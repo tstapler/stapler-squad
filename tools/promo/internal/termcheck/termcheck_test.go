@@ -11,7 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/tools/promo/internal/termcheck"
+	"github.com/tstapler/stapler-squad/tools/promolib/gitbase"
 	"github.com/tstapler/stapler-squad/tools/promolib/gitbase/gitbasetest"
+	"github.com/tstapler/stapler-squad/tools/promolib/termscan"
 )
 
 func term() string { return strings.Join([]string{"wh", "40", "k"}, "") }
@@ -155,4 +157,44 @@ func TestRun_MediaTextRequiresDir(t *testing.T) {
 	code, _, errOut := run("-mode=media-text")
 	assert.Equal(t, termcheck.ExitError, code)
 	assert.Contains(t, errOut, "-dir")
+}
+
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		require.NotEqual(t, dir, parent, "go.mod not found above the test directory")
+		dir = parent
+	}
+}
+
+// The allow-list must name exactly the files that contain a banned term: no
+// missing entry (a leak) and no extra one (a stale exemption).
+func TestAllowlistEqualsLegacyIdFileSet(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	r, err := gitbase.Open(root)
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(termcheck.AllowlistPath)))
+	require.NoError(t, err)
+	allow, err := termscan.ParseAllowlist(data)
+	require.NoError(t, err)
+
+	res, err := termscan.Scan(termscan.GitSource{Repo: r, Root: root}, termscan.Options{})
+	require.NoError(t, err)
+
+	actual := map[string]bool{}
+	for _, f := range res.Findings {
+		actual[f.Path] = true
+	}
+	listed := map[string]bool{}
+	for _, a := range allow {
+		listed[a.Path] = true
+	}
+	assert.Equal(t, listed, actual, "allow-list entries vs files that actually contain a banned term")
 }

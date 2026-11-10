@@ -9,6 +9,8 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
@@ -92,5 +94,30 @@ func LinearRepo(t *testing.T, files Files) string {
 	t.Helper()
 	dir := t.TempDir()
 	Commit(t, dir, files)
+	return dir
+}
+
+// RepoWithGitlink returns a repo whose index holds a regular file plus a
+// gitlink (mode 160000) entry named submodule, whose working-tree path is an
+// empty directory, as a checked-out submodule appears.
+func RepoWithGitlink(t *testing.T, submodule string) string {
+	t.Helper()
+	dir := t.TempDir()
+	repo, wt := openRaw(t, dir)
+	apply(t, dir, wt, Files{"a.txt": []byte("a")})
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := idx.Entries[0]
+	idx.Entries = append(idx.Entries, &index.Entry{
+		Name: submodule, Hash: e.Hash, Mode: filemode.Submodule,
+	})
+	if err := repo.Storer.SetIndex(idx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, submodule), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }

@@ -13,6 +13,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/utils/merkletrie"
 
@@ -46,7 +47,7 @@ func Open(path string) (*Repo, error) {
 	return &Repo{repo: r}, nil
 }
 
-// Files lists every path in the index (the equivalent of git ls-files).
+// Files lists every file path in the index, skipping gitlinks (submodules).
 func (r *Repo) Files() ([]string, error) {
 	idx, err := r.repo.Storer.Index()
 	if err != nil {
@@ -54,6 +55,9 @@ func (r *Repo) Files() ([]string, error) {
 	}
 	files := make([]string, 0, len(idx.Entries))
 	for _, e := range idx.Entries {
+		if e.Mode == filemode.Submodule {
+			continue // gitlink: a directory in the working tree, not a readable file
+		}
 		files = append(files, e.Name)
 	}
 	return files, nil

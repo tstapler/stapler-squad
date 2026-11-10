@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/tools/promolib/gitbase"
+	"github.com/tstapler/stapler-squad/tools/promolib/gitbase/gitbasetest"
 	"github.com/tstapler/stapler-squad/tools/promolib/termscan"
 )
 
@@ -160,4 +162,20 @@ func TestBannedTermSet_EveryTermHasRationale(t *testing.T) {
 	for _, term := range termscan.BannedTermSet() {
 		assert.NotEmpty(t, term.Rationale, term.Text)
 	}
+}
+
+func TestGitSource_SubmoduleEntryDoesNotFailScan(t *testing.T) {
+	t.Parallel()
+	dir := gitbasetest.RepoWithGitlink(t, "third_party/tmux")
+	repo, err := gitbase.Open(dir)
+	require.NoError(t, err)
+
+	res, err := termscan.Scan(termscan.GitSource{Repo: repo, Root: dir}, termscan.Options{})
+	require.NoError(t, err)
+	assert.True(t, res.Clean())
+
+	// A bare directory entry (e.g. an uninitialised submodule) reads as no content.
+	data, err := termscan.GitSource{Root: dir}.Read("third_party/tmux")
+	require.NoError(t, err)
+	assert.Nil(t, data)
 }

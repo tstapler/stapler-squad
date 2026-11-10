@@ -103,3 +103,14 @@ func TestListAt_ListsDirectoryAtBaseAndMissingIsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, none)
 }
+
+func TestFiles_SkipsGitlinkEntries(t *testing.T) {
+	t.Parallel()
+	dir := gitbasetest.RepoWithGitlink(t, "third_party/tmux")
+	r, err := gitbase.Open(dir)
+	require.NoError(t, err)
+
+	files, err := r.Files()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a.txt"}, files)
+}

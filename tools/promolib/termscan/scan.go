@@ -47,7 +47,11 @@ func (g GitSource) Files() ([]string, error) { return g.Repo.Files() }
 
 // Read reads a file from the working tree; a missing file yields (nil, nil).
 func (g GitSource) Read(p string) ([]byte, error) {
-	data, err := os.ReadFile(filepath.Join(g.Root, filepath.FromSlash(p)))
+	full := filepath.Join(g.Root, filepath.FromSlash(p))
+	if fi, err := os.Stat(full); err == nil && fi.IsDir() {
+		return nil, nil // gitlink or directory entry
+	}
+	data, err := os.ReadFile(full)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
