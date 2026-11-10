@@ -149,3 +149,7 @@ tests/e2e/website-demo-output/
 website/public/clips/
 /bazel-*
 /.bazelrc.user
+
+# Build/test output that must never be tracked
+web-app/.next/
+web-app/playwright-report/
