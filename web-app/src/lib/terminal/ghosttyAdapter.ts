@@ -110,6 +110,33 @@ export function serializeGhosttyBuffer(term: GhosttyWebTerminal): string {
 }
 
 /**
+ * ghostty-web 0.4.0's `write` ends with `if (viewportY !== 0) scrollToBottom()`, so any output at all yanks a
+ * user who scrolled into history back to the live screen. This write suppresses that snap and instead keeps
+ * the same history line in view as new lines push into scrollback (`viewportY` counts up from the bottom).
+ * A viewport already at the bottom keeps following output; one stranded past a dropped scrollback is reset.
+ */
+function writeKeepingScroll(term: GhosttyWebTerminal, data: string | Uint8Array): void {
+  const scrolledUp = term.getViewportY() > 0;
+  if (!scrolledUp) {
+    term.write(data);
+    return;
+  }
+  const before = term.wasmTerm?.getScrollbackLength() ?? 0;
+  // An own property shadows the prototype method for this one synchronous write only.
+  const own = Object.getOwnPropertyDescriptor(term, "scrollToBottom");
+  (term as { scrollToBottom: () => void }).scrollToBottom = () => {};
+  try {
+    term.write(data);
+  } finally {
+    if (own) Object.defineProperty(term, "scrollToBottom", own);
+    else delete (term as { scrollToBottom?: () => void }).scrollToBottom;
+  }
+  const grown = (term.wasmTerm?.getScrollbackLength() ?? 0) - before;
+  if (grown > 0) term.scrollLines(-grown);
+  if ((term.wasmTerm?.getScrollbackLength() ?? 0) === 0) term.scrollToBottom();
+}
+
+/**
  * Wraps a ghostty-web `Terminal` in the `ITerminal` contract. ghostty-web's `viewportY` counts
  * lines scrolled up from the bottom while xterm's counts from the top of the buffer, so it is
  * converted. `clear` also drops scrollback, like xterm's. `refresh` is a no-op: ghostty-web repaints from its own render loop.
@@ -117,7 +144,7 @@ export function serializeGhosttyBuffer(term: GhosttyWebTerminal): string {
 export function toITerminal(term: GhosttyWebTerminal): ITerminal {
   // Captured now: TerminalOutput's debug instrumentation later monkey-patches `write`, and calling the patched
   // one from here would recurse back into this facade.
-  const rawWrite = term.write.bind(term);
+  const rawWrite = (data: string | Uint8Array) => writeKeepingScroll(term, data);
   const xtermStyleViewportY = (): number =>
     Math.max(0, term.buffer.active.length - term.rows - term.getViewportY());
   return {

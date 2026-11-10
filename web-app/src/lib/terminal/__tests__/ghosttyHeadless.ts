@@ -15,7 +15,15 @@ export class HeadlessGhosttyTerminal {
   }
   get rows() { return ROWS; }
   get cols() { return COLS; }
-  write(data: string | Uint8Array) { this.wasmTerm.write(data); this.wasmTerm.update(); }
+  // Mirrors ghostty-web 0.4.0's writeInternal, which snaps to the bottom after every write when scrolled up.
+  write(data: string | Uint8Array) {
+    this.wasmTerm.write(data);
+    this.wasmTerm.update();
+    if (this.viewportY !== 0) this.scrollToBottom();
+  }
+  getScrollbackLength() { return this.wasmTerm.getScrollbackLength(); }
+  /** Same sign convention as ghostty-web: positive = toward newer output, negative = into history. */
+  scrollLines(amount: number) { this.viewportY = Math.max(0, Math.min(this.getScrollbackLength(), this.viewportY - amount)); }
   writeln(data: string) { this.write(`${data}\r\n`); }
   getViewportY() { return this.viewportY; }
   scrollToBottom() { this.viewportY = 0; }
