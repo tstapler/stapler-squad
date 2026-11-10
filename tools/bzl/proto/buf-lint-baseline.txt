@@ -50,4 +50,5 @@ proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response typ
 proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"ReplaceTymuxdResponse\" or \"TymuxRolloutServiceReplaceTymuxdResponse\".
 proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"SetTymuxGlobalOverrideResponse\" or \"TymuxRolloutServiceSetTymuxGlobalOverrideResponse\".
 proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"SetTymuxSessionOverrideResponse\" or \"TymuxRolloutServiceSetTymuxSessionOverrideResponse\".
+proto/session/v1/types.proto ENUM_ZERO_VALUE_SUFFIX Enum zero value name \"POLL_ERROR_NONE\" should be suffixed with \"_UNSPECIFIED\".
 proto/session/v1/unfinished.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"UnfinishedWorkEvent\" should be named \"WatchUnfinishedWorkResponse\" or \"UnfinishedWorkServiceWatchUnfinishedWorkResponse\".

@@ -799,6 +799,7 @@ go_test(
     data = glob(["*.go"]) + [
         "//:go.mod",
         "//docs/adr:ADR-002-workspace-host-registry-gossip.md",
+        "//docs/observability/grafana/dashboards:json",
         "//jules:types.go",
         "//server/mcp:go_sources",
         "//server/services:go_sources",

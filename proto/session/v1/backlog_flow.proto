@@ -4,6 +4,8 @@ package session.v1;
 
 import "google/protobuf/timestamp.proto";
 
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
 // BacklogFlowService serves the backlog flow-observability aggregates. The
 // messages mirror session/flow/summary_types.go field for field; a change to
 // those Go types is a change to this file in the same PR. JSON consumers marshal

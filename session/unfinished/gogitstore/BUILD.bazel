@@ -61,6 +61,7 @@ go_test(
         ":go_sources",
         "//:go.mod",
         "//config/workspacepath:go_sources",
+        "//internal/dirwatch:go_sources",
         "//log:go_sources",
         "//session/unfinished:gogit_vcs_reader.go",
     ],

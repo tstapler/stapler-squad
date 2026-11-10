@@ -81,10 +81,22 @@ go_test(
         "types_test.go",
         "verdict_test.go",
     ],
+    data = glob(["testdata/**"]) + [
+        ":go_sources",
+        "//:go.mod",
+        "//session/domain:go_sources",
+    ],
     embed = [":flow"],
     deps = [
         "//session/domain",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+# Read by TestFlowImports, which walks the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//visibility:private"],
 )

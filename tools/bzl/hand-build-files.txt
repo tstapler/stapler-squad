@@ -22,3 +22,4 @@ tools/bzl/forbidden_deps_test_data/BUILD.bazel  # planned: forbidden_deps_test
 tools/bzl/forbidden_deps_test_data/bad/inner/BUILD.bazel  # planned: forbidden_deps_test
 tools/bzl/e2e/BUILD.bazel  # planned: Task 12.2a
 third_party/ghostty/BUILD.bazel  # planned: main #1491 (own ghostty-vt.wasm build, ADR-039)
+docs/observability/grafana/dashboards/BUILD.bazel  # planned: dashboard JSON test data (bazel-ci-tests)
