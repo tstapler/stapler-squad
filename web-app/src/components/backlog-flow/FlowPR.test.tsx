@@ -117,3 +117,25 @@ describe("FlowPR", () => {
     expect(screen.getByText("No PR fixes in this window")).toBeInTheDocument();
   });
 });
+
+describe("FlowPR manual nudges", () => {
+  it("FlowPR_should_ShowNotYetRecordingNotZeros_When_NoNudgeCapture", () => {
+    render3([]);
+
+    expect(screen.getByTestId("flow-pr-nudges").textContent).toBe("Manual nudge tracking not yet recording");
+  });
+
+  it("FlowPR_should_ShowWeeklyNudgesWithCaptureSinceAndDrill_When_Recording", () => {
+    const ts = (d: Date) => ({ seconds: BigInt(Math.floor(d.getTime() / 1000)), nanos: 0 });
+    const week = new Date(Date.UTC(2026, 9, 19));
+    render3(["manual_nudge:since_capture"], [], CAPTURE, pr({
+      nudges: { recording: true, captureSince: ts(CAPTURE), total: 4, drillKey: "pr.manual_nudge", weekly: [{ weekStart: ts(week), n: 4, drillKey: "pr.manual_nudge" }] },
+    }));
+
+    const section = screen.getByTestId("flow-pr-nudges");
+    expect(section).toHaveTextContent("Manual nudges since 2026-10-20");
+    expect(section).toHaveTextContent("2026-10-19");
+    fireEvent.click(screen.getAllByRole("button", { name: "4" })[0]);
+    expect(onDrill).toHaveBeenCalledWith("pr.manual_nudge");
+  });
+});

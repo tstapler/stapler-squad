@@ -24,6 +24,19 @@ type TerminalService struct {
 	extDiscovery *session.ExternalSessionDiscovery
 	// guards is the live hidden_session_readonly_guards value; nil means on.
 	guards GuardsFlag
+	// nudges records user-originated writes as manual-nudge flow markers; nil is a no-op.
+	nudges NudgeRecorder
+}
+
+// NudgeRecorder records a user-originated intervention on a session. Only
+// human-driven RPC handlers may call it; automated steers never do.
+type NudgeRecorder interface {
+	RecordManualNudgeForSession(ctx context.Context, sessionUUID, value string)
+}
+
+// SetNudgeRecorder injects the manual-nudge recorder.
+func (ts *TerminalService) SetNudgeRecorder(n NudgeRecorder) {
+	ts.nudges = n
 }
 
 // NewTerminalService creates a TerminalService. Wire poller and externalDiscovery
@@ -152,6 +165,9 @@ func (ts *TerminalService) WriteToSession(
 		return nil, submitErrToConnectError(err)
 	}
 
+	if ts.nudges != nil {
+		ts.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), session.ManualNudgeWrite)
+	}
 	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
 }
 
