@@ -821,6 +821,9 @@ test-race: gen-gate-strict ensure-tools proto-gen $(BIN_TMUX) $(GOTESTSUM_BIN) #
 endif
 
 ifneq ($(BUILD_SYSTEM),bazel)
+# Directories holding a //go:build ...integration test file (git grep, so node_modules and generated trees never match).
+INTEGRATION_PKGS := $(shell git grep -lE '^//go:build.*integration' -- '*_test.go' 2>/dev/null | xargs -n1 dirname | sort -u | awk '{ if ($$0 == ".") print "."; else print "./"$$0 }')
+
 test-integration: gen-gate-strict ensure-tools proto-gen server/web/dist $(GOTESTSUM_BIN) ## Run integration tests, requires real tmux (Bazel: bazel test --config=integration --config=race)
 	@echo "[build-system=make] gotestsum -- -race -tags integration (see Makefile test-integration)"
 	# ./session and ./session/tmux are the only integration-tagged packages that
@@ -835,7 +838,9 @@ test-integration: gen-gate-strict ensure-tools proto-gen server/web/dist $(GOTES
 	# these two packages against each other; everything else still runs in
 	# parallel via the second invocation.
 	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m -p 1 ./session ./session/tmux
-	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $$(go list ./... | grep -vE '^github\.com/tstapler/stapler-squad/(session|session/tmux)$$')
+	# Only packages that actually carry integration-tagged test files: the tag adds nothing to the rest, so running
+	# them again here duplicated the whole unit suite (~17.6k tests, 1233 s of a 4657 s `make ready`).
+	$(GOTESTSUM_BIN) --format pkgname-and-test-fails -- -race -tags integration -timeout 20m $(filter-out ./session ./session/tmux,$(INTEGRATION_PKGS))
 endif
 
 # Differential oracle tests (go-git fork plan Story 1.3.3): files tagged `//go:build gitoracle`
