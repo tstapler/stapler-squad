@@ -35,6 +35,7 @@ const (
 	DrillUnverifiable DrillKey = "review.unverifiable"
 	DrillStalled      DrillKey = "review.stalled"
 	DrillPRFixOpen    DrillKey = "pr.fix_open"
+	DrillManualNudge  DrillKey = "pr.manual_nudge"
 )
 
 var extraDrillKeys = []DrillKey{DrillReworkAny, DrillZeroBounce, DrillUnverifiable, DrillStalled, DrillPRFixOpen}

@@ -141,7 +141,7 @@ type StreamHub struct {
 	clock                 Clock
 	interactive           interactivity // see qos.go
 	qos                   *qos.Tracker
-	activitySink          func(qos.Activity)
+	activitySink          func(qos.Activity) error
 	activity              activityState // see activity.go
 	quiescenceTimeout     time.Duration
 	resizeBudget          resizeBudget

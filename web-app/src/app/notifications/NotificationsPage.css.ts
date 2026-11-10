@@ -10,9 +10,13 @@ export const pageRoot = style({
   maxWidth: "800px",
   margin: "0 auto",
   padding: `${vars.space[4]} ${vars.space[4]} 0`,
+  paddingRight: `calc(var(--tray-clearance, 0px) + ${vars.space[4]})`,
+  paddingLeft: `calc(var(--tray-clearance-left, 0px) + ${vars.space[4]})`,
   "@media": {
     [`screen and (max-width: ${breakpoints.md})`]: {
       padding: `${vars.space[2]} ${vars.space[2]} 0`,
+      paddingRight: `calc(var(--tray-clearance, 0px) + ${vars.space[2]})`,
+      paddingLeft: `calc(var(--tray-clearance-left, 0px) + ${vars.space[2]})`,
     },
   },
 });

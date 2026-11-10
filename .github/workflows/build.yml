@@ -167,7 +167,7 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
 
@@ -197,7 +197,7 @@ jobs:
       # Exact key, no restore-keys: a partial restore could keep a stale or unpatched `eval`
       # (oven-sh/bun#33520); the build's guard stage also fails loudly on that.
       - name: Cache shared node_modules
-        uses: actions/cache@v4
+        uses: ./.github/actions/cache-main-writes
         with:
           path: ~/.stapler-squad/shared-node-modules
           key: web-node-modules-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'web-app/patches/**') }}
@@ -363,10 +363,9 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
@@ -396,7 +395,7 @@ jobs:
 
       # Exact key, no restore-keys: see web-build-smoke-bun's identical step for why.
       - name: Cache shared node_modules
-        uses: actions/cache@v4
+        uses: ./.github/actions/cache-main-writes
         with:
           path: ~/.stapler-squad/shared-node-modules
           key: web-node-modules-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'web-app/patches/**') }}
@@ -774,10 +773,9 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       # gotestsum wraps `go test -json` for readable per-test pass/fail output
       # instead of a wall of raw go test stdout -- default test runner for this
@@ -1094,10 +1092,9 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Install gotestsum
         run: |
@@ -1120,6 +1117,11 @@ jobs:
       - name: Run gitoracle-tagged tests
         if: ${{ !cancelled() }}
         run: make test-oracle
+
+      # Fails a PR that adds an RPC without a methodToID entry; main-ci.yml's copy only ran post-merge.
+      - name: Run scanner unit tests
+        if: ${{ !cancelled() }}
+        run: cd tools/scanner && go test ./...
 
       - name: Build binary (native)
         if: ${{ !cancelled() }}

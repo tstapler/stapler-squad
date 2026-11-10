@@ -70,6 +70,16 @@ func (h *blockerHarness) link(owner session.PROwner, n int, state session.PRStat
 	require.NoError(h.t, err)
 }
 
+func (h *blockerHarness) blockedOnPath(path string) int {
+	n := 0
+	for _, b := range h.svc.BlockedCleanups() {
+		if b.ItemID == h.itemID && b.Path == path {
+			n++
+		}
+	}
+	return n
+}
+
 func uniquePath(h *blockerHarness, label string) context.Context {
 	return session.WithCleanupPath(h.t.Context(), label)
 }
@@ -110,7 +120,10 @@ func TestCleanupGate_ShouldRetainWorktreeOnEveryPath_WhenOnePROpen(t *testing.T)
 				}
 
 				assert.Empty(t, h.removed, "the worktree must still exist")
-				assert.Equal(t, before+1, session.CleanupBlockedCount(path), "counted once for this path; a second attempt leaves it unchanged")
+				// The metric is process-global and keyed only by path, so parallel tests bump it too: it can
+				// only be bounded below. "Counted once" is asserted on this service's own blocked set.
+				assert.Greater(t, session.CleanupBlockedCount(path), before, "the block must be counted on this path")
+				assert.Equal(t, 1, h.blockedOnPath(path), "blocked once for this path; a second attempt leaves it unchanged")
 				assert.GreaterOrEqual(t, session.CleanupBlockedItemsGauge(path), 1)
 				if path == session.CleanupPathTransition || path == session.CleanupPathHook || path == session.CleanupPathSweep {
 					assert.Contains(t, h.stopper.archivedUUIDs, h.uuid, "archival is not gated by open PRs; only the worktree removal is withheld")

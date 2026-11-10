@@ -2158,26 +2158,37 @@ const HubStartFailedErrorCode = "HUB_START_FAILED"
 // treating it (and the self-heal decision in ensureHubInstanceStarted that
 // depends on it) as alive.
 func (h *ConnectRPCWebSocketHandler) ensureHubBackendAlive(instance *session.Instance, sessionID string) (processAlive bool, err error) {
-	return h.ensureHubBackendAliveCtx(context.Background(), instance, sessionID)
+	return h.ensureHubBackendAliveCtx(context.Background(), instance, sessionID, termlat.Labels{})
 }
 
 // ensureHubBackendAliveCtx is ensureHubBackendAlive bounded by the connection: a client that
-// disconnects mid-attach stops waiting on the daemon and frees its attach slot.
-func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Context, instance *session.Instance, sessionID string) (processAlive bool, err error) {
-	if handled, err := instance.PrepareRetainedTerminalView(ctx); handled {
-		return false, err // Render readiness does not imply process/input readiness.
+// disconnects mid-attach stops waiting on the daemon and frees its attach slot. Each step is
+// timed under labels (attach_prepare, attach_alive_check, attach_restore) so a slow attach_open
+// can be pinned on one of them.
+func (h *ConnectRPCWebSocketHandler) ensureHubBackendAliveCtx(ctx context.Context, instance *session.Instance, sessionID string, labels termlat.Labels) (processAlive bool, err error) {
+	prepareStart := time.Now()
+	handled, prepErr := instance.PrepareRetainedTerminalView(ctx)
+	termlat.Default.Record(termlat.StageAttachPrepare, labels, time.Since(prepareStart))
+	if handled {
+		return false, prepErr // Render readiness does not imply process/input readiness.
 	}
-	if instance.IsBackendProcessAlive() {
+	aliveStart := time.Now()
+	alive := instance.IsBackendProcessAlive()
+	termlat.Default.Record(termlat.StageAttachAliveCheck, labels, time.Since(aliveStart))
+	if alive {
 		return true, nil
 	}
 	log.Info("[streamViaHub] session not alive, restoring before control mode", "session", sessionID)
 	workDir := instance.ActiveDir()
 	restoreStart := time.Now()
-	if restoreErr := instance.RestoreProcess(workDir); restoreErr != nil {
+	restoreErr := instance.RestoreProcess(workDir)
+	restoreDur := time.Since(restoreStart)
+	termlat.Default.Record(termlat.StageAttachRestore, labels, restoreDur)
+	if restoreErr != nil {
 		return false, handleTmuxRestoreFailure(instance, restoreErr)
 	}
 	// The multi-second tail of attach_open is this restore, so name it in the log.
-	log.Info("[streamViaHub] restored session before control mode", "session", sessionID, "restore_ms", time.Since(restoreStart).Milliseconds())
+	log.Info("[streamViaHub] restored session before control mode", "session", sessionID, "restore_ms", restoreDur.Milliseconds())
 	if _, ptyErr := instance.RestoredPTY(); ptyErr != nil {
 		log.Warn("[streamViaHub] restored session but PTY attach failed, not treating as alive", "session", sessionID, "err", ptyErr)
 		return false, nil
@@ -2446,7 +2457,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	}
 
 	processAlive, err := gatedAttach(connCtx, attachLimiter, stream.latency.labels(), tmuxSessionName, func() (bool, error) {
-		return h.ensureHubBackendAliveCtx(connCtx, instance, sessionID)
+		return h.ensureHubBackendAliveCtx(connCtx, instance, sessionID, stream.latency.labels())
 	})
 	if err != nil {
 		return err
