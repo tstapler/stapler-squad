@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -45,5 +47,28 @@ func TestFoldShortTargets(t *testing.T) {
 	got := foldShort([]Entry{{"a.o", 0.2}, {"build", 3}, {"b.o", 0.3}})
 	if len(got) != 2 || got[0].Name != "build" || got[1].Name != "(2 targets under 1s)" || got[1].Seconds != 0.5 {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestFollowReaderStopsAfterDoneFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "make.log")
+	if err := os.WriteFile(log, []byte("Makefile:1: update target 'a' due to: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	done := filepath.Join(dir, "make.log.done")
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		os.WriteFile(done, nil, 0o644) //nolint:errcheck // test helper
+	}()
+	rep, err := scan(followReader{f: f, done: done}, time.Now)
+	if err != nil || len(rep.Targets) != 1 {
+		t.Fatalf("rep=%+v err=%v", rep, err)
 	}
 }

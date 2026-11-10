@@ -83,13 +83,27 @@ jobs:
           git config --global user.name "ci"
           git config --global user.email "ci@example.invalid"
 
-      # tee owns the live log; citime only reads it and writes a per-target and per-package timing table to the job
-      # summary (advisory; it never fails the step). `shell: bash` is required so pipefail keeps make's exit code.
+      # make writes to a regular file, not a pipe: Bun/Node children can set a shared pipe non-blocking and make then
+      # dies with "write error: stdout" (seen after a fully green make ready). citime follows the file and writes a
+      # per-target and per-package timing table to the job summary (advisory); tail echoes the log live.
+      # `shell: bash` gives -e/pipefail semantics; rc is carried explicitly.
       - name: make ready
         shell: bash
         run: |
           go build -o "$RUNNER_TEMP/citime" ./tools/ci/citime
-          make --trace ready 2>&1 | tee "$RUNNER_TEMP/make-ready.log" | "$RUNNER_TEMP/citime" -out "$RUNNER_TEMP/make-ready-timing.json" -summary "$GITHUB_STEP_SUMMARY"
+          log="$RUNNER_TEMP/make-ready.log"; done="$log.done"
+          rm -f "$done"; : > "$log"
+          "$RUNNER_TEMP/citime" -in "$log" -done "$done" -out "$RUNNER_TEMP/make-ready-timing.json" -summary "$GITHUB_STEP_SUMMARY" &
+          timing=$!
+          tail -n +1 -F "$log" &
+          echo_pid=$!
+          rc=0
+          make --trace ready > "$log" 2>&1 || rc=$?
+          touch "$done"
+          wait "$timing" || true
+          sleep 2
+          kill "$echo_pid" 2>/dev/null || true
+          exit "$rc"
 
       - name: Upload make timing
         if: always()

@@ -154,3 +154,30 @@ func appendFile(path, s string) error {
 	_, err = f.WriteString(s)
 	return err
 }
+
+// followReader reads a growing file and reports EOF only after the done file exists and a further read is empty,
+// so citime can time a log that make writes to a regular file (a pipe shared with Bun/Node children can go
+// non-blocking and make then fails with "write error: stdout").
+type followReader struct {
+	f    *os.File
+	done string
+}
+
+func (r followReader) Read(p []byte) (int, error) {
+	for {
+		n, err := r.f.Read(p)
+		if n > 0 {
+			return n, nil
+		}
+		if err != nil && err != io.EOF {
+			return 0, err
+		}
+		if _, statErr := os.Stat(r.done); statErr == nil {
+			if n, err = r.f.Read(p); n > 0 {
+				return n, nil
+			}
+			return 0, io.EOF
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
