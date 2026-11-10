@@ -250,21 +250,27 @@ jobs:
             echo "::warning::no dom-text/ output in this shard"
           fi
 
-      # Report-only until the OCR known-text fixture (Task 2.4.1h) exists; then drop
-      # `continue-on-error` so a hit blocks the upload. Output feeds termcheck media-text.
+      # Blocking, independent of freshnessEnforce (Task 2.4.1h): the known-text fixture
+      # (termscan TestOCRRecoversKnownText) guards OCR quality in PR CI. Hits at or above
+      # ocrMinConfidence in tools/promo/budgets.json fail the job before the upload; lower
+      # confidence hits are warnings in the job summary. Confirmed false positives go in
+      # tools/promo/ocr-allowlist.txt.
       - name: OCR the shots and scan for banned terms
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: |
           mkdir -p "$RUNNER_TEMP/media-out/ocr-text"
           shopt -s nullglob
-          for shot in "$RUNNER_TEMP/media-out"/shots/*.webp "$RUNNER_TEMP/media-out"/shots/*.png; do
+          shots=("$RUNNER_TEMP/media-out"/shots/*.webp "$RUNNER_TEMP/media-out"/shots/*.png)
+          for shot in "${shots[@]}"; do
             name=$(basename "$shot"); name=${name%.*}
             png="$RUNNER_TEMP/ocr-$name.png"
             ffmpeg -y -loglevel error -i "$shot" "$png"
-            tesseract "$png" "$RUNNER_TEMP/media-out/ocr-text/$name" >/dev/null 2>&1
+            tesseract "$png" "$RUNNER_TEMP/media-out/ocr-text/$name" tsv >/dev/null
             rm -f "$png"
           done
+          if [ "${#shots[@]}" -gt 0 ] && ! compgen -G "$RUNNER_TEMP/media-out/ocr-text/*.tsv" >/dev/null; then
+            echo "::error::OCR produced no output for ${#shots[@]} shots"; exit 1
+          fi
           "$RUNNER_TEMP/promo-plan/termcheck" -mode=media-text -dir "$RUNNER_TEMP/media-out/ocr-text"
 
       - name: Name the shard manifest

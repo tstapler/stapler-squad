@@ -117,6 +117,18 @@ test('deployWorkflow_should_RunFreshnessBesideLegacyFallback_When_YamlParsed', (
   assert.ok(!/PROMO_FRESHNESS_ENFORCE/.test(text), 'flags live in git, not repo variables');
 });
 
+// Task 2.4.1h: the OCR step is blocking (no continue-on-error), emits Tesseract TSV for the
+// confidence rule, and runs before the shard upload.
+test('OCR step blocks the upload and feeds the confidence rule', () => {
+  const steps = loadDeploy().jobs.record.steps;
+  const ocr = steps.findIndex((step) => step.name === 'OCR the shots and scan for banned terms');
+  const upload = steps.findIndex((step) => step.name === 'Upload shard media');
+  assert.ok(ocr !== -1 && ocr < upload, 'OCR scan runs before the shard upload');
+  assert.equal(steps[ocr]['continue-on-error'], undefined, 'OCR hits block, independent of freshnessEnforce');
+  assert.match(steps[ocr].run ?? '', /tesseract .* tsv/, 'TSV output carries word confidence');
+  assert.match(steps[ocr].run ?? '', /-mode=media-text -dir "\$RUNNER_TEMP\/media-out\/ocr-text"/);
+});
+
 // Validation R16: notify covers every failure source and the flag-age reminder.
 test('deployWorkflow_should_NotifyOnEveryFailureSource_When_YamlParsed', () => {
   const doc = loadDeploy();

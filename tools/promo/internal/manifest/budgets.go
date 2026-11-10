@@ -15,6 +15,8 @@ type Budgets struct {
 	DistMaxBytes              int64    `json:"distMaxBytes"`
 	RecordWallClockMaxMinutes int      `json:"recordWallClockMaxMinutes"`
 	ClipMaxDurationMs         int64    `json:"clipMaxDurationMs"`
+	OCRMinConfidence          float64  `json:"ocrMinConfidence"`
+	OCRFixtureMinRecall       float64  `json:"ocrFixtureMinRecall"`
 	RecordInputPaths          []string `json:"recordInputPaths"`
 }
 
@@ -32,7 +34,8 @@ func ReadBudgets(path string) (Budgets, error) {
 		return Budgets{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if b.ClipMaxBytes <= 0 || b.ImageMaxBytes <= 0 || b.DistMaxBytes <= 0 ||
-		b.RecordWallClockMaxMinutes <= 0 || b.ClipMaxDurationMs <= 0 || len(b.RecordInputPaths) == 0 {
+		b.RecordWallClockMaxMinutes <= 0 || b.ClipMaxDurationMs <= 0 || len(b.RecordInputPaths) == 0 ||
+		b.OCRMinConfidence <= 0 || b.OCRMinConfidence > 100 || b.OCRFixtureMinRecall <= 0 || b.OCRFixtureMinRecall > 1 {
 		return Budgets{}, fmt.Errorf("%s: every budget must be positive and recordInputPaths non-empty", path)
 	}
 	return b, nil

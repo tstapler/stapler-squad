@@ -10,3 +10,4 @@ web-app/public/icons/**
 tests/e2e/tests/snapshots/**
 project_plans/**/design/*.png
 web-app/build/__tests__/fixtures/app/public/icons/**
+tools/promolib/termscan/testdata/**

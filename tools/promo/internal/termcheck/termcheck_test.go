@@ -102,3 +102,57 @@ func TestRun_LeakPatterns(t *testing.T) {
 	code, _, _ = run("-patterns", "nope")
 	assert.Equal(t, termcheck.ExitError, code)
 }
+
+const ocrHeader = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+
+func ocrRow(conf, text string) string {
+	return "5\t1\t1\t1\t1\t1\t0\t0\t10\t10\t" + conf + "\t" + text + "\n"
+}
+
+func mediaDir(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
+	}
+	return dir
+}
+
+func TestRun_MediaTextOCRConfidenceAndAllowlist(t *testing.T) {
+	t.Parallel()
+	banned := strings.Join([]string{"war", "hammer"}, "")
+	dir := mediaDir(t, map[string]string{
+		"sure.tsv": ocrHeader + ocrRow("90.0", banned),
+		"weak.tsv": ocrHeader + ocrRow("30.0", banned),
+	})
+	budgets := filepath.Join(t.TempDir(), "budgets.json")
+	require.NoError(t, os.WriteFile(budgets, []byte(`{"clipMaxBytes":1,"imageMaxBytes":1,"distMaxBytes":1,"recordWallClockMaxMinutes":1,"clipMaxDurationMs":1,"ocrMinConfidence":60,"ocrFixtureMinRecall":0.8,"recordInputPaths":["x"]}`), 0o644))
+	allow := filepath.Join(t.TempDir(), "allow.txt")
+
+	code, out, _ := run("-mode=media-text", "-dir", dir, "-budgets", budgets, "-ocr-allowlist", allow)
+	assert.Equal(t, termcheck.ExitFindings, code)
+	assert.Contains(t, out, "sure: banned term")
+	assert.Contains(t, out, "warning: weak: banned term")
+	assert.NotContains(t, out, "\nweak:")
+
+	require.NoError(t, os.WriteFile(allow, []byte("sure:confirmed false positive\n"), 0o644))
+	code, out, _ = run("-mode=media-text", "-dir", dir, "-budgets", budgets, "-ocr-allowlist", allow)
+	assert.Equal(t, termcheck.ExitOK, code, out)
+	assert.Contains(t, out, "warning: weak")
+}
+
+func TestRun_MediaTextDOMTextBlocksAndAbsentConfigDefaults(t *testing.T) {
+	t.Parallel()
+	dir := mediaDir(t, map[string]string{"dom.txt": "x " + term()})
+	missing := filepath.Join(t.TempDir(), "nope")
+	code, out, _ := run("-mode=media-text", "-dir", dir, "-budgets", missing, "-ocr-allowlist", missing)
+	assert.Equal(t, termcheck.ExitFindings, code)
+	assert.Contains(t, out, "dom.txt:1")
+}
+
+func TestRun_MediaTextRequiresDir(t *testing.T) {
+	t.Parallel()
+	code, _, errOut := run("-mode=media-text")
+	assert.Equal(t, termcheck.ExitError, code)
+	assert.Contains(t, errOut, "-dir")
+}

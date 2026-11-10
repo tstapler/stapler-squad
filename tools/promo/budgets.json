@@ -4,6 +4,8 @@
   "distMaxBytes": 41943040,
   "recordWallClockMaxMinutes": 30,
   "clipMaxDurationMs": 60000,
+  "ocrMinConfidence": 60,
+  "ocrFixtureMinRecall": 0.8,
   "recordInputPaths": [
     "web-app/**",
     "server/**",

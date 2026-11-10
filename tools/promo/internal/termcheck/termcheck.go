@@ -17,6 +17,12 @@ import (
 // AllowlistPath is the repo-relative allow-list file.
 const AllowlistPath = "tools/promo/termcheck/allowlist.txt"
 
+// BudgetsPath and OCRAllowlistPath are the repo-relative defaults for media-text mode.
+const (
+	BudgetsPath      = "tools/promo/budgets.json"
+	OCRAllowlistPath = "tools/promo/ocr-allowlist.txt"
+)
+
 // Exit codes.
 const (
 	ExitOK       = 0
@@ -33,6 +39,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	base := fs.String("base", "", "read the allow-list from this base commit instead of the working tree (CI uses HEAD^1)")
 	allowPath := fs.String("allowlist", AllowlistPath, "allow-list path, repo-relative")
 	dir := fs.String("dir", "", "directory to scan (dist and media-text modes)")
+	budgets := fs.String("budgets", BudgetsPath, "budgets file read for ocrMinConfidence (media-text mode; absent means the default)")
+	ocrAllow := fs.String("ocr-allowlist", OCRAllowlistPath, "OCR false-positive allow-list, shot-name:reason (media-text mode; absent means empty)")
 	patterns := fs.String("patterns", "banned", "banned (trademark terms) or leak (paths, tokens, emails; needs -dir)")
 	if err := fs.Parse(args); err != nil {
 		return ExitError
@@ -43,6 +51,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if *patterns != "banned" {
 		fmt.Fprintf(stderr, "termcheck: unknown -patterns %q (want banned or leak)\n", *patterns)
 		return ExitError
+	}
+	if *mode == "media-text" {
+		return runMediaText(*dir, *budgets, *ocrAllow, stdout, stderr)
 	}
 	res, err := run(*mode, *repo, *base, *allowPath, *dir)
 	if err != nil {
@@ -65,11 +76,11 @@ func run(mode, repoDir, base, allowPath, dir string) (termscan.Result, error) {
 	switch mode {
 	case "source":
 		return runSource(repoDir, base, allowPath)
-	case "dist", "media-text":
+	case "dist":
 		if dir == "" {
 			return termscan.Result{}, fmt.Errorf("-dir is required for -mode=%s", mode)
 		}
-		return termscan.Scan(termscan.DirSource{Dir: dir}, termscan.Options{AllPaths: true, ScanNames: mode == "dist"})
+		return termscan.Scan(termscan.DirSource{Dir: dir}, termscan.Options{AllPaths: true, ScanNames: true})
 	default:
 		return termscan.Result{}, fmt.Errorf("unknown -mode %q (want source, dist or media-text)", mode)
 	}
