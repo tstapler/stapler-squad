@@ -3,7 +3,9 @@
     "collect": {
       "url": [
         "http://localhost:4321/stapler-squad/",
-        "http://localhost:4321/stapler-squad/help/getting-started/"
+        "http://localhost:4321/stapler-squad/help/getting-started/",
+        "http://localhost:4321/stapler-squad/tours/",
+        "http://localhost:4321/stapler-squad/tours/dashboard-lifecycle/"
       ],
       "numberOfRuns": 3,
       "settings": {
