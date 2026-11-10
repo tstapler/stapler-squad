@@ -105,7 +105,7 @@ function SourceFilterChips({
             onClick={() => toggle(id)}
             aria-pressed={active}
             data-testid={`backlog-filter-source-${id}`}
-          >
+          >{/* analytics-exempt */}
             {SOURCE_BADGE_CONFIG[id].label}
           </button>
         );
@@ -114,6 +114,7 @@ function SourceFilterChips({
   );
 }
 
+/* eslint-disable no-restricted-syntax -- one value/onChange pair per filter control, wired by two callers; grouping would only rename the same props */
 export interface BacklogFilterBarProps {
   search: string;
   onSearchChange: (v: string) => void;
@@ -142,6 +143,7 @@ export interface BacklogFilterBarProps {
   onArchiveDone?: () => void;
   archiveDoneBusy?: boolean;
 }
+/* eslint-enable no-restricted-syntax */
 
 export function BacklogFilterBar({
   search,

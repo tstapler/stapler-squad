@@ -65,8 +65,27 @@ OTel names as registered; VictoriaMetrics appends the unit and `_bucket`/`_count
 | `client_batch_fallback_total` | counter | `reason` (`request-failed`, `server-declined`) | `cm.batch_fallback` |
 | `client_web_vital_*` | histogram | `vital` (`lcp`, `inp`, `cls`, `fcp`, `ttfb`), `rating`, `page` | `web_vital.*` from `WebVitalsReporter` (ms; CLS unitless) |
 | `client_long_task_duration_milliseconds_*` | histogram | `page` | `cm.longtask` from `lib/telemetry/longTasks.ts`; capped at 30 per minute per tab |
+| `client_input_total` | counter | `event` (`emitted`, `queued`, `dropped_disconnected`), `renderer` (`xterm`, `ghostty`) | `cm.input` from `lib/terminal/mobileInput/telemetry.ts`. The sender sums units and sends one beacon per event class per 10 s with a `count` label (server caps it at 1000). `emitted` counts every unit the layer handed to the terminal; `queued` and `dropped_disconnected` are subsets that did not reach the socket. Unknown `event` or `renderer` rejects the whole event (`bad_input_label`). Never carries typed content |
+| `client_ime_anomaly_total` | counter | `kind` (the `ImeAnomaly` union: `orphaned_input`, `rewrite_bound_exceeded`, `unrecognized_sequence`, `stuck_composition`, `selection_in_region`, `duplicate_suppressed`), `renderer` | `cm.ime_anomaly`, one per anomaly, limited to 1 per kind per 10 s with a burst of 5 per tab. Unknown values reject the event (`bad_ime_anomaly_label`) |
 | `client_metrics_rate_limited_total` | counter | `scope` | `server/handlers/analytics_rate_budget.go`: batches refused with 429 |
-| `client_metrics_rejected_total` | counter | `reason` (`unknown_event`, `bad_web_vital`, `missing_duration`) | server: events the allow-list refused. Old cached clients whose `rpc.*` events lack `method`/`transport` land as `other`/`unknown` rather than being rejected |
+| `client_metrics_rejected_total` | counter | `reason` (`unknown_event`, `bad_web_vital`, `missing_duration`, `bad_input_label`, `bad_ime_anomaly_label`) | server: events the allow-list refused. Old cached clients whose `rpc.*` events lack `method`/`transport` land as `other`/`unknown` rather than being rejected |
+
+### Phone input layer: requirement names and diagnostic query
+
+The mobile-input-layer requirements use their own names for two of these series:
+
+| Requirement name | Series |
+|---|---|
+| `input_dropped_disconnected_total` | `client_input_total{event="dropped_disconnected"}` (`cm.input`) |
+| `ime_event_sequence_unrecognized_total` | `client_ime_anomaly_total{kind="unrecognized_sequence"}` (`cm.ime_anomaly`) |
+| `terminal_input_frames_total`, `terminal_input_bytes_total` | server counters, labels `kind` (`text`, `escape`, `other`), `listener`, `path` (`cm`, `shell`, `capture`, `stream`), `stage` (`received`, `forwarded`); see `docs/reference/mobile-input-layer.md` |
+
+"Phone typed but nothing arrived" is the `ssq-client-network` panel **Terminal input**: client
+`sum(rate(client_input_total{event="emitted"}[5m]))` above zero while
+`sum(rate(terminal_input_frames_total{kind="text",stage="received",listener="remote"}[5m]))` is flat.
+`received` rising with `stage="forwarded"` flat means a read-only or permission denial. The companion panel
+**Phone input anomalies and drops** graphs `client_ime_anomaly_total` by `kind`. Browser counts are
+aggregated units and server counts are frames, so compare whether each is moving, not their ratio.
 
 Round-trip time for a unary WebSocket call is `client_rpc_duration` with
 `transport="ws"` (send to reply, includes `client_ws_send_queue_delay`).

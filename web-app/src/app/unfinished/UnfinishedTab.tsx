@@ -27,6 +27,7 @@ import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
 import { useUpNextTab } from "@/lib/hooks/useUpNextTab";
 import { DEGRADED_ATTENTION_TEXT, summarizeAttention } from "@/lib/unfinished/prAttention";
 import * as styles from "./UnfinishedTab.css";
+import { useTrayClearanceRef } from "@/lib/hooks/useTrayClearance";
 
 const PR_TAB_DESCRIPTION =
   "PRs with failing CI, conflicts, unresolved threads or requested changes. The sidebar badge uses its own count.";
@@ -38,6 +39,7 @@ type FilterType = "all" | "uncommitted" | "ahead" | "behind";
  * Groups worktrees by repo, supports filter chips, and handles dismiss/snooze.
  */
 export function UnfinishedTab() {
+  const trayClearanceRef = useTrayClearanceRef();
   const { worktrees, lastScanTime, isScanning, triggerScan } = useUnfinishedWork();
   const [filter, setFilter] = useState<FilterType>("all");
   const [secondsAgo, setSecondsAgo] = useState(0);
@@ -210,7 +212,7 @@ export function UnfinishedTab() {
   };
 
   return (
-    <div className={styles.container}>
+    <div ref={trayClearanceRef} className={styles.container}>
       {/* Toolbar */}
       <div className={styles.toolbar}>
         <div className={styles.toolbarLeft}>

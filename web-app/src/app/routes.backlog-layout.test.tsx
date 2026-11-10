@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { Suspense } from "react";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
 import { resetFlagStoreForTest } from "@/lib/features/flagStore";
@@ -39,7 +39,11 @@ describe.each(["/backlog", "/backlog/board"])("%s route wrap", (path) => {
         </Suspense>
       </FeatureFlagsProvider>,
     );
-    await waitFor(() => expect(screen.getByText("b")).toBeInTheDocument());
+    // Macrotasks drain the lazy() import, the mocked flag fetch and Suspense; no polling budget involved.
+    for (let i = 0; i < 5 && !screen.queryByText("b"); i++) {
+      await act(async () => void (await new Promise<void>((r) => setTimeout(r, 0))));
+    }
+    expect(screen.getByText("b")).toBeInTheDocument();
     expect(mockWatch).toHaveBeenCalledTimes(1);
   });
 });

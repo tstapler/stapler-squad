@@ -47,7 +47,7 @@ export function ClaimOverrideForm({ label, confirmLabel, onConfirm, onCancel, bu
         </span>
       )}
       <div className={styles.actions}>
-        <button type="button" className={styles.cancelButton} onClick={onCancel} data-testid="claim-override-cancel">
+        <button type="button" className={styles.cancelButton} onClick={onCancel} data-testid="claim-override-cancel">{/* analytics-exempt */}
           Cancel
         </button>
         <button
@@ -56,7 +56,7 @@ export function ClaimOverrideForm({ label, confirmLabel, onConfirm, onCancel, bu
           disabled={tooShort || busy}
           onClick={() => void onConfirm(reason.trim())}
           data-testid="claim-override-confirm"
-        >
+        >{/* analytics-exempt */}
           {confirmLabel}
         </button>
       </div>

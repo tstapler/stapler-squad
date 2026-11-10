@@ -2,6 +2,8 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ActionsSection } from "./ActionsSection";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
+import { noManualReview } from "./actionsSectionTestFixtures";
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 
 // Covers the two mutually-exclusive Unarchive render paths (ActionsSection.tsx:104-115,
 // :369-379) — live terminalState vs. item.status on load — which share one testid by design.
@@ -35,14 +37,8 @@ function renderActions(overrides: Partial<React.ComponentProps<typeof ActionsSec
       item={makeItem()}
       actionLoading={null}
       latestWorkSession={undefined}
-      showManualReview={false}
-      manualReviewOutcome="PASS"
-      manualReviewSummary=""
+      manualReview={noManualReview}
       onAction={noop}
-      onManualReviewOutcomeChange={noop}
-      onManualReviewSummaryChange={noop}
-      onManualReviewSubmit={noop}
-      onManualReviewCancel={noop}
       terminalState={null}
       activeWorkSessionCount={0}
       onSendBackWithFeedback={async () => {}}

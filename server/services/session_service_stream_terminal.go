@@ -395,6 +395,7 @@ func (s *SessionService) StreamTerminal(
 	// A hidden (background) session streams read-only: writer is nil and the
 	// loop below drops Input and Resize frames (ADR-005, Story 5.1).
 	writer, _ := AccessFor(instance).Writer(nil)
+	inputSrc := newInputSourceFromContext(ctx, PathStream, initialMsg.SessionId)
 
 	// Goroutine 2: Receive from client and forward to PTY (terminal input + resize)
 	wg.Add(1)
@@ -437,6 +438,7 @@ func (s *SessionService) StreamTerminal(
 
 				switch data := msg.Data.(type) {
 				case *sessionv1.TerminalData_Input:
+					recordTerminalInput(inputSrc, data.Input.Data, StageReceived)
 					if writer == nil {
 						log.Debug("[StreamTerminal] read-only attach: input frame dropped", "session", msg.SessionId, "bytes", len(data.Input.Data))
 						continue
@@ -475,6 +477,8 @@ func (s *SessionService) StreamTerminal(
 						errCh <- writeErr
 						return
 					}
+
+					recordTerminalInput(inputSrc, data.Input.Data, StageForwarded)
 
 					// Publish user interaction event for immediate review queue reactivity
 					s.eventBus.Publish(events.NewUserInteractionEvent(

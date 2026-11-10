@@ -1,4 +1,10 @@
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
+  MOBILE_INPUT_LAYER_DEFAULT,
+  MOBILE_INPUT_LAYER_FLAG,
+  MOBILE_INPUT_OVERRIDE_KEY,
+  getMobileInputOverride,
   loadFlags,
   peekFlags,
   preloadFlagValue,
@@ -203,5 +209,108 @@ describe("flagStore", () => {
       expect(flags[0]).toMatchObject({ name: "x", enabled: true });
       expect(mockGetFeatureFlags.mock.calls[1][0]).toEqual({ ifNoneMatch: "" });
     });
+  });
+});
+
+describe("mobile_input_layer flag", () => {
+  const KEY = "ssq:flag:mobile_input_layer";
+  const OVERRIDE = "ssq:flag-override:mobile_input_layer";
+  const setSearch = (q: string) => window.history.replaceState(null, "", "/" + q);
+  afterEach(() => setSearch(""));
+
+  it("preload_should_EqualGoDefaultConstant_When_NothingPersisted", () => {
+    const go = readFileSync(join(__dirname, "../../../../server/services/feature_flag_service.go"), "utf8");
+    const block = /name:\s*"mobile_input_layer",[\s\S]*?defaultValue:\s*(true|false),/.exec(go);
+    expect(block).not.toBeNull();
+    expect(MOBILE_INPUT_LAYER_DEFAULT).toBe(block?.[1] === "true");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(MOBILE_INPUT_LAYER_DEFAULT);
+  });
+
+  it("preload_should_ReturnPersistedValue_When_ZeroOrOne", () => {
+    localStorage.setItem(KEY, "0");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(false);
+    localStorage.setItem(KEY, "1");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(true);
+    localStorage.setItem(KEY, "garbage");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(MOBILE_INPUT_LAYER_DEFAULT);
+  });
+
+  it("persistFlags_should_WriteZeroAndPreloadReturnFalse_When_ServerReportsDisabled", async () => {
+    mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag(MOBILE_INPUT_LAYER_FLAG, false)] });
+    await loadFlags();
+    expect(localStorage.getItem(KEY)).toBe("0");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(false);
+
+    mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag(MOBILE_INPUT_LAYER_FLAG, true)] });
+    await loadFlags(Date.now, { force: true });
+    expect(localStorage.getItem(KEY)).toBe("1");
+  });
+
+  it("preload_should_ApplyOffOnlyOnSecondLoad_When_FlagFlippedAfterFirstLoadPersisted", async () => {
+    localStorage.setItem(KEY, "1");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(true); // load 1: still the old value
+    mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag(MOBILE_INPUT_LAYER_FLAG, false)] });
+    await loadFlags();
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(false); // load 2
+  });
+
+  it("preload_should_ReturnFalseInSameLoadAndStoreOverride_When_QueryParamMobileInput0", () => {
+    localStorage.setItem(KEY, "1");
+    setSearch("?mobile_input=0");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(false);
+    expect(localStorage.getItem(OVERRIDE)).toBe("0");
+    expect(localStorage.getItem(KEY)).toBe("1"); // server-persisted key untouched
+  });
+
+  it("preload_should_ReturnTrueInSameLoadAndStoreOverride_When_QueryParamMobileInput1", () => {
+    localStorage.setItem(KEY, "0");
+    setSearch("?mobile_input=1");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(true);
+    expect(localStorage.getItem(OVERRIDE)).toBe("1");
+    expect(localStorage.getItem(KEY)).toBe("0");
+  });
+
+  it("preload_should_IgnoreQueryParam_When_ValueIsGarbageOrAbsent", () => {
+    localStorage.setItem(KEY, "0");
+    for (const q of ["?mobile_input=yes", "?mobile_input=", "?other=1", ""]) {
+      setSearch(q);
+      expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(false);
+      expect(localStorage.getItem(OVERRIDE)).toBeNull();
+    }
+  });
+
+  it("override_should_SurviveServerRefreshAndStillWin_When_PersistFlagsRewritesTheServerKey", async () => {
+    setSearch("?mobile_input=0");
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(false);
+    setSearch(""); // a later navigation without the param
+    mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag(MOBILE_INPUT_LAYER_FLAG, true)] });
+    await loadFlags();
+    expect(localStorage.getItem(KEY)).toBe("1"); // persistFlags overwrote the server key
+    expect(localStorage.getItem(OVERRIDE)).toBe("0"); // but not the override
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(false);
+    expect(getMobileInputOverride()).toBe(false);
+  });
+
+  it("override_should_BeClearedAndServerValueGovern_When_UserFlipsTheFlagFromThePanel", async () => {
+    setSearch("?mobile_input=0");
+    preloadFlagValue(MOBILE_INPUT_LAYER_FLAG);
+    setSearch("");
+    mockGetFeatureFlags.mockResolvedValueOnce({ flags: [flag(MOBILE_INPUT_LAYER_FLAG, true)] });
+    await loadFlags();
+    recordFlagWrite(MOBILE_INPUT_LAYER_FLAG, true);
+    expect(localStorage.getItem(OVERRIDE)).toBeNull();
+    expect(preloadFlagValue(MOBILE_INPUT_LAYER_FLAG)).toBe(true);
+  });
+
+  it("override_should_BeClearedEvenWithoutLoadedFlags_And_IgnoreOtherFlagWrites", () => {
+    localStorage.setItem(OVERRIDE, "1");
+    recordFlagWrite("ghostty_renderer", true);
+    expect(localStorage.getItem(OVERRIDE)).toBe("1");
+    recordFlagWrite(MOBILE_INPUT_LAYER_FLAG, false, "ws-1");
+    expect(localStorage.getItem(OVERRIDE)).toBeNull();
+  });
+
+  it("override_key_should_NotCollideWithServerPersistPrefix", () => {
+    expect(MOBILE_INPUT_OVERRIDE_KEY.startsWith("ssq:flag:")).toBe(false);
   });
 });

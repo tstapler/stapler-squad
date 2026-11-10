@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionDetail } from "@/components/sessions/SessionDetail";
 import { SessionList } from "@/components/sessions/SessionList";
@@ -44,6 +44,7 @@ import {
   rendererContent,
 } from "@/styles/pane/paneSplit.css";
 import { pickerOverlay, pickerLabel } from "@/styles/pane/panePickerOverlay.css";
+import { useTrayClearanceRef } from "@/lib/hooks/useTrayClearance";
 
 function getPickerLetter(root: PaneNode, paneId: string): string | null {
   const allLeaves = getAllLeaves(root);
@@ -228,6 +229,14 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
   const { viewMode, setViewMode } = useSessionViewModeContext();
   // Mobile swaps this pane for the terminal and remounts it on return; restore the scroll.
   const scrollRef = useScrollRestore(`session-list-scroll-${pane.id}`);
+  const trayClearanceRef = useTrayClearanceRef();
+  const listScrollRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      scrollRef(el);
+      trayClearanceRef(el);
+    },
+    [scrollRef, trayClearanceRef],
+  );
   if (loading) return viewMode === "board" ? <BoardColumnsSkeleton /> : <SessionListSkeleton count={4} />;
   // `error` is useSessionServiceContext's single shared Redux field -- ANY
   // session-mutating RPC (createSession, updateSession, cancelSessionCreation,
@@ -322,7 +331,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
       >
         {viewMode === "board" ? `Board view, showing ${sessions.length} sessions` : `List view, showing ${sessions.length} sessions`}
       </div>
-      <div ref={scrollRef} className={sessionListScroll} data-testid="session-list-scroll">
+      <div ref={listScrollRef} className={sessionListScroll} data-testid="session-list-scroll">
         {viewMode === "board" ? (
           <SessionBoard {...sharedProps} />
         ) : (

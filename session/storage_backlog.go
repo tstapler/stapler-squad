@@ -1441,6 +1441,7 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 		result = append(result, ReviewVerdictSummary{
 			ID:                is.Edges.ReviewVerdict.ID.String(),
 			OverallOutcome:    is.Edges.ReviewVerdict.OverallOutcome,
+			PerCriterion:      is.Edges.ReviewVerdict.PerCriterion,
 			Summary:           is.Edges.ReviewVerdict.Summary,
 			DiffHash:          is.Edges.ReviewVerdict.DiffHash,
 			DiffTruncated:     is.Edges.ReviewVerdict.DiffTruncated,

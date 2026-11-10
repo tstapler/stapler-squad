@@ -51,6 +51,7 @@ import { ALL_STATUSES, BACKLOG_FILTER_FIELDS, filterBacklogItems } from "@/lib/h
 import { BacklogFilterBar } from "@/components/backlog/BacklogFilterBar";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import * as styles from "./backlog.css";
+import { useTrayClearanceRef } from "@/lib/hooks/useTrayClearance";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -277,6 +278,7 @@ const BacklogTableRow = memo(function BacklogTableRow({
 // ---------------------------------------------------------------------------
 
 function BacklogPageInner() {
+  const trayClearanceRef = useTrayClearanceRef();
   usePageView();
   const { track } = useAnalytics();
   const { createBacklogItem, importGitHubIssue, triggerTriage, spawnSessionFromItem, archiveBacklogItem, deleteBacklogItem, listForeignClaims } = useBacklogService();
@@ -952,7 +954,7 @@ function BacklogPageInner() {
 
       {/* Content */}
       <div className={styles.contentArea}>
-        <div className={styles.listPane}>
+        <div ref={trayClearanceRef} className={styles.listPane}>
           {loading ? (
             <div role="status" aria-label="Loading backlog items" style={{ padding: "32px", textAlign: "center", color: "inherit", opacity: 0.6 }}>
               Loading…

@@ -85,7 +85,7 @@ export function GitHubIssuePicker({ onSelect, onCancel, importing, importProgres
           enable the GitHub issue picker.
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onCancel} className={styles.backButton}>
+          <button type="button" onClick={onCancel} className={styles.backButton}>{/* analytics-exempt */}
             Close
           </button>
         </div>
@@ -101,7 +101,7 @@ export function GitHubIssuePicker({ onSelect, onCancel, importing, importProgres
         <IssuePhase picker={picker} searchRef={searchRef} importing={importing} importProgress={importProgress} />
       )}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button type="button" onClick={onCancel} className={styles.backButton} disabled={importing}>
+        <button type="button" onClick={onCancel} className={styles.backButton} disabled={importing}>{/* analytics-exempt */}
           Cancel
         </button>
       </div>
@@ -273,7 +273,7 @@ function IssuePhase({
           className={styles.backButton}
           onClick={picker.goBack}
           aria-label="Back to repository selection"
-        >
+        >{/* analytics-exempt */}
           ← Back
         </button>
         <span className={styles.repoChip} aria-label="Selected repository">
@@ -346,7 +346,7 @@ function IssuePhase({
           className={styles.importButton}
           disabled={selectedIssues.length === 0 || importing}
           onClick={handleImport}
-        >
+        >{/* analytics-exempt */}
           {importing ? "Importing…" : `Import${selectedIssues.length > 0 ? ` (${selectedIssues.length})` : ""}`}
         </button>
       </div>
@@ -428,7 +428,7 @@ function IssueRow({
               e.stopPropagation();
               onToggleExpanded();
             }}
-          >
+          >{/* analytics-exempt */}
             {expanded ? "▾" : "▸"}
           </button>
         )}
@@ -440,7 +440,7 @@ function IssueRow({
           aria-label={`Open issue #${issue.number} on GitHub`}
           title="Open on GitHub"
           onClick={(e) => e.stopPropagation()}
-        >
+        >{/* analytics-exempt */}
           👁
         </a>
       </div>

@@ -105,7 +105,7 @@ export function TriageRelatedWorkSection({ itemTitle, repoPath }: TriageRelatedW
       {error && (
         <div role="alert" className={styles.errorState} data-testid="triage-related-work-error">
           <span>Search failed —</span>
-          <button type="button" className={styles.retryButton} onClick={retry}>
+          <button type="button" className={styles.retryButton} onClick={retry}>{/* analytics-exempt */}
             Retry
           </button>
         </div>

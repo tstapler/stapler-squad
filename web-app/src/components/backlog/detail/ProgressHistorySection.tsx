@@ -57,7 +57,7 @@ export function ProgressHistorySection({ item, defaultExpanded }: ProgressHistor
             className={sectionStyles.showMoreButton}
             onClick={showAll}
             data-testid="progress-history-show-more"
-          >
+          >{/* analytics-exempt */}
             Show {remaining} more
           </button>
         )}

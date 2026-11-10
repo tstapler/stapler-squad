@@ -1,0 +1,74 @@
+{
+  "id": "gboard-spacebar-swipe-caret",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Dragging the space bar moves the caret with selectionchange only; nothing may be emitted. Source: https://github.com/codemirror/view/releases/tag/6.25.0",
+  "events": [
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 10
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "a",
+      "value": "a",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 20
+    },
+    {
+      "kind": "input",
+      "value": "a",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 30
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 40
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "b",
+      "value": "b",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 50
+    },
+    {
+      "kind": "input",
+      "value": "b",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 60
+    },
+    {
+      "kind": "selectionchange",
+      "selStart": 0,
+      "selEnd": 0,
+      "t": 70
+    },
+    {
+      "kind": "selectionchange",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 80
+    },
+    {
+      "kind": "selectionchange",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 90
+    }
+  ],
+  "expectedBytes": "ab",
+  "finalText": "ab"
+}

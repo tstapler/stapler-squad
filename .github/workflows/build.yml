@@ -323,10 +323,19 @@ jobs:
     outputs:
       playwright-version: ${{ steps.pw.outputs.version }}
       shards: ${{ steps.shards.outputs.matrix }}
+      shard-total: ${{ steps.shards.outputs.total }}
+      mode: ${{ steps.shards.outputs.mode }}
+      specs: ${{ steps.shards.outputs.specs }}
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tests/e2e/bun.lock
+          sparse-checkout: |
+            tests/e2e/bun.lock
+            tests/e2e/scripts
+            tests/e2e/shard-timings.json
+            .bun-version
+            .github/actions/setup-bun
+            .github/actions/cache-main-writes
           sparse-checkout-cone-mode: false
 
       - name: Read pinned Playwright version
@@ -336,11 +345,38 @@ jobs:
           [ -n "$v" ] || { echo "::error::could not read @playwright/test version from tests/e2e/bun.lock" >&2; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-      - name: Build shard matrix from E2E_SHARD_TOTAL
+      - name: Set up Bun
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/setup-bun
+
+      # PR runs only: pick the specs this diff can affect (tests/e2e/scripts/select-specs.ts; unknown file = all).
+      # main pushes and manual runs always run the full suite, which is what catches a wrong selection rule.
+      - name: Build shard matrix (full suite, or the specs this PR can affect)
         id: shards
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           case "$E2E_SHARD_TOTAL" in ''|*[!0-9]*|0) echo "::error::E2E_SHARD_TOTAL must be a positive integer, got '$E2E_SHARD_TOTAL'" >&2; exit 1;; esac
-          echo "matrix=$(jq -nc --argjson n "$E2E_SHARD_TOTAL" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
+          mode=all; total="$E2E_SHARD_TOTAL"; specs=''
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            # Fail open: if the selector cannot run, run everything rather than guess.
+            if sel=$(set -e
+              gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+              git ls-files 'tests/e2e/*.spec.ts' 'tests/e2e/**/*.spec.ts' | sed 's#^tests/e2e/##' | grep -v '^node_modules/' > "$RUNNER_TEMP/specs.txt"
+              bun tests/e2e/scripts/select-specs.ts --specs "$RUNNER_TEMP/specs.txt" --changed-file "$RUNNER_TEMP/changed.txt" --summary > "$RUNNER_TEMP/summary.md"
+              bun tests/e2e/scripts/select-specs.ts --specs "$RUNNER_TEMP/specs.txt" --changed-file "$RUNNER_TEMP/changed.txt" \
+                --timings tests/e2e/shard-timings.json --max-shards "$E2E_SHARD_TOTAL"); then
+              cat "$RUNNER_TEMP/summary.md" | tee -a "$GITHUB_STEP_SUMMARY"
+              mode=$(jq -r .mode <<<"$sel"); total=$(jq -r .shards <<<"$sel"); specs=$(jq -r '.specs[]' <<<"$sel")
+            else
+              echo "::warning::e2e spec selection failed; running the full suite"
+            fi
+          fi
+          # mode none skips every consumer; a one-element matrix keeps GitHub from rejecting an empty one.
+          { echo "mode=$mode"; echo "total=$total"
+            echo "matrix=$(jq -nc --argjson n "$total" 'if $n < 1 then [1] else [range(1; $n + 1)] end')"
+            echo "specs<<E2E_SPECS_EOF"; printf '%s\n' "$specs" | grep -E '^[A-Za-z0-9._/-]+$' || true; echo "E2E_SPECS_EOF"; } >> "$GITHUB_OUTPUT"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # e2e-bun: the one e2e run. The full suite (every spec under tests/e2e/, every Chromium project)
@@ -357,9 +393,10 @@ jobs:
   e2e-binary-bun:
     name: e2e binary (Bun build)
     runs-on: ubuntu-latest
-    needs: [detect-changes, prepare]
+    needs: [detect-changes, prepare, e2e-env]
     timeout-minutes: 30
-    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
+    # mode none = no change in this PR can affect e2e (select-specs.ts): skip the build, the shards and the gate (skipped = green).
+    if: always() && (github.event_name != 'pull_request' || (needs.detect-changes.outputs.relevant == 'true' && needs.e2e-env.outputs.mode != 'none'))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -443,7 +480,7 @@ jobs:
     name: e2e (Bun build) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     needs: [detect-changes, e2e-env, e2e-binary-bun]
-    if: always() && (github.event_name != 'pull_request' || needs.detect-changes.outputs.relevant == 'true')
+    if: always() && (github.event_name != 'pull_request' || (needs.detect-changes.outputs.relevant == 'true' && needs.e2e-env.outputs.mode != 'none'))
     timeout-minutes: 50
     # Official Playwright image: browsers and OS libraries are baked in, so there is no
     # apt-get / `playwright install` per shard. The tag comes from bun.lock via e2e-env.
@@ -503,17 +540,19 @@ jobs:
       # fires before the job's hard 50m.
       # Firefox/WebKit (desktop-firefox, desktop-webkit, webkit-mobile) moved to the dedicated
       # nightly.yml's secondary-browser jobs — see its header for why.
-      - name: Run e2e shard ${{ matrix.shard }}/${{ env.E2E_SHARD_TOTAL }} (Bun build)
+      - name: Run e2e shard ${{ matrix.shard }}/${{ needs.e2e-env.outputs.shard-total }} (Bun build)
         env:
           TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
           TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
           TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
           TEST_SSHD_BINARY: ${{ github.workspace }}/e2e-sshd
           MEM_LABEL: e2e-shard-${{ matrix.shard }}
+          # Set only for a PR subset run (see e2e-env); empty = the full suite. Passed via env, never inlined in the script.
+          E2E_SPEC_SELECTION: ${{ needs.e2e-env.outputs.mode == 'subset' && needs.e2e-env.outputs.specs || '' }}
         run: |
           cd tests/e2e
           mem-sampler --out "$GITHUB_WORKSPACE/ci-mem-head/metrics.json" --label "$MEM_LABEL" -- \
-            timeout 40m bash scripts/run-ci-shard.sh ${{ matrix.shard }} ${{ env.E2E_SHARD_TOTAL }} || {
+            timeout 40m bash scripts/run-ci-shard.sh ${{ matrix.shard }} ${{ needs.e2e-env.outputs.shard-total }} || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
               echo "::error::CI-BUDGET-EXCEEDED: 'e2e-bun' shard ${{ matrix.shard }} exceeded its 40m budget"
@@ -527,7 +566,10 @@ jobs:
       # global-setup error leaves a blob report with zero executed tests and used to pass the shard.
       - name: Fail if shard ${{ matrix.shard }} ran no tests or hit a setup error (Bun build)
         run: |
-          node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-bun shard ${{ matrix.shard }}"
+          # A PR subset run may leave a shard with no selected specs, or no stress pass; the full suite never does.
+          if [ -f tests/e2e/shard-pass1-empty ]; then echo "shard ${{ matrix.shard }}: no selected specs in the parallel pass"
+          else node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-bun shard ${{ matrix.shard }}"; fi
+          if [ -f tests/e2e/shard-stress-skipped ]; then echo "shard ${{ matrix.shard }}: stress pass not selected"; exit 0; fi
           node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report-stress.json --label "e2e-bun shard ${{ matrix.shard }} (stress pass)"
 
       - name: Upload blob report
@@ -536,7 +578,7 @@ jobs:
         with:
           name: e2e-bun-blob-${{ matrix.shard }}
           path: tests/e2e/blob-report
-          if-no-files-found: error
+          if-no-files-found: ${{ needs.e2e-env.outputs.mode == 'subset' && 'ignore' || 'error' }}
           retention-days: 1
 
       - name: Runner utilization report

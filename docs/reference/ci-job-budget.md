@@ -42,9 +42,15 @@ No check is a required status check: `gh api repos/tstapler/stapler-squad/branch
 
 For the promo-materials-refresh workflow change (Story 2.4.1) the PR-side count is unchanged by design: `website-ci.yml` stays one job and `demo-publish.yml` never ran on PRs. The new jobs live in `deploy-website.yml`, which has no `pull_request` trigger. Measured with `tools/ci/count-pr-checks.py`: 20 checks on a code PR touching every filtered path and 1 on a docs-only PR, before (spike notes) and after. Put the numbers in the PR description; the matrix is 2 shards on `push` to main until the Task 0.1.1b measurement shows headroom for 4.
 
+**Ghostty double-send e2e on dependency changes (mobile-input-layer Task 5.1.1d).** `tests/e2e/mobile-input-layer.spec.ts` runs for both renderers inside the existing `e2e-bun-shard` jobs, and `detect-changes` already marks a PR touching `web-app/package.json`, `web-app/bun.lock` or `web-app/src/**` as relevant, so a ghostty-web bump runs it with no new job or check. Nothing here is a required status check (see above); if branch protection is ever added, require the `e2e-bun` aggregate job, not a per-spec job.
+
 The e2e shard count is a separate knob (`E2E_SHARD_TOTAL` in `build.yml` once #1317 lands) and is the largest remaining contributor.
 
 Within a shard, spec files are assigned by recorded duration (`tests/e2e/shard-timings.json`, `tests/e2e/scripts/shard-assign.ts`) rather than Playwright's count-based `--shard`, which once left one shard at 36 min next to others at 16. Refresh the file from the `e2e-shard-timings` artifact the `e2e (Bun build)` job uploads, taken from a full uncut run (a cut-off shard has no durations for the specs it never reached). Each shard also stops itself with `--global-timeout` inside `E2E_SHARD_BUDGET_S` (default 38 min), so an overrunning shard still writes its reports instead of being killed with none. It still fails loudly (`assert-e2e-report.mjs` names the global-timeout cut-off), and the confirmation rerun does not run for a failed shard. A missing or unusable shard plan also fails the shard; there is no count-based fallback, because mixing schemes across shards would lose and duplicate tests.
+
+### Affected-spec selection (PRs only)
+
+On a PR, `e2e-env` runs `tests/e2e/scripts/select-specs.ts` over the PR's changed files and picks `all`, `subset` or `none`. The reasons per file are in the `e2e environment` job summary. `none` skips `e2e binary`, every shard and the `e2e (Bun build)` gate (a skipped check, same as an irrelevant PR today); `subset` shrinks the shard matrix and passes the spec list to `run-ci-shard.sh` via `E2E_SPEC_SELECTION`. A file no rule recognizes, or any shared surface (terminal/streamhub/proto/e2e harness/CI/build inputs), selects `all`. Main pushes and `workflow_dispatch` always run the full suite. The rules and their unit tests are in `select-specs.ts` and `tests/e2e/baseline/select-specs.test.ts`; replay them against recent PRs with `cd tests/e2e && bun scripts/replay-selection.ts --prs 60`. The check count is unchanged (no job added).
 
 ## Cache policy
 

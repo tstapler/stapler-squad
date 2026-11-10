@@ -192,6 +192,34 @@ func writeSessionTranscriptSection(sb *strings.Builder, transcriptRelPath string
 
 // writeReviewContextExtras renders all ReviewContextExtras sections. Only called on the
 // diff == "" path — see BuildHeadlessReviewPrompt.
+// writeAcceptanceCriteria lists the criteria; a waived one is marked so the reviewer does not
+// fail the item for something the owner already decided not to require.
+func writeAcceptanceCriteria(sb *strings.Builder, acSnapshot []AcCriterion) {
+	if len(acSnapshot) == 0 {
+		sb.WriteString("(no acceptance criteria)\n")
+		return
+	}
+	for _, c := range acSnapshot {
+		fmt.Fprintf(sb, "%d. %s\n", c.Index, sanitizeField(c.Text, 500))
+		if c.Status == AcStatusWaived {
+			sb.WriteString("   WAIVED by the owner: do not evaluate it and leave it out of verdicts.\n")
+		}
+		if c.Note != "" {
+			fmt.Fprintf(sb, "   Note (self-reported by work session via report_progress): %s\n", sanitizeField(c.Note, 500))
+		}
+	}
+}
+
+// writeReviewScope tells the reviewer what evidence is in bounds and how to treat failures
+// the change did not cause.
+func writeReviewScope(sb *strings.Builder, item *BacklogItemData) {
+	sb.WriteString("## Review Scope\n")
+	if item.PlanArtifactsPath != "" {
+		fmt.Fprintf(sb, "Plan artifacts for this item live in %s; files there count as evidence you may read and cite.\n", item.PlanArtifactsPath)
+	}
+	sb.WriteString(forDefault(secReviewScope) + "\n\n")
+}
+
 func writeReviewContextExtras(sb *strings.Builder, extras ReviewContextExtras) {
 	writePriorReviewAttemptsSection(sb, extras.PriorSessions)
 	writeFullNotesHistorySection(sb, extras.ProgressNotes)
@@ -212,16 +240,7 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 
 	// Acceptance criteria list.
 	sb.WriteString("## Acceptance Criteria\n")
-	if len(acSnapshot) == 0 {
-		sb.WriteString("(no acceptance criteria)\n")
-	} else {
-		for _, c := range acSnapshot {
-			fmt.Fprintf(&sb, "%d. %s\n", c.Index, sanitizeField(c.Text, 500))
-			if c.Note != "" {
-				fmt.Fprintf(&sb, "   Note (self-reported by work session via report_progress): %s\n", sanitizeField(c.Note, 500))
-			}
-		}
-	}
+	writeAcceptanceCriteria(&sb, acSnapshot)
 	sb.WriteString("\n")
 
 	// Implementation plan (if available).
@@ -271,14 +290,17 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 
 	writeVerificationEvidenceSection(&sb, verificationNotes)
 
+	writeReviewScope(&sb, item)
+
 	// --- instructions ---
 	sb.WriteString("## Instructions\n")
 	sb.WriteString("Call submit_review_verdict ONCE with ALL criteria verdicts in the verdicts array:\n")
 	sb.WriteString("  - item_id: the backlog item UUID shown below\n")
 	sb.WriteString("  - summary: a concise overall assessment\n")
-	sb.WriteString("  - verdicts: [{criterion_index, outcome, evidence}, ...] for each criterion\n")
+	sb.WriteString("  - verdicts: [{criterion_index, outcome, evidence, failure_class?, proposed_waiver?}, ...] for each criterion\n")
 	sb.WriteString("  - outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE\n")
-	sb.WriteString("  - evidence: direct quote or reference from the diff\n\n")
+	sb.WriteString("  - evidence: direct quote or reference from the diff\n")
+	sb.WriteString("  - " + forDefault(secReviewFailureClass) + "\n\n")
 	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_review_verdict): %s\n", item.ID)
 	sb.WriteString("\nEnd your session immediately after calling submit_review_verdict. Do not wait, poll, or do further work — an idle-but-alive reviewer session leaves the item stuck in review.\n")
 
@@ -305,16 +327,7 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	}
 
 	sb.WriteString("## Acceptance Criteria\n")
-	if len(acSnapshot) == 0 {
-		sb.WriteString("(no acceptance criteria)\n")
-	} else {
-		for _, c := range acSnapshot {
-			fmt.Fprintf(&sb, "%d. %s\n", c.Index, sanitizeField(c.Text, 500))
-			if c.Note != "" {
-				fmt.Fprintf(&sb, "   Note (self-reported by work session via report_progress): %s\n", sanitizeField(c.Note, 500))
-			}
-		}
-	}
+	writeAcceptanceCriteria(&sb, acSnapshot)
 	sb.WriteString("\n")
 
 	// Implementation plan (if available).
@@ -349,6 +362,8 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 
 	writeVerificationEvidenceSection(&sb, verificationNotes)
 
+	writeReviewScope(&sb, item)
+
 	sb.WriteString("## Instructions\n")
 	sb.WriteString("Evaluate every acceptance criterion against the diff above. Also verify the implementation follows the plan (if provided).\n")
 	sb.WriteString("Output ONLY a single JSON object with no surrounding text:\n")
@@ -362,6 +377,7 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	} else {
 		sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
 	}
+	sb.WriteString("\nOptional per-verdict fields failure_class and proposed_waiver: " + forDefault(secReviewFailureClass) + "\n")
 	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark a criterion UNVERIFIABLE rather than guessing if you cannot confirm it from what's in front of you — a missing or incomplete diff is a known limitation of this mode, not a signal the work is wrong.\n")
 
 	return sb.String()
@@ -488,15 +504,26 @@ func ParseHeadlessToolReads(text string) []string {
 
 // verifyToolReadsExist does a cheap, non-LLM os.Stat on every path in toolReads,
 // resolved relative to codebaseWorkDir (absolute paths are stat'd as-is). Every
-// resolved path MUST also be contained within codebaseWorkDir — an absolute path
-// pointing anywhere else on the host, or a relative path that escapes
-// codebaseWorkDir via "..", is treated as unverified/fabricated rather than stat'd
-// unconditionally. Returns false and the first offending path if ANY claimed path
-// does not exist or escapes codebaseWorkDir.
-func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, badPath string) {
+// resolved path MUST also be contained within codebaseWorkDir or one of
+// extraRoots (the item's own plan-artifacts directory, where evidence such as
+// captured race logs legitimately lives outside the worktree) — any other
+// absolute path, or a relative path that escapes via "..", is treated as
+// unverified/fabricated rather than stat'd unconditionally. Returns false and
+// the first offending path if ANY claimed path does not exist or escapes every
+// allowed root.
+func verifyToolReadsExist(codebaseWorkDir string, toolReads []string, extraRoots ...string) (ok bool, badPath string) {
 	root, rootErr := filepath.Abs(codebaseWorkDir)
 	if rootErr != nil {
 		return false, codebaseWorkDir
+	}
+	roots := []string{root}
+	for _, r := range extraRoots {
+		if strings.TrimSpace(r) == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(r); err == nil {
+			roots = append(roots, abs)
+		}
 	}
 	for _, p := range toolReads {
 		if strings.TrimSpace(p) == "" {
@@ -512,16 +539,19 @@ func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, 
 		if err != nil {
 			return false, p
 		}
-		rel, relErr := filepath.Rel(root, resolved)
-		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			// Escapes codebaseWorkDir — treat as unverified/fabricated regardless of
-			// whether the path happens to exist somewhere else on the host.
-			return false, p
-		}
-		if rel == "." {
-			// The path resolves to codebaseWorkDir itself (e.g. "" or ".") — the
+		contained, isRoot := false, false
+		for _, r := range roots {
+			rel, relErr := filepath.Rel(r, resolved)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			contained = true
+			// The path resolves to an allowed root itself (e.g. "" or ".") — the
 			// directory always exists, so this would otherwise trivially satisfy
 			// the check without citing any real evidence. Reject it.
+			isRoot = isRoot || rel == "."
+		}
+		if !contained || isRoot {
 			return false, p
 		}
 		info, err := os.Stat(resolved)
@@ -539,11 +569,11 @@ func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, 
 // outcome, verdicts, an annotated summary, and the refined path label
 // ("codebase-read-verified" or "codebase-read-degraded") for logging. No-op when
 // path != "codebase-read".
-func DegradeIfUnverified(path string, overall ReviewOutcome, verdicts []CriterionVerdict, summary string, toolReads []string, codebaseWorkDir string) (ReviewOutcome, []CriterionVerdict, string, string) {
+func DegradeIfUnverified(path string, overall ReviewOutcome, verdicts []CriterionVerdict, summary string, toolReads []string, codebaseWorkDir string, extraRoots ...string) (ReviewOutcome, []CriterionVerdict, string, string) {
 	if path != "codebase-read" {
 		return overall, verdicts, summary, path
 	}
-	verified, badPath := verifyToolReadsExist(codebaseWorkDir, toolReads)
+	verified, badPath := verifyToolReadsExist(codebaseWorkDir, toolReads, extraRoots...)
 	if len(toolReads) > 0 && verified {
 		return overall, verdicts, summary, "codebase-read-verified"
 	}
@@ -735,10 +765,8 @@ func GetGitDiffRef(ctx context.Context, dir string, baseSHA string, headRef stri
 		return "", false, fmt.Errorf("git diff %s in %s: %w", rangeArg, dir, runErr)
 	}
 
-	if len(raw) > headless.MaxDiffSizeReview {
-		return raw[:headless.MaxDiffSizeReview], true, nil
-	}
-	return raw, false, nil
+	diff, truncated = TruncateDiffByFile(raw, headless.MaxDiffSizeReview)
+	return diff, truncated, nil
 }
 
 // RecoverBaseCommitSHA attempts to self-heal a base commit SHA that no longer
