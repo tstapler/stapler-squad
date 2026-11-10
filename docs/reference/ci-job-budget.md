@@ -24,7 +24,9 @@ The script is an upper bound for jobs whose skip comes from `needs:` or a `detec
 | PR labelled `run-benchmarks` | `benchmark.yml` | also runs on every push to main; a failing main run opens an issue |
 | PR labelled `record-video` | `e2e-video.yml` | non-gating feature videos |
 | Push to main only | `main-ci.yml` | full-suite coverage gate (`test-tmux`, `test-rest`, `test`), 5-platform build matrix |
-| Nightly / manual | `nightly.yml`, `css-differential.yml`, release and demo workflows | |
+| PR touching `website/**`, `tests/e2e/website-demos/**`, `tests/demo/**` or docs sources | `website-ci.yml` | one `checks` job; its smoke steps (build the server binary from the PR, record the `dashboard-lifecycle` clip, build with `TOURS_MEDIA_MODE=smoke`) are steps, not jobs, so the check count is unchanged |
+| Push to main touching website or promo paths; weekly cron; manual | `deploy-website.yml` | `decide`, `binary`, `record` (matrix: 2 shards, one check each), `build`, `mediafresh`, `termcheck-dist`, `deploy`, `publish-lkg`, `notify`. Never a PR check. A content-only push skips `binary` and `record` and ships the `promo-media-lkg` artifact |
+| Nightly / manual | `nightly.yml`, `css-differential.yml`, release workflows | `demo-publish.yml` is retired (its `demo-gifs-latest` release is no longer written) |
 
 No check is a required status check: `gh api repos/tstapler/stapler-squad/branches/main` reports `protected: false` with empty `required_status_checks`, and `gh api repos/tstapler/stapler-squad/rulesets` returns `[]`. Re-verify before relying on that.
 
@@ -37,6 +39,8 @@ No check is a required status check: `gh api repos/tstapler/stapler-squad/branch
 5. **Do not use a matrix for fan-out you do not need.** A matrix leg is a check. Cross-compile and OS/arch matrices run on main only.
 6. **Add `concurrency` with `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`** so a superseded PR run frees its jobs.
 7. Re-run `tools/ci/count-pr-checks.py` and put the before/after in the PR description.
+
+For the promo-materials-refresh workflow change (Story 2.4.1) the PR-side count is unchanged by design: `website-ci.yml` stays one job and `demo-publish.yml` never ran on PRs. The new jobs live in `deploy-website.yml`, which has no `pull_request` trigger. Measured with `tools/ci/count-pr-checks.py`: 20 checks on a code PR touching every filtered path and 1 on a docs-only PR, before (spike notes) and after. Put the numbers in the PR description; the matrix is 2 shards on `push` to main until the Task 0.1.1b measurement shows headroom for 4.
 
 The e2e shard count is a separate knob (`E2E_SHARD_TOTAL` in `build.yml` once #1317 lands) and is the largest remaining contributor.
 

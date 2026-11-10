@@ -11,3 +11,11 @@
 /tools/promo/termcheck/allowlist.txt @tstapler
 /.github/workflows/backlog-scaffolding-guard.yml @tstapler
 /.github/workflows/deploy-website.yml @tstapler
+
+# Theme files: a change needs the owner's review (the recorded sign-off for imagery,
+# logos and decorative art that the OCR gate cannot read; Task 2.4.1f).
+/web-app/src/styles/theme* @tstapler
+/web-app/src/lib/theme/** @tstapler
+/website/src/styles/grimdark.css @tstapler
+/web-app/src/app/fonts/** @tstapler
+/.github/workflows/website-ci.yml @tstapler

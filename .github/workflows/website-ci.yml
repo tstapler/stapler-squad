@@ -5,6 +5,15 @@ name: Website CI
 # that would break the Pages deploy fails here instead of after merge.
 # website/tests/unit/workflow-yaml.test.ts fails if the two drift apart.
 # Never deploys: the `github-pages` environment only accepts main.
+#
+# Media: a PR records ONE clip (the dashboard-lifecycle hero clip) and its shots
+# against a server binary built from the PR itself (build.yml's e2e-binary-bun
+# artifact has 1-day retention and path-filtered triggers, so there is no
+# reliably downloadable main binary), then builds the site with
+# TOURS_MEDIA_MODE=smoke: tours without recorded media are not built at all.
+# Full media, tour-page Lighthouse and every-tour axe run only in deploy-website.yml.
+# Recorder contract assumed: record-website-demos.sh --out DIR --only a,b --smoke writes
+# DIR/clips, DIR/shots and DIR/manifest.json.
 
 on:
   pull_request:
@@ -14,6 +23,7 @@ on:
       - 'docs/features.md'
       - 'README.md'
       - 'tests/e2e/website-demos/**'
+      - 'tests/demo/**'
       - 'tests/e2e/website-demos.spec.ts'
       - 'tests/e2e/playwright.website-demos.config.ts'
       - 'scripts/record-website-demos.sh'
@@ -60,8 +70,53 @@ jobs:
         working-directory: website
         run: node scripts/build-features.mjs && git diff --exit-code -- src/content/features.json
 
+      # CI-only (deploy-website.yml records full media in its own jobs): smoke-record
+      # the hero clip so the site build has a manifest and one tour to render.
+      - name: "Smoke: fetch submodules"
+        run: git submodule update --init --depth 1
+
+      - name: "Smoke: set up Go"
+        uses: ./.github/actions/setup-go-cached
+        with:
+          go-version-file: 'go.mod'
+
+      # The prepare action sets up Bun and Node itself.
+      - name: "Smoke: generate protos and build web UI"
+        uses: ./.github/actions/prepare
+
+      - name: "Smoke: build server binary"
+        run: go build -o stapler-squad .
+
+      - name: "Smoke: cache Playwright browsers"
+        uses: ./.github/actions/cache-main-writes
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
+
+      - name: "Smoke: install recorder dependencies"
+        run: |
+          cd tests/e2e
+          bun install --frozen-lockfile
+          npx playwright install chromium --with-deps
+          sudo apt-get install -y ffmpeg librsvg2-bin jq tmux
+
+      - name: "Smoke: record the dashboard-lifecycle clip"
+        env:
+          SSQ_BIN: ${{ github.workspace }}/stapler-squad
+        run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/smoke-out" --only dashboard-lifecycle --smoke
+
+      - name: "Smoke: stage media for the site build"
+        run: |
+          mkdir -p website/public
+          cp -r "$RUNNER_TEMP/smoke-out/clips" website/public/clips
+          [ -d "$RUNNER_TEMP/smoke-out/shots" ] && cp -r "$RUNNER_TEMP/smoke-out/shots" website/public/shots
+          cp "$RUNNER_TEMP/smoke-out/manifest.json" website/public/media-manifest.json
+          echo "Smoke media: dashboard-lifecycle only, recorded against a binary built from this PR." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build site
         working-directory: website
+        env:
+          TOURS_MEDIA_MODE: smoke
         run: bun run build
 
       - name: Check internal links

@@ -5,7 +5,18 @@ name: Deploy Website
 # docs/features.md and README.md are CuratedDoc/features.json sources (Epic 2.1's sync-content.mjs /
 # content-manifest.json), so a change there without a `website/**` change
 # must still trigger a rebuild+resync, not silently drift.
-
+#
+# Pipeline (ADR-003, plan Epic 2.4):
+#   decide -> binary -> record (shard matrix) -> build -> mediafresh + termcheck-dist -> deploy -> publish-lkg
+#   notify reports every failure source.
+# decide chooses `record` or `reuse`: a push whose changes since the last-known-good
+# (LKG) media touch no recording-input path (tools/promo/budgets.json recordInputPaths)
+# skips recording and ships the LKG artifact. schedule and workflow_dispatch always record.
+#
+# Recorder contract assumed here (scripts/record-website-demos.sh, owned by the recorder work):
+#   record-website-demos.sh --out DIR --only a,b   writes DIR/clips, DIR/shots, DIR/dom-text
+#   and DIR/manifest.json (one MediaManifest per shard).
+#
 # `schedule` + `workflow_dispatch` redeploy without a content change, so the
 # clips are re-recorded against the current app and a rotted link or a demo
 # selector that no longer matches is caught within a week instead of at the
@@ -21,8 +32,12 @@ on:
       - 'README.md'
       - 'tests/e2e/website-demos/**'
       - 'tests/e2e/playwright.website-demos.config.ts'
+      - 'tests/demo/**'
       - 'scripts/record-website-demos.sh'
       - 'scripts/demo-post-process.sh'
+      - 'tools/promo/**'
+      - 'tools/promolib/**'
+      - '.github/promo-flags.json'
       - '.github/workflows/deploy-website.yml'
   schedule:
     - cron: '17 6 * * 1'
@@ -38,19 +53,101 @@ permissions:
   id-token: write
 
 jobs:
-  # Records the demo clips against the current app so they never go stale and
-  # nothing is committed: they ship inside the Pages artifact. The build job
-  # tolerates this job failing (the site then keeps its screenshots), and
-  # `notify` below still reports a failed deploy.
-  record-clips:
+  # Builds the promo tools once, chooses record vs reuse, and plans the shard matrix.
+  # Everything later jobs need from here travels in the `promo-plan` artifact.
+  decide:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read # gh run list / gh run download for the LKG artifact
+    outputs:
+      mode: ${{ steps.decide.outputs.mode }}
+      recorded: ${{ steps.decide.outputs.recorded }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-cached
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build promo tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/promo-plan"
+          go build -o "$RUNNER_TEMP/promo-plan/mediatool" ./tools/promo/cmd/mediatool
+          go build -o "$RUNNER_TEMP/promo-plan/termcheck" ./tools/promo/cmd/termcheck
+
+      # Assumption: the script writes website/expected-media.json with no arguments.
+      - name: Generate expected-media.json
+        working-directory: website
+        run: |
+          bun install --frozen-lockfile
+          node scripts/expected-media.mjs
+          cp expected-media.json "$RUNNER_TEMP/promo-plan/expected-media.json"
+
+      # A missing LKG artifact here only means "record"; every consumer of the
+      # artifact (build, below) hard-fails when it is absent.
+      - name: Decide record or reuse
+        id: decide
+        run: |
+          mode=record
+          recorded=""
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if "$RUNNER_TEMP/promo-plan/mediatool" lkg -out "$RUNNER_TEMP/lkg" > "$RUNNER_TEMP/lkg.txt"; then
+              recorded=$(jq -r .commit "$RUNNER_TEMP/lkg/media-manifest.json")
+              if gh api "repos/$GH_REPO/compare/$recorded...$GITHUB_SHA" --paginate > "$RUNNER_TEMP/promo-plan/compare.json"; then
+                mode=$("$RUNNER_TEMP/promo-plan/mediatool" fresh -decide-reuse -manifest "$RUNNER_TEMP/lkg/media-manifest.json" -compare-json "$RUNNER_TEMP/promo-plan/compare.json") \
+                  || { echo "::warning::reuse decision failed, recording"; mode=record; }
+              else
+                echo "::notice::compare $recorded...$GITHUB_SHA failed; recording"
+              fi
+            else
+              echo "::notice::no usable last-known-good artifact; recording"
+            fi
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "recorded=$recorded" >> "$GITHUB_OUTPUT"
+          echo "### Media mode: $mode (recorded commit: ${recorded:-none})" >> "$GITHUB_STEP_SUMMARY"
+
+      # shard-plan prints {"include":[{shard,total,tours,only}]}; drop empty shards
+      # so a short tour list never starts a runner (or records everything).
+      - name: Plan shards
+        id: plan
+        run: |
+          matrix=$("$RUNNER_TEMP/promo-plan/mediatool" shard-plan -shards 2 | jq -c '{include: [.include[] | select(.only != "")]}')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+      - name: Upload promo plan
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
+        with:
+          name: promo-plan
+          path: ${{ runner.temp }}/promo-plan
+          retention-days: 1
+
+  # The server binary is built once and handed to every shard.
+  binary:
+    needs: decide
+    if: ${{ needs.decide.outputs.mode == 'record' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
         with:
-          lfs: true
           submodules: true
 
       - name: Set up Go
@@ -68,36 +165,144 @@ jobs:
       - name: Build binary
         run: go build -o stapler-squad .
 
+      - name: Upload binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
+        with:
+          name: ssq-binary
+          path: stapler-squad
+          retention-days: 1
+
+  # Records the demo clips and shots against the current app; nothing is committed,
+  # they ship inside the Pages artifact. No `lfs: true` here: LFS would mask the
+  # mediaguard. The build job tolerates a failed shard while freshness is
+  # report-only (and fails once freshnessEnforce is true); notify reports it.
+  record:
+    name: record (shard ${{ matrix.shard }}/${{ matrix.total }})
+    needs: [decide, binary]
+    if: ${{ needs.decide.outputs.mode == 'record' }}
+    runs-on: ubuntu-22.04
+    # recordWallClockMaxMinutes is 30 (tools/promo/budgets.json, checked by
+    # `mediatool fresh`); the extra minutes cover cold-cache apt + Chromium setup.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.decide.outputs.matrix) }}
+    steps:
+      - name: Start setup timer
+        run: echo "SETUP_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
+        with:
+          submodules: true
+
+      # Go is only for `go run ./tests/demo/seed` inside the record script.
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-cached
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
       - name: Cache Playwright browsers
         uses: ./.github/actions/cache-main-writes
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
 
-      - name: Install Playwright, ffmpeg and librsvg
+      - name: Install Playwright, ffmpeg, tesseract and librsvg
         run: |
           cd tests/e2e
           bun install --frozen-lockfile
           npx playwright install chromium --with-deps
-          sudo apt-get install -y ffmpeg librsvg2-bin jq tmux
+          sudo apt-get install -y ffmpeg librsvg2-bin jq tmux tesseract-ocr
+
+      - name: Download server binary and promo tools
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          pattern: '{ssq-binary,promo-plan}'
+          path: ${{ runner.temp }}/dl
+
+      - name: Place binary and tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/promo-plan"
+          cp "$RUNNER_TEMP"/dl/promo-plan/* "$RUNNER_TEMP/promo-plan"/
+          chmod +x "$RUNNER_TEMP/promo-plan"/mediatool "$RUNNER_TEMP/promo-plan"/termcheck "$RUNNER_TEMP/dl/ssq-binary/stapler-squad"
+          echo "setup (apt, Chromium, deps) took $(( $(date +%s) - SETUP_T0 )) s" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record, trim and brand the clips
-        run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/website-demo-clips"
+        env:
+          SSQ_BIN: ${{ runner.temp }}/dl/ssq-binary/stapler-squad
+          ONLY: ${{ matrix.only }}
+        run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/media-out" --only "$ONLY"
 
-      # Even after a partial failure (the script exits 3): ship the clips that worked.
-      - name: Upload clips
+      # Blocking, independent of freshnessEnforce: banned terms in the DOM text of what was recorded.
+      - name: Scan DOM text for banned terms
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -d "$RUNNER_TEMP/media-out/dom-text" ]; then
+            "$RUNNER_TEMP/promo-plan/termcheck" -mode=media-text -dir "$RUNNER_TEMP/media-out/dom-text"
+          else
+            echo "::warning::no dom-text/ output in this shard"
+          fi
+
+      # Report-only until the OCR known-text fixture (Task 2.4.1h) exists; then drop
+      # `continue-on-error` so a hit blocks the upload. Output feeds termcheck media-text.
+      - name: OCR the shots and scan for banned terms
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/media-out/ocr-text"
+          shopt -s nullglob
+          for shot in "$RUNNER_TEMP/media-out"/shots/*.webp "$RUNNER_TEMP/media-out"/shots/*.png; do
+            name=$(basename "$shot"); name=${name%.*}
+            png="$RUNNER_TEMP/ocr-$name.png"
+            ffmpeg -y -loglevel error -i "$shot" "$png"
+            tesseract "$png" "$RUNNER_TEMP/media-out/ocr-text/$name" >/dev/null 2>&1
+            rm -f "$png"
+          done
+          "$RUNNER_TEMP/promo-plan/termcheck" -mode=media-text -dir "$RUNNER_TEMP/media-out/ocr-text"
+
+      - name: Name the shard manifest
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/media-out/manifest.json" ]; then
+            mv "$RUNNER_TEMP/media-out/manifest.json" "$RUNNER_TEMP/media-out/manifest-${{ matrix.shard }}.json"
+            "$RUNNER_TEMP/promo-plan/mediatool" summary -manifest "$RUNNER_TEMP/media-out/manifest-${{ matrix.shard }}.json"
+          else
+            echo "::warning::shard ${{ matrix.shard }} wrote no manifest.json"
+          fi
+
+      # Even after a partial failure: ship what was recorded. dom-text/ and ocr-text/ stay out.
+      - name: Upload shard media
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
         with:
-          name: website-demo-clips
-          path: ${{ runner.temp }}/website-demo-clips/*.webm
+          name: media-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/media-out/clips
+            ${{ runner.temp }}/media-out/shots
+            ${{ runner.temp }}/media-out/manifest-${{ matrix.shard }}.json
           if-no-files-found: warn
           retention-days: 1
 
   build:
-    needs: record-clips
-    if: ${{ !cancelled() }}
+    needs: [decide, record]
+    if: ${{ !cancelled() && needs.decide.result == 'success' }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read # gh run download of the LKG artifact
+      pages: write
+    outputs:
+      lkg_used: ${{ steps.lkgfallback.outputs.used }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      MODE: ${{ needs.decide.outputs.mode }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
 
@@ -132,23 +337,85 @@ jobs:
         working-directory: website
         run: node scripts/build-features.mjs && git diff --exit-code -- src/content/features.json
 
-      # Deploy-only (website-ci.yml has no recording): put this run's clips under
-      # public/clips/ and regenerate features.json so the cards play them. Neither
-      # is committed. A missing artifact (failed recording) leaves the screenshots.
-      - name: Download demo clips
-        id: clips
+      # Deploy-only (website-ci.yml has no full recording): promo tools, shard
+      # media (record) or the LKG artifact (reuse), then freshness, then
+      # regenerate features.json so the cards play the clips. None is committed.
+      - name: Download promo plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          name: promo-plan
+          path: ${{ runner.temp }}/promo-plan
+
+      - name: Make promo tools executable
+        run: chmod +x "$RUNNER_TEMP/promo-plan/mediatool" "$RUNNER_TEMP/promo-plan/termcheck"
+
+      # A failed shard must not stop the build while freshness is report-only:
+      # the freshness check below is what turns missing media into a failure.
+      - name: Download media shards
+        id: shards
+        if: ${{ env.MODE == 'record' }}
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
         with:
-          name: website-demo-clips
-          path: website/public/clips
+          pattern: media-shard-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/media-in
 
-      # A download that fails after a successful recording would otherwise ship
-      # screenshot-only with no signal; fail loudly on the annotation at least.
+      - name: Stage shard media and merge manifests
+        if: ${{ env.MODE == 'record' }}
+        run: |
+          shopt -s nullglob
+          manifests=("$RUNNER_TEMP"/media-in/manifest-*.json)
+          if [ ${#manifests[@]} -eq 0 ]; then
+            echo "::warning::no shard manifests (download outcome: ${{ steps.shards.outcome }}); the site ships without recorded media"
+            if [ "$(jq -r .freshnessEnforce .github/promo-flags.json)" = "true" ]; then
+              echo "freshnessEnforce is true and no shard produced a manifest"; exit 1
+            fi
+            exit 0
+          fi
+          mkdir -p website/public
+          [ -d "$RUNNER_TEMP/media-in/clips" ] && cp -r "$RUNNER_TEMP/media-in/clips" website/public/clips
+          [ -d "$RUNNER_TEMP/media-in/shots" ] && cp -r "$RUNNER_TEMP/media-in/shots" website/public/shots
+          args=()
+          for m in "${manifests[@]}"; do args+=(-manifest "$m"); done
+          "$RUNNER_TEMP/promo-plan/mediatool" merge "${args[@]}" -out website/public/media-manifest.json
+
+      # Reuse (content-only push): no continue-on-error. A missing or expired
+      # artifact is a hard failure naming promo-media-lkg, never a silent skip.
+      - name: Download last-known-good media (reuse)
+        if: ${{ env.MODE == 'reuse' }}
+        run: |
+          mkdir -p website/public
+          "$RUNNER_TEMP/promo-plan/mediatool" lkg -out website/public
+
+      - name: Freshness precheck (mediatool fresh)
+        id: precheck
+        if: ${{ env.MODE == 'record' && hashFiles('website/public/media-manifest.json') != '' }}
+        # Only a scheduled run may fall back to last-known-good; push and dispatch fail.
+        continue-on-error: ${{ github.event_name == 'schedule' }}
+        run: |
+          "$RUNNER_TEMP/promo-plan/mediatool" fresh \
+            -manifest website/public/media-manifest.json \
+            -expected "$RUNNER_TEMP/promo-plan/expected-media.json" \
+            -sha "$GITHUB_SHA" -summary
+
+      # Scheduled runs only, and only when the precheck failed (enforcing):
+      # publish media younger than 28 days with a banner; older hard-fails.
+      - name: Use last-known-good media (scheduled fallback)
+        id: lkgfallback
+        if: ${{ github.event_name == 'schedule' && steps.precheck.outcome == 'failure' }}
+        run: |
+          rm -rf website/public/clips website/public/shots website/public/media-manifest.json
+          "$RUNNER_TEMP/promo-plan/mediatool" lkg -out website/public -max-age-days 28
+          echo "used=true" >> "$GITHUB_OUTPUT"
+          echo "> **Deploying last-known-good media**: this week's recording failed freshness (see the precheck step)." >> "$GITHUB_STEP_SUMMARY"
+
+      # REMOVE IN 5.1.2: legacy warn-and-fallback, kept beside `mediatool fresh`
+      # until freshnessEnforce is true (Task 5.1.2a removes it).
       - name: Warn when no clips were shipped
         run: |
           if ! ls website/public/clips/*.webm >/dev/null 2>&1; then
-            echo "::warning::no demo clips in this build (download outcome: ${{ steps.clips.outcome }}); the site ships screenshots only"
+            echo "::warning::no demo clips in this build (shards download outcome: ${{ steps.shards.outcome }}); the site ships screenshots only"
           fi
 
       - name: Regenerate features.json with the clips
@@ -223,40 +490,180 @@ jobs:
         with:
           path: website/dist
 
-  deploy:
+      # Same bytes as the Pages artifact, for the post-build gates and the LKG upload.
+      - name: Upload site dist for the post-build gates
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
+        with:
+          name: site-dist
+          path: website/dist
+          retention-days: 1
+
+  # Report-only while freshnessEnforce is false in .github/promo-flags.json
+  # (mediatool fresh exits 0 and prints the findings); fails and blocks deploy once true.
+  mediafresh:
+    needs: [decide, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      clean: ${{ steps.fresh.outputs.clean }}
+      report_only: ${{ steps.fresh.outputs.report_only }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
+        with:
+          sparse-checkout: |
+            .github/promo-flags.json
+            tools/promo/budgets.json
+
+      - name: Download promo plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          name: promo-plan
+          path: ${{ runner.temp }}/promo-plan
+
+      - name: Download site dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          name: site-dist
+          path: website/dist
+
+      - name: Freshness and budgets (mediatool fresh)
+        id: fresh
+        env:
+          MODE: ${{ needs.decide.outputs.mode }}
+          RECORDED: ${{ needs.decide.outputs.recorded }}
+          LKG_USED: ${{ needs.build.outputs.lkg_used }}
+        run: |
+          chmod +x "$RUNNER_TEMP/promo-plan/mediatool"
+          if [ "$LKG_USED" = true ]; then
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            echo "> Last-known-good media deployed; freshness was checked on the failed recording (build precheck)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          args=(-manifest website/dist/media-manifest.json -expected "$RUNNER_TEMP/promo-plan/expected-media.json" -dist website/dist -summary)
+          if [ "$MODE" = reuse ]; then
+            args+=(-reuse-from "$RECORDED" -compare-json "$RUNNER_TEMP/promo-plan/compare.json")
+          fi
+          set +e
+          out=$("$RUNNER_TEMP/promo-plan/mediatool" fresh "${args[@]}"); code=$?
+          set -e
+          echo "$out"
+          clean=false
+          if [ "$code" -eq 0 ] && ! grep -q 'report-only' <<<"$out"; then clean=true; fi
+          echo "clean=$clean" >> "$GITHUB_OUTPUT"
+          echo "report_only=$([ "$code" -eq 0 ] && [ "$clean" = false ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+  termcheck-dist:
     needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
+        with:
+          sparse-checkout: tools/promo
+
+      - name: Download promo plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          name: promo-plan
+          path: ${{ runner.temp }}/promo-plan
+
+      - name: Download site dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          name: site-dist
+          path: website/dist
+
+      # Blocking, independent of freshnessEnforce.
+      - name: Scan the built site for banned terms
+        run: |
+          chmod +x "$RUNNER_TEMP/promo-plan/termcheck"
+          "$RUNNER_TEMP/promo-plan/termcheck" -mode=dist -dir website/dist
+
+  deploy:
+    needs: [build, mediafresh, termcheck-dist]
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-22.04
+    permissions:
+      pages: write
+      id-token: write
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # ratchet:actions/deploy-pages@v5
 
-  # Opens (or comments on) one tracking issue when a push/scheduled deploy
-  # fails, and closes it on the next success, so a broken site is never silent
+  # Last-known-good: only a full run on main that passed `mediatool fresh` cleanly
+  # (not report-only), was not itself an LKG/reuse deploy, and deployed. A named
+  # artifact, not actions/cache: cache entries evict after 7 days idle, the weekly
+  # cron's exact period. 35-day retention keeps the 28-day age bound satisfiable.
+  publish-lkg:
+    needs: [decide, build, mediafresh, termcheck-dist, deploy]
+    if: ${{ needs.decide.outputs.mode == 'record' && needs.build.outputs.lkg_used != 'true' && needs.mediafresh.outputs.clean == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Download site dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
+        with:
+          name: site-dist
+          path: dist
+
+      - name: Upload last-known-good media
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # ratchet:actions/upload-artifact@v7
+        with:
+          name: promo-media-lkg
+          path: |
+            dist/clips
+            dist/shots
+            dist/media-manifest.json
+          if-no-files-found: error
+          retention-days: 35
+
+  # Opens (or comments on) one tracking issue per failure source when a push/scheduled
+  # deploy fails, and closes it on the next success, so a broken site is never silent
   # again (it failed 25 consecutive times unnoticed before this existed).
   notify:
-    needs: [record-clips, build, deploy]
+    needs: [decide, record, build, mediafresh, termcheck-dist, deploy, publish-lkg]
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     permissions:
+      contents: read
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       DEPLOYED: ${{ needs.deploy.result }}
-      RECORDED: ${{ needs.record-clips.result }}
+      BUILT: ${{ needs.build.result }}
+      RECORDED: ${{ needs.record.result }}
+      FRESH: ${{ needs.mediafresh.result }}
+      DISTCHECK: ${{ needs.termcheck-dist.result }}
+      LKG_USED: ${{ needs.build.outputs.lkg_used }}
+      FRESH_REPORT_ONLY: ${{ needs.mediafresh.outputs.report_only }}
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
+        with:
+          sparse-checkout: .github/promo-flags.json
+
       # One tracking issue per problem: opened (or commented on) while it
-      # persists, closed on the first healthy run. A failed recording does not
-      # block the deploy, so without its own issue it would degrade silently.
+      # persists, closed on the first healthy run. A skipped job (reuse mode, or
+      # an upstream failure) neither opens nor closes anything.
       - name: Open, update or close the tracking issues
         run: |
           track() {
             local title="$1" result="$2" body="$3" existing
+            [ "$result" = "skipped" ] && return 0
             existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
             if [ "$result" = "success" ]; then
               if [ -n "$existing" ]; then gh issue close "$existing" --comment "Recovered: $RUN_URL"; fi
@@ -266,8 +673,39 @@ jobs:
               gh issue create --title "$title" --body "$body"
             fi
           }
+          deploy_state=$DEPLOYED
+          [ "$BUILT" = "failure" ] && deploy_state=failure
+          fresh_state=$FRESH
+          # Report-only findings still open the issue: the soak needs them visible.
+          [ "$FRESH_REPORT_ONLY" = "true" ] && fresh_state=failure
+          lkg_state=success
+          [ "$LKG_USED" = "true" ] && lkg_state=failure
           # Each call is independent: one gh failure must not skip the other issue.
           failures=0
-          track "Website deploy is failing" "$DEPLOYED" "Deploy Website failed (build or deploy job): $RUN_URL" || failures=$((failures + 1))
-          track "Website demo clips failed to record" "$RECORDED" "The record-clips job did not succeed, so the site shipped without (some) demo clips: $RUN_URL" || failures=$((failures + 1))
+          track "Website deploy is failing" "$deploy_state" "Deploy Website failed (build or deploy job): $RUN_URL" || failures=$((failures + 1))
+          track "Website demo clips failed to record" "$RECORDED" "The record job did not succeed for every shard, so the site shipped without (some) demo media: $RUN_URL" || failures=$((failures + 1))
+          track "Website media failed the freshness check" "$fresh_state" "mediatool fresh failed (missing, stale or over-budget media): $RUN_URL" || failures=$((failures + 1))
+          track "Website dist failed the terminology check" "$DISTCHECK" "termcheck -mode=dist found banned terms in the built site: $RUN_URL" || failures=$((failures + 1))
+          track "Website deployed last-known-good media" "$lkg_state" "This week's recording failed freshness, so the previous known-good media was deployed: $RUN_URL" || failures=$((failures + 1))
           exit "$failures"
+
+      # Each flip story opens "Promo flag flip: <flag>" when its prerequisite story merges.
+      # A flag still false 14 days later gets a reminder on the weekly cron.
+      - name: Remind about flags still false after 14 days
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          for flag in $(jq -r 'to_entries[] | select(.value == false) | .key' .github/promo-flags.json); do
+            issue=$(gh issue list --state open --search "\"Promo flag flip: $flag\" in:title" --json number,createdAt --jq '.[0] | select(. != null) | "\(.number) \(.createdAt)"')
+            [ -z "$issue" ] && continue
+            number=${issue%% *}; created=${issue#* }
+            age_days=$(( ( $(date +%s) - $(date -d "$created" +%s) ) / 86400 ))
+            if [ "$age_days" -ge 14 ]; then
+              gh issue comment "$number" --body "Flag \`$flag\` is still \`false\` in .github/promo-flags.json, $age_days days after this flip was opened. Record the soak criterion and flip it, or say why not: $RUN_URL"
+            fi
+          done
+
+      # Imagery, logos and decorative art are unreadable to OCR; theme changes need owner review (CODEOWNERS).
+      - name: Owner review reminder
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          echo "Owner review: confirm this week's imagery, logos and decorative art against the Grimdark theme files (see CODEOWNERS theme entries)." >> "$GITHUB_STEP_SUMMARY"
