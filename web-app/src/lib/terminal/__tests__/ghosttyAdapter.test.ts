@@ -120,6 +120,24 @@ describe("ghostty adapter: scroll position while output streams", () => {
     expect(raw.viewportY).toBe(0);
   });
 
+  it("write_should_ReturnToBottom_When_ChunkClearsAndRefillsScrollback", () => {
+    const { raw, term } = setup();
+    term.write(lines(0, 40));
+    raw.scrollLines(-10);
+    term.write(`\x1b[3J\x1b[2J\x1b[H${lines(0, 60)}`);
+    expect(raw.viewportY).toBe(0);
+  });
+
+  it("write_should_ShiftAnimationTarget_When_WheelAnimationInFlight", () => {
+    const { raw, term } = setup();
+    term.write(lines(0, 40));
+    raw.scrollLines(-10);
+    raw.targetViewportY = 10;
+    const before = raw.wasmTerm.getScrollbackLength();
+    term.write(`\r\n${lines(40, 50)}`);
+    expect(raw.targetViewportY).toBe(10 + raw.wasmTerm.getScrollbackLength() - before);
+  });
+
   it("scrollToBottom_should_StillWork_AfterAGuardedWrite", () => {
     const { raw, term } = setup();
     term.write(lines(0, 40));

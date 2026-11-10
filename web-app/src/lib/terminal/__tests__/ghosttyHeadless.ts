@@ -10,6 +10,7 @@ export const COLS = 20;
 export class HeadlessGhosttyTerminal {
   readonly wasmTerm: WasmTerminal;
   viewportY = 0;
+  targetViewportY = 0;
   constructor(ghostty: Ghostty) {
     this.wasmTerm = ghostty.createTerminal(COLS, ROWS, { scrollbackLimit: 1000 });
   }

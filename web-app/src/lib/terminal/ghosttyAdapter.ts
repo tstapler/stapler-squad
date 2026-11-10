@@ -114,9 +114,10 @@ export function serializeGhosttyBuffer(term: GhosttyWebTerminal): string {
  * user who scrolled into history back to the live screen. This write suppresses that snap and instead keeps
  * the same history line in view as new lines push into scrollback (`viewportY` counts up from the bottom).
  * A viewport already at the bottom keeps following output; one stranded past a dropped scrollback is reset.
+ * Limit: once scrollback is full, evicted lines leave its length unchanged, so the view cannot be re-anchored.
  */
 function writeKeepingScroll(term: GhosttyWebTerminal, data: string | Uint8Array): void {
-  const scrolledUp = term.getViewportY() > 0;
+  const scrolledUp = term.getViewportY() > 0.01; // matches ghostty-web's animation epsilon
   if (!scrolledUp) {
     term.write(data);
     return;
@@ -131,9 +132,18 @@ function writeKeepingScroll(term: GhosttyWebTerminal, data: string | Uint8Array)
     if (own) Object.defineProperty(term, "scrollToBottom", own);
     else delete (term as { scrollToBottom?: () => void }).scrollToBottom;
   }
-  const grown = (term.wasmTerm?.getScrollbackLength() ?? 0) - before;
-  if (grown > 0) term.scrollLines(-grown);
-  if ((term.wasmTerm?.getScrollbackLength() ?? 0) === 0) term.scrollToBottom();
+  const after = term.wasmTerm?.getScrollbackLength() ?? 0;
+  if (after < before || after === 0 || term.getViewportY() > after) {
+    term.scrollToBottom(); // scrollback was dropped (or refilled from empty): nothing left to anchor to
+    return;
+  }
+  const grown = after - before;
+  if (grown > 0) {
+    term.scrollLines(-grown);
+    // An in-flight wheel animation eases toward an absolute target; move it too or it pulls the view back.
+    const anim = term as unknown as { targetViewportY?: number };
+    if (typeof anim.targetViewportY === "number") anim.targetViewportY = Math.min(after, anim.targetViewportY + grown);
+  }
 }
 
 /**
@@ -142,8 +152,7 @@ function writeKeepingScroll(term: GhosttyWebTerminal, data: string | Uint8Array)
  * converted. `clear` also drops scrollback, like xterm's. `refresh` is a no-op: ghostty-web repaints from its own render loop.
  */
 export function toITerminal(term: GhosttyWebTerminal): ITerminal {
-  // Captured now: TerminalOutput's debug instrumentation later monkey-patches `write`, and calling the patched
-  // one from here would recurse back into this facade.
+  // Instrumentation patches this facade's `write`, never the raw terminal's, so calling the raw one cannot recurse.
   const rawWrite = (data: string | Uint8Array) => writeKeepingScroll(term, data);
   const xtermStyleViewportY = (): number =>
     Math.max(0, term.buffer.active.length - term.rows - term.getViewportY());
