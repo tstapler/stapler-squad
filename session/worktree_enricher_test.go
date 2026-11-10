@@ -502,7 +502,8 @@ func TestWorktreeEnricher_RetriesOfStuckPathsAreCapped(t *testing.T) {
 	e.Request("/s1")
 	e.Request("/s2")
 	// One retry takes the single slot and waits on its (unfired) deadline; the other is deferred.
-	enrichWaitUntil(t, func() bool { return e.Stats().RetriesDeferred == 1 })
+	// The deferral and the slot-holder's timer registration are separate events; wait for both.
+	enrichWaitUntil(t, func() bool { return e.Stats().RetriesDeferred == 1 && len(timers()) == 3 })
 	require.Len(t, timers(), 3, "exactly one retry waits")
 	timers()[2] <- time.Now()
 	enrichWaitUntil(t, func() bool { return e.Stats().TimedOut == 4 })
