@@ -63,7 +63,9 @@ func WriteTerminalProgram(dir, name string, transcript []byte) (string, error) {
 		return "", err
 	}
 	script := filepath.Join(dir, name+".sh")
-	body := fmt.Sprintf("#!/bin/sh\ncat '%s'\nsleep 3600\n", txt)
+	// Redraw bottom-anchored on every resize: the status detector only reads the last 15 screen lines,
+	// so a closing prompt left at the top would sit above a screenful of blank padding.
+	body := fmt.Sprintf("#!/bin/sh\ndraw() { printf '\\033[2J\\033[%%d;1H' \"$(stty size | cut -d' ' -f1)\"; cat '%s'; }\ntrap draw WINCH\ndraw\nwhile :; do sleep 1; done\n", txt)
 	// #nosec G306 -- the script must be executable to be used as a session program.
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		return "", err

@@ -31,6 +31,22 @@ type BacklogItem struct {
 	CreatedAt                      time.Time
 }
 
+// Notification is seeded through SendNotification; Type is a NotificationType enum name.
+type Notification struct {
+	ID, Type, Title, Message string
+}
+
+// TaggingRule is seeded through UpsertTaggingRule.
+type TaggingRule struct {
+	ID, Name, PathPattern, OutputTag string
+	Priority                         int
+}
+
+// Workflow is seeded through CreateWorkflow; a non-empty Cron makes it a scheduled trigger.
+type Workflow struct {
+	Slug, Name, Description, Command, Cron string
+}
+
 // Terminal is a session whose program prints a canned transcript.
 type Terminal struct {
 	ID, Title, Transcript string
@@ -58,6 +74,9 @@ type Bundle struct {
 	ApprovalRules []ApprovalRule
 	Backlog       []BacklogItem
 	Terminals     []Terminal
+	Notifications []Notification
+	TaggingRules  []TaggingRule
+	Workflows     []Workflow
 	Routes        []RouteFixture
 }
 
@@ -67,12 +86,15 @@ func (b *Bundle) append(o Bundle) {
 	b.ApprovalRules = append(b.ApprovalRules, o.ApprovalRules...)
 	b.Backlog = append(b.Backlog, o.Backlog...)
 	b.Terminals = append(b.Terminals, o.Terminals...)
+	b.Notifications = append(b.Notifications, o.Notifications...)
+	b.TaggingRules = append(b.TaggingRules, o.TaggingRules...)
+	b.Workflows = append(b.Workflows, o.Workflows...)
 	b.Routes = append(b.Routes, o.Routes...)
 }
 
 // keys returns namespaced ids used for duplicate detection.
 func (b Bundle) keys() []string {
-	ks := make([]string, 0, len(b.Sessions)+len(b.Flags)+len(b.ApprovalRules)+len(b.Backlog)+len(b.Terminals)+len(b.Routes))
+	ks := make([]string, 0, len(b.Sessions)+len(b.Flags)+len(b.ApprovalRules)+len(b.Backlog)+len(b.Terminals)+len(b.Notifications)+len(b.TaggingRules)+len(b.Workflows)+len(b.Routes))
 	for _, s := range b.Sessions {
 		ks = append(ks, "session:"+s.ID)
 	}
@@ -87,6 +109,15 @@ func (b Bundle) keys() []string {
 	}
 	for _, t := range b.Terminals {
 		ks = append(ks, "terminal:"+t.ID)
+	}
+	for _, n := range b.Notifications {
+		ks = append(ks, "notification:"+n.ID)
+	}
+	for _, r := range b.TaggingRules {
+		ks = append(ks, "tagging-rule:"+r.ID)
+	}
+	for _, w := range b.Workflows {
+		ks = append(ks, "workflow:"+w.Slug)
 	}
 	for _, r := range b.Routes {
 		ks = append(ks, "route:"+r.ID)

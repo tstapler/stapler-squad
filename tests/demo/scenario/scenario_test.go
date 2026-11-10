@@ -124,11 +124,35 @@ func TestSeedRPCCallsExpectedEndpoints(t *testing.T) {
 		count[cl]++
 	}
 	want := map[call]int{
-		{"SessionService", "UpdateFeatureFlag"}:           1,
+		{"SessionService", "UpdateFeatureFlag"}:           2,
 		{"SessionService", "UpsertApprovalRule"}:          3,
 		{"BacklogService", "CreateBacklogItem"}:           5,
-		{"BacklogService", "TransitionBacklogItemStatus"}: 4,
+		{"BacklogService", "TransitionBacklogItemStatus"}: 6, // in_progress 1 + review 2 + done 3
 		{"SessionService", "CreateSession"}:               1,
+	}
+	if !reflect.DeepEqual(count, want) {
+		t.Fatalf("calls = %v, want %v", count, want)
+	}
+}
+
+func TestSeedRPCSeedsNotificationsTaggingRulesAndWorkflows(t *testing.T) {
+	t.Parallel()
+	c, err := Compose([]string{"notifications", "automation"}, Deps{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc := &fakeClient{}
+	if err := c.SeedRPC(context.Background(), fc, refA()); err != nil {
+		t.Fatal(err)
+	}
+	count := map[call]int{}
+	for _, cl := range fc.calls {
+		count[cl]++
+	}
+	want := map[call]int{
+		{"SessionService", "SendNotification"}:  3,
+		{"SessionService", "UpsertTaggingRule"}: 2,
+		{"SessionService", "CreateWorkflow"}:    2,
 	}
 	if !reflect.DeepEqual(count, want) {
 		t.Fatalf("calls = %v, want %v", count, want)

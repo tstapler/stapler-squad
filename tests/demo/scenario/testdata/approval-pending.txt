@@ -6,4 +6,6 @@ Starting with the current store implementation.
 [32m*[0m Read(store/sessions_test.go)
 
 [33m* Bash(git push origin feature/repository-interface)[0m
-  Waiting for approval
+
+Do you want to proceed?
+  (Y)es/(N)o

@@ -79,6 +79,9 @@ func (c *Composite) SeedRPC(ctx context.Context, cl Client, ref time.Time) error
 	if err := seedBacklog(ctx, cl, b.Backlog); err != nil {
 		return err
 	}
+	if err := seedAutomation(ctx, cl, b); err != nil {
+		return err
+	}
 	return c.seedTerminals(ctx, cl, b.Terminals)
 }
 
@@ -86,6 +89,11 @@ func seedBacklog(ctx context.Context, cl Client, items []BacklogItem) error {
 	repo := "/demo/shop/checkout-service"
 	for _, it := range items {
 		req := map[string]any{"title": it.Title, "description": it.Description, "priority": it.Priority, "repoPath": repo}
+		if it.Status != "idea" && it.Status != "" {
+			// The server creates an item with criteria as "ready" and rejects leaving idea without them.
+			req["skipPlanning"] = true // in_progress needs an approved plan or skip_planning
+			req["acceptanceCriteria"] = []map[string]any{{"index": 0, "text": "Behaviour matches the description", "status": "pending"}}
+		}
 		var out struct {
 			Item struct {
 				ID string `json:"id"`
@@ -94,15 +102,54 @@ func seedBacklog(ctx context.Context, cl Client, items []BacklogItem) error {
 		if err := cl.Call(ctx, "BacklogService", "CreateBacklogItem", req, &out); err != nil {
 			return err
 		}
-		if it.Status == "idea" || it.Status == "" {
+		if it.Status == "idea" || it.Status == "" || it.Status == "ready" {
 			continue
 		}
-		tr := map[string]any{"itemId": out.Item.ID, "targetStatus": it.Status, "overrideReason": "demo seed"}
-		if err := cl.Call(ctx, "BacklogService", "TransitionBacklogItemStatus", tr, nil); err != nil {
+		for _, step := range backlogPath(it.Status) {
+			tr := map[string]any{"itemId": out.Item.ID, "targetStatus": step, "overrideReason": "demo seed"}
+			if err := cl.Call(ctx, "BacklogService", "TransitionBacklogItemStatus", tr, nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func seedAutomation(ctx context.Context, cl Client, b Bundle) error {
+	for _, r := range b.TaggingRules {
+		req := map[string]any{"rule": map[string]any{
+			"id": r.ID, "name": r.Name, "pathPattern": r.PathPattern, "outputTag": r.OutputTag,
+			"priority": r.Priority, "enabled": true, "source": "user",
+		}}
+		if err := cl.Call(ctx, "SessionService", "UpsertTaggingRule", req, nil); err != nil {
+			return err
+		}
+	}
+	for _, w := range b.Workflows {
+		req := map[string]any{"slug": w.Slug, "name": w.Name, "description": w.Description, "command": w.Command,
+			"targetDirectory": "/demo/shop/checkout-service", "cronExpression": w.Cron, "cronEnabled": w.Cron != ""}
+		if err := cl.Call(ctx, "SessionService", "CreateWorkflow", req, nil); err != nil {
+			return err
+		}
+	}
+	for _, n := range b.Notifications {
+		req := map[string]any{"sessionId": "demo", "notificationType": n.Type, "title": n.Title, "message": n.Message}
+		if err := cl.Call(ctx, "SessionService", "SendNotification", req, nil); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// backlogPath lists the statuses to walk from "ready" to target; the workflow graph has no shortcuts.
+func backlogPath(target string) []string {
+	chain := []string{"in_progress", "review", "done"}
+	for i, s := range chain {
+		if s == target {
+			return chain[:i+1]
+		}
+	}
+	return []string{target}
 }
 
 func (c *Composite) seedTerminals(ctx context.Context, cl Client, ts []Terminal) error {
