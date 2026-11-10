@@ -179,6 +179,7 @@ func TestCreateSession_should_SetAutoApprove_When_ProgramIsClaude(t *testing.T) 
 	}))
 
 	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
 	assert.True(t, resp.Msg.Session.AutoApprove)
 }
 
