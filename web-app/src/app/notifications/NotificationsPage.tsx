@@ -1,3 +1,4 @@
+/* eslint-disable analytics/require-on-click -- pre-existing handlers (filters, load more, mark read); event tracking is out of scope for the bell clearance fix */
 "use client";
 // +feature: ui:notifications-page
 
@@ -51,6 +52,7 @@ type TypeFilter = "all" | "approval_needed" | "error" | "task_complete" | "info"
 const TYPE_FILTER_LABELS: Record<TypeFilter, string> = {
   all: "All",
   approval_needed: "Approval",
+  // eslint-disable-next-line no-restricted-syntax -- notification type label, not a detected status
   error: "Error",
   task_complete: "Task",
   info: "Info",

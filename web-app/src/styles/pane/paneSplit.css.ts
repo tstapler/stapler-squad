@@ -79,6 +79,7 @@ export const leafContainer = recipe({
 export const leafZoomed = style({
   position: "absolute",
   inset: 0,
+  // eslint-disable-next-line no-restricted-syntax -- local stacking inside the pane, not a global layer
   zIndex: 10,
   background: vars.color.background,
 });
