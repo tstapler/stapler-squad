@@ -159,3 +159,4 @@ ocr-text/
 # Build/test output that must never be tracked
 web-app/.next/
 web-app/playwright-report/
+docs-coverage-trend.json

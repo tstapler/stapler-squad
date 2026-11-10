@@ -13,7 +13,7 @@ name: Website CI
 # TOURS_MEDIA_MODE=smoke: tours without recorded media are not built at all.
 # Full media, tour-page Lighthouse and every-tour axe run only in deploy-website.yml.
 # Recorder contract assumed: record-website-demos.sh --out DIR --only a,b --smoke writes
-# DIR/clips, DIR/shots and DIR/manifest.json.
+# DIR/clips, DIR/shots and DIR/media-manifest.json.
 
 on:
   pull_request:
@@ -98,19 +98,19 @@ jobs:
           cd tests/e2e
           bun install --frozen-lockfile
           npx playwright install chromium --with-deps
-          sudo apt-get install -y ffmpeg librsvg2-bin jq tmux
+          sudo apt-get install -y ffmpeg librsvg2-bin jq tmux webp
 
       - name: "Smoke: record the dashboard-lifecycle clip"
         env:
           SSQ_BIN: ${{ github.workspace }}/stapler-squad
-        run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/smoke-out" --only dashboard-lifecycle --smoke
+        run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/smoke-out" --only dashboard-lifecycle --smoke --scenario default,dashboard,approvals
 
       - name: "Smoke: stage media for the site build"
         run: |
           mkdir -p website/public
           cp -r "$RUNNER_TEMP/smoke-out/clips" website/public/clips
           [ -d "$RUNNER_TEMP/smoke-out/shots" ] && cp -r "$RUNNER_TEMP/smoke-out/shots" website/public/shots
-          cp "$RUNNER_TEMP/smoke-out/manifest.json" website/public/media-manifest.json
+          cp "$RUNNER_TEMP/smoke-out/media-manifest.json" website/public/media-manifest.json
           echo "Smoke media: dashboard-lifecycle only, recorded against a binary built from this PR." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build site

@@ -15,7 +15,7 @@ name: Deploy Website
 #
 # Recorder contract assumed here (scripts/record-website-demos.sh, owned by the recorder work):
 #   record-website-demos.sh --out DIR --only a,b   writes DIR/clips, DIR/shots, DIR/dom-text
-#   and DIR/manifest.json (one MediaManifest per shard).
+#   and DIR/media-manifest.json (one MediaManifest per shard).
 #
 # `schedule` + `workflow_dispatch` redeploy without a content change, so the
 # clips are re-recorded against the current app and a rotted link or a demo
@@ -219,7 +219,7 @@ jobs:
           cd tests/e2e
           bun install --frozen-lockfile
           npx playwright install chromium --with-deps
-          sudo apt-get install -y ffmpeg librsvg2-bin jq tmux tesseract-ocr
+          sudo apt-get install -y ffmpeg librsvg2-bin jq tmux tesseract-ocr webp
 
       - name: Download server binary and promo tools
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # ratchet:actions/download-artifact@v4
@@ -238,7 +238,7 @@ jobs:
         env:
           SSQ_BIN: ${{ runner.temp }}/dl/ssq-binary/stapler-squad
           ONLY: ${{ matrix.only }}
-        run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/media-out" --only "$ONLY"
+        run: scripts/record-website-demos.sh --out "$RUNNER_TEMP/media-out" --only "$ONLY" --scenario all
 
       # Blocking, independent of freshnessEnforce: banned terms in the DOM text of what was recorded.
       - name: Scan DOM text for banned terms
