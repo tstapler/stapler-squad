@@ -5,7 +5,7 @@
 // every tour scenario seeded (record-website-demos.sh --scenario all). Nothing is persisted.
 import type { Page } from '@playwright/test';
 import { RULE_NAME, openNewRuleBuilder } from '../rules';
-import { ROW as CARD, SEARCH, groupBy, openFilters } from '../dashboard';
+import { ROW as CARD, SEARCH, groupBy, openFilters, terminalConnected } from '../dashboard';
 import type { ShotListSpec, ShotSpec } from '../scene';
 
 const QUEUE = '[data-testid="review-queue"]';
@@ -21,6 +21,7 @@ const openTab = (tab: RegExp) => async (page: Page) => {
   await page.locator(CARD).filter({ hasText: REFACTOR }).first().click();
   await page.getByRole('tab', { name: tab }).first().click();
   await page.locator(SELECTED_TAB).first().waitFor();
+  if (tab.test('terminal')) await terminalConnected(page);
 };
 
 interface CardShot {

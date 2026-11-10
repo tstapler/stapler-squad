@@ -4,7 +4,7 @@
 // persisted: the omnibar is opened and dismissed without creating a session.
 import { caption } from '../recorder';
 import { hold } from '../hold';
-import { ROW as CARD, SEARCH } from '../dashboard';
+import { ROW as CARD, SEARCH, terminalConnected } from '../dashboard';
 import type { Scene } from '../scene';
 
 const NEW_SESSION = 'button[aria-label="Create new session"]';
@@ -34,6 +34,7 @@ export const scene: Scene = {
 
     await page.locator(CARD).filter({ hasText: 'refactor-session-store' }).first().click();
     await page.getByRole('tab', { name: /terminal/i }).first().click();
+    await terminalConnected(page);
     await caption(page, 'Watch the live terminal of any running agent');
 
     await page.getByRole('tab', { name: /diff/i }).first().click();
@@ -67,6 +68,7 @@ export const scene: Scene = {
       prepare: async (page) => {
         await page.locator(CARD).filter({ hasText: 'refactor-session-store' }).first().click();
         await page.getByRole('tab', { name: /terminal/i }).first().click();
+        await terminalConnected(page);
         await page.locator(SELECTED_TAB).first().waitFor();
       },
       annotations: [{ selector: SELECTED_TAB, n: 1 }],

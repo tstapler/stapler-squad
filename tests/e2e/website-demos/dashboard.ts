@@ -25,3 +25,8 @@ export async function showSessionList(page: Page): Promise<void> {
   await page.locator(SESSIONS_PANE_TAB).tap();
   await page.locator(ROW).first().waitFor();
 }
+
+/** The terminal tab paints "Initializing..." until its stream connects; capture only the live view. */
+export async function terminalConnected(page: Page): Promise<void> {
+  await page.getByText('Connected', { exact: true }).first().waitFor({ timeout: 30_000 });
+}
