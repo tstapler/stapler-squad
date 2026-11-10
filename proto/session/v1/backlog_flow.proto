@@ -336,6 +336,21 @@ message FlowPRSection {
   repeated FlowTriggerDwellRow trigger_dwell = 7;
   // Names the items with a PR-fix cycle still open (the open_count).
   string open_drill_key = 8;
+  // nudges counts user-originated interventions (manual_nudge markers).
+  FlowManualNudges nudges = 9;
+}
+
+// FlowManualNudges is the manual-intervention tally. When recording is false no
+// nudge has been captured yet (forward-only, no backfill): show "not yet
+// recording", not zeros.
+message FlowManualNudges {
+  bool recording = 1;
+  // capture_since is when the first nudge was recorded.
+  google.protobuf.Timestamp capture_since = 2;
+  int32 total = 3;
+  // weekly has one bucket per ISO week in the window; drill_key opens the nudged items.
+  repeated FlowThroughputBucket weekly = 4;
+  string drill_key = 5;
 }
 
 // FlowPROutcomes counts PR-fix outcomes in the window. When recording is false

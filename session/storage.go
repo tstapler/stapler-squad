@@ -2071,6 +2071,30 @@ func (s *Storage) RecordFlowMarker(ctx context.Context, itemID string, kind Flow
 	s.repo.RecordFlowMarker(ctx, itemID, kind, value, prNumber)
 }
 
+// RecordManualNudgeForSession records a user-originated intervention on the
+// backlog item linked to sessionUUID. Non-backlog sessions and lookup errors are
+// silent no-ops. Callers must be human-driven handlers, never agent-reachable
+// ones. The name deliberately omits "FlowMarker" (see
+// flow_marker_no_mcp_exposure_test.go): no MCP handler may call this.
+func (s *Storage) RecordManualNudgeForSession(ctx context.Context, sessionUUID, value string) {
+	if s == nil || s.repo == nil || sessionUUID == "" {
+		return
+	}
+	is, err := s.repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil || is.BacklogItemID == "" {
+		return
+	}
+	s.repo.RecordFlowMarker(ctx, is.BacklogItemID, FlowMarkerManualNudge, value, 0)
+}
+
+// RecordManualNudgeForItem records a user-originated intervention on itemID.
+func (s *Storage) RecordManualNudgeForItem(ctx context.Context, itemID, value string) {
+	if s == nil || s.repo == nil {
+		return
+	}
+	s.repo.RecordFlowMarker(ctx, itemID, FlowMarkerManualNudge, value, 0)
+}
+
 // RecordFlowMarkerForItemPR passes through to EntRepository.RecordFlowMarkerForItemPR
 // (limiter first, then a pr_number-only read). A nil Storage or repo is a no-op.
 func (s *Storage) RecordFlowMarkerForItemPR(ctx context.Context, itemID string, kind FlowMarkerKind, value string) {

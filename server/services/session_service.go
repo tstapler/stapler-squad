@@ -1012,6 +1012,9 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 
 	svc.guards = &UnaryGuardsFlag{}
 	svc.terminalSvc.SetGuardsFlag(svc.guards)
+	if concStorage != nil {
+		svc.terminalSvc.SetNudgeRecorder(concStorage)
+	}
 	workspaceSvc.SetGuardsFlag(svc.guards)
 	var linkLookup itemSessionLookup
 	if concStorage != nil {

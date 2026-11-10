@@ -27,7 +27,7 @@ const (
 var staticDrillKeys = []DrillKey{
 	DrillReworkReviewFail, DrillReworkBounce, DrillReworkPRFix, DrillReworkOther, DrillThrashEpisode,
 	DrillFPY, DrillFPYThrashAffected, DrillLeadTime, DrillPRFixDwell, DrillMerged,
-	DrillDeadlock, DrillVerdicts, DrillRawFail, DrillAdjustedFail, DrillOverride,
+	DrillDeadlock, DrillVerdicts, DrillRawFail, DrillAdjustedFail, DrillOverride, DrillManualNudge,
 }
 
 var drillReasons = map[DrillKey]string{
@@ -46,6 +46,7 @@ var drillReasons = map[DrillKey]string{
 	DrillRawFail:           "FAIL verdict",
 	DrillAdjustedFail:      "judgment FAIL verdict",
 	DrillOverride:          "verdict overridden by a human",
+	DrillManualNudge:       "manually nudged by an operator",
 }
 
 func drillReason(key DrillKey) string {
@@ -117,6 +118,17 @@ func (r *run) eventDrill(sets DrillSets) error {
 		}
 	}
 	sets[DrillMerged], sets[DrillReworkOther] = sortedItems(merged), sortedItems(other)
+	markers, err := r.loadMarkers()
+	if err != nil {
+		return err
+	}
+	nudged := map[ItemID]struct{}{}
+	for _, m := range markers {
+		if m.Kind == MarkerManualNudge && r.w.Contains(m.At) {
+			nudged[m.Item] = struct{}{}
+		}
+	}
+	sets[DrillManualNudge] = sortedItems(nudged)
 	return nil
 }
 

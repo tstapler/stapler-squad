@@ -33,6 +33,7 @@ var flowEstimatedLegend = map[string]string{
 	flow.EstimatedPRFixCauseSinceCapture:   "PR-fix trigger split covers only events after capture began; earlier events stay unknown",
 	flow.EstimatedPRFixDwellSplit:          "PR-fix dwell is split by trigger only for cycles after capture began; earlier cycles stay combined",
 	flow.EstimatedPRFixOutcomeSinceCapture: "PR-fix outcome counts cover only the period since outcome capture began",
+	flow.EstimatedManualNudgeSinceCapture:  "manual nudge counts cover only the period since nudge capture began (no backfill)",
 	"pr_fix_dwell:combined":                "PR-fix dwell is combined across triggers",
 	flow.EstimatedDwellSeedMixedOffset:     "stage dwell near the window start is inexact: events before 2026-08-18 were stored with mixed UTC offsets, so some window-start states cannot be found",
 	flow.EstimatedLeadTimeInWindowOnly:     "lead time uses in-window events only: items started before the window start are excluded or understated",
@@ -267,6 +268,13 @@ func prToProto(s flow.PRSection) *sessionv1.FlowPRSection {
 		TriggerDwell: mapSlice(s.TriggerDwell, func(r flow.TriggerDwellRow) *sessionv1.FlowTriggerDwellRow {
 			return &sessionv1.FlowTriggerDwellRow{Trigger: r.Trigger, Cycles: countMetric(r.Cycles), Dwell: durationMetric(r.Dwell)}
 		}),
+		Nudges: &sessionv1.FlowManualNudges{
+			Recording: s.Nudges.Recording, CaptureSince: flowTime(s.Nudges.CaptureSince), Total: flowI32(s.Nudges.Total),
+			DrillKey: string(s.Nudges.Drill),
+			Weekly: mapSlice(s.Nudges.Weekly, func(b flow.ThroughputBucket) *sessionv1.FlowThroughputBucket {
+				return &sessionv1.FlowThroughputBucket{WeekStart: flowTime(b.WeekStart), N: flowI32(b.N), DrillKey: string(b.Drill)}
+			}),
+		},
 	}
 }
 

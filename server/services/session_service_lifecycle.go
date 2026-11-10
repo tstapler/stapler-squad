@@ -703,6 +703,7 @@ func (s *SessionService) RestartSession(
 	}
 
 	RefreshInstanceHookProof(instance)
+	s.concStorage.RecordManualNudgeForSession(ctx, instance.GetStableID(), session.ManualNudgeRestart)
 
 	// Persist the updated instance state.
 	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {

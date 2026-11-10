@@ -185,7 +185,7 @@ func (r *run) pr(s *PRSection) error {
 	if err := r.prOutcomes(ev, s); err != nil {
 		return err
 	}
-	if len(res.Cycles) == 0 && !s.Outcomes.Recording {
+	if len(res.Cycles) == 0 && !s.Outcomes.Recording && !s.Nudges.Recording {
 		s.Meta.Status = SectionEmpty
 	}
 	r.markerFailure(SectionPR, &s.Meta)
@@ -218,6 +218,10 @@ func (r *run) prOutcomes(ev *eventData, s *PRSection) error {
 	}
 	if o.Recording {
 		s.Meta.Estimated = append(s.Meta.Estimated, EstimatedPRFixOutcomeSinceCapture)
+	}
+	s.Nudges = ManualNudgeCounts(r.w, markers, mc.FirstNudge)
+	if s.Nudges.Recording {
+		s.Meta.Estimated = append(s.Meta.Estimated, EstimatedManualNudgeSinceCapture)
 	}
 	return nil
 }

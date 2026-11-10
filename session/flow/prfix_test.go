@@ -287,3 +287,32 @@ func TestAggregator_should_MarkPRSectionPartial_When_MarkerReadFails(t *testing.
 	assert.Contains(t, s.PR.Meta.Error, "marker table locked")
 	assert.Equal(t, 1, s.PR.Cycles.Value, "dwell survives the marker failure")
 }
+
+func TestManualNudgeCounts_should_BucketByISOWeekAndIgnoreOutOfScope_When_Recording(t *testing.T) {
+	t.Parallel()
+	w, err := NewFlowWindowBounds(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 20, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	first := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	nudge := func(at time.Time) Marker { return Marker{Item: "a", Kind: MarkerManualNudge, Value: "write", At: at} }
+	markers := []Marker{
+		nudge(first), nudge(first.Add(time.Hour)), nudge(first.Add(8 * 24 * time.Hour)),
+		nudge(first.Add(-time.Hour)),                       // before capture
+		nudge(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)), // after window
+		{Item: "a", Kind: MarkerPRFixOutcome, Value: "steered", At: first},
+	}
+
+	got := ManualNudgeCounts(w, markers, first)
+
+	assert.True(t, got.Recording)
+	assert.Equal(t, first, got.CaptureSince)
+	assert.Equal(t, 3, got.Total)
+	assert.Equal(t, DrillManualNudge, got.Drill)
+	require.Len(t, got.Weekly, 4) // weeks of Dec 29, Jan 5, Jan 12, Jan 19
+	assert.Equal(t, []int{0, 2, 1, 0}, []int{got.Weekly[0].N, got.Weekly[1].N, got.Weekly[2].N, got.Weekly[3].N})
+}
+
+func TestManualNudgeCounts_should_ReportNotRecording_When_NoCapture(t *testing.T) {
+	t.Parallel()
+	got := ManualNudgeCounts(prWindow(t), []Marker{{Kind: MarkerManualNudge, At: prCapture}}, time.Time{})
+	assert.Equal(t, ManualNudges{Drill: DrillManualNudge}, got)
+}
