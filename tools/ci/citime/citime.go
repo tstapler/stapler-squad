@@ -32,9 +32,11 @@ var (
 	pkgRe = regexp.MustCompile(`^[✓✖∅]\s+(\S+)\s+\(([0-9.]+(?:h|m|s|ms|µs)[0-9.hmsµ]*)\)`)
 )
 
-// scan copies in to out and times targets and packages. A target runs until the next target starts, so a
-// target's time includes its recipe and any prerequisites it triggers after its own trace line.
-func scan(in io.Reader, out io.Writer, now func() time.Time) (Report, error) {
+// scan reads in and times targets and packages; it never writes the log (tee does), so a broken stdout cannot
+// lose build output. A target runs until the next target starts, so a target's time includes its recipe and
+// any prerequisites it triggers after its own trace line. Targets under minTarget seconds (tmux's per-object
+// sub-make) are folded into one row.
+func scan(in io.Reader, now func() time.Time) (Report, error) {
 	var rep Report
 	start := now()
 	var cur string
@@ -46,11 +48,8 @@ func scan(in io.Reader, out io.Writer, now func() time.Time) (Report, error) {
 	}
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
-	w := bufio.NewWriter(out)
 	for sc.Scan() {
 		line := sc.Text()
-		fmt.Fprintln(w, line)
-		w.Flush() // keep the CI log live
 		if m := targetRe.FindStringSubmatch(line); m != nil {
 			t := now()
 			closeCur(t)
@@ -64,8 +63,29 @@ func scan(in io.Reader, out io.Writer, now func() time.Time) (Report, error) {
 	end := now()
 	closeCur(end)
 	rep.TotalSeconds = end.Sub(start).Seconds()
+	rep.Targets = foldShort(rep.Targets)
 	sort.SliceStable(rep.Packages, func(i, j int) bool { return rep.Packages[i].Seconds > rep.Packages[j].Seconds })
 	return rep, sc.Err()
+}
+
+const minTarget = 1.0
+
+func foldShort(es []Entry) []Entry {
+	var out []Entry
+	var n int
+	var sum float64
+	for _, e := range es {
+		if e.Seconds < minTarget {
+			n++
+			sum += e.Seconds
+			continue
+		}
+		out = append(out, e)
+	}
+	if n > 0 {
+		out = append(out, Entry{fmt.Sprintf("(%d targets under %.0fs)", n, minTarget), sum})
+	}
+	return out
 }
 
 func (r Report) markdown(top int) string {

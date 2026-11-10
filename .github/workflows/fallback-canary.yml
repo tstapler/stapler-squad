@@ -83,20 +83,22 @@ jobs:
           git config --global user.name "ci"
           git config --global user.email "ci@example.invalid"
 
-      # citime passes make's output through and writes a per-target and per-package timing table to the job
+      # tee owns the live log; citime only reads it and writes a per-target and per-package timing table to the job
       # summary (advisory; it never fails the step). `shell: bash` is required so pipefail keeps make's exit code.
       - name: make ready
         shell: bash
         run: |
           go build -o "$RUNNER_TEMP/citime" ./tools/ci/citime
-          make --trace ready 2>&1 | "$RUNNER_TEMP/citime" -out "$RUNNER_TEMP/make-ready-timing.json" -summary "$GITHUB_STEP_SUMMARY"
+          make --trace ready 2>&1 | tee "$RUNNER_TEMP/make-ready.log" | "$RUNNER_TEMP/citime" -out "$RUNNER_TEMP/make-ready-timing.json" -summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload make timing
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: make-ready-timing
-          path: ${{ runner.temp }}/make-ready-timing.json
+          path: |
+            ${{ runner.temp }}/make-ready-timing.json
+            ${{ runner.temp }}/make-ready.log
           if-no-files-found: ignore
 
       - name: make build

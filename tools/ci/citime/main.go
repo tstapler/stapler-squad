@@ -1,6 +1,6 @@
-// Command citime reads `make --trace` output on stdin, passes it through unchanged, and reports where the
+// Command citime reads `make --trace` output on stdin (it prints nothing; tee the log) and reports where the
 // wall-clock time went: per make target (time between consecutive "update target" lines) and per Go package
-// (gotestsum "pkgname" lines). Usage: make --trace ready 2>&1 | citime -out timing.json -summary "$GITHUB_STEP_SUMMARY"
+// (gotestsum "pkgname" lines). Usage: make --trace ready 2>&1 | tee make.log | citime -out timing.json -summary "$GITHUB_STEP_SUMMARY"
 package main
 
 import (
@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, time.Now)) }
+func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stderr, time.Now)) }
 
-func run(args []string, in io.Reader, out, errw io.Writer, now func() time.Time) int {
+func run(args []string, in io.Reader, errw io.Writer, now func() time.Time) int {
 	fs := flag.NewFlagSet("citime", flag.ContinueOnError)
 	fs.SetOutput(errw)
 	jsonPath := fs.String("out", "", "write the timing report as JSON to this file")
@@ -22,7 +22,7 @@ func run(args []string, in io.Reader, out, errw io.Writer, now func() time.Time)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	rep, err := scan(in, out, now)
+	rep, err := scan(in, now)
 	if err != nil {
 		fmt.Fprintln(errw, "citime:", err)
 	}
