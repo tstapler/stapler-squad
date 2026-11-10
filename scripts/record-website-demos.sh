@@ -85,7 +85,8 @@ export PROMO_COMMIT="${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
 
 if [[ -z "${TEST_SERVER_URL:-}" ]]; then
   [[ -x "$BIN" ]] || { echo "❌  $BIN not found; build it first (make build)" >&2; exit 1; }
-  DEMO_DIR="$(mktemp -d)"
+  # Session rows print the work dir under DEMO_DIR; a bare `mktemp -d` name (/tmp/tmp.XXXX) is what termcheck's leak scan flags.
+  DEMO_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ssq-demo-XXXXXX")"
   SERVER_HOME="$(mktemp -d)"
   (cd "$REPO_ROOT" && go run ./tests/demo/seed --scenario "$SCENARIOS" --ref "$DEMO_REF_TIME" "$DEMO_DIR")
   PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"

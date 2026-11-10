@@ -23,7 +23,7 @@ export const TITLE_CARD_MS = 1500;
 export interface RecordEnv {
   outDir: string;
   commit: string;
-  /** Reference instant the seeder used (DEMO_REF_TIME); the page clock is fixed to it. */
+  /** Reference instant the seeder used (DEMO_REF_TIME); the page clock is fixed to it (or to real now, if later). */
   refTime?: string;
   /** Upper bound on clip length, from tools/promo/budgets.json. */
   clipMaxDurationMs: number;
@@ -67,7 +67,8 @@ export async function ensureFlags(baseURL: string, flags: readonly string[], fet
 /** Keeps tours and toasts out of the footage, selects the theme and freezes time. */
 export async function initContext(context: BrowserContext, theme: string, refTime?: string): Promise<void> {
   // setFixedTime (not install): timers keep running so animations and polling still work.
-  if (refTime) await context.clock.setFixedTime(new Date(refTime));
+  // Never before real now: sessions created over RPC after the seed ref would otherwise age negative ("-94s").
+  if (refTime) await context.clock.setFixedTime(new Date(Math.max(Date.parse(refTime), Date.now())));
   await context.addInitScript((appTheme) => {
     try {
       localStorage.setItem('stapler-squad:onboarded', 'true');
