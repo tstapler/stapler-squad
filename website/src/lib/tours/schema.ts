@@ -7,6 +7,9 @@ import { CATEGORY_ORDER } from '../../../scripts/build-features.mjs';
 export const MIN_STEPS = 3;
 export const MAX_STEPS = 6;
 export const TOURS_DIR = 'tours';
+export const ALT_MIN = 20;
+export const ALT_MAX = 300;
+export const MARKER_WORD = /\bmarkers?\b/i;
 
 const categories = CATEGORY_ORDER as [string, ...string[]];
 
@@ -16,7 +19,8 @@ export const tourStepSchema = z
 	.object({
 		text: nonEmpty('step.text'),
 		shot: nonEmpty('step.shot'),
-		alt: nonEmpty('step.alt'),
+		alt: nonEmpty('step.alt')
+			.pipe(z.string().min(ALT_MIN, `step.alt must be at least ${ALT_MIN} characters`).max(ALT_MAX, `step.alt must be at most ${ALT_MAX} characters`)),
 		caption: nonEmpty('step.caption'),
 		// What happens on screen: the transcript line (WCAG 1.2.1/1.2.3).
 		narration: nonEmpty('step.narration'),
@@ -27,6 +31,14 @@ export const tourStepSchema = z
 	.refine((s) => s.narration !== s.text, {
 		path: ['narration'],
 		message: 'step.narration must differ from step.text (narration describes the screen, text is the instruction)',
+	})
+	.refine((s) => s.alt !== s.caption && s.alt !== s.shot, {
+		path: ['alt'],
+		message: 'step.alt must differ from step.caption and step.shot (describe the screen, not the label)',
+	})
+	.refine((s) => !s.annotated || MARKER_WORD.test(s.caption), {
+		path: ['caption'],
+		message: 'an annotated step caption must name its markers (the word "marker" or "markers")',
 	});
 
 export type TourStep = z.infer<typeof tourStepSchema>;
@@ -59,7 +71,7 @@ export interface TourEntry {
 	tour: Tour;
 }
 
-/** `tour.order` must be unique 1..N across the set (Cross-cutting 7f). Returns error strings. */
+/** `tour.order` must be exactly 1..N across the set (Cross-cutting 7f). Returns error strings. */
 export function checkOrderSet(tours: readonly TourEntry[]): string[] {
 	const errors: string[] = [];
 	const seen = new Map<number, string>();
@@ -67,6 +79,10 @@ export function checkOrderSet(tours: readonly TourEntry[]): string[] {
 		const other = seen.get(tour.order);
 		if (other) errors.push(`${id}: tour.order ${tour.order} duplicates ${other}`);
 		else seen.set(tour.order, id);
+	}
+	const n = tours.length;
+	for (const { id, tour } of tours) {
+		if (tour.order > n) errors.push(`${id}: tour.order ${tour.order} is outside 1..${n}; orders must be exactly 1..${n} with no gaps`);
 	}
 	return errors;
 }

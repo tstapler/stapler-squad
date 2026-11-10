@@ -36,7 +36,7 @@ export function fixtureSteps(count = 3, overrides: Partial<FixtureStep> = {}): F
 		text: `Do thing ${i + 1}`,
 		shot: `${FIXTURE_ID}-${i + 1}`,
 		alt: `Screenshot of step ${i + 1}`,
-		caption: `Caption ${i + 1}`,
+		caption: `Marker 1 shows thing ${i + 1}`,
 		narration: `On screen, thing ${i + 1} happens`,
 		...overrides,
 	}));

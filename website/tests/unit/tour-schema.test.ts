@@ -1,7 +1,8 @@
 // Story 3.1.1 / Tasks 3.1.1c, 3.1.1e: the tour frontmatter contract.
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { parseFrontmatter } from '../../src/lib/tours/catalog.ts';
 import { checkOrderSet, makeTourSchema, MAX_STEPS, MIN_STEPS } from '../../src/lib/tours/schema.ts';
 import { buildWithFixtures, FIXTURE_ID, fixtureSteps, tourMdx, type FixtureBuild } from '../helpers/tour-fixture.ts';
 
@@ -67,6 +68,47 @@ describe('tour schema', () => {
 		expect(parsed.steps.every((s) => s.annotated === true)).toBe(true);
 	});
 
+	it('tourSchema_should_Reject_When_AltOutsideTwentyToThreeHundredChars', () => {
+		const withAlt = (alt: string) => {
+			const steps = fixtureSteps(3);
+			steps[0].alt = alt;
+			return schema.safeParse(validTour({ steps })).success;
+		};
+		expect(withAlt('x'.repeat(19))).toBe(false);
+		expect(withAlt('x'.repeat(20))).toBe(true);
+		expect(withAlt('x'.repeat(300))).toBe(true);
+		expect(withAlt('x'.repeat(301))).toBe(false);
+	});
+
+	it('tourSchema_should_Reject_When_AltEqualsCaptionOrShotName', () => {
+		const same = 'Marker 1 shows the sidebar list';
+		const sameCaption = fixtureSteps(3);
+		sameCaption[0].alt = same;
+		sameCaption[0].caption = same;
+		expect(schema.safeParse(validTour({ steps: sameCaption })).success, 'alt equals caption').toBe(false);
+		const sameShot = fixtureSteps(3);
+		sameShot[0].shot = 'zz-fixture-a-long-shot-name';
+		sameShot[0].alt = 'zz-fixture-a-long-shot-name';
+		expect(schema.safeParse(validTour({ steps: sameShot })).success, 'alt equals shot').toBe(false);
+	});
+
+	it('tourSchema_should_RequireMarkerWord_When_StepAnnotated_And_NotWhenUnannotated', () => {
+		const steps = fixtureSteps(3);
+		steps[0].caption = 'The dashboard header';
+		expect(schema.safeParse(validTour({ steps })).success).toBe(false);
+		(steps[0] as { annotated?: boolean }).annotated = false;
+		expect(schema.safeParse(validTour({ steps })).success).toBe(true);
+		steps[1].caption = 'MARKERS 1 and 2 show the tabs';
+		expect(schema.safeParse(validTour({ steps })).success).toBe(true);
+	});
+
+	it('checkOrderSet_should_Report_When_OrderHasGapOrDoesNotStartAtOne', () => {
+		const t = (order: number) => schema.parse(validTour({ order }));
+		expect(checkOrderSet([{ id: 'tours/a', tour: t(1) }, { id: 'tours/b', tour: t(3) }])).toHaveLength(1);
+		expect(checkOrderSet([{ id: 'tours/a', tour: t(2) }, { id: 'tours/b', tour: t(3) }])).toHaveLength(1);
+		expect(checkOrderSet([{ id: 'tours/a', tour: t(2) }, { id: 'tours/b', tour: t(1) }])).toEqual([]);
+	});
+
 	it('checkOrderSet_should_ReportDuplicate_When_TwoToursShareOrder', () => {
 		const a = { id: 'tours/a', tour: schema.parse(validTour({ order: 1 })) };
 		const b = { id: 'tours/b', tour: schema.parse(validTour({ order: 1 })) };
@@ -88,6 +130,33 @@ describe('tour sources vs scene files', () => {
 
 	it('tours_should_HaveMatchingSceneFile_When_MdxExists_AndViceVersa', () => {
 		expect(scenes).toEqual(mdx);
+	});
+});
+
+// Epic 3.2 content quality: real tours must satisfy the schema, the order set and the flag-note rule.
+describe('real tours content quality', () => {
+	const ids = readdirSync(join(DOCS_DIR, 'tours'))
+		.filter((f) => f.endsWith('.mdx') && f !== 'index.mdx')
+		.map((f) => f.replace(/\.mdx$/, ''))
+		.sort();
+	const tours = ids.map((id) => ({
+		id,
+		tour: parseFrontmatter(readFileSync(join(DOCS_DIR, 'tours', `${id}.mdx`), 'utf8')).tour as Record<string, unknown>,
+	}));
+	const schema = makeTourSchema();
+
+	it('realTours_should_ParseAndHaveOrderExactlyOneToN', () => {
+		const entries = tours.map(({ id, tour }) => ({ id: `tours/${id}`, tour: schema.parse(tour) }));
+		expect(checkOrderSet(entries)).toEqual([]);
+	});
+
+	it('realTours_should_HaveNonEmptyFlagNote_Exactly_When_SceneExportsFlagsEnabled', () => {
+		for (const { id, tour } of tours) {
+			const scene = readFileSync(join(SCENES_DIR, `${id}.ts`), 'utf8');
+			const flagged = /^export\s+const\s+flagsEnabled\b/m.test(scene);
+			const hasNote = typeof tour.flagNote === 'string' && tour.flagNote.trim() !== '';
+			expect(hasNote, `${id}: flagNote present iff scene exports flagsEnabled`).toBe(flagged);
+		}
 	});
 });
 
