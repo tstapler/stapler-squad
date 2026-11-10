@@ -15,7 +15,7 @@ Drop a JSON file into `~/.stapler-squad/themes/` to make it available in every w
 ```
 
 - The file name (without `.json`) is the theme id: lowercase letters, digits and `-`, up to 40 characters.
-- `base` is a built-in theme (`matrix`, `cyberpunk77`, `grimdark`, `clean`, `light`, `dark`); omitted or unknown falls back to `clean`. The former id `wh40k` is deprecated: it is still accepted as `base` and treated as `grimdark` (the file is not rewritten), but use `grimdark` in new files. Tokens you don't set come from the base.
+- `base` is a built-in theme (`matrix`, `cyberpunk77`, `grimdark`, `clean`, `light`, `dark`); omitted or unknown falls back to `clean`. The theme's former id is deprecated: it is still accepted as `base` and treated as `grimdark` (the file is not rewritten), but use `grimdark` in new files. Tokens you don't set come from the base.
 - `tokens` keys are dotted paths into the theme contract, `web-app/src/styles/theme-contract.css.ts` (for example `color.background`, `color.statusDot.running`, `shadow.sm`). Unknown paths are ignored.
 - Values may use letters, digits, whitespace and `# % . , ( ) / ' " _ + * -` only, and only these CSS functions: `rgb rgba hsl hsla hwb lab lch oklab oklch color-mix var calc min max clamp`. Anything else (`url()`, `image-set()`, `;`, `{}`) drops that token and logs a warning.
 - Limits: 64 KB per file, 50 themes in total across both folders (extras are dropped by theme id order, with a warning in the log), 300 tokens per theme. Symlinked files work, so a dotfiles repo can link its theme in.

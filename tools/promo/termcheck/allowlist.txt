@@ -8,5 +8,3 @@ tests/e2e/theme-fouc.spec.ts:legacy stored-theme case
 web-app/src/lib/omnibar/detectors/CommandDetector.test.ts:legacy theme command case
 server/user_themes.go:legacy id compat constant
 server/user_themes_test.go:legacy id compat test
-docs/how-to/add-user-themes.md:mentions the legacy id as deprecated
-website/src/content/docs/help/add-user-themes.md:mentions the legacy id as deprecated
