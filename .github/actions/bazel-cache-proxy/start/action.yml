@@ -6,7 +6,7 @@ description: >
 inputs:
   rev:
     description: bazel-cache-proxy commit to build (cargo install --git ... --rev)
-    default: 82a1d600b49a708f286ea0a291b221528de25c6e
+    default: 54d4cf6df06995b01e853994aba0e6dc857eb023
   prefix:
     description: Cache key prefix; include the workflow/job so unrelated caches stay apart
     required: true
