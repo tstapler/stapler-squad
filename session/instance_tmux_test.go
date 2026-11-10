@@ -851,7 +851,9 @@ func TestBuildClaudeCommand_LargePromptTempFileContentIsExactExcludingTrailingNe
 	// change that silently starts corrupting more than trailing whitespace
 	// (the actual bug class this whole fix targets) fails this test.
 	prompt := strings.Repeat("w", maxInlinePromptBytes+1) + "\n\n"
-	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt, promptFileCleanupDelayOverride: shortPromptFileCleanupDelay}
+	// No cleanup-delay override: a 10ms one races the os.ReadFile below on a loaded runner
+	// (see TestBuildClaudeCommand_LargePromptRoutedThroughTempFile...); t.Cleanup removes the file.
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
 	got := inst.buildLaunchCommand("")
 
 	m := promptFileRefRegex.FindStringSubmatch(got)
