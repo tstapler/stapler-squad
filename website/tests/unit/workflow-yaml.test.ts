@@ -388,3 +388,21 @@ test('deployWorkflow_should_PlanEveryRecordableId_When_ShardPlanRuns', () => {
   assert.ok(!/-shotlists-dir/.test(run), 'shotlists/ is planned from its default directory');
   assert.ok(readdirSync(path.join(repoRoot, 'tests/e2e/website-demos/shotlists')).length > 0);
 });
+
+// docscoverage must never fall back to its merge-base default in CI: each event names its base
+// (Task 4.1.4a). HEAD^1 is the pull_request merge commit's base, github.event.before is the push base.
+test('buildWorkflow_should_PassExplicitBasePerEvent_When_DocsCoverageStepParsed', () => {
+  const build = yaml.load(readFileSync(path.join(repoRoot, '.github/workflows/build.yml'), UTF8)) as Workflow;
+  const steps = Object.values(build.jobs).flatMap((job) => job.steps ?? []);
+  const step = steps.find((candidate) => candidate.name?.startsWith('Docs coverage'));
+  assert.ok(step, 'build.yml has a Docs coverage step');
+  const run = String((step as Step & { run?: string }).run);
+
+  assert.match(run, /pull_request\)\s*BASE=HEAD\^1/);
+  assert.match(run, /push\)\s*BASE="\$EVENT_BEFORE"/);
+  assert.match(run, /\*\)\s*BASE=none/);
+  assert.match(run, /docscoverage -base "\$BASE"/);
+  assert.match(run, /docscoverage enforce -base "\$BASE"/, 'the enforce flag is read from the base blob, not the PR tree');
+  assert.ok(!/promo-flags\.json/.test(run), 'the step does not read the flags file from the working tree');
+  assert.equal(step.env?.EVENT_BEFORE, '${{ github.event.before }}');
+});
