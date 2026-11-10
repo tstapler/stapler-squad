@@ -11,7 +11,8 @@ import { experimental_AstroContainer as AstroContainer } from 'astro/container';
 import HeroVideo from '../../src/components/HeroVideo.astro';
 import { applyAutoplayUnlessReducedMotion, startHeroPlayback, whenLoadedAndIdle } from '../../src/lib/reduced-motion-video.ts';
 
-const PROPS = { src: '/stapler-squad/demo.webm', poster: '/stapler-squad/screenshot.png' };
+const PROPS = { src: '/stapler-squad/clips/dashboard-lifecycle.webm', poster: '/stapler-squad/shots/dashboard-lifecycle-poster.webp' };
+const MP4 = '/stapler-squad/clips/dashboard-lifecycle.mp4';
 // Boolean attributes HeroVideo.astro always sets server-side, named once so
 // both the markup assertions and the jsdom fixture below share one spelling.
 // kibitzer:ignore replace-magic-literal -- these are the literal HTML
@@ -68,6 +69,18 @@ describe('HeroVideo component markup', () => {
 		const video = createVideoElement(true);
 		expect(video.hasAttribute('autoplay')).toBe(false);
 		expect(video.getAttribute('poster')).toBe(PROPS.poster);
+	});
+});
+
+describe('HeroVideo renditions (Cross-cutting 7e)', () => {
+	it('heroVideo_should_ListWebmThenMp4Sources_When_Mp4Given', async () => {
+		const container = await AstroContainer.create();
+		const html = await container.renderToString(HeroVideo, { props: { ...PROPS, mp4: MP4 } });
+		const webm = html.indexOf(`<source src="${PROPS.src}" type="video/webm"`);
+		const mp4 = html.indexOf(`<source src="${MP4}" type="video/mp4"`);
+		expect(webm).toBeGreaterThan(-1);
+		expect(mp4).toBeGreaterThan(webm);
+		expect(html).toContain(`poster="${PROPS.poster}"`);
 	});
 });
 

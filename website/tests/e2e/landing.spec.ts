@@ -71,13 +71,13 @@ test.describe('Landing page — UX acceptance', () => {
 
 	// Criterion 10: broken hero media degrades to its poster fallback, never
 	// a blank box. Per the task brief, this is tested against the real,
-	// committed hero video (public/demo.webm) via route interception; feature-card
+	// hero clip (clips/dashboard-lifecycle.*) via route interception; feature-card
 	// clips only exist in the deploy build (recorded there), not in the PR gate.
 	test('heroVideoAndFeatureImage_should_ShowPosterOrAltTextFallback_When_SourceIntercept404s', async ({
 		page,
 	}) => {
-		await page.route('**/demo.webm', (route) => route.fulfill({ status: 404, body: '' }));
-		await page.route('**/01-dashboard.png', (route) => route.fulfill({ status: 404, body: '' }));
+		await page.route('**/clips/dashboard-lifecycle.*', (route) => route.fulfill({ status: 404, body: '' }));
+		await page.route('**/01-dashboard.*', (route) => route.fulfill({ status: 404, body: '' }));
 		await page.route('**/clips/*.webm', (route) => route.fulfill({ status: 404, body: '' }));
 
 		const landing = new LandingPage(page);
@@ -112,7 +112,7 @@ test.describe('Landing page — UX acceptance', () => {
 			await expect(clip).toHaveAttribute('aria-label', new RegExp(alt));
 			// Lazy poster (data-poster -> poster once near the viewport) is the
 			// screenshot fallback for a dead clip, so it must have been applied.
-			await expect.poll(() => clip.evaluate((v: HTMLVideoElement) => v.poster)).toMatch(/01-dashboard\.png$/);
+			await expect.poll(() => clip.evaluate((v: HTMLVideoElement) => v.poster)).toMatch(/01-dashboard\.(png|webp)$/);
 		}
 	});
 
@@ -137,7 +137,7 @@ test.describe('Landing page — UX acceptance', () => {
 	// criterion lives in docs-search.spec.ts (needs the search modal open).
 	test.describe('edgeCaseStates_should_AlwaysRenderAtLeastOneExitLink_When_AnyDocumentedFailureModeTriggered', () => {
 		test('broken hero video', async ({ page }) => {
-			await page.route('**/demo.webm', (route) => route.fulfill({ status: 404, body: '' }));
+			await page.route('**/clips/dashboard-lifecycle.*', (route) => route.fulfill({ status: 404, body: '' }));
 			const landing = new LandingPage(page);
 			await landing.goto();
 
@@ -145,7 +145,7 @@ test.describe('Landing page — UX acceptance', () => {
 		});
 
 		test('broken feature image', async ({ page }) => {
-			await page.route('**/01-dashboard.png', (route) => route.fulfill({ status: 404, body: '' }));
+			await page.route('**/01-dashboard.*', (route) => route.fulfill({ status: 404, body: '' }));
 			const landing = new LandingPage(page);
 			await landing.goto();
 
@@ -185,6 +185,30 @@ test.describe('Landing page — UX acceptance', () => {
 			await expect(landing.viewOnGithubLink).toBeVisible();
 			await context.close();
 		});
+	});
+});
+
+// Story 3.3.1 / UX-12: the landing page points at the tours index directly under the hero CTAs.
+test.describe('Landing tour entry points', () => {
+	test('seeTheTours_should_LinkToTheToursIndex_When_LandingLoads', async ({ page }) => {
+		const landing = new LandingPage(page);
+		await landing.goto();
+
+		await expect(landing.seeTheToursLink).toBeVisible();
+		await expect(landing.seeTheToursLink).toHaveAttribute('href', /\/stapler-squad\/tours\/$/);
+	});
+
+	test('startHere_should_ListOnlyBuiltTours_When_LandingLoads', async ({ page }) => {
+		const landing = new LandingPage(page);
+		await landing.goto();
+
+		// The PR smoke build records one tour; the deploy build records all three. Either way no link is dead.
+		const links = landing.startHere.getByRole('link');
+		const count = await links.count();
+		expect(count).toBeLessThanOrEqual(3);
+		for (let i = 0; i < count; i++) {
+			await expect(links.nth(i)).toHaveAttribute('href', /\/stapler-squad\/tours\/[a-z-]+\/$/);
+		}
 	});
 });
 

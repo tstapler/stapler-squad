@@ -9,10 +9,14 @@ hero:
       link: https://github.com/tstapler/stapler-squad
       icon: external
       variant: primary
+    - text: See the tours
+      link: /stapler-squad/tours/
+      variant: secondary
 ---
 
 import InstallCommand from '../../components/InstallCommand.astro';
 import HeroVideo from '../../components/HeroVideo.astro';
+import StartHereStrip from '../../components/StartHereStrip.astro';
 import FeatureGrid from '../../components/FeatureGrid.astro';
 import LandingFooterNav from '../../components/LandingFooterNav.astro';
 
@@ -22,7 +26,13 @@ Works on macOS and Linux via the Homebrew tap and the prebuilt-binary installer 
 _(Windows/WSL support hasn't been exercised and isn't claimed here — `install.sh`'s
 shell detection only branches on zsh/bash/fish/ash.)_
 
-<HeroVideo src="/stapler-squad/demo.webm" poster="/stapler-squad/screenshot.png" />
+<HeroVideo
+  src="/stapler-squad/clips/dashboard-lifecycle.webm"
+  mp4="/stapler-squad/clips/dashboard-lifecycle.mp4"
+  poster="/stapler-squad/shots/dashboard-lifecycle-poster.webp"
+/>
+
+<StartHereStrip headingId="landing-start-here" />
 
 ## Features
 

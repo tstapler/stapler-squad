@@ -1,36 +1,19 @@
 ---
-// /tours/ index body: "Start here" strip (tour.order 1-3, derived, not
-// hard-coded) and one h2 per category that has a built tour.
+// /tours/ index body: the "Start here" strip and one h2 per category that has a built tour.
 import { clipDurationMs, formatWatch } from '../lib/tours/manifest';
-import { groupByCategory, startHere } from '../lib/tours/nav';
+import { groupByCategory } from '../lib/tours/nav';
+import StartHereStrip from './StartHereStrip.astro';
 import type { TourEntry } from '../lib/tours/schema';
 import { basePath, builtTours, tourContext } from '../lib/tours/site';
 
 const tours = await builtTours();
 const { manifest } = tourContext();
 const base = basePath();
-const strip = startHere(tours);
 const groups = groupByCategory(tours);
 const watch = (t: TourEntry) => formatWatch(clipDurationMs(manifest, t.tour.clip));
 ---
 
-{
-	strip.length > 0 && (
-		<section class="tour-start" aria-labelledby="tours-start-here" data-testid="tour-start-here">
-			<h2 id="tours-start-here">Start here</h2>
-			<ul class="tour-cards">
-				{strip.map((t) => (
-					<li class="tour-card" data-testid="tour-card">
-						<h3>{t.tour.title}</h3>
-						<p>{t.tour.outcome}</p>
-						{watch(t) && <p class="tour-card-meta">Watch {watch(t)}</p>}
-						<a class="tour-link" href={`${base}/${t.id}/`}>See the tour: {t.tour.title}</a>
-					</li>
-				))}
-			</ul>
-		</section>
-	)
-}
+<StartHereStrip headingId="tours-start-here" />
 {
 	groups.map((g) => (
 		<section class="tour-category" data-testid="tour-category">

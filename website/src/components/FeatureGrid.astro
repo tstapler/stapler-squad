@@ -7,6 +7,7 @@ import FeatureCard from './FeatureCard.astro';
 import features from '../content/features.json';
 import { CATEGORY_ORDER } from '../../scripts/build-features.mjs';
 import { existsSync } from 'node:fs';
+import { basePath, builtTours } from '../lib/tours/site';
 
 // features.json declares clips by name (Story 3.1.2), so it is identical in git
 // and in the deployed build. Rendering is where file presence matters: a card
@@ -16,6 +17,23 @@ import { existsSync } from 'node:fs';
 const CLIPS_DIR = new URL('../../public/clips/', import.meta.url);
 const clipPresent = (clip?: { name: string; ext: string }) =>
 	clip ? existsSync(new URL(`${clip.name}.${clip.ext}`, CLIPS_DIR)) : false;
+
+// Same idea for stills: a card shows its recorded shot (public/shots/<name>.webp), else the
+// legacy committed screenshot (public/features/<name>.png, retired in Phase 5), else no image.
+const PUBLIC = new URL('../../public/', import.meta.url);
+const shotFor = (screenshot?: string) => {
+	if (!screenshot) return undefined;
+	if (existsSync(new URL(screenshot.slice(1), PUBLIC))) return screenshot;
+	const legacy = `/features/${screenshot.replace(/^\/shots\//, '').replace(/\.webp$/, '.png')}`;
+	return existsSync(new URL(legacy.slice(1), PUBLIC)) ? legacy : undefined;
+};
+
+// "See the tour" only for tours that are built, so smoke builds never link to an unbuilt page.
+const tours = new Map((await builtTours()).map((t) => [t.id.replace(/^tours\//, ''), t]));
+const tourFor = (card: { tour?: string }) => {
+	const t = card.tour ? tours.get(card.tour) : undefined;
+	return t ? { title: t.tour.title, href: `${basePath()}/${t.id}/` } : undefined;
+};
 
 const groups = CATEGORY_ORDER.map((category) => ({
 	category,
@@ -34,8 +52,9 @@ const groups = CATEGORY_ORDER.map((category) => ({
 							heading={card.heading}
 							description={card.description}
 							category={card.category}
-							screenshot={card.screenshot}
+							screenshot={shotFor(card.screenshot)}
 							alt={card.alt}
+							tour={tourFor(card)}
 							demoClip={clipPresent(card.demoClip) ? card.demoClip : undefined}
 						/>
 					))}
