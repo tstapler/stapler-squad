@@ -41,6 +41,7 @@ const (
 	eventWsSend            = "cm.ws_send"
 	eventLongTask          = "cm.longtask"
 	eventTermLatency       = "cm.term_latency"
+	eventTermResync        = "cm.term_resync"
 	maxClientDurationMs    = 10 * 60 * 1000
 	maxTermLatencyMs       = 10 * 1000 // a longer keystroke/paint sample is a throttled tab, not latency
 	maxInflightObservation = 64
@@ -260,6 +261,8 @@ func (c *clientMetrics) observe(ctx context.Context, ev Event) (consumed bool) {
 		}
 	case name == eventTermLatency:
 		c.observeTermLatency(ctx, ev)
+	case name == eventTermResync:
+		termlat.Default.CountResync(ev.Labels["reason"], ev.Labels["backend"])
 	case consumed:
 		c.rejectedEvents.Add(ctx, 1, attrs(attribute.String("reason", "unknown_event")))
 	}
@@ -376,8 +379,9 @@ func closeCodeLabel(s string) string {
 // clientTermStages are the terminal stages a browser may report; anything else is rejected so a
 // client cannot write server-side stages (input_total etc.) into the shared rolling windows.
 var clientTermStages = map[string]bool{
-	termlat.StageEchoArrive: true, termlat.StageEchoPaint: true,
+	termlat.StageEchoArrive: true, termlat.StageEchoPaint: true, termlat.StageResyncQueue: true,
 	termlat.StageTTFPConnect: true, termlat.StageTTFPFirstData: true, termlat.StageTTFPFirstPaint: true,
+	termlat.StageInputQueue: true, termlat.StageEchoRender: true, termlat.StageWSBufferedKiB: true, termlat.StageEventLoopLag: true,
 }
 
 // observeTermLatency feeds a browser-measured terminal stage (keystroke echo, time to first

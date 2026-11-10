@@ -61,6 +61,7 @@ func editorInstance(t *testing.T) (*Instance, *fakePRSetEditor) {
 }
 
 func TestDetachPRPersisted_ShouldWriteRepositoryThenMemoryThenMirror(t *testing.T) {
+	t.Parallel()
 	inst, ed := editorInstance(t)
 	r12 := mustPRRef(t, "", "acme", "app", 12)
 
@@ -75,6 +76,7 @@ func TestDetachPRPersisted_ShouldWriteRepositoryThenMemoryThenMirror(t *testing.
 }
 
 func TestDetachPRPersisted_ShouldLeaveMemoryAlone_WhenRepositoryFails(t *testing.T) {
+	t.Parallel()
 	inst, ed := editorInstance(t)
 	ed.editErr = errors.New("db down")
 
@@ -86,6 +88,7 @@ func TestDetachPRPersisted_ShouldLeaveMemoryAlone_WhenRepositoryFails(t *testing
 }
 
 func TestDetachPRPersisted_ShouldReportNotFound_WhenPRNotAttached(t *testing.T) {
+	t.Parallel()
 	inst, ed := editorInstance(t)
 	found, err := inst.DetachPRPersisted(context.Background(), mustPRRef(t, "", "acme", "app", 99))
 	require.NoError(t, err)
@@ -94,6 +97,7 @@ func TestDetachPRPersisted_ShouldReportNotFound_WhenPRNotAttached(t *testing.T) 
 }
 
 func TestPinPRPersisted_ShouldPinThenUnpin(t *testing.T) {
+	t.Parallel()
 	inst, ed := editorInstance(t)
 	r12 := mustPRRef(t, "", "acme", "app", 12)
 	pinsBefore, unpinsBefore := PRPinCount("pin"), PRPinCount("unpin")
@@ -112,6 +116,7 @@ func TestPinPRPersisted_ShouldPinThenUnpin(t *testing.T) {
 }
 
 func TestPinPRPersisted_ShouldNotPinInMemory_WhenRepositoryFails(t *testing.T) {
+	t.Parallel()
 	inst, ed := editorInstance(t)
 	ed.editErr = errors.New("db down")
 	require.Error(t, inst.PinPRPersisted(context.Background(), mustPRRef(t, "", "acme", "app", 12), true))
@@ -119,6 +124,7 @@ func TestPinPRPersisted_ShouldNotPinInMemory_WhenRepositoryFails(t *testing.T) {
 }
 
 func TestAttachPRManual_ShouldClearTombstoneBeforeAttaching(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	ed := &fakePRSetEditor{}
 	inst.SetPRPersister(ed)
@@ -133,6 +139,7 @@ func TestAttachPRManual_ShouldClearTombstoneBeforeAttaching(t *testing.T) {
 }
 
 func TestPRSetEdits_ShouldFail_WhenPersisterCannotEdit(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.SetPRPersister(&fakePRPersister{})
 	_, err := inst.DetachPRPersisted(context.Background(), mustPRRef(t, "", "acme", "app", 12))

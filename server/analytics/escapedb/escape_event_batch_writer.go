@@ -2,9 +2,10 @@ package escapedb
 
 import (
 	"context"
-	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -256,8 +257,38 @@ func nullIfEmptyBytes(b []byte) any {
 	return b
 }
 
+var escapeEventIDs escapeEventIDGen
+
+// escapeEventIDGen mints IDs that are strictly increasing within a process, even if the wall
+// clock steps back: ms never decreases and seq restarts at 0 for each new ms.
+type escapeEventIDGen struct {
+	mu  sync.Mutex
+	ms  uint64
+	seq uint64
+}
+
+func (g *escapeEventIDGen) next(nowMs uint64) string {
+	g.mu.Lock()
+	if nowMs > g.ms {
+		g.ms, g.seq = nowMs, 0
+	} else if g.seq++; g.seq > escapeEventIDSeqMax {
+		g.ms, g.seq = g.ms+1, 0
+	}
+	ms, seq := g.ms, g.seq
+	g.mu.Unlock()
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], ms<<escapeEventIDSeqBits|seq)
+	return hex.EncodeToString(b[:])
+}
+
+const (
+	escapeEventIDSeqBits = 23
+	escapeEventIDSeqMax  = 1<<escapeEventIDSeqBits - 1
+)
+
+// generateEscapeEventID returns a 16-hex-char ID: 41-bit unix ms, then a 23-bit sequence (ms
+// overflows in 2039). Time-ordered keys append to the ID index; random ones scatter every
+// insert and eviction delete across it.
 func generateEscapeEventID() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	return escapeEventIDs.next(uint64(time.Now().UnixMilli()))
 }

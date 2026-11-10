@@ -30,6 +30,7 @@ jest.mock("./page", () => ({ __esModule: true, default: () => <h1>Sessions page<
 jest.mock("./settings/page", () => ({ __esModule: true, default: () => <h1>Settings page</h1> }));
 jest.mock("./settings/jules/page", () => ({ __esModule: true, default: () => <h1>Jules page</h1> }));
 jest.mock("./backlog/board/page", () => ({ __esModule: true, default: () => <h1>Board page</h1> }));
+jest.mock("./backlog/flow/page", () => ({ __esModule: true, default: () => <h1>Flow page</h1> }));
 jest.mock("./changelog/page", () => ({ __esModule: true, default: () => <h1>Changelog page</h1> }));
 
 const APP_DIR = __dirname;
@@ -87,7 +88,7 @@ describe("route table", () => {
 
   it("wraps exactly the RouteMeta-guarded paths and stores no title", () => {
     const guarded = Object.entries(ROUTE_META).filter(([, meta]) => meta.guard).map(([route]) => route).sort();
-    expect(guarded).toEqual(["/backlog", "/backlog/board", "/changelog", "/settings/backlog-sources"]);
+    expect(guarded).toEqual(["/backlog", "/backlog/board", "/backlog/flow", "/changelog", "/settings/backlog-sources"]);
     const wrapped = appRoutes.filter((route) => "wrap" in route && route.wrap).map((route) => route.path).sort();
     expect(wrapped).toEqual(guarded);
     appRoutes.forEach((route) => expect(route).not.toHaveProperty("title"));
@@ -130,6 +131,21 @@ describe("feature guards", () => {
     // The guarded entry was replaced, so Back is not trapped on it.
     await act(async () => void (await router.navigate(-1)));
     expect(router.state.location.pathname).not.toBe("/backlog/board");
+  });
+
+  it("FlowLayoutGate_should_ShowBoardGateMessage_When_BacklogFlagOff", async () => {
+    mockGetFeatureFlags.mockResolvedValue({ flags: [{ name: "backlog", enabled: false, scopes: [] }] });
+    const router = setup("/");
+    await screen.findByText("Sessions page");
+    await act(async () => void (await router.navigate("/backlog/flow")));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(screen.queryByText("Flow page")).toBeNull();
+  });
+
+  it("renders the Flow page when the backlog flag is on", async () => {
+    mockGetFeatureFlags.mockResolvedValue({ flags: [{ name: "backlog", enabled: true, scopes: [] }] });
+    setup("/backlog/flow");
+    expect(await screen.findByText("Flow page")).toBeTruthy();
   });
 
   it("renders the page when its flag is on", async () => {

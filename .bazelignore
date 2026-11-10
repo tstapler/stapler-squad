@@ -1,0 +1,9 @@
+.claude
+.cache
+.git
+node_modules
+web-app/node_modules
+web-app/.next
+tests/e2e/node_modules
+third_party/tmux
+website/node_modules

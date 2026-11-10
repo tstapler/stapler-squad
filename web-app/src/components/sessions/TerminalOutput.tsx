@@ -44,6 +44,7 @@ import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOver
 import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { createTerminalLatencyProbe } from "@/lib/telemetry/terminalLatency";
+import { terminalInputTimer } from "@/lib/telemetry/terminalInputTiming";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import { useInputModeOverride } from "@/lib/hooks/useInputModeOverride";
@@ -125,7 +126,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const { track } = useAnalytics();
   const trackRef = useRef(track);
   trackRef.current = track;
+  const lastOutputAtRef = useRef(0);
+  const getMsSinceOutput = useCallback(() => (lastOutputAtRef.current ? Date.now() - lastOutputAtRef.current : Infinity), []);
   const [latencyProbe] = useState(() => createTerminalLatencyProbe({ track: (e) => trackRef.current(e) }));
+  useEffect(() => terminalInputTimer.subscribe(sessionId, (s) => latencyProbe.noteInputSent(s)), [latencyProbe, sessionId]);
   const { announce } = useAnnounce();
   const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
@@ -772,6 +776,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const handleOutput = useCallback((output: string, resyncId?: string) => {
     if (!xtermRef.current) return;
     latencyProbe.noteOutput();
+    lastOutputAtRef.current = Date.now();
 
     // Epic 3.1 (AC2) — if this output is the reply to a correlation-ID-
     // tagged resync request tracked via EITHER hook's resync flow (resize or
@@ -867,7 +872,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [reportDroppedInput]);
 
-  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, isServerUnreachable, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, connectionCount } = useTerminalStream({
+  const { isConnected, error, sendInput, isInputChunking, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, isServerUnreachable, handleManualReconnect: handleHookReconnect, requestFullResync, markResyncComplete, markPaneResponseReceived, visibilityResyncDecision, connectionCount } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -951,12 +956,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     connect,
     disconnect,
     requestFullResync,
+    visibilityResyncDecision,
     markResyncComplete,
     markPaneResponseReceived,
     setShowReconnectButton,
     setShowReconnectBanner,
     scheduleResync,
     outstandingResyncIdsRef,
+    getMsSinceOutput,
   });
   useEffect(() => {
     notifyResyncOutputReceivedRef.current = notifyResyncOutputReceived;

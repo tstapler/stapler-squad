@@ -79,6 +79,7 @@ export const leafContainer = recipe({
 export const leafZoomed = style({
   position: "absolute",
   inset: 0,
+  // eslint-disable-next-line no-restricted-syntax -- local stacking inside the pane, not a global layer
   zIndex: 10,
   background: vars.color.background,
 });
@@ -111,6 +112,8 @@ export const sessionListScroll = style({
   flex: 1,
   overflowY: "auto",
   minHeight: 0,
+  paddingRight: "var(--tray-clearance, 0px)",
+  paddingLeft: "var(--tray-clearance-left, 0px)",
 });
 
 export const resetLayoutBar = style({

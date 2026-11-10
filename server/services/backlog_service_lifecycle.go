@@ -473,6 +473,10 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
 	}
 
+	if update.RepoPath != nil && *update.RepoPath != existing.RepoPath {
+		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId) // the likely cause was just fixed
+	}
+
 	prAssociation := sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_UNSPECIFIED
 	if associatePR {
 		prAssociation = prAssociationOutcome(updated, prNumber)
@@ -1111,6 +1115,10 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, transitionConnectError(err, req.Msg.ItemId, "transition backlog item")
 	}
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
+	if transitionActorFromContext(ctx) == session.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
+		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId)
+		s.storage.RecordManualNudgeForItem(ctx, req.Msg.ItemId, session.ManualNudgeStatusTransition)
+	}
 
 	// override_reason set means this was a manual operator override (bypassing
 	// TransitionGuard, per session.TransitionGuard's override handling above),

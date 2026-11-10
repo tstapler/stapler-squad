@@ -1,0 +1,54 @@
+name: Bazel cache proxy trial
+
+# Measures the ghostty-vt.wasm Bazel build three ways on fresh runners, in order:
+# baseline (no remote cache), cold (proxy, empty cache), warm (proxy, cache restored from cold).
+# Manual or PR-triggered only when this workflow or the proxy action changes.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/actions/bazel-cache-proxy/**'
+      - '.github/workflows/bazel-cache-proxy-trial.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      max-parallel: 1
+      matrix:
+        phase: [baseline, cold, warm]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3.0.0
+
+      - if: matrix.phase != 'baseline'
+        uses: ./.github/actions/bazel-cache-proxy/start
+        with:
+          prefix: trial-${{ github.run_id }}-${{ github.run_attempt }}
+          upload: 'true'
+
+      - name: Build and test ghostty-vt.wasm (${{ matrix.phase }})
+        env:
+          PHASE: ${{ matrix.phase }}
+        run: |
+          set -o pipefail
+          export BAZEL_FLAGS=""
+          if [[ $PHASE != baseline ]]; then
+            BAZEL_FLAGS="--remote_cache=http://127.0.0.1:9090/cache"
+          fi
+          start=$(date +%s)
+          ./scripts/build-ghostty-wasm.sh --test 2>&1 | tee "$RUNNER_TEMP/build.log"
+          elapsed=$(( $(date +%s) - start ))
+          hits=$( (grep -Eo '[0-9]+ remote cache hit' "$RUNNER_TEMP/build.log" || true) | awk '{s+=$1} END {print s+0}')
+          {
+            echo "### $PHASE: Bazel build + softreset test"
+            echo "- wall time: ${elapsed}s"
+            echo "- remote cache hits (summed over bazel invocations): $hits"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - if: always() && matrix.phase != 'baseline'
+        uses: ./.github/actions/bazel-cache-proxy/flush

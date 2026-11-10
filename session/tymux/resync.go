@@ -49,6 +49,10 @@ const (
 // byte stream has a hole the browser's terminal cannot detect. It repaints, in the background and
 // coalesced, only the subscribers that lost output.
 func (s *tymuxGRPCSession) scheduleDropRepaint() {
+	if s.fanout.SeqValid() {
+		s.requestStreamResync(resyncReasonDrop, ScopeDropped)
+		return
+	}
 	if !s.dropRepaintPending.CompareAndSwap(false, true) {
 		return
 	}
@@ -173,7 +177,43 @@ func (s *tymuxGRPCSession) resyncViaCapturePane(ctx context.Context) error {
 // Snapshot (never expected in practice given the ADR-003 guarantee).
 func (s *tymuxGRPCSession) resyncAfterReconnect(ctx context.Context, first *v1.AttachEvent) error {
 	if snap := first.GetSnapshot(); snap != nil {
+		s.seedSequence(snap)
+		if snap.Seq != nil {
+			return s.applyPrimingSnapshot(snap)
+		}
 		return s.applySnapshotResync(snap)
 	}
+	// No priming snapshot to reseed from: a restarted daemon may number from lower seqs, which
+	// BroadcastSeq would drop as duplicates.
+	s.fanout.DisableSeq()
 	return s.resyncViaCapturePane(ctx)
+}
+
+// seedSequence restarts sequenced tracking from a priming snapshot (the first event of every
+// Attach): output after snap.Seq follows on this stream. A snapshot without a seq (older
+// daemon) leaves the stream unsequenced.
+func (s *tymuxGRPCSession) seedSequence(snap *v1.PaneSnapshot) {
+	if snap.Seq == nil {
+		s.fanout.DisableSeq()
+		return
+	}
+	s.fanout.ResetSeq(snap.GetSeq())
+}
+
+// applyPrimingSnapshot is applySnapshotResync for a reattach's priming snapshot on a sequenced
+// stream: subscribers' queues, which hold pre-disconnect output, are replaced by the redraw.
+func (s *tymuxGRPCSession) applyPrimingSnapshot(snap *v1.PaneSnapshot) error {
+	s.mu.Lock()
+	s.liveness = snap.GetLiveness()
+	s.restartIsPending = false
+	s.mu.Unlock()
+	redraw, err := RenderSnapshotRedraw(snap)
+	if err != nil {
+		return fmt.Errorf("tymux: resync: RenderSnapshotRedraw: %w", err)
+	}
+	if _, ok := s.fanout.ResyncAt(snap.GetSeq(), s.fanout.SeqGeneration(), []byte(redraw), ScopeAll); !ok {
+		return fmt.Errorf("tymux: resync: sequenced stream not ready after reseed")
+	}
+	recordAttachEvent(attachEventSnapshotRedraw)
+	return nil
 }

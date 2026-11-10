@@ -1,0 +1,37 @@
+name: 'Bazel cache (GitHub Actions disk + repository cache)'
+description: >
+  Restores/saves Bazel's disk and repository caches with the main-writes policy and exports
+  BAZEL_FLAGS (read by scripts/build-ghostty-wasm.sh). To move to a remote cache later, pass
+  remote-cache (e.g. a GHA-cache-backed proxy URL): that is the only line callers change.
+
+inputs:
+  remote-cache:
+    description: Optional --remote_cache URL appended to BAZEL_FLAGS. Empty means disk cache only.
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Bazel caches
+      uses: ./.github/actions/cache-main-writes
+      with:
+        path: |
+          ~/.cache/bazel-disk
+          ~/.cache/bazel-repo
+        # Also hashes third_party/ghostty/**: an exact hit is never re-saved, so editing BUILD/bzl files
+        # would otherwise keep restoring a stale disk cache and rebuild Zig cold.
+        key: bazel-ghostty-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', 'third_party/ghostty/**') }}
+        restore-keys: |
+          bazel-ghostty-${{ runner.os }}-
+          ghostty-wasm-
+        # Seeding main from an older entry would only accumulate stale actions: start clean per pin.
+        main-fallback: 'false'
+
+    - name: Export BAZEL_FLAGS
+      shell: bash
+      env:
+        REMOTE_CACHE: ${{ inputs.remote-cache }}
+      run: |
+        flags="--disk_cache=$HOME/.cache/bazel-disk --repository_cache=$HOME/.cache/bazel-repo"
+        if [ -n "$REMOTE_CACHE" ]; then flags="$flags --remote_cache=$REMOTE_CACHE"; fi
+        echo "BAZEL_FLAGS=$flags" >> "$GITHUB_ENV"

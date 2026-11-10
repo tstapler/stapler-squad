@@ -2,6 +2,7 @@ package streamhub
 
 import (
 	"context"
+	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -51,6 +52,21 @@ func (h *StreamHub) ResizeActivity() (generation uint64, resizing bool) {
 // calls with, so an early disconnect stops those calls instead of always
 // waiting out a fixed ceiling.
 func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size TerminalSize) {
+	h.RequestResizeNotify(ctx, id, size, nil)
+}
+
+// RequestResizeNotify is RequestResize that also calls paneResized exactly once: right after the
+// pane has been resized (before the repaint capture, which can take seconds), or when the call
+// returns without resizing (unchanged size, rejected vote, unknown subscriber). A caller that
+// must order input after the resize waits for this, not for the capture. paneResized runs on the
+// resizing goroutine and must not block. nil is allowed.
+func (h *StreamHub) RequestResizeNotify(ctx context.Context, id SubscriberID, size TerminalSize, paneResized func()) {
+	signal := sync.OnceFunc(func() {
+		if paneResized != nil {
+			paneResized()
+		}
+	})
+	defer signal()
 	h.mu.Lock()
 	sub, ok := h.subscribers[id]
 	h.mu.Unlock()
@@ -71,6 +87,8 @@ func (h *StreamHub) RequestResize(ctx context.Context, id SubscriberID, size Ter
 	// hub.go for the full race this closes.
 	h.resizeApplyMu.Lock()
 	defer h.resizeApplyMu.Unlock()
+	h.paneResized = signal // guarded by resizeApplyMu, which applyNegotiatedSize runs under
+	defer func() { h.paneResized = nil }()
 
 	sub.recordResizeVote(size)
 	h.renegotiateLocked(ctx)

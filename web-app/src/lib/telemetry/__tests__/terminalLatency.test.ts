@@ -45,6 +45,29 @@ describe("terminal latency probe", () => {
     expect(stages()).toContain("echo_paint:62");
   });
 
+  it("splits arrive-to-paint out as echo_render", () => {
+    const { probe, advance, runFrame, stages } = setup();
+    probe.noteInput();
+    advance(30);
+    probe.noteOutput();
+    advance(16);
+    runFrame();
+    advance(16);
+    runFrame();
+    expect(stages()).toContain("echo_render:32");
+  });
+
+  it("reports the send queue wait and socket backlog for the sampled keystroke only", () => {
+    const { probe, advance, stages } = setup();
+    probe.noteInputSent({ queuedMs: 4, bufferedBytes: 3000 }); // nothing sampled yet: ignored
+    probe.noteInput();
+    advance(1);
+    probe.noteInputSent({ queuedMs: 12, bufferedBytes: 3072 });
+    probe.noteInputSent({ queuedMs: 99, bufferedBytes: 0 }); // a later frame of the same keystroke
+    expect(stages().filter((s) => s.startsWith("input_queue"))).toEqual(["input_queue:12"]);
+    expect(stages().filter((s) => s.startsWith("ws_buffered_kib"))).toEqual(["ws_buffered_kib:3"]);
+  });
+
   it("samples one keystroke per gap and ignores a held key", () => {
     const { probe, advance, runFrame, events } = setup();
     probe.noteOutput();
@@ -95,9 +118,11 @@ describe("terminal latency probe", () => {
 
   it("never sends keystroke content or ids and caps events per minute", () => {
     const { probe, advance, events } = setup();
-    for (let i = 0; i < MAX_TERM_EVENTS_PER_MINUTE + 20; i++) {
+    // 3 events per sampled keystroke over under a minute: well past the cap.
+    for (let i = 0; i < 200; i++) {
       advance(ECHO_MIN_GAP_MS);
       probe.noteInput();
+      probe.noteInputSent({ queuedMs: 1, bufferedBytes: 0 });
       advance(5);
       probe.noteOutput();
     }

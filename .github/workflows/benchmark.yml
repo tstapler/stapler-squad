@@ -59,10 +59,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Install buf
         run: |
@@ -150,10 +149,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Install buf
         run: |
@@ -204,8 +202,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    # .size-limit.json's 6,349,052B cap (Story 5.9) is calibrated against the
-    # minified Bun build (build.ts's default).
+    # .size-limit.json mirrors budgets.json's totalJsBytes tripwire (8,000,000 B), measured on the
+    # minified Bun build (build.ts's default). The per-PR growth gate lives in build.yml's web-checks.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -372,10 +370,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
@@ -579,10 +576,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun

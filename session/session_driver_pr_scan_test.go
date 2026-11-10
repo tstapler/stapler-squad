@@ -15,6 +15,7 @@ import (
 const pushLine12 = "remote:      https://github.com/acme/app/pull/12\n"
 
 func TestScanAndLinkPRURL_ShouldAttachAndClearTerminal_WhenNumberChanges(t *testing.T) {
+	t.Parallel()
 	t.Run("session with a uuid attaches #12 as push_scan beside #11 and mirrors terminal=false", func(t *testing.T) {
 		inst := newPRTestInstance(t)
 		fake := &fakePRPersister{}
@@ -75,6 +76,7 @@ func legacyOnlyScanInstance(t *testing.T) *Instance {
 }
 
 func TestScanAndLinkPRURL_ShouldNotAttach_WhenRepoMismatchOrBareMention(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		configure func(*Instance)
@@ -111,6 +113,7 @@ func TestScanAndLinkPRURL_ShouldNotAttach_WhenRepoMismatchOrBareMention(t *testi
 }
 
 func TestScanAndLinkPRURL_ShouldAttachEachURLOnce_WhenTicksRepeatAndSecondURLAppears(t *testing.T) {
+	t.Parallel()
 	inst := newPRTestInstance(t)
 	fake := &fakePRPersister{}
 	inst.SetPRPersister(fake)
@@ -128,6 +131,7 @@ func TestScanAndLinkPRURL_ShouldAttachEachURLOnce_WhenTicksRepeatAndSecondURLApp
 }
 
 func TestScanAndLinkPRURL_ShouldUseCanonicalIdentity_WhenURLCasingDiffers(t *testing.T) {
+	t.Parallel()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
 
@@ -139,6 +143,7 @@ func TestScanAndLinkPRURL_ShouldUseCanonicalIdentity_WhenURLCasingDiffers(t *tes
 }
 
 func TestScanAndLinkPRURL_ShouldSkipTombstonedRef_WhenOwnerDetachedItBefore(t *testing.T) {
+	t.Parallel()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
 	ctx := context.Background()
@@ -170,6 +175,7 @@ func (f *failingTerminalPersister) UpdateGitHubPRStatusTerminal(title string, te
 }
 
 func TestScanAndLinkPRURL_ShouldReloadTerminalFalse_WhenSessionHasNoLink(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name    string
 		persist func(*Storage) prSetPersister

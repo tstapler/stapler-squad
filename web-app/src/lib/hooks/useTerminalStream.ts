@@ -1,5 +1,7 @@
 "use client";
 
+import { terminalInputTimer } from "@/lib/telemetry/terminalInputTiming";
+import type { VisibilityResyncDecision } from "@/lib/terminal/resyncPolicy";
 import { createClient, ConnectError } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { TerminalData, ScrollForwardOutcome, ScrollBlockedReason } from "@/gen/session/v1/events_pb";
@@ -131,6 +133,7 @@ interface TerminalStreamResult {
   isServerUnreachable: boolean;
   handleManualReconnect: () => void;
   requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
+  visibilityResyncDecision: () => VisibilityResyncDecision;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
   /**
@@ -301,7 +304,11 @@ export function useTerminalStream({
   // Keep pushMessageRef in sync with current messageQueue
   useEffect(() => {
     pushMessageRef.current = (msg: TerminalData) => {
-      messageQueueRef.current?.push(msg);
+      const queue = messageQueueRef.current;
+      if (!queue) return;
+      // Only a message that is really queued can later be sent, or the FIFO pairing drifts.
+      if (msg.data.case === "input") terminalInputTimer.markQueued(msg.sessionId);
+      queue.push(msg);
     };
     return () => { pushMessageRef.current = null; };
   }, []);
@@ -400,6 +407,7 @@ export function useTerminalStream({
       // itself always close/abort what it's about to replace.
       if (messageQueueRef.current) {
         const dropped = messageQueueRef.current.close();
+        terminalInputTimer.reset(sessionId); // the dropped inputs will never be sent
         if (dropped > 0) {
           onInputDropped?.(dropped);
         }
@@ -824,6 +832,7 @@ export function useTerminalStream({
 
     if (messageQueueRef.current) {
       const dropped = messageQueueRef.current.close();
+      terminalInputTimer.reset(sessionId);
       if (dropped > 0) {
         onInputDropped?.(dropped);
       }
@@ -853,7 +862,7 @@ export function useTerminalStream({
     isDisconnectingRef.current = false;
     textDecoderRef.current = new TextDecoder();
     scrollbackDecoderRef.current = new TextDecoder();
-  }, [getIsResyncingRef, onInputDropped, clearConnectTimeout]);
+  }, [getIsResyncingRef, onInputDropped, clearConnectTimeout, sessionId]);
 
   // ---- Auto-connect / cleanup ----
   useEffect(() => {
@@ -944,6 +953,7 @@ export function useTerminalStream({
     isServerUnreachable,
     handleManualReconnect,
     requestFullResync: flowControl.requestFullResync,
+    visibilityResyncDecision: flowControl.visibilityResyncDecision,
     markResyncComplete: flowControl.markResyncComplete,
     markPaneResponseReceived: flowControl.markPaneResponseReceived,
     connectionCount,

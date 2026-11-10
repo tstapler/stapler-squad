@@ -1634,7 +1634,7 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 			if l.conflictRetries.markExhaustedNotified(itemID) {
 				l.notify(itemID,
 					"Auto-rework paused",
-					fmt.Sprintf("%s — the merge conflict survived %d automated fix sessions. It now needs manual attention; use Reset to try again automatically.", itemTitle, conflictRetryMaxAttempts),
+					conflictExhaustionMessage(itemTitle, l.conflictRetries.sessionsRan(itemID), l.conflictRetries.failedStarts(itemID)),
 					8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 					true, true, // urgent, important — automated retry gave up; a genuine dead end
 				)
@@ -1665,8 +1665,12 @@ func (l *BacklogLifecycleListener) remediatePRFixWithBackoffGate(ctx context.Con
 	log.InfoLog().Printf("[BacklogLifecycle] remediatePRFixWithBackoffGate item=%s: attempting fix (trigger_source=%s)", itemID, prFixTriggerSourceFrom(ctx))
 
 	fixErr := fixSpawner.AutoReopenForPRFix(ctx, itemID, fixCtx)
-	if fixErr != nil && grantedHere {
-		l.conflictRetries.refund(itemID) // no session started: don't spend the attempt budget
+	if grantedHere {
+		if fixErr != nil {
+			l.conflictRetries.refund(itemID) // no session started: don't spend the attempt budget
+		} else {
+			l.conflictRetries.confirmStarted(itemID)
+		}
 	}
 	return true, fixErr
 }
@@ -1878,7 +1882,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			fixCtx = unverifiedPRAssociationDisclaimer + fixCtx
 		}
 		log.InfoLog().Printf("[BacklogLifecycle] ReconcilePRPending item=%s → in_progress: PR #%d closed without merging", item.ID, closedPrNum)
-		recordPRFixTrigger(ctx, er, item.ID.String(), closedPrNum, PRFixTriggerUnknown)
+		recordPRFixTrigger(ctx, er, item.ID.String(), closedPrNum, PRFixTriggerClosed)
 		attempted, fixErr := l.remediatePRFixWithBackoffGate(ctx, er, fixSpawner, item.ID.String(), item.Title, fixCtx, false)
 		if !attempted {
 			// Backoff not yet due — same as before this fix existed for a
