@@ -100,7 +100,7 @@ func (k keystrokeDelivery) deliver(writer TerminalWriter, data []byte) {
 	// Try the control-mode path first (low latency, no subprocess); it falls back to a
 	// subprocess send-keys. Errors are non-fatal: keystrokes may be lost under load but the
 	// stream stays alive (sending TerminalError kills it).
-	sendCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	sendCtx, cancel := context.WithTimeout(termlat.WithKeystroke(context.Background()), 2*time.Second)
 	_ = writer.SendInput(sendCtx, PaneInput{
 		ControlMode: k.instance,
 		TmuxSocket:  k.tmuxSocket,

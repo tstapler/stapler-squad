@@ -41,6 +41,7 @@ const (
 // tymuxd daemon over gRPC via rpcTransport.
 type tymuxGRPCSession struct {
 	transport    rpcTransport
+	echo         echoProbe // splits echo_server with the daemon's send stamp (echo_probe.go)
 	bannerFilter *tmux.BannerFilter
 
 	// mu guards every field below — Start/Close/RestoreWithWorkDir write
@@ -825,13 +826,18 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 		return err
 	}
 	ctx := context.Background()
+	listStart := time.Now()
 	listResp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	termlat.Default.Record(termlat.StageRestoreList, tymuxLabels, time.Since(listStart))
 	if err != nil {
 		return classifyRPCError("RestoreWithWorkDir", err)
 	}
 	found, viaStoredID := s.claimOwnSession(workDir, listResp.Msg.GetSessions())
 	if found == nil {
-		return s.Start(workDir)
+		startAt := time.Now()
+		err := s.Start(workDir)
+		termlat.Default.Record(termlat.StageRestoreStart, tymuxLabels, time.Since(startAt))
+		return err
 	}
 	return s.adopt(ctx, found, viaStoredID)
 }
@@ -945,7 +951,9 @@ func (s *tymuxGRPCSession) cacheForViewing(ctx context.Context, id string, found
 // adopt attaches to a session this owner has claimed, reviving it when tymuxd lists it dead.
 func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStoredID bool) error {
 	if found.GetLiveness() == v1.Liveness_LIVENESS_DEAD {
+		reviveStart := time.Now()
 		revived, err := s.reviveForRestore(ctx, found)
+		termlat.Default.Record(termlat.StageRestoreRevive, tymuxLabels, time.Since(reviveStart))
 		if err != nil {
 			claimedSessions.CompareAndDelete(found.GetId(), any(s))
 			return err
@@ -956,7 +964,10 @@ func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStor
 	s.recordOwned = viaStoredID
 	s.adoptedPreexisting = true
 	s.mu.Unlock()
-	return s.cacheFromSession(found)
+	adoptStart := time.Now()
+	err := s.cacheFromSession(found)
+	termlat.Default.Record(termlat.StageRestoreAdopt, tymuxLabels, time.Since(adoptStart))
+	return err
 }
 
 // reviveForRestore returns the session record to adopt in place of a DEAD-listed one. A pane
@@ -1314,9 +1325,18 @@ func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []b
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Only a ctx marked by the browser keystroke path starts the echo clock: SendKeys is agent
+	// automation and scroll forwarding also lands here.
+	var inputNs int64
+	if termlat.IsKeystroke(ctx) {
+		inputNs = s.echo.noteInput(time.Now())
+	}
 	_, err := s.sendOnStreamCtx(ctx, &v1.AttachRequest{
 		Payload: &v1.AttachRequest_Input{Input: data},
 	})
+	if err != nil && inputNs != 0 {
+		s.echo.forget(inputNs)
+	}
 	return err
 }
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -37,11 +38,28 @@ func TestForkPressureHealthStatus(t *testing.T) {
 }
 
 func TestGoroutineHealthStatus(t *testing.T) {
-	if got := goroutineHealthStatus(highGoroutineCountThreshold); got != "ok" {
-		t.Errorf("at threshold: got %q, want ok", got)
+	t.Parallel()
+	steady := profiling.GoroutineVerdict{State: profiling.GoroutinesOK, Ceiling: 5000}
+	cases := []struct {
+		name    string
+		count   int
+		verdict profiling.GoroutineVerdict
+		want    string
+	}{
+		{"no sample yet, normal count", 600, profiling.GoroutineVerdict{}, "ok"},
+		{"no sample yet, over the absolute ceiling", profiling.HighGoroutineThreshold + 1, profiling.GoroutineVerdict{}, "degraded"},
+		{"elevated spike stays ok", 900, profiling.GoroutineVerdict{State: profiling.GoroutinesElevated}, "ok"},
+		{"sustained growth degrades at a modest count", 400, profiling.GoroutineVerdict{State: profiling.GoroutinesSustained}, "degraded"},
+		{"over the session-scaled ceiling degrades", 5001, steady, "degraded"},
+		{"large fleet below its own ceiling is ok", 4000, steady, "ok"},
 	}
-	if got := goroutineHealthStatus(highGoroutineCountThreshold + 1); got != "degraded" {
-		t.Errorf("above threshold: got %q, want degraded", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := goroutineHealthStatus(tc.count, tc.verdict); got != tc.want {
+				t.Errorf("goroutineHealthStatus(%d, %s) = %q, want %q", tc.count, tc.verdict.State, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -53,7 +71,7 @@ func TestHandleActuatorHealth_ReturnsOK_InNormalConditions(t *testing.T) {
 
 	// Inputs are pinned: the live goroutine count and fork pressure are
 	// process-global, so other tests' leftovers made this flaky under -count=N.
-	writeActuatorHealth(rec, tmux.ForkPressureOK, 10)
+	writeActuatorHealth(rec, tmux.ForkPressureOK, 10, profiling.GoroutineVerdict{})
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)

@@ -1,7 +1,14 @@
 import { Terminal } from "@xterm/xterm";
 import { attachAndroidImeInput, compositionDelta } from "../androidImeInput";
 
-const flush = () => new Promise((r) => setTimeout(r, 5));
+// xterm's CompositionHelper chains setTimeout(0) callbacks that read the render service. With real
+// timers a CPU stall can fire the test's own wait first, so term.dispose() ran before the chained
+// callback and it threw "reading 'dimensions'". Fake timers drain them deterministically before dispose.
+beforeEach(() => jest.useFakeTimers());
+afterEach(() => jest.useRealTimers());
+const flush = async () => {
+  jest.advanceTimersByTime(50);
+};
 
 /** Replays the event sequence Android Gboard emits for a composing word (keydown 229, no per-key keys). */
 function gboard(ta: HTMLTextAreaElement) {
