@@ -91,24 +91,18 @@ Each subagent writes one file:
 Write %s/plan.md containing:
 - Executive summary (2-3 sentences)
 - Implementation approach
-- Task breakdown with time estimates
+- Task breakdown with a cost class per task (S, M or L) and any named blocker
 - Dependencies and blockers
 
 ### Step 3 — Validation
 Write %s/validation.md containing:
 - Test plan mapping each acceptance criterion to a specific test
 - Edge cases and error scenarios
+- %s
 
 ### Step 4 — Output
 After all files are written, output ONLY a JSON object (no other text before or after):
-{"title":"fix-short-kebab-name","summary":"2-3 sentence summary","acceptance_criteria":[{"index":0,"text":"Clear, testable criterion","status":"pending"}],"suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"task description","estimate":"2h","category":"backend"}]}
-- title: short kebab-case session name (3-5 words, imperative verb first, e.g. "fix-session-rename" or "add-pr-status-badge")
-- summary: 2-3 sentence executive summary
-- acceptance_criteria: full list of testable acceptance criteria (replace any existing ones). Each has index (0-based), text (one clear testable statement), status ("pending"). Merge with existing criteria: keep unchanged ones, add new ones, update clarified ones.
-- suggestions: additional open questions or improvement ideas beyond the ACs (questions use rationale="question")
-- tasks: implementation task breakdown from plan.md (max 12)
-- Do NOT call submit_triage_result. Do NOT write any source code.
-`, researchDir, researchDir, researchDir, researchDir, artifactAbsPath, artifactAbsPath)
+%s`, researchDir, researchDir, researchDir, researchDir, artifactAbsPath, artifactAbsPath, session.SecTriageCriteriaCheck, session.TriageOutputContract())
 
 	return sb.String()
 }
@@ -161,13 +155,7 @@ research as-is.
 
 After writing all files, output ONLY a JSON object (no other text before or
 after):
-{"title":"fix-short-kebab-name","summary":"2-3 sentence summary","suggestions":[{"text":"...","rationale":"..."}],"tasks":[{"text":"task description","estimate":"2h","category":"backend"}]}
-- title: short kebab-case session name (3-5 words, imperative verb first)
-- summary: 2-3 sentence executive summary of the REVISED plan
-- suggestions: AC gaps, open questions, improvement ideas (questions use rationale="question")
-- tasks: revised implementation task breakdown (max 12)
-- Do NOT call submit_triage_result. Do NOT write any source code.
-`, feedback, artifactAbsPath, artifactAbsPath, researchDir)
+%s`, feedback, artifactAbsPath, artifactAbsPath, researchDir, session.RetriageOutputContract())
 
 	return sb.String()
 }

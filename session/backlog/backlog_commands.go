@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
+
+// renderDefault renders a section for the Go-built prompts, substituting placeholder values.
+func renderDefault(section string, values map[string]string) string {
+	return renderTemplate(session.ForDefault(section), values)
+}
 
 // backlogCommandsDir is the relative path from worktree root for slash command files.
 const backlogCommandsDir = ".claude/commands/backlog"
@@ -219,58 +225,17 @@ func buildDefaultSlashCommandSet(item *session.BacklogItemData) (map[string]stri
 
 	// Per-criterion done-N.md and fail-N.md
 	for _, c := range criteria {
-		files[fmt.Sprintf("done-%d.md", c.Index)] = fmt.Sprintf("Call report_progress with item_id=%s, criteria_index=%d, status=pass. "+
-			"Include the optional note parameter with a 1-2 sentence description of what you verified (e.g. "+
-			"\"ran the new unit test, it passes\" or \"manually tested via curl against the new endpoint\") — it is "+
-			"appended to this item's permanent audit trail and is what a reviewer reads to judge whether this "+
-			"criterion is genuinely done, not just marked done.\n", itemID, c.Index)
-		files[fmt.Sprintf("fail-%d.md", c.Index)] = fmt.Sprintf("Call report_progress with item_id=%s, criteria_index=%d, status=fail. "+
-			"Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking "+
-			"this criterion — it is appended to this item's permanent audit trail and is what a reviewer or the "+
-			"next session reads to understand why this criterion isn't done yet.\n", itemID, c.Index)
+		values := map[string]string{"item_id": itemID, "criteria_index": strconv.Itoa(c.Index)}
+		files[fmt.Sprintf("done-%d.md", c.Index)] = renderDefault(session.SecDoneNote, values) + "\n"
+		files[fmt.Sprintf("fail-%d.md", c.Index)] = renderDefault(session.SecFailNote, values) + "\n"
 	}
 
 	// review.md
-	files["review.md"] = withWakeGuidance(fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n"+
-		"Then end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to "+
-		"wait: every wake re-reads your whole context. The app sends you a message with the verdict as soon as it "+
-		"is recorded.\n\n"+
-		"PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local "+
-		"CI, code review, remote CI, and merge-conflict resolution) — do not stop here; shipping the PR is part "+
-		"of this task, not a separate step someone else does.\n\n"+
-		"FAIL/PARTIAL → fix the noted gaps in this same session and run /backlog/review again. Its request_review "+
-		"call reports which attempt number you're on out of %d allowed in this session — the count is tracked "+
-		"server-side, so trust what it reports rather than counting your own calls. Once it says you've hit the "+
-		"cap, STOP looping: run /backlog/ship anyway to open a PR so a human can pick up the review directly, "+
-		"rather than retrying /backlog/review again.\n", itemID, session.MaxSameSessionReviewAttempts))
+	files["review.md"] = withWakeGuidance(fmt.Sprintf("Call request_review with item_id=%s and a 2-3 sentence summary of what was built.\n\n", itemID) +
+		"Then " + session.ForDefault(session.SecAwaitVerdict) + "\n\n" + session.ForDefault(session.SecOnPass) + "\n\n" + session.ForDefault(session.OnFailSection()) + "\n")
 
 	// ship.md
-	files["ship.md"] = fmt.Sprintf("You are ready to ship your work as a pull request — either because /backlog/review just "+
-		"returned PASS, or because review has looped without reaching a PASS and it's time to hand the work to a "+
-		"human instead of retrying indefinitely.\n\n"+
-		"Before shipping, confirm all acceptance criteria are marked complete (`/backlog/status`).\n\n"+
-		"Steps:\n"+
-		"1. Create the pull request:\n"+
-		"   Run `/github:pr-ship` — this drives the PR through local CI, code review, remote CI, and\n"+
-		"   merge-conflict resolution. It will stop short of actually merging; the final merge is left to\n"+
-		"   the human reviewer.\n\n"+
-		"2. Once `/github:pr-ship` reports all gates green: if this work has NOT already received a PASS "+
-		"verdict (i.e. you're shipping because review looped without converging, not because it passed), "+
-		"request the automated review with the PR number included:\n"+
-		"   Run `/backlog/review` with a 2-3 sentence summary of what was built and the PR number.\n"+
-		"   If review already returned PASS before you got here, skip this — running it again will fail (the "+
-		"   item is no longer `in_progress`), and there's nothing left for it to check.\n\n"+
-		"3. Report a PR back onto this backlog item — REQUIRED, do not skip:\n"+
-		"   Call the report_pr_created MCP tool with item_id=%s, pr_url=<the PR URL /github:pr-ship or gh pr "+
-		"create printed>, pr_number=<the PR number>, and summary=<2-3 sentences: what changed and why>.\n"+
-		"   You created each PR yourself — nothing else will ever report it back to the item record. Skipping "+
-		"this step leaves the item stuck in review with a real PR that is invisible to the reviewer and the "+
-		"operator.\n\n"+
-		"Note: if the repository has no GitHub remote, run `gh pr create` manually — do NOT use `--fill`, which\n"+
-		"just concatenates commit messages with no test plan. Write `--title` using Conventional Commits format\n"+
-		"and a `--body` structured as `## Summary` (why this change was made, from the backlog item above),\n"+
-		"`## What Changed` (a short bullet list), and `## Test plan` (a checklist of concrete verification steps).\n"+
-		"Then run `/backlog/review`, then step 3 above to report the PR.\n", itemID)
+	files["ship.md"] = withWakeGuidance(renderDefault(session.SecShipIntro+"\n\n"+session.SecShipSteps, map[string]string{"item_id": itemID}) + "\n")
 
 	// help.md — list all available commands
 	var helpSb strings.Builder
@@ -283,6 +248,7 @@ func buildDefaultSlashCommandSet(item *session.BacklogItemData) (map[string]stri
 	helpSb.WriteString("- `/backlog/review` — Submit for review with a summary\n")
 	helpSb.WriteString("- `/backlog/ship` — Create a PR with /github:pr-ship and submit for review\n")
 	helpSb.WriteString("- `/backlog/block` — Report that you're stuck and hand this item back (not for bugs you can fix yourself)\n")
+	helpSb.WriteString("- " + session.HelpOwnerActionLine + "\n")
 	helpSb.WriteString("- `/backlog/duplicate` — Report this item is already covered by an existing PR, issue, or commit\n")
 	files["help.md"] = helpSb.String()
 
@@ -295,15 +261,19 @@ func buildDefaultSlashCommandSet(item *session.BacklogItemData) (map[string]stri
 // changes based on pipeline mode.
 func buildBlockAndDuplicateCommands(itemID string) map[string]string {
 	return map[string]string{
-		"block.md": fmt.Sprintf("Call report_blocked with item_id=%s and a rationale (1-3 sentences) that names "+
-			"specifically what is stopping you — a missing credential or access grant, an acceptance criterion "+
-			"that is ambiguous or contradictory, a hard dependency on another backlog item or an external team, "+
-			"or a design decision you are not authorized to make unilaterally.\n\n"+
+		"block.md": fmt.Sprintf("Call report_blocked with item_id=%s and a rationale (1-3 sentences) ONLY for an "+
+			"external blocker: a missing credential or access grant, or a hard dependency on another backlog item "+
+			"or an external team.\n\n"+
+			"If the blocker is an acceptance criterion that is ambiguous, contradictory or unattainable, or a decision "+
+			"only the owner can make, call request_owner_action instead (item_id=%s, a question that includes your "+
+			"evidence, allowed_responses; waive_criterion_index=N offers a one-click waiver of criterion N). It pins a "+
+			"banner, notifies the owner, and wakes you with their answer, whereas report_blocked gives the owner "+
+			"nothing to answer.\n\n"+
 			"Do NOT use this for a bug, failing test, or error you are able to fix yourself — fix it and keep "+
 			"going instead of blocking. Blocking returns the item to ready so a human or another session can "+
 			"pick it up; if this item has been blocked repeatedly, it escalates straight to review instead so a "+
 			"human sees the recurring pattern directly rather than the item bouncing in the queue indefinitely. "+
-			"This call is rejected unless it comes from a work-role session actively assigned to this item.\n", itemID),
+			"This call is rejected unless it comes from a work-role session actively assigned to this item.\n", itemID, itemID),
 
 		"duplicate.md": fmt.Sprintf("Call report_duplicate with item_id=%s, duplicate_ref=<the GitHub URL of the "+
 			"pull request, issue, or commit that already covers this exact work>, and reason=<1-2 sentences "+
@@ -352,9 +322,7 @@ func WriteBacklogContextFile(item *session.BacklogItemData, priorSessions []sess
 	sb.WriteString("If MCP tools are unavailable, continue using the acceptance criteria above.\n")
 	sb.WriteString("Record completed criteria in commit messages. Run git commit after each criterion is done.\n")
 	sb.WriteString("\n## Before You Start\n")
-	sb.WriteString("This worktree's branch may be behind main (this file is rewritten on every spawn and re-attach, but the branch itself is not auto-synced). ")
-	sb.WriteString("Run `git merge main` before starting substantive work. If it merges cleanly, continue. ")
-	sb.WriteString("If it conflicts, resolve them as part of this task — you have the context to do it correctly; a background process does not.\n")
+	sb.WriteString(session.ForDefault(session.SecSyncMain) + "\n")
 
 	content := sb.String()
 

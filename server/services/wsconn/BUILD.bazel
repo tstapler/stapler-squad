@@ -83,6 +83,7 @@ go_test(
         "feature_flag_service_ws_test.go",
         "input_order_gate_test.go",
         "input_priority_test.go",
+        "scrollback_response_test.go",
         "session_gone_test.go",
         "session_gone_ws_test.go",
         "stream_route_ws_test.go",

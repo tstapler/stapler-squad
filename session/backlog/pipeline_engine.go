@@ -370,7 +370,7 @@ func (e *CachingPipelineEngine) SlashCommandSet(item *session.BacklogItemData) (
 	files := make(map[string]string, len(criteria)*2+4)
 	files["status.md"] = renderTemplate(rm.StatusCommandTemplate, base)
 	files["review.md"] = withWakeGuidance(renderTemplate(rm.ReviewCommandTemplate, base))
-	files["ship.md"] = renderTemplate(rm.ShipCommandTemplate, base)
+	files["ship.md"] = withWakeGuidance(renderTemplate(rm.ShipCommandTemplate, base))
 	files["help.md"] = renderTemplate(rm.HelpCommandTemplate, base)
 
 	for _, c := range criteria {
@@ -477,7 +477,7 @@ func (e *CachingPipelineEngine) InitialPromptFor(item *session.BacklogItemData, 
 	// decision (server/services/backlog_service_triage.go) applies identically
 	// regardless of pipeline mode; without this, an item on a custom mode would
 	// silently never receive the nudge on its escalated retry.
-	return EscalationNoticeFor(priorSessions) + withWakeGuidance(renderTemplate(rm.InitialPromptTemplate, itemPlaceholders(item)))
+	return EscalationNoticeFor(priorSessions) + reworkContextFor(item, priorSessions) + withWakeGuidance(renderTemplate(rm.InitialPromptTemplate, itemPlaceholders(item)))
 }
 
 // ContentHashFor implements PipelineEngine.

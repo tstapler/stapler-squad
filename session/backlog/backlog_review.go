@@ -68,7 +68,7 @@ type ReviewContextExtras struct {
 	// shown in "## Acceptance Criteria" with the complete timeline.
 	ProgressNotes []session.ProgressNoteData
 	// ItemDescription is the backlog item's Description, rendered in "## Item Context"
-	// alongside StatusEvents. Kept separate from the *BacklogItemData already passed to
+	// alongside StatusEvents. Kept separate from the *session.BacklogItemData already passed to
 	// BuildHeadlessReviewPrompt because that pointer may not have StatusEvents loaded —
 	// callers typically populate both fields together from a single freshly-loaded
 	// GetBacklogItem(..., WithStatusEvents) call.
@@ -95,7 +95,7 @@ const maxContextExtrasEntries = 20
 
 // writePriorReviewAttemptsSection appends outcome + summary + non-PASS per-criterion
 // evidence for every past review session on this item, most recent last. Reuses
-// parsePerCriterionVerdicts (backlog_context.go) since ReviewVerdictSummary.PerCriterion
+// session.ParsePerCriterionVerdicts (backlog_context.go) since ReviewVerdictSummary.PerCriterion
 // is the identical JSON shape ([]CriterionVerdict) in both places.
 func writePriorReviewAttemptsSection(sb *strings.Builder, priorSessions []session.ItemSessionSummary) {
 	var reviews []session.ItemSessionSummary
@@ -193,6 +193,34 @@ func writeSessionTranscriptSection(sb *strings.Builder, transcriptRelPath string
 
 // writeReviewContextExtras renders all ReviewContextExtras sections. Only called on the
 // diff == "" path — see BuildHeadlessReviewPrompt.
+// writeAcceptanceCriteria lists the criteria; a waived one is marked so the reviewer does not
+// fail the item for something the owner already decided not to require.
+func writeAcceptanceCriteria(sb *strings.Builder, acSnapshot []session.AcCriterion) {
+	if len(acSnapshot) == 0 {
+		sb.WriteString("(no acceptance criteria)\n")
+		return
+	}
+	for _, c := range acSnapshot {
+		fmt.Fprintf(sb, "%d. %s\n", c.Index, session.SanitizeField(c.Text, 500))
+		if c.Status == session.AcStatusWaived {
+			sb.WriteString("   WAIVED by the owner: do not evaluate it and leave it out of verdicts.\n")
+		}
+		if c.Note != "" {
+			fmt.Fprintf(sb, "   Note (self-reported by work session via report_progress): %s\n", session.SanitizeField(c.Note, 500))
+		}
+	}
+}
+
+// writeReviewScope tells the reviewer what evidence is in bounds and how to treat failures
+// the change did not cause.
+func writeReviewScope(sb *strings.Builder, item *session.BacklogItemData) {
+	sb.WriteString("## Review Scope\n")
+	if item.PlanArtifactsPath != "" {
+		fmt.Fprintf(sb, "Plan artifacts for this item live in %s; files there count as evidence you may read and cite.\n", item.PlanArtifactsPath)
+	}
+	sb.WriteString(session.ForDefault(session.SecReviewScope) + "\n\n")
+}
+
 func writeReviewContextExtras(sb *strings.Builder, extras ReviewContextExtras) {
 	writePriorReviewAttemptsSection(sb, extras.PriorSessions)
 	writeFullNotesHistorySection(sb, extras.ProgressNotes)
@@ -213,16 +241,7 @@ func BuildReviewPrompt(item *session.BacklogItemData, acSnapshot []session.AcCri
 
 	// Acceptance criteria list.
 	sb.WriteString("## Acceptance Criteria\n")
-	if len(acSnapshot) == 0 {
-		sb.WriteString("(no acceptance criteria)\n")
-	} else {
-		for _, c := range acSnapshot {
-			fmt.Fprintf(&sb, "%d. %s\n", c.Index, session.SanitizeField(c.Text, 500))
-			if c.Note != "" {
-				fmt.Fprintf(&sb, "   Note (self-reported by work session via report_progress): %s\n", session.SanitizeField(c.Note, 500))
-			}
-		}
-	}
+	writeAcceptanceCriteria(&sb, acSnapshot)
 	sb.WriteString("\n")
 
 	// Implementation plan (if available).
@@ -272,14 +291,17 @@ func BuildReviewPrompt(item *session.BacklogItemData, acSnapshot []session.AcCri
 
 	writeVerificationEvidenceSection(&sb, verificationNotes)
 
+	writeReviewScope(&sb, item)
+
 	// --- instructions ---
 	sb.WriteString("## Instructions\n")
 	sb.WriteString("Call submit_review_verdict ONCE with ALL criteria verdicts in the verdicts array:\n")
 	sb.WriteString("  - item_id: the backlog item UUID shown below\n")
 	sb.WriteString("  - summary: a concise overall assessment\n")
-	sb.WriteString("  - verdicts: [{criterion_index, outcome, evidence}, ...] for each criterion\n")
+	sb.WriteString("  - verdicts: [{criterion_index, outcome, evidence, failure_class?, proposed_waiver?}, ...] for each criterion\n")
 	sb.WriteString("  - outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE\n")
-	sb.WriteString("  - evidence: direct quote or reference from the diff\n\n")
+	sb.WriteString("  - evidence: direct quote or reference from the diff\n")
+	sb.WriteString("  - " + session.ForDefault(session.SecReviewFailureClass) + "\n\n")
 	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_review_verdict): %s\n", item.ID)
 	sb.WriteString("\nEnd your session immediately after calling submit_review_verdict. Do not wait, poll, or do further work — an idle-but-alive reviewer session leaves the item stuck in review.\n")
 
@@ -306,16 +328,7 @@ func BuildHeadlessReviewPrompt(item *session.BacklogItemData, acSnapshot []sessi
 	}
 
 	sb.WriteString("## Acceptance Criteria\n")
-	if len(acSnapshot) == 0 {
-		sb.WriteString("(no acceptance criteria)\n")
-	} else {
-		for _, c := range acSnapshot {
-			fmt.Fprintf(&sb, "%d. %s\n", c.Index, session.SanitizeField(c.Text, 500))
-			if c.Note != "" {
-				fmt.Fprintf(&sb, "   Note (self-reported by work session via report_progress): %s\n", session.SanitizeField(c.Note, 500))
-			}
-		}
-	}
+	writeAcceptanceCriteria(&sb, acSnapshot)
 	sb.WriteString("\n")
 
 	// Implementation plan (if available).
@@ -350,6 +363,8 @@ func BuildHeadlessReviewPrompt(item *session.BacklogItemData, acSnapshot []sessi
 
 	writeVerificationEvidenceSection(&sb, verificationNotes)
 
+	writeReviewScope(&sb, item)
+
 	sb.WriteString("## Instructions\n")
 	sb.WriteString("Evaluate every acceptance criterion against the diff above. Also verify the implementation follows the plan (if provided).\n")
 	sb.WriteString("Output ONLY a single JSON object with no surrounding text:\n")
@@ -363,6 +378,7 @@ func BuildHeadlessReviewPrompt(item *session.BacklogItemData, acSnapshot []sessi
 	} else {
 		sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
 	}
+	sb.WriteString("\nOptional per-verdict fields failure_class and proposed_waiver: " + session.ForDefault(session.SecReviewFailureClass) + "\n")
 	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark a criterion UNVERIFIABLE rather than guessing if you cannot confirm it from what's in front of you — a missing or incomplete diff is a known limitation of this mode, not a signal the work is wrong.\n")
 
 	return sb.String()
@@ -489,15 +505,26 @@ func ParseHeadlessToolReads(text string) []string {
 
 // verifyToolReadsExist does a cheap, non-LLM os.Stat on every path in toolReads,
 // resolved relative to codebaseWorkDir (absolute paths are stat'd as-is). Every
-// resolved path MUST also be contained within codebaseWorkDir — an absolute path
-// pointing anywhere else on the host, or a relative path that escapes
-// codebaseWorkDir via "..", is treated as unverified/fabricated rather than stat'd
-// unconditionally. Returns false and the first offending path if ANY claimed path
-// does not exist or escapes codebaseWorkDir.
-func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, badPath string) {
+// resolved path MUST also be contained within codebaseWorkDir or one of
+// extraRoots (the item's own plan-artifacts directory, where evidence such as
+// captured race logs legitimately lives outside the worktree) — any other
+// absolute path, or a relative path that escapes via "..", is treated as
+// unverified/fabricated rather than stat'd unconditionally. Returns false and
+// the first offending path if ANY claimed path does not exist or escapes every
+// allowed root.
+func verifyToolReadsExist(codebaseWorkDir string, toolReads []string, extraRoots ...string) (ok bool, badPath string) {
 	root, rootErr := filepath.Abs(codebaseWorkDir)
 	if rootErr != nil {
 		return false, codebaseWorkDir
+	}
+	roots := []string{root}
+	for _, r := range extraRoots {
+		if strings.TrimSpace(r) == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(r); err == nil {
+			roots = append(roots, abs)
+		}
 	}
 	for _, p := range toolReads {
 		if strings.TrimSpace(p) == "" {
@@ -513,16 +540,19 @@ func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, 
 		if err != nil {
 			return false, p
 		}
-		rel, relErr := filepath.Rel(root, resolved)
-		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			// Escapes codebaseWorkDir — treat as unverified/fabricated regardless of
-			// whether the path happens to exist somewhere else on the host.
-			return false, p
-		}
-		if rel == "." {
-			// The path resolves to codebaseWorkDir itself (e.g. "" or ".") — the
+		contained, isRoot := false, false
+		for _, r := range roots {
+			rel, relErr := filepath.Rel(r, resolved)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			contained = true
+			// The path resolves to an allowed root itself (e.g. "" or ".") — the
 			// directory always exists, so this would otherwise trivially satisfy
 			// the check without citing any real evidence. Reject it.
+			isRoot = isRoot || rel == "."
+		}
+		if !contained || isRoot {
 			return false, p
 		}
 		info, err := os.Stat(resolved)
@@ -540,11 +570,11 @@ func verifyToolReadsExist(codebaseWorkDir string, toolReads []string) (ok bool, 
 // outcome, verdicts, an annotated summary, and the refined path label
 // ("codebase-read-verified" or "codebase-read-degraded") for logging. No-op when
 // path != "codebase-read".
-func DegradeIfUnverified(path string, overall session.ReviewOutcome, verdicts []session.CriterionVerdict, summary string, toolReads []string, codebaseWorkDir string) (session.ReviewOutcome, []session.CriterionVerdict, string, string) {
+func DegradeIfUnverified(path string, overall session.ReviewOutcome, verdicts []session.CriterionVerdict, summary string, toolReads []string, codebaseWorkDir string, extraRoots ...string) (session.ReviewOutcome, []session.CriterionVerdict, string, string) {
 	if path != "codebase-read" {
 		return overall, verdicts, summary, path
 	}
-	verified, badPath := verifyToolReadsExist(codebaseWorkDir, toolReads)
+	verified, badPath := verifyToolReadsExist(codebaseWorkDir, toolReads, extraRoots...)
 	if len(toolReads) > 0 && verified {
 		return overall, verdicts, summary, "codebase-read-verified"
 	}
@@ -580,7 +610,7 @@ func DegradeIfUnverified(path string, overall session.ReviewOutcome, verdicts []
 // context error). See ADR-001 for the rationale on treating infrastructure failures as
 // distinct from evidence of failure.
 //
-// Returns the resulting ItemSessionSummary for the caller's own logging, RPC response
+// Returns the resulting session.ItemSessionSummary for the caller's own logging, RPC response
 // construction, or auto-reopen-goroutine handling — those differ enough between call
 // sites (return-vs-goroutine control flow, RPC error wrapping, distinct summary/outcome
 // per failure mode) that they remain the caller's responsibility rather than being
@@ -821,7 +851,7 @@ func isPathUnderAnyRoot(cleanPath string, roots []string) bool {
 }
 
 // readPlanFile reads plan.md from the given artifacts directory.
-// artifactsDir originates from BacklogItemData.PlanArtifactsPath, which can be
+// artifactsDir originates from session.BacklogItemData.PlanArtifactsPath, which can be
 // set directly from untrusted MCP tool input (server/mcp/tools_backlog.go's
 // submit_triage_result "plan_artifact_path" argument) — so this enforces
 // containment under one of planArtifactsAllowedRoots(repoPath) before ever

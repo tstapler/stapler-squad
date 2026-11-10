@@ -1348,10 +1348,11 @@ func buildContinuationPrompt(inst *Instance) string {
 }
 
 // IsOneShot returns true for sessions that should NOT be auto-retried.
-// Triage and review sessions run exactly once; retrying them could corrupt
-// backlog state by re-triggering lifecycle transitions.
+// Triage, review and diagnose sessions run exactly once; retrying them could corrupt
+// backlog state by re-triggering lifecycle transitions, and a revived diagnose
+// session re-runs its prompt (and re-bills it) every health tick.
 func IsOneShot(inst *Instance) bool {
-	return inst.HasTag("backlog:triage") || inst.HasTag("backlog:review")
+	return inst.HasTag("backlog:triage") || inst.HasTag("backlog:review") || inst.HasTag("backlog:diagnose")
 }
 
 // answerDialogOnce implements the DialogAnswerLatch state machine (ADR-001):

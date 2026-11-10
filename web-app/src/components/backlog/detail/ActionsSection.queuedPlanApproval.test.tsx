@@ -2,6 +2,8 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ActionsSection } from "./ActionsSection";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
+import { noManualReview } from "./actionsSectionTestFixtures";
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 
 /**
  * Regression coverage for the "no reachable Approve Plan action for queued
@@ -52,14 +54,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         item={makeItem({ planArtifactsPath: "/tmp/plan.md" })}
         actionLoading={null}
         latestWorkSession={undefined}
-        showManualReview={false}
-        manualReviewOutcome="PASS"
-        manualReviewSummary=""
+        manualReview={noManualReview}
         onAction={noop}
-        onManualReviewOutcomeChange={noop}
-        onManualReviewSummaryChange={noop}
-        onManualReviewSubmit={noop}
-        onManualReviewCancel={noop}
         terminalState={null}
         activeWorkSessionCount={0}
         onSendBackWithFeedback={async () => {}}
@@ -75,14 +71,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         item={makeItem({ planArtifactsPath: "/tmp/plan.md" })}
         actionLoading={null}
         latestWorkSession={undefined}
-        showManualReview={false}
-        manualReviewOutcome="PASS"
-        manualReviewSummary=""
+        manualReview={noManualReview}
         onAction={onAction}
-        onManualReviewOutcomeChange={noop}
-        onManualReviewSummaryChange={noop}
-        onManualReviewSubmit={noop}
-        onManualReviewCancel={noop}
         terminalState={null}
         activeWorkSessionCount={0}
         onSendBackWithFeedback={async () => {}}
@@ -98,14 +88,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         item={makeItem({ planArtifactsPath: "", triageStatus: "failed" })}
         actionLoading={null}
         latestWorkSession={undefined}
-        showManualReview={false}
-        manualReviewOutcome="PASS"
-        manualReviewSummary=""
+        manualReview={noManualReview}
         onAction={noop}
-        onManualReviewOutcomeChange={noop}
-        onManualReviewSummaryChange={noop}
-        onManualReviewSubmit={noop}
-        onManualReviewCancel={noop}
         terminalState={null}
         activeWorkSessionCount={0}
         onSendBackWithFeedback={async () => {}}
@@ -122,14 +106,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         item={makeItem({ planArtifactsPath: "", triageStatus: "failed" })}
         actionLoading={null}
         latestWorkSession={undefined}
-        showManualReview={false}
-        manualReviewOutcome="PASS"
-        manualReviewSummary=""
+        manualReview={noManualReview}
         onAction={onAction}
-        onManualReviewOutcomeChange={noop}
-        onManualReviewSummaryChange={noop}
-        onManualReviewSubmit={noop}
-        onManualReviewCancel={noop}
         terminalState={null}
         activeWorkSessionCount={0}
         onSendBackWithFeedback={async () => {}}
@@ -149,14 +127,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         item={makeItem({ planArtifactsPath: "", triageStatus: undefined })}
         actionLoading={null}
         latestWorkSession={undefined}
-        showManualReview={false}
-        manualReviewOutcome="PASS"
-        manualReviewSummary=""
+        manualReview={noManualReview}
         onAction={noop}
-        onManualReviewOutcomeChange={noop}
-        onManualReviewSummaryChange={noop}
-        onManualReviewSubmit={noop}
-        onManualReviewCancel={noop}
         terminalState={null}
         activeWorkSessionCount={0}
         onSendBackWithFeedback={async () => {}}
@@ -172,14 +144,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         item={makeItem({ planArtifactsPath: "", planApproved: true, triageStatus: "failed" })}
         actionLoading={null}
         latestWorkSession={undefined}
-        showManualReview={false}
-        manualReviewOutcome="PASS"
-        manualReviewSummary=""
+        manualReview={noManualReview}
         onAction={noop}
-        onManualReviewOutcomeChange={noop}
-        onManualReviewSummaryChange={noop}
-        onManualReviewSubmit={noop}
-        onManualReviewCancel={noop}
         terminalState={null}
         activeWorkSessionCount={0}
         onSendBackWithFeedback={async () => {}}
@@ -195,14 +161,8 @@ describe("ActionsSection — queued status Approve Plan action", () => {
         item={makeItem({ planArtifactsPath: "/tmp/plan.md", planApproved: true })}
         actionLoading={null}
         latestWorkSession={undefined}
-        showManualReview={false}
-        manualReviewOutcome="PASS"
-        manualReviewSummary=""
+        manualReview={noManualReview}
         onAction={noop}
-        onManualReviewOutcomeChange={noop}
-        onManualReviewSummaryChange={noop}
-        onManualReviewSubmit={noop}
-        onManualReviewCancel={noop}
         terminalState={null}
         activeWorkSessionCount={0}
         onSendBackWithFeedback={async () => {}}

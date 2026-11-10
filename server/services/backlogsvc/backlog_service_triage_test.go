@@ -4725,6 +4725,24 @@ func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseS
 		"must recover the real diff via merge-base auto-repair instead of giving up empty")
 }
 
+// A directory-mode work session has no worktree row. The diff must be empty, not the
+// shared checkout's HEAD~1..HEAD (item a0fb3466's reviewer saw an unrelated lint commit).
+func TestGetWorkSessionDiff_should_ReturnEmpty_When_WorkSessionHasNoWorktree(t *testing.T) {
+	t.Parallel()
+	repoDir := t.TempDir()
+	repo := svctest.InitGitRepoForTest(t, repoDir)
+	svctest.CommitFileForTest(t, repo, repoDir, "README.md", "# Test Repo\n", "initial")
+	svctest.CommitFileForTest(t, repo, repoDir, "unrelated.txt", "other work\n", "unrelated commit on shared checkout")
+
+	storage, _ := createTestStorageWithRepo(t)
+	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
+
+	diff, truncated := svc.getWorkSessionDiffTruncated(context.Background(), repoDir,
+		&session.ItemSessionSummary{SessionUUID: "directory-mode-session", BaseCommitSha: "HEAD~1"})
+	assert.Empty(t, diff, "must not review the shared checkout's last commit as the item's work")
+	assert.False(t, truncated)
+}
+
 // TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsButBaseShaCorrupted
 // covers the ae1e2070 shape directly, distinct from the gone-worktree test above: the
 // worktree directory is still present, so recoverDir must be wt.WorktreePath, not

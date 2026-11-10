@@ -105,6 +105,7 @@ go_test(
         "pipeline_engine_characterization_test.go",
         "pipeline_mode_validation_bk_test.go",
         "pr_terminal_listener_test.go",
+        "prompt_sections_bk_test.go",
         "refs_backend_bk_test.go",
         "review_gate_bk_test.go",
         "review_spawn_guard_bk_test.go",

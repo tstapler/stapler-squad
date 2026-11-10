@@ -33,8 +33,8 @@ func TruncateField(s string, maxLen int) string {
 	return s
 }
 
-// buildAcChecklist renders a numbered checklist from AC criteria.
-// pending → "[ ]", done → "[✓]", in_progress → "[✗]"
+// BuildAcChecklist renders a numbered checklist from AC criteria, followed by a legend.
+// done → "[✓]", waived → "[~]" (owner-set, skip it), fail → "[✗]", in_progress → "[>]", else "[ ]".
 func BuildAcChecklist(criteria []AcCriterion) string {
 	if len(criteria) == 0 {
 		return "(no acceptance criteria)"
@@ -43,16 +43,21 @@ func BuildAcChecklist(criteria []AcCriterion) string {
 	for _, c := range criteria {
 		var marker string
 		switch c.Status {
-		case "done":
+		case AcStatusDone:
 			marker = "[✓]"
-		case "in_progress":
+		case AcStatusWaived:
+			marker = "[~]"
+		case AcStatusFail:
 			marker = "[✗]"
+		case AcStatusInProgress:
+			marker = "[>]"
 		default:
 			marker = "[ ]"
 		}
 		fmt.Fprintf(&sb, "%d. %s %s\n", c.Index, marker, SanitizeField(c.Text, 500))
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	sb.WriteString("Legend: [✓] done  [~] waived by the owner (skip it)  [✗] failed  [>] in progress  [ ] pending")
+	return sb.String()
 }
 
 // parsePerCriterionVerdicts unmarshals the JSON array stored in

@@ -861,6 +861,40 @@ func TestVerifyToolReadsExist_DirectoryPath_ReturnsFalse(t *testing.T) {
 	assert.Equal(t, "session", badPath)
 }
 
+// TestVerifyToolReadsExist_ExtraRoot_AllowsEvidenceOutsideWorkDir pins the
+// 2026-11 stuck-item fix: evidence captured under the item's plan-artifacts
+// directory (outside the worktree) must verify, while paths outside BOTH roots,
+// the extra root itself, and missing files still fail.
+func TestVerifyToolReadsExist_ExtraRoot_AllowsEvidenceOutsideWorkDir(t *testing.T) {
+	t.Parallel()
+	work, artifacts, other := t.TempDir(), t.TempDir(), t.TempDir()
+	evidence := filepath.Join(artifacts, "evidence", "race.log")
+	require.NoError(t, os.MkdirAll(filepath.Dir(evidence), 0o755))
+	require.NoError(t, os.WriteFile(evidence, []byte("WARNING: DATA RACE"), 0o644))
+	stray := filepath.Join(other, "race.log")
+	require.NoError(t, os.WriteFile(stray, []byte("x"), 0o644))
+
+	ok, _ := verifyToolReadsExist(work, []string{evidence}, artifacts)
+	assert.True(t, ok, "file under the extra root verifies")
+
+	ok, bad := verifyToolReadsExist(work, []string{evidence})
+	assert.False(t, ok, "without the extra root the same path is rejected")
+	assert.Equal(t, evidence, bad)
+
+	ok, bad = verifyToolReadsExist(work, []string{stray}, artifacts)
+	assert.False(t, ok, "a path outside every allowed root is still rejected")
+	assert.Equal(t, stray, bad)
+
+	ok, _ = verifyToolReadsExist(work, []string{artifacts}, artifacts)
+	assert.False(t, ok, "the extra root itself cites no file")
+
+	ok, _ = verifyToolReadsExist(work, []string{filepath.Join(artifacts, "missing.log")}, artifacts)
+	assert.False(t, ok, "a missing file under the extra root is rejected")
+
+	ok, _ = verifyToolReadsExist(work, []string{evidence}, "")
+	assert.False(t, ok, "a blank extra root grants nothing")
+}
+
 // TestDegradeIfUnverified_DiffPath_NoOp verifies the diff path (normal review, no
 // tool access) is never touched by the degrade logic.
 func TestDegradeIfUnverified_DiffPath_NoOp(t *testing.T) {

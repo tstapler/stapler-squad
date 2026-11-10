@@ -721,6 +721,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			triageRespawner = deps.BacklogService
 		}
 		guidanceRequestSvc = services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
+		if deps.BacklogService != nil {
+			guidanceRequestSvc.SetWaiverResumer(deps.BacklogService.ResumeAfterOwnerWaiver)
+		}
 		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
 		if deps.SessionService != nil {
 			var backlogTransitions services.BacklogTransitioner // stays nil unless set: a boxed nil *BacklogService would defeat the nil check

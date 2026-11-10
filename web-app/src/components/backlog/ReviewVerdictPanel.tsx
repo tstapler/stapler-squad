@@ -15,6 +15,13 @@ export interface ReviewVerdictPanelProps {
   loading?: boolean;
 }
 
+/** Short label for a failure class the owner must decide on; undefined when rework can fix it. */
+export function ownerDecisionLabel(failureClass: string | undefined, proposedWaiver: boolean | undefined): string | undefined {
+  if (proposedWaiver) return "Reviewer proposes waiving this";
+  if (!failureClass || failureClass === "NOT_DONE") return undefined;
+  return `Needs your decision: ${failureClass.toLowerCase().replace(/_/g, " ")}`;
+}
+
 /** Verdict of the most recent review session that has one (linkedSessions is oldest-first). */
 export function latestReviewVerdict(sessions: LinkedSession[]): LinkedSession["reviewVerdict"] | undefined {
   return sessions.filter((s) => s.role === "review" && s.reviewVerdict).at(-1)?.reviewVerdict;
@@ -67,6 +74,11 @@ export function ReviewVerdictPanel({ verdict, loading }: ReviewVerdictPanelProps
             <li key={c.criterionIndex} className={styles.row}>
               <span className={styles.rowText}>Criterion {c.criterionIndex + 1}</span>
               <span className={outcomeBadge(c.outcome)}>{c.outcome}</span>
+              {ownerDecisionLabel(c.failureClass, c.proposedWaiver) && (
+                <span className={styles.evidence} data-testid={`review-owner-decision-${c.criterionIndex}`}>
+                  {ownerDecisionLabel(c.failureClass, c.proposedWaiver)}
+                </span>
+              )}
               {c.evidence && <span className={styles.evidence}>{c.evidence}</span>}
             </li>
           ))}

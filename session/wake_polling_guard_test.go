@@ -27,11 +27,9 @@ var pollingReferences = map[string]int{
 	"server/services/guidance_ack_wiring.go":                      4, // PostToolUse receipt counter, not a prompt
 	"server/services/notification_quality_metrics.go":             7, // agent_schedule_wakeup_calls_total
 	"server/services/notification_quality_metrics_test.go":        6,
-	"session/backlog/backlog_commands.go":                         1,
-	"session/backlog/backlog_context.go":                          1,
 	"session/backlog/backlog_post_review_prompt_test.go":          1,
 	"session/domain/backlog.go":                                   1,
-	"session/pipeline_mode_seed.go":                               2,
+	"session/prompt_sections.go":                                  1, // the one shared ban, used by every work prompt
 }
 
 func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.T) {

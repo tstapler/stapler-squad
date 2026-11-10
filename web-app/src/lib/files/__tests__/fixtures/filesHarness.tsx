@@ -1,5 +1,5 @@
 import React, { type ReactNode } from "react";
-import { createRouterTransport, type ServiceImpl } from "@connectrpc/connect";
+import { createClient, createRouterTransport, type ServiceImpl } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
 import { AnalyticsContextProvider } from "@/lib/contexts/AnalyticsContext";
@@ -54,4 +54,15 @@ export function createFilesTestHarness(overrides: FilesHarnessOverrides = {}): F
     </AnalyticsContextProvider>
   );
   return { sessionId: overrides.sessionId ?? "session-1", analytics, calls, wrapper };
+}
+
+/**
+ * Runs one GetFeatureFlags round trip on a private transport so the one-time Connect/protobuf setup
+ * lands in `beforeAll` (jest's per-test timeout), not inside the first `waitFor` (1 s budget).
+ */
+export async function warmFilesHarness(): Promise<void> {
+  const transport = createRouterTransport(({ service }) => {
+    service(SessionService, { getFeatureFlags: () => ({ flags: [] }) });
+  });
+  await createClient(SessionService, transport).getFeatureFlags({});
 }

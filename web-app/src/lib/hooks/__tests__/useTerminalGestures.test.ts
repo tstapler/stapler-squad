@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- pre-existing fixture style; the changed-file lint gate fails on any warning */
 /**
  * Tests for useTerminalGestures — 5-state gesture machine.
  *
@@ -6,7 +7,7 @@
  */
 
 import { renderHook } from '@testing-library/react';
-import { RefObject } from 'react';
+import type { RefObject } from 'react';
 
 // Mock cellDimensions before importing the hook so the module resolves cleanly.
 jest.mock('@/lib/terminal/cellDimensions', () => ({
@@ -1529,9 +1530,11 @@ describe('useTerminalGestures', () => {
       walk(root);
       // The touch-drag path has exactly one caller. XtermTerminal.tsx's three calls belong to
       // the custom scrollbar (track click and thumb drag) which sits outside the gesture container;
-      // pinned by count so a new caller fails this test.
+      // pinned by count so a new caller fails this test. ghosttyAdapter.ts's call is output-driven
+      // scroll anchoring on write (not a gesture), so it cannot double-scroll a touch drag.
       expect(callers).toEqual({
         'lib/hooks/useTerminalGestures.ts': 1,
+        'lib/terminal/ghosttyAdapter.ts': 1,
         'components/sessions/XtermTerminal.tsx': 3,
       });
     });

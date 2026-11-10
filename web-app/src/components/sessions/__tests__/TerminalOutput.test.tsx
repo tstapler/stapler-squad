@@ -12,7 +12,7 @@
  * events without mounting real xterm.js.
  */
 
-import { render, act, fireEvent, screen } from "@testing-library/react";
+import { render, act, fireEvent, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 
@@ -45,6 +45,9 @@ jest.mock("../XtermTerminal", () => {
     clear: jest.Mock;
     isAltScreenActive: (() => boolean) | null;
     onAltScreenScrollUp: ((lines: number) => void) | null;
+    // ghostty-web draws to a canvas: no .xterm-viewport child, scrolling is reported via terminal.onScroll.
+    ghostty: boolean;
+    scrollListeners: Set<() => void>;
   } = {
     onResize: null,
     cols: 80,
@@ -54,6 +57,8 @@ jest.mock("../XtermTerminal", () => {
     clear: jest.fn(),
     isAltScreenActive: null,
     onAltScreenScrollUp: null,
+    ghostty: false,
+    scrollListeners: new Set(),
   };
 
   const MockXtermTerminal = ReactLib.forwardRef((props: any, ref: any) => {
@@ -73,7 +78,13 @@ jest.mock("../XtermTerminal", () => {
           buffer: { active: { viewportY: 0 } },
           scrollToBottom: jest.fn(),
           element: {
-            querySelector: () => viewportEl,
+            querySelector: () => (state.ghostty ? null : viewportEl),
+            addEventListener: () => {},
+            removeEventListener: () => {},
+          },
+          onScroll: (listener: () => void) => {
+            state.scrollListeners.add(listener);
+            return { dispose: () => state.scrollListeners.delete(listener) };
           },
         };
       },
@@ -159,6 +170,8 @@ function withPool(children: React.ReactNode) {
 }
 
 const mockXtermState = jest.requireMock("../XtermTerminal").__mockXtermState as {
+  ghostty: boolean;
+  scrollListeners: Set<() => void>;
   onResize: ((cols: number, rows: number) => void) | null;
   cols: number;
   rows: number;
@@ -246,6 +259,8 @@ function resetSharedTerminalMocks() {
   jest.spyOn(console, "warn").mockImplementation(() => {});
   jest.spyOn(console, "error").mockImplementation(() => {});
   mockXtermState.onResize = null;
+  mockXtermState.ghostty = false;
+  mockXtermState.scrollListeners.clear();
   mockXtermState.cols = 80;
   mockXtermState.rows = 24;
   mockXtermState.fit.mockClear();
@@ -559,6 +574,51 @@ describe("TerminalOutput Epic 1.4 — scroll-forward client rendering", () => {
 
       expect(mockXtermState.isAltScreenActive?.()).toBe(true);
       expect(typeof mockXtermState.onAltScreenScrollUp).toBe("function");
+    });
+  });
+
+  // ghostty-web has no .xterm-viewport DOM scroller, so only terminal.onScroll can drive history paging.
+  describe("history paging trigger on a canvas (ghostty) terminal", () => {
+    const fireTerminalScroll = () => act(() => { mockXtermState.scrollListeners.forEach((l) => l()); });
+
+    it("requests older scrollback when the terminal reports a scroll near the top", async () => {
+      mockXtermState.ghostty = true;
+      const { streamState } = await mountAndLoadInitialContent();
+      expect(streamState.requestScrollback).not.toHaveBeenCalled();
+
+      fireTerminalScroll();
+
+      expect(streamState.requestScrollback).toHaveBeenCalledWith(0, 500);
+    });
+
+    it("does not request again while a fetch is already in flight", async () => {
+      mockXtermState.ghostty = true;
+      const { streamState } = await mountAndLoadInitialContent();
+
+      fireTerminalScroll();
+      fireTerminalScroll();
+
+      expect(streamState.requestScrollback).toHaveBeenCalledTimes(1);
+    });
+
+    it("unsubscribes from terminal.onScroll on unmount", async () => {
+      mockXtermState.ghostty = true;
+      await mountAndLoadInitialContent();
+      expect(mockXtermState.scrollListeners.size).toBeGreaterThan(0);
+
+      cleanup();
+
+      expect(mockXtermState.scrollListeners.size).toBe(0);
+    });
+
+    it("leaves the DOM scroll listener as the only trigger on an xterm terminal", async () => {
+      const { streamState } = await mountAndLoadInitialContent();
+
+      fireTerminalScroll();
+      expect(streamState.requestScrollback).not.toHaveBeenCalled();
+
+      act(() => { fireViewportEvent("scroll", {}); });
+      expect(streamState.requestScrollback).toHaveBeenCalledWith(0, 500);
     });
   });
 

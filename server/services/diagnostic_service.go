@@ -184,6 +184,7 @@ func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID
 func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuckReason string, nudgeAllowed bool, nudgeDisallowedReason string) string {
 	var sb strings.Builder
 	sb.WriteString("You are a diagnostic agent investigating a backlog item. You have been given a context bundle below.\n\n")
+	sb.WriteString("For stuck reasons, remediation attempts and live CI state beyond this bundle, call get_backlog_stuck_report with the item id before concluding.\n\n")
 	sb.WriteString("Based on the evidence, decide ONE of:\n")
 	sb.WriteString("1. File a backlog item via create_backlog_item with concrete evidence (log lines, timestamps, session UUIDs) if you find a genuine product/infra defect.\n")
 	sb.WriteString("2. Post a diagnostic note via post_backlog_update if the situation is inconclusive or informational only.\n")

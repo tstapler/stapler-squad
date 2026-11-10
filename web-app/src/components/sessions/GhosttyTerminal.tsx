@@ -7,7 +7,7 @@ import type { Terminal as XtermWebTerminal } from "@xterm/xterm";
 import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
-import { asXtermCompatible, FRESH_TERMINAL_SCRUB, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
+import { asXtermCompatible, FRESH_TERMINAL_SCRUB, ghosttyScrollbackBytes, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
 import { attachRenderGate } from "@/lib/terminal/ghosttyRenderGate";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
 import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
@@ -92,7 +92,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
       term = new Terminal({
         fontSize,
         fontFamily,
-        scrollback,
+        scrollback: ghosttyScrollbackBytes(scrollback),
         cursorStyle,
         cursorBlink,
         theme: themeName === "light" ? lightTerminalTheme : darkTerminalTheme,
