@@ -1018,7 +1018,7 @@ test-shell: ## Run shell-script regression tests (*.test.sh) — currently: dev-
 	@echo "Running shell regression tests..."
 	@for t in $$(find scripts -name '*.test.sh'); do \
 		echo "-- $$t --"; \
-		sh "$$t" || exit 1; \
+		"$$t" || exit 1; \
 	done
 
 actor-lint: ## Detect actor self-deadlock patterns using ast-grep (sg)
