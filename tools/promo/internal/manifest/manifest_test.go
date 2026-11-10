@@ -106,3 +106,22 @@ func TestRenderSummary(t *testing.T) {
 	assert.Contains(t, out, "previous run 1500, +500")
 	assert.NotContains(t, manifest.RenderSummary(sample(), 2000, -1), "previous run")
 }
+
+func TestRenderSummary_ShowsAttemptsAndFlakyMarker(t *testing.T) {
+	t.Parallel()
+	steady, flaky := entry("steady", manifest.FormatWebM), entry("shaky", manifest.FormatWebM)
+	steady.Attempts, flaky.Attempts = 1, 2
+	out := manifest.RenderSummary(sample(steady, flaky, entry("legacy", manifest.FormatPNG)), 0, -1)
+	assert.Contains(t, out, "| attempts |")
+	assert.Contains(t, out, "| steady | webm | recorded | 100 | "+strings.Repeat("a", 64))
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "| steady "):
+			assert.True(t, strings.HasSuffix(line, "| 1 |"), line)
+		case strings.HasPrefix(line, "| shaky "):
+			assert.True(t, strings.HasSuffix(line, "| 2 flaky |"), line)
+		case strings.HasPrefix(line, "| legacy "):
+			assert.True(t, strings.HasSuffix(line, "| - |"), line)
+		}
+	}
+}
