@@ -31,6 +31,10 @@ The report shows covered, exempt, grandfathered and gap counts side by side, the
 
 A feature is **covered** when `website` resolves together with `help` or `tour`. Many features may point at the same page (many-to-one is fine); do not write a page per feature.
 
+### A feature in more than one tour
+
+A sidecar holds one `tour`, so a feature that two tours show (`session-list` is in `dashboard-lifecycle` and `organise-at-scale`) has its sidecar name its **primary** tour, with `website` set to that tour's page. List the feature id in `tour.features` of both tour pages. The checker only requires that the tour the sidecar names lists the feature; the second tour needs no sidecar entry of its own and raises no warning. Do not duplicate the sidecar or point `tour` at two ids.
+
 ## Exempt a feature
 
 Use `exempt` only when no doc makes sense (an internal affordance, say):

@@ -18,3 +18,4 @@ Keep the id and relabel only (leaves the term in source; owner scoped the rename
 
 ## Consequences
 Existing users land on Grimdark. Visual-regression snapshot bytes stay identical. First post-merge deploy needs the e2e theme-fouc legacy case green.
+- The termcheck allow-list is now enforced on every PR by `promo-guards` (read from the base blob); `TestAllowlistEqualsLegacyIdFileSet` fails when the allow-list and the real legacy-id file set drift, and the merge of `origin/main` added one entry (`tools/bzl/baseline/pr-sample.json`) for that reason. Merged-in files that contain the legacy id must be allow-listed or renamed before they reach `main`.

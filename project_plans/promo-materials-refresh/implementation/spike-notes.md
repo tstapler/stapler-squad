@@ -74,6 +74,49 @@ Seeder split decided: `RPCSeeder` for flags, approval rules, backlog items, noti
 - Analytics: `grep -rn "analytics|gtag|plausible|googletagmanager|umami|posthog|goatcounter|cloudflareinsights"` over `website/astro.config.mjs website/src website/public README.md .github/workflows/deploy-website.yml` found only README prose about the app's approval analytics (`README.md:33,59`). **The site has no analytics.** Pages build type is `workflow`, site `https://tstapler.github.io/stapler-squad/`. No tracking is added by this plan; outcome metrics are "to be measured", owner Tyler, from the GitHub numbers below.
 - Branch protection: `gh api repos/tstapler/stapler-squad/branches/main/protection --jq .required_pull_request_reviews.require_code_owner_reviews` returned HTTP 404 `Branch not protected`, and `gh api repos/tstapler/stapler-squad/rules/branches/main --jq '[.[].type]'` returned `[]`. So `require_code_owner_reviews` is **not enabled**: a CODEOWNERS file alone enforces nothing today; Task 2.1.1c must either record that gap as an owner-gated settings change (Tyler enables protection) or rely on the Cross-cutting 8d label authority rule only. Owner-gated; not changed here.
 
+## Guard wiring (Tasks 1.1.4b0, 1.1.4b, 2.1.1b, 2.1.1c) - 2026-11-10, after merging origin/main
+
+**Guard job id decision: `promo-guards` (separate always-reporting job in `backlog-scaffolding-guard.yml`; `guard` is not extended).** Tests hold the id in one constant, `PROMO_GUARD_JOB_ID` in `website/tests/unit/workflow-yaml.test.ts`. Basis: INFERRED, not a CI measurement. `guard`'s own comment records a baseline of avg 4m / max 10.1m for a job that does two API calls and no checkout, so adding a checkout, Go setup and a build cannot be shown to stay under the 5-minute warm target; the plan's hard gate says not to extend `guard` in that case. Cost of the choice: one more check on every PR (see counts below). If the first real CI runs show `promo-guards` well under the budget, folding it back into `guard` is a one-line job merge the owner can decide.
+
+Local measurements (VERIFIED, run on this Linux host at load average 35-58 because other sessions were running, so absolute seconds are inflated and noisy; fresh private `GOCACHE`, warm module cache, so module download is not included):
+
+| Measure | Result |
+|---|---|
+| `go build -o` of `tools/promo/cmd/promoguard`, cold build cache | 26.5 s (cache grew to 313 MB) |
+| same, warm build cache | 1.7 s |
+| `go build -o` of `tools/docscoverage/cmd/docscoverage`, warm cache | 1.0 s |
+| `go list -deps` package count, promoguard / docscoverage | 602 / 602 (396 non-stdlib) |
+| promoguard binary size | 26.6 MB |
+| `promoguard flags -base HEAD^1` | under 0.1 s |
+| `promoguard termcheck -mode=source -base HEAD^1` over 14100 tracked files (depth-2 clone) | 13.2 s warm-disk, 35.4 s first run |
+| `promoguard mediaguard -base HEAD^1` | 1.2 s (depth-2 clone), 2.0 s (full worktree) |
+| `git clone --depth 2` of this branch (local `file://`), `.git` size | 94 MB, 3 commits |
+
+Depth-2 behaviour (answers the 1.1.4b0 and spike 0.1.1d question, VERIFIED): in that clone `git rev-parse HEAD^1` resolves to the pre-merge tip, `gitbase.Open` succeeds (via `session/git.OpenRepo`), `HEAD^1` resolves, and the tree diff, base-blob read and `flags` output all work (`{"freshnessEnforce":false,"docsCoverageEnforce":false,"guardsEnforce":true}`).
+
+UNMEASURED (CI-only, no numbers invented): `actions/checkout` at depth 2 over the network, `setup-go-cached` cache restore, runner speed, warm and cold p95 of the whole job, and the timeout headroom. `timeout-minutes: 12` on `promo-guards` is a placeholder bounding a cold build plus `guard`'s observed 10.1 m max; replace it with 3x the first measured warm run. Follow-up when the first PR runs: record the job's checkout, setup-go and build seconds here. The checkout-free alternative (API-only `mediaguard`) was not taken: `mediaguard` already reads the base blob through `gitbase`, and the saved clone is the minor cost.
+
+Deviation from the plan text: the Go step uses the repo's `.github/actions/setup-go-cached` (restore-only cache, wraps `actions/setup-go` with its own cache off) instead of `actions/setup-go` with `cache: true`, matching every other Go job in the repo.
+
+PR check counts (`uv run --with pyyaml python tools/ci/count-pr-checks.py`, merged tree): before 30 checks on a code PR touching every filtered path and 4 on a docs-only PR; after adding `promo-guards`, 31 and 5. The 20/1 figures in Q6 predate the `origin/main` merge (which added the Bazel workflows).
+
+Bootstrap consequence (VERIFIED by running the tools against `origin/main` as base): `main` has none of the gate inputs yet (`promo-flags.json`, both allow-lists, `.github/CODEOWNERS` entries for the owner), so on THIS PR the guard reads the Cross-cutting 8a defaults. `promoguard termcheck -mode=source -base origin/main` reports the whole legacy-id file set and `promoguard mediaguard -base origin/main` reports every added binary, so `promo-guards` is expected to be red on this PR. Nobody holds `allow-media` authority in a base without CODEOWNERS, so the label cannot clear it either. Merging this PR is an owner decision (merge with the red check, since `main` is unprotected); every later PR sees the inputs in its base blob. The plan's PR A / PR B split would have avoided this; the owner chose to wire the guards in this one PR.
+
+Fallout from the `origin/main` merge, fixed in the allow-lists: `tools/bzl/baseline/pr-sample.json` (recorded historical PR file paths, includes `website/src/styles/wh40k.css`) was added to the termcheck allow-list, and `tools/bzl/otel_overlay/otelc-build.tar.bin` (1,075,200 bytes, over the 512,000-byte ceiling) to the mediaguard allow-list.
+
+### Branch protection (Task 2.1.1c precondition) - NOT MET, OWNER ACTION PENDING
+
+```
+$ gh api repos/tstapler/stapler-squad/branches/main/protection --jq .required_pull_request_reviews.require_code_owner_reviews
+{"message":"Branch not protected", ... "status":"404"}
+$ gh api repos/tstapler/stapler-squad/rules/branches/main --jq '[.[].type]'
+[]
+$ gh api repos/tstapler/stapler-squad/rulesets --jq length
+0
+```
+
+The owner decided to wire the blocking guards in this PR anyway and this change does not touch repo settings. Until the owner (1) enables "require review from code owners" on `main` and (2) makes the `promo-guards` job a required status check, the guard checks are red-but-mergeable (advisory), and the CODEOWNERS entries protecting the guard code and its gate inputs are not enforced. PENDING OWNER ACTION; on a solo-owner repo the author cannot approve their own PR, so see ADR-003 "Solo-owner review and admin override".
+
 ## Outcome samples
 
 The traffic API keeps 14 days, so readings must overlap. Attribution limit: releases, CI changes, bot traffic and unrelated promotion move the same numbers; a delta is evidence consistent with the tours working, not proof, and stays beside the "provisional" label. Owner of every sample: Tyler.

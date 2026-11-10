@@ -20,6 +20,11 @@ On a solo-owner repo the author cannot approve their own PR, so a PR touching a 
 - **Override procedure**: (1) the PR states in its description which gated paths it touches and why; (2) the owner reviews the diff of those paths specifically; (3) the owner merges with the admin bypass (`gh pr merge --merge --admin --repo owner/repo`) and notes the override in the PR; (4) a bypass never covers a change that disables the guard or edits `guardsEnforce` without a stated reason. The guard job id must also be a required status check on `main` (Task 2.1.1c), since `main` currently has no required checks.
 - **OWNER DECISION (open, not decided here)**: name a second reviewer (a user login in CODEOWNERS) or accept admin override as the standing procedure.
 
+## Guard placement outcome and enforcement status (2026-11-10)
+- **Job id: `promo-guards`.** The Task 1.1.4b0 hard gate was applied from `guard`'s documented baseline (avg 4m, max 10.1m) plus local build numbers; CI timings are unmeasured (spike-notes.md, "Guard wiring"). The guards therefore run as a separate always-reporting job in `backlog-scaffolding-guard.yml`, not as steps of `guard`, and every plan mention of `guard`/`pr-diff-guards` for these steps reads `promo-guards`.
+- **Enforcement is advisory until the owner acts.** `main` has no branch protection and no rulesets (command output in spike-notes.md). The guards are wired as blocking in the workflow (`guardsEnforce` kill switch from the base blob), but until the owner enables "require review from code owners" and makes `promo-guards` a required status check, a red guard does not stop a merge and the CODEOWNERS entries are not enforced. This PR does not change repo settings. **PENDING OWNER ACTION.**
+- **Bootstrap.** The gate inputs land in the same PR as the wiring, so the base blob of that PR lacks them and `promo-guards` is expected to be red on it (Cross-cutting 8a defaults: empty allow-lists, no override authority). Later PRs read the merged inputs.
+
 ## Alternatives rejected
 Git LFS (owner: no binaries in repo; `lfs: true` checkout would also mask the guard); keeping committed screenshots as fallback (the stated failure mode); release-asset hosting for README (camo caching, extra publish workflow).
 
