@@ -3,7 +3,7 @@
   "minLines": 20,
   "minTokens": 200,
   "threshold": 0.14,
-  "ignore": ["**/fonts/**"],
+  "ignore": ["**/fonts/**", "**/terminal/mobileInput/__fixtures__/**"],
   "reporters": ["console"],
   "absolute": false
 }

@@ -128,6 +128,73 @@ describe('useTerminalFlowControl', () => {
 
       expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/not connected/i));
     });
+
+    // Story 1.2.4 / Task 1.2.4a: the result tells the mobile input layer whether its diff base can be trusted.
+    it('sendInput_should_ReturnSent_When_ConnectedAndPushSucceeds', () => {
+      const { options } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      expect(result.current.sendInput('hello')).toBe('sent');
+    });
+
+    it('sendInput_should_ReturnDropped_When_StreamDisconnected', () => {
+      const { options, isConnectedRef } = createTestOptions();
+      isConnectedRef.current = false;
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      expect(result.current.sendInput('hello')).toBe('dropped');
+      expect(console.warn).toHaveBeenCalledWith(expect.stringMatching(/not connected/i));
+    });
+
+    it('sendInput_should_ReturnDropped_When_ReadOnly', () => {
+      const { options, pushMessageFn } = createTestOptions({ readOnly: true });
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      expect(result.current.sendInput('hello')).toBe('dropped');
+      expect(pushMessageFn).not.toHaveBeenCalled();
+    });
+
+    it('sendInput_should_ReturnDropped_When_PushMessageThrows', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      pushMessageFn.mockImplementation(() => { throw new Error('socket closed'); });
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      expect(result.current.sendInput('hello')).toBe('dropped');
+      expect(options.onError).toHaveBeenCalled();
+    });
+
+    it('sendInput_should_ReturnDropped_When_FirstChunkOfLargePasteThrows', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      pushMessageFn.mockImplementation(() => { throw new Error('socket closed'); });
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      expect(result.current.sendInput('a'.repeat(2000))).toBe('dropped');
+    });
+
+    it('sendInput_should_ReturnSentSynchronously_When_LargePasteAbortsLater', () => {
+      // A mid-paste abort cannot change the already-returned result: the isConnected/sessionId
+      // invalidate triggers cover it (plan Story 1.2.4).
+      const { options, isConnectedRef } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      expect(result.current.sendInput('a'.repeat(2000))).toBe('sent');
+      isConnectedRef.current = false;
+      act(() => { jest.advanceTimersByTime(10); });
+      expect(result.current.isInputChunking()).toBe(false);
+    });
+
+    it('sendInput_should_SendRewriteUnitAsOnePush_When_ZwjEmojiRewriteUnder512Bytes', () => {
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      const unit = '\x7f'.repeat(10) + '👨‍👩‍👧'.repeat(10); // DELs plus replacement, well under 512 bytes
+      expect(new TextEncoder().encode(unit).length).toBeLessThanOrEqual(512);
+      result.current.sendInput(unit);
+      expect(pushMessageFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('sendInput_should_PushInCallOrder_When_UnitsSentBackToBack', () => {
+      // Strict FIFO sink contract (PR-A has no queue, so call order is the only order there is).
+      const { options, pushMessageFn } = createTestOptions();
+      const { result } = renderHook(() => useTerminalFlowControl(options));
+      result.current.sendInput('he');
+      result.current.sendInput('l');
+      const sent = pushMessageFn.mock.calls.map((c) => new TextDecoder().decode(c[0].data.value.data));
+      expect(sent).toEqual(['he', 'l']);
+    });
   });
 
   describe('isInputChunking (Story 1.2.6)', () => {

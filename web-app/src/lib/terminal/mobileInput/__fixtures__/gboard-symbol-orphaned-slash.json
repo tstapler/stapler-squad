@@ -1,0 +1,20 @@
+{
+  "id": "gboard-symbol-orphaned-slash",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Symbol keyboard: the textarea value changes with no beforeinput (orphaned input), diffed against the sentinel shadow. Source: https://github.com/NousResearch/hermes-agent/issues/137986",
+  "events": [
+    {
+      "kind": "input",
+      "value": "​/",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 10
+    }
+  ],
+  "expectedBytes": "/",
+  "finalText": "/",
+  "expectedAnomalies": [
+    "orphaned_input"
+  ]
+}

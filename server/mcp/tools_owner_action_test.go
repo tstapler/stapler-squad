@@ -177,3 +177,52 @@ func TestSubmitTriageResult_should_KeepOwnerWaiver_When_AgentRewritesWaivedCrite
 	assert.Equal(t, session.AcStatusWaived, got[0].Status)
 	assert.Equal(t, "owner call", got[0].WaiverReason)
 }
+
+func itemWithCriteria(t *testing.T, r *toolRig, sid string, statuses ...session.AcStatus) string {
+	t.Helper()
+	ctx := context.Background()
+	cs := make([]session.AcCriterion, len(statuses))
+	for i, st := range statuses {
+		cs[i] = session.AcCriterion{Index: i, Text: "criterion " + string(rune('A'+i)), Status: st}
+	}
+	raw, err := session.SerializeAcCriteria(cs)
+	require.NoError(t, err)
+	item, err := r.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "w", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: raw})
+	require.NoError(t, err)
+	_, err = r.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: sid, SessionRole: session.SessionRoleWork})
+	require.NoError(t, err)
+	return item.ID
+}
+
+func TestRequestOwnerAction_should_MarkWaiverTarget_And_AddWaiveResponse(t *testing.T) {
+	t.Parallel()
+	r := newToolRig(t)
+	sid := uuid.New().String()
+	itemID := itemWithCriteria(t, r, sid, session.AcStatusDone, session.AcStatusPending)
+
+	args := ownerActionArgs(itemID)
+	args["waive_criterion_index"] = float64(1)
+	m := r.call(as(sid), toolRequestOwnerAction, args)
+
+	require.True(t, m["success"].(bool), "%v", m)
+	row, err := r.storage.GetGuidanceRequest(context.Background(), uuid.MustParse(m["request_id"].(string)))
+	require.NoError(t, err)
+	idx, ok := domain.ParseOwnerActionWaiver(row.QuestionText)
+	assert.True(t, ok)
+	assert.Equal(t, 1, idx)
+	assert.JSONEq(t, `["record waiver","provide evidence","Waive criterion"]`, row.Options)
+}
+
+func TestRequestOwnerAction_should_Reject_When_WaiverTargetIsInvalid(t *testing.T) {
+	t.Parallel()
+	r := newToolRig(t)
+	sid := uuid.New().String()
+	itemID := itemWithCriteria(t, r, sid, session.AcStatusDone, session.AcStatusPending)
+
+	for name, idx := range map[string]float64{"already done": 0, "out of range": 7, "negative": -1} {
+		args := ownerActionArgs(itemID)
+		args["waive_criterion_index"] = idx
+		assert.Equal(t, ErrInvalidArgument, resultCode(r.call(as(sid), toolRequestOwnerAction, args)), name)
+	}
+	assert.Empty(t, r.backend.scheduleCalls(), "no wake on a rejected call")
+}

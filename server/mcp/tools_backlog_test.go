@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"go.uber.org/goleak"
@@ -7799,4 +7800,35 @@ func TestGetBacklogItem_should_ListDependencies_When_EdgesExist(t *testing.T) {
 	require.Contains(t, textA, "blocking:")
 	require.Contains(t, textA, b.ID)
 	require.Contains(t, textA, "Dependent B")
+}
+
+func TestSubmitReviewVerdict_should_PersistFailureClassAndWaiver_And_RejectUnknownClass(t *testing.T) {
+	storage := newTestBacklogStorage(t)
+	itemID, sessUUID, _ := setupReviewSessionWithCompletedWorkSession(t, storage)
+	handler := &backlogHandlers{storage: storage}
+	ctx := WithSessionUUID(context.Background(), sessUUID)
+
+	bad := makeToolReq(map[string]interface{}{"item_id": itemID, "summary": "s", "verdicts": []interface{}{
+		map[string]interface{}{"criterion_index": float64(0), "outcome": "FAIL", "evidence": "e", "failure_class": "BOGUS"},
+	}})
+	res, err := handler.submitReviewVerdict(ctx, bad)
+	require.NoError(t, err)
+	tc, ok := res.Content[0].(mcpgo.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, tc.Text, `"success":false`, "unknown failure_class must be rejected")
+
+	good := makeToolReq(map[string]interface{}{"item_id": itemID, "summary": "s", "verdicts": []interface{}{
+		map[string]interface{}{"criterion_index": float64(0), "outcome": "FAIL", "evidence": "e", "failure_class": "unattainable", "proposed_waiver": true},
+	}})
+	_, err = handler.submitReviewVerdict(ctx, good)
+	require.NoError(t, err)
+
+	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, itemID, 1)
+	require.NoError(t, err)
+	require.Len(t, recent, 1)
+	var got []session.CriterionVerdict
+	require.NoError(t, json.Unmarshal([]byte(recent[0].PerCriterion), &got))
+	require.Len(t, got, 1)
+	assert.Equal(t, domain.FailureClassUnattainable, got[0].FailureClass)
+	assert.True(t, got[0].ProposedWaiver)
 }

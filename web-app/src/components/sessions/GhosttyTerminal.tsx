@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type * as GhosttyModule from "ghostty-web";
 import type { FitAddon, Terminal as GhosttyWebTerminal } from "ghostty-web";
 import type { Terminal as XtermWebTerminal } from "@xterm/xterm";
@@ -9,9 +9,28 @@ import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
 import { asXtermCompatible, FRESH_TERMINAL_SCRUB, ghosttyScrollbackBytes, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
 import { attachRenderGate } from "@/lib/terminal/ghosttyRenderGate";
+import { createMouseWheelForwarder, type WheelTerminal } from "@/lib/terminal/ghosttyWheelForward";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
 import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import type { RefitOptions } from "@/lib/terminal/postFitRepaint";
+import type { MobileInputHandle } from "@/lib/terminal/mobileInput/useMobileInput";
+import { useRendererMobileInput } from "@/lib/terminal/mobileInput/useRendererMobileInput";
+
+/** Adapts a ghostty-web terminal to what the wheel forwarder reads; `renderer` is private in its typings. */
+function ghosttyWheelTerminal(term: XtermWebTerminal | GhosttyWebTerminal): WheelTerminal {
+  const t = term as unknown as GhosttyWebTerminal & { renderer?: { getMetrics?: () => { width: number; height: number } } };
+  return {
+    get cols() {
+      return t.cols;
+    },
+    get rows() {
+      return t.rows;
+    },
+    hasMouseTracking: () => t.hasMouseTracking(),
+    cellSize: () => t.renderer?.getMetrics?.(),
+    gridRect: () => t.element?.querySelector("canvas")?.getBoundingClientRect(),
+  };
+}
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
 const DEFAULT_FONT_SIZE = 14;
@@ -47,6 +66,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
   scrollback: scrollbackProp,
   useConfig = false,
   windowActive = true,
+  mobileInput,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<GhosttyWebTerminal | null>(null);
@@ -55,6 +75,8 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
   // Writes that arrive while the WASM is still loading; flushed in order once the terminal opens.
   const pendingWritesRef = useRef<string[]>([]);
   const searchStateRef = useRef<SearchState>({ term: "", row: -1, col: -1 });
+  const layerRef = useRef<MobileInputHandle | null>(null);
+  const [terminalReady, setTerminalReady] = useState(false);
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
   const windowActiveRef = useRef(windowActive);
@@ -108,9 +130,13 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
         ime?.traceData(data);
         onDataRef.current?.(data);
       });
+      term.attachCustomWheelEventHandler(
+        createMouseWheelForwarder(ghosttyWheelTerminal(term), (data) => onDataRef.current?.(data)),
+      );
       term.onResize(({ cols, rows }) => onResizeRef.current?.(cols, rows));
       terminalRef.current = term;
       fitRef.current = fit;
+      setTerminalReady(true);
       const surface = compatTerminal();
       surface?.write(FRESH_TERMINAL_SCRUB);
       for (const chunk of pendingWritesRef.current.splice(0)) surface?.write(chunk);
@@ -176,7 +202,9 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
         if (t) toITerminal(t).clear();
         else pendingWritesRef.current.length = 0;
       },
-      focus: () => terminalRef.current?.focus(),
+      focus: () => {
+        if (!layerRef.current?.focus()) terminalRef.current?.focus();
+      },
       fit: () => fitRef.current?.fit(),
       resize: (cols: number, rows: number) => terminalRef.current?.resize(cols, rows),
       refit: (opts?: RefitOptions) => {
@@ -193,9 +221,23 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     };
   }, []);
 
+  // The layer textarea lives beside, never inside, the element handed to open(): that element carries
+  // ghostty's blanket beforeinput preventDefault and keydown handlers. Layer bytes skip the terminal's own onData.
+  const layer = useRendererMobileInput({
+    renderer: "ghostty",
+    mobileInput,
+    onDataRef,
+    containerRef,
+    getHelperTextarea: () => terminalRef.current?.textarea,
+    bracketedPasteEnabled: () => terminalRef.current?.hasBracketedPaste() ?? false,
+    rendererReady: terminalReady,
+  });
+  layerRef.current = layer.handle;
+
   return (
     <div className={styles.container} data-context="terminal" data-renderer="ghostty">
       <div ref={containerRef} className={styles.terminal} />
+      {layer.layerActive && <div ref={layer.layerContainerRef} data-mobile-input-host />}
     </div>
   );
 });

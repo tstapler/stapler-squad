@@ -2166,6 +2166,16 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		return nil
 	}
 
+	// A verdict the reviewer classed as unfixable by rework (unattainable, unrelated failure,
+	// environmental, wrong branch, or a proposed waiver) goes to the owner, not another round.
+	if verdictErr == nil && len(recentVerdicts) > 0 {
+		if criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria); parseErr == nil {
+			if flagged := flaggedForOwner(recentVerdicts[0].PerCriterion, criteria); len(flagged) > 0 && s.escalateVerdictToOwner(ctx, item, flagged) {
+				return nil
+			}
+		}
+	}
+
 	workCount := 0
 	for _, is := range sessions {
 		if is.Role == session.SessionRoleWork {
@@ -3500,7 +3510,7 @@ Do not modify the code. Only write the review verdict.
 
 		overall, perCriterion, reviewSummary := session.ParseHeadlessVerdictResult(reviewResult)
 		toolReads := session.ParseHeadlessToolReads(reviewResult)
-		overall, perCriterion, reviewSummary, reviewPath = session.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir)
+		overall, perCriterion, reviewSummary, reviewPath = session.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir, item.PlanArtifactsPath)
 		// reviewPath now carries the final path label ("diff", "codebase-read-verified",
 		// or "codebase-read-degraded"), logged below via Epic 2.5's path=/duration_ms=
 		// observability fields.
@@ -3979,6 +3989,14 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 	// the base SHA into LastCommitSha and nothing ever refreshed it (BUG-047).
 	if diffBaseSHA == "" && workSession.BaseCommitSha != "" {
 		diffBaseSHA = workSession.BaseCommitSha
+	}
+	// No branch means no head: a directory-mode session (no worktree row) would diff
+	// repoPath's ambient HEAD~1..HEAD, i.e. whatever commit last landed on the shared
+	// checkout, and present it as this item's work. Return empty so the caller's
+	// codebase-read/degraded path refuses instead of reviewing an unrelated diff.
+	if diffHeadRef == "" {
+		log.Warn("[TriggerReReview] work session has no resolvable branch; refusing to diff the shared checkout", "session", workSession.SessionUUID)
+		return "", false
 	}
 	diff, truncated, diffErr := session.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
 	if diffErr == nil {
