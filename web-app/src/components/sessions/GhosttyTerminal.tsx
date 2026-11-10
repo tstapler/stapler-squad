@@ -9,6 +9,8 @@ import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
 import { asXtermCompatible, FRESH_TERMINAL_SCRUB, ghosttyScrollbackBytes, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
 import { attachRenderGate } from "@/lib/terminal/ghosttyRenderGate";
+import { copyToClipboard } from "@/lib/clipboard";
+import { createCopyKeyHandler } from "@/lib/terminal/ghosttyCopyKey";
 import { createMouseWheelForwarder, type WheelTerminal } from "@/lib/terminal/ghosttyWheelForward";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
 import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
@@ -130,6 +132,13 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
         ime?.traceData(data);
         onDataRef.current?.(data);
       });
+      term.attachCustomKeyEventHandler(
+        createCopyKeyHandler({
+          getSelection: () => term?.getSelection() ?? "",
+          clearSelection: () => term?.clearSelection(),
+          copy: copyToClipboard,
+        }),
+      );
       term.attachCustomWheelEventHandler(
         createMouseWheelForwarder(ghosttyWheelTerminal(term), (data) => onDataRef.current?.(data)),
       );
