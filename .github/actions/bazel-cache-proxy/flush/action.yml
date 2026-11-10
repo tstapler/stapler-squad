@@ -12,8 +12,8 @@ runs:
         # Cache problems must not fail the build: report and continue.
         {
           echo '### Bazel cache proxy'
-          curl -fsS -X POST http://127.0.0.1:9090/admin/flush | sed 's/^/flush: /' || echo "flush failed (see proxy log)"
-          echo '```'; curl -fsS http://127.0.0.1:9090/metrics | grep -E '^bazel_cache_(lookups|put)' || true; echo '```'
+          { curl -fsS --max-time 300 -X POST http://127.0.0.1:9090/admin/flush && echo; } | sed 's/^/flush: /' || echo "flush failed (see proxy log)"
+          echo '```'; curl -fsS --max-time 10 http://127.0.0.1:9090/metrics | grep -E '^bazel_cache_(lookups|put)' || true; echo '```'
         } | tee -a "$GITHUB_STEP_SUMMARY"
         kill "$(cat "$dir/pid")" 2>/dev/null || true
         grep -E "restored|no cache manifest|WARN|ERROR" "$dir/proxy.log" | tail -20 || true

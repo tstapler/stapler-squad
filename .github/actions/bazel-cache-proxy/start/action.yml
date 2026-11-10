@@ -37,6 +37,7 @@ runs:
         UPLOAD_INPUT: ${{ inputs.upload }}
         EVENT: ${{ github.event_name }}
       run: |
+        [[ $PREFIX =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo "::error::prefix must match [A-Za-z0-9._-]{1,128}"; exit 1; }
         upload=true
         if [[ $UPLOAD_INPUT == false || ( $UPLOAD_INPUT == auto && $EVENT == pull_request ) ]]; then upload=false; fi
         dir="$RUNNER_TEMP/bazel-cache-proxy"; mkdir -p "$dir"
