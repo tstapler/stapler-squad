@@ -1,5 +1,5 @@
 import React, { type ReactNode } from "react";
-import { createClient, createRouterTransport, type ServiceImpl, type Transport } from "@connectrpc/connect";
+import { createClient, createRouterTransport, type ServiceImpl } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
 import { AnalyticsContextProvider } from "@/lib/contexts/AnalyticsContext";
@@ -57,14 +57,12 @@ export function createFilesTestHarness(overrides: FilesHarnessOverrides = {}): F
 }
 
 /**
- * Pays the one-time Connect/protobuf setup cost for the RPCs a files test uses, so it lands in a
- * `beforeAll` (jest's per-test timeout) instead of inside the first `waitFor`/`findBy` (1 s budget),
- * which CPU contention on CI can outlast. Pass the same `handlers` the tests will install.
+ * Runs one GetFeatureFlags round trip on a private transport so the one-time Connect/protobuf setup
+ * lands in `beforeAll` (jest's per-test timeout), not inside the first `waitFor` (1 s budget).
  */
-export async function warmFilesHarness(handlers: SessionHandlers = {}): Promise<void> {
-  createFilesTestHarness({ handlers });
-  const client = createClient(SessionService, fakeTransportRef.current as Transport);
-  await client.getFeatureFlags({});
-  if (handlers.getFileContent) await client.getFileContent({});
-  if (handlers.statFile) await client.statFile({});
+export async function warmFilesHarness(): Promise<void> {
+  const transport = createRouterTransport(({ service }) => {
+    service(SessionService, { getFeatureFlags: () => ({ flags: [] }) });
+  });
+  await createClient(SessionService, transport).getFeatureFlags({});
 }
