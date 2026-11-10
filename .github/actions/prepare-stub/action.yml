@@ -18,11 +18,33 @@ inputs:
 runs:
   using: composite
   steps:
+    # Download to a temp file, verify the pinned sha256, only then install. A bare `curl -o /usr/local/bin/buf`
+    # let a GitHub 504 HTML page become the "binary". The verified file is cached so most runs skip the network.
+    - name: Cache buf binary
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cache/ci-tools/buf
+        key: buf-bin-1.41.0-linux-x86_64-ccbfc1ff
+
     - name: Install buf
       shell: bash
+      env:
+        BUF_URL: https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64
+        BUF_SHA256: ccbfc1ff1aa72de6d36e3b0e72f89db8c1e2f11ec7a0595e86856c34237e9b20
       run: |
-        curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
-          -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+        set -euo pipefail
+        cached="$HOME/.cache/ci-tools/buf/buf"
+        verified() { echo "$BUF_SHA256  $1" | sha256sum --check --status; }
+        if [ ! -f "$cached" ] || ! verified "$cached"; then
+          mkdir -p "$(dirname "$cached")"
+          tmp="$(mktemp)"
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 120 "$BUF_URL" -o "$tmp"
+          verified "$tmp" || { echo "::error::buf download failed sha256 verification"; head -c 200 "$tmp" >&2; exit 1; }
+          install -m 0755 "$tmp" "$cached"
+        fi
+        sudo install -m 0755 "$cached" /usr/local/bin/buf
+        buf --version
 
     - name: Generate protobuf code
       shell: bash

@@ -1,4 +1,4 @@
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, cleanup } from '@testing-library/react';
 import { useVisibilityResync } from '../useVisibilityResync';
 import { resyncGate } from '@/lib/terminal/resyncGate';
 
@@ -46,8 +46,14 @@ describe('useVisibilityResync', () => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
     (useFeatureFlag as jest.Mock).mockReturnValue(false);
     resyncGate.reset();
+    // Some tests set 'hidden'; without this the next test inherits it under --randomize.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   });
   afterEach(() => {
+    // Unmount while fake timers are still installed: the shared gate's jitter timer, armed when
+    // the first hook releases its slot, must be a fake one so it dies with this test. A real one
+    // fires during a later test and releases a slot that test holds.
+    cleanup();
     jest.useRealTimers();
     jest.restoreAllMocks();
   });

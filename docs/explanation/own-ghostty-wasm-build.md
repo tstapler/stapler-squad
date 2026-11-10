@@ -33,7 +33,7 @@ No runtime loader. `web-app/build/plugins/ghostty-wasm.ts` rewrites ghostty-web'
 
 ## Policy: build, do not commit
 
-The wasm is not committed. CI builds it on PRs that touch the pin or script; release builds should run `make build-ghostty-wasm` before `make web-build` (wiring that into the release workflow is a follow-up, since no recorded sha exists yet). Auditability comes from the pinned inputs and the recorded sha256, not from a binary in git.
+The wasm is not committed. CI builds it on PRs that touch the pin or script; release and CI web builds get it through `.github/actions/prepare` (fetch the published, sha256-verified asset, or Bazel-build it), and a Mac downloads the same asset (`docs/how-to/build-own-ghostty-wasm.md`). Auditability comes from the pinned inputs and the recorded sha256, not from a binary in git.
 
 ## Patch series
 

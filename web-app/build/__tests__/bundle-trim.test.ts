@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { chooseGhosttyWasm, externalizeGhosttyWasm } from "../plugins/ghostty-wasm";
+import { chooseGhosttyWasm, externalizeGhosttyWasm, readWasmPin, type WasmPin } from "../plugins/ghostty-wasm";
 import { pruneUnreferencedCss } from "../stages/prune-css";
 
 describe("externalizeGhosttyWasm", () => {
@@ -20,12 +21,48 @@ describe("externalizeGhosttyWasm", () => {
 });
 
 describe("chooseGhosttyWasm", () => {
-  it("prefers our own build when it exists and falls back to the stock wasm otherwise", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "own-wasm-"));
-    const own = path.join(dir, "ghostty-vt.wasm");
-    expect(chooseGhosttyWasm("/stock/ghostty-vt.wasm", own)).toBe("/stock/ghostty-vt.wasm");
-    writeFileSync(own, "x");
-    expect(chooseGhosttyWasm("/stock/ghostty-vt.wasm", own)).toBe(own);
+  const stock = "/stock/ghostty-vt.wasm";
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  const ownFile = (text: string) => {
+    const own = path.join(mkdtempSync(path.join(os.tmpdir(), "own-wasm-")), "ghostty-vt.wasm");
+    writeFileSync(own, text);
+    return own;
+  };
+  const pin = (sha256: string | null, extra: Partial<WasmPin> = {}): WasmPin => ({ sha256, require: false, allowUnpinned: false, ...extra });
+
+  it("falls back to the stock wasm when ours is absent", () => {
+    expect(chooseGhosttyWasm(stock, "/nonexistent/ghostty-vt.wasm", pin(sha("x")))).toBe(stock);
+  });
+
+  it("ships ours only when its sha256 equals the pinned one", () => {
+    const own = ownFile("x");
+    expect(chooseGhosttyWasm(stock, own, pin(sha("x")))).toBe(own);
+  });
+
+  it("falls back loudly on a sha256 mismatch or an unrecorded pin", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const own = ownFile("x");
+    expect(chooseGhosttyWasm(stock, own, pin(sha("other")))).toBe(stock);
+    expect(chooseGhosttyWasm(stock, own, pin(null))).toBe(stock);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it("trusts an unrecorded pin only when explicitly allowed", () => {
+    const own = ownFile("x");
+    expect(chooseGhosttyWasm(stock, own, pin(null, { allowUnpinned: true }))).toBe(own);
+  });
+
+  it("throws instead of falling back when own wasm is required", () => {
+    expect(() => chooseGhosttyWasm(stock, ownFile("x"), pin(sha("other"), { require: true }))).toThrow(/NOT using our own wasm/);
+    expect(() => chooseGhosttyWasm(stock, "/nonexistent/ghostty-vt.wasm", pin(sha("x"), { require: true }))).toThrow(/does not exist/);
+  });
+});
+
+describe("readWasmPin", () => {
+  it("finds the recorded sha256 for the repo's current pin", () => {
+    const { sha256 } = readWasmPin(path.resolve(__dirname, "..", "..", ".."), {});
+    expect(sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
