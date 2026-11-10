@@ -268,11 +268,11 @@ jobs:
       - name: Name the shard manifest
         if: ${{ !cancelled() }}
         run: |
-          if [ -f "$RUNNER_TEMP/media-out/manifest.json" ]; then
-            mv "$RUNNER_TEMP/media-out/manifest.json" "$RUNNER_TEMP/media-out/manifest-${{ matrix.shard }}.json"
+          if [ -f "$RUNNER_TEMP/media-out/media-manifest.json" ]; then
+            mv "$RUNNER_TEMP/media-out/media-manifest.json" "$RUNNER_TEMP/media-out/manifest-${{ matrix.shard }}.json"
             "$RUNNER_TEMP/promo-plan/mediatool" summary -manifest "$RUNNER_TEMP/media-out/manifest-${{ matrix.shard }}.json"
           else
-            echo "::warning::shard ${{ matrix.shard }} wrote no manifest.json"
+            echo "::warning::shard ${{ matrix.shard }} wrote no media-manifest.json"
           fi
 
       # Even after a partial failure: ship what was recorded. dom-text/ and ocr-text/ stay out.
