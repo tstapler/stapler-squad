@@ -1529,9 +1529,11 @@ describe('useTerminalGestures', () => {
       walk(root);
       // The touch-drag path has exactly one caller. XtermTerminal.tsx's three calls belong to
       // the custom scrollbar (track click and thumb drag) which sits outside the gesture container;
-      // pinned by count so a new caller fails this test.
+      // pinned by count so a new caller fails this test. ghosttyAdapter.ts's call is output-driven
+      // scroll anchoring on write (not a gesture), so it cannot double-scroll a touch drag.
       expect(callers).toEqual({
         'lib/hooks/useTerminalGestures.ts': 1,
+        'lib/terminal/ghosttyAdapter.ts': 1,
         'components/sessions/XtermTerminal.tsx': 3,
       });
     });
