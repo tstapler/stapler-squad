@@ -53,14 +53,18 @@ export function TrayHandle() {
   // The phone's standing entry is the bottom nav; the floating bell is opt-in and yields to the keyboard.
   const visible = isInnerScreen || (bell.floatingBellEnabled && !isVirtualKeyboardOpen);
 
-  // Scroll containers pad their right edge by this so rows don't sit under the fixed bell.
+  // Scroll containers pad the bell's side by this so rows don't sit under the fixed bell.
+  const edge = bell.edge;
   useEffect(() => {
     if (!visible) return;
-    document.documentElement.style.setProperty("--tray-handle-width", "44px");
+    const root = document.documentElement.style;
+    root.setProperty("--tray-handle-width", "44px");
+    root.setProperty("--tray-handle-edge", edge);
     return () => {
-      document.documentElement.style.removeProperty("--tray-handle-width");
+      root.removeProperty("--tray-handle-width");
+      root.removeProperty("--tray-handle-edge");
     };
-  }, [visible]);
+  }, [visible, edge]);
 
   if (!visible) return null;
 

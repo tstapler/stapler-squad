@@ -121,8 +121,10 @@ describe("TrayHandle", () => {
     const root = document.documentElement.style;
     const { unmount } = renderHandle();
     expect(root.getPropertyValue("--tray-handle-width")).toBe("44px");
+    expect(root.getPropertyValue("--tray-handle-edge")).toBe("right");
     unmount();
     expect(root.getPropertyValue("--tray-handle-width")).toBe("");
+    expect(root.getPropertyValue("--tray-handle-edge")).toBe("");
   });
 
   it("handle_should_not_publish_tray_handle_width_when_hidden_on_phone", () => {
