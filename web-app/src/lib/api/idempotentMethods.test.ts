@@ -2,17 +2,18 @@ import { create } from "@bufbuild/protobuf";
 import { SessionService, ListFilesRequestSchema, StatFileRequestSchema } from "@/gen/session/v1/session_pb";
 import { InsightsService } from "@/gen/session/v1/insights_pb";
 import { BacklogService } from "@/gen/session/v1/backlog_pb";
+import { BacklogFlowService } from "@/gen/session/v1/backlog_flow_pb";
 import allowlist from "@/lib/transport/__fixtures__/ws-unary-allowlist.json";
 import { IDEMPOTENT_METHODS, buildDedupeKey, isCoalescible } from "./idempotentMethods";
 
 describe("idempotentMethodTable", () => {
   it("idempotentMethodTable_should_ListOnlyMethodsInServiceDescriptor_And_KeepSubsetOrdering_When_Validated", () => {
-    const known = new Set([...SessionService.methods, ...InsightsService.methods, ...BacklogService.methods].map((m) => m.name));
+    const known = new Set([...SessionService.methods, ...InsightsService.methods, ...BacklogService.methods, ...BacklogFlowService.methods].map((m) => m.name));
     const { coalescible, replayable, wsEligible, cacheable } = IDEMPOTENT_METHODS;
     for (const name of [...coalescible, ...replayable, ...wsEligible, ...cacheable]) {
       expect(known.has(name)).toBe(true);
     }
-    expect(coalescible).toHaveLength(21);
+    expect(coalescible).toHaveLength(27);
     expect(wsEligible).toHaveLength(17);
     for (const name of replayable) expect(coalescible).toContain(name);
     for (const name of wsEligible) expect(coalescible).toContain(name);

@@ -68,8 +68,11 @@ jest.mock("@/components/sessions/OmnibarResultList", () => ({
   getHighlightedItemId: jest.fn(() => undefined),
 }));
 
+jest.mock("@/lib/hooks/useGitHubEnterpriseHosts", () => ({ useGitHubEnterpriseHosts: () => [] }));
+
+let mockRepoPaths: string[] = [];
 jest.mock("@/lib/hooks/useSessionRepoPaths", () => ({
-  useSessionRepoPaths: () => [],
+  useSessionRepoPaths: () => mockRepoPaths,
 }));
 
 jest.mock("@/lib/hooks/useBacklogService", () => ({
@@ -109,6 +112,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  mockRepoPaths = [];
   act(() => {
     jest.runOnlyPendingTimers();
   });
@@ -251,10 +255,204 @@ describe("Omnibar compose mode", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/Parsing your message/)).not.toBeInTheDocument();
     expect(parseBacklogItemIntent).not.toHaveBeenCalled();
-    expect(createBacklogItemFromChat).toHaveBeenCalledWith("add dark mode ![shot](/api/local/serve/x.png)");
-    expect(mockAddNotification).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Backlog item created — triage starting", message: "Add dark mode" })
+    expect(createBacklogItemFromChat).toHaveBeenCalledWith(
+      "add dark mode ![shot](/api/local/serve/x.png)",
+      undefined,
+      ""
     );
+    expect(mockAddNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Backlog item created — triage underway", message: "Add dark mode" })
+    );
+  });
+
+  async function submitCompose(text: string) {
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: text } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("backlog-compose-submit"));
+    });
+  }
+
+  it("pre-fills the repo path from active-session repo roots and sends it with the item", async () => {
+    mockRepoPaths = ["/home/user/my-repo", "/home/user/other"];
+    const createBacklogItemFromChat = jest
+      .fn()
+      .mockResolvedValue({ item: { id: "i", title: "T" }, triageTriggered: true });
+    mockBacklogService({ createBacklogItemFromChat: createBacklogItemFromChat as never });
+    renderOmnibar();
+
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    expect(screen.getByTestId("backlog-compose-repo")).toHaveValue("/home/user/my-repo");
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "idea" } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("backlog-compose-submit"));
+    });
+
+    expect(createBacklogItemFromChat).toHaveBeenCalledWith("idea", undefined, "/home/user/my-repo");
+  });
+
+  it("sends an empty repo path when the user clears the pre-filled one", async () => {
+    mockRepoPaths = ["/home/user/my-repo"];
+    const createBacklogItemFromChat = jest
+      .fn()
+      .mockResolvedValue({ item: { id: "i", title: "T" }, triageTriggered: false });
+    mockBacklogService({ createBacklogItemFromChat: createBacklogItemFromChat as never });
+    renderOmnibar();
+
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    fireEvent.change(screen.getByTestId("backlog-compose-repo"), { target: { value: "" } });
+    expect(screen.getByTestId("backlog-compose-repo")).toHaveValue("");
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "idea" } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("backlog-compose-submit"));
+    });
+
+    expect(createBacklogItemFromChat).toHaveBeenCalledWith("idea", undefined, "");
+  });
+
+  it("says triage could not start and links to the item when triageTriggered is false", async () => {
+    mockBacklogService({
+      createBacklogItemFromChat: jest
+        .fn()
+        .mockResolvedValue({ item: { id: "item-9", title: "T" }, triageTriggered: false }) as never,
+    });
+    renderOmnibar();
+
+    await submitCompose("idea");
+
+    const call = mockAddNotification.mock.calls.find(([n]) => /could not start/.test(n.title))?.[0];
+    expect(call).toBeDefined();
+    expect(call.message).toMatch(/Add a repo path/);
+    call.onView();
+    expect(mockPush).toHaveBeenCalledWith("/backlog?item=item-9");
+    expect(mockAddNotification).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: expect.stringMatching(/triage underway|triage starting/) })
+    );
+  });
+
+  it("tells the user to check the repo path when one was set but triage still did not start", async () => {
+    mockRepoPaths = ["/home/user/my-repo"];
+    mockBacklogService({
+      createBacklogItemFromChat: jest
+        .fn()
+        .mockResolvedValue({ item: { id: "i", title: "T" }, triageTriggered: false }) as never,
+    });
+    renderOmnibar();
+
+    await submitCompose("idea");
+
+    expect(mockAddNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/Check the repo path/) })
+    );
+  });
+
+  it("enriches the item in the background when triage did not start", async () => {
+    const item = { id: "item-3", title: "idea", description: "idea", acCriteria: [] };
+    const parseBacklogItemIntent = jest.fn().mockResolvedValue({
+      title: "Better title",
+      description: "Better description",
+      acceptanceCriteria: ["AC one", "AC two"],
+      confidence: 0.9,
+      suggestedRepoPath: "",
+    });
+    const updateBacklogItem = jest.fn().mockResolvedValue({ ...item, title: "Better title" });
+    mockBacklogService({
+      createBacklogItemFromChat: jest.fn().mockResolvedValue({ item, triageTriggered: false }) as never,
+      parseBacklogItemIntent: parseBacklogItemIntent as never,
+      getBacklogItem: jest.fn().mockResolvedValue(item) as never,
+      updateBacklogItem: updateBacklogItem as never,
+    });
+    renderOmnibar();
+
+    await submitCompose("idea");
+
+    expect(parseBacklogItemIntent).toHaveBeenCalledWith("idea", []);
+    expect(updateBacklogItem).toHaveBeenCalledWith("item-3", {
+      title: "Better title",
+      description: "Better description",
+      acCriteria: [
+        { index: 0, text: "AC one", status: "pending" },
+        { index: 1, text: "AC two", status: "pending" },
+      ],
+    });
+    const call = mockAddNotification.mock.calls.find(([n]) => n.title === "Backlog item enriched")?.[0];
+    expect(call).toBeDefined();
+    call.onView();
+    expect(mockPush).toHaveBeenCalledWith("/backlog?item=item-3");
+  });
+
+  it("does not enrich when triage started", async () => {
+    const parseBacklogItemIntent = jest.fn();
+    mockBacklogService({
+      createBacklogItemFromChat: jest
+        .fn()
+        .mockResolvedValue({ item: { id: "i", title: "T" }, triageTriggered: true }) as never,
+      parseBacklogItemIntent: parseBacklogItemIntent as never,
+    });
+    renderOmnibar();
+
+    await submitCompose("idea");
+
+    expect(parseBacklogItemIntent).not.toHaveBeenCalled();
+  });
+
+  it("enrichment failure is silent and the update is skipped when the user edited the item", async () => {
+    const item = { id: "i", title: "T", description: "d", acCriteria: [] };
+    const updateBacklogItem = jest.fn();
+    const parse = jest
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ title: "x", description: "y", acceptanceCriteria: [], confidence: 1, suggestedRepoPath: "" });
+    mockBacklogService({
+      createBacklogItemFromChat: jest.fn().mockResolvedValue({ item, triageTriggered: false }) as never,
+      parseBacklogItemIntent: parse as never,
+      getBacklogItem: jest.fn().mockResolvedValue({ ...item, description: "edited by user" }) as never,
+      updateBacklogItem: updateBacklogItem as never,
+    });
+    renderOmnibar();
+
+    await submitCompose("idea");
+    expect(updateBacklogItem).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "again" } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("backlog-compose-submit"));
+    });
+    expect(updateBacklogItem).not.toHaveBeenCalled();
+    expect(mockAddNotification).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Backlog item enriched" })
+    );
+    expect(mockAddNotification).not.toHaveBeenCalledWith(
+      expect.objectContaining({ notificationType: "error" })
+    );
+  });
+
+  it("Explore with AI reveals a brainstorm panel that sends question + draft without blocking submit", async () => {
+    let resolveParse: (v: unknown) => void = () => {};
+    const parseBacklogItemIntent = jest.fn().mockReturnValue(new Promise((r) => (resolveParse = r)));
+    mockBacklogService({ parseBacklogItemIntent: parseBacklogItemIntent as never });
+    renderOmnibar();
+
+    fireEvent.click(screen.getByTestId("mock-create-backlog"));
+    fireEvent.change(screen.getByTestId("backlog-compose-textarea"), { target: { value: "add dark mode" } });
+    expect(screen.queryByTestId("brainstorm-panel")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("backlog-compose-explore"));
+    fireEvent.change(screen.getByTestId("brainstorm-input"), { target: { value: "what are the risks?" } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("brainstorm-ask"));
+    });
+
+    expect(parseBacklogItemIntent).toHaveBeenCalledWith("what are the risks?\n\nadd dark mode", []);
+    expect(screen.getByTestId("backlog-compose-submit")).toBeEnabled();
+
+    await act(async () => {
+      resolveParse({ title: "t", description: "d", acceptanceCriteria: ["Toggle persists"], confidence: 1, suggestedRepoPath: "" });
+    });
+    expect(screen.getByText("Toggle persists")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("backlog-compose-explore"));
+    expect(screen.queryByTestId("brainstorm-panel")).not.toBeInTheDocument();
   });
 
   it("raises an error notification when background creation fails", async () => {

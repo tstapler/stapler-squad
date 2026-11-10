@@ -34,6 +34,7 @@ type WorktreeEnricher struct {
 	mu      sync.Mutex
 	results map[string]worktreeResult
 	stuck   map[string]*stuckPath
+	gens    map[string]uint64 // per-path generation; Recheck bumps it to invalidate in-flight probes
 
 	cancel  context.CancelFunc
 	stopped atomic.Bool
@@ -59,6 +60,9 @@ type WorktreeEnricherConfig struct {
 	// Returning false parks the path: nothing runs until Unpark(path). Nil means
 	// always ready.
 	Ready func(path string) bool
+
+	// OnResult observes every finished probe (not parked ones), outside locks.
+	OnResult func(path string, err error)
 
 	// Probe, AfterFunc and Now are injectable for deterministic tests.
 	Probe     func(path string) (*WorktreeInfo, error)
@@ -116,7 +120,7 @@ func NewWorktreeEnricher(cfg WorktreeEnricherConfig) *WorktreeEnricher {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	e := &WorktreeEnricher{cfg: cfg, results: map[string]worktreeResult{}, stuck: map[string]*stuckPath{}}
+	e := &WorktreeEnricher{cfg: cfg, results: map[string]worktreeResult{}, stuck: map[string]*stuckPath{}, gens: map[string]uint64{}}
 	e.retrySlots = make(chan struct{}, max(1, cfg.Workers/2))
 	e.queue = scanqueue.New(scanqueue.Config{Workers: cfg.Workers}, e.handle)
 	return e
@@ -179,6 +183,17 @@ func (e *WorktreeEnricher) Request(path string) {
 // Unpark requeues a path parked by Config.Ready.
 func (e *WorktreeEnricher) Unpark(path string) { e.Request(path) }
 
+// Recheck drops the cached result for path, invalidates any in-flight probe
+// (its late result is discarded) and probes it again.
+func (e *WorktreeEnricher) Recheck(path string) {
+	e.mu.Lock()
+	e.gens[path]++
+	delete(e.results, path)
+	delete(e.stuck, path)
+	e.mu.Unlock()
+	e.Request(path)
+}
+
 func (e *WorktreeEnricher) handle(path string) {
 	if e.stopped.Load() {
 		return
@@ -189,6 +204,7 @@ func (e *WorktreeEnricher) handle(path string) {
 		e.mu.Unlock() // backing off; the scheduled retry will come back
 		return
 	}
+	gen := e.gens[path]
 	e.mu.Unlock()
 
 	start := e.cfg.Now()
@@ -199,7 +215,7 @@ func (e *WorktreeEnricher) handle(path string) {
 		default:
 			// Too many workers already wait on stuck paths: back off without waiting.
 			e.retriesDeferred.Add(1)
-			e.markStuck(path, start)
+			e.markStuck(path, gen, start)
 			return
 		}
 	}
@@ -207,7 +223,8 @@ func (e *WorktreeEnricher) handle(path string) {
 	defer e.running.Add(-1)
 	// The result is cached by the flight itself, so it lands even when this
 	// handler already gave up on a stuck call.
-	ch := e.group.DoChan(path, func() (any, error) {
+	// Keyed by generation so a probe started after Recheck never joins a pre-Recheck flight.
+	ch := e.group.DoChan(fmt.Sprintf("%s\x00%d", path, gen), func() (any, error) {
 		info, err := e.safeProbe(path)
 		if errors.Is(err, errEnrichmentParked) {
 			e.mu.Lock()
@@ -215,7 +232,7 @@ func (e *WorktreeEnricher) handle(path string) {
 			e.mu.Unlock()
 			return struct{}{}, nil
 		}
-		e.finish(path, worktreeResult{info: info, err: err}, e.cfg.Now().Sub(start))
+		e.finish(path, gen, worktreeResult{info: info, err: err}, e.cfg.Now().Sub(start))
 		return struct{}{}, nil
 	})
 	deadline, stopTimer := e.cfg.Timer(e.cfg.Deadline)
@@ -223,7 +240,7 @@ func (e *WorktreeEnricher) handle(path string) {
 	select {
 	case <-ch:
 	case <-deadline:
-		e.markStuck(path, start)
+		e.markStuck(path, gen, start)
 	}
 }
 
@@ -262,8 +279,12 @@ func (e *WorktreeEnricher) Outcome(path string) string {
 	return "pending"
 }
 
-func (e *WorktreeEnricher) markStuck(path string, attemptStart time.Time) {
+func (e *WorktreeEnricher) markStuck(path string, gen uint64, attemptStart time.Time) {
 	e.mu.Lock()
+	if e.gens[path] != gen {
+		e.mu.Unlock() // superseded by Recheck: do not back the path off
+		return
+	}
 	if r, ok := e.results[path]; ok && !r.at.Before(attemptStart) {
 		e.mu.Unlock() // the probe finished just as the deadline fired
 		return
@@ -300,9 +321,13 @@ func (e *WorktreeEnricher) retry(path string) {
 	e.Request(path)
 }
 
-func (e *WorktreeEnricher) finish(path string, res worktreeResult, took time.Duration) {
+func (e *WorktreeEnricher) finish(path string, gen uint64, res worktreeResult, took time.Duration) {
 	res.at = e.cfg.Now()
 	e.mu.Lock()
+	if e.gens[path] != gen {
+		e.mu.Unlock() // a Recheck superseded this probe: drop its result entirely
+		return
+	}
 	late := e.stuck[path] != nil
 	if late {
 		delete(e.stuck, path)
@@ -320,6 +345,9 @@ func (e *WorktreeEnricher) finish(path string, res worktreeResult, took time.Dur
 	}
 	if late {
 		log.Info("worktree enrichment: stuck path finished (slow, not stuck)", "path", path, "took", took)
+	}
+	if e.cfg.OnResult != nil {
+		e.cfg.OnResult(path, res.err)
 	}
 	e.completed.Add(1)
 	if res.err != nil {

@@ -33,7 +33,9 @@ func TestGitRunnerEnvForGitOverridesLocale(t *testing.T) {
 	}
 	assert.Equal(t, "C", last["LC_ALL"])
 	assert.Equal(t, "0", last["GIT_TERMINAL_PROMPT"])
-	assert.Equal(t, env[len(env)-2:], backend.RequiredGitEnv())
+	required := backend.RequiredGitEnv()
+	assert.Equal(t, env[len(env)-len(required):], required)
+	assert.Equal(t, "0", last["GIT_OPTIONAL_LOCKS"])
 }
 
 func TestGitRunnerEnvForNonGitIsInherited(t *testing.T) {

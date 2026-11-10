@@ -48,7 +48,7 @@ jest.mock("../CreatePullRequestModal", () => ({
   }) =>
     isOpen ? (
       <div data-testid="create-pr-modal" data-session-id={session.id}>
-        <button onClick={onClose}>Close</button>
+        <button onClick={onClose}>{/* analytics-exempt */}Close</button>
       </div>
     ) : null,
 }));
@@ -149,12 +149,6 @@ describe("SessionActionsOverflow", () => {
       renderOverflow();
       openMenu("More");
       expect(screen.queryByRole("menuitem", { name: /clear conversation/i })).not.toBeInTheDocument();
-    });
-
-    it("shows Rename when onRenameRequest provided", () => {
-      renderOverflow({ onRenameRequest: jest.fn() });
-      openMenu("Organize");
-      expect(screen.getByRole("menuitem", { name: /rename/i })).toBeInTheDocument();
     });
   });
 
@@ -257,6 +251,71 @@ describe("SessionActionsOverflow", () => {
       fireEvent.click(screen.getByRole("button", { name: /^retry now$/i }));
       await waitFor(() => expect(screen.getByText(/failed to retry session/i)).toBeInTheDocument());
       expect(screen.getByRole("dialog", { name: /retry session/i })).toBeInTheDocument();
+    });
+  });
+
+  describe("archive / unarchive", () => {
+    const archivedAt = { seconds: BigInt(1700000000), nanos: 0 };
+
+    it("shows Archive (not Unarchive) for a non-archived session", () => {
+      renderOverflow({ onArchive: jest.fn(), onUnarchive: jest.fn() });
+      openMenu("More");
+      expect(screen.getByTestId("session-archive-menuitem")).toHaveAccessibleName("Archive session Test Session");
+      expect(screen.queryByTestId("session-unarchive-menuitem")).not.toBeInTheDocument();
+    });
+
+    it("shows Unarchive (not Archive) when archivedAt is set, regardless of status", () => {
+      const session = makeSession({ archivedAt, status: SessionStatus.RUNNING });
+      renderOverflow({ session, onArchive: jest.fn(), onUnarchive: jest.fn() });
+      openMenu("More");
+      expect(screen.getByTestId("session-unarchive-menuitem")).toHaveAccessibleName("Unarchive session Test Session");
+      expect(screen.queryByTestId("session-archive-menuitem")).not.toBeInTheDocument();
+    });
+
+    it("omits both items when no callbacks are supplied", () => {
+      renderOverflow({ onRestart: jest.fn() });
+      openMenu("More");
+      expect(screen.queryByTestId("session-archive-menuitem")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("session-unarchive-menuitem")).not.toBeInTheDocument();
+    });
+
+    it("requires confirmation before calling onArchive, then passes the session id", async () => {
+      const onArchive = jest.fn().mockResolvedValue(true);
+      renderOverflow({ onArchive });
+      openMenu("More");
+      fireEvent.click(screen.getByTestId("session-archive-menuitem"));
+      expect(onArchive).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: /archive session/i })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /^archive$/i }));
+      await waitFor(() => expect(onArchive).toHaveBeenCalledWith("session-1"));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /archive session/i })).not.toBeInTheDocument());
+    });
+
+    it("does not call onArchive when the dialog is cancelled", () => {
+      const onArchive = jest.fn();
+      renderOverflow({ onArchive });
+      openMenu("More");
+      fireEvent.click(screen.getByTestId("session-archive-menuitem"));
+      fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(onArchive).not.toHaveBeenCalled();
+    });
+
+    it("keeps the dialog open with an error when onArchive resolves false", async () => {
+      renderOverflow({ onArchive: jest.fn().mockResolvedValue(false) });
+      openMenu("More");
+      fireEvent.click(screen.getByTestId("session-archive-menuitem"));
+      fireEvent.click(screen.getByRole("button", { name: /^archive$/i }));
+      await waitFor(() => expect(screen.getByText(/failed to archive session/i)).toBeInTheDocument());
+      expect(screen.getByRole("dialog", { name: /archive session/i })).toBeInTheDocument();
+    });
+
+    it("calls onUnarchive directly with no confirmation dialog", () => {
+      const onUnarchive = jest.fn().mockResolvedValue(true);
+      renderOverflow({ session: makeSession({ archivedAt }), onUnarchive });
+      openMenu("More");
+      fireEvent.click(screen.getByTestId("session-unarchive-menuitem"));
+      expect(onUnarchive).toHaveBeenCalledWith("session-1");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
   });
 

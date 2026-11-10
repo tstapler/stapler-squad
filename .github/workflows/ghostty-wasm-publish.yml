@@ -1,0 +1,75 @@
+name: Ghostty WASM publish
+
+# Publishes the wasm that the Ghostty WASM workflow built on main as the release asset
+# "ghostty-wasm-<key>/ghostty-vt.wasm", which scripts/fetch-ghostty-wasm.sh (macOS installs, the
+# prepare action) downloads and sha256-verifies. Only runs for a successful push build on main, and
+# refuses to publish bytes that do not match scripts/ghostty-wasm.sha256.
+
+on:
+  workflow_run:
+    workflows: [ 'Ghostty WASM' ]
+    types: [ completed ]
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: 'Ghostty WASM run id whose artifact to publish'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghostty-wasm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish ghostty-vt.wasm release asset
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      RUN_ID: ${{ inputs.run-id || github.event.workflow_run.id }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the commit that was built
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.HEAD_SHA }}
+
+      - name: Download the built wasm
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ghostty-vt-wasm
+          path: ${{ runner.temp }}/wasm
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Verify against the recorded sha256 and publish
+        run: |
+          set -euo pipefail
+          rev="$(sed -n 's/^GHOSTTY_REV = "\(.*\)"$/\1/p' MODULE.bazel | head -n1)"
+          zig="$(sed -n 's/^ZIG_VERSION = "\(.*\)"$/\1/p' MODULE.bazel | head -n1)"
+          key="${rev:0:12}-zig${zig}"
+          want="$(awk -v k="$key" '$1 == k { print $2 }' scripts/ghostty-wasm.sha256)"
+          got="$(sha256sum "$RUNNER_TEMP/wasm/ghostty-vt.wasm" | cut -d' ' -f1)"
+          [[ -n "$want" ]] || { echo "no recorded sha256 for $key; not publishing" >&2; exit 1; }
+          [[ "$got" == "$want" ]] || { echo "artifact sha256 $got != recorded $want for $key; not publishing" >&2; exit 1; }
+          tag="ghostty-wasm-$key"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -qx ghostty-vt.wasm; then
+              echo "$tag already published; leaving it untouched (assets are immutable per key)"
+            else
+              gh release upload "$tag" "$RUNNER_TEMP/wasm/ghostty-vt.wasm" # an earlier run created the release but not the asset
+            fi
+            exit 0
+          fi
+          gh release create "$tag" "$RUNNER_TEMP/wasm/ghostty-vt.wasm" \
+            --target "$HEAD_SHA" --prerelease --latest=false \
+            --title "ghostty-vt.wasm $key" \
+            --notes "Own ghostty-vt.wasm for pin $key, sha256 $want. Built by the Ghostty WASM workflow (run $RUN_ID); fetched by scripts/fetch-ghostty-wasm.sh. Not a product release."

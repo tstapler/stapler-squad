@@ -503,6 +503,20 @@ func ListAllSessions(serverSocket string) (map[string]bool, error) {
 	return sessions, nil
 }
 
+// FormatSep separates fields in tmux -F formats whose output we parse. Never use a
+// tab: tmux 3.8 prints it as "_" when no UTF-8 locale is set (the launchd service has
+// none), silently fusing fields. '|' is printable ASCII and cannot occur in a session
+// name (see nonSafeTmuxNameChar), so splitting on it is unambiguous.
+const FormatSep = "|"
+
+// UTF8Env returns env with a UTF-8 LC_ALL appended so tmux does not mangle
+// control characters in its output when the process has no locale. Only the exec
+// path is affected (control-mode replies are not locale-filtered); callers must
+// still use FormatSep rather than rely on it. C.UTF-8 was verified on macOS tmux 3.8.
+func UTF8Env(env []string) []string {
+	return append(env, "LC_ALL=C.UTF-8")
+}
+
 // PaneDeadStatus reports whether a pane's wrapped program has exited
 // (remain-on-exit placeholder), and its exit code/signal when it has.
 type PaneDeadStatus struct {
@@ -520,7 +534,7 @@ type PaneDeadStatus struct {
 // Returns ErrServerDown when the tmux server is not running.
 func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error) {
 	args := prependSocket(serverSocket, []string{"list-panes", "-a", "-F",
-		"#{session_name}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_signal}"})
+		"#{session_name}" + FormatSep + "#{pane_dead}" + FormatSep + "#{pane_dead_status}" + FormatSep + "#{pane_dead_signal}"})
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
 	out, err := runGated(listCtx, serverSocket, func() ([]byte, error) {
@@ -537,15 +551,23 @@ func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error)
 		return nil, fmt.Errorf("BatchPaneDeadStatus: %w", err)
 	}
 
+	return parsePaneDeadStatuses(string(out)), nil
+}
+
+// parsePaneDeadStatuses parses BatchPaneDeadStatus's list-panes output, keyed by session name.
+func parsePaneDeadStatuses(out string) map[string]PaneDeadStatus {
 	statuses := make(map[string]PaneDeadStatus)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
-		fields := strings.SplitN(line, "\t", 4)
-		if len(fields) != 4 {
+		// Split from the right so a name containing the separator stays intact.
+		fields := strings.Split(line, FormatSep)
+		if len(fields) < 4 {
 			continue
 		}
+		n := len(fields)
+		fields = []string{strings.Join(fields[:n-3], FormatSep), fields[n-3], fields[n-2], fields[n-1]}
 		name := fields[0]
 		dead := fields[1] == "1"
 		// A session's window can have multiple panes; a session counts as
@@ -563,7 +585,7 @@ func BatchPaneDeadStatus(serverSocket string) (map[string]PaneDeadStatus, error)
 		}
 		statuses[name] = status
 	}
-	return statuses, nil
+	return statuses
 }
 
 // checkServerNotRunning runs tmux list-sessions directly (bypassing any circuit breaker)
@@ -1467,45 +1489,40 @@ func (t *TmuxSession) filterStatusLine(content string) string {
 
 // detectPromptInContent checks if the given content contains a prompt from the configured program
 func (t *TmuxSession) detectPromptInContent(content string) bool {
-	switch t.programKind {
+	return DetectPromptInContent(t.programKind, content)
+}
+
+// DetectPromptInContent reports whether content contains an approval prompt for kind.
+func DetectPromptInContent(kind ProgramKind, content string) bool {
+	switch kind {
 	case KindClaude:
-		// Claude Code approval dialogs have a distinctive pattern:
-		// An arrow selector (❯) followed by numbered options (1., 2., 3.)
-		// This is more reliable than checking for specific text that might change.
-		//
-		// Example:
-		// ❯ 1. Yes
-		//   2. Yes, allow all edits during this session (shift+tab)
-		//   3. No, and tell Claude what to do differently (esc)
-
-		// Check for the arrow selector with numbered option pattern
-		// Look for: arrow (❯) followed by number and period (1., 2., etc.) on subsequent lines
-		if strings.Contains(content, "❯") {
-			// If we have the arrow, check for numbered options nearby
-			// Split into lines and look for the pattern
-			lines := strings.Split(content, "\n")
-			for i, line := range lines {
-				if strings.Contains(line, "❯") {
-					// Found the arrow, check next few lines for numbered options
-					for j := i; j < i+5 && j < len(lines); j++ {
-						trimmed := strings.TrimSpace(lines[j])
-						// Check for numbered options (1., 2., 3., etc.)
-						if len(trimmed) > 0 && (trimmed[0] >= '1' && trimmed[0] <= '9') &&
-							len(trimmed) > 1 && trimmed[1] == '.' {
-							return true
-						}
-					}
-				}
-			}
-		}
-
-		// Fallback: Check for legacy patterns in case the UI changes
-		return strings.Contains(content, "No, and tell Claude what to do differently") ||
+		return hasClaudeApprovalOptions(content) ||
+			strings.Contains(content, "No, and tell Claude what to do differently") ||
 			strings.Contains(content, "Yes, allow all edits during this session")
 	case KindAider:
 		return strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
 	case KindGemini:
 		return strings.Contains(content, "Yes, allow once")
+	}
+	return false
+}
+
+func hasClaudeApprovalOptions(content string) bool {
+	if !strings.Contains(content, "❯") {
+		return false
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "❯") {
+			continue
+		}
+		// Numbered choices within five lines of the selector identify an approval dialog.
+		for _, option := range lines[i:min(i+5, len(lines))] {
+			trimmed := strings.TrimSpace(option)
+			if len(trimmed) > 1 && trimmed[0] >= '1' && trimmed[0] <= '9' && trimmed[1] == '.' {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -3005,7 +3022,7 @@ func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
 		ctx, cancel := cmCtx()
 		defer cancel()
 		body, cmErr := t.sendCMCommand(ctx,
-			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_dead_status}\t#{pane_dead_signal}'")
+			"display-message", "-p", "-t", t.sanitizedName, "'#{pane_dead_status}"+FormatSep+"#{pane_dead_signal}'")
 		if cmErr == nil {
 			if parsedCode, parsedSignal, parsedOK := parseExitStatus(body); parsedOK {
 				return parsedCode, parsedSignal, true
@@ -3015,7 +3032,7 @@ func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
 		}
 	}
 	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
-		"#{pane_dead_status}\t#{pane_dead_signal}")
+		"#{pane_dead_status}"+FormatSep+"#{pane_dead_signal}")
 	output, err := runGated(context.Background(), t.serverSocket, func() ([]byte, error) {
 		return t.cmdExec.Output(cmd)
 	})
@@ -3025,11 +3042,11 @@ func (t *TmuxSession) ExitStatus() (code int, signal string, ok bool) {
 	return parseExitStatus(string(output))
 }
 
-// parseExitStatus parses the "<status>\t<signal>" body produced by
-// `display-message -p '#{pane_dead_status}\t#{pane_dead_signal}'`, whether it
+// parseExitStatus parses the "<status>|<signal>" body produced by
+// `display-message -p '#{pane_dead_status}|#{pane_dead_signal}'`, whether it
 // arrived via a CM command reply or raw subprocess output.
 func parseExitStatus(raw string) (code int, signal string, ok bool) {
-	parts := strings.SplitN(strings.TrimRight(raw, "\n"), "\t", 2)
+	parts := strings.SplitN(strings.TrimRight(raw, "\n"), FormatSep, 2)
 	statusStr := strings.TrimSpace(parts[0])
 	if statusStr == "" {
 		// Empty means the pane is still alive (or the format variables aren't

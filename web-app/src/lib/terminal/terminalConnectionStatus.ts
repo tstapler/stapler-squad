@@ -44,3 +44,18 @@ export function useTerminalConnectionStatuses(sessionIds: readonly string[]): Te
   useSyncExternalStore(subscribe, () => version, () => version);
   return sessionIds.map((id) => entries.get(id)?.status ?? "connecting");
 }
+
+const hardFailed = new Set<string>();
+
+/** Published by `TerminalOutput` while its own hard-failed banner (with its own Retry) is showing. */
+export function setTerminalHardFailed(sessionId: string, failed: boolean): void {
+  if (failed === hardFailed.has(sessionId)) return;
+  if (failed) hardFailed.add(sessionId);
+  else hardFailed.delete(sessionId);
+  notify();
+}
+
+export function useTerminalHardFailed(sessionId: string): boolean {
+  useSyncExternalStore(subscribe, () => version, () => version);
+  return hardFailed.has(sessionId);
+}

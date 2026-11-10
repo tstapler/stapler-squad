@@ -85,6 +85,9 @@ type julesPollerStorage interface {
 	AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error
 	GatedSetPRAndTransition(ctx context.Context, req TransitionRequest, pr PRAssociation) error
 	GatedTransition(ctx context.Context, req TransitionRequest) (*BacklogItemData, error)
+	// AttachItemPRLink records one Outputs[] PR as an item-direct link; attached is
+	// false when the item tombstoned that PR.
+	AttachItemPRLink(ctx context.Context, itemID, prURL string, source AttachSource) (attached bool, err error)
 }
 
 // JulesSessionPollerConfig controls polling cadence and staleness thresholds.
@@ -504,14 +507,11 @@ func (p *JulesSessionPoller) noteStateChangeIfNeeded(ctx context.Context, entry 
 // request_review does for a local agent session, before either branch runs.
 func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry ItemSessionBacklogEntry, row ItemSessionSummary, s *jules.JulesSession) error {
 	p.incSessionCompleted()
-	if len(s.Outputs) > 1 {
-		// Interim behavior for the still-open "does outputs[] ever carry more
-		// than one PR" question (plan.md Unresolved Questions): we take the
-		// first non-empty pullRequest.url and log so the assumption is
-		// observable rather than silent.
-		log.Warn("jules multiple pr outputs", "jules_session", entry.SessionUUID, "output_count", len(s.Outputs))
+	prURLs := completedSessionPRURLs(s)
+	prURL := ""
+	if len(prURLs) > 0 {
+		prURL = prURLs[0]
 	}
-	prURL := completedSessionPRURL(s)
 	now := p.now()
 
 	if prURL == "" {
@@ -538,6 +538,18 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry Item
 		return fmt.Errorf("parse PR number from %q: %w", prURL, err)
 	}
 
+	// Links first: an upsert is idempotent, so a failure here retries cleanly on the
+	// next poll before any transition has happened.
+	for _, u := range prURLs {
+		attached, linkErr := p.storage.AttachItemPRLink(ctx, entry.ItemID, u, AttachSourceJules)
+		if linkErr != nil {
+			return fmt.Errorf("attach jules pr %s: %w", u, linkErr)
+		}
+		if !attached {
+			log.Info("jules pr skipped: item tombstoned it", "jules_session", entry.SessionUUID, "url", u)
+		}
+	}
+
 	reviewItem, err := p.storage.GatedTransition(ctx, TransitionRequest{
 		Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, To: BacklogStatusReview,
 		Precondition: &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBy: TriggeredBySystem,
@@ -549,7 +561,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry Item
 	summary := fmt.Sprintf("Jules opened pull request %s.", prURL)
 	if err := p.storage.GatedSetPRAndTransition(ctx,
 		TransitionRequest{Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, Observed: reviewItem, TriggeredBy: TriggeredBySystem},
-		PRAssociation{URL: prURL, Number: prNumber, Summary: summary}); err != nil {
+		PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Source: AttachSourceJules}); err != nil {
 		return fmt.Errorf("record PR: %w", err)
 	}
 	if err := p.storage.UpdateItemSessionEndedWithReason(ctx, row.ID, now, "jules_completed"); err != nil {
@@ -581,16 +593,17 @@ func (p *JulesSessionPoller) applyUnknownState(ctx context.Context, entry ItemSe
 	return nil
 }
 
-// completedSessionPRURL returns the first pull request URL in s.Outputs that
-// passes isValidGitHubPRURL, or "" if COMPLETED carried no (valid) PR output.
-// The Jules API response is semi-trusted output (target-repo content the
-// session processed can influence it via prompt injection, per this
-// feature's egress-consent threat model), and prURL is persisted as
-// item.PrURL and rendered as an <a href> in GitHubBadge.tsx, so a value that
-// isn't actually an https://github.com/... URL is rejected here rather than
-// stored — a bare trailing-path regex match (e.g. "javascript:alert(1)//pull/1")
-// is not enough.
-func completedSessionPRURL(s *jules.JulesSession) string {
+// completedSessionPRURLs returns every pull request URL in s.Outputs that passes
+// isValidGitHubPRURL, in order and de-duplicated; empty if COMPLETED carried no
+// (valid) PR output. The Jules API response is semi-trusted output (target-repo
+// content the session processed can influence it via prompt injection, per this
+// feature's egress-consent threat model), and a URL is persisted and rendered as
+// an <a href> in GitHubBadge.tsx, so a value that isn't actually an
+// https://github.com/... URL is rejected here rather than stored; a bare
+// trailing-path regex match (e.g. "javascript:alert(1)//pull/1") is not enough.
+func completedSessionPRURLs(s *jules.JulesSession) []string {
+	var urls []string
+	seen := map[string]bool{}
 	for _, out := range s.Outputs {
 		if out.PullRequest == nil || out.PullRequest.URL == "" {
 			continue
@@ -599,9 +612,12 @@ func completedSessionPRURL(s *jules.JulesSession) string {
 			log.Warn("jules rejected invalid pr url", "jules_session", s.Name, "url", out.PullRequest.URL)
 			continue
 		}
-		return out.PullRequest.URL
+		if !seen[out.PullRequest.URL] {
+			seen[out.PullRequest.URL] = true
+			urls = append(urls, out.PullRequest.URL)
+		}
 	}
-	return ""
+	return urls
 }
 
 // isValidGitHubPRURL reports whether rawURL is a genuine

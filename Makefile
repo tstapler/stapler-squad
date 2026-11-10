@@ -89,7 +89,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
+.PHONY: help test-tymux-pin ports build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build proto-breaking ent-gen web-build test-web-build verify-eval-patch lint-workflows web-dev restart-webrestart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service install-service-preflight install-hooks rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview dev-stack coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-ghostty-wasm test-ghostty-wasm verify-ghostty-wasm fetch-ghostty-wasm build-embedded build-embedded-tymux clean-tmux init-submodules fetch-tymuxd build-tymuxd-embed test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard checklocks build-otel-auto build-otel-auto-embedded otel-auto-isolation-guard otel-auto-isolation-guard-selftest otel-auto-smoke otel-auto-smoke-suppression otel-auto-test
 
 # Default target
 help: ## Show this help message
@@ -242,8 +242,11 @@ WEB_MINIFY ?= 0
 
 BUN_BUILD_INPUTS := web-app/index.html web-app/bunfig.toml $(shell find web-app/build web-app/patches -type f -not -path '*/__tests__/*' 2>/dev/null)
 
+# Stamp for the own ghostty wasm fetch; see fetch-ghostty-wasm below.
+GHOSTTY_WASM_STAMP := web-app/build/ghostty-own/.fetched
+
 # Build the web UI to web-app/out with Bun (web-app/build/, ADR-006)
-web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(BUN_BUILD_INPUTS)
+web-app/out: ensure-tools proto-gen web-app/node_modules/.ssq-install-stamp $(WEB_FILES) $(BUN_BUILD_INPUTS) $(GHOSTTY_WASM_STAMP)
 	@# Guard: re-install if node_modules was wiped by external tools without touching bun.lock
 	@test -d web-app/node_modules/@vanilla-extract/integration || { \
 		echo "⚠️  node_modules incomplete, re-installing..."; \
@@ -360,6 +363,30 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 	@cp $(BIN_TMUX) session/tmux/embed/tmux
 	@echo "✅ session/tmux/embed/tmux ready ($(shell $(BIN_TMUX) -V 2>/dev/null || echo unknown))"
 
+# ── Own ghostty-vt.wasm (see docs/explanation/own-ghostty-wasm-build.md) ─────
+# Bazel (//third_party/ghostty:ghostty_vt_wasm): pinned Ghostty fork + checksum-verified
+# Zig, all in MODULE.bazel. Opt-in: not part of `make build`, because Bazel downloads a Zig
+# toolchain. Output is gitignored; the web build falls back to ghostty-web's stock wasm when
+# web-app/build/ghostty-own/ghostty-vt.wasm is absent.
+build-ghostty-wasm: ## Build ghostty-vt.wasm with Bazel into web-app/build/ghostty-own
+	@./scripts/build-ghostty-wasm.sh
+
+test-ghostty-wasm: ## Run the Zig unit tests for our Ghostty patches, then build
+	@./scripts/build-ghostty-wasm.sh --test
+
+verify-ghostty-wasm: ## Build and fail unless the wasm sha256 matches scripts/ghostty-wasm.sha256
+	@./scripts/build-ghostty-wasm.sh --verify
+
+fetch-ghostty-wasm: ## Download the CI-built, sha256-verified wasm for the pin (the macOS path; fails if unavailable)
+	@./scripts/fetch-ghostty-wasm.sh
+
+# Stamp for the web build: re-fetches when the pin or record changes. A failed fetch only warns (the web
+# build then ships the stock wasm, loudly) and leaves no stamp, so the next make tries again.
+$(GHOSTTY_WASM_STAMP): MODULE.bazel scripts/ghostty-wasm.sha256 scripts/fetch-ghostty-wasm.sh
+	@if [ "$(GHOSTTY_WASM_REQUIRE_OWN)" = 1 ]; then ./scripts/fetch-ghostty-wasm.sh && touch $@; \
+	elif ./scripts/fetch-ghostty-wasm.sh; then touch $@; \
+	else echo "⚠️  Continuing with ghostty-web's stock wasm (see the warning above)"; fi
+
 # ── Pinned tymuxd binary (fetched, not compiled — see ADR-001) ─────────────
 # Fetches a prebuilt tymuxd release binary from github.com/tstapler/tymux
 # instead of requiring a cargo/rustc toolchain anywhere in this repo.
@@ -376,7 +403,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 # confirmed via `strings tymuxd | grep TYMUXD_SOCKET_PATH` on the v1.3.0
 # binary (landed upstream in tstapler/tymux#44, first tagged in v1.2.0).
 # See docs/bugs/open/BUG-112-*.md, which this bump closes gap 1 of.
-TYMUX_VERSION ?= v1.12.0
+TYMUX_VERSION ?= v1.17.0
 BIN_TYMUXD        := session/tymux/embed/tymuxd
 TYMUXD_FETCH_STAMP := .tymuxd-fetch.stamp
 
@@ -933,7 +960,7 @@ $(LINTER_BIN): $(LINTER_SRC)
 # excluded outright since scanning them just re-lints scripts already
 # covered by their own branch). Includes scripts/ssq-hook-handler, which has
 # no .sh extension but is a real bash script (installed as a hook handler).
-SHELL_SCRIPTS := $(shell find . -not -path "*/third_party/*" -not -path "*/node_modules/*" -not -path "./.git/*" -not -path "./.claude/worktrees/*" -type f \( -name "*.sh" -o -name "ssq-hook-handler" \))
+SHELL_SCRIPTS := $(shell find . -type d \( -name third_party -o -name node_modules -o -path './.git' -o -path './.claude/worktrees' \) -prune -o -type f \( -name '*.sh' -o -name ssq-hook-handler \) -print)
 
 lint-shell: ## Run shellcheck over all first-party shell scripts
 	@which shellcheck >/dev/null 2>&1 || (echo "shellcheck not installed; run 'brew install shellcheck' (macOS) or see https://github.com/koalaman/shellcheck#installing" && exit 1)
@@ -1064,7 +1091,7 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard ptmx-field-guard otel-auto-isolation-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration test-delivery-guards test-oracle test-shell fmt-check registry-generate actor-field-guard pr-field-guard pr-state-write-guard ptmx-field-guard otel-auto-isolation-guard check-no-generated-committed ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # ready: everything `make ci` runs, plus the CI-only checks that have no local
 # equivalent yet — .github/workflows/lint.yml's complexity gate (gocyclo/
@@ -1114,6 +1141,20 @@ lint-workflows: ## Lint GitHub Actions workflows and the web-app script tests (a
 
 ready-duplication-gate-web: ## Blocking web-app duplication gate (jscpd, see web-app/.jscpd.json)
 	cd web-app && bun run lint:duplicates
+
+.PHONY: check-no-generated-committed
+check-no-generated-committed: ## Fail if generated ent or gen/ output is tracked (only session/ent/schema/ and generate.go may be)
+	@bad="$$(git ls-files session/ent gen | grep -v -E '^session/ent/(schema/|generate\.go)')"; \
+	if [ -n "$$bad" ]; then \
+	    echo "❌ check-no-generated-committed: generated output is tracked (untrack it; .gitignore excludes it):"; \
+	    echo "$$bad" | head -20; \
+	    exit 1; \
+	fi
+	@echo "✅ check-no-generated-committed: no generated ent or gen/ output tracked"
+
+.PHONY: plan-check-session-multi-pr
+plan-check-session-multi-pr: ## Validate the session-multi-pr-tracking plan's task dependency table
+	python3 scripts/plan-check/session_multi_pr_table.py
 
 ready-vt-conformance-gate: ## Blocking VT conformance gate: xterm.js and ghostty-web vs tests/terminal-conformance/ (docs/how-to/vt-conformance-runbook.md)
 	cd web-app && bunx jest --no-coverage src/lib/terminal/__tests__/conformance src/lib/terminal/__tests__/ghosttyAdapter.test.ts
@@ -1194,6 +1235,30 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 	    exit 1; \
 	fi
 	@echo "✅ actor-field-guard: no direct Instance field writes"
+
+# Field-scoped, so unrelated Instance writes (inst.Status = ...) in session_driver.go do not trip it.
+# Receiver-name based: DTO paths named otherwise (i., instanceOpts.) are knowingly not covered.
+pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance*.go and session/session_pr_*.go
+	@echo "pr-field-guard: scanning for direct PR field writes..."
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/instance*.go' ':!:session/session_pr_*.go' ':!:session/ent/*' ':!:gen/*' \
+	    | xargs -r grep -EnH '\b(inst|instance|liveInst)\.(GitHubPRNumber|GitHubPRURL|GitHubPRStatusTerminal|GitHubOwner|GitHubRepo) = [^=]' \
+	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
+	    echo "❌ pr-field-guard: direct PR field write found — route through AttachPR / the actor setters (session-multi-pr-tracking)"; \
+	    exit 1; \
+	fi
+	@echo "✅ pr-field-guard: no direct PR field writes"
+
+# Invariant I1: only the repository file writes PullRequestState (session_pr_gc.go deletes only).
+# Grep-based like pr-field-guard; a typed analyzer is the follow-up T2.2.6.
+pr-state-write-guard: ## session-multi-pr-tracking guard: fail on a direct ent write to PullRequestState outside ent_repository_session_pr.go and session_pr_gc.go
+	@echo "pr-state-write-guard: scanning for direct PullRequestState writes..."
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/ent/*' ':!:gen/*' ':!:session/ent_repository_session_pr.go' ':!:session/session_pr_gc.go' \
+	    | xargs -r grep -EnH 'PullRequestState\.(Create|CreateBulk|Update|UpdateOne|UpdateOneID|Delete|DeleteOne|DeleteOneID)\b|PullRequestState(Create|CreateBulk|Update|UpdateOne|Delete|DeleteOne|Client)\b' \
+	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
+	    echo "❌ pr-state-write-guard: direct PullRequestState write — only the PR status poller writes state (invariant I1); go through EntRepository.UpdatePullRequestState"; \
+	    exit 1; \
+	fi
+	@echo "✅ pr-state-write-guard: no direct PullRequestState writes"
 
 ptmx-field-guard: ## tmux-ptmx-race-fix guard: fail if ptmx/attachCmd/attachCmdWaitOnce are touched outside the ptmxMu helpers
 	@echo "ptmx-field-guard: scanning session/tmux/*.go for direct PTY-triple field access..."

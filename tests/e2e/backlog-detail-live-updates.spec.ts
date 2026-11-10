@@ -24,6 +24,7 @@ import {
   createBacklogItemDirect,
   transitionBacklogItemDirect,
   archiveBacklogItemDirect,
+  deleteBacklogItemsByTitlePrefix,
   enableBacklogFeatureFlag,
   disableBacklogFeatureFlag,
 } from './pages/BacklogMutations';
@@ -35,6 +36,10 @@ test.describe('Backlog live updates (detail panel)', () => {
 
   test.afterAll(async ({ request }) => {
     await disableBacklogFeatureFlag(request);
+  });
+
+  test.afterEach(async ({ request }) => {
+    await deleteBacklogItemsByTitlePrefix(request, ['e2e-detail-']);
   });
 
   test.beforeEach(async ({ page }) => {
@@ -57,7 +62,7 @@ test.describe('Backlog live updates (detail panel)', () => {
 
     const detailPane = backlogPage.getItemDetailPane();
     await expect(detailPane).toBeVisible();
-    await expect(backlogPage.getDetailStatusBadge()).toContainText('In Progress');
+    await expect(backlogPage.getDetailStatusBadge()).toHaveAttribute('aria-label', 'Lifecycle stage: In Progress');
 
     // Old behavior (shouldPoll, BacklogItemDetail.tsx pre-Epic-5.3) fired a
     // GetBacklogItem poll every 5s while in_progress. Confirm no such request
@@ -73,7 +78,7 @@ test.describe('Backlog live updates (detail panel)', () => {
 
     await transitionBacklogItemDirect(request, itemId, 'review');
 
-    await expect(backlogPage.getDetailStatusBadge()).toContainText('Review', { timeout: 5000 });
+    await expect(backlogPage.getDetailStatusBadge()).toHaveAttribute('aria-label', 'Lifecycle stage: Review', { timeout: 5000 });
   });
 
   test('detail panel keeps showing the open item after it no longer matches the active list filter (UX AC #11)', async ({ page, request }) => {
@@ -100,7 +105,7 @@ test.describe('Backlog live updates (detail panel)', () => {
     // ...but the still-open detail panel keeps showing the item's current
     // (done) state rather than blanking/freezing.
     await expect(detailPane).toBeVisible();
-    await expect(backlogPage.getDetailStatusBadge()).toContainText('Done', { timeout: 5000 });
+    await expect(backlogPage.getDetailStatusBadge()).toHaveAttribute('aria-label', 'Lifecycle stage: Done', { timeout: 5000 });
   });
 
   test('archiving the open item from another flow shows a terminal state instead of stale action buttons (UX AC #13)', async ({ page, request }) => {

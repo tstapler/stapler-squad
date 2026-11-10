@@ -34,7 +34,7 @@ export const header = style({
   background: vars.color.cardBackground,
   position: "sticky",
   top: 0,
-  zIndex: 10,
+  zIndex: zIndex.raised,
   flexShrink: 0,
   minHeight: "40px",
   selectors: {
@@ -238,9 +238,12 @@ export const tabs = style({
   padding: "0 0.5rem",
   gap: "0.125rem",
   flexShrink: 0,
+  // Scrollable at every width; thin visible scrollbar on desktop so mouse users can drag it.
+  overflowX: "auto",
+  overflowY: "hidden",
+  scrollbarWidth: "thin",
   "@media": {
     [mobileMediaQuery]: {
-      overflowX: "auto",
       padding: "0 0.25rem",
       gap: "0",
       scrollbarWidth: "none",
@@ -283,6 +286,7 @@ export const tab = style({
   transition: "color 0.2s, border-color 0.2s",
   borderBottom: "2px solid transparent",
   position: "relative",
+  flexShrink: 0,
   whiteSpace: "nowrap",
   selectors: {
     "&:hover": {

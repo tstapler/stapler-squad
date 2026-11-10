@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -39,6 +40,8 @@ type DaemonVersionInfo struct {
 	ProtocolVersion  uint32 // 0 when the daemon predates GetServerInfo or could not be asked
 	InstalledVersion string
 	Direction        VersionDirection
+	// GracefulHandoff: the running daemon advertises the graceful_handoff capability.
+	GracefulHandoff bool
 }
 
 // ErrLiveSessionsWouldBeInterrupted is returned by ReplaceDaemon when sessions are
@@ -50,9 +53,11 @@ const clientProtocolVersion = 1
 
 const (
 	versionProbeTimeout    = 5 * time.Second
-	daemonStopGracePeriod  = 10 * time.Second
 	daemonStopPollInterval = 100 * time.Millisecond
 )
+
+// daemonStopGracePeriod is how long a stopped daemon gets to exit on SIGTERM before SIGKILL; a var so tests can shrink it.
+var daemonStopGracePeriod = 10 * time.Second
 
 // Injection seams so tests need no real daemon, lsof, or /proc.
 var (
@@ -170,6 +175,7 @@ func detectDaemonVersions(ctx context.Context, cfg DaemonConfig) DaemonVersionIn
 	if si, err := serverInfoFn(ctx, cfg); err == nil {
 		info.Running, info.PID = true, int(si.GetPid())
 		info.RunningVersion, info.ProtocolVersion = si.GetVersion(), si.GetProtocolVersion()
+		info.GracefulHandoff = slices.Contains(si.GetCapabilities(), capGracefulHandoff)
 		info.Direction = CompareVersions(info.RunningVersion, info.InstalledVersion)
 		return info
 	} else if connect.CodeOf(err) != connect.CodeUnimplemented {
@@ -200,7 +206,9 @@ func detectRunningByProcess(ctx context.Context, cfg DaemonConfig, info DaemonVe
 func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
 	defer cancel()
-	resp, err := NewRealTransport(cfg.Addr).GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
+	resp, err := transport.GetServerInfo(ctx, connect.NewRequest(&v1.GetServerInfoRequest{ClientProtocolVersion: clientProtocolVersion}))
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +216,9 @@ func fetchServerInfo(ctx context.Context, cfg DaemonConfig) (*v1.ServerInfo, err
 }
 
 func countLiveSessions(ctx context.Context, cfg DaemonConfig) (int, error) {
-	resp, err := NewRealTransport(cfg.Addr).ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	transport, release := newProbeTransport(cfg.Addr)
+	defer release()
+	resp, err := transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return 0, err
 	}
@@ -225,6 +235,8 @@ func countLiveSessions(ctx context.Context, cfg DaemonConfig) (int, error) {
 // which upgrades or downgrades it depending on that binary. Live sessions survive in
 // tymuxd's persisted state but each pane's process is respawned on revive, so unless
 // allowInterrupt is set it refuses (ErrLiveSessionsWouldBeInterrupted) while any are live.
+// A daemon that advertises graceful_handoff is replaced in place with every pane kept
+// (replaceViaHandoff); a failed handoff never falls back to killing it unless allowInterrupt.
 func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (DaemonVersionInfo, error) {
 	before := DetectDaemonVersions(ctx, cfg)
 	if before.Running {
@@ -232,10 +244,24 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 		if err != nil {
 			return before, fmt.Errorf("tymux: cannot count live sessions before replacing the daemon: %w", err)
 		}
+		if live > 0 && before.GracefulHandoff {
+			after, hErr := replaceViaHandoff(ctx, cfg, before, live)
+			if hErr == nil {
+				return after, nil
+			}
+			// Only a failure that provably changed nothing may fall back to killing the daemon; after
+			// an unverified handoff it may already be the new image holding every pane.
+			changedNothing := errors.Is(hErr, ErrHandoffRefused) || errors.Is(hErr, ErrHandoffUnavailable)
+			if !allowInterrupt || !changedNothing {
+				return before, hErr
+			}
+			log.Warn("[tymux] graceful handoff not possible, operator allowed interruption: replacing the daemon the lossy way", "err", hErr)
+		}
 		if live > 0 && !allowInterrupt {
 			return before, fmt.Errorf("%w (%d live)", ErrLiveSessionsWouldBeInterrupted, live)
 		}
-		if err := stopListener(before.PID, cfg); err != nil {
+		reason := StopReason{Kind: StopVersionReplace, Detail: fmt.Sprintf("from %q to %q (binary %s)", before.RunningVersion, before.InstalledVersion, cfg.BinaryPath), Probes: lastProbeFor(cfg.Addr)}
+		if err := stopListener(before.PID, cfg, reason); err != nil {
 			return before, err
 		}
 	}
@@ -248,20 +274,27 @@ func ReplaceDaemon(ctx context.Context, cfg DaemonConfig, allowInterrupt bool) (
 
 // stopListener SIGTERMs pid (tymuxd flushes its session records on SIGTERM), waits for
 // the port to free, then escalates to SIGKILL.
-func stopListener(pid int, cfg DaemonConfig) error {
+func stopListener(pid int, cfg DaemonConfig, reason StopReason) error {
+	attempt := beginStop(pid, reason)
 	if err := signalProcessFn(pid, syscall.SIGTERM); err != nil {
+		attempt.finish(StopSignalFailed, err)
 		return fmt.Errorf("tymux: SIGTERM pid %d: %w", pid, err)
 	}
 	if waitPortFree(cfg, daemonStopGracePeriod) {
+		attempt.finish(StopExitedAfterTerm, nil)
 		return nil
 	}
-	log.Warn("[tymux] tymuxd ignored SIGTERM, escalating to SIGKILL", "pid", pid)
+	log.Warn("[tymux] tymuxd ignored SIGTERM, escalating to SIGKILL", "pid", pid, "reason_kind", string(reason.Kind))
 	if err := signalProcessFn(pid, syscall.SIGKILL); err != nil {
+		attempt.finish(StopSignalFailed, err)
 		return fmt.Errorf("tymux: SIGKILL pid %d: %w", pid, err)
 	}
 	if !waitPortFree(cfg, daemonStopGracePeriod) {
-		return fmt.Errorf("tymux: pid %d still holds %s after SIGKILL", pid, cfg.Addr)
+		err := fmt.Errorf("tymux: pid %d still holds %s after SIGKILL", pid, cfg.Addr)
+		attempt.finish(StopSignalFailed, err)
+		return err
 	}
+	attempt.finish(StopEscalatedToKill, nil)
 	return nil
 }
 

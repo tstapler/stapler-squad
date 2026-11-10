@@ -87,11 +87,12 @@ export function useTerminalResizeHandler({
   } = refs;
 
   return useCallback((cols: number, rows: number) => {
-    console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
     onTerminalResized?.(cols, rows);
 
     const lastResize = lastResizeRef.current;
     const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
+    // Log only real changes: unchanged refits fire in bursts per pane and drowned the console.
+    if (sizeChanged) console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
 
     if (sizeChanged) {
       lastResizeRef.current = { cols, rows };
@@ -174,10 +175,7 @@ export function useTerminalResizeHandler({
       return;
     }
 
-    if (!sizeChanged) {
-      console.log(`[TerminalOutput] Resize blocked - unchanged (${cols}x${rows})`);
-      return;
-    }
+    if (!sizeChanged) return;
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
     clearBufferBeforeResize();
@@ -205,7 +203,6 @@ interface ConnectionBootstrapParams {
   setIsLoadingInitialContent: (loading: boolean) => void;
   setConnectionAttempts: (attempts: number) => void;
   setShowReconnectButton: (show: boolean) => void;
-  reconnectTimeoutRef: RefObject<ReturnType<typeof setTimeout> | null>;
   previousConnectionStateRef: RefObject<boolean>;
   streamManagerRef: RefObject<TerminalStreamManager | null>;
   refs: TerminalSizingRefs;
@@ -227,7 +224,6 @@ export function useSessionConnectionBootstrap({
   setIsLoadingInitialContent,
   setConnectionAttempts,
   setShowReconnectButton,
-  reconnectTimeoutRef,
   previousConnectionStateRef,
   streamManagerRef,
   refs,
@@ -323,10 +319,6 @@ export function useSessionConnectionBootstrap({
     previousConnectionStateRef.current = false;
     setConnectionAttempts(0);
     setShowReconnectButton(false);
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
 
     // Reset stream manager for new session
     if (streamManagerRef.current) {

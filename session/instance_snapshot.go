@@ -25,6 +25,10 @@ package session
 //
 // Expected: goroutine blocking on (*deadlock.RWMutex).RLock should drop
 // proportionally to the reader-path traffic these callers generate.
+//
+// GitHub.PRs / HasPRLinks / LegacyPRUnrepresented (multi-PR tracking) are fields
+// of this authoritative list too: they are copied from Instance, and ToInstanceData
+// copies them back out so a full save never rebuilds them away.
 
 import (
 	"time"
@@ -62,6 +66,13 @@ type GitHubIntegration struct {
 	GitHubMergeable        string
 	GitHubPRStatusTerminal bool
 	LastPRStatusCheck      time.Time
+
+	// Multi-PR set. PRs is a private copy per snapshot (PRView holds only
+	// values); the scalars above mirror ActivePR(PRs) whenever PRs is non-empty.
+	// LegacyPRUnrepresented and HasPRLinks are carried, never derived here.
+	PRs                   []PRView
+	LegacyPRUnrepresented bool
+	HasPRLinks            bool
 }
 
 // AutonomousModeState groups all autonomous-mode fields within InstanceSnapshot
@@ -237,6 +248,9 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubMergeable:        i.GitHubMergeable,
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,
+			PRs:                    append([]PRView(nil), i.PRs...),
+			LegacyPRUnrepresented:  i.LegacyPRUnrepresented,
+			HasPRLinks:             i.HasPRLinks,
 		},
 		Checkpoints:                append(CheckpointList(nil), i.Checkpoints...),
 		ActiveCheckpoint:           i.ActiveCheckpoint,
@@ -264,6 +278,13 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		IsManaged:                  i.IsManaged,
 		Artifacts:                  i.Artifacts,
 		ContextHealth:              i.ContextHealth,
+	}
+
+	// With any link, the legacy scalars show the active PR (pure: no config read).
+	if m, ok := ProjectLegacyPRMirror(s.GitHub.PRs, s.Branch); ok {
+		s.GitHub.GitHubPRNumber = m.Number
+		s.GitHub.GitHubPRURL = m.URL
+		s.GitHub.GitHubPRStatusTerminal = m.Terminal
 	}
 
 	// Deep copy RateLimitAutoResume *bool

@@ -797,8 +797,8 @@ func TestClose_RestoredViewKeepsIDWhenKillFails(t *testing.T) {
 
 	require.Error(t, view.Close())
 	assert.Equal(t, "run-1", view.PersistedSessionID(), "a failed kill must not drop the persisted id")
-	_ = view.Close()
-	assert.Equal(t, 1, kills)
+	require.ErrorIs(t, view.Close(), ErrTymuxdUnreachable)
+	assert.Equal(t, 2, kills, "failed cleanup must remain retryable")
 }
 
 // Close clears the record-owned kill right, so a repeat Close never kills again

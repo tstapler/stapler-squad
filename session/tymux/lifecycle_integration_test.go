@@ -13,6 +13,7 @@ import (
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 	"github.com/tstapler/tymux/clients/go/gen/tymux/v1/tymuxv1connect"
+	"github.com/tstapler/tymux/clients/go/udsdialer"
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -25,9 +26,9 @@ func lifecycleDaemon(t *testing.T) (addr string, raw tymuxv1connect.TymuxService
 	bin := findTymuxdBinary(t)
 	envtest.NewIsolatedStateDir(t)
 	cfg, _, err := ensureDaemonOnFreshLoopbackPort(t, bin)
-	t.Cleanup(func() { _ = stopTymuxdFn() })
+	t.Cleanup(func() { _ = stopTymuxdFn(StopReason{Kind: StopManual}) })
 	require.NoError(t, err)
-	return cfg.Addr, newTymuxClient(newH2CClient(), cfg.Addr)
+	return cfg.Addr, newTymuxClient(udsdialer.DialTCPHTTPClient(), cfg.Addr)
 }
 
 func createStagedSession(t *testing.T, raw tymuxv1connect.TymuxServiceClient, dir string, req *v1.CreateSessionRequest) *v1.Session {

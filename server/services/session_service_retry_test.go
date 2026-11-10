@@ -83,6 +83,39 @@ func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_RetryA
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 }
 
+func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_SessionIsArchived(t *testing.T) {
+	t.Parallel()
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+	t.Cleanup(func() { svc.Shutdown() })
+
+	queue := session.NewReviewQueue()
+	statusMgr := session.NewInstanceStatusManager()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:   "retry-archived-test-session",
+		Path:    t.TempDir(),
+		Program: "true",
+	}))
+	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst)
+	require.True(t, inst.SetArchivedAtIfNil(time.Now()))
+
+	_, retryErr := svc.RetrySession(context.Background(), connect.NewRequest(&sessionv1.RetrySessionRequest{
+		Id: resp.Msg.Session.Id,
+	}))
+	var connectErr *connect.Error
+	require.ErrorAs(t, retryErr, &connectErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
+	assert.Contains(t, connectErr.Message(), "archived")
+}
+
 // TestSessionService_RetrySession_should_RestartImmediately_When_SessionIsPermanentlyFailed
 // covers the RPC's success path (AC6) — the three tests above only assert
 // error-mapping branches (empty ID, not-found, retry-already-in-flight), none

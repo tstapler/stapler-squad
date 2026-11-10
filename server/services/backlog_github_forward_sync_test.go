@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,11 @@ type fakeForwardSyncCloserPlugin struct {
 	closeErr       error
 	closeUpdatedAt time.Time
 	commentErr     error
+
+	// ReadIssueState response; state "" means open/unknown.
+	issueState     string
+	issueUpdatedAt time.Time
+	issueStateErr  error
 
 	mu           sync.Mutex
 	closeCalls   []fakeCloseCall
@@ -66,6 +72,10 @@ func (p *fakeForwardSyncCloserPlugin) PostIssueComment(_ context.Context, _ sess
 	defer p.mu.Unlock()
 	p.commentCalls = append(p.commentCalls, fakeCommentCall{externalID: externalID, body: body})
 	return p.commentErr
+}
+
+func (p *fakeForwardSyncCloserPlugin) ReadIssueState(_ context.Context, _ session.PluginConfig, _ string) (string, time.Time, error) {
+	return p.issueState, p.issueUpdatedAt, p.issueStateErr
 }
 
 func (p *fakeForwardSyncCloserPlugin) closeCallCount() int {
@@ -359,4 +369,164 @@ func TestForwardSyncSubscriber_RecordsFailureOnCloseError(t *testing.T) {
 	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
 	require.Nil(t, refreshed.GitHubSyncedIssueUpdatedAt)
+}
+
+// --- Sourceless (MCP/web-imported) items: ExternalURL only, no ItemSource ---
+
+const sourcelessIssueURL = "https://github.com/acme/widget/issues/42"
+
+func newSourcelessDeps(plugin externalIssueCloser, token string) sourcelessCloseDeps {
+	return sourcelessCloseDeps{plugin: plugin, tokenFor: func(string) string { return token }}
+}
+
+func createSourcelessDoneItem(t *testing.T, storage *session.Storage, prURL string) *session.BacklogItemData {
+	t.Helper()
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "imported", Status: string(session.BacklogStatusDone), ExternalURL: sourcelessIssueURL,
+	})
+	require.NoError(t, err)
+	if prURL != "" {
+		item, err = storage.UpdateBacklogItem(context.Background(), item.ID, session.BacklogItemUpdate{PrURL: &prURL}, nil)
+		require.NoError(t, err)
+	}
+	return item
+}
+
+func runSourcelessClose(t *testing.T, fake *fakeForwardSyncCloserPlugin, token, prURL string) (*session.Storage, *session.BacklogItemData) {
+	t.Helper()
+	storage := newForwardSyncTestStorage(t)
+	item := createSourcelessDoneItem(t, storage, prURL)
+	registry := session.NewPluginRegistry()
+	handleForwardSyncCloseWith(context.Background(), registry, session.NewSyncLoop(storage, registry), storage, item, newSourcelessDeps(fake, token))
+	return storage, item
+}
+
+func TestForwardSyncClose_SourcelessItem_ClosesIssueAndCommentsWithPR(t *testing.T) {
+	t.Parallel()
+	stamp := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "x", closeUpdatedAt: stamp}
+
+	storage, item := runSourcelessClose(t, fake, "tok", "https://github.com/acme/widget/pull/99")
+
+	require.Equal(t, 1, fake.closeCallCount())
+	require.Equal(t, "42", fake.lastCloseCall().externalID)
+	require.Empty(t, fake.lastCloseCall().closeLabel)
+	require.Equal(t, 1, fake.commentCallCount())
+	require.Contains(t, fake.commentCalls[0].body, "Closed automatically")
+	require.Contains(t, fake.commentCalls[0].body, "Implemented in: https://github.com/acme/widget/pull/99.")
+	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, refreshed.GitHubSyncedIssueUpdatedAt)
+	require.True(t, refreshed.GitHubSyncedIssueUpdatedAt.Equal(stamp))
+}
+
+func TestForwardSyncClose_AlreadyClosedIssue_SkipsCloseAndCommentAndAdvancesWatermark(t *testing.T) {
+	t.Parallel()
+	stamp := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "x", issueState: "closed", issueUpdatedAt: stamp}
+
+	storage, item := runSourcelessClose(t, fake, "tok", "")
+
+	require.Zero(t, fake.closeCallCount(), "CloseIssue must not be called for an already-closed issue")
+	require.Zero(t, fake.commentCallCount(), "PostIssueComment must not be called for an already-closed issue")
+	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.NotNil(t, refreshed.GitHubSyncedIssueUpdatedAt)
+	require.True(t, refreshed.GitHubSyncedIssueUpdatedAt.Equal(stamp), "watermark must come from the GET's updated_at")
+}
+
+func TestForwardSyncClose_AlreadyClosedIssue_SourceLinkedItemAlsoSkips(t *testing.T) {
+	t.Parallel()
+	storage := newForwardSyncTestStorage(t)
+	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", true, "")
+	item := createForwardSyncTestItem(t, storage, sourceID, "42", nil)
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "fake_closer", issueState: "closed", issueUpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	registry := session.NewPluginRegistry()
+	registry.Register(fake)
+
+	handleForwardSyncClose(context.Background(), registry, session.NewSyncLoop(storage, registry), storage, item)
+
+	require.Zero(t, fake.closeCallCount())
+	require.Zero(t, fake.commentCallCount())
+}
+
+func TestForwardSyncClose_StateReadError_StillCloses(t *testing.T) {
+	t.Parallel()
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "x", issueStateErr: fmt.Errorf("boom")}
+
+	runSourcelessClose(t, fake, "tok", "")
+
+	require.Equal(t, 1, fake.closeCallCount())
+	require.Equal(t, 1, fake.commentCallCount())
+}
+
+func TestForwardSyncClose_SourcelessItem_TokenMissSkips(t *testing.T) {
+	t.Parallel()
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "x"}
+
+	storage, item := runSourcelessClose(t, fake, "", "")
+
+	require.Zero(t, fake.closeCallCount())
+	require.Zero(t, fake.commentCallCount())
+	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusDone), refreshed.Status)
+}
+
+func TestForwardSyncClose_SourcelessItem_CloseFailureLeavesItemDone(t *testing.T) {
+	t.Parallel()
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "x", closeErr: fmt.Errorf("401 bad credentials")}
+
+	storage, item := runSourcelessClose(t, fake, "tok", "")
+
+	require.Equal(t, 1, fake.closeCallCount())
+	require.Zero(t, fake.commentCallCount())
+	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusDone), refreshed.Status)
+	require.Nil(t, refreshed.GitHubSyncedIssueUpdatedAt, "watermark must not advance on a failed close")
+}
+
+func TestForwardSyncClose_SourcelessItem_NonIssueURLsSkip(t *testing.T) {
+	t.Parallel()
+	for name, url := range map[string]string{
+		"none":       "",
+		"pull":       "https://github.com/acme/widget/pull/7",
+		"not github": "https://example.com/acme/widget/issues/7",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			storage := newForwardSyncTestStorage(t)
+			item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "t", Status: string(session.BacklogStatusDone), ExternalURL: url})
+			require.NoError(t, err)
+			fake := &fakeForwardSyncCloserPlugin{pluginID: "x"}
+			registry := session.NewPluginRegistry()
+			handleForwardSyncCloseWith(context.Background(), registry, session.NewSyncLoop(storage, registry), storage, item, newSourcelessDeps(fake, "tok"))
+			require.Zero(t, fake.closeCallCount())
+		})
+	}
+}
+
+func TestForwardSyncCloseCommentWithPR(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, forwardSyncCloseComment, forwardSyncCloseCommentWithPR("", ""))
+	got := forwardSyncCloseCommentWithPR("host-abc", "https://github.com/acme/widget/pull/99")
+	require.Contains(t, got, "`host-abc`")
+	require.True(t, strings.HasSuffix(got, "Implemented in: https://github.com/acme/widget/pull/99."))
+}
+
+func TestForwardSyncClose_SourceLinkedItemWithoutExternalID_NeverTakesSourcelessPath(t *testing.T) {
+	t.Parallel()
+	storage := newForwardSyncTestStorage(t)
+	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", false, "")
+	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		Title: "t", Status: string(session.BacklogStatusDone), SourceID: sourceID, ExternalURL: sourcelessIssueURL,
+	})
+	require.NoError(t, err)
+	fake := &fakeForwardSyncCloserPlugin{pluginID: "x"}
+	registry := session.NewPluginRegistry()
+
+	handleForwardSyncCloseWith(context.Background(), registry, session.NewSyncLoop(storage, registry), storage, item, newSourcelessDeps(fake, "tok"))
+
+	require.Zero(t, fake.closeCallCount())
 }

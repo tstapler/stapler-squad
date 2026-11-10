@@ -1,15 +1,25 @@
 {
   "totalJsBytes": {
-    "limit": 6349052,
-    "source": "Cap from the Next production build (plan Story 5.9, decision D7). Measured on the Bun 1.4.3 minified build 2026-10-21: 5,680,778 B. Relaxation of the old 5 MB size-limit gate, default pending owner confirmation."
+    "limit": 8000000,
+    "source": "Tripwire only, not the gate (growth vs main is, see growthToleranceBytes). Measured 6,352,583 B on the Bun minified build 2026-11-08 (main e25960f83); x 1.26 so a runaway still fails while main drift never blocks a PR. Replaces the 5 MB size-limit cap (plan Story 5.9, D7)."
   },
   "initialJsBytes": {
-    "limit": 1568892,
-    "source": "Measured on the Bun 1.4.3 minified build 2026-10-21: 1,494,183 B, x 1.05. AMBER: the Next per-route first-load comparison (Task 0.4d) was never measured, so the x 1.10 cross-check is open."
+    "limit": 1600000,
+    "source": "Absolute ceiling on what blocks first paint. Measured 1,394,644 B on the Bun minified build 2026-11-08 (main e25960f83); x 1.15. The tight check is the growth gate (<= 1 KB vs main)."
   },
   "largestChunkBytes": {
-    "limit": 1568892,
-    "source": "Measured on the Bun 1.4.3 minified build 2026-10-21: 1,494,183 B (the entry chunk), x 1.05."
+    "limit": 1600000,
+    "source": "Absolute per-file ceiling for any chunk; the largest file is the entry (1,394,644 B on 2026-11-08), x 1.15. The tight check is the growth gate."
+  },
+  "lazyChunkBytes": {
+    "limit": 1000000,
+    "source": "Absolute per-file ceiling for any chunk outside the initial closure. Largest is ghostty-web at 637,938 B on 2026-11-08 (embedded WASM); a lazy chunk past 1 MB should be split further."
+  },
+  "growthToleranceBytes": {
+    "jsBytes": 10240,
+    "initialJsBytes": 1024,
+    "largestChunkBytes": 1024,
+    "largestLazyChunkBytes": 4096
   },
   "maxWallMs": {
     "limit": 90000,

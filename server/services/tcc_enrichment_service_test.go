@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -104,4 +106,95 @@ func TestTCCEnrichmentRPC_Disabled(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, status.Msg.Enabled)
 	require.Empty(t, status.Msg.Roots)
+}
+
+type tccDenialFixture struct {
+	gate  *tcc.ConsentGate
+	e     *session.WorktreeEnricher
+	svc   *SessionService
+	clock *atomic.Int64
+	err   atomic.Value // holds a boxed error returned by the probe
+	probe chan struct{}
+}
+
+type boxedErr struct{ err error }
+
+func newTCCDenialFixture(t *testing.T, probeErr error) *tccDenialFixture {
+	t.Helper()
+	f := &tccDenialFixture{clock: &atomic.Int64{}, probe: make(chan struct{}, 8)}
+	f.err.Store(boxedErr{probeErr})
+	base := time.Unix(1_700_000_000, 0)
+	f.gate = tcc.NewConsentGate(func(string) tcc.Result {
+		return tcc.Result{Protected: true, Root: "/protected", Service: tcc.FilesAndFolders}
+	}, nil, nil)
+	f.e = session.NewWorktreeEnricher(session.WorktreeEnricherConfig{
+		Ready:     f.gate.Ready,
+		ResultTTL: time.Minute,
+		Now:       func() time.Time { return base.Add(time.Duration(f.clock.Load())) },
+		OnResult:  f.gate.ObserveResult,
+		Probe: func(string) (*session.WorktreeInfo, error) {
+			defer func() { f.probe <- struct{}{} }()
+			if err := f.err.Load().(boxedErr).err; err != nil {
+				return nil, err
+			}
+			return &session.WorktreeInfo{}, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	f.e.Start(ctx)
+	t.Cleanup(func() { cancel(); f.e.Stop() })
+	f.svc = &SessionService{}
+	f.svc.SetTCCEnrichment(f.gate, f.e, true)
+	f.e.Request("/protected/repo")
+	require.Eventually(t, func() bool { return len(f.gate.Roots()) == 1 }, time.Second, time.Millisecond)
+	_, err := f.gate.Continue(f.gate.Roots()[0].ID)
+	require.NoError(t, err)
+	f.e.Unpark("/protected/repo")
+	f.waitProbe(t)
+	return f
+}
+
+func (f *tccDenialFixture) waitProbe(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.probe:
+	case <-time.After(time.Second):
+		t.Fatal("probe did not run")
+	}
+}
+
+func (f *tccDenialFixture) root(t *testing.T) *sessionv1.TCCEnrichmentRoot {
+	t.Helper()
+	status, err := f.svc.GetTCCEnrichmentStatus(context.Background(), connect.NewRequest(&sessionv1.GetTCCEnrichmentStatusRequest{}))
+	require.NoError(t, err)
+	require.Len(t, status.Msg.Roots, 1)
+	return status.Msg.Roots[0]
+}
+
+func TestTCCEnrichmentRPC_EPERMIsStickyDeniedAndRecheckClearsIt(t *testing.T) {
+	t.Parallel()
+	f := newTCCDenialFixture(t, fmt.Errorf("open: %w", syscall.EPERM))
+	require.Eventually(t, func() bool { return f.root(t).Outcome == "denied" }, time.Second, time.Millisecond)
+	require.Equal(t, tcc.SettingsURLFilesAndFolders, f.root(t).SettingsUrl)
+
+	f.clock.Add(int64(10 * time.Minute)) // result TTL (1m) expires; denial must not flap
+	require.Equal(t, "denied", f.root(t).Outcome)
+
+	f.err.Store(boxedErr{nil}) // user granted access
+	cfg := verdictServiceConfig("localhost:8543", nil)
+	ctx := stampedContext(t, &cfg, ListenerLocal, false, "localhost:8543", nil)
+	_, err := f.svc.ContinueTCCEnrichment(ctx, connect.NewRequest(&sessionv1.ContinueTCCEnrichmentRequest{RootId: f.root(t).Id}))
+	require.NoError(t, err)
+	f.waitProbe(t)
+	require.Eventually(t, func() bool {
+		r := f.root(t)
+		return r.Outcome == "completed" && r.SettingsUrl == ""
+	}, time.Second, time.Millisecond)
+}
+
+func TestTCCEnrichmentRPC_EACCESIsOrdinaryErrorNotDenied(t *testing.T) {
+	t.Parallel()
+	f := newTCCDenialFixture(t, fmt.Errorf("open: %w", syscall.EACCES))
+	require.Eventually(t, func() bool { return f.root(t).Outcome == "error" }, time.Second, time.Millisecond)
+	require.Empty(t, f.root(t).SettingsUrl)
 }

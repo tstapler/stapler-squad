@@ -229,23 +229,3 @@ func StartContinuousProfiling(appName, serverAddr string) (func(), error) {
 	}
 	return func() { _ = profiler.Stop() }, nil
 }
-
-// MonitorGoroutines periodically logs goroutine counts
-func MonitorGoroutines(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			count := runtime.NumGoroutine()
-
-			// Alert on goroutine leak
-			if count > 100 {
-				log.Error("high goroutine count detected", "count", count)
-			}
-		}
-	}
-}

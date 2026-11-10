@@ -15,7 +15,7 @@
 import { test, expect, APIRequestContext } from "@playwright/test";
 import { BacklogPage } from "./pages/BacklogPage";
 import { BacklogItemDetailPage } from "./pages/BacklogItemDetailPage";
-import { createBacklogItemDirect, enableBacklogFeatureFlag } from "./pages/BacklogMutations";
+import { deleteBacklogItemsByTitlePrefix, createBacklogItemDirect, enableBacklogFeatureFlag } from "./pages/BacklogMutations";
 import { baseUrl } from './helpers/base-url';
 
 const BASE_URL = baseUrl();
@@ -47,6 +47,10 @@ test.describe("backlog manual override", () => {
       localStorage.setItem("stapler-squad:backlog-onboarded", "true");
       localStorage.setItem("stapler-squad:onboarded", "true");
     });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await deleteBacklogItemsByTitlePrefix(request, ["e2e manual override"]);
   });
 
   test("operator can force a valid status transition with a required reason", async ({ page, request }) => {
@@ -159,8 +163,8 @@ test.describe("backlog manual override", () => {
     // SetBacklogItemPRAndTransition moves review -> pr_pending atomically
     // with the PR fields — both must be visible together.
     await expect(page.getByTestId("stage-modifier-badge")).toHaveText("PR pending");
-    await expect(
-      page.getByRole("link", { name: "https://github.com/tstapler/stapler-squad/pull/320" })
-    ).toBeVisible();
+    await expect(page.getByTestId("toast").getByText("PR #320 linked — item moved to pr_pending.")).toBeVisible();
+    const prLink = page.getByRole("link", { name: "View GitHub Pull Request #320" });
+    await expect(prLink).toHaveAttribute("href", "https://github.com/tstapler/stapler-squad/pull/320");
   });
 });

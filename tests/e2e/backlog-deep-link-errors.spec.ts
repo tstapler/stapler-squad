@@ -61,7 +61,7 @@ test.describe('Backlog deep-link resolution errors', () => {
     ]);
     await page.goto(resolvePageUrl(REMOTE_ITEM_URL), { waitUntil: 'domcontentloaded' });
 
-    const banner = page.getByRole('status');
+    const banner = page.getByTestId('deep-link-error-banner');
     await expect(banner).toContainText(OTHER_HOST);
     await expect(banner).toContainText('Last seen');
 
@@ -78,7 +78,7 @@ test.describe('Backlog deep-link resolution errors', () => {
     await mockDeepLinkResolve(page, [{ kind: 'unreachable', reason: 'not-registered' }]);
     await page.goto(resolvePageUrl(REMOTE_ITEM_URL), { waitUntil: 'domcontentloaded' });
 
-    const banner = page.getByRole('status');
+    const banner = page.getByTestId('deep-link-error-banner');
     await expect(banner).toContainText(OTHER_HOST);
     await expect(page.getByRole('button', { name: 'Copy host address' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();

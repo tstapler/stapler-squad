@@ -28,10 +28,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/tcc"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -53,15 +55,19 @@ const (
 type ServerDependencies struct {
 	// WakeMetrics is shared by the wake service's expiry sweep and the dispatcher
 	// so both feed one wake_trigger_total mirror; set at registration.
-	WakeMetrics             *wakes.Metrics
-	SessionService          *services.SessionService
-	Storage                 *session.Storage
-	Instances               []*session.Instance
-	EventBus                *events.EventBus
-	StatusManager           *session.InstanceStatusManager
-	ReviewQueue             *session.ReviewQueue
-	ReviewQueuePoller       *session.ReviewQueuePoller
-	PRStatusPoller          *session.PRStatusPoller
+	WakeMetrics       *wakes.Metrics
+	SessionService    *services.SessionService
+	Storage           *session.Storage
+	Instances         []*session.Instance
+	EventBus          *events.EventBus
+	StatusManager     *session.InstanceStatusManager
+	ReviewQueue       *session.ReviewQueue
+	ReviewQueuePoller *session.ReviewQueuePoller
+	PRStatusPoller    *session.PRStatusPoller
+
+	// StopPRMaintenance stops the PR startup-maintenance retry ticker (see
+	// BuildOptions.RunPRMaintenance); nil when maintenance did not run.
+	StopPRMaintenance       func()
 	ReactiveQueueMgr        *ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
@@ -109,6 +115,9 @@ type ServerDependencies struct {
 	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
+	// BacklogFlowService is the single flow-observability service; the RPC handler and
+	// the HTTP MCP core both use it so they share one aggregator cache.
+	BacklogFlowService *services.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -215,6 +224,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		ReviewQueue:                    rt.ReviewQueue,
 		ReviewQueuePoller:              rt.ReviewQueuePoller,
 		PRStatusPoller:                 rt.PRStatusPoller,
+		StopPRMaintenance:              rt.StopPRMaintenance,
 		ReactiveQueueMgr:               rt.ReactiveQueueMgr,
 		ScrollbackManager:              rt.ScrollbackManager,
 		TmuxStreamerManager:            rt.TmuxStreamerManager,
@@ -234,6 +244,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		GitHubUserService:              rt.GitHubUserService,
 		InsightsService:                rt.InsightsService,
 		BacklogService:                 rt.BacklogService,
+		BacklogFlowService:             rt.BacklogFlowService,
 		QuotaGate:                      rt.QuotaGate,
 		SyncLoop:                       rt.SyncLoop,
 		WorkflowEngine:                 rt.WorkflowEngine,
@@ -272,7 +283,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 
 	// Phase 1 (core): SessionService, Storage, EventBus, ReviewQueue, ApprovalStore
 	// was: step 1 - SessionService + getter calls
-	core, err := BuildCoreDeps()
+	core, err := BuildCoreDepsWithOptions(BuildOptions{RunPRMaintenance: true})
 	if err != nil {
 		return nil, fmt.Errorf("phase 1 (core): %w", err)
 	}
@@ -398,6 +409,10 @@ type CoreDeps struct {
 	ReviewQueue    *session.ReviewQueue
 	ApprovalStore  *services.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
+
+	// StopPRMaintenance stops the PR startup-maintenance retry ticker and waits for
+	// its goroutine; nil unless BuildOptions.RunPRMaintenance was set.
+	StopPRMaintenance func()
 }
 
 // BuildOptions carries optional overrides for BuildCoreDepsWithOptions.
@@ -406,6 +421,19 @@ type BuildOptions struct {
 	// EntClient supplies a pre-opened *ent.Client, bypassing config-based DB path
 	// discovery and schema migration. nil = open from config as usual.
 	EntClient *ent.Client
+
+	// RunPRMaintenance runs session.Storage.RunPRStartupMaintenance right after
+	// Storage exists and before any poller, sweeper or ticker is built. Only the
+	// service bootstrap sets it: the stdio MCP fallback (buildMCPDeps) and hook/CLI
+	// processes must not import links or reset verification counters.
+	RunPRMaintenance bool
+
+	// PRMaintenanceRunner replaces the real maintenance call in tests (a recording
+	// fake); nil means storage.RunPRStartupMaintenance.
+	PRMaintenanceRunner func(context.Context, *session.Storage) error
+	// Context bounds PR startup maintenance (its boot retries and retry ticker), so
+	// a SIGTERM during boot stops it. Nil means context.Background().
+	Context context.Context
 }
 
 // BuildCoreDepsWithOptions constructs Phase 1 dependencies with optional overrides.
@@ -423,6 +451,13 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 	}
 
 	storage := sessionService.GetStorage()
+
+	var stopPRMaintenance func()
+	if opts.RunPRMaintenance {
+		if stopPRMaintenance, err = runPRMaintenance(opts, storage); err != nil {
+			return nil, err
+		}
+	}
 
 	// Wire the ErrorRegistry using the existing ent client from Storage.
 	// GetEntClient returns nil when storage is not ent-backed (e.g. in tests),
@@ -442,7 +477,28 @@ func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
 		ReviewQueue:    sessionService.GetReviewQueueInstance(),
 		ApprovalStore:  sessionService.GetApprovalStore(),
 		ErrorRegistry:  errorRegistry,
+
+		StopPRMaintenance: stopPRMaintenance,
 	}, nil
+}
+
+// runPRMaintenance runs the PR startup maintenance for the service bootstrap.
+// Maintenance never fails the boot, so an error here means only that a test
+// runner returned one. The retry ticker, if any, is owned by storage and stopped
+// through the returned function.
+func runPRMaintenance(opts BuildOptions, storage *session.Storage) (func(), error) {
+	run := opts.PRMaintenanceRunner
+	if run == nil {
+		run = func(ctx context.Context, st *session.Storage) error { return st.RunPRStartupMaintenance(ctx) }
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := run(ctx, storage); err != nil {
+		return nil, fmt.Errorf("pr startup maintenance: %w", err)
+	}
+	return storage.StopPRMaintenance, nil
 }
 
 // BuildCoreDeps constructs Phase 1 dependencies using config defaults.
@@ -489,6 +545,13 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
 	warren.Set(w, "StatusManager", core.SessionService.SetStatusManager, statusManager)
 	warren.Set(w, "ReviewQueuePoller", core.SessionService.SetReviewQueuePoller, reviewQueuePoller)
+	// The session header's Refresh awaits one poll of a single PR row. There is no
+	// user_refresh observation source yet, so it uses reconciler_refresh.
+	// A successful fetch resolves an unverified-terminal row and resets
+	// poll_fail_count; a counted failure leaves it unverified and increments it.
+	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref session.PRRef) error {
+		return prStatusPoller.Refresh(ctx, ref, session.PRSourceReconcilerRefresh)
+	})
 	if err := w.Validate(); err != nil {
 		return nil, err
 	}
@@ -546,6 +609,9 @@ type RuntimeDeps struct {
 	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
+	// BacklogFlowService is the single flow-observability service; the RPC handler and
+	// the HTTP MCP core both use it so they share one aggregator cache.
+	BacklogFlowService *services.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -728,12 +794,31 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		})
 	})
 	enricherConfig := session.WorktreeEnricherConfig{}
-	if cfg.TCCEnrichmentConsentEnabled() {
+	// Isolated test/e2e instances never hit real protected roots: gate is not_needed.
+	tccGateEnabled := cfg.TCCEnrichmentConsentEnabled() && !config.IsIsolatedInstance()
+	if cfg.TCCEnrichmentConsentEnabled() && !tccGateEnabled {
+		log.Info("TCC enrichment consent gate off: isolated/test instance")
+	}
+	gate.SetDeniedStore(cfg.TCCEnrichmentDenied, func(id string, denied bool) error {
+		return config.UpdateConfig(func(c *config.Config) error {
+			if c.TCCEnrichmentDenied == nil {
+				c.TCCEnrichmentDenied = map[string]bool{}
+			}
+			if denied {
+				c.TCCEnrichmentDenied[id] = true
+			} else {
+				delete(c.TCCEnrichmentDenied, id)
+			}
+			return nil
+		})
+	})
+	enricherConfig.OnResult = gate.ObserveResult
+	if tccGateEnabled {
 		enricherConfig.Ready = gate.Ready
 		enricherConfig.Probe = session.ConsentEnrichmentProbe(gate)
 	}
 	enricher := installWorktreeEnricher(context.Background(), enricherConfig)
-	sessionService.SetTCCEnrichment(gate, enricher, cfg.TCCEnrichmentConsentEnabled())
+	sessionService.SetTCCEnrichment(gate, enricher, tccGateEnabled)
 
 	// Step 5: load instances from storage
 	instances, err := storage.LoadInstances()
@@ -1033,23 +1118,23 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Stagger starts by 200ms each to avoid a fork burst that saturates the
 		// cgroup pids.max limit when many sessions restore simultaneously.
 		for i, inst := range instances {
-			// Archived sessions are deliberately retired: never auto-start one
-			// (ADR-001, superseded-rework-session-retirement).
-			if inst == nil || inst.IsArchived() {
+			if !shouldBootStart(inst) {
 				continue
 			}
-			if !inst.Started() && !deferToReconcile(inst) {
-				if i > 0 {
-					time.Sleep(200 * time.Millisecond)
+			if i > 0 {
+				time.Sleep(200 * time.Millisecond)
+				// A client's lazy restore (or an archive) may have landed during the stagger.
+				if !shouldBootStart(inst) {
+					continue
 				}
-				if err := inst.Start(false); err != nil {
-					log.Error("failed to start loaded instance", "session", inst.Title, "err", err)
-				} else {
-					log.Info("started loaded instance", "session", inst.Title)
-					// Lets waitForInstanceStartedEvent (connectrpc_websocket.go) unblock a
-					// connection that raced this loop's stagger, instead of only polling.
-					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
-				}
+			}
+			if err := inst.Start(false); err != nil {
+				log.Error("failed to start loaded instance", "session", inst.Title, "err", err)
+			} else {
+				log.Info("started loaded instance", "session", inst.Title)
+				// Lets waitForInstanceStartedEvent (connectrpc_websocket.go) unblock a
+				// connection that raced this loop's stagger, instead of only polling.
+				eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 			}
 		}
 
@@ -1072,15 +1157,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			if inst == nil || inst.IsArchived() {
 				continue
 			}
-			if hotRestoreEligible(inst, inst.IsLiveOrStoredSessionLive) {
-				log.Info("Reconcile: session is terminal in DB but tmux is alive — restoring", "session", inst.Title, "status", inst.GetLifecycleStatus())
-				inst.RecoverFromStopped()
-				if err := inst.Start(false); err != nil {
-					log.Warn("Reconcile: hot-restore failed", "session", inst.Title, "err", err)
-				} else {
-					log.Info("Reconcile: restored session (was terminal, now Running)", "session", inst.Title)
-					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
-				}
+			title, status := inst.Title, inst.GetLifecycleStatus()
+			outcome, err := session.HotRestoreIfLive(inst, inst.IsLiveOrStoredSessionLive)
+			switch {
+			case err != nil:
+				log.Warn("Reconcile: hot-restore failed", "session", title, "err", err)
+			case outcome == session.HotRestoreCleared:
+				log.Info("Reconcile: restored session (was terminal, now Running)", "session", title, "was", status)
+				eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 			}
 		}
 
@@ -1591,6 +1675,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
+	// One flow reader, aggregator and service for both the RPC handler and the HTTP MCP core.
+	backlogFlowSvc := services.NewFlowServiceFromStorage(storage, flow.WithObserver(services.NewFlowObserver()))
+	backlogFlowSvc.SetEnabledCheck(backlogCtrl.IsEnabled)
 	if gateErr := workflowEngine.InjectTransitionGate(storage, backlogSvc.TransitionDeniedReporter()); gateErr != nil {
 		return nil, gateErr
 	}
@@ -1714,6 +1801,18 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// runs inline, instead of relying solely on the 60s
 	// reconcileTerminalItemSessions safety-net sweep.
 	backlogLifecycleListener.SetWorktreeCleaner(backlogSvc)
+	// One live-work probe for the lifecycle listener (merge hold), BacklogService
+	// (RULE L) and the cleanup gate; a missed site would silently revert to
+	// kill-at-done, so the wiring is asserted and exported as a gauge.
+	if probeErr := wireLiveWorkProbe(backlogLifecycleListener, backlogSvc, sessionService, storage); probeErr != nil {
+		return nil, probeErr
+	}
+	backlogLifecycleListener.SetPRRowRefresher(svc.PRStatusPoller)
+	sessionService.SetItemCleaner(backlogSvc)
+	// Prompt cleanup when a done/archived item's last PR goes terminal (bounded worker;
+	// the 60s reconcileTerminalItemWorktrees sweep remains the backstop).
+	svc.PRStatusPoller.SetPRTerminalListener(backlogLifecycleListener)
+	svc.PRStatusPoller.SetOnPRUnknown(newPRUnknownNotifier(storage, &services.EventBusNotifier{Bus: eventBus}))
 	// Wire the agent-driven ship runner (shipViaAgentOrFallback,
 	// session/backlog_lifecycle.go) so a PASS verdict whose work session has
 	// already exited ships via a headless one-shot /backlog/ship run (CI
@@ -1848,7 +1947,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Wire ArtifactExtractor to extract PR links, commits, and URLs from JSONL history.
 		// Uses historyLinker.Instances() for live instance snapshots so sessions created
 		// after startup are included in lookupTitle and OnScanComplete.
-		artifactOpts := []artifacts.Option{artifacts.WithQueueConfig(scanqueue.BackfillConfig(artifactBackfillDelay))}
+		artifactOpts := []artifacts.Option{
+			artifacts.WithQueueConfig(scanqueue.BackfillConfig(artifactBackfillDelay)),
+			artifacts.WithScanV2Flag(func() bool { return config.LoadConfig().ArtifactScanV2Enabled() }),
+		}
 		if entClient := storage.GetEntClient(); entClient != nil {
 			artifactOpts = append(artifactOpts, artifacts.WithStateStore(scanstate.NewStore(entClient).Consumer("artifacts")))
 		}
@@ -1864,31 +1966,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			},
 			artifactOpts...,
 		)
+		artifactIndex := search.NewArtifactIndex(storage)
+		attachScan := artifactScanCompleteHandler(historyLinker.Instances, eventBus)
+		indexScan := indexScannedArtifacts(historyLinker.Instances, artifactIndex)
 		artifactExtractor.OnScanComplete = func(title string, blob *artifacts.SessionArtifactsBlob) {
-			// Take a snapshot to avoid a data race with concurrent AddInstance calls (M-5 fix).
-			snapshot := historyLinker.Instances()
-			for _, inst := range snapshot {
-				if inst.Title == title {
-					inst.SetArtifacts(blob)
-					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"artifacts"}))
-					// Feed discovered PR URLs to the PR status poller if not already set.
-					if !inst.HasGitHubPR() {
-						for _, prURL := range blob.PRURLs {
-							if ref, err := session.ParseGitHubURL(prURL); err == nil && ref.PRNumber > 0 {
-								if err := storage.UpdateInstancePRNumber(inst.Title, ref.PRNumber); err != nil {
-									log.Warn("ArtifactExtractor: failed to update PR number", "session", inst.Title, "err", err)
-								} else {
-									// Update in-memory state so HasGitHubPR() reflects the change (M-3 fix).
-									inst.SetGitHubPRNumber(ref.PRNumber)
-								}
-								break
-							}
-						}
-					}
-					break
-				}
-			}
+			attachScan(title, blob)
+			indexScan(title, blob)
 		}
+		sessionService.SetArtifactIndex(artifactIndex)
+		buildArtifactIndexInBackground(historyLinker.Instances, artifactIndex, listenerUp.ch)
+		sessionService.SetArtifactRescanner(artifactExtractor)
 		historyLinker.RegisterFileCallback(artifactExtractor.OnHistoryFileChanged)
 		artifactExtractor.SeedOffsets(session.InstanceInfoSlice(historyLinker.Instances()))
 		artifactExtractor.Start(context.Background(), historyDir)
@@ -2082,6 +2169,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		GitHubUserService:              githubUserSvc,
 		InsightsService:                insightsSvc,
 		BacklogService:                 backlogSvc,
+		BacklogFlowService:             backlogFlowSvc,
 		QuotaGate:                      quotaGate,
 		SyncLoop:                       nil, // managed by BacklogController
 		WorkflowEngine:                 workflowEngine,
@@ -2192,14 +2280,16 @@ func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherCo
 	return e
 }
 
-// hotRestoreEligible probes persisted backend identity before a pane is attached.
-func hotRestoreEligible(inst *session.Instance, isLive func() bool) bool {
-	return inst != nil && !inst.IsArchived() && inst.IsHotRestoreRecoverable() && isLive()
-}
-
 // deferToReconcile reports whether Step 6 must leave inst for Step 6b.
 // Start(false) cannot take PermanentlyFailed/Failed -> Active, and its failure
 // cleanup kills the session's live tmux/tymux session before 6b can adopt it.
+// shouldBootStart reports whether the boot loop should Start(false) inst. Archived sessions are
+// deliberately retired and never auto-started (ADR-001, superseded-rework-session-retirement).
+// Re-evaluated after the boot stagger sleep because the answer can change while it sleeps.
+func shouldBootStart(inst *session.Instance) bool {
+	return inst != nil && !inst.IsArchived() && !inst.Started() && !deferToReconcile(inst)
+}
+
 func deferToReconcile(inst *session.Instance) bool {
 	switch inst.GetLifecycleStatus() {
 	case session.PermanentlyFailed, session.Failed:

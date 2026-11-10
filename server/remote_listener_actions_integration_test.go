@@ -240,3 +240,17 @@ func TestRemoteChain_ShouldRefuseTierBAgain_WhenRetriedWithSameIdempotencyKey(t 
 	}
 	assert.Zero(t, e.pane.sends.Load())
 }
+
+func TestRemoteChain_ShouldReturn401WithZeroPaneWrites_WhenTierBEnabledButUnauthenticated(t *testing.T) {
+	e := newRemoteActionEnv(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlagScope("notification_inline_actions", "channel:remote:tierB", true))
+	req := actionReq(sessionv1.ActionKind_ACTION_KIND_ANSWER_QUESTION, "k1", &sessionv1.NotificationActionParams{Answer: "Redis"})
+	req.TargetKey = "q1"
+
+	code, _ := e.post(t, e.remote, remoteHost, false, req)
+
+	assert.Equal(t, http.StatusUnauthorized, code)
+	assert.Zero(t, e.pane.sends.Load(), "no pane write")
+	_, stillPending := e.svc.PendingQuestions().Peek(e.qkey)
+	assert.True(t, stillPending)
+}

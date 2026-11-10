@@ -29,7 +29,7 @@ describe("TerminalStreamManager (AC7 full-resync integration) on ghostty-web", (
     expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe("STALE LINE ONE");
 
     manager.write(clearAndHome + "FRESH LINE ONE\r\nFRESH LINE TWO\r\n");
-    await new Promise((r) => setTimeout(r, 20));
+    await manager.enqueueWrite("\x1b[0m"); // FIFO barrier: resolves after every earlier write landed
 
     expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe("FRESH LINE ONE");
     expect(term.buffer.active.getLine(1)?.translateToString(true)).toBe("FRESH LINE TWO");

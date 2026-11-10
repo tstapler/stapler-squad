@@ -753,6 +753,11 @@ func (s *SessionService) RetrySession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Retry revives the session, so an archived (deliberately retired) one must be unarchived first.
+	if instance.IsArchived() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session %s is archived; unarchive it before retrying", req.Msg.Id))
+	}
+
 	if err := instance.RetryNow(instance.GetEffectiveRootDir()); err != nil {
 		if errors.Is(err, session.ErrRetryInFlight) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
@@ -761,11 +766,13 @@ func (s *SessionService) RetrySession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retry session: %w", err))
 	}
 
+	// Publish before saving: the retry already took effect in memory, so watchers (e.g. a
+	// read-only terminal stream waiting for Active) must hear it even if persistence fails.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at", "retry_attempt"}))
+
 	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save retried instance: %w", err))
 	}
-
-	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at", "retry_attempt"}))
 
 	message := fmt.Sprintf("Session '%s' retry started", instance.Title)
 	log.Info(message)
@@ -960,6 +967,8 @@ func (s *SessionService) UnarchiveSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 	inst.SetArchivedAt(nil)
+	// Tell watchers (terminal streams that attached read-only while archived) before saving.
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"archived_at"}))
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}

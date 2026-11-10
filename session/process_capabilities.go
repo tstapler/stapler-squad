@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -49,6 +50,27 @@ type ContextCapturer interface {
 // region and cursor intact. Backends without it (tmux) leave Instance on its text-capture paint.
 type RedrawCapturer interface {
 	CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error)
+}
+
+// PaneActivityHinter lets a backend tell its supervising daemon how latency-sensitive the pane
+// is (tymuxd's SetPaneActivity). Backends without it (tmux) simply never get hints.
+type PaneActivityHinter interface {
+	SetPaneActivity(ctx context.Context, activity qos.Activity) error
+}
+
+// InStreamResyncer repairs every raw-output subscriber's stream by sequence number: a capture is
+// spliced into the stream as a redraw followed by exactly the output after it. Only backends
+// whose output carries sequence numbers (tymux, against a daemon that reports them) have it.
+type InStreamResyncer interface {
+	SupportsInStreamResync() bool
+	ResyncInStream(ctx context.Context) error
+}
+
+// DaemonReadiness confirms a backend's supervised daemon is reachable (tymuxd). Instance asks
+// before a backend migration tears down the old session, so an unreachable daemon cannot make
+// termination unconfirmable.
+type DaemonReadiness interface {
+	ensureDaemonReady() error
 }
 
 // AltScreenQuerier asks the backend whether the pane shows its alternate screen.

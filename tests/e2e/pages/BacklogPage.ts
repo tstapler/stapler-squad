@@ -1,4 +1,5 @@
 import { Page, Locator, expect } from '@playwright/test';
+import { slotTmp } from '../helpers/base-url';
 
 export class BacklogPage {
   readonly page: Page;
@@ -84,36 +85,36 @@ export class BacklogPage {
     return this.getTableRows().locator('[data-testid="backlog-repo-path-cell"]').allTextContents();
   }
 
+  // The empty-state CTA opens the same new-item modal as the "+ New Item" button
+  // (the old inline empty-state form was removed).
   async openEmptyStateForm() {
     await this.emptyCtaButton.click();
-    await this.page.waitForSelector('[data-testid="backlog-empty-form"]', { timeout: 5000 });
+    await this.page.waitForSelector('[data-testid="backlog-form-modal"]', { timeout: 5000 });
   }
 
+  // repoPath is mandatory for new items, and one AC criterion keeps the item from being
+  // flagged vague (which pops a blocking VaguenessPromptModal after creation).
   async fillEmptyStateForm(title: string, priority?: number) {
-    const titleInput = this.page.locator('[data-testid="backlog-empty-form-title"]');
-    await titleInput.fill(title);
-
-    if (priority !== undefined) {
-      const prioritySelect = this.page.locator('[data-testid="backlog-empty-form-priority"]');
-      await prioritySelect.selectOption({ value: String(priority) });
-    }
+    await this.fillNewItemForm(title, {
+      priority,
+      repoPath: slotTmp('e2e-backlog-empty-state'),
+      addAcCriterion: 'Item is visible in the list',
+    });
   }
 
   async submitEmptyStateForm() {
-    const submitButton = this.page.locator('[data-testid="backlog-empty-form-submit"]');
-    await submitButton.click();
+    await this.submitNewItemForm();
   }
 
   async cancelEmptyStateForm() {
-    const cancelButton = this.page.locator('[data-testid="backlog-empty-form-cancel"]');
-    await cancelButton.click();
+    await this.page.locator('[data-testid="backlog-form-cancel"]').click();
   }
 
   async createItemFromEmptyState(title: string, priority?: number) {
     await this.openEmptyStateForm();
     await this.fillEmptyStateForm(title, priority);
     await this.submitEmptyStateForm();
-    // Wait for the item to appear in the list
+    await this.page.waitForSelector('[data-testid="backlog-form-modal"]', { state: 'hidden', timeout: 5000 });
     await this.page.waitForSelector('[data-testid="backlog-table-row"]', { timeout: 5000 });
   }
 
@@ -232,8 +233,8 @@ export class BacklogPage {
   }
 
   getDetailStatusBadge(): Locator {
-    // In the detail pane the status badge uses aria-label "Status: <label>"
-    return this.page.locator('[data-testid="backlog-item-detail"] [aria-label^="Status:"]');
+    // The detail pane shows status via the StageTracker: aria-label "Lifecycle stage: <label>"
+    return this.page.locator('[data-testid="backlog-item-detail"] [aria-label^="Lifecycle stage:"]');
   }
 
   getTableRowStatusBadge(itemTitle: string): Locator {
@@ -257,7 +258,7 @@ export class BacklogPage {
     await expect(markReadyBtn).toBeVisible();
     await markReadyBtn.click();
     // Wait for status to update in the detail pane
-    await expect(this.getDetailStatusBadge()).toContainText('Ready', { timeout: 10000 });
+    await expect(this.getDetailStatusBadge()).toHaveAttribute('aria-label', 'Lifecycle stage: Ready', { timeout: 10000 });
   }
 
   // ---------------------------------------------------------------------------

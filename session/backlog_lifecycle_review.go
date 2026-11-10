@@ -333,7 +333,7 @@ func applyVerdictsToACs(ctx context.Context, storage *Storage, item *BacklogItem
 	changed := false
 	for i, ac := range updated {
 		outcome, ok := outcomeByIdx[ac.Index]
-		if !ok {
+		if !ok || ac.Status == AcStatusWaived {
 			continue
 		}
 		var newStatus AcStatus

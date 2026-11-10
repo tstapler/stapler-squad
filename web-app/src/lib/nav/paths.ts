@@ -13,6 +13,7 @@ export const routes = {
   errors: "/errors",
   config: "/config",
   notifications: "/notifications",
+  ownerInbox: "/owner-inbox",
   settings: "/settings",
   settingsDefaults: "/settings/defaults",
   help: "/help",
@@ -31,6 +32,7 @@ export const routes = {
   settingsBackgroundModels: "/settings/background-models",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
+  backlogFlow: "/backlog/flow",
   sessionsImport: "/sessions/import",
   workflows: "/workflows",
   triggers: "/triggers",
@@ -38,12 +40,14 @@ export const routes = {
   account: "/account",
   escapeAnalytics: "/analytics/escape",
   files: "/files",
+  artifacts: "/artifacts",
   sessionDetail: (id: string) => `/?session=${id}`,
   newSessionFromWorktree: (worktreePath: string, branch: string, title?: string) => {
     const params = new URLSearchParams({ worktree: worktreePath, branch });
     if (title) params.set("title", title);
     return `/?${params.toString()}`;
   },
+  backlogItem: (itemId: string) => `/backlog?item=${encodeURIComponent(itemId)}`,
   unfinishedItem: (itemId: string) => `/unfinished?item=${encodeURIComponent(itemId)}`,
   unfinishedTab: (tab: string) => `/unfinished?tab=${encodeURIComponent(tab)}`,
 } as const;
@@ -55,8 +59,10 @@ export const ROUTE_PATHS = [
   "/",
   "/account",
   "/analytics/escape",
+  "/artifacts",
   "/backlog",
   "/backlog/board",
+  "/backlog/flow",
   "/changelog",
   "/config",
   "/debug/escape-codes",
@@ -70,6 +76,7 @@ export const ROUTE_PATHS = [
   "/login",
   "/logs",
   "/notifications",
+  "/owner-inbox",
   "/resolve",
   "/review-queue",
   "/rules",

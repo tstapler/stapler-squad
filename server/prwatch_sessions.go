@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -65,6 +66,9 @@ type prwatchSessions struct {
 	resolve     prwatchRemoteResolver
 	clock       func() time.Time
 	tracker     *prwatch.ResumeTracker
+	// perPR reports whether reader:poller is effective: one entry per open PR
+	// instead of one per session, so a merged PR cannot hide an open one.
+	perPR func() bool
 
 	mu       sync.Mutex
 	resolved map[string][3]string // uuid -> owner, repo, host; resolved once
@@ -77,19 +81,45 @@ func newPRWatchSessions(snapshots func() []*session.InstanceSnapshot, view prwat
 		snapshots: snapshots, view: view, store: store, ignoreRepos: ignoreRepos,
 		resolve: detectRemote, clock: time.Now,
 		tracker: prwatch.NewResumeTracker(), resolved: map[string][3]string{},
+		perPR: func() bool { return config.SessionMultiPR(config.SessionMultiPRScopePoller) },
 	}
 }
 
 func (s *prwatchSessions) List(ctx context.Context) ([]prwatch.SessionRef, error) {
 	snaps := s.snapshots()
 	facts := make([]prwatch.SessionFacts, 0, len(snaps))
+	perPR := s.perPR()
 	for _, sn := range snaps {
-		facts = append(facts, s.factsOf(sn))
+		facts = append(facts, s.factsFor(sn, perPR)...)
 	}
 	return prwatch.ComputeWatchSet(ctx, prwatch.WatchSetInput{
 		Sessions: facts, IgnoreRepos: s.ignoreRepos,
 		Links: &prwatchBacklogLinks{store: s.store}, Tracker: s.tracker, Now: s.clock(),
 	}), nil
+}
+
+// factsFor returns the session's watch facts: one per open PR when perPR is on
+// and the session has any, else the single legacy-scalar fact (an all-terminal
+// session stays one entry so its skip reason still reads PR-terminal).
+func (s *prwatchSessions) factsFor(sn *session.InstanceSnapshot, perPR bool) []prwatch.SessionFacts {
+	base := s.factsOf(sn)
+	if !perPR {
+		return []prwatch.SessionFacts{base}
+	}
+	var out []prwatch.SessionFacts
+	for _, v := range sn.GitHub.PRs {
+		if v.Terminal() {
+			continue
+		}
+		f := base
+		f.Owner, f.Repo, f.Host = v.Ref.Owner(), v.Ref.Repo(), v.Ref.Host()
+		f.PR, f.Terminal = v.Ref.Number(), false
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		return []prwatch.SessionFacts{base}
+	}
+	return out
 }
 
 func (s *prwatchSessions) factsOf(sn *session.InstanceSnapshot) prwatch.SessionFacts {

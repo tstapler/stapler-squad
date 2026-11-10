@@ -59,3 +59,19 @@ v1.12.0 aarch64-apple-darwin 2f8250ddfae7b97584798113bd50aca12062544c7d974ab5b26
 v1.12.0 x86_64-apple-darwin 6d9e080a3d1fc857efe3ebf74c7c73df1b30042525a38e821707e543209a816b
 v1.12.0 x86_64-unknown-linux-musl fbc337e819dc951b296b91afff87e89ceeb148767f452eb1e7e508be65db0fd9
 v1.12.0 aarch64-unknown-linux-musl dddd29b23c3dc6c51919fe13d4bdc89aa2ad9c299b8b0acb50ab8322fc5eae85
+# v1.13.1: daemon self-exits when its TCP listener dies (so a supervisor can respawn it), logs accept errors, raises the fd limit, and reports exited/restored panes with distinct error reasons (tymux#80).
+v1.13.1 aarch64-apple-darwin 17b8e124de5a0020df5e9c0fade3230c6e5f6a2c90279fbbb4da76c0aabff801
+v1.13.1 x86_64-apple-darwin 92057a9aa42e3a1978e1549e80ffe46ed595035150dda0bcac60fdb8a1bbb95f
+v1.13.1 x86_64-unknown-linux-musl ae0fefdcaa440d1e18dbf834c3692072be00ff0d47330c4f7bd07e44c52d9b8a
+v1.13.1 aarch64-unknown-linux-musl f4c1d2623bc9b300f824164a9eadca319299edda501f5c5492b55d2326ba3bbb
+# v1.14.0: Go client selecting/liveness/paneerr packages (tymux#81); daemon unchanged from v1.13.1.
+v1.14.0 aarch64-apple-darwin 6593090202e016164fa281bc9aeb52f086785e072e3d718ec2f69a18e4eda9c4
+v1.14.0 x86_64-apple-darwin b195a49f82f887c280e0994c7fdc4537134cee34d7fbbba995d2a9b684a4cbbd
+v1.14.0 x86_64-unknown-linux-musl 7f9cf765555accac96f35447e005bb9108b980348357f91f3982f068dd1898a7
+v1.14.0 aarch64-unknown-linux-musl 7d53661db495fbeed7962f371deb417a251910f4373521ae14c338183f78a86c
+# v1.17.0: output seq on snapshots (want_output_seq), AttachEvent.sent_at_unix_micros, per-class work pools,
+# SetPaneActivity hint (tstapler/tymux#86, #87). Daemon changes need a restart; 1.13.1 has no graceful handoff.
+v1.17.0 aarch64-apple-darwin ea645d821970f586c322278043bb9646dbcef4834d4a36b627c75764a75e3eac
+v1.17.0 x86_64-apple-darwin f00f62d0388604e32321aba459b2a5405eb64a1661766c28318b03815203a274
+v1.17.0 x86_64-unknown-linux-musl 4cf61e0fdf8c7e69ac7790145f7080fa4b85c23bd96f7a94d86d4bdc7a392e18
+v1.17.0 aarch64-unknown-linux-musl 066a84fce33cde098cc9c59dffb648f0f9052a92f7e6f8dbe4014ec42148a13c

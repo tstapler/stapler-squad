@@ -1,0 +1,15 @@
+{
+  "id": "RescanSessionArtifacts",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "RescanSessionArtifacts",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_delegates.go",
+  "tested": true,
+  "testIds": [
+    "TestRescanSessionArtifacts_ShouldResetPositionAndScan_WhenAnyState",
+    "TestRescanSessionArtifacts_ShouldFail_WhenSessionMissing"
+  ],
+  "lastModified": "2026-11-05T19:14:01.165989968-08:00"
+}

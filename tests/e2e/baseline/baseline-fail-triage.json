@@ -173,7 +173,8 @@
    "coveredBy1208": [
     "backlog-copy-link.spec.ts",
     "backlog-detail-live-updates.spec.ts"
-   ]
+   ],
+   "resolved": "All 11 specs now have 0 fail rows in next-e2e-baseline.json (updated locally from a chromium + chromium-dom run, not a CI re-record); see project_plans/e2e-backlog-flow-fixes."
   },
   {
    "id": "notification-tray-drift",

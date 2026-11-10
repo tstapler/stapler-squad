@@ -11,10 +11,10 @@
   "playwrightVersion": "1.56.1",
   "specCount": 2693,
   "counts": {
-   "pass": 2096,
-   "flaky": 78,
-   "fail": 357,
-   "skipped": 162
+   "fail": 319,
+   "pass": 2142,
+   "skipped": 166,
+   "flaky": 66
   }
  },
  "specs": [
@@ -11055,7 +11055,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium",
    "title": "alias-settings > AC-02 edit alias description",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11137,7 +11137,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium",
    "title": "alias-settings > AC-04 add environment variable via Advanced section",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11184,7 +11184,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium",
    "title": "alias-settings > AC-05 add tag via tag input Enter key",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11406,7 +11406,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium-dom",
    "title": "alias-settings > AC-02 edit alias description",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11488,7 +11488,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium-dom",
    "title": "alias-settings > AC-04 add environment variable via Advanced section",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -11535,7 +11535,7 @@
    "spec": "alias-settings.spec.ts",
    "project": "chromium-dom",
    "title": "alias-settings > AC-05 add tag via tag input Enter key",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -15344,41 +15344,13 @@
    "spec": "backlog-connection-indicator.spec.ts",
    "project": "chromium",
    "title": "Backlog connection indicator > indicator flips to Reconnecting within about one second of a forced disconnect (UX AC #17)",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "skipped"
       }
      ]
     }
@@ -15500,41 +15472,13 @@
    "spec": "backlog-connection-indicator.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog connection indicator > indicator flips to Reconnecting within about one second of a forced disconnect (UX AC #17)",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "skipped"
       }
      ]
     }
@@ -15654,41 +15598,13 @@
    "spec": "backlog-copy-link.spec.ts",
    "project": "chromium",
    "title": "Backlog item Copy Link > copyLink_should_ProduceWellFormedURLWithNoEncodingArtifacts_When_Copied",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -15771,29 +15687,13 @@
    "spec": "backlog-copy-link.spec.ts",
    "project": "chromium",
    "title": "Backlog item Copy Link > copyLink_should_ShowCopyFailedState_When_ClipboardWriteRejected",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
+       "status": "skipped"
       }
      ]
     }
@@ -15876,41 +15776,13 @@
    "spec": "backlog-copy-link.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog item Copy Link > copyLink_should_ProduceWellFormedURLWithNoEncodingArtifacts_When_Copied",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -15993,29 +15865,13 @@
    "spec": "backlog-copy-link.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog item Copy Link > copyLink_should_ShowCopyFailedState_When_ClipboardWriteRejected",
-   "class": "fail",
+   "class": "skipped",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
+       "status": "skipped"
       }
      ]
     }
@@ -16486,41 +16342,13 @@
    "spec": "backlog-deep-link-errors.spec.ts",
    "project": "chromium",
    "title": "Backlog deep-link resolution errors > unreachableHostLink_should_ShowStatusBannerWithLastSeenAndRetry_When_LivenessCheckTimesOut",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -16534,41 +16362,13 @@
    "spec": "backlog-deep-link-errors.spec.ts",
    "project": "chromium",
    "title": "Backlog deep-link resolution errors > unregisteredHostLink_should_ShowStatusBannerWithNoAddressAction_When_HostnameUnknown",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -16726,41 +16526,13 @@
    "spec": "backlog-deep-link-errors.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog deep-link resolution errors > unreachableHostLink_should_ShowStatusBannerWithLastSeenAndRetry_When_LivenessCheckTimesOut",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -16774,41 +16546,13 @@
    "spec": "backlog-deep-link-errors.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog deep-link resolution errors > unregisteredHostLink_should_ShowStatusBannerWithNoAddressAction_When_HostnameUnknown",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -17068,41 +16812,13 @@
    "spec": "backlog-detail-live-updates.spec.ts",
    "project": "chromium",
    "title": "Backlog live updates (detail panel) > an in_progress item's detail panel updates live to review with no polling network request firing on a timer (UX AC #10)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -17152,41 +16868,13 @@
    "spec": "backlog-detail-live-updates.spec.ts",
    "project": "chromium",
    "title": "Backlog live updates (detail panel) > detail panel keeps showing the open item after it no longer matches the active list filter (UX AC #11)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -17200,41 +16888,13 @@
    "spec": "backlog-detail-live-updates.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog live updates (detail panel) > an in_progress item's detail panel updates live to review with no polling network request firing on a timer (UX AC #10)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -17284,41 +16944,13 @@
    "spec": "backlog-detail-live-updates.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog live updates (detail panel) > detail panel keeps showing the open item after it no longer matches the active list filter (UX AC #11)",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -22504,41 +22136,13 @@
    "spec": "backlog-github-sync-settings.spec.ts",
    "project": "chromium",
    "title": "backlog-github-sync-settings > enabling both sync directions shows the loop-risk warning",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -22551,41 +22155,13 @@
    "spec": "backlog-github-sync-settings.spec.ts",
    "project": "chromium",
    "title": "backlog-github-sync-settings > forward and backward sync toggles persist across reload",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -22633,41 +22209,13 @@
    "spec": "backlog-github-sync-settings.spec.ts",
    "project": "chromium-dom",
    "title": "backlog-github-sync-settings > enabling both sync directions shows the loop-risk warning",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -22680,41 +22228,13 @@
    "spec": "backlog-github-sync-settings.spec.ts",
    "project": "chromium-dom",
    "title": "backlog-github-sync-settings > forward and backward sync toggles persist across reload",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -24608,41 +24128,13 @@
    "spec": "backlog-manual-override.spec.ts",
    "project": "chromium",
    "title": "backlog manual override > operator can link an existing PR to an item stuck in review with no live session",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -24764,41 +24256,13 @@
    "spec": "backlog-manual-override.spec.ts",
    "project": "chromium-dom",
    "title": "backlog manual override > operator can link an existing PR to an item stuck in review with no live session",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -24849,41 +24313,13 @@
    "spec": "backlog-pipeline-mode.spec.ts",
    "project": "chromium",
    "title": "backlog-pipeline-mode > AC-02 select a pipeline mode on a backlog item and see the selection persist",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -24972,41 +24408,13 @@
    "spec": "backlog-pipeline-mode.spec.ts",
    "project": "chromium-dom",
    "title": "backlog-pipeline-mode > AC-02 select a pipeline mode on a backlog item and see the selection persist",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -27326,41 +26734,13 @@
    "spec": "backlog-rich-text.spec.ts",
    "project": "chromium",
    "title": "Backlog Rich Text > e2e:backlog-rich-text-upload - Attaching an image inserts markdown and persists after reload",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -27443,41 +26823,13 @@
    "spec": "backlog-rich-text.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog Rich Text > e2e:backlog-rich-text-upload - Attaching an image inserts markdown and persists after reload",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -29998,41 +29350,13 @@
    "spec": "backlog-sources-settings.spec.ts",
    "project": "chromium",
    "title": "backlog-sources-settings > AC-02 add a GitHub Issues source and see it in the list",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -30046,41 +29370,13 @@
    "spec": "backlog-sources-settings.spec.ts",
    "project": "chromium",
    "title": "backlog-sources-settings > AC-03 toggle a source's enabled state",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -30094,41 +29390,13 @@
    "spec": "backlog-sources-settings.spec.ts",
    "project": "chromium",
    "title": "backlog-sources-settings > AC-04 deleting a source removes it from the list",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -30142,41 +29410,13 @@
    "spec": "backlog-sources-settings.spec.ts",
    "project": "chromium",
    "title": "backlog-sources-settings > AC-05 view history shows no sync runs yet for a never-synced source",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -30262,41 +29502,13 @@
    "spec": "backlog-sources-settings.spec.ts",
    "project": "chromium-dom",
    "title": "backlog-sources-settings > AC-02 add a GitHub Issues source and see it in the list",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -30310,41 +29522,13 @@
    "spec": "backlog-sources-settings.spec.ts",
    "project": "chromium-dom",
    "title": "backlog-sources-settings > AC-03 toggle a source's enabled state",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -30358,41 +29542,13 @@
    "spec": "backlog-sources-settings.spec.ts",
    "project": "chromium-dom",
    "title": "backlog-sources-settings > AC-04 deleting a source removes it from the list",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -30406,41 +29562,13 @@
    "spec": "backlog-sources-settings.spec.ts",
    "project": "chromium-dom",
    "title": "backlog-sources-settings > AC-05 view history shows no sync runs yet for a never-synced source",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -31368,41 +30496,13 @@
    "spec": "backlog.spec.ts",
    "project": "chromium",
    "title": "Backlog > Backlog Tour > e2e:backlog-tour-first-visit - Tour appears on first visit and dismissing it persists across reload",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -31455,41 +30555,13 @@
   {
    "spec": "backlog.spec.ts",
    "project": "chromium",
-   "title": "Backlog > Empty State > e2e:backlog-empty-form-cancel - Clicking cancel hides form",
-   "class": "flaky",
+   "title": "Backlog > Empty State > e2e:backlog-empty-form-cancel - Clicking cancel closes the form",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -31505,41 +30577,13 @@
   {
    "spec": "backlog.spec.ts",
    "project": "chromium",
-   "title": "Backlog > Empty State > e2e:backlog-empty-form-opens - Clicking CTA button reveals inline form",
-   "class": "flaky",
+   "title": "Backlog > Empty State > e2e:backlog-empty-form-opens - Clicking CTA button opens the new-item form",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -31555,41 +30599,13 @@
   {
    "spec": "backlog.spec.ts",
    "project": "chromium",
-   "title": "Backlog > Empty State > e2e:backlog-empty-form-submit - Form requires title; submit button disabled when empty",
-   "class": "flaky",
+   "title": "Backlog > Empty State > e2e:backlog-empty-form-submit - Form requires a title; submitting empty shows an error",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -31606,40 +30622,12 @@
    "spec": "backlog.spec.ts",
    "project": "chromium",
    "title": "Backlog > Empty State > e2e:backlog-empty-state-renders - Empty state displays headline, lifecycle diagram, and CTA button",
-   "class": "flaky",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -31732,40 +30720,12 @@
    "spec": "backlog.spec.ts",
    "project": "chromium",
    "title": "Backlog > Item Creation and List > e2e:backlog-create-item - Creating first item via empty state form",
-   "class": "flaky",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -31782,40 +30742,12 @@
    "spec": "backlog.spec.ts",
    "project": "chromium",
    "title": "Backlog > Item Creation and List > e2e:backlog-default-priority - Items created with default priority (P3)",
-   "class": "flaky",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -32022,41 +30954,13 @@
    "spec": "backlog.spec.ts",
    "project": "chromium",
    "title": "Backlog > Status Transitions > e2e:backlog-item-appears-in-list-after-creation - Item created via \"+ New Item\" button appears in list",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -32110,41 +31014,13 @@
    "spec": "backlog.spec.ts",
    "project": "chromium",
    "title": "Backlog > Status Transitions > e2e:backlog-transition-idea-to-ready - Item created as idea can be transitioned to ready via detail pane",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -32274,41 +31150,13 @@
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog > Backlog Tour > e2e:backlog-tour-first-visit - Tour appears on first visit and dismissing it persists across reload",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -32361,41 +31209,13 @@
   {
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
-   "title": "Backlog > Empty State > e2e:backlog-empty-form-cancel - Clicking cancel hides form",
-   "class": "flaky",
+   "title": "Backlog > Empty State > e2e:backlog-empty-form-cancel - Clicking cancel closes the form",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -32411,41 +31231,13 @@
   {
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
-   "title": "Backlog > Empty State > e2e:backlog-empty-form-opens - Clicking CTA button reveals inline form",
-   "class": "flaky",
+   "title": "Backlog > Empty State > e2e:backlog-empty-form-opens - Clicking CTA button opens the new-item form",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -32461,41 +31253,13 @@
   {
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
-   "title": "Backlog > Empty State > e2e:backlog-empty-form-submit - Form requires title; submit button disabled when empty",
-   "class": "flaky",
+   "title": "Backlog > Empty State > e2e:backlog-empty-form-submit - Form requires a title; submitting empty shows an error",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -32512,40 +31276,12 @@
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog > Empty State > e2e:backlog-empty-state-renders - Empty state displays headline, lifecycle diagram, and CTA button",
-   "class": "flaky",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -32638,40 +31374,12 @@
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog > Item Creation and List > e2e:backlog-create-item - Creating first item via empty state form",
-   "class": "flaky",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -32688,40 +31396,12 @@
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog > Item Creation and List > e2e:backlog-default-priority - Items created with default priority (P3)",
-   "class": "flaky",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
-       "status": "passed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "passed"
-      },
-      {
-       "retry": 1,
        "status": "passed"
       }
      ]
@@ -32928,41 +31608,13 @@
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog > Status Transitions > e2e:backlog-item-appears-in-list-after-creation - Item created via \"+ New Item\" button appears in list",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -33016,41 +31668,13 @@
    "spec": "backlog.spec.ts",
    "project": "chromium-dom",
    "title": "Backlog > Status Transitions > e2e:backlog-transition-idea-to-ready - Item created as idea can be transitioned to ready via detail pane",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
       {
        "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
+       "status": "passed"
       }
      ]
     }
@@ -48779,7 +47403,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > Dispatch stays disabled until the egress checkbox is checked, then enables",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -48828,7 +47452,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > completes the full dispatch flow with keyboard only",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -48914,7 +47538,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > dispatches to Jules in 3 clicks when repo already acknowledged",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -48963,7 +47587,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > prefills the Branch field from the item's tracked branch, and disables Dispatch to Jules with a no-branch reason when none exists",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49012,7 +47636,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium",
    "title": "jules dispatch gating > revoking egress consent immediately re-shows the confirmation in a freshly opened dialog",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49061,7 +47685,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > Dispatch stays disabled until the egress checkbox is checked, then enables",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49110,7 +47734,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > completes the full dispatch flow with keyboard only",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49196,7 +47820,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > dispatches to Jules in 3 clicks when repo already acknowledged",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49245,7 +47869,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > prefills the Branch field from the item's tracked branch, and disables Dispatch to Jules with a no-branch reason when none exists",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -49294,7 +47918,7 @@
    "spec": "jules-dispatch.spec.ts",
    "project": "chromium-dom",
    "title": "jules dispatch gating > revoking egress consent immediately re-shows the confirmation in a freshly opened dialog",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -50658,7 +49282,7 @@
    "spec": "local-file-browser.spec.ts",
    "project": "chromium",
    "title": "local-file-browser > local-file-browser > navigates into a symlinked directory",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -50705,7 +49329,7 @@
    "spec": "local-file-browser.spec.ts",
    "project": "chromium",
    "title": "local-file-browser > local-file-browser > open terminal here creates a directory-mode session",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -50857,7 +49481,7 @@
    "spec": "local-file-browser.spec.ts",
    "project": "chromium-dom",
    "title": "local-file-browser > local-file-browser > navigates into a symlinked directory",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -50904,7 +49528,7 @@
    "spec": "local-file-browser.spec.ts",
    "project": "chromium-dom",
    "title": "local-file-browser > local-file-browser > open terminal here creates a directory-mode session",
-   "class": "fail",
+   "class": "pass",
    "runs": [
     {
      "attempts": [
@@ -64906,55 +63530,6 @@
       {
        "retry": 0,
        "status": "passed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": [
-    "/history",
-    "/history/",
-    "/review-queue"
-   ]
-  },
-  {
-   "spec": "route-focus-and-announce.spec.ts",
-   "project": "chromium",
-   "title": "route focus and announcements (Next baseline) > skip link: Tab reaches it, Enter keeps the path and sets the hash",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
       }
      ]
     }
@@ -65251,55 +63826,6 @@
       {
        "retry": 0,
        "status": "passed"
-      }
-     ]
-    }
-   ],
-   "routesVisited": [
-    "/history",
-    "/history/",
-    "/review-queue"
-   ]
-  },
-  {
-   "spec": "route-focus-and-announce.spec.ts",
-   "project": "chromium-dom",
-   "title": "route focus and announcements (Next baseline) > skip link: Tab reaches it, Enter keeps the path and sets the hash",
-   "class": "fail",
-   "runs": [
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
-      }
-     ]
-    },
-    {
-     "attempts": [
-      {
-       "retry": 0,
-       "status": "failed"
-      },
-      {
-       "retry": 1,
-       "status": "failed"
       }
      ]
     }

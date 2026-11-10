@@ -1,0 +1,165 @@
+package services
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/streamhub"
+)
+
+func attachFixture(t *testing.T, h *ConnectRPCWebSocketHandler, inst *session.Instance) (*streamhub.StreamHub, *upgradableWriter, <-chan struct{}, context.CancelFunc) {
+	t.Helper()
+	hub := streamhub.NewStreamHub("attach", nil, streamhub.WithTeardownGrace(time.Hour))
+	t.Cleanup(func() { _ = hub.ForceTeardown() })
+	stream, _, cleanup := createTestWebSocketPair(t)
+	t.Cleanup(cleanup)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	w, _, watchDone := h.attachUpgradableSubscriber(ctx, hub, hubSubscriberAttachment{
+		stream: stream, instance: inst, sessionID: "attach", tmuxSessionName: "attach", currentPaneReq: handshakeReq(100, 30),
+	})
+	return hub, w, watchDone, cancel
+}
+
+func waitClosed(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s did not happen", what)
+	}
+}
+
+func newServiceWithBus(t *testing.T) *SessionService {
+	t.Helper()
+	svc := NewSessionService(createTestStorage(t), events.NewEventBus(100))
+	t.Cleanup(svc.Shutdown)
+	return svc
+}
+
+func TestAttachUpgradableSubscriber_should_UpgradeViaServiceEventBus_When_StatusFlipsWithNoClientFrame(t *testing.T) {
+	t.Parallel()
+	svc := newServiceWithBus(t)
+	h := NewConnectRPCWebSocketHandler(svc, nil, nil)
+	inst := newTymuxInstanceWithStatus(t, session.PermanentlyFailed)
+	hub, w, watchDone, _ := attachFixture(t, h, inst)
+	require.Equal(t, streamhub.TerminalSize{}, hub.NegotiatedSize(), "read-only attach casts no vote")
+
+	session.SetStatusForTest(t, inst, session.Active, nil)
+	svc.GetEventBus().Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
+
+	waitClosed(t, w.Upgraded(), "upgrade")
+	w.WaitVotes()
+	got := hub.NegotiatedSize()
+	require.Equal(t, [2]int{100, 30}, [2]int{got.Cols(), got.Rows()})
+	waitClosed(t, watchDone, "bus subscription release after upgrade")
+	require.Zero(t, svc.GetEventBus().SubscriberCount(), "the bus subscription is released after the upgrade")
+}
+
+func TestAttachUpgradableSubscriber_should_UpgradeOnUnarchiveEvent(t *testing.T) {
+	t.Parallel()
+	svc := newServiceWithBus(t)
+	h := NewConnectRPCWebSocketHandler(svc, nil, nil)
+	inst := newTymuxInstanceWithStatus(t, session.Active)
+	archivedAt := time.Now()
+	session.SetStatusForTest(t, inst, session.Active, &archivedAt)
+	_, w, _, _ := attachFixture(t, h, inst)
+
+	session.SetStatusForTest(t, inst, session.Active, nil)
+	svc.GetEventBus().Publish(events.NewSessionUpdatedEvent(inst, []string{"archived_at"}))
+
+	waitClosed(t, w.Upgraded(), "upgrade after unarchive")
+}
+
+func TestAttachUpgradableSubscriber_should_ReleaseBusSubscription_When_ConnectionContextIsCancelled(t *testing.T) {
+	t.Parallel()
+	svc := newServiceWithBus(t)
+	h := NewConnectRPCWebSocketHandler(svc, nil, nil)
+	inst := newTymuxInstanceWithStatus(t, session.PermanentlyFailed)
+	_, _, watchDone, cancel := attachFixture(t, h, inst)
+
+	cancel()
+	waitClosed(t, watchDone, "bus subscription release after cancel")
+	require.Zero(t, svc.GetEventBus().SubscriberCount())
+}
+
+func TestAttachUpgradableSubscriber_should_UpgradeOnNextFrame_When_NoServiceBus(t *testing.T) {
+	t.Parallel()
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	inst := newTymuxInstanceWithStatus(t, session.PermanentlyFailed)
+	hub, w, _, _ := attachFixture(t, h, inst)
+
+	session.SetStatusForTest(t, inst, session.Active, nil)
+	require.NotNil(t, w.Writer(), "the next frame's writer lookup upgrades")
+
+	waitClosed(t, w.Upgraded(), "upgrade")
+	w.WaitVotes()
+	got := hub.NegotiatedSize()
+	require.Equal(t, [2]int{100, 30}, [2]int{got.Cols(), got.Rows()})
+}
+
+func drain(ch <-chan *events.Event) (n int) {
+	for {
+		select {
+		case <-ch:
+			n++
+		default:
+			return n
+		}
+	}
+}
+
+func TestSessionStartedPublisher_should_PublishExactlyOncePerStart_When_InstanceIsActive(t *testing.T) {
+	t.Parallel()
+	svc := newServiceWithBus(t)
+	inst := newTymuxInstanceWithStatus(t, session.Active)
+	ch, _ := svc.GetEventBus().Subscribe(context.Background())
+	l := &sessionStartedPublisher{svc: svc, inst: inst}
+
+	require.True(t, l.publishIfActive())
+	ev := <-ch
+	require.Equal(t, events.EventSessionUpdated, ev.Type)
+	require.Equal(t, inst.UUID, ev.Session.UUID)
+	require.Zero(t, drain(ch), "one start publishes one event")
+
+	require.True(t, l.publishIfActive())
+	<-ch
+	require.Zero(t, drain(ch))
+}
+
+func TestSessionStartedPublisher_should_PublishNothing_When_TransitionFailedOrArchived(t *testing.T) {
+	t.Parallel()
+	svc := newServiceWithBus(t)
+	ch, _ := svc.GetEventBus().Subscribe(context.Background())
+
+	failed := newTymuxInstanceWithStatus(t, session.Stopped) // reconcile fired EventStarted, transition failed
+	require.False(t, (&sessionStartedPublisher{svc: svc, inst: failed}).publishIfActive())
+
+	archivedAt := time.Now()
+	archived := newTymuxInstanceWithStatus(t, session.Active)
+	session.SetStatusForTest(t, archived, session.Active, &archivedAt)
+	require.False(t, (&sessionStartedPublisher{svc: svc, inst: archived}).publishIfActive())
+
+	require.Zero(t, drain(ch))
+}
+
+func TestSessionStartedPublisher_should_PublishViaLifecycleListener_When_InstanceStarts(t *testing.T) {
+	t.Parallel()
+	svc := newServiceWithBus(t)
+	inst := newTymuxInstanceWithStatus(t, session.Active)
+	ch, _ := svc.GetEventBus().Subscribe(context.Background())
+
+	(&sessionStartedPublisher{svc: svc, inst: inst}).OnLifecycleEvent(session.EventStarted, "")
+
+	select {
+	case ev := <-ch:
+		require.Equal(t, events.EventSessionUpdated, ev.Type)
+	case <-time.After(10 * time.Second):
+		t.Fatal("no session-updated event published for EventStarted")
+	}
+}

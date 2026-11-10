@@ -1,0 +1,18 @@
+{
+  "id": "ListSessionArtifacts",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListSessionArtifacts",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service_delegates.go",
+  "tested": true,
+  "testIds": [
+    "TestListSessionArtifacts_ShouldFilterByTypeAndRepo",
+    "TestListSessionArtifacts_ShouldReturnNewestFirstAndPage",
+    "TestListSessionArtifacts_ShouldRejectABadPageToken",
+    "TestListSessionArtifacts_ShouldKeepOnlySessionsTiedToThePR",
+    "TestListSessionArtifacts_ShouldUseTheSessionsOwnPRState"
+  ],
+  "lastModified": "2026-11-05T09:45:59.310894899-08:00"
+}

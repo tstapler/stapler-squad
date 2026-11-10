@@ -297,6 +297,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 	}
 
 	s.populateAutoMerge(ctx, items, req.Msg.GetRefreshAutoMerge())
+	s.populatePRCounts(ctx, items)
 
 	return connect.NewResponse(&sessionv1.ListStuckBacklogItemsResponse{Items: items}), nil
 }

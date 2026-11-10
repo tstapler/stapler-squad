@@ -40,3 +40,7 @@
 - **Allow wakes to auto-revive stopped sessions**: reproduces the respawn-loop and OOM classes.
 - **Restate the trust model and drop the identity claims (no credential)**: considered and rejected because the HMAC primitive already exists and the cost is small; if Story 4.5's credential task is ever deferred, the fallback is to delete `FORBIDDEN`/anti-spoofing from the ACs and keep only identity-independent invariants (self-target, archived, one-shot, caps), and this ADR must be amended first.
 - **Reuse `steer_session` for peer messages**: unattributed, no refusal for hidden sessions, no rate limit.
+
+## Amendment 2026-11-06: `report_pr_created` joins the identity-gated set
+
+`report_pr_created` (a backlog tool, `server/mcp/tools_backlog_pr.go`) authorised its caller with the unverified `callerSessionUUID(ctx)`, the forged-header case rule 0 exists to close: any process that knew a work session's UUID could record a PR on that session's backlog item. It now has a work-only row in `identityGatedTools` and is registered through `withCallerIdentityGate`, so the caller is `verifiedCallerSessionUUID(ctx)`; an unverified caller gets `identity_unverified` and nothing is written. Behaviour change: sessions with no credential (see `docs/reference/wake-triggers-and-agent-messaging.md`) can no longer use this tool until relaunched. The other backlog tools that use `callerSessionUUID` have the same weakness and are not covered by this amendment.

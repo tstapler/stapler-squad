@@ -1,7 +1,9 @@
 import path from "node:path";
 import { NAMING, PUBLIC_ENV_VARS } from "../config";
+import { ghosttyWasmPlugin } from "../plugins/ghostty-wasm";
 import type { BuildContext } from "./context";
 import { copyHashedFonts, rewriteFontUrls } from "./fonts";
+import { pruneUnreferencedCss } from "./prune-css";
 import type { Stage } from "./runner";
 
 /** `process.env.X` replacements. NODE_ENV is "production" for every build.ts run; only dev.ts uses "development". */
@@ -65,12 +67,14 @@ export const bundle: Stage<BuildContext> = {
         naming: NAMING,
         // fonts.css points at /_next/static/media/*; keep those external so Bun does not inline them as data: URIs.
         external: ["/_next/*"],
-        plugins: [ctx.ve.plugin()],
+        plugins: [ctx.ve.plugin(), ghosttyWasmPlugin()],
       });
     } catch (e) {
       throw bundleError(e);
     }
     ctx.emitted = result.outputs.map((o) => ({ path: o.path, kind: o.kind }));
+    const pruned = new Set(pruneUnreferencedCss(ctx.emitted));
+    ctx.emitted = ctx.emitted.filter((o) => !pruned.has(o.path));
     ctx.loginClosure = loginClosure(result.metafile as Metafile | undefined, ctx.tmpDir);
     ctx.fontFiles = copyHashedFonts(ctx.fontsDir, ctx.tmpDir);
     rewriteFontUrls(ctx.tmpDir, ctx.fontFiles);

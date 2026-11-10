@@ -1,0 +1,9 @@
+{
+  "status": 307,
+  "headers": {
+    "location": "/settings",
+    "x-nextjs-stale-time": "4294967294",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/settings/layout,_N_T_/settings/defaults/layout,_N_T_/settings/defaults/page,_N_T_/settings/defaults/"
+  }
+}

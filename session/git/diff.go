@@ -21,6 +21,8 @@ import (
 	"github.com/go-git/go-git/v5/utils/binary"
 	gogitdiff "github.com/go-git/go-git/v5/utils/diff"
 	dmp "github.com/sergi/go-diff/diffmatchpatch"
+
+	"github.com/tstapler/stapler-squad/session/git/ignorewalk"
 )
 
 // DiffStats holds statistics about the changes in a diff
@@ -233,13 +235,13 @@ func (g *GitWorktree) buildWorkingTreePatch(baseCommit *object.Commit) (fdiff.Pa
 // matched by the worktree's .gitignore/.git/info/exclude patterns, mirroring
 // what `git add .` would stage) and returns the slash-separated relative paths
 // of every regular file or symlink not already present in baseFiles. Reads
-// gitignore patterns directly (github.com/go-git/go-git/v5/plumbing/format/gitignore.ReadPatterns,
-// the same call session/unfinished's GoGitVCSReader uses) rather than go-git's
+// gitignore patterns directly (ignorewalk.ReadPatterns, the same call
+// session/unfinished's GoGitVCSReader uses) rather than go-git's
 // Worktree.Status(), which hashes every untracked file's full content just to
 // classify it — unnecessary work here since only the path is needed.
 func (g *GitWorktree) untrackedWorktreePaths(baseFiles map[string]*object.File) ([]string, error) {
 	fsRoot := osfs.New(g.worktreePath)
-	patterns, err := gitignore.ReadPatterns(fsRoot, nil)
+	patterns, err := ignorewalk.ReadPatterns(fsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read gitignore patterns: %w", err)
 	}

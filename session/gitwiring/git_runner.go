@@ -26,6 +26,7 @@ var (
 // Run implements backend.Runner.
 func (g gitRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := safeexec.CommandContext(ctx, name, args...)
+	useLocalGit(cmd, name, args)
 	cmd.Dir = dir
 	cmd.Env = g.envFor(name)
 	return cmd.CombinedOutput()
@@ -36,6 +37,7 @@ func (g gitRunner) Run(ctx context.Context, dir, name string, args ...string) ([
 // output. On failure the error is an *exec.ExitError whose Stderr holds git's stderr.
 func (g gitRunner) RunStdout(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := safeexec.CommandContext(ctx, name, args...)
+	useLocalGit(cmd, name, args)
 	cmd.Dir = dir
 	cmd.Env = g.envFor(name)
 	return cmd.Output()

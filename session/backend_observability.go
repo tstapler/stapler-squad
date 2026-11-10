@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -89,14 +90,48 @@ const (
 // Tempo span (it would flood traces) and the attribute set is built once up
 // front instead of per call.
 type timedBackendOp struct {
-	attrs metric.MeasurementOption
+	attrs   metric.MeasurementOption
+	op      string
+	backend backendLabel
+	who     sessionNamer // asked for its id only when a call is slow
+}
+
+// with returns the timer bound to who, so a slow call can be attributed to a session.
+func (o timedBackendOp) with(who sessionNamer) timedBackendOp {
+	o.who = who
+	return o
 }
 
 func newTimedBackendOp(backend backendLabel, op string) timedBackendOp {
-	return timedBackendOp{attrs: metric.WithAttributeSet(attribute.NewSet(
+	return timedBackendOp{op: op, backend: backend, attrs: metric.WithAttributeSet(attribute.NewSet(
 		attribute.String("backend", string(backend)),
 		attribute.String("operation", op),
 	))}
+}
+
+// begin starts timing one call and watching it for the slow-op flight recorder; the returned
+// function records the duration and ends the watch.
+func (o timedBackendOp) begin(ctx context.Context) func() {
+	start := time.Now()
+	stopWatch := terminalSlowOps.watch(o.op, o.backend)
+	return func() {
+		stopWatch()
+		o.observe(start)
+		o.reportIfSlow(ctx, start, time.Since(start), slowCallThreshold, slowCallReporter)
+	}
+}
+
+// reportIfSlow passes the call to report when d reaches threshold; both are parameters so tests
+// need neither the process-global threshold nor a real sleep.
+func (o timedBackendOp) reportIfSlow(ctx context.Context, start time.Time, d, threshold time.Duration, report func(context.Context, slowCallReport)) {
+	if d < threshold {
+		return
+	}
+	id := ""
+	if o.who != nil {
+		id = o.who.GetSessionIdentifier()
+	}
+	report(ctx, slowCallReport{op: o.op, backend: o.backend, sessionID: id, start: start, duration: d})
 }
 
 func (o timedBackendOp) observe(start time.Time) {
@@ -105,13 +140,23 @@ func (o timedBackendOp) observe(start time.Time) {
 
 // timeBackendOp runs fn and records its latency under op.
 func timeBackendOp[T any](op timedBackendOp, fn func() (T, error)) (T, error) {
-	defer op.observe(time.Now())
+	return timeBackendOpCtx(context.Background(), op, fn)
+}
+
+// timeBackendOpCtx is timeBackendOp for a caller with a context, so a slow call's span joins
+// the caller's trace.
+func timeBackendOpCtx[T any](ctx context.Context, op timedBackendOp, fn func() (T, error)) (T, error) {
+	defer op.begin(ctx)()
 	return fn()
 }
 
 // timeBackendOpErr is timeBackendOp for error-only operations.
 func timeBackendOpErr(op timedBackendOp, fn func() error) error {
-	defer op.observe(time.Now())
+	return timeBackendOpErrCtx(context.Background(), op, fn)
+}
+
+func timeBackendOpErrCtx(ctx context.Context, op timedBackendOp, fn func() error) error {
+	defer op.begin(ctx)()
 	return fn()
 }
 
@@ -152,7 +197,11 @@ func withBackendOperationSpan(ctx context.Context, backend backendLabel, op stri
 		attribute.String("backend", string(backend)),
 		attribute.String("operation", op),
 	)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrTmuxSessionNotInitialized):
+		// Nothing to restore/start yet: an expected precondition miss, not a backend fault.
+		span.SetAttributes(attribute.Bool("precondition_unmet", true))
+	case err != nil:
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}

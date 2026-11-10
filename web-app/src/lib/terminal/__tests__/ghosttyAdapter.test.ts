@@ -30,6 +30,10 @@ const withRaf = () => {
   (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = (cb: () => void) => setTimeout(cb, 0);
 };
 
+// manager.write() is fire-and-forget; the queue is FIFO, so a no-op item (SGR reset; an empty write never calls back)
+// resolves only after every earlier chunk landed.
+const flushed = (manager: TerminalStreamManager) => manager.enqueueWrite("\x1b[0m");
+
 const setup = () => {
   const raw = new HeadlessGhosttyTerminal(ghostty);
   const term = asXtermCompatible(raw as unknown as GhosttyWebTerminal);
@@ -94,7 +98,7 @@ describe("ghostty adapter: TerminalStreamManager", () => {
     const { raw, manager } = setup();
     const lines = Array.from({ length: 3000 }, (_, i) => `line-${i}`);
     manager.write(lines.join("\r\n"));
-    await new Promise((r) => setTimeout(r, 50));
+    await flushed(manager);
     const got = transcript(raw);
     expect(got[got.length - 1]).toBe("line-2999");
     expect(got.filter((l) => l.startsWith("line-")).length).toBe(3000);
@@ -104,7 +108,7 @@ describe("ghostty adapter: TerminalStreamManager", () => {
     const { raw, term, manager } = setup();
     term.write("STALE ONE\r\nSTALE TWO\r\n");
     manager.write(`${ANSI_SNAPSHOT_PREFIX}FRESH ONE\r\nFRESH TWO`);
-    await new Promise((r) => setTimeout(r, 20));
+    await flushed(manager);
     const text = transcript(raw).join("\n");
     expect(text).toContain("FRESH ONE");
     expect(text).not.toContain("STALE");

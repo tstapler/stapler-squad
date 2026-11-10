@@ -227,6 +227,7 @@ type ItemSessionData struct {
 	ExecutorFallbackReason string
 	TriageResult           string
 	VerificationNotes      string  // Freeform verification evidence reported via request_review
+	DiffTruncated          bool    // Review sessions: the reviewer's diff was truncated at spawn
 	EstimatedCostUsd       float64 // Only set for headless sessions where cost is known at creation time
 	// CostUnpriced marks EstimatedCostUsd as untrustworthy (see headless.CostSink's
 	// priced signal) rather than a genuine dollar figure — e.g. an unpriced Gemini
@@ -250,9 +251,11 @@ type ReviewVerdictData struct {
 	PromptHash     string
 	DiffTokenCount int
 	DiffTruncated  bool
-	OverrideBy     string
-	OverrideReason string
-	OverrideAt     *time.Time
+	// ReviewedCommitSha is the work-session tip commit the verdict reviewed; "" when unknown.
+	ReviewedCommitSha string
+	OverrideBy        string
+	OverrideReason    string
+	OverrideAt        *time.Time
 }
 
 // --- ItemSession ---
@@ -280,6 +283,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetExecutorFallbackReason(data.ExecutorFallbackReason).
 		SetNillableTriageResult(nilIfEmpty(data.TriageResult)).
 		SetNillableVerificationNotes(nilIfEmpty(data.VerificationNotes)).
+		SetDiffTruncated(data.DiffTruncated).
 		SetClaimantHostID(data.ClaimantHostID)
 	if data.EstimatedCostUsd > 0 {
 		q = q.SetEstimatedCostUsd(data.EstimatedCostUsd)
@@ -901,6 +905,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 			SetNillablePromptHash(nilIfEmpty(verdict.PromptHash)).
 			SetDiffTokenCount(verdict.DiffTokenCount).
 			SetDiffTruncated(verdict.DiffTruncated).
+			SetNillableReviewedCommitSha(nilIfEmpty(verdict.ReviewedCommitSha)).
 			SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
 			SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 			SetNillableOverrideAt(verdict.OverrideAt).
@@ -919,6 +924,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 			SetNillablePromptHash(nilIfEmpty(verdict.PromptHash)).
 			SetDiffTokenCount(verdict.DiffTokenCount).
 			SetDiffTruncated(verdict.DiffTruncated).
+			SetNillableReviewedCommitSha(nilIfEmpty(verdict.ReviewedCommitSha)).
 			SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
 			SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 			SetNillableOverrideAt(verdict.OverrideAt).
@@ -995,6 +1001,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 		SetNillablePromptHash(nilIfEmpty(verdict.PromptHash)).
 		SetDiffTokenCount(verdict.DiffTokenCount).
 		SetDiffTruncated(verdict.DiffTruncated).
+		SetNillableReviewedCommitSha(nilIfEmpty(verdict.ReviewedCommitSha)).
 		SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
 		SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 		SetNillableOverrideAt(verdict.OverrideAt).
@@ -1299,6 +1306,27 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 	return result, nil
 }
 
+// FindSnoozedStuckItemIDs returns the item IDs whose open row of reason is snoozed right
+// now. FindOpenStuckStates hides those rows, so a gate that must outlive a snooze reads
+// them here.
+func (r *EntRepository) FindSnoozedStuckItemIDs(ctx context.Context, reason domain.StuckReason) ([]string, error) {
+	rows, err := r.client.BacklogStuckState.Query().
+		Where(
+			backlogstuckstate.ResolvedAtIsNil(),
+			backlogstuckstate.Reason(string(reason)),
+			backlogstuckstate.SnoozedUntilGT(time.Now()),
+		).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query snoozed stuck states: %w", err)
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ItemID.String())
+	}
+	return ids, nil
+}
+
 // StuckStateHistoryData is a single BacklogStuckState row for one item,
 // open or resolved — the full-history counterpart to OpenStuckStateData,
 // which deliberately filters to open-only. Used by
@@ -1411,10 +1439,13 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 			continue
 		}
 		result = append(result, ReviewVerdictSummary{
-			ID:             is.Edges.ReviewVerdict.ID.String(),
-			OverallOutcome: is.Edges.ReviewVerdict.OverallOutcome,
-			Summary:        is.Edges.ReviewVerdict.Summary,
-			DiffHash:       is.Edges.ReviewVerdict.DiffHash,
+			ID:                is.Edges.ReviewVerdict.ID.String(),
+			OverallOutcome:    is.Edges.ReviewVerdict.OverallOutcome,
+			Summary:           is.Edges.ReviewVerdict.Summary,
+			DiffHash:          is.Edges.ReviewVerdict.DiffHash,
+			DiffTruncated:     is.Edges.ReviewVerdict.DiffTruncated,
+			ReviewedCommitSha: is.Edges.ReviewVerdict.ReviewedCommitSha,
+			OverrideBy:        is.Edges.ReviewVerdict.OverrideBy,
 		})
 	}
 	return result, nil
@@ -1422,14 +1453,79 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 
 // --- AC criterion update ---
 
+// ErrAcCriterionWaived is returned when an agent-driven status update targets a
+// criterion that was waived; only the audited waiver path changes it.
+var ErrAcCriterionWaived = errors.New("acceptance criterion was waived")
+
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
+	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: status, reason: note}, func(c *AcCriterion) error {
+		if c.Status == AcStatusWaived {
+			return ErrAcCriterionWaived
+		}
+		c.Status = AcStatus(status)
+		if note != "" {
+			c.Note = note
+		}
+		return nil
+	})
+}
+
+// ErrAcCriterionOutOfRange is returned when a criterion index does not exist on the item.
+var ErrAcCriterionOutOfRange = errors.New("acceptance criterion index out of range")
+
+// ErrWaiverReasonRequired is returned when a waiver carries a blank reason.
+var ErrWaiverReasonRequired = errors.New("a waiver needs a non-empty reason")
+
+// WaiveAcCriterion marks a criterion waived with a non-empty reason. Refused (and audited) when
+// the criterion is already done or already waived.
+func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, criterionIndex int, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ErrWaiverReasonRequired
+	}
+	actor := AcActorFrom(ctx)
+	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: string(AcStatusWaived), reason: reason}, func(c *AcCriterion) error {
+		switch c.Status {
+		case AcStatusDone:
+			return ErrAcCriterionAlreadyDone
+		case AcStatusWaived:
+			return ErrAcCriterionAlreadyWaived
+		}
+		c.Status = AcStatusWaived
+		c.WaiverReason = reason
+		c.WaivedBy = actor.Label()
+		c.WaivedAt = time.Now().UTC().Format(time.RFC3339)
+		return nil
+	})
+}
+
+// acChange describes the requested status change so it can be audited whatever its outcome.
+type acChange struct {
+	newStatus string
+	reason    string
+}
+
+// mutateAcCriterion loads the item's criteria, applies mutate to the one at
+// criterionIndex, and persists the result together with an AcAuditEvent in one
+// transaction. A mutation that reaches an existing item but is refused still
+// leaves an audit row (outcome "rejected:...").
+func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, criterionIndex int, change acChange, mutate func(*AcCriterion) error) error {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+		}
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin AC update transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	item, err := tx.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
@@ -1442,13 +1538,29 @@ func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID stri
 		return fmt.Errorf("failed to parse AC criteria: %w", parseErr)
 	}
 
-	if criterionIndex < 0 || criterionIndex >= len(criteria) {
-		return fmt.Errorf("criterion index %d out of bounds (len=%d)", criterionIndex, len(criteria))
+	audit := func(prev, outcome string) error {
+		return r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
+			ItemID: parsedID.String(), ItemPublicID: item.PublicID, CriterionIndex: criterionIndex, PreviousStatus: prev,
+			NewStatus: change.newStatus, Reason: change.reason, Outcome: outcome,
+		})
+	}
+	reject := func(prev string, cause error) error {
+		if err := audit(prev, "rejected:"+cause.Error()); err != nil {
+			return errors.Join(cause, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return errors.Join(cause, err)
+		}
+		return cause
 	}
 
-	criteria[criterionIndex].Status = AcStatus(status)
-	if note != "" {
-		criteria[criterionIndex].Note = note
+	if criterionIndex < 0 || criterionIndex >= len(criteria) {
+		return reject("", fmt.Errorf("%w: index %d (len=%d)", ErrAcCriterionOutOfRange, criterionIndex, len(criteria)))
+	}
+	prev := string(criteria[criterionIndex].Status)
+
+	if err := mutate(&criteria[criterionIndex]); err != nil {
+		return reject(prev, err)
 	}
 
 	serialized, serErr := SerializeAcCriteria(criteria)
@@ -1456,20 +1568,24 @@ func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID stri
 		return fmt.Errorf("failed to serialize AC criteria: %w", serErr)
 	}
 
-	updated, err := r.client.BacklogItem.UpdateOneID(parsedID).
+	updated, err := tx.BacklogItem.UpdateOneID(parsedID).
 		SetAcceptanceCriteria(string(serialized)).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to save AC criteria update for item %s: %w", itemID, err)
 	}
+	// Only a real status transition is a mutation worth an audit row; a repeated report of the
+	// same status (or a note-only update) is not.
+	if prev != change.newStatus {
+		if err := audit(prev, "applied"); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit AC update: %w", err)
+	}
 
-	// Best-effort publish: never blocks or fails the AC-status update itself.
-	// Found missing by the same Phase 5 spec-compliance sweep that found the
-	// ItemSessions eager-load regression above: this method drove the
-	// "N/M done" acceptance-criteria progress badge but never emitted a
-	// BacklogItemEvent at all, so live viewers never saw AC progress update
-	// until their next full poll/refresh — a real event-system bypass, not
-	// just a blanked field.
+	// Best-effort publish so live viewers see AC progress without a full refresh.
 	result := backlogItemToData(updated)
 	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:          ChangeItemUpdated,

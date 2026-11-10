@@ -591,6 +591,26 @@ func TestResolveMainRepoRoot_ReturnsInputUnchanged_When_NotAGitRepo(t *testing.T
 	}
 }
 
+// TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension drives the full
+// session-start path (resolve default branch -> create worktree) on a repo with
+// extensions.worktreeConfig=true, the state behind "core.repositoryformatversion does not
+// support extension: worktreeconfig" failing async session start.
+func TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension(t *testing.T) {
+	origin := t.TempDir()
+	runGitOrFail(t, origin, "init", "-b", "main")
+	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init")
+	mainRepo := cloneWithOrigin(t, origin)
+	runGitOrFail(t, mainRepo, "config", "extensions.worktreeConfig", "true")
+
+	wt, err := CreateBacklogWorktree(mainRepo, "wtc-item", "")
+	if err != nil {
+		t.Fatalf("CreateBacklogWorktree failed on a worktreeConfig=true repo: %v", err)
+	}
+	if _, statErr := os.Stat(wt); statErr != nil {
+		t.Fatalf("worktree dir %q missing: %v", wt, statErr)
+	}
+}
+
 // TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree verifies
 // CreateBacklogWorktree end-to-end when given a worktree's path (rather than the main
 // checkout) as repoPath: it must still succeed, branching from the main repo's default

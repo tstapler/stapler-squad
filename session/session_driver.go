@@ -43,6 +43,15 @@ var completionVerbRe = regexp.MustCompile(`[✻✽\*] \w+ed for \d+`)
 // driverTiming is the pair of driver timings tests need to shrink.
 type driverTiming struct {
 	pollInterval, readyTimeout time.Duration
+	// totalTimeout overrides driverTotalTimeout; zero means the default.
+	totalTimeout time.Duration
+}
+
+func (t driverTiming) total() time.Duration {
+	if t.totalTimeout > 0 {
+		return t.totalTimeout
+	}
+	return driverTotalTimeout
 }
 
 // testDriverTiming overrides the production timings; nil means defaults. It is
@@ -101,6 +110,46 @@ const (
 	// process teardown after cancellation, not as the primary wait mechanism.
 	driverStopTimeout = 6 * time.Second
 )
+
+// driverAttempt keeps the current run's activity floor separate from durable
+// prompt delivery. Every initial and retry driver constructs one in the core loop.
+type driverAttempt struct {
+	startedAt           time.Time
+	sentInitial         bool
+	initialPromptSentAt time.Time
+	nudgeSentAt         time.Time
+	// flaggedOutputAt is the last-output time when the interactive quiet note
+	// was raised; non-zero means raised. It re-arms only when output advances
+	// past it, so status flapping cannot re-fire it. Per driver run: a driver
+	// restart may note the same quiet episode once more (log-only, harmless).
+	flaggedOutputAt time.Time
+	stallFlags      int // how many quiet notes this run raised
+	// deadSince is when the pane was first probed dead in the current unbroken
+	// run of dead probes; zero when the last probe found it alive.
+	deadSince time.Time
+}
+
+func newDriverAttempt(inst *Instance, initialPrompt string, now time.Time) driverAttempt {
+	attempt := driverAttempt{startedAt: now}
+	if initialPrompt == "" {
+		attempt.sentInitial = true
+		attempt.initialPromptSentAt = now
+	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
+		attempt.sentInitial = true
+		attempt.initialPromptSentAt = persisted
+	}
+	return attempt
+}
+
+func (a *driverAttempt) idleDuration(now, outputAt time.Time) time.Duration {
+	activityRef := a.startedAt
+	for _, candidate := range []time.Time{a.initialPromptSentAt, outputAt, a.nudgeSentAt} {
+		if candidate.After(activityRef) {
+			activityRef = candidate
+		}
+	}
+	return now.Sub(activityRef)
+}
 
 // dialogLatchStatus is the DialogAnswerLatch state machine (ADR-001):
 // dialogUnanswered -> dialogAwaitingDismissal -> dialogGaveUp, keyed by a
@@ -379,7 +428,9 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 	timing := currentDriverTiming()
 	readyDeadline := time.Now().Add(timing.readyTimeout)
-	totalDeadline := time.Now().Add(driverTotalTimeout)
+	runStart := time.Now()
+	totalDeadline := driverTotalDeadline(inst, runStart)
+	dialogDeadline := runStart.Add(timing.total())
 
 	ticker := time.NewTicker(timing.pollInterval)
 	defer ticker.Stop()
@@ -390,42 +441,24 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		return driverPaneSnapshot(inst.IsRemote())
 	}, time.Now, driverPaneActivityGateEnabled)
 
-	// Once a PR URL is found in terminal output we stop scanning.
-	// Pre-seed from the current in-memory state so we don't re-scan for sessions
-	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
-	prURLLinked := inst.GitHubPRNumber > 0
+	// PR URLs from terminal output that the scan has already handled.
+	scannedURLs := scannedPRURLs{}
 
-	// nudgeSentAt records when the last backlog-work nudge was sent.
-	// Zero means no nudge has been sent yet.
-	var nudgeSentAt time.Time
-
-	// No initial prompt configured — skip the send step; driver still handles
-	// startup dialogs, auto-approval, and monitoring.
-	sentInitial := initialPrompt == ""
-	var initialPromptSentAt time.Time
-	if sentInitial {
-		initialPromptSentAt = time.Now()
-	} else if persisted := inst.GetInitialPromptSentAt(); !persisted.IsZero() {
-		// Persisted record of an actual send in a previous service run --
-		// authoritative, checked before the output/JSONL heuristics below
-		// (which only exist for sessions that predate this field, or for the
-		// rare case a send happened but the persist call itself failed).
-		sentInitial = true
-		initialPromptSentAt = persisted
-	} else {
+	attempt := newDriverAttempt(inst, initialPrompt, time.Now())
+	if !attempt.sentInitial {
 		// Check if the prompt was already delivered in a previous service run.
 		// Use live terminal output first (no disk latency), then fall back to JSONL file.
 		// Persist the result via SetInitialPromptSentAt either way, so this
 		// session (predating the persisted field, or hit by an earlier failed
 		// persist call) doesn't have to re-run these heuristics again next restart.
 		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
-			sentInitial = true
-			initialPromptSentAt = time.Now()
-			inst.SetInitialPromptSentAt(initialPromptSentAt)
+			attempt.sentInitial = true
+			attempt.initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
 		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
-			sentInitial = true
-			initialPromptSentAt = time.Now()
-			inst.SetInitialPromptSentAt(initialPromptSentAt)
+			attempt.sentInitial = true
+			attempt.initialPromptSentAt = time.Now()
+			inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
 		}
 	}
 	var sendAttempts int
@@ -468,7 +501,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 
 		// Stopped after sentInitial = potential unexpected exit.
-		if cont, ret := handleStoppedStatus(ctx, inst, st, allowedPath, initialPrompt, policy, stop, sentInitial, initialPromptSentAt); ret {
+		if cont, ret := handleStoppedStatus(ctx, inst, st, allowedPath, initialPrompt, policy, stop, attempt.sentInitial, attempt.initialPromptSentAt); ret {
 			return
 		} else if cont {
 			continue
@@ -488,7 +521,10 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			tailed = tailContent(output, statusDetectionTailBytes)
 		}
 
-		if hasOutput && isStartupDialog(tailed) {
+		// Auto-answering dialogs is scoped to the first driverTotalTimeout for
+		// interactive sessions: later on an operator may be at the keyboard.
+		dialogsOpen := isAutonomousSession(inst) || time.Now().Before(dialogDeadline)
+		if dialogsOpen && hasOutput && isStartupDialog(tailed) {
 			if handleStartupDialogTick(inst, tailed, &startupLatch, sendAnswerKey) {
 				continue
 			}
@@ -496,15 +532,15 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			// handleStartupDialogTick's doc comment.
 		}
 
-		if !sentInitial {
-			sendInitialPromptTick(ctx, inst, initialPrompt, output, detectedSt, readyDeadline, &sentInitial, &initialPromptSentAt, &sendAttempts)
+		if !attempt.sentInitial {
+			sendInitialPromptTick(ctx, inst, initialPrompt, output, detectedSt, readyDeadline, &attempt.sentInitial, &attempt.initialPromptSentAt, &sendAttempts)
 			continue
 		}
 
 		// Inactivity detection: only after initial prompt sent.
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
 		if st == Ready {
-			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, initialPromptSentAt, &nudgeSentAt)
+			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, &attempt, time.Now())
 			if ret {
 				return
 			}
@@ -515,10 +551,12 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// After the initial prompt is sent, watch for NeedsApproval to handle
 		// directory-access dialogs that AutoYes (-y) doesn't cover.
-		handleApprovalDialogTick(inst, hasOutput, tailed, allowedPath, &approvalLatch, sendAnswerKey)
+		if dialogsOpen {
+			handleApprovalDialogTick(inst, hasOutput, tailed, allowedPath, &approvalLatch, sendAnswerKey)
+		}
 
 		// Scan terminal output for a GitHub PR URL printed by git push.
-		prURLLinked = scanAndLinkPRURL(inst, sentInitial, prURLLinked, previewErr, output)
+		scanAndLinkPRURL(inst, attempt.sentInitial, scannedURLs, previewErr, output)
 	}
 }
 
@@ -539,7 +577,7 @@ func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, t
 	case <-ticker.C:
 	}
 
-	if time.Now().After(totalDeadline) {
+	if !totalDeadline.IsZero() && time.Now().After(totalDeadline) {
 		return 0, 0, true
 	}
 
@@ -551,6 +589,10 @@ func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, t
 	// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
 	// or session happens to be using that env var's value next.
 	if inst.destroyed.Load() {
+		return 0, 0, true
+	}
+
+	if !isAutonomousSession(inst) && interactiveDriverShouldEnd(inst) {
 		return 0, 0, true
 	}
 
@@ -687,7 +729,7 @@ func handleStoppedStatus(ctx context.Context, inst *Instance, st Status, allowed
 // tick — restoring Ready-detection, the inactivity-timeout escalation, and
 // the NeedsApproval check for ticks after the dialog has been answered or
 // abandoned. Without this, a dialogGaveUp session would silently wedge here
-// until driverTotalTimeout (25 min) with zero operator escalation.
+// until the driver ends (or its stall flag fires) with no operator escalation.
 //
 // Exhaustive switch (not a plain if) so a future 4th dialogLatchStatus value
 // can't silently fall through the implicit "unanswered" path and reintroduce
@@ -873,26 +915,34 @@ func sendInitialPromptTick(ctx context.Context, inst *Instance, initialPrompt st
 	markSent()
 }
 
-// handleInactivityTick checks for driver inactivity once the initial prompt
-// has been sent, sending a backlog-work nudge or escalating to
-// handleDriverFailure as needed. shouldContinue and shouldReturn tell the
-// caller which loop control-flow to apply; at most one is ever true.
-func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, initialPromptSentAt time.Time, nudgeSentAt *time.Time) (shouldContinue, shouldReturn bool) {
-	last := inst.LastMeaningfulOutputTime()
-	// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
-	// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
-	// from DB before the ReviewQueue poller had a chance to refresh it from live
-	// terminal content). Using initialPromptSentAt as a floor prevents false inactivity
-	// fires immediately after startup.
-	activityRef := initialPromptSentAt
-	if !last.IsZero() && last.After(initialPromptSentAt) {
-		activityRef = last
+func driverWaitingForOperator(inst *Instance) bool {
+	status := inst.GetDetectedStatus()
+	if (InstanceStatusInfo{ClaudeStatus: status}).IsWaitingForUser() {
+		return true
 	}
-	if !nudgeSentAt.IsZero() && nudgeSentAt.After(activityRef) {
-		activityRef = *nudgeSentAt
+	if inst.HasTag(TagBacklogWork) {
+		return false
 	}
+	switch status {
+	case detection.StatusIdle, detection.StatusReady, detection.StatusSuccess:
+		return true
+	default:
+		return false
+	}
+}
 
-	idle := time.Since(activityRef)
+func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, attempt *driverAttempt, now time.Time) (shouldContinue, shouldReturn bool) {
+	if driverWaitingForOperator(inst) {
+		// Human response time is not agent inactivity; resumed work gets a fresh budget.
+		attempt.startedAt = now
+		attempt.nudgeSentAt = time.Time{}
+		return false, false
+	}
+	idle := attempt.idleDuration(now, inst.LastMeaningfulOutputTime())
+	if !isAutonomousSession(inst) {
+		return handleInteractiveInactivity(inst, allowedPath, policy, stop, attempt, idle, now)
+	}
+	nudgeSentAt := &attempt.nudgeSentAt
 
 	// For backlog work sessions: send a task-reminder nudge before restarting.
 	// This preserves conversational context when Claude finishes but forgets to
@@ -907,11 +957,53 @@ func handleInactivityTick(ctx context.Context, inst *Instance, allowedPath strin
 		graceTimeout = driverBacklogNudgeGrace
 	}
 	if idle > graceTimeout {
+		logStallDecision(inst, gatherStallEvidence(inst, idle, graceTimeout), stallRestart, policy, now)
 		log.Warn("SessionDriver: session stuck — no output for inactivity timeout",
 			"session", inst.Title,
 			"inactivity", idle.Round(time.Second),
 		)
 		return handleDriverFailure(inst, allowedPath, policy, "stalled", stop)
+	}
+	return false, false
+}
+
+// handleInteractiveInactivity applies the stall policy to a non-backlog
+// session. It never restarts a live pane and never marks the session
+// PermanentlyFailed for quiet alone (2026-11-05: nine live sessions were
+// killed and failed this way). A dead pane still takes the failure path; a
+// live one is flagged once per quiet episode.
+func handleInteractiveInactivity(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}, attempt *driverAttempt, idle time.Duration, now time.Time) (shouldContinue, shouldReturn bool) {
+	out := inst.LastMeaningfulOutputTime()
+	if out.After(attempt.flaggedOutputAt) {
+		attempt.flaggedOutputAt = time.Time{}
+	}
+	if idle <= driverInactivityTimeout {
+		attempt.deadSince = time.Time{}
+		return false, false
+	}
+	e := gatherStallEvidence(inst, idle, interactiveStallBudget(policy))
+	v := decideStall(e)
+	if v != stallPaneDead {
+		attempt.deadSince = time.Time{}
+	}
+	switch v {
+	case stallPaneDead:
+		// A single failed probe can be transient (and the probe cannot tell an
+		// error from "dead"), so fail only once probes have been dead for a while.
+		if attempt.deadSince.IsZero() {
+			attempt.deadSince = now
+		}
+		if now.Sub(attempt.deadSince) < deadPaneConfirmWindow {
+			return false, false
+		}
+		logStallDecision(inst, e, v, policy, now)
+		return handleDriverFailure(inst, allowedPath, policy, "tmux_exited", stop)
+	case stallNeedsAttention:
+		if attempt.flaggedOutputAt.IsZero() {
+			attempt.flaggedOutputAt = out
+			attempt.stallFlags++
+			noteInteractiveStall(inst, e, policy, now)
+		}
 	}
 	return false, false
 }
@@ -940,32 +1032,47 @@ func handleApprovalDialogTick(inst *Instance, hasOutput bool, tailed string, all
 	}
 }
 
-// scanAndLinkPRURL scans terminal output for a GitHub PR URL printed by git
-// push and auto-links it to the session so PRStatusPoller can track it
-// without relying on branch-name discovery (which fails when the omnibar
-// branch name differs from the PR head branch). It returns the prURLLinked
-// value the caller should keep for subsequent ticks.
-//
-// Republishes the snapshot after its raw write: GitHub()/CurrentBranch()
-// and instance_adapter.go's API responses read GitHubPRURL/GitHubPRNumber
-// via Snapshot(), which would otherwise never observe this write.
-func scanAndLinkPRURL(inst *Instance, sentInitial bool, prURLLinked bool, previewErr error, output string) bool {
-	if prURLLinked || !sentInitial || inst.GitHubOwner == "" || previewErr != nil || output == "" {
-		return prURLLinked
+// scannedPRURLs holds the PR URLs the terminal scan has already handled, so a URL
+// that stays in the scrollback is not processed again on every tick.
+type scannedPRURLs map[string]struct{}
+
+// scanAndLinkPRURL scans terminal output for the PR URLs a git push or
+// `gh pr create` printed and attaches each one that belongs to the session's own
+// repository, so PRStatusPoller can track it without relying on branch-name
+// discovery (which fails when the omnibar branch name differs from the PR head
+// branch). Several URLs accumulate as separate links; seen remembers the ones
+// already handled.
+func scanAndLinkPRURL(inst *Instance, sentInitial bool, seen scannedPRURLs, previewErr error, output string) {
+	if !sentInitial || previewErr != nil || output == "" {
+		return
 	}
-	prURL, prNum := scanTerminalForPRURL(output)
-	if prURL == "" {
-		return prURLLinked
+	for _, prURL := range scanTerminalForPushedPRURLs(output) {
+		if _, done := seen[prURL]; done {
+			continue
+		}
+		seen[prURL] = struct{}{}
+		attachScannedPRURL(inst, prURL)
 	}
-	inst.mu.Lock()
-	inst.GitHubPRURL = prURL
-	inst.GitHubPRNumber = prNum
-	snap := buildSnapshot(inst)
-	inst.mu.Unlock()
-	inst.snapshot.Store(snap)
+}
+
+// attachScannedPRURL attaches prURL only when its host, owner and repo equal the
+// session's resolved ones; a session without a resolved repo attaches nothing.
+func attachScannedPRURL(inst *Instance, prURL string) {
+	parsed, err := ParseGitHubURL(prURL)
+	if err != nil {
+		return
+	}
+	gh := inst.Snapshot().GitHub
+	want, wantErr := NewPRRef(gh.GitHubHost, gh.GitHubOwner, gh.GitHubRepo, parsed.PRNumber)
+	got, gotErr := NewPRRef(parsed.Host, parsed.Owner, parsed.Repo, parsed.PRNumber)
+	if wantErr != nil || gotErr != nil || want != got {
+		log.Debug("SessionDriver: ignoring PR URL from terminal output that is not in the session's repository",
+			"session", inst.Title, "url", prURL, "session_repo", gh.GitHubOwner+"/"+gh.GitHubRepo)
+		return
+	}
+	inst.AttachScannedPR(prURL, parsed.PRNumber)
 	log.Info("SessionDriver: auto-linked PR from terminal push output",
-		"session", inst.Title, "pr", prNum, "url", prURL)
-	return true
+		"session", inst.Title, "pr", parsed.PRNumber, "url", prURL)
 }
 
 // submitInitialPrompt is a variable only so a test can force a lease-API error
@@ -1192,7 +1299,7 @@ func markSessionNeedsAttention(inst *Instance, reason string) {
 		DetectedAt:   time.Now(),
 		Context:      reason, // "inactivity timeout" or "unexpected exit" or "restart error: ..."
 		Tags:         inst.GetTags(),
-		Path:         inst.Path,
+		Path:         inst.GetPath(),
 		Status:       inst.GetEffectiveStatus().String(),
 		LastActivity: inst.LastMeaningfulOutputTime(),
 	})
@@ -1372,26 +1479,23 @@ func outputShowsConversationStarted(output string) bool {
 	return false
 }
 
-// scanTerminalForPRURL searches terminal scrollback output for a GitHub PR URL
-// of the form https://github.com/owner/repo/pull/NNN (as printed by git push).
-// Returns ("", 0) if not found.
-func scanTerminalForPRURL(output string) (string, int) {
+// scanTerminalForPushedPRURLs returns, oldest first, the GitHub PR URLs on the
+// last 30 lines of terminal output that git push (optionally "remote:"-prefixed)
+// or `gh pr create` printed on a line of their own. A URL mentioned inside other
+// text is not a push result and is ignored.
+func scanTerminalForPushedPRURLs(output string) []string {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
-	for i := len(lines) - 1; i >= 0 && i >= len(lines)-30; i-- {
-		line := strings.TrimSpace(lines[i])
-		if !strings.Contains(line, "github.com/") || !strings.Contains(line, "/pull/") {
+	var urls []string
+	for _, line := range lines[max(0, len(lines)-30):] {
+		word := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "remote:"))
+		if strings.ContainsAny(word, " \t") || !strings.Contains(word, "github.com/") || !strings.Contains(word, "/pull/") {
 			continue
 		}
-		for _, word := range strings.Fields(line) {
-			word = strings.Trim(word, ".,;:\"'()")
-			if strings.Contains(word, "github.com/") && strings.Contains(word, "/pull/") {
-				if ref, err := ParseGitHubURL(word); err == nil && ref.PRNumber > 0 {
-					return word, ref.PRNumber
-				}
-			}
+		if ref, err := ParseGitHubURL(word); err == nil && ref.PRNumber > 0 {
+			urls = append(urls, word)
 		}
 	}
-	return "", 0
+	return urls
 }
 
 // parseJSONField extracts a string field value from a JSON blob.

@@ -113,6 +113,26 @@ func registerLifecycleTools(s *mcpserver.MCPServer, lh *lifecycleHandlers) {
 type lifecycleResult struct {
 	MCPResult
 	Session *SessionDetail `json:"session,omitempty"`
+	// Warnings are non-blocking notices, e.g. an intentionally ungated pause or stop
+	// removing a worktree whose PR is still open or unknown.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// openPRWarnings names the open or unknown PRs inst links, read from its Snapshot()
+// (never blocks; pause and stop are explicit actions on one named session). It logs one
+// structured line when there is something to warn about.
+func openPRWarnings(inst *session.Instance, action string) []string {
+	refs := session.OpenPRRefs(inst.Snapshot().GitHub.PRs)
+	if len(refs) == 0 {
+		return nil
+	}
+	names := make([]string, len(refs))
+	for i, r := range refs {
+		names[i] = r.String()
+	}
+	msg := fmt.Sprintf("%s removes the worktree while PR(s) %s are still open or unknown; the branch stays pushed", action, strings.Join(names, ", "))
+	log.Warn("mcp ungated session removal with open PRs", "session", inst.Title, "action", action, "prs", names)
+	return []string{msg}
 }
 
 func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -405,6 +425,8 @@ func (lh *lifecycleHandlers) pauseSession(ctx context.Context, req mcpgo.CallToo
 		return blockErr, nil
 	}
 
+	warnings := openPRWarnings(inst, "pause_session")
+
 	// MCP tool pause is always user-initiated — record as manual.
 	inst.PauseReason = session.PauseReasonManual
 	if err := inst.Pause(); err != nil {
@@ -416,7 +438,7 @@ func (lh *lifecycleHandlers) pauseSession(ctx context.Context, req mcpgo.CallToo
 	}
 
 	detail := instanceToDetail(inst)
-	return okResult(lifecycleResult{MCPResult: MCPResult{Success: true}, Session: &detail}), nil
+	return okResult(lifecycleResult{MCPResult: MCPResult{Success: true}, Session: &detail, Warnings: warnings}), nil
 }
 
 func (lh *lifecycleHandlers) resumeSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -497,10 +519,12 @@ func (lh *lifecycleHandlers) stopSession(ctx context.Context, req mcpgo.CallTool
 		}
 	}
 
+	var warnings []string
 	if inst != nil {
 		if blockErr := lh.refuseIfWorktreeSharedWithOtherLiveSession(inst); blockErr != nil {
 			return blockErr, nil
 		}
+		warnings = openPRWarnings(inst, "stop_session")
 		// Hydrate for tmux access if the session is not paused (paused sessions have no tmux session).
 		if inst.Status != session.Paused && !inst.Started() {
 			if startErr := inst.Start(false); startErr != nil {
@@ -527,7 +551,7 @@ func (lh *lifecycleHandlers) stopSession(ctx context.Context, req mcpgo.CallTool
 		return errResult(ErrInternalError, fmt.Sprintf("delete from storage: %v", err), ""), nil
 	}
 
-	return okResult(MCPResult{Success: true}), nil
+	return okResult(lifecycleResult{MCPResult: MCPResult{Success: true}, Warnings: warnings}), nil
 }
 
 func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

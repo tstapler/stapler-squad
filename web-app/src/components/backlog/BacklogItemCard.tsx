@@ -8,6 +8,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 // it doesn't in the installed version).
 import { CircleDot } from "lucide-react";
 import type { BacklogItem, BacklogItemStatus, ClaimedElsewhere } from "@/lib/hooks/useBacklogService";
+import { isAcSatisfied } from "@/lib/backlog/acStatus";
 import type { StuckBacklogItem, StuckReason } from "@/gen/session/v1/backlog_pb";
 import { getStatusLabel } from "@/lib/backlog/status";
 import { buildExternalRefLabels, getSourceBadgeConfig } from "@/lib/backlog/sourceBadge";
@@ -60,7 +61,7 @@ interface BacklogItemCardProps {
 
 // The bare externalId is only an issue number, so repo-qualify it from the URL
 // (stapler-mcp#22 vs stapler-squad#22); unparseable URLs keep the bare "#N".
-function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: string; externalId: string; pluginId?: string }) {
+export function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: string; externalId: string; pluginId?: string }) {
   const source = getSourceBadgeConfig(pluginId);
   const { fullRef, shortRef } = buildExternalRefLabels(pluginId, externalUrl, externalId);
   const href = safeExternalHref(externalUrl);
@@ -90,9 +91,9 @@ function ProvenanceBadge({ externalUrl, externalId, pluginId }: { externalUrl: s
   );
 }
 
-function AcSummary({ item }: { item: BacklogItem }) {
+export function AcSummary({ item }: { item: BacklogItem }) {
   if (item.acCriteria.length === 0) return null;
-  const done = item.acCriteria.filter((c) => c.status === "done").length;
+  const done = item.acCriteria.filter(isAcSatisfied).length;
   return (
     <span className={styles.acSummary} aria-label={`${done} of ${item.acCriteria.length} criteria done`}>
       {done}/{item.acCriteria.length} done
@@ -111,7 +112,7 @@ const VERDICT_BADGE_CONFIG: Partial<Record<NonNullable<BacklogItem["gateVerdict"
 // FAIL/PARTIAL verdict that triggered rework is otherwise invisible until the
 // item is opened (PENDING is left unbadged: it just means a review is running,
 // not a signal worth a card badge).
-function VerdictBadge({ item }: { item: BacklogItem }) {
+export function VerdictBadge({ item }: { item: BacklogItem }) {
   if (!item.gateVerdict) return null;
   const config = VERDICT_BADGE_CONFIG[item.gateVerdict];
   if (!config) return null;

@@ -1,13 +1,17 @@
 package artifacts
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // artifactEntry is a minimal copy of the JSONL envelope fields the scanner needs.
 // Deliberately does NOT embed session/tokens types to avoid coupling to that package's
 // performance-optimized omissions (jsonlUserContent omits Input to avoid 237KB allocations).
 type artifactEntry struct {
-	Type    string          `json:"type"`
-	Message json.RawMessage `json:"message"`
+	Type      string          `json:"type"`
+	Timestamp time.Time       `json:"timestamp"`
+	Message   json.RawMessage `json:"message"`
 }
 
 type artifactMessage struct {
@@ -17,8 +21,9 @@ type artifactMessage struct {
 
 type artifactContentBlock struct {
 	Type      string          `json:"type"`
-	ToolUseID string          `json:"tool_use_id"`
-	Content   json.RawMessage `json:"content"` // string or []textBlock (tool_result)
+	ID        string          `json:"id"`          // tool_use: pairs with the result's ToolUseID
+	ToolUseID string          `json:"tool_use_id"` // tool_result: the tool_use it answers
+	Content   json.RawMessage `json:"content"`     // string or []textBlock (tool_result)
 	// tool_use fields:
 	Name  string          `json:"name"`  // "Bash", "Write", "Edit", etc.
 	Input json.RawMessage `json:"input"` // {"command":"...", "description":"..."} for Bash

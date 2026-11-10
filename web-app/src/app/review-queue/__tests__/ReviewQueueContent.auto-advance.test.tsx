@@ -53,6 +53,10 @@ jest.mock("@/lib/hooks/useWatchBacklogItems", () => ({
   useWatchBacklogItems: jest.fn(() => ({ items: [], connectionState: "live" })),
 }));
 
+jest.mock("@/lib/api/guidanceApi", () => ({
+  useListAllPendingGuidanceRequestsQuery: () => ({ data: [] }),
+}));
+
 // ---------------------------------------------------------------------------
 // ReviewQueuePanel stub: captures callbacks, including onSessionClick
 // so tests can drive selectedSession state via handleSessionClick.

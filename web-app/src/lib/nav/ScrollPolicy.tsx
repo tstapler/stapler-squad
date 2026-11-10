@@ -18,9 +18,13 @@ interface Position {
 
 const positionsByLocation = new Map<string, Map<string, Position>>();
 
-/** Stable across remounts of the same page: an id, else the tag/sibling-index path from `body`. */
+/**
+ * Stable across remounts of the same page: an id, else the tag/sibling-index path from `body`.
+ * An id counts only if it resolves back to this element: pages nest a second `<main id="main-content">`
+ * inside the shell's, and `getElementById` would hand restore the non-scrolling outer one.
+ */
 function describe(element: Element): string {
-  if (element.id) return `#${element.id}`;
+  if (element.id && document.getElementById(element.id) === element) return `#${element.id}`;
   const segments: string[] = [];
   for (let node: Element | null = element; node && node !== document.body; node = node.parentElement) {
     const siblings = node.parentElement ? Array.from(node.parentElement.children) : [];

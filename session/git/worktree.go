@@ -105,6 +105,10 @@ type GitWorktree struct {
 	// real git worktree on disk for every case.
 	dirtyChecker func(worktreePath string) (bool, error)
 
+	// worktreePruner drops git worktree admin entries whose directories are gone.
+	// Defaults to nativeWorktreePrune; tests override it to observe calls.
+	worktreePruner func(repoPath string) error
+
 	// ponytail: atomic.Value replaces sync.RWMutex+bool+time — lock-free reads on the fast cache-hit path
 	isDirtyCache atomic.Value // stores dirtyCacheState; zero value = cache invalid
 

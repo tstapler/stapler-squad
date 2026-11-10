@@ -423,11 +423,22 @@ func linkKeyFromPRURL(raw string) githubpkg.LinkKey {
 	return key.Key()
 }
 
+// recordPRFixOutcome writes a pr_fix_outcome flow marker, best-effort. The
+// respawned outcome is not written here (it lives in backlog_service_triage.go,
+// which this feature must not diff); readers derive it from status events.
+func (s *BacklogService) recordPRFixOutcome(ctx context.Context, itemID, outcome string) {
+	if s == nil || s.storage == nil {
+		return
+	}
+	s.storage.RecordFlowMarkerForItemPR(ctx, itemID, session.FlowMarkerPRFixOutcome, outcome)
+}
+
 // degradeToRespawnBlocked is steerActiveSessionForPRFix's shared exit for
 // every branch that falls back to the existing notify-only behavior instead
 // of delivering a steer. "Blocked by active session" is never simultaneously
 // a failed-steer condition, so resolve any stale SteerFailed row first.
 func (s *BacklogService) degradeToRespawnBlocked(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID string) {
+	s.recordPRFixOutcome(ctx, itemID, session.PRFixOutcomeSkippedActive)
 	s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
 	s.notifyRespawnBlockedByActiveSession(ctx, "AutoReopenForPRFix", itemID, itemTitle, currentStatus, activeSessionUUID)
 }
@@ -481,6 +492,7 @@ func (s *BacklogService) notifyActiveSessionSteered(ctx context.Context, itemID,
 	reasonPhrase := humanReadableReasonSet(reason)
 	if deliverErr == nil {
 		log.InfoLog().Printf("[AutoReopenForPRFix] steered active session %s for item %s", activeSessionUUID, itemID)
+		s.recordPRFixOutcome(ctx, itemID, session.PRFixOutcomeSteered)
 		s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
 		s.resolveSteerFailedLogged(ctx, "AutoReopenForPRFix", itemID)
 		if s.eventBus == nil {

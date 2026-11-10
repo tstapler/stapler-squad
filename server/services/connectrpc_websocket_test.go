@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
@@ -1084,7 +1085,9 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 	require.Nil(t, terminalData.GetError(), "must not surface a hub-start-failed error frame")
 
 	require.True(t, inst.Started(), "self-heal must flip Started() to true before streaming proceeds")
-	require.Equal(t, session.Active, inst.Snapshot().Status)
+	// The fake tmux's control mode ends at once, which the exit callback self-heal now wires
+	// reports as Stopped; the invariant here is that Creating was left, not that it stays Active.
+	require.NotEqual(t, session.Creating, inst.Snapshot().Status)
 
 	// The regression this test guards: before the self-heal branch existed, Started() stayed
 	// false forever, so every capture call returned streamhub.ErrSessionNotStarted.
@@ -1284,6 +1287,38 @@ func TestEnsureHubBackendAlive(t *testing.T) {
 		require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
 			"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
 	})
+}
+
+func attachStageTotal(stage string, labels termlat.Labels) uint64 {
+	for _, st := range termlat.Default.Report() {
+		if st.Stage == stage && st.Backend == labels.Backend && st.Listener == labels.Listener {
+			return st.Total
+		}
+	}
+	return 0
+}
+
+func TestEnsureHubBackendAliveCtx_should_TimeEachAttachStep(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	labels := termlat.Labels{Backend: "tmux", Listener: "local"}
+	fakeExec := &deadThenAliveExecutor{}
+	ptyFactory := &fakePtyFactory{}
+	t.Cleanup(ptyFactory.Close)
+	inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-hub-stages-"+t.Name(), t.TempDir(), fakeExec, ptyFactory)
+	fakeExec.existsName = tmuxSessionName
+	stages := []string{termlat.StageAttachPrepare, termlat.StageAttachAliveCheck, termlat.StageAttachRestore}
+	before := map[string]uint64{}
+	for _, st := range stages {
+		before[st] = attachStageTotal(st, labels)
+	}
+
+	alive, err := h.ensureHubBackendAliveCtx(context.Background(), inst, "sess", labels)
+
+	require.NoError(t, err)
+	require.True(t, alive)
+	for _, st := range stages {
+		require.Greater(t, attachStageTotal(st, labels), before[st], st)
+	}
 }
 
 // A session that is not Creating can never publish a Started event, so

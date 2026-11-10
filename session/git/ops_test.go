@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/internal/gittest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -345,6 +346,69 @@ func TestResolveOriginBranchSHA_ReturnsError_When_FetchFails(t *testing.T) {
 	sha, err := ResolveOriginBranchSHA(work, "main")
 	require.Error(t, err)
 	assert.Empty(t, sha)
+}
+
+// worktreeConfigClone returns a clone of a fresh origin with
+// extensions.worktreeConfig=true on a core.repositoryformatversion=0 repo (the state
+// `git worktree`/sparse-checkout tooling leaves behind), using a file:// remote.
+func worktreeConfigClone(t *testing.T) (origin, work string) {
+	t.Helper()
+	origin = setupTestRepo(t)
+	work = cloneTestRepo(t, origin)
+	runGit(t, work, "remote", "set-url", "origin", "file://"+origin)
+	runGit(t, work, "config", "extensions.worktreeConfig", "true")
+	require.Equal(t, "0", strings.TrimSpace(runGit(t, work, "config", "core.repositoryformatversion")))
+	return origin, work
+}
+
+// TestResolveOriginBranchSHA_Succeeds_When_RepoHasWorktreeConfigExtension is the
+// regression test for "core.repositoryformatversion does not support extension:
+// worktreeconfig" breaking session creation.
+func TestResolveOriginBranchSHA_Succeeds_When_RepoHasWorktreeConfigExtension(t *testing.T) {
+	t.Parallel()
+	origin, work := worktreeConfigClone(t)
+	want := strings.TrimSpace(runGit(t, origin, "rev-parse", "main"))
+
+	sha, err := ResolveOriginBranchSHA(work, "main")
+	require.NoError(t, err)
+	assert.Regexp(t, `^[0-9a-f]{40}$`, sha)
+	assert.Equal(t, want, sha)
+}
+
+func TestResolveLocalBranchSHA_Succeeds_When_RepoHasWorktreeConfigExtension(t *testing.T) {
+	t.Parallel()
+	_, work := worktreeConfigClone(t)
+	want := strings.TrimSpace(runGit(t, work, "rev-parse", "main"))
+
+	sha, err := ResolveLocalBranchSHA(work, "main")
+	require.NoError(t, err)
+	assert.Regexp(t, `^[0-9a-f]{40}$`, sha)
+	assert.Equal(t, want, sha)
+}
+
+func TestResolveLocalBranchSHA_ReturnsErrRefNotFound_When_BranchMissing(t *testing.T) {
+	t.Parallel()
+	_, work := worktreeConfigClone(t)
+
+	_, err := ResolveLocalBranchSHA(work, "nonexistent")
+	require.ErrorIs(t, err, backend.ErrRefNotFound)
+	assert.Contains(t, err.Error(), "failed to resolve local branch nonexistent")
+}
+
+// A missing origin branch normally fails at the fetch step; dropping the clone's fetch
+// refspec lets the fetch succeed without creating refs/remotes/origin/<b>, so the
+// failure comes from ResolveRef.
+func TestResolveOriginBranchSHA_ReturnsErrRefNotFound_When_NoRemoteTrackingRef(t *testing.T) {
+	t.Parallel()
+	origin, work := worktreeConfigClone(t)
+	runGit(t, origin, "branch", "feature-x")
+	runGit(t, work, "config", "--unset-all", "remote.origin.fetch")
+
+	require.NoError(t, FetchBranch(work, "feature-x"), "precondition: fetch must succeed so the error comes from ResolveRef")
+
+	_, err := ResolveOriginBranchSHA(work, "feature-x")
+	require.ErrorIs(t, err, backend.ErrRefNotFound)
+	assert.Contains(t, err.Error(), "failed to resolve origin/feature-x")
 }
 
 // TestResolveDefaultBranchSHA_FindsNonMainDefaultBranch is the regression test for the

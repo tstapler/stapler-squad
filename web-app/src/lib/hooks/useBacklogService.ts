@@ -5,6 +5,7 @@ import { createClient } from "@connectrpc/connect";
 import { getConnectTransport } from "@/lib/api/transport";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import type { PrHold, SessionPullRequest } from "@/gen/session/v1/types_pb";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { useAbortableEffect } from "@/lib/hooks/useAbortableEffect";
 import type {
@@ -19,7 +20,8 @@ import type {
   PipelineMode as PipelineModeProto,
   PipelineStageExecutor as PipelineStageExecutorProto} from "@/gen/session/v1/backlog_pb";
 import {
-  BacklogService
+  BacklogService,
+  PrAssociationResult
 } from "@/gen/session/v1/backlog_pb";
 
 // ---------------------------------------------------------------------------
@@ -31,12 +33,25 @@ export type KnownBacklogStatus = "idea" | "refining" | "ready" | "queued" | "in_
 // accepting unknown statuses returned by newer server versions.
 export type BacklogItemStatus = KnownBacklogStatus | (string & {});
 
-export type AcCriterionStatus = "pending" | "in_progress" | "done";
+/** What an UpdateBacklogItem pr_url/pr_number write did, as the server reported it. */
+export type PrAssociation = "linked_and_moved" | "already_tracked" | "unspecified";
+
+const PR_ASSOCIATION: Record<PrAssociationResult, PrAssociation> = {
+  [PrAssociationResult.UNSPECIFIED]: "unspecified",
+  [PrAssociationResult.LINKED_AND_MOVED]: "linked_and_moved",
+  [PrAssociationResult.ALREADY_TRACKED]: "already_tracked",
+};
+
+export type AcCriterionStatus = "pending" | "in_progress" | "done" | "waived";
 
 export interface AcCriterion {
   index: number;
   text: string;
   status: AcCriterionStatus;
+  /** Justification recorded with the waiver; set when status is "waived". */
+  waiverReason?: string;
+  waivedBy?: string;
+  waivedAt?: string;
 }
 
 export interface TriageSuggestion {
@@ -233,6 +248,10 @@ export interface BacklogItem {
   prUrl?: string;
   /** GitHub PR number when item is in pr_pending status */
   prNumber?: number;
+  /** The item's derived PR set (item-direct plus current round); empty from servers that predate it. */
+  pullRequests?: SessionPullRequest[];
+  /** Why cleanup is held for this item. Detail responses only, never list responses. */
+  prHolds?: PrHold[];
   /** Source tracker's identifier for this item (e.g. a GitHub issue number), populated for imported items only. */
   externalId?: string;
   /** Source plugin id ("github_issues", "linear", ...), populated for imported items only. */
@@ -474,6 +493,9 @@ function mapAcCriterion(c: AcCriterionProto): AcCriterion {
     index: c.index,
     text: c.text,
     status: (c.status || "pending") as AcCriterionStatus,
+    waiverReason: c.waiverReason || undefined,
+    waivedBy: c.waivedBy || undefined,
+    waivedAt: c.waivedAt || undefined,
   };
 }
 
@@ -703,6 +725,8 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     totalEstimatedCostUsd: p.totalEstimatedCostUsd ?? 0,
     prUrl: p.prUrl || undefined,
     prNumber: p.prNumber || undefined,
+    pullRequests: p.pullRequests ?? [],
+    prHolds: p.prHolds ?? [],
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
@@ -727,6 +751,9 @@ function toProtoAcCriteria(criteria: AcCriterion[]): AcCriterionProto[] {
     index: c.index,
     text: c.text,
     status: c.status,
+    waiverReason: c.waiverReason ?? "",
+    waivedBy: c.waivedBy ?? "",
+    waivedAt: c.waivedAt ?? "",
   }));
 }
 
@@ -822,7 +849,7 @@ interface UseBacklogServiceReturn {
   getBacklogItem: (id: string) => Promise<BacklogItem | null>;
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   /** One turn of chat-based backlog creation/refinement. Empty existingItemId creates a new item (delegates to createBacklogItem); a set existingItemId delegates to TriggerTriage's feedback-driven refine path. */
-  createBacklogItemFromChat: (message: string, existingItemId?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
+  createBacklogItemFromChat: (message: string, existingItemId?: string, repoPath?: string) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   /**
    * Runs a free-text message through an LLM to produce a structured draft
    * (title/description/acceptance criteria) for the caller to review/edit —
@@ -841,6 +868,13 @@ interface UseBacklogServiceReturn {
   searchGitHubRepos: (query: string, limit?: number) => Promise<GitHubRepo[]>;
   listGitHubIssues: (owner: string, repo: string, options?: { state?: string; search?: string; limit?: number; host?: string }) => Promise<GitHubIssue[]>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
+  /** Audited waiver of one acceptance criterion with a mandatory reason. Returns the refreshed item. */
+  waiveAcceptanceCriterion: (id: string, criterionIndex: number, reason: string) => Promise<BacklogItem | null>;
+  /**
+   * updateBacklogItem for a pr_url/pr_number write: reports what the server did with the link and throws the
+   * server's error (e.g. FailedPrecondition outside review/pr_pending) instead of swallowing it into lastError.
+   */
+  associatePullRequest: (id: string, data: Partial<BacklogItemInput> & { prUrl: string; prNumber: number }) => Promise<{ item: BacklogItem | null; association: PrAssociation }>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
   unarchiveBacklogItem: (id: string) => Promise<boolean>;
   deleteBacklogItem: (id: string) => Promise<boolean>;
@@ -995,13 +1029,14 @@ export function useBacklogService(): UseBacklogServiceReturn {
   );
 
   const createBacklogItemFromChat = useCallback(
-    async (message: string, existingItemId?: string): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
+    async (message: string, existingItemId?: string, repoPath?: string): Promise<{ item: BacklogItem; triageTriggered: boolean } | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
         const resp = await clientRef.current.createBacklogItemFromChat({
           message,
           existingItemId: existingItemId ?? "",
+          repoPath: repoPath ?? "",
         });
         return resp.item
           ? { item: mapBacklogItem(resp.item), triageTriggered: resp.triageTriggered }
@@ -1016,8 +1051,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
   );
 
   const parseBacklogItemIntent = useCallback(
-    // repo_path is intentionally omitted: the omnibar has no "current repo"
-    // context available before parsing.
+    // repo_path is omitted: callers pass known_repo_paths and let the LLM pick one.
     async (message: string, knownRepoPaths: string[] = []): Promise<ParsedBacklogItemDraft | null> => {
       if (!clientRef.current) return null;
       try {
@@ -1041,35 +1075,63 @@ export function useBacklogService(): UseBacklogServiceReturn {
     []
   );
 
+  const sendBacklogItemUpdate = useCallback(
+    async (id: string, data: Partial<BacklogItemInput>): Promise<{ item: BacklogItem | null; association: PrAssociation }> => {
+      if (!clientRef.current) return { item: null, association: "unspecified" };
+      const resp = await clientRef.current.updateBacklogItem({
+        itemId: id,
+        title: data.title,
+        description: data.description,
+        repoPath: data.repoPath,
+        priority: data.priority,
+        skipPlanning: data.skipPlanning,
+        skipReviewGate: data.skipReviewGate,
+        autoSpawnSession: data.autoSpawnSession,
+        autoCreatePr: data.autoCreatePR,
+        autoApprovePlan: data.autoApprovePlan,
+        acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
+        notes: data.notes,
+        pipelineMode: data.pipelineMode,
+        category: data.category,
+        reworkCapOverride: data.reworkCapOverride,
+        costBudgetThresholdUsd: data.costBudgetThresholdUsd,
+        prUrl: data.prUrl,
+        prNumber: data.prNumber,
+      });
+      return { item: resp.item ? mapBacklogItem(resp.item) : null, association: PR_ASSOCIATION[resp.prAssociation] ?? "unspecified" };
+    },
+    []
+  );
+
   const updateBacklogItem = useCallback(
     async (id: string, data: Partial<BacklogItemInput>): Promise<BacklogItem | null> => {
-      if (!clientRef.current) return null;
       try {
         setLastError(null);
-        const resp = await clientRef.current.updateBacklogItem({
-          itemId: id,
-          title: data.title,
-          description: data.description,
-          repoPath: data.repoPath,
-          priority: data.priority,
-          skipPlanning: data.skipPlanning,
-          skipReviewGate: data.skipReviewGate,
-          autoSpawnSession: data.autoSpawnSession,
-          autoCreatePr: data.autoCreatePR,
-          autoApprovePlan: data.autoApprovePlan,
-          acceptanceCriteria: data.acCriteria ? toProtoAcCriteria(data.acCriteria) : undefined,
-          notes: data.notes,
-          pipelineMode: data.pipelineMode,
-          category: data.category,
-          reworkCapOverride: data.reworkCapOverride,
-          costBudgetThresholdUsd: data.costBudgetThresholdUsd,
-          prUrl: data.prUrl,
-          prNumber: data.prNumber,
-        });
-        return resp.item ? mapBacklogItem(resp.item) : null;
+        return (await sendBacklogItemUpdate(id, data)).item;
       } catch (err) {
         console.error("[useBacklogService] updateBacklogItem:", err);
         setLastError(new Error(getErrorMessage(err, "Failed to update backlog item.")));
+        return null;
+      }
+    },
+    [sendBacklogItemUpdate]
+  );
+
+  const associatePullRequest = useCallback(
+    (id: string, data: Partial<BacklogItemInput> & { prUrl: string; prNumber: number }) => sendBacklogItemUpdate(id, data),
+    [sendBacklogItemUpdate]
+  );
+
+  const waiveAcceptanceCriterion = useCallback(
+    async (id: string, criterionIndex: number, reason: string): Promise<BacklogItem | null> => {
+      if (!clientRef.current) return null;
+      try {
+        setLastError(null);
+        const resp = await clientRef.current.waiveAcceptanceCriterion({ itemId: id, criterionIndex, reason });
+        return resp.item ? mapBacklogItem(resp.item) : null;
+      } catch (err) {
+        console.error("[useBacklogService] waiveAcceptanceCriterion:", err);
+        setLastError(new Error(getErrorMessage(err, "Failed to waive criterion.")));
         return null;
       }
     },
@@ -1533,6 +1595,8 @@ export function useBacklogService(): UseBacklogServiceReturn {
       searchGitHubRepos,
       listGitHubIssues,
       updateBacklogItem,
+      waiveAcceptanceCriterion,
+      associatePullRequest,
       archiveBacklogItem,
       unarchiveBacklogItem,
       deleteBacklogItem,

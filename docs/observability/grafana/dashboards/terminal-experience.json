@@ -1,0 +1,2315 @@
+{
+  "title": "stapler-squad: terminal experience",
+  "description": "Where does terminal input lag come from? Keystroke-to-echo broken into send, server, network and render; backend call decomposition; head-of-line waits on every hop; queues, drops, runtime.",
+  "uid": "ssq-terminal-experience",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "tags": [
+    "stapler-squad",
+    "terminal",
+    "latency"
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "iconColor": "green",
+        "name": "Deploys",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [
+            "deploy",
+            "stapler-squad"
+          ],
+          "type": "tags"
+        },
+        "type": "tags"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Slow-call traces in Tempo (Explore)",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": true,
+      "url": "/explore?schemaVersion=1&orgId=1&panes=%7B%22a%22%3A%7B%22datasource%22%3A%22tempo%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22datasource%22%3A%7B%22type%22%3A%22tempo%22%2C%22uid%22%3A%22tempo%22%7D%2C%22queryType%22%3A%22traceql%22%2C%22query%22%3A%22%7B%20resource.service.name%20%3D%20%5C%22stapler-squad%5C%22%20%26%26%20name%20%3D~%20%5C%22session.backend.*%7Cterminal.input%5C%22%20%7D%22%2C%22tableType%22%3A%22traces%22%2C%22limit%22%3A20%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22${__from}%22%2C%22to%22%3A%22${__to}%22%7D%7D%7D",
+      "tooltip": "Spans exist only for calls over the slow-call threshold"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Alerts: red here means the user is feeling it",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Echo paint p95",
+      "description": "Keystroke to painted echo, browser-measured. Red above the 150 ms alert limit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"echo_paint\"}[$__rate_interval])))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 150
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Server input p95",
+      "description": "Keystroke frame read -> backend send returned. Red above 100 ms.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"input_total\"}[$__rate_interval])))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Slow calls / min",
+      "description": "capture_pane, resize, write_stdin or send_keys calls slower than STAPLER_SQUAD_SLOW_CALL_MS (250 ms).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(terminal_slow_call_total[$__rate_interval])) * 60",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Dropped frames / min",
+      "description": "Output frames dropped on a full hub or tymux queue. Any sustained value is a visible glitch.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(terminal_frame_drops_total[$__rate_interval])) * 60",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Event-loop lag p95",
+      "description": "Worst main-thread timer drift per 5 s window, browser-measured. A busy thread delays every keystroke.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"eventloop_lag\"}[$__rate_interval])))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Scheduler latency p99",
+      "description": "Go goroutine run-queue wait. Above 100 ms the server itself is starved.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "go_runtime_sched_latency_seconds{quantile=\"0.99\"}",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.25
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Keystroke to echo: where does the lag sit?",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Echo painted (browser) p50 / p95 / p99",
+      "description": "Keystroke sent -> echo painted two animation frames later. The number the user feels.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"echo_paint\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{listener}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"echo_paint\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{listener}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"echo_paint\"}[$__rate_interval])))",
+          "legendFormat": "p99 {{listener}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Echo written (server) p50 / p95 / p99 by backend",
+      "description": "Keystroke received on the server -> next output frame written to the socket. Compare with the browser panel: the gap is network plus browser.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le,backend,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"echo_server\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{backend}}/{{listener}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"echo_server\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{backend}}/{{listener}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,backend,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"echo_server\"}[$__rate_interval])))",
+          "legendFormat": "p99 {{backend}}/{{listener}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Echo breakdown (mean, stacked)",
+      "description": "Averages add up, percentiles do not. send queue = browser send queue; server = echo_server; network+return = echo_arrive - server - send queue (clamped at 0); render = arrive -> painted.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"input_queue\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"input_queue\"}[$__rate_interval])))",
+          "legendFormat": "send queue (browser)"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"echo_server\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"echo_server\"}[$__rate_interval])))",
+          "legendFormat": "server"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "clamp_min((sum(rate(terminal_latency_stage_duration_sum{stage=\"echo_arrive\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"echo_arrive\"}[$__rate_interval]))) - (sum(rate(terminal_latency_stage_duration_sum{stage=\"echo_server\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"echo_server\"}[$__rate_interval]))) - (sum(rate(terminal_latency_stage_duration_sum{stage=\"input_queue\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"input_queue\"}[$__rate_interval]))), 0)",
+          "legendFormat": "network + return"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"echo_render\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"echo_render\"}[$__rate_interval])))",
+          "legendFormat": "render (browser)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 25,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Server input path p95 by stage",
+      "description": "Inside one keystroke on the server: bookkeeping, waiting for the Attach stream lock, the stream Send, and the whole input_total.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"input_bookkeep\"}[$__rate_interval])))",
+          "legendFormat": "input_bookkeep {{backend}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"stream_lock_wait\"}[$__rate_interval])))",
+          "legendFormat": "stream_lock_wait {{backend}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"stream_send\"}[$__rate_interval])))",
+          "legendFormat": "stream_send {{backend}}"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"input_send\"}[$__rate_interval])))",
+          "legendFormat": "input_send {{backend}}"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"input_total\"}[$__rate_interval])))",
+          "legendFormat": "input_total {{backend}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 38,
+      "type": "timeseries",
+      "title": "tymux echo_server decomposition (mean, stacked)",
+      "description": "Where the server's echo time goes on tymux, tymux sessions only. echo_daemon needs a daemon with capability output.sent_at (v1.17.0+) and is empty otherwise, and it contains stream_lock_wait and stream_send. echo_daemon and output_transit attribute the first stamped frame after a keystroke, an upper bound under bulk output, so the stack only approximates the echo_server line. Averages add; percentiles do not.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"input_bookkeep\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"input_bookkeep\",backend=\"tymux\"}[$__rate_interval])))",
+          "legendFormat": "squad pre-write (input_bookkeep)"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"echo_daemon\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"echo_daemon\",backend=\"tymux\"}[$__rate_interval])))",
+          "legendFormat": "pty write + app echo + daemon send queue (echo_daemon)"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"output_transit\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"output_transit\",backend=\"tymux\"}[$__rate_interval])))",
+          "legendFormat": "daemon -> squad gRPC transit (output_transit)"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"tymux_fanout_wait\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"tymux_fanout_wait\",backend=\"tymux\"}[$__rate_interval])))",
+          "legendFormat": "squad fanout queue (tymux_fanout_wait)"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"output_queue_wait\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"output_queue_wait\",backend=\"tymux\"}[$__rate_interval])))",
+          "legendFormat": "hub batch queue (output_queue_wait)"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"ws_write_wait\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"ws_write_wait\",backend=\"tymux\"}[$__rate_interval])))",
+          "legendFormat": "socket write lock (ws_write_wait)"
+        },
+        {
+          "refId": "G",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"ws_write\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"ws_write\",backend=\"tymux\"}[$__rate_interval])))",
+          "legendFormat": "socket write (ws_write)"
+        },
+        {
+          "refId": "H",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"echo_server\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(terminal_latency_stage_duration_count{stage=\"echo_server\",backend=\"tymux\"}[$__rate_interval])))",
+          "legendFormat": "echo_server (total)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 25,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "echo_server (total)"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "Backend calls: capture_pane / resize / write_stdin / send_keys",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Operation latency p50 / p99 by backend",
+      "description": "session.backend.* durations, the sum of everything below.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le,backend,operation) (rate(session_backend_operation_duration_ms_milliseconds_bucket{operation=~\"session.backend.(capture_pane|resize|write_stdin|send_keys)\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{backend}} {{operation}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,backend,operation) (rate(session_backend_operation_duration_ms_milliseconds_bucket{operation=~\"session.backend.(capture_pane|resize|write_stdin|send_keys)\"}[$__rate_interval])))",
+          "legendFormat": "p99 {{backend}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "tymux capture_pane decomposition (mean per capture)",
+      "description": "Mean per capture call. total = rpc + render + revive + squad-side. squad-side is the residual: time spent outside the RPC, render and revive (locks, queueing, retries). Render and revive are spread over every capture, so revive is ~0 unless a pane was dead.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 31
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(session_backend_operation_duration_ms_milliseconds_sum{backend=\"tymux\",operation=\"session.backend.capture_pane\"}[$__rate_interval])) / sum(rate(session_backend_operation_duration_ms_milliseconds_count{backend=\"tymux\",operation=\"session.backend.capture_pane\"}[$__rate_interval])))",
+          "legendFormat": "total"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(tymux_rpc_duration_ms_milliseconds_sum{method=\"capture_pane\"}[$__rate_interval])) / sum(rate(tymux_rpc_duration_ms_milliseconds_count{method=\"capture_pane\"}[$__rate_interval])))",
+          "legendFormat": "rpc"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"capture_render\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(session_backend_operation_duration_ms_milliseconds_count{backend=\"tymux\",operation=\"session.backend.capture_pane\"}[$__rate_interval])))",
+          "legendFormat": "render"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "(sum(rate(terminal_latency_stage_duration_sum{stage=\"capture_revive\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(session_backend_operation_duration_ms_milliseconds_count{backend=\"tymux\",operation=\"session.backend.capture_pane\"}[$__rate_interval])))",
+          "legendFormat": "revive"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "clamp_min((sum(rate(session_backend_operation_duration_ms_milliseconds_sum{backend=\"tymux\",operation=\"session.backend.capture_pane\"}[$__rate_interval])) / sum(rate(session_backend_operation_duration_ms_milliseconds_count{backend=\"tymux\",operation=\"session.backend.capture_pane\"}[$__rate_interval]))) - (sum(rate(tymux_rpc_duration_ms_milliseconds_sum{method=\"capture_pane\"}[$__rate_interval])) / sum(rate(tymux_rpc_duration_ms_milliseconds_count{method=\"capture_pane\"}[$__rate_interval]))) - (sum(rate(terminal_latency_stage_duration_sum{stage=\"capture_render\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(session_backend_operation_duration_ms_milliseconds_count{backend=\"tymux\",operation=\"session.backend.capture_pane\"}[$__rate_interval]))) - (sum(rate(terminal_latency_stage_duration_sum{stage=\"capture_revive\",backend=\"tymux\"}[$__rate_interval])) / sum(rate(session_backend_operation_duration_ms_milliseconds_count{backend=\"tymux\",operation=\"session.backend.capture_pane\"}[$__rate_interval]))), 0)",
+          "legendFormat": "squad-side residual"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "tmux capture_pane decomposition (mean)",
+      "description": "tmux has no single RPC: exec-gate wait, subprocess exec, and control-mode command round trip are measured separately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 39
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(tmux_exec_gate_wait_duration_ms_milliseconds_sum[$__rate_interval])) / sum(rate(tmux_exec_gate_wait_duration_ms_milliseconds_count[$__rate_interval]))",
+          "legendFormat": "exec-gate wait"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(tmux_exec_gate_exec_duration_ms_milliseconds_sum[$__rate_interval])) / sum(rate(tmux_exec_gate_exec_duration_ms_milliseconds_count[$__rate_interval]))",
+          "legendFormat": "subprocess exec"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(tmux_control_mode_command_duration_ms_milliseconds_sum{command=\"capture-pane\"}[$__rate_interval])) / sum(rate(tmux_control_mode_command_duration_ms_milliseconds_count{command=\"capture-pane\"}[$__rate_interval]))",
+          "legendFormat": "control-mode capture-pane"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(session_backend_operation_duration_ms_milliseconds_sum{backend=\"tmux\",operation=\"session.backend.capture_pane\"}[$__rate_interval])) / sum(rate(session_backend_operation_duration_ms_milliseconds_count{backend=\"tmux\",operation=\"session.backend.capture_pane\"}[$__rate_interval]))",
+          "legendFormat": "total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "tymux RPC round trip p50 / p99 by method",
+      "description": "Pure gRPC wall time of one tymuxd control RPC (needs the tymux_rpc_duration_ms build).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 39
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le,method) (rate(tymux_rpc_duration_ms_milliseconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50 {{method}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,method) (rate(tymux_rpc_duration_ms_milliseconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99 {{method}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Slow calls by session",
+      "description": "Calls over the slow-call threshold per minute, by op and session. Only the 20 busiest sessions per 10 minutes keep a name; the rest are 'other'. Open the same time range in Tempo for the span (name = the op).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 47
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (op, backend, session) (rate(terminal_slow_call_total[$__rate_interval])) * 60",
+          "legendFormat": "{{op}} {{backend}} {{session}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Contended Instance lock waits (pm_lock_wait)",
+      "description": "Waits on Instance.pmMu. Only contended acquisitions are recorded, so the count is how often typing met a lock.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 47
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"pm_lock_wait\"}[$__rate_interval])))",
+          "legendFormat": "p99 wait"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum(rate(terminal_latency_stage_duration_count{stage=\"pm_lock_wait\"}[$__rate_interval]))",
+          "legendFormat": "contended / s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Head-of-line waits per hop",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Browser <-> squad mux: HOL wait p50 / p99",
+      "description": "Time a frame waits behind others on the shared browser WebSocket (terminal_mux_hol_wait).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(terminal_mux_hol_wait_milliseconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(terminal_mux_hol_wait_milliseconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Hub subscriber queue wait p50 / p95 / p99",
+      "description": "Squad: a frame sits in a subscriber's outbound queue (100 slots) until the writer takes it. Rising means the browser side is draining slower than output arrives.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 56
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le,backend,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"output_queue_wait\"}[$__rate_interval])))",
+          "legendFormat": "p50 {{backend}}/{{listener}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"output_queue_wait\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{backend}}/{{listener}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,backend,listener) (rate(terminal_latency_stage_duration_bucket{stage=\"output_queue_wait\"}[$__rate_interval])))",
+          "legendFormat": "p99 {{backend}}/{{listener}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "squad <-> tymux: frame handling and fanout wait p95",
+      "description": "tymux_frame_handle: daemon frame received -> fanout broadcast done. tymux_fanout_wait: broadcast -> PTY adapter reads it (64 slots). tymux_pty_write: adapter write into the PTY socketpair.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 64
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"tymux_frame_handle\"}[$__rate_interval])))",
+          "legendFormat": "tymux_frame_handle"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"tymux_fanout_wait\"}[$__rate_interval])))",
+          "legendFormat": "tymux_fanout_wait"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"tymux_pty_write\"}[$__rate_interval])))",
+          "legendFormat": "tymux_pty_write"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"tymux_frame_handle\"}[$__rate_interval])))",
+          "legendFormat": "tymux_frame_handle p99"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"tymux_fanout_wait\"}[$__rate_interval])))",
+          "legendFormat": "tymux_fanout_wait p99"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"tymux_pty_write\"}[$__rate_interval])))",
+          "legendFormat": "tymux_pty_write p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "squad -> browser socket: write wait and write p95",
+      "description": "Per-stream socket write lock wait and the write itself, plus hub output_send.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 64
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"ws_write_wait\"}[$__rate_interval])))",
+          "legendFormat": "ws_write_wait {{backend}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"ws_write\"}[$__rate_interval])))",
+          "legendFormat": "ws_write {{backend}}"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"output_send\"}[$__rate_interval])))",
+          "legendFormat": "output_send {{backend}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Browser: send queue, socket backlog, event loop",
+      "description": "input_queue = keystroke enqueued -> handed to the socket (ms). eventloop_lag = worst timer drift per 5 s (ms). Socket backlog is in the next panel.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 72
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"input_queue\"}[$__rate_interval])))",
+          "legendFormat": "input_queue p95"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"input_queue\"}[$__rate_interval])))",
+          "legendFormat": "input_queue p99"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"eventloop_lag\"}[$__rate_interval])))",
+          "legendFormat": "eventloop_lag p95"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(client_long_task_duration_milliseconds_bucket[$__rate_interval])))",
+          "legendFormat": "long task p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Browser WebSocket backlog (bufferedAmount)",
+      "description": "KiB the browser had queued but not sent when a keystroke went out. Growth means the uplink or the mux socket is the bottleneck.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 72
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"ws_buffered_kib\"}[$__rate_interval])))",
+          "legendFormat": "p95 KiB"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"ws_buffered_kib\"}[$__rate_interval])))",
+          "legendFormat": "p99 KiB"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "KiB",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "type": "row",
+      "title": "Queues, drops and resyncs",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 80
+      }
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Queue depth p99",
+      "description": "Frames waiting: hub subscriber outbound queue (cap 100) and tymux fanout queue (cap 64). Near the cap means drops are next.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 81
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,backend) (rate(terminal_latency_stage_duration_bucket{stage=\"output_queue_depth\"}[$__rate_interval])))",
+          "legendFormat": "hub queue {{backend}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(terminal_latency_stage_duration_bucket{stage=\"tymux_fanout_depth\"}[$__rate_interval])))",
+          "legendFormat": "tymux fanout"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "Dropped frames by cause",
+      "description": "Frames lost to a full queue. Each drop forces a repaint of that subscriber.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 81
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (cause, backend) (rate(terminal_frame_drops_total[$__rate_interval]))",
+          "legendFormat": "{{cause}} {{backend}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Resyncs by reason",
+      "description": "Full-screen resync requests and client-side skips. Spikes after tab focus are the avoidable kind.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 89
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (reason, backend) (rate(terminal_resync_total[$__rate_interval]))",
+          "legendFormat": "{{reason}} {{backend}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Subscriber lifecycle",
+      "description": "Hub subscribers attaching, detaching and being evicted for being slow.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 89
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (event) (rate(streamhub_subscriber_events_total[$__rate_interval]))",
+          "legendFormat": "{{event}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "row",
+      "title": "Runtime and host",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 97
+      }
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Scheduler latency",
+      "description": "Goroutine run-queue wait (p50 and p99 as exported).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 98
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "go_runtime_sched_latency_seconds",
+          "legendFormat": "p{{quantile}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "GC pause and mutex wait",
+      "description": "GC pause quantiles and the share of time goroutines spend waiting on mutexes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 98
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "go_runtime_gc_pause_seconds",
+          "legendFormat": "gc pause p{{quantile}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "rate(go_runtime_mutex_wait_seconds_total[$__rate_interval])",
+          "legendFormat": "mutex wait s/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Goroutines",
+      "description": "A steady climb is a leak; a spike is a stall.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 106
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "go_runtime_goroutines",
+          "legendFormat": "goroutines"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "DB pool wait p99 by database",
+      "description": "Time queries wait for a pooled connection. Terminal paths that touch the DB inherit this.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 106
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le,db_name) (rate(db_query_pool_wait_milliseconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{db_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 37,
+      "type": "timeseries",
+      "title": "Host pressure (cgroup)",
+      "description": "cgroup memory pressure (Linux hosts). Empty on macOS: no node-exporter data exists on this host.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 114
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "cgroup_memory_pressure_some_avg10",
+          "legendFormat": "memory some avg10"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ]
+}

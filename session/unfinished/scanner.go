@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
@@ -332,18 +335,29 @@ func (s *Scanner) Start(ctx context.Context) {
 
 	const numWorkers = 4
 	for i := 0; i < numWorkers; i++ {
-		s.wg.Go(func() { s.worker(ctx) })
+		s.wg.Go(func() { proflabel.Do("unfinished_scanner", func() { s.worker(ctx) }) })
 	}
-	s.wg.Go(func() { s.coordinator(ctx) })
+	s.wg.Go(func() { proflabel.Do("unfinished_scanner", func() { s.coordinator(ctx) }) })
 	s.wg.Go(func() { s.subscribeToSessionEvents(ctx) })
 	s.wg.Go(func() { s.pruneMissingRepos(ctx) })
 
-	if w, err := fsnotify.NewWatcher(); err != nil {
-		log.Warn("fsnotify unavailable, scanner falling back to tick-only polling", "err", err)
-	} else {
-		s.mu.Lock()
-		s.fsWatcher = w
-		s.mu.Unlock()
+	s.mu.RLock()
+	injected := s.gitwatch.override != nil && !s.gitwatch.ownsOverride
+	s.mu.RUnlock()
+	if !injected {
+		// dirwatch uses FSEvents on macOS: kqueue would hold an fd per file in
+		// every linked-worktree admin dir (~5,000 fds at ~700 worktrees).
+		if w, err := dirwatch.New(dirwatch.WithName("scanner-git"), dirwatch.WithRootFunc(sharedWorktreesRoot)); err != nil {
+			log.Warn("fsnotify unavailable, scanner falling back to tick-only polling", "err", err)
+		} else {
+			s.mu.Lock()
+			s.gitwatch.override = w
+			s.gitwatch.resyncDelay = watchResyncDelay
+			s.gitwatch.ownsOverride = true // fsnotifyLoop closes it on exit, so a restart needs a fresh one
+			s.mu.Unlock()
+		}
+	}
+	if s.activeWatcher() != nil {
 		s.wg.Go(func() { s.fsnotifyLoop(ctx) })
 	}
 
@@ -513,6 +527,9 @@ func (s *Scanner) coordinator(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			if qos.Default.Defer("unfinished_scanner", qos.BackgroundMaxDeferral) {
+				continue
+			}
 			s.enqueueAll(false)
 		case <-s.triggerCh:
 			s.enqueueAll(true)
@@ -915,6 +932,25 @@ func (s *Scanner) AddRepo(repoPath string) {
 	s.repoSet.Store(repoPath, true)
 	s.watchRepo(repoPath)
 	s.EnqueueRepo(repoPath)
+	s.scheduleWatchResync(repoPath)
+}
+
+// scheduleWatchResync re-enqueues repoPath once, watchResyncDelay after its
+// watch was registered: an FSEvents stream can deliver its first event seconds
+// late, or lose one right after starting, with no error, so one late rescan
+// closes that window. Zero delay (kqueue, tests) disables it.
+func (s *Scanner) scheduleWatchResync(repoPath string) {
+	s.mu.RLock()
+	d := s.gitwatch.resyncDelay
+	s.mu.RUnlock()
+	if d <= 0 {
+		return
+	}
+	time.AfterFunc(d, func() {
+		if _, tracked := s.repoSet.Load(repoPath); tracked {
+			s.EnqueueRepo(repoPath)
+		}
+	})
 }
 
 // IsTracked reports whether repoPath is currently in the scan set, regardless

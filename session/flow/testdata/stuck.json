@@ -1,0 +1,53 @@
+{
+ "description": "Synthetic stuck intervals (reason is a closed-set string; resolved_at null means open).",
+ "intervals": [
+  {
+   "item_id": "stuck-1",
+   "reason": "pr_needs_fix",
+   "first_detected_at": "2026-10-25 09:00:00.000000-07:00",
+   "resolved_at": "2026-10-25 11:00:00.000000-07:00"
+  },
+  {
+   "item_id": "stuck-1",
+   "reason": "pr_needs_fix",
+   "first_detected_at": "2026-10-25 14:00:00.000000-07:00",
+   "resolved_at": "2026-10-25 15:00:00.000000-07:00"
+  },
+  {
+   "item_id": "stuck-2",
+   "reason": "bouncing",
+   "first_detected_at": "2026-10-25 10:00:00.000000-07:00",
+   "resolved_at": null
+  },
+  {
+   "item_id": "stuck-3",
+   "reason": "orphaned_triage",
+   "first_detected_at": "2026-10-25 11:00:00.000000-07:00",
+   "resolved_at": "2026-10-25 12:00:00.000000-07:00"
+  },
+  {
+   "item_id": "stuck-4",
+   "reason": "multiple_reasons",
+   "first_detected_at": "2026-10-25 12:00:00.000000-07:00",
+   "resolved_at": null
+  },
+  {
+   "item_id": "stuck-5",
+   "reason": "abandoned_review",
+   "first_detected_at": "2026-10-25 13:00:00.000000-07:00",
+   "resolved_at": "2026-10-26 15:00:00.000000-07:00"
+  },
+  {
+   "item_id": "stuck-6",
+   "reason": "bounce_cap_exhausted",
+   "first_detected_at": "2026-10-25 15:00:00.000000-07:00",
+   "resolved_at": "2026-10-25 16:00:00.000000-07:00"
+  },
+  {
+   "item_id": "stuck-7",
+   "reason": "stale_work",
+   "first_detected_at": "2026-10-25 16:00:00.000000-07:00",
+   "resolved_at": "2026-10-25 18:00:00.000000-07:00"
+  }
+ ]
+}

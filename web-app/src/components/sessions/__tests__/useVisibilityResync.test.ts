@@ -1,5 +1,6 @@
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, cleanup } from '@testing-library/react';
 import { useVisibilityResync } from '../useVisibilityResync';
+import { resyncGate } from '@/lib/terminal/resyncGate';
 
 // Mock useFeatureFlag — default to false (terminal:resync-visibility-scope
 // off), overridden per-test for the Epic 2.1 (AC1) flag-on cases. Mirrors the
@@ -30,6 +31,7 @@ function makeParams(overrides: Partial<Parameters<typeof useVisibilityResync>[0]
     requestFullResync: jest.fn(),
     markResyncComplete: jest.fn(),
     markPaneResponseReceived: jest.fn(),
+    stallFloorMs: 4000,
     setShowReconnectButton: jest.fn(),
     setShowReconnectBanner: jest.fn(),
     ...overrides,
@@ -43,8 +45,15 @@ describe('useVisibilityResync', () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     jest.spyOn(console, 'log').mockImplementation(() => {});
     (useFeatureFlag as jest.Mock).mockReturnValue(false);
+    resyncGate.reset();
+    // Some tests set 'hidden'; without this the next test inherits it under --randomize.
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   });
   afterEach(() => {
+    // Unmount while fake timers are still installed: the shared gate's jitter timer, armed when
+    // the first hook releases its slot, must be a fake one so it dies with this test. A real one
+    // fires during a later test and releases a slot that test holds.
+    cleanup();
     jest.useRealTimers();
     jest.restoreAllMocks();
   });
@@ -77,6 +86,40 @@ describe('useVisibilityResync', () => {
     act(() => { jest.advanceTimersByTime(300); });
 
     expect(params.requestFullResync).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['skipped_fresh', 'skipped_unavailable'] as const)(
+    'useVisibilityResync_should_notResyncOrArmTheStallWatchdog_When_decisionIs_%s',
+    (decision) => {
+      mockTrack.mockClear();
+      const params = makeParams({ visibilityResyncDecision: jest.fn().mockReturnValue(decision) });
+      renderHook(() => useVisibilityResync(params));
+
+      act(() => {
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        window.dispatchEvent(new Event('focus'));
+      });
+      act(() => { jest.advanceTimersByTime(10_000); }); // well past the 4s stall watchdog
+
+      expect(params.requestFullResync).not.toHaveBeenCalled();
+      expect(params.disconnect).not.toHaveBeenCalled(); // an armed watchdog would force a reconnect
+      expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ name: 'cm.term_resync', labels: { reason: decision } }));
+    },
+  );
+
+  it('useVisibilityResync_should_resyncAndCountIt_When_decisionIsSend', () => {
+    mockTrack.mockClear();
+    const params = makeParams({ visibilityResyncDecision: jest.fn().mockReturnValue('send') });
+    renderHook(() => useVisibilityResync(params));
+
+    act(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      window.dispatchEvent(new Event('focus'));
+    });
+    act(() => { jest.advanceTimersByTime(300); });
+
+    expect(params.requestFullResync).toHaveBeenCalledTimes(1);
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ name: 'cm.term_resync', labels: { reason: 'visibility' } }));
   });
 
   it('useVisibilityResync_should_callRequestFullResyncTwice_When_transitionsAreMoreThan300msApart', () => {
@@ -138,21 +181,22 @@ describe('useVisibilityResync', () => {
     expect(params.connect).not.toHaveBeenCalled();
   });
 
-  it('handleVisibilityOrFocusResyncInner_should_CallRequestFullResync_When_IsVisibleFalseAndFlagOff', () => {
-    (useFeatureFlag as jest.Mock).mockReturnValue(false);
+  it('handleVisibilityOrFocusResyncInner_should_DeferAHiddenPaneUntilShown_RegardlessOfTheScopeFlag', () => {
+    mockTrack.mockClear();
     const params = makeParams({ isVisible: false });
-    renderHook(() => useVisibilityResync(params));
+    const { rerender } = renderHook((p: typeof params) => useVisibilityResync(p), { initialProps: params });
 
     act(() => {
       Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
     });
     act(() => { jest.advanceTimersByTime(300); });
+    expect(params.requestFullResync).not.toHaveBeenCalled();
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'deferred_hidden' } }));
 
-    // Flag off ⇒ unchanged pre-project behavior: every mounted instance
-    // resyncs on visibility/focus regardless of isVisible.
+    rerender({ ...params, isVisible: true });
     expect(params.requestFullResync).toHaveBeenCalledTimes(1);
-    expect(params.requestFullResync).toHaveBeenCalledWith(true, true);
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'stale_shown' } }));
   });
 
   // ── Story 2.1.2 (AC4) ────────────────────────────────────────────────────
@@ -218,7 +262,7 @@ describe('useVisibilityResync', () => {
     });
     act(() => { jest.advanceTimersByTime(300); });
 
-    await act(async () => { jest.advanceTimersByTime(4000); });
+    await act(async () => { jest.advanceTimersByTime(8000); });
 
     expect(params.disconnect).toHaveBeenCalledTimes(1);
     // flush the disconnect().then(connect) chain
@@ -264,7 +308,7 @@ describe('useVisibilityResync', () => {
       act(() => { jest.advanceTimersByTime(300); });
     }).not.toThrow();
 
-    await act(async () => { jest.advanceTimersByTime(4000); });
+    await act(async () => { jest.advanceTimersByTime(8000); });
 
     expect(params.disconnect).toHaveBeenCalledTimes(1);
   });
@@ -489,7 +533,7 @@ describe('useVisibilityResync', () => {
     expect(params.markPaneResponseReceived).not.toHaveBeenCalled();
 
     // The watchdog must still be live since pending state was never cleared.
-    act(() => { jest.advanceTimersByTime(4000); });
+    act(() => { jest.advanceTimersByTime(8000); });
     expect(params.disconnect).toHaveBeenCalledTimes(1);
   });
 
@@ -536,7 +580,7 @@ describe('useVisibilityResync', () => {
     // The watchdog was re-armed (not left stale) by the reset: advancing a
     // full new 4s window from the reset point fires it, proving resetStallWatchdog
     // actually rearmed rather than being a no-op.
-    act(() => { jest.advanceTimersByTime(4000); });
+    act(() => { jest.advanceTimersByTime(8000); });
     expect(params.disconnect).toHaveBeenCalledTimes(1);
   });
 
@@ -726,7 +770,7 @@ describe('useVisibilityResync', () => {
     // watchdog fires — this is the scenario the test name asserts against.
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
 
-    await act(async () => { jest.advanceTimersByTime(4000); });
+    await act(async () => { jest.advanceTimersByTime(8000); });
 
     expect(mockTrack).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -783,5 +827,177 @@ describe('useVisibilityResync', () => {
     });
 
     expect(debugSpy).toHaveBeenCalledWith(expect.stringMatching(/resync completed in \d+ms/));
+  });
+
+  // ── Thundering herd ──────────────────────────────────────────────────────
+
+  function focusEvent() {
+    act(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      window.dispatchEvent(new Event('focus'));
+    });
+    act(() => { jest.advanceTimersByTime(300); });
+  }
+
+  it('ten visible terminals focusing at once keep at most two resyncs in flight', () => {
+    const all = Array.from({ length: 10 }, () => makeParams());
+    all.forEach((p) => renderHook(() => useVisibilityResync(p)));
+    focusEvent();
+    const sent = () => all.filter((p) => (p.requestFullResync as jest.Mock).mock.calls.length > 0).length;
+    expect(sent()).toBe(2);
+    expect(resyncGate.depth()).toBe(8);
+  });
+
+  it('a stalled resync is re-sent once and only the second stall drops the stream', async () => {
+    mockTrack.mockClear();
+    const params = makeParams();
+    renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    expect(params.requestFullResync).toHaveBeenCalledTimes(1);
+
+    await act(async () => { jest.advanceTimersByTime(4000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(2); // the retry
+    expect(params.disconnect).not.toHaveBeenCalled();
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'watchdog_retry' } }));
+
+    await act(async () => { jest.advanceTimersByTime(4000); });
+    expect(params.disconnect).toHaveBeenCalledTimes(1);
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'watchdog_disconnect' } }));
+  });
+
+  it('a stall across ten terminals drops streams one at a time, not all at once', async () => {
+    const all = Array.from({ length: 10 }, () => makeParams());
+    all.forEach((p) => renderHook(() => useVisibilityResync(p)));
+    focusEvent();
+    // Nothing answers: run both watchdog expiries for everything that got a slot, then keep
+    // releasing slots as streams are dropped.
+    await act(async () => { jest.advanceTimersByTime(8000); });
+    const dropped = () => all.filter((p) => (p.disconnect as jest.Mock).mock.calls.length > 0).length;
+    expect(dropped()).toBeLessThan(10);
+    expect(dropped()).toBeLessThanOrEqual(2);
+  });
+
+  it('skips the resync when output is flowing on a connected stream', () => {
+    mockTrack.mockClear();
+    const params = makeParams({ getMsSinceOutput: () => 1000 });
+    renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    expect(params.requestFullResync).not.toHaveBeenCalled();
+    expect(mockTrack).toHaveBeenCalledWith(expect.objectContaining({ labels: { reason: 'skipped_output' } }));
+  });
+
+  // ── Review follow-ups ────────────────────────────────────────────────────
+
+  async function runCleanResync(result: { current: { notifyResyncOutputReceived: (id?: string) => void } }, ms: number) {
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(ms); });
+    act(() => { result.current.notifyResyncOutputReceived(); });
+  }
+
+  it('caps the stall budget at 30s even when recent round trips were slow', async () => {
+    const params = makeParams();
+    const { result } = renderHook(() => useVisibilityResync(params));
+    await runCleanResync(result, 3900); // budget becomes 3 x 3.9s
+    await runCleanResync(result, 11_000); // median 11s would give 33s unclamped
+    const before = (params.requestFullResync as jest.Mock).mock.calls.length;
+
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(29_000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(before + 1); // no retry yet
+    await act(async () => { jest.advanceTimersByTime(1_000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(before + 2); // retry at the 30s cap
+  });
+
+  it('does not learn from a resync that needed a retry', async () => {
+    const params = makeParams();
+    const { result } = renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); }); // retry
+    await act(async () => { jest.advanceTimersByTime(3000); });
+    act(() => { result.current.notifyResyncOutputReceived(); }); // completes after 7s
+
+    const before = (params.requestFullResync as jest.Mock).mock.calls.length;
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(before + 2); // still the 4s floor
+  });
+
+  it('does not learn from a resync that spanned a hidden tab', async () => {
+    const params = makeParams();
+    const { result } = renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    act(() => {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    });
+    await act(async () => { jest.advanceTimersByTime(3900); });
+    act(() => { result.current.notifyResyncOutputReceived(); });
+
+    const before = (params.requestFullResync as jest.Mock).mock.calls.length;
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); });
+    expect(params.requestFullResync).toHaveBeenCalledTimes(before + 2); // floor, not 3 x 3.9s
+  });
+
+  async function stallUntilDelayedDisconnect(rerender: (p: ReturnType<typeof makeParams>) => void, params: ReturnType<typeof makeParams>) {
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); }); // retry
+    await act(async () => { jest.advanceTimersByTime(3700); });
+    resyncGate.scheduleDisconnect(() => {}); // a sibling just dropped, so ours must wait 500ms
+    await act(async () => { jest.advanceTimersByTime(300); }); // recovery runs, disconnect is delayed
+    expect(params.disconnect).not.toHaveBeenCalled();
+    return rerender;
+  }
+
+  it('drops the delayed disconnect when the session switched meanwhile', async () => {
+    const params = makeParams();
+    const { rerender } = renderHook((p) => useVisibilityResync(p), { initialProps: params });
+    await stallUntilDelayedDisconnect((p) => rerender(p), params);
+    rerender({ ...params, sessionId: 's2' });
+    await act(async () => { jest.advanceTimersByTime(600); });
+    expect(params.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('drops the delayed disconnect when the hook unmounts meanwhile', async () => {
+    const params = makeParams();
+    const { rerender, unmount } = renderHook((p) => useVisibilityResync(p), { initialProps: params });
+    await stallUntilDelayedDisconnect((p) => rerender(p), params);
+    unmount();
+    await act(async () => { jest.advanceTimersByTime(600); });
+    expect(params.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('a queued resync that has no slot ignores resetStallWatchdog', async () => {
+    const all = Array.from({ length: 3 }, () => makeParams());
+    const hooks = all.map((p) => renderHook(() => useVisibilityResync(p)));
+    focusEvent();
+    expect(all[2].requestFullResync).not.toHaveBeenCalled();
+    await act(async () => { jest.advanceTimersByTime(3000); });
+    act(() => { hooks[2].result.current.resetStallWatchdog(); });
+    await act(async () => { jest.advanceTimersByTime(4000); }); // past the timer it would have armed
+    expect(all[2].requestFullResync).not.toHaveBeenCalled();
+    expect(all[2].disconnect).not.toHaveBeenCalled();
+  });
+
+  it('a queued resync does not start once its stream has dropped', async () => {
+    const all = Array.from({ length: 3 }, () => makeParams());
+    const hooks = all.map((p) => renderHook((props) => useVisibilityResync(props), { initialProps: p }));
+    focusEvent();
+    hooks[2].rerender({ ...all[2], isConnected: false });
+    act(() => { hooks[0].result.current.notifyResyncOutputReceived(); }); // frees a slot
+    await act(async () => { jest.advanceTimersByTime(300); });
+    expect(all[2].requestFullResync).not.toHaveBeenCalled();
+    expect(resyncGate.active()).toBe(1);
+  });
+
+  it('accepts a late reply to the id a retry replaced', async () => {
+    const params = makeParams({ requestFullResync: jest.fn().mockReturnValueOnce('a').mockReturnValueOnce('b') });
+    const { result } = renderHook(() => useVisibilityResync(params));
+    focusEvent();
+    await act(async () => { jest.advanceTimersByTime(4000); }); // retry sends 'b'
+    (params.markResyncComplete as jest.Mock).mockClear();
+    act(() => { result.current.notifyResyncOutputReceived('a'); });
+    expect(params.markResyncComplete).toHaveBeenCalledTimes(1);
   });
 });

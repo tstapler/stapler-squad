@@ -1,0 +1,28 @@
+# ADR-005: Reviewer-quality and deadlock-candidate definitions
+
+**Status**: Accepted **Date**: 2026-11-05
+
+## Context
+Live recount (`sqlite3 -readonly`, 2026-11-05): 132 of 378 non-PASS verdicts are non-judgments (98 "no committed changes" FAILs plus 34 "codebase-read self-check failed" UNVERIFIABLEs; the earlier "146" figure was wrong), a further 18 UNVERIFIABLEs are reviewer-degraded ("Review blocked: no diff could be computed" 7, "Degraded to UNVERIFIABLE" 4, "no acceptance criteria" 7), and 23 of 150 PASSes are synthetic "Auto-verified by reconcileBouncingItems" (`research/features.md` section 2). `review_verdicts.diff_truncated` is false for all rows and is unusable. Verdicts reach items only through `item_sessions`.
+
+## Decision
+- **VerdictClass** (sum type): `Judgment`, `NoCommits`, `SelfCheckFailed`, `ReviewerDegraded`, `AutoVerified`. Classified by a closed table over `summary` text, with an `unrecognized` count reported. Headline rates are reported raw and adjusted (Judgment only: `NoCommits`, `SelfCheckFailed`, `ReviewerDegraded` and `AutoVerified` excluded). Live: raw FAIL 186/528 (35.2%), adjusted FAIL 88/355 (24.8%); raw UNVERIFIABLE 110/528 (20.8%).
+- Verdicts reach an item only through `item_sessions`; `review_verdicts` is unique per session (unique index `item_session_review_verdict`, live: 528 rows, 528 distinct sessions), so the per-session step is a join-safety guard against items x sessions x verdicts inflation, not a dedup.
+- **Deadlock candidate (redefined after adversarial review)**: `agent_claimed_done` does not discriminate (the latest progress-note status is `done` on 95.7% of non-PASS criterion verdicts), so it is displayed but is not a gate. A candidate is an item with a run of at least `DeadlockMinRun` (3) consecutive **judgment** non-PASS verdicts (non-judgments neither extend nor break a run; a real PASS ends it) plus a no-progress signal inside the run: (a) the same failing `criterion_index` (from `per_criterion`) in `DeadlockRepeatCriterion` (3) consecutive verdicts, or (b) an unchanged non-empty `diff_hash` between two consecutive verdicts. Cap exhaustion (`bounce_cap_exhausted`, `rework_cap` stuck rows) also qualifies with a shorter run. Output: `resolution` in `{open, passed, auto_verified, human_override, archived}`, the verdict sequence string (for example `FRUUURURRURRRP`), `run_length`, `repeated_criterion`, `diff_unchanged_pairs`, and `agent_claimed_done`.
+- **Measured on live data (simulation, 2026-11-05)**: 31 items have a judgment run of at least 3 (34 runs); 27 of them meet a second signal (26 of 34 runs have the same criterion in 3 consecutive verdicts; 11 items have an unchanged non-empty `diff_hash`). `diff_hash` is non-empty on only 140 of 528 verdicts and `item_sessions.last_commit_sha` is empty for every verdict session, so signal (b) is weak. The second signal therefore removes only 4 of 31 items. This is a stated limitation: the table ranks by `run_length` and shows both signals as columns, and Data notes says the filter is weak. A stronger discriminator would need commit capture at review time: out of scope for this feature and filed as a tracked backlog item in plan Story 6.1.2 (not a prose note). Before ship, plan Story 6.1.1 hand-labels about 10 candidates; the section ships under the display name "Review-fail streaks (heuristic)" with the info-only `agent_claimed_done` column hidden by default, and is promoted to "Deadlock candidates" only if the hand-labeled hit rate is at least 50% (Triad repair 1: the safer name is the default, the stronger name must be earned). The `deadlock_candidates` key, the MCP tool name and the `estimated` tag do not change either way.
+- **Reviewer-unverifiable streak** (3+ consecutive real UNVERIFIABLE) is a separate flag pointing at the reviewer, not the agent.
+- Cap-exhausted items (`bounce_cap_exhausted`, `rework_cap` stuck rows) are candidates even with a shorter run.
+- All outputs are tagged `estimated: deadlock_candidates:heuristic` (the one spelling used in the plan, UX and tests). The default list is the top 10 by `run_length` with a "weak filter" note in the UI and the MCP response, and `total_count` shows the full set. In-flight items need an age or activity threshold (default: latest verdict older than 1h or item in review/in_progress) before being called stalled.
+- **Verdict mix over time** is a weekly series by `VerdictClass` x outcome (`VerdictMixSeries`), rendered by the `FlowChart` wrapper (Story 4.2.5); empty weeks are real zeros.
+- Out of scope: changing reviewer prompts or thresholds.
+
+## Hand-label validation status (pending)
+
+Not yet run. The live `sessions.db` has no `review_verdicts.reviewed_commit_sha` column until this change is deployed, and the 31 existing candidates predate it (empty SHA), so the SHA-based signal cannot be applied to them retroactively.
+
+Procedure once new verdicts have accumulated:
+1. List current "Review-fail streaks" candidates; for each with 2+ consecutive non-PASS verdicts, check `reviewed_commit_sha` is equal and non-empty (the `IsNoProgressReview` rule).
+2. Hand-label each flagged item as true deadlock (no new commit, same failure) or false positive.
+3. Record true-positive rate here. Rename the section to "Deadlock candidates" only if ≥70%.
+
+Status: section name stays "Review-fail streaks (heuristic)".

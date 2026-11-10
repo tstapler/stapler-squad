@@ -2,8 +2,8 @@
 
 import React, { createContext, useContext, useCallback } from "react";
 import { useRouter } from "@/lib/nav";
-import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
-import {
+import type { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import type {
   CreateSessionRequest,
   UpdateSessionRequest,
   RunOneShotResponse,
@@ -11,7 +11,7 @@ import {
   CreatePullRequestResponse,
   PromptHistoryEntry,
 } from "@/gen/session/v1/session_pb";
-import { CheckpointProto } from "@/gen/session/v1/types_pb";
+import type { CheckpointProto } from "@/gen/session/v1/types_pb";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { useAuth } from "@/lib/contexts/AuthContext";
@@ -45,6 +45,8 @@ export interface SessionServiceContextValue {
   pinSession: (id: string) => Promise<boolean>;
   unpinSession: (id: string) => Promise<boolean>;
   retrySession: (id: string) => Promise<boolean>;
+  archiveSession: (id: string) => Promise<boolean>;
+  unarchiveSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
   acknowledgeSession: (id: string) => Promise<boolean>;
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;

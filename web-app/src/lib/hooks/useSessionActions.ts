@@ -14,6 +14,7 @@ export function useSessionActions(sessionId: string) {
     pauseSession,
     resumeSession,
     resumeCrashedSession,
+    retrySession,
     deleteSession,
     renameSession,
     restartSession,
@@ -28,6 +29,7 @@ export function useSessionActions(sessionId: string) {
     resume: (updates?: { title?: string; tags?: string[] }) =>
       resumeSession(sessionId, updates),
     resumeFromCrash: () => resumeCrashedSession(sessionId),
+    retry: () => retrySession(sessionId),
     delete: (force?: boolean) => deleteSession(sessionId, force),
     rename: (title: string) => renameSession(sessionId, title),
     restart: () => restartSession(sessionId),

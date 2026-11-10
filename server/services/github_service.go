@@ -66,6 +66,8 @@ func classifyGitHubRateLimitError(err error) error {
 // by ID and call PR operations on it.
 type GitHubService struct {
 	storage *session.Storage
+	// find replaces the storage lookup in tests.
+	find func(id string) (*session.Instance, error)
 }
 
 // NewGitHubService creates a GitHubService backed by the given storage.
@@ -77,6 +79,9 @@ func NewGitHubService(storage *session.Storage) *GitHubService {
 // id may be either the session UUID or the legacy Title; both are accepted.
 // Returns CodeNotFound if not found.
 func (gs *GitHubService) findInstance(id string) (*session.Instance, error) {
+	if gs.find != nil {
+		return gs.find(id)
+	}
 	instances, err := gs.storage.LoadInstances()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
@@ -158,11 +163,12 @@ func (gs *GitHubService) GetPRComments(
 		return nil, err
 	}
 
-	if !instance.IsPRSession() {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	target, err := resolveTargetPR(instance, req.Msg.GetPr())
+	if err != nil {
+		return nil, err
 	}
 
-	comments, err := instance.GetPRComments(ctx)
+	comments, err := instance.GetPRComments(ctx, target)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, classifyGitHubRateLimitError(fmt.Errorf("failed to get PR comments: %w", err)))
 	}
@@ -216,11 +222,12 @@ func (gs *GitHubService) PostPRComment(
 		return nil, err
 	}
 
-	if !instance.IsPRSession() {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	target, err := resolveTargetPR(instance, req.Msg.GetPr())
+	if err != nil {
+		return nil, err
 	}
 
-	if err := instance.PostComment(ctx, req.Msg.Body); err != nil {
+	if err := instance.PostComment(ctx, target, req.Msg.Body); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, classifyGitHubRateLimitError(fmt.Errorf("failed to post comment: %w", err)))
 	}
 
@@ -246,16 +253,14 @@ func (gs *GitHubService) MergePR(
 		return nil, err
 	}
 
-	if !instance.IsPRSession() {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	target, err := resolveTargetPR(instance, req.Msg.GetPr())
+	if err != nil {
+		return nil, err
 	}
 
-	method := "merge"
-	if req.Msg.Method != nil && *req.Msg.Method != "" {
-		method = *req.Msg.Method
-	}
+	method := resolveMergeMethod(req.Msg)
 
-	if err := instance.MergePR(ctx, method); err != nil {
+	if err := instance.MergePR(ctx, target, method); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, classifyGitHubRateLimitError(fmt.Errorf("failed to merge PR: %w", err)))
 	}
 
@@ -263,6 +268,24 @@ func (gs *GitHubService) MergePR(
 		Success: true,
 		Message: fmt.Sprintf("PR merged successfully for session '%s' using method '%s'", req.Msg.Id, method),
 	}), nil
+}
+
+// resolveMergeMethod prefers the typed merge_method, then the deprecated
+// legacy method string (passed through unvalidated, as before), then "merge"
+// (the pre-multi-PR default; never squash unless explicitly requested).
+func resolveMergeMethod(req *sessionv1.MergePRRequest) string {
+	switch req.GetMergeMethod() {
+	case sessionv1.MergeMethod_MERGE_METHOD_MERGE:
+		return "merge"
+	case sessionv1.MergeMethod_MERGE_METHOD_SQUASH:
+		return "squash"
+	case sessionv1.MergeMethod_MERGE_METHOD_REBASE:
+		return "rebase"
+	}
+	if m := req.GetMethod(); m != "" { //nolint:staticcheck // deprecated legacy field, intentionally still honored
+		return m
+	}
+	return "merge"
 }
 
 // ClosePR closes the PR without merging for a session.
@@ -281,11 +304,12 @@ func (gs *GitHubService) ClosePR(
 		return nil, err
 	}
 
-	if !instance.IsPRSession() {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	target, err := resolveTargetPR(instance, req.Msg.GetPr())
+	if err != nil {
+		return nil, err
 	}
 
-	if err := instance.ClosePR(ctx); err != nil {
+	if err := instance.ClosePR(ctx, target); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, classifyGitHubRateLimitError(fmt.Errorf("failed to close PR: %w", err)))
 	}
 

@@ -85,6 +85,7 @@ func TestRequiredGitEnv(t *testing.T) {
 	env := backend.RequiredGitEnv()
 	assert.Contains(t, env, "LC_ALL=C")
 	assert.Contains(t, env, "GIT_TERMINAL_PROMPT=0")
+	assert.Contains(t, env, "GIT_OPTIONAL_LOCKS=0", "read-only git must not take index.lock")
 	env[0] = "mutated"
 	assert.NotEqual(t, "mutated", backend.RequiredGitEnv()[0], "a fresh slice per call")
 }

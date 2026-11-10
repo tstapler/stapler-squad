@@ -9,6 +9,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
@@ -121,6 +122,19 @@ func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
 // Must be called before the first QueryEscapeAnalytics or GetEscapeAnalyticsSummary RPC.
 func (s *SessionService) SetEscapeEventsClient(c *ent.Client) {
 	s.escapeEventsClient = c
+}
+
+// SetEscapeAggregateReader wires the rollup-backed reader for escape analytics summaries.
+// Without it, summaries count raw rows only (the pre-rollup behavior).
+func (s *SessionService) SetEscapeAggregateReader(r *escapedb.Reader) {
+	s.escapeAggregates = r
+}
+
+func (s *SessionService) escapeAggregateReader() *escapedb.Reader {
+	if s.escapeAggregates != nil {
+		return s.escapeAggregates
+	}
+	return escapedb.NewReader(s.escapeEventsClient, nil, escapedb.RollupTiers{}, nil)
 }
 
 // GetEventBus returns the event bus instance for wiring up reactive components.

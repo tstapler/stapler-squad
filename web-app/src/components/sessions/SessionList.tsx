@@ -65,7 +65,7 @@ import {
 // Exported so SessionBoard.tsx can declare an identical prop surface — a caller (e.g. the
 // future SessionListPaneBody) can then spread the same props object into either component.
 interface SessionListActionHandlers {
-  onSessionClick?: (session: Session) => void;
+  onSessionClick?: (session: Session, tab?: string) => void;
   onSessionOpenInNewPane?: (session: Session) => void;
   onDeleteSession?: (sessionId: string) => Promise<void> | void;
   onPauseSession?: (sessionId: string) => void;
@@ -77,6 +77,8 @@ interface SessionListActionHandlers {
   onRenameSession?: (sessionId: string, newTitle: string) => Promise<boolean>;
   onRestartSession?: (sessionId: string) => Promise<boolean>;
   onRetryNowSession?: (sessionId: string) => Promise<boolean>;
+  onArchiveSession?: (sessionId: string) => Promise<boolean>;
+  onUnarchiveSession?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onNewSession?: () => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
@@ -133,7 +135,7 @@ type SortDir = 'asc' | 'desc';
 // Using (session: Session) / (id: string) shapes lets the parent pass
 // one useCallback per action instead of one closure per row.
 interface SessionRowHandlers {
-  onSessionClick?: (session: Session) => void;
+  onSessionClick?: (session: Session, tab?: string) => void;
   onSessionOpenInNewPane?: (session: Session) => void;
   onDeleteSession?: (id: string) => Promise<void> | void;
   onPauseSession?: (id: string) => void;
@@ -142,6 +144,8 @@ interface SessionRowHandlers {
   onNewWorkspaceSession?: (id: string) => void;
   onRestartSession?: (id: string) => Promise<boolean | void>;
   onRetryNowSession?: (id: string) => Promise<boolean | void>;
+  onArchiveSession?: (id: string) => Promise<boolean | void>;
+  onUnarchiveSession?: (id: string) => Promise<boolean | void>;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onSetRateLimitEnabled?: (id: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (id: string, enabled: boolean) => void;
@@ -185,6 +189,8 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
   onNewWorkspaceSession,
   onRestartSession,
   onRetryNowSession,
+  onArchiveSession,
+  onUnarchiveSession,
   onCreateCheckpoint,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
@@ -203,6 +209,7 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
     <SessionRow
       session={session}
       onClick={onSessionClick ? () => onSessionClick(session) : undefined}
+      onOpenInfo={onSessionClick ? () => onSessionClick(session, "info") : undefined}
       onPause={onPauseSession ? () => onPauseSession(id) : undefined}
       onResume={onResumeSession ? () => onResumeSession(session) : undefined}
       onDelete={onDeleteSession ? () => onDeleteSession(id) : undefined}
@@ -211,6 +218,8 @@ const SessionRowWrapper = React.memo(function SessionRowWrapper({
       onNewWorkspace={onNewWorkspaceSession ? () => onNewWorkspaceSession(id) : undefined}
       onRestart={onRestartSession}
       onRetryNow={onRetryNowSession}
+      onArchive={onArchiveSession}
+      onUnarchive={onUnarchiveSession}
       onCreateCheckpoint={onCreateCheckpoint}
       onSetRateLimitEnabled={onSetRateLimitEnabled}
       onToggleAutonomousMode={onToggleAutonomousMode}
@@ -387,6 +396,8 @@ export function SessionList({
   onRenameSession,
   onRestartSession,
   onRetryNowSession,
+  onArchiveSession,
+  onUnarchiveSession,
   onUpdateTags,
   onNewSession,
   onCreateCheckpoint,
@@ -760,7 +771,7 @@ export function SessionList({
   // Stable row-handler callbacks passed to SessionRowWrapper.
   // These accept (session) or (id) so SessionRowWrapper can be memoized —
   // the per-session closures are only recreated inside the wrapper when session identity changes.
-  const stableOnSessionClick = useCallback((session: Session) => onSessionClick?.(session), [onSessionClick]);
+  const stableOnSessionClick = useCallback((session: Session, tab?: string) => onSessionClick?.(session, tab), [onSessionClick]);
   const stableOnSessionOpenInNewPane = useCallback((session: Session) => onSessionOpenInNewPane?.(session), [onSessionOpenInNewPane]);
   const stableOnDeleteSession = useCallback((id: string) => onDeleteSession?.(id), [onDeleteSession]);
   const stableOnPauseSession = useCallback((id: string) => onPauseSession?.(id), [onPauseSession]);
@@ -1406,6 +1417,8 @@ export function SessionList({
                     onNewWorkspaceSession={stableOnNewWorkspaceSession}
                     onRestartSession={onRestartSession}
                     onRetryNowSession={onRetryNowSession}
+                    onArchiveSession={onArchiveSession}
+                    onUnarchiveSession={onUnarchiveSession}
                     onCreateCheckpoint={onCreateCheckpoint}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onToggleAutonomousMode={onToggleAutonomousMode}
@@ -1583,6 +1596,7 @@ export function SessionList({
                 <SessionCard
                   session={session}
                   onClick={() => onSessionClick?.(session)}
+                  onOpenInfo={() => onSessionClick?.(session, "info")}
                   onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
                   onDelete={() => onDeleteSession?.(session.id)}
                   onPause={() => onPauseSession?.(session.id)}
@@ -1592,6 +1606,8 @@ export function SessionList({
                   onRename={onRenameSession}
                   onRestart={onRestartSession}
                   onRetryNow={onRetryNowSession}
+                  onArchive={onArchiveSession}
+                  onUnarchive={onUnarchiveSession}
                   onUpdateTags={onUpdateTags}
                   onCreateCheckpoint={onCreateCheckpoint}
                   onListCheckpoints={onListCheckpoints}

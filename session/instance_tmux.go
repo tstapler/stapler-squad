@@ -15,6 +15,8 @@ import (
 	ptyPkg "github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/qos"
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
@@ -331,7 +333,11 @@ func AutoApproveSupported(program string) bool {
 // NewProcessManager's error directly instead of going through this
 // fallback — see backend_factory.go's ErrUnrecognizedBackend.
 func (i *Instance) pm() ProcessManager {
-	i.pmMu.Lock()
+	if !i.pmMu.TryLock() {
+		waitStart := time.Now()
+		i.pmMu.Lock()
+		termlat.Default.Record(termlat.StagePMLockWait, termlat.Labels{}, time.Since(waitStart))
+	}
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
 		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
@@ -872,6 +878,12 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 		return fmt.Errorf("failed to construct %q process manager for migration: %w", backendOverride, err)
 	}
 	i.processManager = newPM
+	i.wireTmuxSession(command)
+	if backendOverride == BackendTymux {
+		newPM.AppendLaunchEnv(i.buildExtraEnv()...)
+	}
+	newPM.ResetExitOnce()
+	newPM.SetOnExitCallback(instanceOnExitCallback(i))
 
 	i.mu.Lock()
 	i.Backend = backendOverride
@@ -1247,6 +1259,12 @@ func (i *Instance) GetPTYReader() (*os.File, error) {
 	return i.pm().GetPTY()
 }
 
+// RestoredPTY returns the PTY of a pane RestoreProcess just attached. Unlike GetPTYReader it
+// has no started gate: a boot-loaded instance is not started until its first lazy restore.
+func (i *Instance) RestoredPTY() (*os.File, error) {
+	return i.pm().GetPTY()
+}
+
 // IsRemote reports whether this instance's tmux session runs on a remote
 // host (ssh-remote-workspaces Phase 4 Epic 4.2's ExecutionTarget), exposed
 // for server/services call sites (a different package, so the unexported
@@ -1555,6 +1573,36 @@ func (i *Instance) CapturePaneRedraw(ctx context.Context) (streamhub.FullStateSn
 		i.SetAltScreenActiveBootstrap(altScreen)
 	}
 	return streamhub.FullStateSnapshot{Data: data, AltScreen: altScreen}, true, nil
+}
+
+// SetPaneActivity forwards the hub's per-session priority class to the backend daemon when it
+// takes hints; otherwise it is a no-op. Satisfies streamhub.ActivityHinter.
+func (i *Instance) SetPaneActivity(ctx context.Context, activity qos.Activity) error {
+	h, ok := capabilityOf[PaneActivityHinter](i.pm())
+	if !ok {
+		return nil
+	}
+	return h.SetPaneActivity(ctx, activity)
+}
+
+// SupportsInStreamResync reports whether ResyncInStream can splice by sequence number right now.
+// Satisfies streamhub.InStreamResyncer.
+func (i *Instance) SupportsInStreamResync() bool {
+	c, ok := capabilityOf[InStreamResyncer](i.pm())
+	return ok && i.terminalScreenReady() && c.SupportsInStreamResync()
+}
+
+// ResyncInStream captures the pane and splices a redraw plus all later output into every raw
+// output subscriber's stream, in order. Satisfies streamhub.InStreamResyncer.
+func (i *Instance) ResyncInStream(ctx context.Context) error {
+	c, ok := capabilityOf[InStreamResyncer](i.pm())
+	if !ok {
+		return streamhub.ErrSessionNotStarted
+	}
+	if !i.terminalScreenReady() {
+		return streamhub.ErrSessionNotStarted
+	}
+	return c.ResyncInStream(ctx)
 }
 
 // GetCurrentPaneContent captures the current visible tmux pane content.

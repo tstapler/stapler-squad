@@ -50,9 +50,19 @@ const SHORTCUT_SPECS = ['**/files-shortcuts.spec.ts'];
 // The server pool is shared across projects, so one project proves it; a skip elsewhere would read as a gap to the baseline gate.
 const POOL_ISOLATION_SPEC = '**/worker-server-isolation.spec.ts';
 const STRESS_SPECS = '**/terminal-stress/*.spec.ts';
+const LEAN_CI = !!process.env.CI && process.env.E2E_KEEP_ARTIFACTS !== '1';
 const SKIP_STRESS = process.env.E2E_SKIP_STRESS === '1';
 const STRESS_ONLY = process.env.E2E_STRESS_ONLY === '1';
-const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-large.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts'];
+// Specs that assert touch, `isMobile` and a coarse pointer: they run only on the mobile projects, never on
+// desktop chromium (a MOBILE_SPECS file such as files-large.spec.ts also runs there by design).
+const MOBILE_ONLY_SPECS = [
+  '**/multi-pr-session-mobile.spec.ts',
+  '**/artifacts-tab-mobile.spec.ts',
+  '**/artifacts-view-mobile.spec.ts',
+  '**/omnibar-find-pr-mobile.spec.ts',
+  '**/backlog-import-close-issue-mobile.spec.ts',
+];
+const MOBILE_SPECS = ['**/files-mobile*.spec.ts', '**/files-large.spec.ts', '**/files-lazydoc-spike.spec.ts', '**/files-transport-spike.spec.ts', ...MOBILE_ONLY_SPECS];
 
 /**
  * Frontend-responsiveness perf project (Story 1.1.3). Registered only when explicitly selected
@@ -141,14 +151,16 @@ export default defineConfig({
       ],
     },
 
-    // Browser trace on failure
-    trace: 'on-first-retry',
+    // CI keeps no traces or videos: the shards upload blob reports that are only merged into one JSON report
+    // (2.5 GB per run, 1.1 GB on one shard). E2E_KEEP_ARTIFACTS=1 turns them back on to debug a CI-only failure.
+    // Browser trace on the first retry
+    trace: LEAN_CI ? 'off' : 'on-first-retry',
 
     // Screenshot on failure
     screenshot: 'only-on-failure',
 
-    // Video: always-on when RECORD_FEATURES=true, otherwise retain on failure
-    video: process.env.RECORD_FEATURES === 'true' ? 'on' : 'retain-on-failure',
+    // Video: always-on when RECORD_FEATURES=true, otherwise retain on failure (off in lean CI, see trace above)
+    video: process.env.RECORD_FEATURES === 'true' ? 'on' : LEAN_CI ? 'off' : 'retain-on-failure',
 
     // Test results output directory
     outputDir: 'test-results/',
@@ -205,7 +217,7 @@ export default defineConfig({
     {
       name: 'chromium',
       ...(STRESS_ONLY ? { testMatch: STRESS_SPECS } : {}),
-      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', ...MOBILE_ONLY_SPECS, DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {
@@ -251,7 +263,7 @@ export default defineConfig({
       // --disable-webgl makes that check false → no addon loads → DOM renderer.
       name: 'chromium-dom',
       ...(STRESS_ONLY ? { testMatch: STRESS_SPECS } : {}),
-      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', POOL_ISOLATION_SPEC, DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
+      testIgnore: ['**/mobile-webkit.spec.ts', '**/perf/**', ...MOBILE_ONLY_SPECS, POOL_ISOLATION_SPEC, DEV_SERVER_SPECS, WEBSITE_DEMO_SPECS, ...(SKIP_STRESS ? [STRESS_SPECS] : [])],
       use: {
         ...devices['Desktop Chrome'],
         launchOptions: {

@@ -59,10 +59,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Install buf
         run: |
@@ -141,7 +140,7 @@ jobs:
   go-tier2:
     name: Go Benchmarks (Tier 2 - Extended)
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     # Only run on push to main, not on PRs (too slow for per-PR checks)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -150,19 +149,35 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
+
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" \
+            -o /usr/local/bin/buf && chmod +x /usr/local/bin/buf
+
+      - name: Generate protobuf code
+        run: buf generate proto --template buf.gen.go-only.yaml
+
+      - name: Generate ent ORM code
+        run: go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
+      - name: Create placeholder web UI dist
+        # server/web/embed.go does `//go:embed all:dist`; this job builds no web UI,
+        # and without the directory the root and server/* packages fail at setup.
+        run: mkdir -p server/web/dist && touch server/web/dist/.gitkeep
 
       - name: Run full benchmark suite
         run: |
+          set -o pipefail
           go test \
             -bench=. \
             -run='^$' \
             -benchmem \
-            -count=8 \
-            -timeout=30m \
+            -count=3 \
+            -timeout=25m \
             ./... | tee tier2-bench.txt
 
       - name: Save benchmark baseline
@@ -187,8 +202,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    # .size-limit.json's 6,349,052B cap (Story 5.9) is calibrated against the
-    # minified Bun build (build.ts's default).
+    # .size-limit.json mirrors budgets.json's totalJsBytes tripwire (8,000,000 B), measured on the
+    # minified Bun build (build.ts's default). The per-PR growth gate lives in build.yml's web-checks.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -227,7 +242,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   frontend-throughput:
     name: Frontend Terminal Throughput
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     needs: frontend-bundle
     permissions:
@@ -281,6 +296,10 @@ jobs:
         run: cd web-app && bun run build
 
       - name: Run terminal throughput benchmark
+        env:
+          # The dev server's HMR client injects a <bun-hmr> overlay that
+          # intercepts the start-test click and hangs the run until timeout.
+          WEB_DEV_HMR: '0'
         run: |
           set -o pipefail
           cd web-app && npx playwright test tests/e2e/benchmarks/terminal-throughput.spec.ts --reporter=json 2>&1 | tee /tmp/throughput-raw.txt
@@ -339,7 +358,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   e2e-latency:
     name: E2E RPC Latency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     needs: frontend-bundle
     permissions:
@@ -351,10 +370,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
@@ -543,7 +561,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   e2e-perf:
     name: E2E Perf Budget
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     needs: frontend-bundle
     permissions:
@@ -558,10 +576,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun

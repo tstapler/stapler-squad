@@ -46,10 +46,9 @@ jobs:
 
       - name: Set up Go (stub mode)
         if: ${{ !inputs.build-web-ui }}
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Generate protos and ent (web UI stubbed)
         if: ${{ !inputs.build-web-ui }}
