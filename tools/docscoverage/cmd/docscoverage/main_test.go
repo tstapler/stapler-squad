@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,18 +37,26 @@ func baseTree() files {
 	}
 }
 
-func prRepo(t *testing.T, flagsEnforce bool) string {
+func flagsJSON(docsEnforce bool) []byte {
+	return []byte(fmt.Sprintf(`{"freshnessEnforce":false,"docsCoverageEnforce":%t,"guardsEnforce":true}`, docsEnforce))
+}
+
+// prRepo builds a PR whose base tree has docsCoverageEnforce=baseEnforce and
+// whose PR tree sets it to prEnforce.
+func prRepo(t *testing.T, baseEnforce, prEnforce bool) string {
 	t.Helper()
-	pr := files{"docs/registry/features/frontend/foo-panel.json": fixture.Feature("foo-panel", "Foo panel")}
-	if flagsEnforce {
-		pr[".github/promo-flags.json"] = []byte(`{"freshnessEnforce":false,"docsCoverageEnforce":true,"guardsEnforce":true}`)
+	base := baseTree()
+	base[".github/promo-flags.json"] = flagsJSON(baseEnforce)
+	pr := files{
+		"docs/registry/features/frontend/foo-panel.json": fixture.Feature("foo-panel", "Foo panel"),
+		".github/promo-flags.json":                       flagsJSON(prEnforce),
 	}
-	return gitbasetest.PRRepo(t, baseTree(), pr)
+	return gitbasetest.PRRepo(t, base, pr)
 }
 
 func TestNewFeatureReportOnlyThenEnforced(t *testing.T) {
 	t.Parallel()
-	dir := prRepo(t, false)
+	dir := prRepo(t, false, false)
 
 	code, out, _ := exec(t, "-repo", dir, "-base", "HEAD^1")
 	assert.Equal(t, 0, code)
@@ -57,15 +66,39 @@ func TestNewFeatureReportOnlyThenEnforced(t *testing.T) {
 	code, _, _ = exec(t, "-repo", dir, "-base", "HEAD^1", "-enforce=true")
 	assert.Equal(t, 1, code)
 
-	enforced := prRepo(t, true)
-	code, out, _ = exec(t, "-repo", enforced, "-base", "HEAD^1")
-	assert.Equal(t, 1, code, "docsCoverageEnforce true in the flags file blocks")
+	code, out, _ = exec(t, "-repo", prRepo(t, true, true), "-base", "HEAD^1")
+	assert.Equal(t, 1, code, "docsCoverageEnforce true in the base flags file blocks")
 	assert.Contains(t, out, "enforcing")
+}
 
-	require.NoError(t, os.WriteFile(filepath.Join(enforced, ".github/promo-flags.json"),
-		[]byte(`{"freshnessEnforce":false,"docsCoverageEnforce":false,"guardsEnforce":true}`), 0o644))
-	code, _, _ = exec(t, "-repo", enforced, "-base", "HEAD^1")
-	assert.Equal(t, 0, code, "flipping the flag back makes the same PR pass")
+func TestFlagsComeFromBaseBlobNotPRTree(t *testing.T) {
+	t.Parallel()
+	code, _, _ := exec(t, "-repo", prRepo(t, false, true), "-base", "HEAD^1")
+	assert.Equal(t, 0, code, "a PR cannot enable its own gate")
+
+	code, _, _ = exec(t, "-repo", prRepo(t, true, false), "-base", "HEAD^1")
+	assert.Equal(t, 1, code, "a PR cannot disable the gate it is judged by")
+}
+
+func TestAbsentFlagsInBaseMeansReportOnly(t *testing.T) {
+	t.Parallel()
+	base := baseTree()
+	delete(base, ".github/promo-flags.json")
+	pr := files{
+		"docs/registry/features/frontend/foo-panel.json": fixture.Feature("foo-panel", "Foo panel"),
+		".github/promo-flags.json":                       flagsJSON(true),
+	}
+	code, _, errOut := exec(t, "-repo", gitbasetest.PRRepo(t, base, pr), "-base", "HEAD^1")
+	assert.Equal(t, 0, code, errOut)
+}
+
+func TestMalformedBaseFlagsIsAToolError(t *testing.T) {
+	t.Parallel()
+	base := baseTree()
+	base[".github/promo-flags.json"] = []byte(`{"docsCoverageEnforce":"yes"}`)
+	code, _, errOut := exec(t, "-repo", gitbasetest.PRRepo(t, base, files{"x.txt": []byte("x")}), "-base", "HEAD^1")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, errOut, "docsCoverageEnforce must be a boolean")
 }
 
 func TestUnresolvableBaseNeverBlocks(t *testing.T) {
@@ -177,4 +210,15 @@ func TestAllTourFeaturesHaveSidecars(t *testing.T) {
 	for _, w := range res.Warnings {
 		assert.NotContains(t, w, "sidecar has no tour")
 	}
+}
+
+func TestEnforceSubcommandReadsBaseBlob(t *testing.T) {
+	t.Parallel()
+	code, out, _ := exec(t, "enforce", "-repo", prRepo(t, true, false), "-base", "HEAD^1")
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "true\n", out)
+
+	code, out, _ = exec(t, "enforce", "-repo", prRepo(t, false, true), "-base", "HEAD^1")
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "false\n", out)
 }

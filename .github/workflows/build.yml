@@ -975,7 +975,8 @@ jobs:
             push) BASE="$EVENT_BEFORE" ;;
             *) BASE=none ;;
           esac
-          ENFORCE=$(jq -r '.docsCoverageEnforce' .github/promo-flags.json)
+          # docsCoverageEnforce comes from the base blob, never the PR tree; absent means false.
+          ENFORCE=$(go run ./tools/docscoverage/cmd/docscoverage enforce -base "$BASE")
           go run ./tools/docscoverage/cmd/docscoverage -base "$BASE" || {
             rc=$?
             if [ "$ENFORCE" = "true" ]; then exit "$rc"; fi

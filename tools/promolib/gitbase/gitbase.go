@@ -26,6 +26,9 @@ const DefaultBase = "HEAD^1"
 // ErrNotFound reports a path absent from the base tree. Gate inputs map it to defaults.
 var ErrNotFound = errors.New("gitbase: path not found in base tree")
 
+// ErrBaseUnresolved marks a -base value that does not name a commit.
+var ErrBaseUnresolved = errors.New("gitbase: base unresolved")
+
 // WrongBaseError is returned when the default base HEAD^1 is used on a HEAD that
 // is not a merge commit (a push event or a re-run on a head SHA).
 type WrongBaseError struct{ Parents int }
@@ -90,11 +93,11 @@ func (r *Repo) ResolveBase(base string) (*object.Commit, error) {
 	}
 	h, err := r.repo.ResolveRevision(plumbing.Revision(base))
 	if err != nil {
-		return nil, fmt.Errorf("resolve -base %q: %w", base, err)
+		return nil, fmt.Errorf("%w: resolve -base %q: %w", ErrBaseUnresolved, base, err)
 	}
 	c, err := r.repo.CommitObject(*h)
 	if err != nil {
-		return nil, fmt.Errorf("load -base commit %q: %w", base, err)
+		return nil, fmt.Errorf("%w: load -base commit %q: %w", ErrBaseUnresolved, base, err)
 	}
 	return c, nil
 }

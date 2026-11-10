@@ -3,6 +3,7 @@
 //
 //	docscoverage [-repo d] [-base sha|none] [-enforce=bool] [-flags file]   check and report
 //	docscoverage baseline [-repo d]                                    write grandfather sidecars
+//	docscoverage enforce [-repo d] [-base sha|none]                    print docsCoverageEnforce at the base
 //
 // Report-only unless docsCoverageEnforce is true in .github/promo-flags.json
 // (or -enforce is passed). An unresolvable base never blocks. Exit codes: 0
@@ -39,7 +40,31 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	if len(args) > 0 && args[0] == "baseline" {
 		return runBaseline(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "enforce" {
+		return runEnforce(args[1:], stdout, stderr)
+	}
 	return runCheck(args, stdout, stderr, getenv)
+}
+
+// runEnforce prints true or false: whether docsCoverageEnforce is on at -base.
+// CI reads it through here so the flag never comes from the PR's own tree.
+func runEnforce(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("docscoverage enforce", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var o checkOpts
+	fs.StringVar(&o.repo, "repo", ".", "repository root")
+	fs.StringVar(&o.base, "base", "", "base commit; same values as the check command")
+	fs.StringVar(&o.flagsFile, "flags", flagsPath, "rollout flags file, relative to -repo")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	on, err := resolveEnforce(o)
+	if err != nil {
+		fmt.Fprintln(stderr, "docscoverage:", err)
+		return 2
+	}
+	fmt.Fprintln(stdout, on)
+	return 0
 }
 
 type checkOpts struct {
@@ -131,8 +156,11 @@ func readBudgets(repo string) (check.Budgets, error) {
 	return b, nil
 }
 
-// resolveEnforce: -enforce wins; else docsCoverageEnforce from the flags file;
-// a missing file means report-only, a malformed one is an error.
+// resolveEnforce: -enforce wins; else docsCoverageEnforce from the flags file
+// as of the base commit, so a PR cannot flip its own gate (Cross-cutting 7a).
+// A base that lacks the file means report-only (Cross-cutting 8a); a malformed
+// file is an error. With no resolvable base (run report-only anyway) the
+// working-tree file is parsed so a broken file still surfaces.
 func resolveEnforce(o checkOpts) (bool, error) {
 	switch o.enforce {
 	case "true":
@@ -143,8 +171,8 @@ func resolveEnforce(o checkOpts) (bool, error) {
 	default:
 		return false, fmt.Errorf("-enforce must be true or false, got %q", o.enforce)
 	}
-	data, err := os.ReadFile(filepath.Join(o.repo, o.flagsFile))
-	if errors.Is(err, fs.ErrNotExist) {
+	data, err := readFlagsBlob(o)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, gitbase.ErrNotFound) {
 		return false, nil
 	}
 	if err != nil {
@@ -157,6 +185,27 @@ func resolveEnforce(o checkOpts) (bool, error) {
 		return false, fmt.Errorf("%s: docsCoverageEnforce must be a boolean", o.flagsFile)
 	}
 	return *f.DocsCoverageEnforce, nil
+}
+
+// readFlagsBlob reads the flags file from the base blob, falling back to the
+// working tree only when no base can be resolved.
+func readFlagsBlob(o checkOpts) ([]byte, error) {
+	if o.base != noBase {
+		if r, err := gitbase.Open(o.repo); err == nil {
+			base := o.base
+			if base == "" {
+				base, err = r.MergeBaseWith(originMain)
+			}
+			if err == nil {
+				data, err := r.ReadBlob(base, o.flagsFile)
+				var wrong *gitbase.WrongBaseError
+				if !errors.As(err, &wrong) && !errors.Is(err, gitbase.ErrBaseUnresolved) {
+					return data, err
+				}
+			}
+		}
+	}
+	return os.ReadFile(filepath.Join(o.repo, o.flagsFile))
 }
 
 // loadBase never fails the run: any problem resolving the base yields a notice
