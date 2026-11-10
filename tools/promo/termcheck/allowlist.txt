@@ -8,3 +8,4 @@ tests/e2e/theme-fouc.spec.ts:legacy stored-theme case
 web-app/src/lib/omnibar/detectors/CommandDetector.test.ts:legacy theme command case
 server/user_themes.go:legacy id compat constant
 server/user_themes_test.go:legacy id compat test
+tools/bzl/baseline/pr-sample.json:recorded main-branch PR file list, historical paths (from the origin/main merge)

@@ -11,3 +11,4 @@ tests/e2e/tests/snapshots/**
 project_plans/**/design/*.png
 web-app/build/__tests__/fixtures/app/public/icons/**
 tools/promolib/termscan/testdata/**
+tools/bzl/otel_overlay/otelc-build.tar.bin
