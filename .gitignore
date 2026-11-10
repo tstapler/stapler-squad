@@ -147,6 +147,12 @@ tests/e2e/website-demo-output/
 
 # demo clips recorded during the deploy; never committed
 website/public/clips/
+website/public/shots/
+website/public/media-manifest.json
+website/expected-media.json
+# promo recorder text dumps (DOM text, OCR text) scanned by termcheck/leak checks
+dom-text/
+ocr-text/
 /bazel-*
 /.bazelrc.user
 
