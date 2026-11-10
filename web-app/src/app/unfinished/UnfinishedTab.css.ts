@@ -15,6 +15,7 @@ export const container = style({
   maxWidth: "960px",
   margin: "0 auto",
   padding: `${vars.space["4"]} ${vars.space["4"]}`,
+  paddingRight: `calc(var(--tray-handle-width, 0px) + ${vars.space["4"]})`,
   display: "flex",
   flexDirection: "column",
   gap: vars.space["4"],

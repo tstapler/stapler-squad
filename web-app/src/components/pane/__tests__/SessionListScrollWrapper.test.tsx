@@ -10,6 +10,8 @@
  */
 
 import React from "react";
+import fs from "fs";
+import path from "path";
 import { render, fireEvent } from "@testing-library/react";
 import { PaneSplitRenderer } from "../PaneSplitRenderer";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
@@ -190,5 +192,13 @@ describe("SessionListPaneBody — scroll wrapper", () => {
 
     view.rerender(tree("list"));
     expect(view.getByTestId("session-list-scroll").scrollTop).toBe(300);
+  });
+
+  it("sessionListScroll_should_pad_right_by_tray_handle_width_so_rows_clear_the_fixed_bell", () => {
+    // jest does not compute vanilla-extract styles; assert the source contract that
+    // TrayHandle's --tray-handle-width (see TrayHandle.test.tsx) is consumed here.
+    const css = fs.readFileSync(path.join(__dirname, "../../../styles/pane/paneSplit.css.ts"), "utf8");
+    const block = css.slice(css.indexOf("export const sessionListScroll = style("));
+    expect(block.slice(0, block.indexOf("});"))).toContain('paddingRight: "var(--tray-handle-width, 0px)"');
   });
 });
