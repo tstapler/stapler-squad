@@ -58,3 +58,9 @@ go_test(
         "@org_golang_x_crypto//ssh",
     ],
 )
+
+# Read by session/legacy_pr_readers_test.go.
+exports_files(
+    ["instance_adapter.go"],
+    visibility = ["//session:__pkg__"],
+)

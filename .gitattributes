@@ -17,6 +17,8 @@ MODULE.bazel.lock merge=bazel-lockfile-merge
 /contracts/BUILD.bazel -linguist-generated
 /docs/adr/BUILD.bazel -linguist-generated
 /docs/how-to/BUILD.bazel -linguist-generated
+/docs/observability/grafana/dashboards/BUILD.bazel -linguist-generated
+/docs/reference/BUILD.bazel -linguist-generated
 /macos/BUILD.bazel -linguist-generated
 /proto/session/v1/BUILD.bazel -linguist-generated
 /scripts/BUILD.bazel -linguist-generated

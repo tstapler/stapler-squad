@@ -30,3 +30,10 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
+)

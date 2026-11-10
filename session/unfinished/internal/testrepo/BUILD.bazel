@@ -36,6 +36,7 @@ go_test(
         "//:go.mod",
         "//config/workspacepath:go_sources",
         "//log:go_sources",
+        "//session/git/ignorewalk:go_sources",
         "//session/git/native:go_sources",
         "//session/git/redact:go_sources",
         "//telemetry:go_sources",

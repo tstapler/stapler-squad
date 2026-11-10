@@ -332,3 +332,14 @@ go_test(
         "@org_uber_go_goleak//:goleak",
     ],
 )
+
+# Read by session tests that parse or scan server sources.
+exports_files(
+    [
+        "artifact_scan_complete.go",
+        "pr_annotations.go",
+        "prwatch_sessions.go",
+        "review_queue_manager.go",
+    ],
+    visibility = ["//session:__pkg__"],
+)

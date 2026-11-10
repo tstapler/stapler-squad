@@ -35,6 +35,7 @@ go_test(
         "stages_ext_test.go",
         "termlat_test.go",
     ],
+    data = ["//docs/observability/grafana/dashboards:json"],
     embed = [":termlat"],
     deps = [
         "@com_github_stretchr_testify//assert",
