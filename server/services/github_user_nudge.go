@@ -81,14 +81,19 @@ type nudgeDeps struct {
 	tokens   PRTokenResolver
 	snapshot PRSnapshotSource
 	tracker  PRNudgeTracker
-	clock    nudgeClock
-	logf     func(msg string, args ...any)
+	// nudges records a delivered user nudge as a manual-nudge flow marker; nil is a no-op.
+	nudges NudgeRecorder
+	clock  nudgeClock
+	logf   func(msg string, args ...any)
 	// rateLimitResume reports when GitHub access resumes; nil uses the process-wide limiter.
 	rateLimitResume func() (limited bool, resumeAt time.Time)
 }
 
 // SetPRNudger sets the session-side port. Call before serving requests.
 func (s *GitHubUserService) SetPRNudger(n PRNudger) { s.nudge.nudger = n }
+
+// SetNudgeRecorder sets the manual-nudge flow-marker recorder.
+func (s *GitHubUserService) SetNudgeRecorder(n NudgeRecorder) { s.nudge.nudges = n }
 
 // SetPRDetailFetcher sets the fresh-PR-state reader.
 func (s *GitHubUserService) SetPRDetailFetcher(f githubpkg.PRDetailFetcher) { s.nudge.fetcher = f }
@@ -404,6 +409,9 @@ func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *
 	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, nudgeSignature(key, reasons), prompt)
 	if no, detail, ok := nudgeFromSteer(outcome); ok {
 		if outcome == SteerDelivered {
+			if s.nudge.nudges != nil {
+				s.nudge.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), session.ManualNudgeWrite)
+			}
 			if t := s.nudgeTracker(); t != nil {
 				t.RecordNudge(key, nudgeReasonKinds(reasons), s.nudgeClock().Now())
 			}

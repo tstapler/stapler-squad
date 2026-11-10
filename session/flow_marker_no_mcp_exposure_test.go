@@ -26,6 +26,7 @@ func TestFlowMarkerWriter_should_NotBeReachableFromMCP_When_ServerMcpScanned(t *
 		scanned++
 		require.NotContains(t, string(b), "RecordFlowMarker", e.Name())
 		require.NotContains(t, string(b), "FlowMarker", e.Name())
+		require.NotContains(t, string(b), "ManualNudge", e.Name())
 	}
 	require.Positive(t, scanned)
 }

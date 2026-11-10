@@ -172,10 +172,12 @@ func sanitizeInitialContent(content string) string {
 // the non-"-J" RawPaneContent variant, since "-J" strips cursor codes and
 // merges wrapped rows in a way that breaks redraw.
 func prepareSnapshotContent(content streamhub.RawPaneContent) string {
-	sanitized := sanitizeInitialContent(string(content))
-	// Avoid creating \r\r\n from any pre-existing \r\n pairs.
-	sanitized = strings.ReplaceAll(sanitized, "\r\n", "\n")
-	return strings.ReplaceAll(sanitized, "\n", "\r\n")
+	return normalizeLineEndings(sanitizeInitialContent(string(content)))
+}
+
+// normalizeLineEndings turns every bare \n into \r\n without doubling existing pairs.
+func normalizeLineEndings(content string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(content, "\r\n", "\n"), "\n", "\r\n")
 }
 
 // withCursorSync appends a CUP escape to content so xterm.js cursor lands at the
@@ -2674,7 +2676,8 @@ func buildScrollbackResponse(sessionID, shellID, content string, offset uint64, 
 	}
 	var chunks []*sessionv1.ScrollbackChunk
 	if linesReturned > 0 {
-		chunks = []*sessionv1.ScrollbackChunk{{Data: []byte(content)}}
+		// Same as the initial snapshot: a terminal only returns to column 0 on CR, so bare LF staircases.
+		chunks = []*sessionv1.ScrollbackChunk{{Data: []byte(normalizeLineEndings(content))}}
 	}
 	return &sessionv1.TerminalData{
 		SessionId: sessionID,

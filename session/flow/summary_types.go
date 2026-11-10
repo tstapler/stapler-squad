@@ -245,6 +245,21 @@ type PRSection struct {
 	Outcomes PROutcomes
 	// TriggerDwell splits dwell by joined trigger for cycles after capture.
 	TriggerDwell []TriggerDwellRow
+	// Nudges counts user-originated interventions (manual_nudge markers).
+	Nudges ManualNudges
+}
+
+// ManualNudges is the manual-intervention tally. Recording false means no
+// nudge was ever captured (capture is forward-only, no backfill), so the
+// counts must not be shown as zeros; CaptureSince is the first nudge.
+type ManualNudges struct {
+	Recording    bool
+	CaptureSince time.Time
+	Total        int
+	// Weekly has one bucket per ISO week in the window, oldest first.
+	Weekly []ThroughputBucket
+	// Drill names the items nudged in the window.
+	Drill DrillKey
 }
 
 // PROutcomes is the PR-fix outcome tally. Recording false means outcome
