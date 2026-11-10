@@ -1,17 +1,24 @@
-// Builds the real site with a throwaway fixture tour (Epic 3.2 owns real tour
-// content). Fixture files use the `zz-fixture` prefix, are written into the
-// source tree only for the duration of the build, and are always removed. The
-// manifest lives in a scratch dir and is passed via MEDIA_MANIFEST_PATH, so
-// nothing under public/ besides the zz-fixture clip files is touched.
+// Builds the site with throwaway fixture tours in a hermetic scratch copy of
+// website/ (real tours under src/content/docs/tours are removed from the copy, so
+// their order numbers, clips and manifest rows can never collide with fixtures).
+// node_modules is symlinked, not copied. The working tree is never written to.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MediaManifest } from '../../src/lib/tours/manifest.ts';
 
 export const WEBSITE_ROOT = join(import.meta.dirname, '..', '..');
-const TOURS_DIR = join(WEBSITE_ROOT, 'src', 'content', 'docs', 'tours');
-const CLIPS_DIR = join(WEBSITE_ROOT, 'public', 'clips');
+const COPY_SKIP = new Set(['node_modules', 'dist', '.astro', 'tests', '.vscode']);
+
+/** Copies the site sources into `dest` and drops every real tour (keeping tours/index.mdx). */
+function copySite(dest: string): void {
+	cpSync(WEBSITE_ROOT, dest, { recursive: true, filter: (src) => !COPY_SKIP.has(src.slice(WEBSITE_ROOT.length + 1).split('/')[0]) });
+	symlinkSync(join(WEBSITE_ROOT, 'node_modules'), join(dest, 'node_modules'), 'dir');
+	const tours = join(dest, 'src', 'content', 'docs', 'tours');
+	for (const f of readdirSync(tours)) if (f !== 'index.mdx') rmSync(join(tours, f), { recursive: true, force: true });
+	rmSync(join(dest, 'public', 'clips'), { recursive: true, force: true });
+}
 
 export const FIXTURE_ID = 'zz-fixture';
 
@@ -90,7 +97,7 @@ export interface FixtureBuild {
 	outDir: string;
 	status: number | null;
 	output: string;
-	/** Removes the scratch outDir (source fixtures are already gone after the build). */
+	/** Removes the scratch site copy and its outDir. */
 	cleanup: () => void;
 }
 
@@ -108,32 +115,27 @@ export function buildWithFixtures(opts: {
 }): FixtureBuild {
 	const { mode = 'deploy', manifest = manifestFor(), tours = { [FIXTURE_ID]: tourMdx() }, captions = [{ tMs: 1000, text: 'Caption one' }, { tMs: 9000, text: 'Caption two' }], clipName = FIXTURE_ID, transcriptClips = [clipName], clipFiles = {} } = opts;
 	const scratch = mkdtempSync(join(tmpdir(), 'tour-fixture-'));
+	const site = join(scratch, 'site');
 	const outDir = join(scratch, 'dist');
-	const written: string[] = [];
+	copySite(site);
+	const toursDir = join(site, 'src', 'content', 'docs', 'tours');
+	const clipsDir = join(site, 'public', 'clips');
 	const put = (path: string, body: string) => {
 		mkdirSync(join(path, '..'), { recursive: true });
 		writeFileSync(path, body);
-		written.push(path);
 	};
-	for (const [name, src] of Object.entries(tours)) put(join(TOURS_DIR, `${name}.mdx`), src);
-	if (captions !== null) for (const c of transcriptClips) put(join(CLIPS_DIR, `${c}.transcript.json`), JSON.stringify(captions));
-	for (const [file, bytes] of Object.entries(clipFiles)) put(join(CLIPS_DIR, file), 'x'.repeat(bytes));
+	for (const [name, src] of Object.entries(tours)) put(join(toursDir, `${name}.mdx`), src);
+	if (captions !== null) for (const c of transcriptClips) put(join(clipsDir, `${c}.transcript.json`), JSON.stringify(captions));
+	for (const [file, bytes] of Object.entries(clipFiles)) put(join(clipsDir, file), 'x'.repeat(bytes));
 	const manifestPath = join(scratch, 'media-manifest.json');
 	if (manifest) writeFileSync(manifestPath, JSON.stringify(toWireManifest(manifest)));
 
 	const { npm_config_user_agent: _ua, BASE_URL: _b, SITE: _s, ...env } = process.env;
 	const result = spawnSync('bun', ['run', 'build', '--', '--outDir', outDir], {
-		cwd: WEBSITE_ROOT,
+		cwd: site,
 		encoding: 'utf8',
 		env: { ...env, TOURS_MEDIA_MODE: mode, MEDIA_MANIFEST_PATH: manifestPath },
 	});
-	// Sources are only needed during the build; remove them now so builds can't leak into each other.
-	for (const f of written) rmSync(f, { force: true });
-	try {
-		rmdirSync(CLIPS_DIR);
-	} catch {
-		// not empty: real clips live here too
-	}
 	return {
 		outDir,
 		status: result.status,
