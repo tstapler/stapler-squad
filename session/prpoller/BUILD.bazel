@@ -55,3 +55,9 @@ go_test(
         "//testutil/wait",
     ],
 )
+
+# Read by session/legacy_pr_readers_test.go.
+exports_files(
+    ["pr_status_poller.go"],
+    visibility = ["//session:__pkg__"],
+)

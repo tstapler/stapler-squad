@@ -119,3 +119,10 @@ go_test(
         "@org_uber_go_goleak//:goleak",
     ],
 )
+
+# Read by session/pr_dashboard_test.go, which scans Go sources for metric names.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session:__pkg__"],
+)
