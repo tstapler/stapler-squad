@@ -84,8 +84,9 @@ func TestReviewCommand_should_NameScheduleWakeAndStillForbidPolling_When_Schedul
 	require.NoError(t, err)
 	requireForbidsPollingButNamesTheTool(t, onFiles["review.md"], "review.md")
 	assert.Equal(t, offFiles["review.md"]+"\n"+scheduleWakeGuidance+"\n", onFiles["review.md"])
+	assert.Equal(t, offFiles["ship.md"]+"\n"+scheduleWakeGuidance+"\n", onFiles["ship.md"])
 	for name, text := range offFiles {
-		if name != "review.md" {
+		if name != "review.md" && name != "ship.md" {
 			assert.Equal(t, text, onFiles[name], name+" is untouched")
 		}
 	}

@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { PROGRAMS, type ProgramOption } from "@/lib/constants/programs";
 
 // jest.setup.js globally mocks this hook; these tests need the real one.
@@ -10,6 +10,9 @@ const { useAvailablePrograms, resetAvailableProgramsForTest } = jest.requireActu
 const mockList = jest.fn();
 jest.mock("@connectrpc/connect", () => ({ createClient: () => ({ listProgramsConfig: mockList }) }));
 jest.mock("@/lib/api/transport", () => ({ getConnectTransport: () => ({}) }));
+
+// One macrotask drains the mocked RPC's whole promise chain, so 58 hooks need no polling budget.
+const settle = () => act(async () => void (await new Promise<void>((r) => setTimeout(r, 0))));
 
 describe("useAvailablePrograms", () => {
   beforeAll(() => {
@@ -26,10 +29,12 @@ describe("useAvailablePrograms", () => {
   it("useAvailablePrograms_should_IssueOneListProgramsConfig_When_58ConsumersMount", async () => {
     mockList.mockResolvedValue({ programs: [{ id: "aider", label: "Aider", description: "", command: "aider", cliFlags: "" }] });
     const hooks = Array.from({ length: 58 }, () => renderHook(() => useAvailablePrograms()));
-    await waitFor(() => hooks.forEach((h) => expect(h.result.current[0].value).toBe("aider")));
+    await settle();
+    hooks.forEach((h) => expect(h.result.current[0].value).toBe("aider"));
     expect(mockList).toHaveBeenCalledTimes(1);
     const late = renderHook(() => useAvailablePrograms());
-    await waitFor(() => expect(late.result.current[0].value).toBe("aider"));
+    await settle();
+    expect(late.result.current[0].value).toBe("aider");
     expect(mockList).toHaveBeenCalledTimes(1);
   });
 

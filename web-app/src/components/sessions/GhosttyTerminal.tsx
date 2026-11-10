@@ -9,9 +9,26 @@ import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
 import { asXtermCompatible, FRESH_TERMINAL_SCRUB, ghosttyScrollbackBytes, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
 import { attachRenderGate } from "@/lib/terminal/ghosttyRenderGate";
+import { createMouseWheelForwarder, type WheelTerminal } from "@/lib/terminal/ghosttyWheelForward";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
 import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import type { RefitOptions } from "@/lib/terminal/postFitRepaint";
+
+/** Adapts a ghostty-web terminal to what the wheel forwarder reads; `renderer` is private in its typings. */
+function ghosttyWheelTerminal(term: XtermWebTerminal | GhosttyWebTerminal): WheelTerminal {
+  const t = term as unknown as GhosttyWebTerminal & { renderer?: { getMetrics?: () => { width: number; height: number } } };
+  return {
+    get cols() {
+      return t.cols;
+    },
+    get rows() {
+      return t.rows;
+    },
+    hasMouseTracking: () => t.hasMouseTracking(),
+    cellSize: () => t.renderer?.getMetrics?.(),
+    gridRect: () => t.element?.querySelector("canvas")?.getBoundingClientRect(),
+  };
+}
 
 const DEFAULT_SCROLLBACK_SIZE = 5000;
 const DEFAULT_FONT_SIZE = 14;
@@ -108,6 +125,9 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
         ime?.traceData(data);
         onDataRef.current?.(data);
       });
+      term.attachCustomWheelEventHandler(
+        createMouseWheelForwarder(ghosttyWheelTerminal(term), (data) => onDataRef.current?.(data)),
+      );
       term.onResize(({ cols, rows }) => onResizeRef.current?.(cols, rows));
       terminalRef.current = term;
       fitRef.current = fit;

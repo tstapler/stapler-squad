@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -45,6 +46,10 @@ func registerOwnerActionTools(s *mcpserver.MCPServer, h *peerHelpHandlers) {
 		mcpgo.WithArray("allowed_responses", mcpgo.Required(),
 			mcpgo.Description("The responses the owner may pick, e.g. [\"record waiver\", \"provide evidence\", \"approve\", \"reject\"]."),
 			mcpgo.Items(map[string]any{"type": "string"})),
+		mcpgo.WithNumber("waive_criterion_index", mcpgo.Description("Optional 0-based index of an acceptance criterion you cannot honestly satisfy "+
+			"(e.g. it depends on an unrelated flaky test, or on a failure that will not reproduce). The \""+domain.OwnerActionWaiveResponse+"\" "+
+			"response is added for you; when the owner picks it the criterion is waived automatically (audited) and you are woken with the answer. "+
+			"Put the evidence in question, since the owner decides from it.")),
 	), withCallerIdentityGate(h.gate, toolRequestOwnerAction, h.requestOwnerAction))
 }
 
@@ -66,18 +71,26 @@ func (h *peerHelpHandlers) requestOwnerAction(ctx context.Context, caller string
 	if deps == nil || deps.Backend == nil {
 		return typedErrorResult(CodeUnavailable, "", "the wake dispatcher is not running in this process", "Try again later."), nil
 	}
-	itemID, question, responses, errRes := parseOwnerActionArgs(req.GetArguments())
+	args := req.GetArguments()
+	itemID, question, responses, errRes := parseOwnerActionArgs(args)
 	if errRes != nil {
 		return errRes, nil
 	}
 	if errRes := h.checkOwnerActionItem(ctx, caller, itemID); errRes != nil {
 		return errRes, nil
 	}
+	questionText := domain.OwnerActionQuestionPrefix + question
+	if idx, ok := optionalIntArg(args, "waive_criterion_index"); ok {
+		var errRes *mcpgo.CallToolResult
+		if responses, questionText, errRes = h.prepareWaiverRequest(ctx, itemID, idx, question, responses); errRes != nil {
+			return errRes, nil
+		}
+	}
 	id, _ := uuid.Parse(itemID)
 	row, err := h.storage.CreateGuidanceRequest(ctx, session.CreateGuidanceRequestInput{
 		Scope:        domain.RequestScopeBacklogItem,
 		ItemID:       &id,
-		QuestionText: domain.OwnerActionQuestionPrefix + question,
+		QuestionText: questionText,
 		QuestionType: domain.QuestionTypeMultipleChoice,
 		Options:      mustJSONStrings(responses),
 	})
@@ -153,4 +166,34 @@ func (h *peerHelpHandlers) notifyOwnerAction(itemID, requestID, question string)
 		"Owner action requested", question,
 		map[string]string{"item_id": itemID, "guidance_request_id": requestID},
 	))
+}
+
+// prepareWaiverRequest validates that criterion idx can still be waived and returns the
+// responses (with OwnerActionWaiveResponse guaranteed present) and the marker-bearing
+// question text.
+func (h *peerHelpHandlers) prepareWaiverRequest(ctx context.Context, itemID string, idx int, question string, responses []string) ([]string, string, *mcpgo.CallToolResult) {
+	item, err := h.storage.GetBacklogItem(ctx, itemID)
+	if err != nil {
+		return nil, "", errResult(ErrInternalError, fmt.Sprintf("load item: %v", err), "")
+	}
+	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	if err != nil || idx < 0 || idx >= len(criteria) {
+		return nil, "", errResult(ErrInvalidArgument, fmt.Sprintf("waive_criterion_index %d is not a criterion of this item (it has %d)", idx, len(criteria)), "")
+	}
+	if st := criteria[idx].Status; st == session.AcStatusDone || st == session.AcStatusWaived {
+		return nil, "", errResult(ErrInvalidArgument, fmt.Sprintf("criterion %d is already %s; nothing to waive", idx, st), "")
+	}
+	if !slices.Contains(responses, domain.OwnerActionWaiveResponse) {
+		if len(responses) >= maxOwnerActionResponses {
+			return nil, "", errResult(ErrInvalidArgument, fmt.Sprintf("allowed_responses is full; leave room for %q", domain.OwnerActionWaiveResponse), "")
+		}
+		responses = append(responses, domain.OwnerActionWaiveResponse)
+	}
+	return responses, domain.OwnerActionQuestionPrefix + domain.FormatOwnerActionWaiver(idx) + question, nil
+}
+
+// optionalIntArg reads a JSON number argument as an int; ok is false when absent.
+func optionalIntArg(args map[string]any, key string) (int, bool) {
+	f, ok := args[key].(float64)
+	return int(f), ok
 }

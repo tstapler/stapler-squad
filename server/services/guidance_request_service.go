@@ -33,6 +33,7 @@ type GuidanceRequestService struct {
 	notifier        *EventBusNotifier
 	triageRespawner TriageRespawner
 	answerListener  atomic.Pointer[AnswerListener]
+	waiverResumer   atomic.Pointer[WaiverResumer]
 	probes          atomic.Pointer[DeliveryProbes]
 }
 
@@ -88,6 +89,13 @@ func (p *DeliveryProbes) ended(sessionUUID string) bool {
 func (p *DeliveryProbes) archived(sessionUUID string) bool {
 	return sessionUUID != "" && p.SessionArchived != nil && p.SessionArchived(sessionUUID)
 }
+
+// WaiverResumer is called after an owner-action answer waived a criterion, so the item can
+// continue without anyone re-clicking it.
+type WaiverResumer func(ctx context.Context, itemID string)
+
+// SetWaiverResumer registers fn to run after an owner waiver is applied.
+func (s *GuidanceRequestService) SetWaiverResumer(fn WaiverResumer) { s.waiverResumer.Store(&fn) }
 
 // SetAnswerListener registers fn to run after each successfully applied answer.
 func (s *GuidanceRequestService) SetAnswerListener(fn AnswerListener) { s.answerListener.Store(&fn) }
