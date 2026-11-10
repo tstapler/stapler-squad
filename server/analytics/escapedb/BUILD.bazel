@@ -48,6 +48,7 @@ go_test(
     srcs = [
         "db_reopen_test.go",
         "escape_event_batch_writer_test.go",
+        "escape_event_id_test.go",
         "helpers_test.go",
         "index_usage_test.go",
         "legacy_drop_test.go",

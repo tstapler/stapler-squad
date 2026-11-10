@@ -21,6 +21,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -1242,6 +1243,38 @@ func TestEnsureHubBackendAlive(t *testing.T) {
 		require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
 			"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
 	})
+}
+
+func attachStageTotal(stage string, labels termlat.Labels) uint64 {
+	for _, st := range termlat.Default.Report() {
+		if st.Stage == stage && st.Backend == labels.Backend && st.Listener == labels.Listener {
+			return st.Total
+		}
+	}
+	return 0
+}
+
+func TestEnsureHubBackendAliveCtx_should_TimeEachAttachStep(t *testing.T) {
+	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
+	labels := termlat.Labels{Backend: "tmux", Listener: "local"}
+	fakeExec := &deadThenAliveExecutor{}
+	ptyFactory := &fakePtyFactory{}
+	t.Cleanup(ptyFactory.Close)
+	inst, tmuxSessionName := newTestTmuxInstance(t, "ensure-hub-stages-"+t.Name(), t.TempDir(), fakeExec, ptyFactory)
+	fakeExec.existsName = tmuxSessionName
+	stages := []string{termlat.StageAttachPrepare, termlat.StageAttachAliveCheck, termlat.StageAttachRestore}
+	before := map[string]uint64{}
+	for _, st := range stages {
+		before[st] = attachStageTotal(st, labels)
+	}
+
+	alive, err := h.ensureHubBackendAliveCtx(context.Background(), inst, "sess", labels)
+
+	require.NoError(t, err)
+	require.True(t, alive)
+	for _, st := range stages {
+		require.Greater(t, attachStageTotal(st, labels), before[st], st)
+	}
 }
 
 // A session that is not Creating can never publish a Started event, so

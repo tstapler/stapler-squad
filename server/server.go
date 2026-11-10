@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
+	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
@@ -214,6 +215,33 @@ func (s *Server) joinAfterCancel(ctx context.Context, join func()) {
 // consecutive misses, a dead pane surfaces within ~2x this interval.
 const sessionHealthCheckInterval = 15 * time.Second
 
+// liveSessionCount reports how many sessions own goroutines (Active or Creating; hibernated,
+// paused, stopped and failed ones hold none) and whether the review-queue poller has been given its
+// instances yet. Until it first holds one the count is unknown, so the leak watch does not judge the
+// process against an empty budget during startup; once seen, an empty poller is a real zero.
+func liveSessionCount(deps *ServerDependencies) func() (int, bool) {
+	var populated atomic.Bool
+	return func() (int, bool) {
+		if deps.ReviewQueuePoller == nil {
+			return 0, false
+		}
+		all := deps.ReviewQueuePoller.GetInstances()
+		if len(all) > 0 {
+			populated.Store(true)
+		}
+		if !populated.Load() {
+			return 0, false
+		}
+		n := 0
+		for _, inst := range all {
+			if inst.IsActive() || inst.IsCreating() {
+				n++
+			}
+		}
+		return n, true
+	}
+}
+
 // wireDepsIntoServer wires pre-built ServerDependencies into srv: starts background
 // components, registers shutdown hooks, and mounts all ConnectRPC/HTTP handlers.
 // serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
@@ -222,6 +250,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.hookIPC = newHookIPCState(deps)
 	srv.unfinishedScanner = deps.UnfinishedScanner
 	srv.shutdownHooks = append(srv.shutdownHooks, srv.hookIPC.Close)
+
+	// Always-on goroutine leak watch; /actuator/health reads its verdict.
+	srv.goBackground(func() {
+		profiling.RunGoroutineWatch(serverCtx, profiling.DefaultGoroutineWatch, profiling.GoroutineSampleInterval, liveSessionCount(deps))
+	})
 
 	// Start background components
 	srv.goBackground(func() {

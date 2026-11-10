@@ -3,7 +3,10 @@ load("//tools/bzl:go_test.bzl", "go_test")
 
 go_library(
     name = "profiling",
-    srcs = ["profiling.go"],
+    srcs = [
+        "goroutine_watch.go",
+        "profiling.go",
+    ],
     importpath = "github.com/tstapler/stapler-squad/profiling",
     visibility = ["//visibility:public"],
     deps = [
@@ -24,6 +27,7 @@ alias(
 go_test(
     name = "profiling_test",
     srcs = [
+        "goroutine_watch_test.go",
         "lockprofile_bench_test.go",
         "profiling_test.go",
     ],
