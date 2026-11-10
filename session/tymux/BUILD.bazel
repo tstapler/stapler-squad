@@ -19,6 +19,7 @@ go_library(
         "manager.go",
         "metrics.go",
         "pane_activity.go",
+        "pane_activity_adapter.go",
         "pty_adapter.go",
         "pty_adapter_windows.go",
         "redraw.go",

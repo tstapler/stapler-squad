@@ -1121,6 +1121,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-oracle
 
+      # Fails a PR that adds an RPC without a methodToID entry; main-ci.yml's copy only ran post-merge.
+      - name: Run scanner unit tests
+        if: ${{ !cancelled() }}
+        run: cd tools/scanner && go test ./...
+
       - name: Build binary (native)
         if: ${{ !cancelled() }}
         run: go build -o stapler-squad .
