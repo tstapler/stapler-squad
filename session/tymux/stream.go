@@ -116,10 +116,16 @@ func (s *tymuxGRPCSession) teardownStandingStream() {
 	cancel := s.cancelAttach
 	done := s.streamDone
 	wait := s.teardownWait
+	stream := s.stream
 	s.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
+	}
+	// Once response headers have arrived, cancelling the Attach ctx does not wake an HTTP/2
+	// stream's blocked Receive (it returned only after ~5s in practice); closing the response does.
+	if stream != nil {
+		_ = stream.CloseResponse()
 	}
 	if done != nil {
 		if !lifecycle.AwaitBounded(done, wait) {
