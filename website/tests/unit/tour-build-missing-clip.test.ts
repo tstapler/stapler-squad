@@ -21,6 +21,12 @@ describe('TOURS_MEDIA_MODE=deploy', () => {
 		expect(b.output).toContain('clip "zz-fixture" is absent from media-manifest.json');
 	}, 120_000);
 
+	it('build_should_FailNamingPoster_When_PosterShotAbsentFromManifest', () => {
+		const b = build({ manifest: manifestFor({ poster: false }) });
+		expect(b.status).not.toBe(0);
+		expect(b.output).toContain('poster shot "zz-fixture-poster" is absent from media-manifest.json');
+	}, 120_000);
+
 	it('build_should_FailNamingShot_When_StepShotAbsentFromManifest', () => {
 		const b = build({ manifest: manifestFor({ shots: ['zz-fixture-1', 'zz-fixture-2'] }) });
 		expect(b.status).not.toBe(0);

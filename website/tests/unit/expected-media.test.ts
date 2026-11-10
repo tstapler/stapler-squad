@@ -17,7 +17,9 @@ describe('expected-media.mjs', () => {
 				{ name: 'alpha-1' },
 				{ name: 'alpha-2' },
 				{ name: 'alpha-mobile' },
+				{ name: 'alpha-poster' },
 				{ name: 'beta', formats: ['mp4', 'webm'] },
+				{ name: 'beta-poster' },
 				{ name: 'shared-shot' },
 			],
 		});

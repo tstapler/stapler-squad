@@ -48,6 +48,7 @@ export function collectTourMedia(toursDir, acc) {
 			throw new Error(`${file}: frontmatter has no \`tour:\` object`);
 		}
 		add(acc, tour.clip, CLIP_FORMATS);
+		if (typeof tour.clip === 'string' && tour.clip.trim() !== '') add(acc, `${tour.clip}-poster`, []); // TourClip's poster frame
 		add(acc, tour.phoneFigure, []);
 		for (const step of Array.isArray(tour.steps) ? tour.steps : []) add(acc, step?.shot, []);
 	}

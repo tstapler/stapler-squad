@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseFrontmatter, type TourSource } from './catalog.ts';
 import { checkOrderSet, makeTourSchema, type TourEntry } from './schema.ts';
-import { clipDurationMs, hasClip, requireManifest, type MediaMode } from './manifest.ts';
+import { clipDurationMs, hasClip, hasShot, posterName, requireManifest, type MediaMode } from './manifest.ts';
 
 export const CLIP_MAX_DURATION_MS = 60_000;
 
@@ -48,6 +48,9 @@ export function assertDeployMedia(entries: readonly TourEntry[], mode: MediaMode
 	const errors: string[] = [];
 	for (const { id, tour } of entries) {
 		if (!hasClip(manifest, tour.clip)) errors.push(`${id}: clip "${tour.clip}" is absent from media-manifest.json`);
+		if (!hasShot(manifest, posterName(tour.clip))) {
+			errors.push(`${id}: poster shot "${posterName(tour.clip)}" is absent from media-manifest.json`);
+		}
 		const d = clipDurationMs(manifest, tour.clip);
 		if (d !== undefined && d > CLIP_MAX_DURATION_MS) {
 			errors.push(`${id}: clip "${tour.clip}" is ${d} ms, over the ${CLIP_MAX_DURATION_MS} ms cap`);

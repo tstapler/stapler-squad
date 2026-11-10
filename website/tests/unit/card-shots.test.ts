@@ -107,7 +107,7 @@ describe('no orphan media (Story 3.2.5 consumer equality)', () => {
 	it('everything the site consumes has a producer in the recorder (expected-media vs scenes, shotlists, legacy clips)', () => {
 		const legacyClips = [...readFileSync(join(SCENES_DIR, '..', 'clips.ts'), 'utf8').matchAll(/^    name: '([^']+)',$/gm)].map((m) => m[1]);
 		const produced = new Set<string>([
-			...tours.flatMap((t) => [t.id, ...sceneShotNames(t.id)]),
+			...tours.flatMap((t) => [t.id, `${t.id}-poster`, ...sceneShotNames(t.id)]),
 			...legacyClips,
 			...CARD_SHOTS.map((c) => c.spec.name),
 			...MOBILE_SHOTS.map((s) => s.name),

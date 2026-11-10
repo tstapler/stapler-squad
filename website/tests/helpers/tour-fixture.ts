@@ -64,13 +64,14 @@ export function tourMdx(opts: { id?: string; clip?: string; helpDoc?: string; or
 	return `---\n${JSON.stringify(frontmatter, null, 2)}\n---\n`;
 }
 
-export function manifestFor(opts: { clip?: string; shots?: string[]; durationMs?: number; commit?: string; recordedAt?: string; mobileShots?: string[] } = {}): MediaManifest {
-	const { clip = FIXTURE_ID, shots = fixtureSteps().map((s) => s.shot), durationMs = 45_000, commit = 'a1b2c3d4e5f6', recordedAt = '2026-11-10T12:00:00Z', mobileShots = [] } = opts;
+export function manifestFor(opts: { clip?: string; shots?: string[]; durationMs?: number; commit?: string; recordedAt?: string; mobileShots?: string[]; poster?: boolean } = {}): MediaManifest {
+	const { clip = FIXTURE_ID, shots = fixtureSteps().map((s) => s.shot), durationMs = 45_000, commit = 'a1b2c3d4e5f6', recordedAt = '2026-11-10T12:00:00Z', mobileShots = [], poster = true } = opts;
 	return {
 		commit,
 		recordedAt,
 		entries: [
 			...(clip ? [{ name: clip, kind: 'clip' as const, formFactor: 'desktop' as const, format: 'webm', durationMs }] : []),
+			...(clip && poster ? [{ name: `${clip}-poster`, kind: 'shot' as const, formFactor: 'desktop' as const, width: 1280, height: 720 }] : []),
 			...shots.map((name) => ({ name, kind: 'shot' as const, formFactor: 'desktop' as const, width: 1280, height: 720 })),
 			...mobileShots.map((name) => ({ name, kind: 'shot' as const, formFactor: 'mobile' as const, width: 390, height: 844 })),
 		],

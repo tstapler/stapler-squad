@@ -20,6 +20,7 @@ beforeAll(() => {
 	const ids = [A, B, C];
 	const manifest = manifestFor({ clip: '', shots: ids.flatMap((id) => stepsFor(id).map((s) => s.shot)) });
 	manifest.entries.push(...ids.map((id) => ({ name: id, kind: 'clip' as const, durationMs: 30_000 })));
+	manifest.entries.push(...ids.map((id) => ({ name: `${id}-poster`, kind: 'shot' as const, width: 1280, height: 720 })));
 	build = buildWithFixtures({
 		manifest,
 		transcriptClips: ids,

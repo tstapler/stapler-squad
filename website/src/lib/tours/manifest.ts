@@ -118,10 +118,13 @@ export function unrecordedTourIds(manifest: MediaManifest, tours: ReadonlyArray<
 	return tours.filter((t) => !hasClip(manifest, t.clip)).map((t) => t.id);
 }
 
+/** Manifest shot name of a clip's poster frame (recorder.ts emits `<clip>-poster`). */
+export const posterName = (clip: string) => `${clip}-poster`;
+
 export const clipUrls = (base: string, name: string) => ({
 	webm: `${base}/clips/${name}.webm`,
 	mp4: `${base}/clips/${name}.mp4`,
-	poster: `${base}/shots/${name}-poster.webp`,
+	poster: `${base}/shots/${posterName(name)}.webp`,
 });
 export const shotUrl = (base: string, name: string) => `${base}/shots/${name}.webp`;
 
