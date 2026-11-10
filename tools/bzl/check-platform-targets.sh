@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Task 6.1b: on this host //... must analyse with zero errors, and at least one target must be
 # reported incompatible by the platform provider (the windows-only canary, ADR-005).
-# Needs bazel (use through tools/bazel; honours BAZEL_REAL). Exits 1 on failure.
+# Needs bazel: tools/bazel when BAZEL_REAL is set (bazelisk sets it), else plain `bazel` as CI invokes it
+# (tools/bazel exits 2 without BAZEL_REAL, which this script's grep-based checks would read as "0 incompatible"). Exits 1 on failure.
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 2
-bz=tools/bazel
+if [ -n "${BAZEL_REAL:-}" ]; then bz=tools/bazel; else bz=bazel; fi
 
 errs=$($bz build --nobuild --keep_going //... 2>&1 | grep -c '^ERROR')
 if [ "$errs" -ne 0 ]; then

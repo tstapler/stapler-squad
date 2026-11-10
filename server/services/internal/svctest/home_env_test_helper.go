@@ -1,9 +1,11 @@
 package svctest
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // homeEnvMu guards every test in this package that mutates the process-global
@@ -70,7 +72,30 @@ var stateEnvMu sync.Mutex
 func WithIsolatedStateDir(t *testing.T) string {
 	t.Helper()
 	StateLock.Acquire(t)
-	return WithIsolatedStateDirPath(t, t.TempDir())
+	return WithIsolatedStateDirPath(t, forgivingTempDir(t))
+}
+
+// forgivingTempDir is t.TempDir() whose cleanup retries RemoveAll: a goroutine leaked by an earlier
+// test can be mid-MkdirAll in this directory (it resolved the path from the live env var) when cleanup
+// runs, which fails t.TempDir()'s single RemoveAll with "directory not empty" and fails the test.
+// The retries let that writer finish; once the env var is restored (earlier cleanup) no new writer can start.
+func forgivingTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ssq-state-")
+	if err != nil {
+		t.Fatalf("create state dir: %v", err)
+	}
+	t.Cleanup(func() {
+		var rmErr error
+		for attempt := 0; attempt < 10; attempt++ {
+			if rmErr = os.RemoveAll(dir); rmErr == nil {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Errorf("remove state dir %s: %v", dir, rmErr)
+	})
+	return dir
 }
 
 // withIsolatedStateDirPath is withIsolatedStateDir for tests that already have

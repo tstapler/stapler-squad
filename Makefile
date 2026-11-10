@@ -968,12 +968,16 @@ vet-rpc-markers: registry-generate-backend ## Check that all RPC handlers have a
 		echo "✅ All RPC handlers have +api: markers."; \
 	fi
 
+# Keep in sync with golangci-lint-action `version:` in .github/workflows/lint.yml; an unpinned install picks up
+# newer staticcheck rules (e.g. Go 1.26 SA1019 on ecdsa.PrivateKey.D) that the required Lint check does not run.
+GOLANGCI_LINT_VERSION ?= v2.11.4
+
 lint: gen-gate-strict ensure-tools proto-gen ent-gen server/web/dist lint-custom lint-shell ## Run golangci-lint with comprehensive checks
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
 		echo "Installing golangci-lint v2..."; \
-		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
 	fi; \
 	CGO_ENABLED=0 golangci-lint run --enable=nilnil,staticcheck,ineffassign,govet
 
@@ -1182,7 +1186,7 @@ ready-complexity-gate: ensure-tools ## New-code-only gocyclo/gocognit/funlen/rev
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \
 		echo "Installing golangci-lint v2..."; \
-		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
 	fi; \
 	golangci-lint run --timeout=5m --max-issues-per-linter=0 --max-same-issues=0 \
 		--enable=gocyclo,gocognit,funlen,revive,dupl --new-from-rev=origin/main
