@@ -33,7 +33,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	base := fs.String("base", "", "read the allow-list from this base commit instead of the working tree (CI uses HEAD^1)")
 	allowPath := fs.String("allowlist", AllowlistPath, "allow-list path, repo-relative")
 	dir := fs.String("dir", "", "directory to scan (dist and media-text modes)")
+	patterns := fs.String("patterns", "banned", "banned (trademark terms) or leak (paths, tokens, emails; needs -dir)")
 	if err := fs.Parse(args); err != nil {
+		return ExitError
+	}
+	if *patterns == "leak" {
+		return runLeak(*dir, stdout, stderr)
+	}
+	if *patterns != "banned" {
+		fmt.Fprintf(stderr, "termcheck: unknown -patterns %q (want banned or leak)\n", *patterns)
 		return ExitError
 	}
 	res, err := run(*mode, *repo, *base, *allowPath, *dir)
@@ -99,4 +107,23 @@ func readAllowlist(r *gitbase.Repo, repoDir, base, allowPath string) ([]byte, er
 		return nil, nil
 	}
 	return data, err
+}
+
+func runLeak(dir string, stdout, stderr io.Writer) int {
+	if dir == "" {
+		fmt.Fprintln(stderr, "termcheck: -dir is required for -patterns=leak")
+		return ExitError
+	}
+	found, err := termscan.ScanLeaks(termscan.DirSource{Dir: dir}, nil)
+	if err != nil {
+		fmt.Fprintln(stderr, "termcheck:", err)
+		return ExitError
+	}
+	for _, f := range found {
+		fmt.Fprintln(stdout, f)
+	}
+	if len(found) > 0 {
+		return ExitFindings
+	}
+	return ExitOK
 }

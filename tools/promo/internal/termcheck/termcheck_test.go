@@ -85,3 +85,20 @@ func TestRun_UsageErrors(t *testing.T) {
 		assert.Equal(t, termcheck.ExitError, code, args)
 	}
 }
+
+func TestRun_LeakPatterns(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("ok\nsee /home/bob/x\n"), 0o644))
+	code, out, _ := run("-patterns", "leak", "-dir", dir)
+	assert.Equal(t, termcheck.ExitFindings, code)
+	assert.Contains(t, out, "a.txt:2")
+	clean := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(clean, "a.txt"), []byte("3m ago"), 0o644))
+	code, _, _ = run("-patterns", "leak", "-dir", clean)
+	assert.Equal(t, termcheck.ExitOK, code)
+	code, _, _ = run("-patterns", "leak")
+	assert.Equal(t, termcheck.ExitError, code)
+	code, _, _ = run("-patterns", "nope")
+	assert.Equal(t, termcheck.ExitError, code)
+}

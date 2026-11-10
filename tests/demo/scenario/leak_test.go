@@ -6,22 +6,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-)
 
-// leakRegexps are the interim leak patterns. PENDING: once
-// tools/promolib/termscan exports LeakPatterns() (Cross-cutting 5a), replace
-// this function with that call so there is one pattern list.
-func leakRegexps() []*regexp.Regexp {
-	src := []string{
-		`/home/`, `/tmp/tmp\.`, `ghp_[A-Za-z0-9]`, `\.internal\b`,
-		`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`, `/Users/`,
-	}
-	out := make([]*regexp.Regexp, len(src))
-	for i, s := range src {
-		out[i] = regexp.MustCompile(s)
-	}
-	return out
-}
+	"github.com/tstapler/stapler-squad/tools/promolib/termscan"
+)
 
 // fakeDefaultPathPrefixes lists the obviously fake paths the legacy default
 // scenario (tests/demo mockSessions) uses; it is not rewritten, so it is
@@ -33,8 +20,8 @@ func leakHits(text string) []string {
 		text = strings.ReplaceAll(text, p, "")
 	}
 	var hits []string
-	for _, re := range leakRegexps() {
-		if m := re.FindString(text); m != "" {
+	for _, p := range termscan.LeakPatterns() {
+		if m := p.Find(text); m != "" {
 			hits = append(hits, m)
 		}
 	}
