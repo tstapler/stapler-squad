@@ -4,12 +4,15 @@ The registry tracks every backend RPC method and frontend feature in stapler-squ
 
 ## Files
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
 | `schema.json` | JSON Schema definition for registry entries |
-| `backend-features.json` | One entry per RPC method in `proto/session/v1/session.proto` |
-| `frontend-features.json` | One entry per significant UI feature |
+| `features/backend/**/*.json` | One file per RPC method in `proto/session/v1/session.proto` (scanner-owned) |
+| `features/frontend/*.json`, `features/*.json` | One file per UI feature; a root file may hold an array (scanner-owned) |
+| `docs-coverage/<encoded-id>.json` | Hand-written docs link per feature (`help`, `website`, `tour`, `exempt`); see "Docs coverage" below |
 | `coverage-gaps.json` | Derived view: features where `tested: false` |
+
+Older text below that mentions `backend-features.json` and `frontend-features.json` describes the retired monolith; identity is the entry `id`, never the filename.
 
 ## Entry format
 
@@ -95,7 +98,11 @@ Delete the entry from the registry file. Remove its test file too.
 
 ## coverage-gaps.json
 
-This file lists feature IDs where `tested: false`. It is checked in CI — a PR that increases the gap count must include a justification in the PR description (e.g. "stubbed RPC not yet implemented"). Do not mark `tested: true` without a real test to back it up.
+This file lists feature IDs where `tested: false`. It is checked in CI — a PR that increases the gap count must include a justification in the PR description (e.g. "stubbed RPC not yet implemented"). Do not mark `tested: true` without a real test to back it up. This is the **test** gap list. The **docs** gap list is separate: per-feature sidecars under `docs-coverage/`, whose `grandfathered` status is a ratchet that may only shrink (see below), so each kind of debt has exactly one baseline.
+
+## Docs coverage
+
+Frontend and root features (163 ids) are in scope; backend features only when their sidecar sets `userFacing: true`. Each in-scope feature has a sidecar `docs-coverage/<encoded-id>.json`, where `%`, `:` and `/` in the id are percent-encoded (`alias:invoke` -> `alias%3Ainvoke.json`). Scanners never read or write these files. `go run ./tools/docscoverage/cmd/docscoverage` (or `make docs-coverage`) checks them; `make docs-coverage-baseline` writes `status: "grandfathered"` sidecars for features that have none. How to add docs for a feature: `docs/how-to/add-docs-coverage-for-a-feature.md`; design: `project_plans/promo-materials-refresh/decisions/ADR-005-docs-coverage-gate-sidecar-ratchet.md`.
 
 ## Regenerating the registry
 

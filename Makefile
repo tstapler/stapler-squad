@@ -95,7 +95,10 @@ endif
 help: ## Show this help message
 	@echo "Stapler Squad Development Makefile"
 	@echo "================================="
-	@grep -E '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z0-9._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+# Promo-materials-refresh targets (after `help` so it stays the default goal).
+include make/promo.mk
 
 .PHONY: git-soak-status
 git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)

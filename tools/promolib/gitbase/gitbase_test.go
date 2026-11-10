@@ -85,3 +85,21 @@ func TestMergeBaseWith(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, 40)
 }
+
+func TestListAt_ListsDirectoryAtBaseAndMissingIsEmpty(t *testing.T) {
+	t.Parallel()
+	dir := gitbasetest.PRRepo(t,
+		gitbasetest.Files{"d/a.json": []byte("1"), "d/sub/b.json": []byte("2"), "other.txt": []byte("3")},
+		gitbasetest.Files{"d/new.json": []byte("4")})
+	r, err := gitbase.Open(dir)
+	require.NoError(t, err)
+
+	got, err := r.ListAt("", "d")
+	require.NoError(t, err)
+	sort.Strings(got)
+	assert.Equal(t, []string{"d/a.json", "d/sub/b.json"}, got)
+
+	none, err := r.ListAt("", "absent")
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}

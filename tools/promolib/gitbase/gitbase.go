@@ -203,3 +203,36 @@ func (r *Repo) ReadBlob(base, path string) ([]byte, error) {
 	defer rd.Close()
 	return io.ReadAll(rd)
 }
+
+// ListAt lists every file under the directory prefix (no trailing slash) in the
+// base tree, as repo-relative paths. A missing directory yields an empty list.
+func (r *Repo) ListAt(base, prefix string) ([]string, error) {
+	baseCommit, err := r.ResolveBase(base)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := baseCommit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("load base tree: %w", err)
+	}
+	sub, err := tree.Tree(prefix)
+	if err != nil {
+		if errors.Is(err, object.ErrDirectoryNotFound) || errors.Is(err, object.ErrEntryNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open %q at base: %w", prefix, err)
+	}
+	var out []string
+	it := sub.Files()
+	defer it.Close()
+	for {
+		f, err := it.Next()
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("walk %q at base: %w", prefix, err)
+		}
+		out = append(out, prefix+"/"+f.Name)
+	}
+}

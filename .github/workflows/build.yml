@@ -11,6 +11,11 @@ on:
       - 'install.sh'
       - 'proto/**'
       - 'web-app/src/**'
+      - 'web-app/public/docs/**'
+      - 'website/src/content/**'
+      - 'docs/registry/**'
+      - 'tools/docscoverage/**'
+      - '.github/promo-flags.json'
       - 'web-app/package.json'
       - 'web-app/bun.lock'
       - 'web-app/build/**'
@@ -94,7 +99,7 @@ jobs:
           CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
           echo "Changed files:"
           echo "$CHANGED"
-          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^scripts/e2e-confirm\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.github/actions/prepare-stub/|^\.github/workflows/_prepare\.yml$|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
+          if echo "$CHANGED" | grep -qE '\.go$|^go\.(mod|sum)$|^Makefile$|^install\.sh$|^proto/|^web-app/src/|^web-app/public/docs/|^website/src/content/|^docs/registry/|^tools/docscoverage/|^\.github/promo-flags\.json$|^web-app/build/|^web-app/index\.html$|^web-app/patches/|^web-app/bunfig\.toml$|^web-app/scripts/ci/|^tests/e2e/|^scripts/e2e-baseline-compare\.ts$|^scripts/e2e-confirm\.ts$|^server/middleware/testdata/|^\.bun-version$|^web-app/package\.json$|^web-app/bun\.lock$|^\.github/workflows/build\.yml$|^\.github/actions/prepare/|^\.github/actions/prepare-stub/|^\.github/workflows/_prepare\.yml$|^\.gitmodules$|^third_party/tmux/|^web-app/tests/e2e/'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
@@ -956,6 +961,26 @@ jobs:
           done
           # Also validate the typed catalog
           cd web-app && bun install --frozen-lockfile --silent && bun run validate-catalog
+
+      # Docs coverage (ADR-005): report-only while docsCoverageEnforce is false in
+      # .github/promo-flags.json. Separate from the gate above, which is untouched.
+      # Explicit -base per event: HEAD^1 is the base of the pull_request merge
+      # commit; on push it is github.event.before; other events report only.
+      - name: Docs coverage (report-only)
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) BASE=HEAD^1 ;;
+            push) BASE="$EVENT_BEFORE" ;;
+            *) BASE=none ;;
+          esac
+          ENFORCE=$(jq -r '.docsCoverageEnforce' .github/promo-flags.json)
+          go run ./tools/docscoverage/cmd/docscoverage -base "$BASE" || {
+            rc=$?
+            if [ "$ENFORCE" = "true" ]; then exit "$rc"; fi
+            echo "::warning::docscoverage exited $rc; report-only because docsCoverageEnforce is false"
+          }
 
       # registry-validation.yml's other unique signal (advisory, not blocking):
       # what fraction of registered features declare testIds at all. Ported

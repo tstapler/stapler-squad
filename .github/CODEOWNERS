@@ -7,6 +7,7 @@
 /tools/promo/** @tstapler
 /tools/promolib/** @tstapler
 /tools/docscoverage/** @tstapler
+/docs/registry/docs-coverage/ @tstapler
 /tools/promo/mediaguard/allowlist.txt @tstapler
 /tools/promo/termcheck/allowlist.txt @tstapler
 /.github/workflows/backlog-scaffolding-guard.yml @tstapler
