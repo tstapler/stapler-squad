@@ -1,4 +1,4 @@
-package server
+package reviewqueue
 
 import (
 	"context"
@@ -203,6 +203,11 @@ func (rqm *ReactiveQueueManager) SetCallbackDispatcher(d CallbackDispatchWiring)
 // pattern as SetOneShotRunner/SetCallbackDispatcher above.
 func (rqm *ReactiveQueueManager) SetSlackNotifier(n SlackNotifierWiring) {
 	rqm.slackNotifier = n
+}
+
+// SlackNotifier returns the wired notifier, for cross-package wiring tests.
+func (rqm *ReactiveQueueManager) SlackNotifier() SlackNotifierWiring {
+	return rqm.slackNotifier
 }
 
 // SetDashboardBaseURLFn wires the lazily-read dashboard-base-URL fallback
