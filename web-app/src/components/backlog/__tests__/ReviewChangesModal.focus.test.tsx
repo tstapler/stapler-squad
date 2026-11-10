@@ -38,10 +38,10 @@ function Harness() {
 
   return (
     <>
-      <button data-testid="view-changes" onClick={handleOpen}>
+      <button data-testid="view-changes" onClick={handleOpen}>{/* analytics-exempt */}
         View Changes
       </button>
-      <button data-testid="view-diff" onClick={handleOpen}>
+      <button data-testid="view-diff" onClick={handleOpen}>{/* analytics-exempt */}
         View Diff
       </button>
       {open && (

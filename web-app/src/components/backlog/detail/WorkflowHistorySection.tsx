@@ -63,7 +63,7 @@ export function WorkflowHistorySection({ item, defaultExpanded }: WorkflowHistor
                 className={sectionStyles.showMoreButton}
                 onClick={showAll}
                 data-testid="workflow-show-more"
-              >
+              >{/* analytics-exempt */}
                 Show {remaining} more
               </button>
             )}

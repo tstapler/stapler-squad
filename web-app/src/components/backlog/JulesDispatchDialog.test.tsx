@@ -55,7 +55,7 @@ function Harness({
           triggerRef.current = e.currentTarget;
           setOpen(true);
         }}
-      >
+      >{/* analytics-exempt */}
         Dispatch to Jules
       </button>
       {open && (
