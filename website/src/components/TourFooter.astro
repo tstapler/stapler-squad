@@ -1,0 +1,34 @@
+---
+// "Try it" block, prev/next and "All tours", then the build stamp. Links show
+// their full label as visible text and carry no aria-label (WCAG 2.5.3).
+import { helpLabel } from '../lib/tours/nav';
+import type { TourEntry } from '../lib/tours/schema';
+import { basePath } from '../lib/tours/site';
+import BuildStamp from './BuildStamp.astro';
+
+export interface Props {
+	tour: TourEntry['tour'];
+	prev?: TourEntry;
+	next?: TourEntry;
+}
+
+const { tour, prev, next } = Astro.props;
+const base = basePath();
+const tourHref = (id: string) => `${base}/${id}/`;
+---
+
+<section class="tour-try" aria-labelledby="tour-try-heading" data-testid="tour-try">
+	<h2 id="tour-try-heading">Try it</h2>
+	<p>
+		<a class="tour-cta" data-testid="tour-try-install" href={`${base}/help/getting-started/`}>Install Stapler Squad</a>
+		<a class="tour-link" data-testid="tour-help-link" href={`${base}/${tour.helpDoc}/`}>{helpLabel(tour.helpDoc)}</a>
+	</p>
+</section>
+
+<nav class="tour-prevnext" aria-label="More tours" data-testid="tour-prevnext">
+	{prev && <a class="tour-link" rel="prev" href={tourHref(prev.id)}>Previous tour: {prev.tour.title}</a>}
+	{next ? <a class="tour-link" rel="next" href={tourHref(next.id)}>Next tour: {next.tour.title}</a> : <a class="tour-link" href={`${base}/tours/`}>Back to all tours</a>}
+	<a class="tour-link" data-testid="tour-all" href={`${base}/tours/`}>All tours</a>
+</nav>
+
+<BuildStamp />

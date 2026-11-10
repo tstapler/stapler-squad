@@ -1,0 +1,46 @@
+---
+// A step or phone-framed screenshot. Reserves its box (width/height +
+// aspect-ratio) so a blocked image keeps its size and shows its alt text.
+// Media modes (Cross-cutting 6c): deploy fails the build for a shot absent from
+// the manifest; smoke renders nothing for it.
+import { hasShot, shotSize, shotUrl } from '../lib/tours/manifest';
+import { basePath, tourContext } from '../lib/tours/site';
+
+export interface Props {
+	shot: string;
+	alt: string;
+	caption?: string;
+	phone?: boolean;
+	annotated?: boolean;
+}
+
+const { shot, alt, caption, phone = false, annotated = true } = Astro.props;
+const form = phone ? 'mobile' : 'desktop';
+const { mode, manifest } = tourContext();
+const present = hasShot(manifest, shot, form);
+if (!present && mode === 'deploy') {
+	throw new Error(`tour shot "${shot}" (${form}) is absent from media-manifest.json`);
+}
+const { width, height } = shotSize(manifest, shot, form);
+const src = shotUrl(basePath(), shot, form);
+---
+
+{
+	present && (
+		<figure
+			class:list={['tour-shot', { 'tour-shot-phone': phone }]}
+			data-testid={phone ? 'tour-phone-figure' : 'tour-shot'}
+			data-annotated={annotated}
+			style={`aspect-ratio: ${width} / ${height}; max-width: ${width}px;`}
+		>
+			{phone ? (
+				<a href={src} aria-label={`Open full-size screenshot: ${alt}`} class="tour-shot-link">
+					<img src={src} alt={alt} width={width} height={height} loading="lazy" decoding="async" />
+				</a>
+			) : (
+				<img src={src} alt={alt} width={width} height={height} loading="lazy" decoding="async" />
+			)}
+			{caption && <figcaption>{caption}</figcaption>}
+		</figure>
+	)
+}

@@ -12,8 +12,13 @@ export default defineConfig({
 		starlight({
 			title: 'Stapler Squad',
 			// The app's own Grimdark theme (web-app/src/styles/theme.css.ts); dark only.
-			customCss: ['./src/styles/grimdark.css'],
-			components: { ThemeSelect: './src/components/NoThemeSelect.astro' },
+			customCss: ['./src/styles/grimdark.css', './src/styles/tours.css'],
+			components: {
+				ThemeSelect: './src/components/NoThemeSelect.astro',
+				// Tour pages (ADR-001): breadcrumb/meta row and clip/steps/footer; pass through for every other page.
+				PageTitle: './src/components/overrides/TourPageTitle.astro',
+				MarkdownContent: './src/components/overrides/TourMarkdownContent.astro',
+			},
 			favicon: '/favicon.svg',
 			// One dark code theme: with Expressive Code's default light+dark pair the
 			// light tokens (e.g. #3b61b0, 3.22:1) render on this dark-only theme and
@@ -39,6 +44,9 @@ export default defineConfig({
 					label: 'Features',
 					items: [{ slug: 'help/features' }],
 				},
+				// Smoke-mode unrecorded tours are excluded at the docs loader
+				// (content.config.ts), so they never reach this group.
+				{ label: 'Tours', items: [{ autogenerate: { directory: 'tours' } }] },
 				{
 					// Explicit slug list (not `autogenerate: { directory: 'help' }`)
 					// because help/ also holds getting-started.md and features.mdx,

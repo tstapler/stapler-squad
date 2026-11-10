@@ -1,0 +1,194 @@
+/*
+ * Tour pages and /tours/ index (Epic 3.1). Colours come from the Grimdark
+ * Starlight tokens in grimdark.css. Motion is opt-in: every transition sits
+ * inside prefers-reduced-motion: no-preference, so "reduce" computes to 0s.
+ */
+html {
+	/* WCAG 2.4.11: keep focused elements out from under the sticky header. */
+	scroll-padding-top: calc(var(--sl-nav-height, 3.5rem) + 1rem);
+}
+
+/* Starlight's own prev/next follows sidebar order, not tour.order; TourFooter owns it. */
+:root:has(.tour-page) .pagination-links {
+	display: none;
+}
+
+.tour-breadcrumb ol {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	list-style: none;
+	padding: 0;
+	margin: 0 0 0.5rem;
+	font-size: var(--sl-text-sm);
+}
+.tour-breadcrumb li + li::before {
+	content: '/';
+	margin-right: 0.5rem;
+	color: var(--sl-color-gray-4);
+}
+.tour-breadcrumb a {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+}
+
+.tour-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem 1rem;
+	list-style: none;
+	padding: 0;
+	margin: 0.5rem 0 1rem;
+	color: var(--sl-color-gray-2);
+	font-size: var(--sl-text-sm);
+}
+.tour-audience {
+	padding: 0 0.6rem;
+	border: 1px solid var(--sl-color-accent);
+	border-radius: 999px;
+	color: var(--sl-color-text-accent);
+}
+
+.tour-page :is(video, img) {
+	max-width: 100%;
+	height: auto;
+}
+.tour-clip video {
+	display: block;
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	border-radius: 0.75rem;
+	background: var(--sl-color-gray-7);
+}
+
+.tour-cta,
+.tour-link,
+.tour-transcript summary,
+.tour-shot-link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 44px;
+	min-width: 44px;
+}
+.tour-cta {
+	margin-top: 0.75rem;
+	margin-right: 1rem;
+	padding: 0 1rem;
+	border-radius: 0.5rem;
+	background: var(--sl-color-accent);
+	color: var(--sl-color-black);
+	font-weight: 600;
+	text-decoration: none;
+}
+.tour-cta:hover {
+	background: var(--sl-color-accent-high);
+}
+:is(.tour-cta, .tour-link, .tour-transcript summary, .tour-shot-link, .tour-breadcrumb a):focus-visible {
+	outline: 3px solid var(--sl-color-accent-high);
+	outline-offset: 2px;
+}
+
+.tour-transcript {
+	margin: 1.5rem 0;
+}
+.tour-transcript summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+.tour-time {
+	color: var(--sl-color-gray-3);
+	font-variant-numeric: tabular-nums;
+}
+
+.tour-steps {
+	padding-left: 1.5rem;
+}
+.tour-steps > li {
+	margin-bottom: 2rem;
+}
+.tour-step-text {
+	font-weight: 600;
+}
+.tour-step-why {
+	color: var(--sl-color-gray-2);
+}
+
+.tour-shot {
+	margin: 0.75rem 0;
+	width: 100%;
+}
+.tour-shot img {
+	display: block;
+	width: 100%;
+	height: auto;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.5rem;
+}
+.tour-shot figcaption {
+	margin-top: 0.4rem;
+	color: var(--sl-color-gray-2);
+	font-size: var(--sl-text-sm);
+}
+.tour-shot-phone {
+	max-width: 390px;
+}
+
+.tour-try {
+	margin-top: 2rem;
+}
+.tour-prevnext {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1.5rem;
+	margin: 1.5rem 0;
+}
+.tour-stamp {
+	color: var(--sl-color-gray-3);
+	font-size: var(--sl-text-sm);
+}
+.tour-stamp p {
+	margin: 0.25rem 0;
+}
+
+.tour-cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+	gap: 1rem;
+	list-style: none;
+	padding: 0;
+}
+.tour-card {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	padding: 1rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.75rem;
+	background: var(--sl-color-gray-6);
+}
+.tour-card h3 {
+	margin: 0;
+	font-size: var(--sl-text-lg);
+}
+.tour-card p {
+	margin: 0;
+}
+.tour-card-meta {
+	color: var(--sl-color-gray-3);
+	font-size: var(--sl-text-sm);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.tour-cta,
+	.tour-link,
+	.tour-card,
+	.tour-shot img {
+		transition:
+			background-color 150ms ease,
+			border-color 150ms ease;
+	}
+	.tour-card:hover {
+		border-color: var(--sl-color-accent);
+	}
+}
