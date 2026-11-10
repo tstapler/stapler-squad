@@ -461,6 +461,8 @@ func reviewVerdictDataToProto(v *session.ReviewVerdictData, occurredAt time.Time
 					CriterionIndex: int32(cv.CriterionIndex),
 					Outcome:        string(cv.Outcome),
 					Evidence:       cv.Evidence,
+					FailureClass:   string(cv.FailureClass),
+					ProposedWaiver: cv.ProposedWaiver,
 				}
 			}
 		}

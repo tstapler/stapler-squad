@@ -3,6 +3,8 @@ import { render, screen } from "@testing-library/react";
 import { ActionsSection } from "./ActionsSection";
 import type { JulesDispatchGate } from "./ActionsSection";
 import type { BacklogItem } from "@/lib/hooks/useBacklogService";
+import { noManualReview } from "./actionsSectionTestFixtures";
+jest.mock("@/lib/analytics", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 
 /**
  * Story 3.2.2 (google-jules-integration): the gated "Dispatch to Jules"
@@ -44,14 +46,8 @@ function renderActionsSection(julesDispatchGate: JulesDispatchGate | undefined, 
       item={item}
       actionLoading={null}
       latestWorkSession={undefined}
-      showManualReview={false}
-      manualReviewOutcome="PASS"
-      manualReviewSummary=""
+      manualReview={noManualReview}
       onAction={noop}
-      onManualReviewOutcomeChange={noop}
-      onManualReviewSummaryChange={noop}
-      onManualReviewSubmit={noop}
-      onManualReviewCancel={noop}
       terminalState={null}
       julesDispatchGate={julesDispatchGate}
       onDispatchToJulesClick={noop}

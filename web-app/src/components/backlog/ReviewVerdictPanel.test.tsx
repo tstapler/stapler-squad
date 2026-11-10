@@ -27,6 +27,21 @@ describe("ReviewVerdictPanel", () => {
     expect(screen.getByText("no mobile check")).toBeInTheDocument();
   });
 
+  it("flags criteria the owner must decide on, not ones rework can fix", () => {
+    const verdict = {
+      overallOutcome: "FAIL" as const,
+      perCriterion: [
+        { criterionIndex: 0, outcome: "FAIL", evidence: "e", failureClass: "NOT_DONE" },
+        { criterionIndex: 1, outcome: "FAIL", evidence: "e", failureClass: "UNATTAINABLE" },
+        { criterionIndex: 2, outcome: "PARTIAL", evidence: "e", proposedWaiver: true },
+      ],
+    };
+    render(<ReviewVerdictPanel verdict={verdict} />);
+    expect(screen.queryByTestId("review-owner-decision-0")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-owner-decision-1")).toHaveTextContent("Needs your decision: unattainable");
+    expect(screen.getByTestId("review-owner-decision-2")).toHaveTextContent("Reviewer proposes waiving this");
+  });
+
   it("renders nothing when the flag is off", () => {
     mockFlag.mockReturnValue(false);
     const { container } = render(<ReviewVerdictPanel verdict={full} />);

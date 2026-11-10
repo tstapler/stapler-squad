@@ -426,7 +426,7 @@ func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *t
 
 	mustContain := []string{
 		"/backlog/ship",
-		fmt.Sprintf("%d allowed in this session", MaxSameSessionReviewAttempts),
+		fmt.Sprintf("%d allowed in THIS session", MaxSameSessionReviewAttempts),
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(content, want) {

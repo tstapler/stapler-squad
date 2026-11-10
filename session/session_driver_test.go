@@ -331,6 +331,7 @@ func TestIsOneShot(t *testing.T) {
 	}{
 		{name: "triage tag → true", tags: []string{"backlog:triage"}, want: true},
 		{name: "review tag → true", tags: []string{"backlog:review"}, want: true},
+		{name: "diagnose tag → true (revived every tick otherwise)", tags: []string{"backlog:diagnose"}, want: true},
 		{name: "work tag → false", tags: []string{"backlog:work"}, want: false},
 		{name: "mcp source tag → false", tags: []string{"source:mcp"}, want: false},
 		{name: "no tags → false", tags: nil, want: false},
