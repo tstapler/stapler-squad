@@ -140,12 +140,17 @@ func TestParsePaneDeadStatuses_should_SplitFromTheRight_When_NameContainsSeparat
 
 func TestServerCommand_should_ReturnNotRunning_When_QueueIsBusy(t *testing.T) {
 	t.Parallel()
-	sess, _ := newDispatchTestSession(t)
-	sess.controlModeSubMu.RLock()
-	ch := sess.normPriSendCh
-	sess.controlModeSubMu.RUnlock()
-	ch <- cmSendReq{}
-	_, err := sess.ServerCommand(context.Background(), "list-sessions")
+	// No sender goroutine: a running one drains the queued request, the channel looks idle
+	// again, and ServerCommand then waits forever for a reply that never comes.
+	sess := &TmuxSession{
+		sanitizedName: "test_session",
+		highPriSendCh: make(chan cmSendReq, 64),
+		normPriSendCh: make(chan cmSendReq, 256),
+	}
+	sess.normPriSendCh <- cmSendReq{}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := sess.ServerCommand(ctx, "list-sessions")
 	if !errors.Is(err, ErrControlModeNotRunning) {
 		t.Fatalf("err = %v, want ErrControlModeNotRunning", err)
 	}
