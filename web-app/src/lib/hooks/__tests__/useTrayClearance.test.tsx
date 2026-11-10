@@ -87,4 +87,16 @@ describe("useTrayClearanceRef", () => {
     });
     expect(read(getByTestId("box")).right).toBe("44px");
   });
+
+  it("moves_the_padding_to_the_other_side_when_the_bell_edge_flips_after_mount", async () => {
+    style().setProperty("--tray-handle-width", "44px");
+    style().setProperty("--tray-handle-edge", "right");
+    const { getByTestId } = render(<Box left={0} right={1000} />);
+    expect(read(getByTestId("box"))).toEqual({ right: "44px", left: "0px" });
+    await act(async () => {
+      style().setProperty("--tray-handle-edge", "left");
+      await Promise.resolve();
+    });
+    expect(read(getByTestId("box"))).toEqual({ right: "0px", left: "44px" });
+  });
 });

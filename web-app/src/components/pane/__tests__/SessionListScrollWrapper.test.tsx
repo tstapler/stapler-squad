@@ -205,5 +205,6 @@ describe("SessionListPaneBody — scroll wrapper", () => {
     // useTrayClearance's --tray-clearance (see useTrayClearance.test.tsx) is consumed.
     const css = fs.readFileSync(path.join(__dirname, "../../../", rel), "utf8");
     expect(css).toMatch(/paddingRight:[^\n]*var\(--tray-clearance, 0px\)/);
+    expect(css).toMatch(/paddingLeft:[^\n]*var\(--tray-clearance-left, 0px\)/);
   });
 });
