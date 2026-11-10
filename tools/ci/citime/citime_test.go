@@ -12,7 +12,7 @@ func TestScanTimesTargetsAndPackages(t *testing.T) {
 		"Makefile:10: update target 'vet' due to: target is .PHONY",
 		"go vet ./...",
 		"Makefile:20: update target 'test' due to: target is .PHONY",
-		"✓  session (12.5s)",
+		"\x1b[32m✓\x1b[0m  session (12.5s)",
 		"✓  config (cached)",
 		"✓  tiny (3ms)",
 		"✓  slow (1m2s)",
@@ -28,7 +28,7 @@ func TestScanTimesTargetsAndPackages(t *testing.T) {
 	if len(rep.Targets) != 2 || rep.Targets[0] != (Entry{"vet", 20}) || rep.Targets[1] != (Entry{"test", 5}) {
 		t.Errorf("targets = %+v", rep.Targets)
 	}
-	if len(rep.Packages) != 4 || rep.Packages[0] != (Entry{"slow", 62}) || rep.Packages[1].Name != "session" || rep.Packages[3].Name != "tiny" {
+	if len(rep.Packages) != 4 || rep.Packages[0] != (Entry{"test: slow", 62}) || rep.Packages[1].Name != "test: session" || rep.Packages[3].Name != "test: tiny" {
 		t.Errorf("packages = %+v (cached packages carry no time and are skipped)", rep.Packages)
 	}
 	if rep.TotalSeconds != 30 {

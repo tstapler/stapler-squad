@@ -29,7 +29,8 @@ var (
 	// make --trace: "Makefile:709: update target 'test' due to: target is .PHONY"
 	targetRe = regexp.MustCompile(`^\S+:\d+: update target '([^']+)'`)
 	// gotestsum --format pkgname-and-test-fails: "✓  session (12.3s)", "✓  x (3ms)", "✓  y (1m2s)"; "(cached)" has no time
-	pkgRe = regexp.MustCompile(`^[✓✖∅]\s+(\S+)\s+\(([0-9.]+(?:h|m|s|ms|µs)[0-9.hmsµ]*)\)`)
+	ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	pkgRe  = regexp.MustCompile(`^[✓✖∅]\s+(\S+)\s+\(([0-9.]+(?:h|m|s|ms|µs)[0-9.hmsµ]*)\)`)
 )
 
 // scan reads in and times targets and packages; it never writes the log (tee does), so a broken stdout cannot
@@ -49,14 +50,14 @@ func scan(in io.Reader, now func() time.Time) (Report, error) {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
 	for sc.Scan() {
-		line := sc.Text()
+		line := ansiRe.ReplaceAllString(sc.Text(), "") // CI gotestsum colours the status mark
 		if m := targetRe.FindStringSubmatch(line); m != nil {
 			t := now()
 			closeCur(t)
 			cur, curStart = m[1], t
 		} else if m := pkgRe.FindStringSubmatch(line); m != nil {
 			if d, perr := time.ParseDuration(m[2]); perr == nil {
-				rep.Packages = append(rep.Packages, Entry{m[1], d.Seconds()})
+				rep.Packages = append(rep.Packages, Entry{cur + ": " + m[1], d.Seconds()}) // same package runs under test, test-race and test-integration
 			}
 		}
 	}
@@ -91,9 +92,9 @@ func foldShort(es []Entry) []Entry {
 func (r Report) markdown(top int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "### make timing (total %s)\n\n", dur(r.TotalSeconds))
-	b.WriteString(table("Target (slowest first)", slowest(r.Targets, top), r.TotalSeconds))
+	b.WriteString(table("Target (slowest first)", slowest(r.Targets, top), r.TotalSeconds, true))
 	if len(r.Packages) > 0 {
-		b.WriteString(table("Go package (slowest first)", slowest(r.Packages, top), r.TotalSeconds))
+		b.WriteString(table("Go package, parallel so times overlap (slowest first)", slowest(r.Packages, top), r.TotalSeconds, false))
 	}
 	return b.String()
 }
@@ -107,15 +108,23 @@ func slowest(es []Entry, n int) []Entry {
 	return c
 }
 
-func table(head string, es []Entry, total float64) string {
+func table(head string, es []Entry, total float64, pct bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "| %s | Time | %% of run |\n|---|---:|---:|\n", head)
+	if pct {
+		fmt.Fprintf(&b, "| %s | Time | %% of run |\n|---|---:|---:|\n", head)
+	} else {
+		fmt.Fprintf(&b, "| %s | Time |\n|---|---:|\n", head)
+	}
 	for _, e := range es {
-		pct := 0.0
-		if total > 0 {
-			pct = 100 * e.Seconds / total
+		if !pct {
+			fmt.Fprintf(&b, "| `%s` | %s |\n", e.Name, dur(e.Seconds))
+			continue
 		}
-		fmt.Fprintf(&b, "| `%s` | %s | %.1f%% |\n", e.Name, dur(e.Seconds), pct)
+		share := 0.0
+		if total > 0 {
+			share = 100 * e.Seconds / total
+		}
+		fmt.Fprintf(&b, "| `%s` | %s | %.1f%% |\n", e.Name, dur(e.Seconds), share)
 	}
 	b.WriteString("\n")
 	return b.String()
