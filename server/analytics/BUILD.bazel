@@ -48,6 +48,7 @@ go_test(
     name = "analytics_test",
     srcs = [
         "client_metrics_test.go",
+        "client_network_dashboard_test.go",
         "db_autovacuum_test.go",
         "db_indexes_test.go",
         "retention_test.go",
@@ -66,6 +67,7 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@io_entgo_ent//dialect",
         "@io_entgo_ent//dialect/sql",
+        "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel_metric//:metric",
         "@io_opentelemetry_go_otel_metric//noop",
         "@io_opentelemetry_go_otel_sdk_metric//:metric",

@@ -61,7 +61,7 @@ func TestStreamSites_ShouldDropInputAndResizeForHiddenAndApplyForVisible_WhenFra
 			var inputs, resizes atomic.Int32
 			p := inputReadLoopParams{
 				writer:   writer,
-				onInput:  func([]byte) { inputs.Add(1) },
+				onInput:  func([]byte) bool { inputs.Add(1); return true },
 				onResize: func(int, int) { resizes.Add(1) },
 			}
 			dispatchInputReadLoopFrame(p, inputFrame("rm -rf"))

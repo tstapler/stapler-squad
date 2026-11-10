@@ -78,7 +78,7 @@ export function ClaimedElsewhereNotice({ entries, onImportAnyway }: ClaimedElsew
               {entry.issueUrl} — {entry.claim.disputed ? `disputed between hosts, currently ${host}` : `claimed by ${host}`}
             </span>
             <div className={styles.entryActions}>
-              <button type="button" className={styles.actionButton} onClick={() => void copyLink(entry)} data-testid="claimed-elsewhere-copy">
+              <button type="button" className={styles.actionButton} onClick={() => void copyLink(entry)} data-testid="claimed-elsewhere-copy">{/* analytics-exempt */}
                 {copiedUrl === entry.issueUrl ? "Copied" : `Copy link to ${host}'s item`}
               </button>
               <button
@@ -87,7 +87,7 @@ export function ClaimedElsewhereNotice({ entries, onImportAnyway }: ClaimedElsew
                 aria-expanded={openUrl === entry.issueUrl}
                 onClick={() => setOpenUrl((prev) => (prev === entry.issueUrl ? null : entry.issueUrl))}
                 data-testid="claimed-elsewhere-import-anyway"
-              >
+              >{/* analytics-exempt */}
                 Import anyway
               </button>
             </div>

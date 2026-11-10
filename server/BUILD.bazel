@@ -201,6 +201,7 @@ go_test(
     name = "server_test",
     srcs = [
         "actuator_nudge_outcomes_test.go",
+        "actuator_terminal_input_test.go",
         "actuator_terminal_latency_test.go",
         "actuator_terminal_mux_test.go",
         "actuator_test.go",

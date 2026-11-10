@@ -135,7 +135,7 @@ export function ManualOverrideSection({
                 aria-busy={prPending}
                 onClick={() => void handleAssociatePRSubmit()}
                 data-testid="manual-override-pr-submit"
-              >
+              >{/* analytics-exempt */}
                 Link PR
               </button>
             </div>
@@ -194,7 +194,7 @@ export function ManualOverrideSection({
               aria-busy={statusPending}
               onClick={() => void handleOverrideSubmit()}
               data-testid="manual-override-status-submit"
-            >
+            >{/* analytics-exempt */}
               Override Status
             </button>
           </div>

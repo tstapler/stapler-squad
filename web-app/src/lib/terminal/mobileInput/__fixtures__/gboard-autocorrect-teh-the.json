@@ -1,0 +1,105 @@
+{
+  "id": "gboard-autocorrect-teh-the",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Autocorrect rewrites the composing region teh -> the via insertReplacementText (suggestion replace). Rewrite is DEL DEL + \"he\". The trigger space is not part of this trace. Source: https://github.com/Ark0N/Codeman/pull/541",
+  "events": [
+    {
+      "kind": "compositionstart",
+      "t": 10
+    },
+    {
+      "kind": "compositionupdate",
+      "data": "t",
+      "t": 20
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "t",
+      "value": "t",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 30
+    },
+    {
+      "kind": "input",
+      "value": "t",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 40
+    },
+    {
+      "kind": "compositionupdate",
+      "data": "te",
+      "t": 50
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "te",
+      "value": "te",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 60
+    },
+    {
+      "kind": "input",
+      "value": "te",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 70
+    },
+    {
+      "kind": "compositionupdate",
+      "data": "teh",
+      "t": 80
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "teh",
+      "value": "teh",
+      "selStart": 3,
+      "selEnd": 3,
+      "t": 90
+    },
+    {
+      "kind": "input",
+      "value": "teh",
+      "selStart": 3,
+      "selEnd": 3,
+      "t": 100
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertReplacementText",
+      "data": "the",
+      "value": "the",
+      "selStart": 3,
+      "selEnd": 3,
+      "t": 110
+    },
+    {
+      "kind": "input",
+      "value": "the",
+      "selStart": 3,
+      "selEnd": 3,
+      "t": 120
+    },
+    {
+      "kind": "compositionend",
+      "data": "the",
+      "t": 130
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 140
+    }
+  ],
+  "expectedBytes": "tehhe",
+  "finalText": "the"
+}

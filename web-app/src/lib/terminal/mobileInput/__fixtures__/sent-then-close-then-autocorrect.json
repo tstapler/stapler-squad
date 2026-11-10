@@ -1,0 +1,71 @@
+{
+  "id": "sent-then-close-then-autocorrect",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "\"hel\" is handed to the transport but the last frame is lost (half-open socket), the link closes, then autocorrect turns the region into \"yo\": zero bytes, no DEL, the line never shrinks below what arrived. Story 1.2.4 / ADR-004 in project_plans/mobile-input-layer/implementation/plan.md.",
+  "events": [
+    {
+      "kind": "compositionstart",
+      "t": 10
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "h",
+      "value": "h",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 20
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "he",
+      "value": "he",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 30
+    },
+    {
+      "kind": "loseNext"
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "hel",
+      "value": "hel",
+      "selStart": 3,
+      "selEnd": 3,
+      "t": 40
+    },
+    {
+      "kind": "linkDown"
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "yo",
+      "value": "yo",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 60
+    },
+    {
+      "kind": "compositionend",
+      "data": "yo",
+      "t": 70
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 80
+    }
+  ],
+  "expectedBytes": "hel",
+  "finalText": "he",
+  "expectedAnomalies": [
+    "unrecognized_sequence"
+  ]
+}

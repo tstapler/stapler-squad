@@ -28,10 +28,12 @@ import {
 // ---------------------------------------------------------------------------
 const fitSpy = jest.fn();
 const focusSpy = jest.fn();
+const mockRendererProps: any[] = [];
 
 jest.mock("@/components/sessions/XtermTerminal", () => {
   const ReactLib = require("react");
   const XtermTerminal = ReactLib.forwardRef((props: any, ref: any) => {
+    mockRendererProps.push(props);
     ReactLib.useImperativeHandle(ref, () => ({
       terminal: { cols: 80, rows: 24 },
       serializeAddon: null,
@@ -426,5 +428,88 @@ describe("usePooledTerminalCallbacks -- rapid-switch guard (Task 3.6)", () => {
 
     expect(secondOnData).toHaveBeenCalledWith("typed");
     expect(firstOnData).not.toHaveBeenCalled();
+  });
+});
+
+describe("usePooledTerminalCallbacks -- mobile input layer (Story 1.4.1)", () => {
+  const host = (over: Record<string, unknown> = {}) => ({
+    onData: jest.fn(() => "sent"),
+    getModifiers: () => ({ ctrl: true, alt: false, shift: false }),
+    consumeModifiers: jest.fn(),
+    isReadOnly: () => false,
+    ...over,
+  });
+
+  function Consumer({ mobileInput, onData = () => "sent" }: { mobileInput?: { host: any; isConnected: boolean }; onData?: (d: string) => any }) {
+    const dockRef = React.useRef<HTMLDivElement | null>(null);
+    usePooledTerminal("s1", dockRef, true);
+    usePooledTerminalCallbacks("s1", true, {
+      onData,
+      onResize: () => {},
+      isAltScreenActive: () => false,
+      onAltScreenScrollUp: () => {},
+      mobileInput,
+    });
+    return <div data-testid="anchor-s1" ref={dockRef} />;
+  }
+
+  const lastMobileInput = () => mockRendererProps.at(-1)?.mobileInput;
+  const ui = (node: React.ReactNode) => <TerminalPoolProvider>{node}</TerminalPoolProvider>;
+
+  beforeEach(() => {
+    mockRendererProps.length = 0;
+  });
+
+  it("renderer_should_ReceiveNoMobileInput_When_ConsumerPassesNone", async () => {
+    render(ui(<Consumer />));
+    await waitFor(() => expect(mockRendererProps.length).toBeGreaterThan(0));
+    expect(lastMobileInput()).toBeUndefined();
+  });
+
+  it("renderer_should_ReceiveDelegatingHostAndPrimitives_When_ConsumerPassesMobileInput", async () => {
+    const h = host();
+    render(ui(<Consumer mobileInput={{ host: h, isConnected: true }} />));
+    await waitFor(() => expect(lastMobileInput()).toBeDefined());
+    const mi = lastMobileInput();
+    expect(mi).toMatchObject({ sessionId: "s1", isConnected: true, visible: true });
+    expect(mi.host.onData("x", 1)).toBe("sent");
+    expect(h.onData).toHaveBeenCalledWith("x", 1);
+    expect(mi.host.getModifiers().ctrl).toBe(true);
+  });
+
+  it("renderer_should_SeeIsConnectedFlip_When_ConsumerConnectionChanges", async () => {
+    const h = host();
+    const { rerender } = render(ui(<Consumer mobileInput={{ host: h, isConnected: true }} />));
+    await waitFor(() => expect(lastMobileInput()?.isConnected).toBe(true));
+    rerender(ui(<Consumer mobileInput={{ host: h, isConnected: false }} />));
+    await waitFor(() => expect(lastMobileInput()?.isConnected).toBe(false));
+  });
+
+  it("renderer_should_SeeNewReuseKey_When_ANewConsumerTakesOverTheEntry", async () => {
+    const h = host();
+    const view = render(ui(<Consumer key="a" mobileInput={{ host: h, isConnected: true }} />));
+    await waitFor(() => expect(lastMobileInput()).toBeDefined());
+    const before = lastMobileInput().reuseKey;
+    view.rerender(ui(<Consumer key="b" mobileInput={{ host: h, isConnected: true }} />)); // remount under the same provider
+    await waitFor(() => expect(lastMobileInput().reuseKey).toBeGreaterThan(before));
+  });
+
+  it("host_should_DropAndStayReadOnly_When_NoConsumerIsRegistered", async () => {
+    const h = host();
+    const view = render(ui(<Consumer mobileInput={{ host: h, isConnected: true }} />));
+    await waitFor(() => expect(lastMobileInput()).toBeDefined());
+    const delegate = lastMobileInput().host;
+    view.rerender(ui(<Consumer />));
+    await waitFor(() => expect(delegate.isReadOnly()).toBe(true));
+    expect(delegate.onData("x", 1)).toBe("dropped");
+  });
+
+  it("stableOnData_should_ReturnConsumerResultAndDroppedWithoutConsumer", async () => {
+    const view = render(ui(<Consumer onData={() => "queued"} />));
+    await waitFor(() => expect(mockRendererProps.length).toBeGreaterThan(0));
+    const onData = mockRendererProps.at(-1).onData;
+    expect(onData("x")).toBe("queued");
+    view.unmount();
+    expect(onData("x")).toBe("dropped");
   });
 });

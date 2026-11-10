@@ -423,5 +423,6 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Protect the live service from a Bazel memory spike (owner-run) | `docs/how-to/protect-live-service-from-bazel.md` |
 | Bazel configs, TagConfigs, make-to-bazel map, PermanentExceptions | `docs/reference/bazel-targets-and-configs.md` |
 | Why Bazel (drivers, supersession of the ci-speed ADR) | `docs/explanation/why-bazel.md` |
+| Phone keyboard input layer: seam contract, flags, `?mobile_input=0\|1`, input-site table, `cm.input`/`cm.ime_anomaly` metrics, `/actuator/terminal-input` (debug procedure in `docs/how-to/debug-phone-typing.md`) | `docs/reference/mobile-input-layer.md` |
 | Session multi-PR model: SessionPR/PullRequestState/tombstone, ActivePR, legacy mirror, flags and scopes, RPCs, metrics | `docs/reference/session-pull-requests.md` |
 | Roll out session multi-PR tracking: backup, first deploy with scopes off, enabling order, rollback | `docs/how-to/roll-out-session-multi-pr.md` |

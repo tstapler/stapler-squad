@@ -1,0 +1,25 @@
+# ADR-004: Disconnected input: visible status chip and bounded plain-text queue
+
+## Status
+Accepted (2026-11-06), amended in Phase 3 plan-repair (2026-11-08). **Owner-visible behavior change**: previously input typed while disconnected was silently dropped (`useTerminalFlowControl.ts:144`, `console.warn`); now plain text is held and replayed on reconnect. Call this out in the PR-B description. Shipped behind sub-flag `mobile_input_queue`.
+
+## Context
+`research/architecture.md` 5.4 proposed drop-with-indicator; `research/ux.md` 4.1 proposed a bounded queue. Owner decision: queue plain text only. Replaying control sequences or Enter into a different TUI state seconds later is dangerous (a late `\r` can approve a permission prompt). The adversarial and architecture reviews found two further hazards: resetting the layer's diff base on `queued` makes a later rewrite replay as `helhelp`, and dropping part of a DEL+text rewrite replays orphan DELs that erase pre-disconnect prompt text.
+
+## Decision
+Behind `mobile_input_queue` (requires `mobile_input_layer`): `sendInput` reports `{sent|dropped|queued}`; an `onInputDropped(info)` callback replaces the silent warn for the `sendInput` path; a `role="status"` chip appears within 250 ms; client counter `input_dropped_disconnected` (`cm.input{event=dropped_disconnected}`).
+
+Queue contents (all enforced in `InputQueue.ts`):
+- **Plain text only.** A unit is rejected if it contains `\r`, `\n`, `\t`, `\x1b` or any other control byte (C0, `\x7f`, C1). The single exception is a leading run of `\x7f` inside an atomic rewrite unit that also carries non-empty plain text and is bounded by `ATOMIC_EDIT_MAX_BYTES`; that unit is held, flushed or dropped as one. A lone `\x7f`, Esc, arrows and Ctrl bytes are never queued (`dropped`, "keys not sent").
+- **Enter is not queued.** Enter typed while disconnected shows "Enter not sent"; it is never replayed.
+- **Atomic units.** The queue stores the original emitted chunks as indivisible units; a DEL+text edit is one unit and is never split or merged.
+- **Bounds.** 4096 bytes total and 30 s per unit (injected clock). On overflow or expiry of any unit the WHOLE queue is discarded (later units' DELs depend on earlier units), with the visible notice `Discarded N chars typed while offline` (`input_queue_discarded`).
+- **Session safety.** A queued unit is discarded after any session switch: different session id on reconnect, terminal pool reuse, unmount, refresh, or the session being paused/restarted behind the same id. The queue is in memory only and never persisted.
+
+Layer diff base (amended 2026-11-08, again after the third review): `sent` means handed to the transport, not delivered; a half-open socket can lose a frame silently. The layer therefore scopes DELs to a delivery epoch, bumped at every transport boundary (connection drop, reconnect, `dropped`, thrown send, chunked paste aborted midway; the last two return `dropped`). It tags each atomic unit with a `UnitSeq` and keeps a ledger. One drop rule: after a `dropped` result or a transport boundary the in-flight region is deferred; at the next commit (`compositionend` or the Enter flush) the layer emits only the insert-only tail (`"he"` sent + `"l"` dropped + region `"help"` emits `"lp"` at commit) when the final text starts with the last delivered text, else zero bytes and an anomaly. Never a DEL for text from an earlier epoch. After a queue discard (`onQueueDiscard(DeliveryReport)`), or `controller.invalidate(reason)` for a session, `session_generation` or pool change, or visibility-hidden beyond a bound, the region is ABANDONED (zero bytes, no tail), the ledger is cleared and the next composition starts from an empty base. `sendInput` is strictly FIFO: while the queue is non-empty or flushing it enqueues behind, so a keystroke typed after reconnect cannot overtake queued units. Units queued after a boundary stay DEL-eligible (the queue replays them in order or discards everything). Minimal drop detection and `invalidate` ship in PR-A, so PR-A emits no DEL across a boundary before the queue exists; it has no visible drop notice (the chip is PR-B), only the existing disconnected UI and the `dropped_disconnected` counter. Residual: a silently lost frame can leave a truncated word (insert-only), never erased prompt text. Replay cases: disconnect -> autocorrect -> reconnect, partial delivery then drop, keystroke after reconnect before flush, session switch mid composition, sent then close then autocorrect, enter after mid-region drop.
+
+## Alternatives rejected
+Drop with indicator only (loses prompts typed over flaky mobile links); queue everything (unsafe replay of Esc/Ctrl-C/Enter); queue final text only and never DELs (loses the ability to keep the base true across autocorrect); drop oldest-first on overflow (orphans later units' DELs).
+
+## Consequences
+Queued text can arrive late. The 30 s TTL, same-session check and no-control-bytes rule bound that. Flag off restores the old silent drop exactly.

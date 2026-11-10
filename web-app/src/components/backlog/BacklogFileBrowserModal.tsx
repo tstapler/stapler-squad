@@ -1,7 +1,8 @@
 "use client";
 // +feature: backlog:file-browser-modal
 
-import { useEffect, useMemo, useRef, useState, RefObject } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { createPortal } from "react-dom";
 import { FileTree } from "@/components/sessions/FileTree";
 import { FileContentViewer } from "@/components/sessions/FileContentViewer";
@@ -88,7 +89,7 @@ export function BacklogFileBrowserModal({ sessionId, sessionTitle, onClose, trig
           >
             Open in Terminal ↗
           </a>
-          <button className={closeButton} onClick={onClose} aria-label="Close file browser">
+          <button className={closeButton} onClick={onClose} aria-label="Close file browser">{/* analytics-exempt */}
             ✕
           </button>
         </div>

@@ -10,6 +10,7 @@ import { generateSecureId } from "@/lib/pane/paneUtils";
 import { useResizeSettling, type ResizeOptions } from "@/lib/hooks/useResizeSettling";
 import type { Terminal } from '@xterm/xterm';
 import { isUsableTerminalSize } from "@/lib/terminal/handshakeDims";
+import type { SendResult } from "@/lib/terminal/mobileInput/types";
 
 // Epic 3.1 (AC2) — client-generated correlation ID echoed back on the
 // resulting TerminalOutput.resync_id. Flag off preserves pre-project wire
@@ -48,7 +49,12 @@ export interface UseTerminalFlowControlOptions {
 }
 
 export interface UseTerminalFlowControlResult {
-  sendInput: (input: string) => void;
+  /**
+   * `sent` means handed to the transport (not acknowledged); `dropped` means nothing was sent.
+   * A >512 B paste returns `sent` once its first chunk is out: a later abort is covered by the
+   * isConnected/sessionId invalidate triggers, not by this result.
+   */
+  sendInput: (input: string) => SendResult;
   /** True while a >512 B paste is mid-chunking; backed by a ref, safe to read inside rAF. */
   isInputChunking: () => boolean;
   resize: (cols: number, rows: number, force?: boolean, opts?: ResizeOptions) => void;
@@ -243,9 +249,9 @@ export function useTerminalFlowControl({
   const PASTE_CHUNK_SIZE = 512; // bytes — fits within tmux's pty write buffer
   const CHUNK_DELAY_MS = 10;   // ms between chunks — yields event loop without stalling input
 
-  const sendInput = useCallback((input: string) => {
-    if (readOnlyRef.current) return;
-    if (!ensureConnected("send input")) return;
+  const sendInput = useCallback((input: string): SendResult => {
+    if (readOnlyRef.current) return "dropped";
+    if (!ensureConnected("send input")) return "dropped";
 
     const encoder = new TextEncoder();
     const inputBytes = encoder.encode(input);
@@ -263,8 +269,9 @@ export function useTerminalFlowControl({
         );
       } catch (err) {
         handleError(err);
+        return "dropped";
       }
-      return;
+      return "sent";
     }
 
     // Large input: send in chunks to avoid tmux/WebSocket buffer limits.
@@ -275,6 +282,7 @@ export function useTerminalFlowControl({
     const pasteToken = Symbol("paste");
     const activePastes = activePastesRef.current;
     const finishPaste = () => { activePastes.delete(pasteToken); };
+    let firstChunkFailed = false;
     const sendChunk = () => {
       // sessionIdRef, not the closed-over sessionId, which is always sessionIdAtStart.
       if (
@@ -300,6 +308,7 @@ export function useTerminalFlowControl({
         );
       } catch (err) {
         finishPaste();
+        firstChunkFailed = true;
         handleError(err);
         return;
       }
@@ -311,6 +320,7 @@ export function useTerminalFlowControl({
       }
     };
     sendChunk();
+    return firstChunkFailed ? "dropped" : "sent";
   }, [sessionId, pushMessage, pushMessageRef, isConnectedRef, handleError, ensureConnected]);
 
   // True from the first chunk of a >512 B paste until the last chunk is sent (or it aborts).

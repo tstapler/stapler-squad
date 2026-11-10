@@ -38,7 +38,7 @@ function TwoOpenerHarness() {
           triggerRef.current = e.currentTarget;
           setOpen(true);
         }}
-      >
+      >{/* analytics-exempt */}
         View Changes
       </button>
       <button
@@ -47,7 +47,7 @@ function TwoOpenerHarness() {
           triggerRef.current = e.currentTarget;
           setOpen(true);
         }}
-      >
+      >{/* analytics-exempt */}
         View Diff
       </button>
       {open && <ReviewChangesModal itemId="item-1" onClose={() => setOpen(false)} triggerRef={triggerRef} />}

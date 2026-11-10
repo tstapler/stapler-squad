@@ -911,3 +911,77 @@ func TestKnownFeatureFlags_ShouldReportKeepAliveFalse_WhenFreshConfig_AndTrueAft
 	require.NoError(t, flagUpdate(svc, "window_keep_alive", true))
 	require.True(t, flagStates(t, svc)["window_keep_alive"])
 }
+
+var mobileInputFlagDefaults = map[string]bool{
+	"mobile_input_layer":        true,
+	"mobile_input_queue":        false,
+	"mobile_input_diagnostics":  false,
+	"mobile_input_compose":      false,
+	"mobile_input_edit_context": false,
+}
+
+func TestListFeatureFlags_ShouldIncludeMobileInputLayerWithMergedDefaultAndKillSwitchDescription_When_FreshServer(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	resp, err := NewFeatureFlagService().GetFeatureFlags(context.Background(),
+		connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	byName := map[string]*sessionv1.FeatureFlag{}
+	for _, f := range resp.Msg.GetFlags() {
+		byName[f.GetName()] = f
+	}
+	for name, want := range mobileInputFlagDefaults {
+		f, ok := byName[name]
+		require.True(t, ok, "%s is registered", name)
+		require.Equal(t, want, f.GetEnabled(), name)
+	}
+	desc := byName["mobile_input_layer"].GetDescription()
+	for _, phrase := range []string{"Kill switch", "Android", "?mobile_input=0"} {
+		require.Contains(t, desc, phrase)
+	}
+}
+
+func TestMobileInputLayer_ShouldBeLiveSettable_When_UpdateFeatureFlag(t *testing.T) {
+	svctest.WithIsolatedStateDir(t)
+	svc := NewFeatureFlagService()
+	require.NoError(t, flagUpdate(svc, "mobile_input_layer", false))
+	require.False(t, flagStates(t, svc)["mobile_input_layer"])
+	require.NoError(t, flagUpdate(svc, "mobile_input_layer", true))
+	require.True(t, flagStates(t, svc)["mobile_input_layer"])
+}
+
+// mobileInputEnvReads returns the file:line of every os env read whose key mentions MOBILE_INPUT.
+func mobileInputEnvReads(files []dfltFile) []string {
+	var hits []string
+	for _, f := range files {
+		ast.Inspect(f.src, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "Getenv" && sel.Sel.Name != "LookupEnv") {
+				return true
+			}
+			for _, a := range call.Args {
+				if lit, ok := a.(*ast.BasicLit); ok && strings.Contains(strings.ToUpper(lit.Value), "MOBILE_INPUT") {
+					hits = append(hits, f.path+":"+strconv.Itoa(f.fset.Position(call.Pos()).Line))
+				}
+			}
+			return true
+		})
+	}
+	return hits
+}
+
+// The flags are live-settable and never env-driven; a source scan keeps this t.Parallel()-safe (no t.Setenv).
+func TestMobileInputFlags_ShouldNotBeReadFromEnvironment_When_EnvVarSet(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", `package x
+import "os"
+func f() { _ = os.Getenv("STAPLER_SQUAD_MOBILE_INPUT_LAYER") }`, parser.SkipObjectResolution)
+	require.NoError(t, err)
+	require.Len(t, mobileInputEnvReads([]dfltFile{{path: "x.go", src: f, fset: fset}}), 1, "scanner catches a violation")
+
+	require.Empty(t, mobileInputEnvReads(dfltParseRepoSources(t)))
+}

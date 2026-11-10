@@ -138,7 +138,7 @@ function InteractiveChip({
         data-testid="blocker-chip-retry"
         disabled={parked || retryState === "pending"}
         onClick={handleRetryNow}
-      >
+      >{/* analytics-exempt */}
         <span aria-hidden="true">{icon}</span>
         <span>{label}</span>
         <span className={styles.duration} data-testid="blocker-chip-duration">
@@ -194,7 +194,7 @@ function ClaimBlockChip({
         title={item.context || undefined}
         data-testid="blocker-chip-claim-override"
         onClick={() => setOpen((prev) => !prev)}
-      >
+      >{/* analytics-exempt */}
         <span aria-hidden="true">{icon}</span>
         <span>{label}</span>
         <span className={styles.duration} data-testid="blocker-chip-duration">

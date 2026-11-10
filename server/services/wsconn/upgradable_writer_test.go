@@ -122,7 +122,7 @@ func TestInputReadLoop_should_ForwardInput_When_WriterUpgradesMidConnection(t *t
 	p := inputReadLoopParams{
 		currentWriter: w.Writer,
 		sessionID:     "upgrade",
-		onInput:       func(data []byte) { got = append(got, data) },
+		onInput:       func(data []byte) bool { got = append(got, data); return true },
 	}
 	frame := &sessionv1.TerminalData{Data: &sessionv1.TerminalData_Input{Input: &sessionv1.TerminalInput{Data: []byte("x")}}}
 
