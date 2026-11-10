@@ -73,6 +73,7 @@ func runShardPlan(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("shard-plan", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dir := fs.String("tours-dir", "tests/e2e/website-demos/tours", "directory of scene files, one <tour-id>.ts each")
+	listsDir := fs.String("shotlists-dir", "tests/e2e/website-demos/shotlists", "directory of shot-only lists, one <list-id>.ts each (empty to skip)")
 	shards := fs.Int("shards", 2, "number of record shards")
 	var extra stringList
 	fs.Var(&extra, "extra", "additional recordable id outside tours-dir, e.g. a legacy clip (repeatable)")
@@ -87,6 +88,14 @@ func runShardPlan(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, "mediatool shard-plan:", err)
 		return 2
+	}
+	if *listsDir != "" {
+		lists, err := tourIDs(*listsDir)
+		if err != nil {
+			fmt.Fprintln(stderr, "mediatool shard-plan:", err)
+			return 2
+		}
+		ids = append(ids, lists...)
 	}
 	out, err := json.Marshal(planShards(append(ids, extra...), *shards))
 	if err != nil {

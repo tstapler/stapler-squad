@@ -123,9 +123,11 @@ jobs:
         working-directory: website
         run: node scripts/check-internal-links.mjs
 
-      - name: Check demo-asset health
+      - name: Check README links
         working-directory: website
-        run: node scripts/check-asset-health.mjs
+        env:
+          TOURS_MEDIA_MODE: smoke
+        run: node scripts/check-readme-links.mjs
 
       # Backgrounded with its output redirected: left attached, the server
       # holds the step's output pipe open and the step never completes.

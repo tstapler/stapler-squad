@@ -52,7 +52,7 @@ func TestShardPlan_AddingATourFileTouchesNothingElse(t *testing.T) {
 	}
 	plan := func() shardMatrix {
 		var out, errb bytes.Buffer
-		require.Equal(t, 0, run([]string{"shard-plan", "-tours-dir", dir, "-shards", "2"}, &out, &errb, os.Getenv), errb.String())
+		require.Equal(t, 0, run([]string{"shard-plan", "-tours-dir", dir, "-shotlists-dir", "", "-shards", "2"}, &out, &errb, os.Getenv), errb.String())
 		var m shardMatrix
 		require.NoError(t, json.Unmarshal(out.Bytes(), &m))
 		return m
@@ -78,4 +78,18 @@ func TestShardPlan_Usage(t *testing.T) {
 	var out, errb bytes.Buffer
 	assert.Equal(t, 2, run([]string{"shard-plan", "-shards", "0"}, &out, &errb, os.Getenv))
 	assert.Equal(t, 2, run([]string{"shard-plan", "-tours-dir", "/nonexistent-dir"}, &out, &errb, os.Getenv))
+}
+
+func TestShardPlan_IncludesShotlistsAndExtras(t *testing.T) {
+	t.Parallel()
+	tours, lists := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tours, "tour-a.ts"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(lists, "cards.ts"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(lists, "mobile.ts"), nil, 0o644))
+	var out, errb bytes.Buffer
+	args := []string{"shard-plan", "-tours-dir", tours, "-shotlists-dir", lists, "-extra", "session-dashboard", "-shards", "1"}
+	require.Equal(t, 0, run(args, &out, &errb, os.Getenv), errb.String())
+	var m shardMatrix
+	require.NoError(t, json.Unmarshal(out.Bytes(), &m))
+	assert.Equal(t, []string{"cards", "mobile", "session-dashboard", "tour-a"}, m.Include[0].Tours)
 }

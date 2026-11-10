@@ -193,7 +193,7 @@ test('workflows_should_NotReferenceRetiredDemoPublish_When_Scanned', () => {
 // blocking checks in the exact dependency order plan.md specifies --
 // sync-content verify (before anything reads the CuratedDocs it checks) ->
 // build (before any check needs dist/) -> check-internal-links ->
-// check-asset-health -> Lighthouse CI -> upload the artifact only once every
+// check-readme-links -> Lighthouse CI -> upload the artifact only once every
 // earlier gate has passed. Uses js-yaml (unlike the raw-text block
 // extraction above) because this job has many more steps in a deeper,
 // list-of-maps structure than the simple top-level on:/env: blocks those
@@ -231,7 +231,7 @@ const REQUIRED_BUILD_STEP_ORDER = [
   'Verify content sync',
   'Build site',
   'Check internal links',
-  'Check demo-asset health',
+  'Check README links',
   'Lighthouse CI (desktop)',
   'Lighthouse CI (mobile)',
   'Upload Pages artifact',
@@ -247,14 +247,14 @@ test('deployWorkflow_should_RunChecksInDependencyOrder_When_YamlParsed', () => {
   );
 });
 
-test('deployWorkflow_should_FlagMissingStep_When_AssetHealthCheckStepRemoved', () => {
+test('deployWorkflow_should_FlagMissingStep_When_ReadmeLinkCheckStepRemoved', () => {
   const stepLabels = extractBuildStepLabels(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8));
-  const tampered = stepLabels.filter((label) => !label.includes('Check demo-asset health'));
+  const tampered = stepLabels.filter((label) => !label.includes('Check README links'));
 
   const violation = findOrderViolation(tampered, REQUIRED_BUILD_STEP_ORDER);
   assert.ok(
-    violation && violation.includes('Check demo-asset health'),
-    'removing the asset-health-check step must be caught by the same order check',
+    violation && violation.includes('Check README links'),
+    'removing the README link check step must be caught by the same order check',
   );
 });
 
@@ -326,8 +326,8 @@ test('websiteCiWorkflow_should_SmokeRecordOneClipAgainstItsOwnBinary_When_YamlPa
   const ci = yaml.load(ciText) as Workflow & { on: { pull_request: { paths: string[] } } };
 
   const withMode = ci.jobs.checks.steps.filter((step) => step.env?.TOURS_MEDIA_MODE !== undefined);
-  assert.deepEqual(withMode.map((step) => step.name), ['Build site']);
-  assert.equal(withMode[0].env?.TOURS_MEDIA_MODE, 'smoke');
+  assert.deepEqual(withMode.map((step) => step.name), ['Build site', 'Check README links']);
+  assert.ok(withMode.every((step) => step.env?.TOURS_MEDIA_MODE === 'smoke'));
   assert.ok(!/TOURS_MEDIA_MODE/.test(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)), 'deploy builds in the default deploy mode');
 
   const record = ci.jobs.checks.steps.find((step) => step.name === 'Smoke: record the dashboard-lifecycle clip');
@@ -354,4 +354,25 @@ test('deployWorkflow_should_RequestIdTokenWritePermission_When_YamlMissingPermis
   };
 
   assert.equal(doc.permissions['id-token'], 'write');
+});
+
+test('deployWorkflow_should_RetireTheReleaseAssetHealthCheck_When_YamlParsed', () => {
+  for (const file of ['deploy-website.yml', 'website-ci.yml']) {
+    const text = readFileSync(path.join(repoRoot, '.github/workflows', file), UTF8);
+    assert.ok(!/check-asset-health|demo-gifs-latest/.test(text), `${file} no longer runs the release-URL health check`);
+  }
+});
+
+// Every id the recorder can run must reach a shard: tours and shotlists by glob in shard-plan,
+// legacy clips (clips.ts, not files) through -extra.
+test('deployWorkflow_should_PlanEveryRecordableId_When_ShardPlanRuns', () => {
+  const plan = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as Workflow;
+  const run = plan.jobs.decide.steps.find((step) => step.name === 'Plan shards')?.run ?? '';
+  const extras = [...run.matchAll(/-extra\s+(\S+)/g)].map((m) => m[1]).sort();
+  const clips = readFileSync(path.join(repoRoot, 'tests/e2e/website-demos/clips.ts'), UTF8);
+  const legacy = [...clips.matchAll(/^\s{4}name: '([^']+)'/gm)].map((m) => m[1]).sort();
+  assert.ok(legacy.length > 0, 'clips.ts names were parsed');
+  assert.deepEqual(extras, legacy, 'legacy clips in clips.ts must be passed to shard-plan with -extra');
+  assert.ok(!/-shotlists-dir/.test(run), 'shotlists/ is planned from its default directory');
+  assert.ok(readdirSync(path.join(repoRoot, 'tests/e2e/website-demos/shotlists')).length > 0);
 });

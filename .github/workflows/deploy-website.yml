@@ -122,12 +122,14 @@ jobs:
           echo "recorded=$recorded" >> "$GITHUB_OUTPUT"
           echo "### Media mode: $mode (recorded commit: ${recorded:-none})" >> "$GITHUB_STEP_SUMMARY"
 
+      # shard-plan covers tours/*.ts and shotlists/*.ts by glob; the legacy clips in clips.ts
+      # are not files, so they are named with -extra (workflow-yaml.test.ts keeps them in sync).
       # shard-plan prints {"include":[{shard,total,tours,only}]}; drop empty shards
       # so a short tour list never starts a runner (or records everything).
       - name: Plan shards
         id: plan
         run: |
-          matrix=$("$RUNNER_TEMP/promo-plan/mediatool" shard-plan -shards 2 | jq -c '{include: [.include[] | select(.only != "")]}')
+          matrix=$("$RUNNER_TEMP/promo-plan/mediatool" shard-plan -shards 2 -extra session-dashboard -extra auto-approval-rules | jq -c '{include: [.include[] | select(.only != "")]}')
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
       - name: Upload promo plan
@@ -430,9 +432,9 @@ jobs:
         working-directory: website
         run: node scripts/check-internal-links.mjs
 
-      - name: Check demo-asset health
+      - name: Check README links
         working-directory: website
-        run: node scripts/check-asset-health.mjs
+        run: node scripts/check-readme-links.mjs
 
       # Epic 6.1: both configs assert performance/accessibility/best-practices
       # >= 0.90 at error (blocking) level -- see website/lighthouserc.json's
