@@ -133,7 +133,8 @@ function writeKeepingScroll(term: GhosttyWebTerminal, data: string | Uint8Array)
     else delete (term as { scrollToBottom?: () => void }).scrollToBottom;
   }
   const after = term.wasmTerm?.getScrollbackLength() ?? 0;
-  if (after < before || after === 0 || term.getViewportY() > after) {
+  const erasedScrollback = typeof data === "string" && data.includes("\x1b[3J"); // a refill can leave length > before
+  if (erasedScrollback || after < before || after === 0 || term.getViewportY() > after) {
     term.scrollToBottom(); // scrollback was dropped (or refilled from empty): nothing left to anchor to
     return;
   }
