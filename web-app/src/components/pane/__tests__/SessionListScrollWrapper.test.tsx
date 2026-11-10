@@ -194,11 +194,16 @@ describe("SessionListPaneBody — scroll wrapper", () => {
     expect(view.getByTestId("session-list-scroll").scrollTop).toBe(300);
   });
 
-  it("sessionListScroll_should_pad_right_by_tray_handle_width_so_rows_clear_the_fixed_bell", () => {
-    // jest does not compute vanilla-extract styles; assert the source contract that
-    // TrayHandle's --tray-handle-width (see TrayHandle.test.tsx) is consumed here.
-    const css = fs.readFileSync(path.join(__dirname, "../../../styles/pane/paneSplit.css.ts"), "utf8");
-    const block = css.slice(css.indexOf("export const sessionListScroll = style("));
-    expect(block.slice(0, block.indexOf("});"))).toContain('paddingRight: "var(--tray-handle-width, 0px)"');
+  it.each([
+    "styles/pane/paneSplit.css.ts",
+    "app/backlog/backlog.css.ts",
+    "app/notifications/NotificationsPage.css.ts",
+    "app/unfinished/UnfinishedTab.css.ts",
+    "app/review-queue/page.css.ts",
+  ])("%s_should_pad_right_by_tray_handle_width_so_rows_clear_the_fixed_bell", (rel) => {
+    // jest does not compute vanilla-extract styles, so assert the source contract that
+    // TrayHandle's --tray-handle-width (published in TrayHandle.test.tsx) is consumed.
+    const css = fs.readFileSync(path.join(__dirname, "../../../", rel), "utf8");
+    expect(css).toMatch(/paddingRight:[^\n]*var\(--tray-handle-width, 0px\)/);
   });
 });
