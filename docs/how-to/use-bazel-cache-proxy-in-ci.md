@@ -38,8 +38,9 @@ runs of the existing job took 9-21 s in the build step over the last 12 successf
 (cold: 88-110 s). Most of those 206 MB are the repository cache (Zig and Ghostty downloads), which
 the proxy does not replace.
 
-**Conclusion for this target:** the proxy is roughly equal to the current disk cache on time and
-~1650x smaller in the action-cache part, but it does not remove the need for the repository cache.
-It is not worth switching `ghostty-wasm.yml` for. It becomes interesting for the full-graph job in
+**Conclusion for this target:** the proxy stores far less (125 KB vs a 206 MB entry that mixes the
+disk and repository caches, so not like for like; the split was not measured) and its warm build
+(26 s, no repository cache) is not faster than the existing job's 9-21 s with one. It does not
+remove the need for the repository cache, so it is not worth switching `ghostty-wasm.yml` for. It becomes interesting for the full-graph job in
 `bazel.yml` (PR #1517), where a disk-cache archive grows with every action; that is **not measured**.
 Run the trial workflow (`bazel-cache-proxy-trial.yml`) against that job before deciding.
