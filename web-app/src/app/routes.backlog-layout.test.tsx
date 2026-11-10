@@ -21,6 +21,9 @@ function Consumer({ label }: { label: string }) {
 
 // The Bun router loads pages only, so app/backlog/layout.tsx's shared stream must come from the route table.
 describe.each(["/backlog", "/backlog/board"])("%s route wrap", (path) => {
+  // The wrap lazy-imports the provider module; load it here so that cost is not inside waitFor's 1 s budget.
+  beforeAll(() => import("@/components/backlog/BacklogStreamContext"));
+
   beforeEach(() => {
     resetFlagStoreForTest();
     mockWatch.mockClear();
