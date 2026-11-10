@@ -390,7 +390,8 @@ test('deployWorkflow_should_PlanEveryRecordableId_When_ShardPlanRuns', () => {
 });
 
 // docscoverage must never fall back to its merge-base default in CI: each event names its base
-// (Task 4.1.4a). HEAD^1 is the pull_request merge commit's base, github.event.before is the push base.
+// (Task 4.1.4a). github.event.before is the push base here; pull requests run it in the always-run
+// promo-guards job with HEAD^1 (see the guard-workflow tests below).
 test('buildWorkflow_should_PassExplicitBasePerEvent_When_DocsCoverageStepParsed', () => {
   const build = yaml.load(readFileSync(path.join(repoRoot, '.github/workflows/build.yml'), UTF8)) as Workflow;
   const steps = Object.values(build.jobs).flatMap((job) => job.steps ?? []);
@@ -398,7 +399,8 @@ test('buildWorkflow_should_PassExplicitBasePerEvent_When_DocsCoverageStepParsed'
   assert.ok(step, 'build.yml has a Docs coverage step');
   const run = String((step as Step & { run?: string }).run);
 
-  assert.match(run, /pull_request\)\s*BASE=HEAD\^1/);
+  assert.equal(step.if, "${{ github.event_name != 'pull_request' }}", 'PRs run docs coverage in promo-guards, not build.yml');
+  assert.ok(!/pull_request\)/.test(run), 'no pull_request arm: that case lives in promo-guards');
   assert.match(run, /push\)\s*BASE="\$EVENT_BEFORE"/);
   assert.match(run, /\*\)\s*BASE=none/);
   assert.match(run, /docscoverage -base "\$BASE"/);
@@ -420,4 +422,67 @@ test('workflows_should_ProduceAndConsumeDocsCoverageTrend_When_YamlParsed', () =
   assert.ok(trend, 'notify has a trend step');
   assert.match(String(trend.if), /schedule/);
   assert.match(String((trend as Step & { run?: string }).run), /docscoverage trend/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// backlog-scaffolding-guard.yml: the always-run PR guard workflow (Tasks 1.1.4b0, 1.1.4b, 2.1.1b, 2.1.1c).
+
+const GUARD_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/backlog-scaffolding-guard.yml');
+// Task 1.1.4b0 hard gate chose a separate job (decision and numbers: spike-notes.md, ADR-003).
+const PROMO_GUARD_JOB_ID = 'promo-guards';
+const loadGuard = (): Workflow => yaml.load(readFileSync(GUARD_WORKFLOW_PATH, UTF8)) as Workflow;
+const runOf = (step: Step): string => String((step as Step & { run?: string }).run ?? '');
+
+test('guardWorkflow_should_HaveNoPathFilterAndNeverUsePullRequestTarget_When_Parsed', () => {
+  const text = readFileSync(GUARD_WORKFLOW_PATH, UTF8);
+  const pr = loadGuard().on.pull_request as Record<string, unknown>;
+  assert.ok(pr, 'runs on pull_request');
+  assert.ok(!('paths' in pr) && !('paths-ignore' in pr), 'a path filter would leave a docs-only PR with no result');
+  assert.ok(!/^[^#\n]*pull_request_target/m.test(text), 'pull_request_target would run PR code with write-scoped secrets');
+  assert.deepEqual(pr.types, ['opened', 'synchronize', 'reopened', 'labeled', 'unlabeled']);
+  assert.equal(loadGuard().on.pull_request_target, undefined);
+});
+
+test('guardWorkflow_should_GiveBothJobsReadOnlyPermissions_When_Parsed', () => {
+  const doc = loadGuard();
+  for (const id of ['guard', PROMO_GUARD_JOB_ID]) {
+    assert.deepEqual(doc.jobs[id]?.permissions, { contents: 'read', 'pull-requests': 'read', issues: 'read' }, `${id} permissions`);
+  }
+});
+
+test('guardWorkflow_should_NotRerunScaffoldingChecksOnUnrelatedLabelEvents_When_Parsed', () => {
+  const doc = loadGuard();
+  assert.match(String(doc.jobs.guard.if), /action != 'labeled' && github\.event\.action != 'unlabeled'/);
+  assert.match(String(doc.jobs[PROMO_GUARD_JOB_ID].if), /github\.event\.label\.name == 'allow-media'/);
+});
+
+test('guardWorkflow_should_BuildAPrebuiltBinaryOnADepthTwoCheckout_When_PromoGuardsParsed', () => {
+  const job = loadGuard().jobs[PROMO_GUARD_JOB_ID];
+  assert.ok(job, `job ${PROMO_GUARD_JOB_ID} exists`);
+  assert.ok(job['timeout-minutes'] && job['timeout-minutes'] >= 8, 'timeout is set and at least the prior guard budget');
+  const checkout = job.steps.find((step) => step.uses?.includes('actions/checkout'));
+  assert.equal(checkout?.with?.['fetch-depth'], 2, 'depth 2 from the start: merge commit plus its base parent');
+  assert.ok(job.steps.some((step) => step.uses?.includes('setup-go-cached')), 'Go module and build cache restore');
+  const build = job.steps.find((step) => runOf(step).includes('go build -o'));
+  assert.match(runOf(build as Step), /promoguard/);
+  assert.equal(job.steps[0].id, 'scope', 'first step decides relevance so the check always reports');
+});
+
+test('guardWorkflow_should_ReadEveryGateInputFromTheBaseBlob_When_PromoGuardsParsed', () => {
+  const job = loadGuard().jobs[PROMO_GUARD_JOB_ID];
+  const term = job.steps.find((step) => step.name?.startsWith('Banned-term scan'));
+  const media = job.steps.find((step) => step.name?.startsWith('Binary media guard'));
+  const flagsStep = job.steps.find((step) => step.id === 'flags');
+  assert.match(runOf(term as Step), /termcheck -mode=source -base HEAD\^1/);
+  assert.match(runOf(media as Step), /mediaguard -base HEAD\^1/);
+  assert.match(runOf(media as Step), /-events-json/, 'override authority is judged from the issue events');
+  assert.match(runOf(flagsStep as Step), /promoguard" flags -base HEAD\^1/, 'kill switch from the base blob');
+  for (const step of [term, media]) {
+    assert.match(String(step?.['continue-on-error']), /steps\.flags\.outputs\.enforce != 'true'/, 'guardsEnforce kill switch');
+  }
+  const docs = job.steps.find((step) => step.name?.startsWith('Docs coverage'));
+  assert.match(runOf(docs as Step), /docscoverage" -base HEAD\^1/);
+  for (const step of job.steps) {
+    assert.ok(!/promo-flags\.json|CODEOWNERS|allowlist\.txt/.test(runOf(step)), 'no step reads a gate input from the PR tree');
+  }
 });
