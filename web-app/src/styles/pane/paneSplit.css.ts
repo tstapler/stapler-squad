@@ -111,7 +111,7 @@ export const sessionListScroll = style({
   flex: 1,
   overflowY: "auto",
   minHeight: 0,
-  paddingRight: "var(--tray-handle-width, 0px)",
+  paddingRight: "var(--tray-clearance, 0px)",
 });
 
 export const resetLayoutBar = style({

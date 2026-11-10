@@ -21,6 +21,7 @@ import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { KeyboardHints } from "@/components/ui/KeyboardHint";
 import * as styles from "./page.css";
+import { useTrayClearanceRef } from "@/lib/hooks/useTrayClearance";
 
 // Stable reference — useWatchBacklogItems only reruns its connection effects when the
 // joined filter key changes, but a fresh array literal every render is still bad hygiene.
@@ -42,6 +43,7 @@ function sessionFromReviewItem(item: ReviewItem): Session {
 }
 
 function ReviewQueueContent() {
+  const trayClearanceRef = useTrayClearanceRef();
   const searchParams = useSearchParams();
   const router = useRouter();
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
@@ -305,7 +307,7 @@ function ReviewQueueContent() {
 
   return (
     <div className={styles.page}>
-      <div id="main-content" className={styles.main}>
+      <div ref={trayClearanceRef} id="main-content" className={styles.main}>
         {ownerActionRequests.length > 0 && (
           <section className={styles.inlineSection} aria-label="Pending questions" data-testid="owner-action-section">
             <h3 className={styles.inlineSectionTitle}>

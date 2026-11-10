@@ -44,6 +44,7 @@ import {
   incompleteSearchNoticeButton,
 } from "@/components/ui/NotificationPanel.css";
 import { pageRoot } from "./NotificationsPage.css";
+import { useTrayClearanceRef } from "@/lib/hooks/useTrayClearance";
 
 type TypeFilter = "all" | "approval_needed" | "error" | "task_complete" | "info";
 
@@ -63,6 +64,7 @@ function minutesAgoLabel(sinceMs: number): string {
 }
 
 export function NotificationsPage() {
+  const trayClearanceRef = useTrayClearanceRef();
   const {
     notificationHistory,
     markAsRead,
@@ -290,7 +292,7 @@ export function NotificationsPage() {
   );
 
   return (
-    <div className={pageRoot}>
+    <div ref={trayClearanceRef} className={pageRoot}>
       <div className={header} data-testid="notifications-header">
         <h2 className={title} data-testid="notifications-title">
           Notifications

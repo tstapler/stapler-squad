@@ -82,7 +82,7 @@ export const listPane = style({
   flex: 1,
   overflow: "auto",
   padding: vars.space["4"],
-  paddingRight: `calc(var(--tray-handle-width, 0px) + ${vars.space["4"]})`,
+  paddingRight: `calc(var(--tray-clearance, 0px) + ${vars.space["4"]})`,
 });
 
 // width is set via inline style (resizable) on top of the shared base.

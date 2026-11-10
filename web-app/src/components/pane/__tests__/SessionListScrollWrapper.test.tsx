@@ -202,8 +202,8 @@ describe("SessionListPaneBody — scroll wrapper", () => {
     "app/review-queue/page.css.ts",
   ])("%s_should_pad_right_by_tray_handle_width_so_rows_clear_the_fixed_bell", (rel) => {
     // jest does not compute vanilla-extract styles, so assert the source contract that
-    // TrayHandle's --tray-handle-width (published in TrayHandle.test.tsx) is consumed.
+    // useTrayClearance's --tray-clearance (see useTrayClearance.test.tsx) is consumed.
     const css = fs.readFileSync(path.join(__dirname, "../../../", rel), "utf8");
-    expect(css).toMatch(/paddingRight:[^\n]*var\(--tray-handle-width, 0px\)/);
+    expect(css).toMatch(/paddingRight:[^\n]*var\(--tray-clearance, 0px\)/);
   });
 });
