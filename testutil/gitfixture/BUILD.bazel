@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "gitfixture",
+    srcs = [
+        "identity.go",
+        "run.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/testutil/gitfixture",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor/safeexec",
+        "@com_github_go_git_go_git_v5//:go-git",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gitfixture",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gitfixture_test",
+    srcs = ["run_test.go"],
+    embed = [":gitfixture"],
+)

@@ -50,7 +50,7 @@ func TestWedgedLease_ShouldRaiseExactlyOneTrayWarningPerEpisodeNotPushedAndDeliv
 	n := got[0]
 	assert.Equal(t, leaseWedgeTitle, n.NotificationTitle)
 	assert.Equal(t, inst.UUID, n.SessionID)
-	assert.Equal(t, derivePriority(true, false), n.NotificationPriority, "medium: below the urgent push threshold")
+	assert.Equal(t, DerivePriority(true, false), n.NotificationPriority, "medium: below the urgent push threshold")
 	assert.Equal(t, pkgevents.DeliveryClassFailure, n.NotificationMetadata[pkgevents.MetadataKeyDeliveryClass])
 	assert.Equal(t, "true", n.NotificationMetadata[pkgevents.MetadataKeySessionScoped])
 	assert.NotEqual(t, int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT), n.NotificationPriority)

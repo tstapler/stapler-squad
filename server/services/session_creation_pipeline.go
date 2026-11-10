@@ -345,11 +345,11 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 			costOpt = session.WithCostSink(session.CostSinkForSessionUUID(concreteStorage, p.instance.UUID))
 		}
 		driver := session.NewAutonomousDriver(p.instance, s.autonomousDriverClient(), p.instance.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), costOpt)
-		driver.RegisterCompletionCallback(s.autonomousSvc.onAutonomousDriverComplete)
-		if driverErr := driver.Start(s.autonomousSvc.driverCtx()); driverErr != nil {
+		driver.RegisterCompletionCallback(s.AutonomousSvc.OnAutonomousDriverComplete)
+		if driverErr := driver.Start(s.AutonomousSvc.driverCtx()); driverErr != nil {
 			log.Warn("[session pipeline] failed to start autonomous driver", "session", p.instanceTitle, "err", driverErr)
 		} else {
-			s.autonomousSvc.registerDriver(p.instanceTitle, driver)
+			s.AutonomousSvc.registerDriver(p.instanceTitle, driver)
 		}
 	} else if p.instance.AutonomousMode {
 		log.Warn("[session pipeline] autonomous_mode requested but headlessPool is nil", "session", p.instanceTitle)

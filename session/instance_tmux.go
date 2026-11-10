@@ -92,7 +92,7 @@ var launchBuilders = []launchCommandBuilder{
 // claudeLaunchBuilder implements launchCommandBuilder for the claude binary.
 type claudeLaunchBuilder struct{}
 
-func (b *claudeLaunchBuilder) Matches(program string) bool { return isClaude(program) }
+func (b *claudeLaunchBuilder) Matches(program string) bool { return IsClaude(program) }
 
 func (b *claudeLaunchBuilder) Build(i *Instance, base, resumeSessionID string) launchcmd.ExecCommand {
 	// AutoApprove is injected inside buildClaudeCommand, before the trailing
@@ -254,7 +254,7 @@ func isGemini(program string) bool {
 // It checks each whitespace-delimited token's basename to avoid false positives
 // from env wrappers (e.g. "env -u VAR claude") and to reject similar names
 // like "claude-squad" or "myclaudeapp". Custom program IDs are resolved first.
-func isClaude(program string) bool {
+func IsClaude(program string) bool {
 	cfg := config.LoadConfig()
 	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
 		program = res.Command

@@ -262,7 +262,7 @@ func validateRecognizedPlaceholders(fieldName, value string) error {
 
 // isRecognizedPlaceholder reports whether name is in recognizedPlaceholders.
 func isRecognizedPlaceholder(name string) bool {
-	for _, recognized := range recognizedPlaceholders {
+	for _, recognized := range RecognizedPlaceholders {
 		if recognized == name {
 			return true
 		}
@@ -278,5 +278,5 @@ func isRecognizedPlaceholder(name string) bool {
 // which fails immediately if a future edit gives one function its own copy
 // that drifts from the other.
 func placeholderAllowList() []string {
-	return recognizedPlaceholders
+	return RecognizedPlaceholders
 }

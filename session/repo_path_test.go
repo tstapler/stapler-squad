@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // stapler-squad#152 security review: GitHub owner/repo regexes only exclude
@@ -499,7 +500,7 @@ func TestGetMainRepoPath_ResolvesWorktreeToMainRepo(t *testing.T) {
 	}
 
 	worktreeDir := filepath.Join(t.TempDir(), "extra-worktree")
-	runGitOrFail(t, mainDir, "worktree", "add", "-b", "extra-branch", worktreeDir)
+	sessiontest.RunGitOrFail(t, mainDir, "worktree", "add", "-b", "extra-branch", worktreeDir)
 
 	resolved, err := GetMainRepoPath(worktreeDir)
 	if err != nil {
@@ -547,7 +548,7 @@ func TestResolveMainRepoRoot_RedirectsWorktreeToMainRepo(t *testing.T) {
 	}
 
 	worktreeDir := filepath.Join(t.TempDir(), "extra-worktree")
-	runGitOrFail(t, mainDir, "worktree", "add", "-b", "extra-branch", worktreeDir)
+	sessiontest.RunGitOrFail(t, mainDir, "worktree", "add", "-b", "extra-branch", worktreeDir)
 
 	resolved, err := ResolveMainRepoRoot(worktreeDir)
 	if err != nil {
@@ -597,10 +598,10 @@ func TestResolveMainRepoRoot_ReturnsInputUnchanged_When_NotAGitRepo(t *testing.T
 // support extension: worktreeconfig" failing async session start.
 func TestCreateBacklogWorktree_Succeeds_When_RepoHasWorktreeConfigExtension(t *testing.T) {
 	origin := t.TempDir()
-	runGitOrFail(t, origin, "init", "-b", "main")
-	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init")
-	mainRepo := cloneWithOrigin(t, origin)
-	runGitOrFail(t, mainRepo, "config", "extensions.worktreeConfig", "true")
+	sessiontest.RunGitOrFail(t, origin, "init", "-b", "main")
+	sessiontest.RunGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init")
+	mainRepo := sessiontest.CloneWithOrigin(t, origin)
+	sessiontest.RunGitOrFail(t, mainRepo, "config", "extensions.worktreeConfig", "true")
 
 	wt, err := CreateBacklogWorktree(mainRepo, "wtc-item", "")
 	if err != nil {
@@ -639,9 +640,9 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 	if err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
-	runGitOrFail(t, origin, "branch", "-M", "main")
+	sessiontest.RunGitOrFail(t, origin, "branch", "-M", "main")
 
-	mainRepo := cloneWithOrigin(t, origin)
+	mainRepo := sessiontest.CloneWithOrigin(t, origin)
 
 	// Simulate a backlog item whose RepoPath got stored as a worktree's own directory —
 	// an agent running inside one filed the item using its own CWD instead of the main
@@ -684,7 +685,7 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 		t.Errorf("CreateBacklogWorktree did not operate against the resolved main repo path %q; log:\n%s", wantMain, logOutput)
 	}
 
-	base := strings.TrimSpace(runGitOutputOrFail(t, childWorktree, "merge-base", "HEAD", mainTip.String()))
+	base := strings.TrimSpace(sessiontest.RunGitOutputOrFail(t, childWorktree, "merge-base", "HEAD", mainTip.String()))
 	if base != mainTip.String() {
 		t.Errorf("child worktree's branch point = %s, want origin's main tip %s (must branch from the resolved main repo, not the anchor worktree)", base, mainTip)
 	}
@@ -697,21 +698,21 @@ func TestCreateBacklogWorktree_AnchorsAtMainRepo_When_RepoPathIsAWorktree(t *tes
 func TestCreateBacklogWorktree_BranchesFromFetchedOriginTip_NotAmbientHead(t *testing.T) {
 	t.Parallel()
 	origin := t.TempDir()
-	runGitOrFail(t, origin, "init", "-b", "main")
-	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init")
+	sessiontest.RunGitOrFail(t, origin, "init", "-b", "main")
+	sessiontest.RunGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "init")
 
-	clone := cloneWithOrigin(t, origin)
-	runGitOrFail(t, clone, "checkout", "-b", "stale-feature")
-	runGitOrFail(t, clone, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "diverged local work")
+	clone := sessiontest.CloneWithOrigin(t, origin)
+	sessiontest.RunGitOrFail(t, clone, "checkout", "-b", "stale-feature")
+	sessiontest.RunGitOrFail(t, clone, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "diverged local work")
 
-	runGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "newer origin commit")
-	originTip := strings.TrimSpace(runGitOutputOrFail(t, origin, "rev-parse", "main"))
+	sessiontest.RunGitOrFail(t, origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "newer origin commit")
+	originTip := strings.TrimSpace(sessiontest.RunGitOutputOrFail(t, origin, "rev-parse", "main"))
 
 	worktreePath, err := CreateBacklogWorktree(clone, "fresh-base-item", "")
 	if err != nil {
 		t.Fatalf("CreateBacklogWorktree failed: %v", err)
 	}
-	head := strings.TrimSpace(runGitOutputOrFail(t, worktreePath, "rev-parse", "HEAD"))
+	head := strings.TrimSpace(sessiontest.RunGitOutputOrFail(t, worktreePath, "rev-parse", "HEAD"))
 	if head != originTip {
 		t.Errorf("worktree HEAD = %s, want freshly fetched origin/main tip %s", head, originTip)
 	}
@@ -740,20 +741,20 @@ func TestCreateBacklogWorktree_UsesExplicitBaseBranch_When_Set(t *testing.T) {
 	if _, err := originWT.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}}); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
-	runGitOrFail(t, origin, "branch", "-M", "main")
-	runGitOrFail(t, origin, "checkout", "-b", "release-2.0")
-	runGitOrFail(t, origin, "commit", "--allow-empty", "-m", "release commit")
-	releaseTip := strings.TrimSpace(runGitOutputOrFail(t, origin, "rev-parse", "release-2.0"))
-	runGitOrFail(t, origin, "checkout", "main")
+	sessiontest.RunGitOrFail(t, origin, "branch", "-M", "main")
+	sessiontest.RunGitOrFail(t, origin, "checkout", "-b", "release-2.0")
+	sessiontest.RunGitOrFail(t, origin, "commit", "--allow-empty", "-m", "release commit")
+	releaseTip := strings.TrimSpace(sessiontest.RunGitOutputOrFail(t, origin, "rev-parse", "release-2.0"))
+	sessiontest.RunGitOrFail(t, origin, "checkout", "main")
 
-	mainRepo := cloneWithOrigin(t, origin)
+	mainRepo := sessiontest.CloneWithOrigin(t, origin)
 
 	worktreePath, err := CreateBacklogWorktree(mainRepo, "explicit-base-item", "release-2.0")
 	if err != nil {
 		t.Fatalf("CreateBacklogWorktree(baseBranch=release-2.0) failed: %v", err)
 	}
 
-	head := strings.TrimSpace(runGitOutputOrFail(t, worktreePath, "rev-parse", "HEAD"))
+	head := strings.TrimSpace(sessiontest.RunGitOutputOrFail(t, worktreePath, "rev-parse", "HEAD"))
 	if head != releaseTip {
 		t.Errorf("worktree HEAD = %s, want release-2.0's tip %s (must fork from the explicit base_branch override, not the default branch)", head, releaseTip)
 	}
@@ -782,8 +783,8 @@ func TestCreateBacklogWorktree_ErrorsLoudly_When_ExplicitBaseBranchDoesNotExist(
 	if _, err := originWT.Commit("init", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com"}}); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
-	runGitOrFail(t, origin, "branch", "-M", "main")
-	mainRepo := cloneWithOrigin(t, origin)
+	sessiontest.RunGitOrFail(t, origin, "branch", "-M", "main")
+	mainRepo := sessiontest.CloneWithOrigin(t, origin)
 
 	_, err = CreateBacklogWorktree(mainRepo, "bad-base-item", "does-not-exist-anywhere")
 	if err == nil {

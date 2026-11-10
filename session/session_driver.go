@@ -1168,7 +1168,7 @@ func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy,
 	rs := inst.RetryState
 	inst.mu.RUnlock()
 
-	switch evaluateSessionRetry(rs, policy, reason, now, serverStartTime) {
+	switch evaluateSessionRetry(rs, policy, reason, now, ServerStartTime) {
 	case retryDecisionScheduled:
 		nextAttempt := rs.RetryAttempt + 1
 		delay := backoffDelay(rs.RetryAttempt, policy.InitialDelay, policy.MaxDelay, defaultJitterFraction)

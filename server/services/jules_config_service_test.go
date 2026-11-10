@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -123,7 +124,7 @@ func (f *fakeJulesPollStatusClient) setFail(v bool) {
 }
 
 func TestJulesConfigService_GetJulesConfig_should_NeverReturnKeyMaterial_When_KeyStored(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	const key = "AIzaSyD-EXAMPLE"
 	svc := NewJulesConfigService(&fakeJulesKeyManager{hasKey: true, key: key}, nil, nil)
 
@@ -140,7 +141,7 @@ func TestJulesConfigService_GetJulesConfig_should_NeverReturnKeyMaterial_When_Ke
 
 func TestJulesConfigService_UpdateJulesConfig_should_WriteKeychainNotConfigJSON_When_APIKeyProvided(t *testing.T) {
 	keyring.MockInit()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	const newKey = "AIzaSyD-NEW"
 
 	keys := jules.NewKeyringTokenSource()
@@ -166,10 +167,10 @@ func TestJulesConfigService_UpdateJulesConfig_should_WriteKeychainNotConfigJSON_
 }
 
 func TestJulesConfigService_TestJulesConnection_should_NameUnconnectedRepo_When_SourceNotInListSources(t *testing.T) {
-	withIsolatedStateDir(t)
-	repoPath := newTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
-	registry := jules.NewJulesSourceRegistry(&fakeSourceLister{
-		sources: []jules.JulesSource{{Name: "sources/github-tstapler-dotfiles", ID: "src-1"}},
+	svctest.WithIsolatedStateDir(t)
+	repoPath := svctest.NewTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
+	registry := jules.NewJulesSourceRegistry(&svctest.FakeSourceLister{
+		Sources: []jules.JulesSource{{Name: "sources/github-tstapler-dotfiles", ID: "src-1"}},
 	})
 	svc := NewJulesConfigService(nil, registry, nil)
 
@@ -184,7 +185,7 @@ func TestJulesConfigService_TestJulesConnection_should_NameUnconnectedRepo_When_
 }
 
 func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequiredLive_When_PollerFlagToggles(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	client := newFakeJulesPollStatusClient(true)
 	storage := &fakeJulesPollerStorage{
 		entries: []session.ItemSessionBacklogEntry{{
@@ -222,7 +223,7 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 }
 
 func TestJulesConfigService_GetJulesConfig_should_ReturnAuthReconnectRequiredFalse_When_PollerDependencyIsNil(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 
 	resp, err := svc.GetJulesConfig(context.Background(), connect.NewRequest(&sessionv1.GetJulesConfigRequest{}))
@@ -231,7 +232,7 @@ func TestJulesConfigService_GetJulesConfig_should_ReturnAuthReconnectRequiredFal
 }
 
 func TestJulesConfigService_ConfirmEgressConsent_should_AppendAndPersistRepo_When_RepoNotAlreadyAcknowledged(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 	const repoPath = "/home/tstapler/code/github.com/tstapler/stapler-squad"
 
@@ -244,7 +245,7 @@ func TestJulesConfigService_ConfirmEgressConsent_should_AppendAndPersistRepo_Whe
 }
 
 func TestJulesConfigService_ConfirmEgressConsent_should_AvoidDuplicateEntry_When_RepoAlreadyAcknowledged(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 	const repoPath = "/home/tstapler/code/github.com/tstapler/stapler-squad"
 
@@ -257,7 +258,7 @@ func TestJulesConfigService_ConfirmEgressConsent_should_AvoidDuplicateEntry_When
 }
 
 func TestJulesConfigService_ConfirmEgressConsent_should_ReturnInvalidArgument_When_RepoPathEmpty(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 
 	_, err := svc.ConfirmEgressConsent(context.Background(), connect.NewRequest(&sessionv1.ConfirmEgressConsentRequest{RepoPath: ""}))
@@ -269,7 +270,7 @@ func TestJulesConfigService_ConfirmEgressConsent_should_ReturnInvalidArgument_Wh
 }
 
 func TestJulesConfigService_RevokeEgressConsent_should_RemoveOnlyTargetRepo_When_MultipleRepoAcknowledged(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 	const repoA = "/home/tstapler/code/github.com/tstapler/stapler-squad"
 	const repoB = "/home/tstapler/code/github.com/tstapler/dotfiles"
@@ -289,7 +290,7 @@ func TestJulesConfigService_RevokeEgressConsent_should_RemoveOnlyTargetRepo_When
 }
 
 func TestJulesConfigService_RevokeEgressConsent_should_BeIdempotent_When_RepoNotAcknowledged(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 	const repoPath = "/home/tstapler/code/github.com/tstapler/stapler-squad"
 
@@ -299,7 +300,7 @@ func TestJulesConfigService_RevokeEgressConsent_should_BeIdempotent_When_RepoNot
 }
 
 func TestJulesConfigService_RevokeEgressConsent_should_ReturnInvalidArgument_When_RepoPathEmpty(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewJulesConfigService(nil, nil, nil)
 
 	_, err := svc.RevokeEgressConsent(context.Background(), connect.NewRequest(&sessionv1.RevokeEgressConsentRequest{RepoPath: ""}))

@@ -1,0 +1,2 @@
+# gazelle:prefix github.com/tstapler/stapler-squad/tools/lint
+# gazelle:resolve_regexp go ^golang\.org/x/tools/(.*)$ @lint_x_tools//$1

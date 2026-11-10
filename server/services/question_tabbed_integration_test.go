@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -53,7 +54,7 @@ func TestParseAskUserQuestion_should_FlagOnlyTheMeasuredTabbedShape(t *testing.T
 
 func TestRegisterQuestion_should_MirrorATabbedAskAsALiveKeystrokeRowWithoutThePendingStore(t *testing.T) {
 	q := newQuestionHarness(t)
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	q.h.SetGuidanceMirror(newRealStoreMirror(storage, q.store, &mirrorCounts{}))
 
 	md := q.post(tabbedAskBody, map[string]string{hookProofHeader: q.proofs.HeaderValue("sess-uuid")}).NotificationMetadata
@@ -74,7 +75,7 @@ func TestRegisterQuestion_should_MirrorATabbedAskAsALiveKeystrokeRowWithoutThePe
 
 func TestRegisterQuestion_should_KeepATabbedAskViewOnly_WhenTheSenderIsUnverified(t *testing.T) {
 	q := newQuestionHarness(t)
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	q.h.SetGuidanceMirror(newRealStoreMirror(storage, q.store, &mirrorCounts{}))
 
 	md := q.post(tabbedAskBody, map[string]string{"X-CS-Session-ID": "other-uuid"}).NotificationMetadata

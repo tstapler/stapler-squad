@@ -107,3 +107,60 @@ The `make install-service` flow on macOS:
 The `CFBundleIdentifier = com.stapler-squad` in the embedded plist causes TCC to track the app by bundle ID (`client_type=0`) rather than path+hash. The cert-anchored DR means the TCC row's `csreq` field matches every rebuild as long as the same cert is used.
 
 **Why `Info.plist` lives in `macos/` and not the repo root:** if the source `Info.plist` file sits in the same directory as the built binary, `codesign` auto-detects a bundle layout and seals the *entire directory* as bundle resources (every file, recursively — this repo has 80k+ tracked/untracked files). `codesign --verify` then fails with `a sealed resource is missing or invalid` the moment anything in the repo changes (a git worktree's `.git/index`, an untracked `.claude/settings.local.json`, etc.), which silently aborts `install-service.sh`'s pre-flight signature check before it ever restarts the LaunchAgent. Keeping `Info.plist` out of the binary's directory keeps `codesign` treating it as a plain Mach-O executable (`Sealed Resources=none`).
+
+## Bazel-built binary (owner device check; not done yet)
+
+Signing stays outside Bazel (ADR-005, ADR-006): Bazel produces the unsigned binary and the existing flow signs a copy.
+Nothing in this section has been run on a Mac. The Bazel side (`--config=macos`, the `-sectcreate` Info.plist link
+in `tools/bzl/otel_weave_hermetic.sh`, `//macos:infoplist_test`, `.github/workflows/bazel-macos.yml`) was written
+without one and is unverified, including whether the woven (otelc) darwin build links at all; cross-compiling darwin
+from Linux is not supported (cgo is off there, so no Info.plist).
+
+### Designated requirement of the signed copy
+
+`BUILD_SYSTEM=bazel make install-service` runs `tools/bzl/verifybin -codesign`, which aborts before the old service is
+stopped unless `codesign -d -r-` on the signed copy prints exactly the requirement recorded here. Until the owner
+records it the check fails closed (it names the missing marker). Record it once, from the make-built signed binary:
+
+```bash
+make install-service            # BUILD_SYSTEM=make, once, so the binary is signed by StaplerSquadDev
+codesign -d -r- ./stapler-squad # copy the "designated =>" line into the block below
+```
+
+<!-- designated-requirement:begin -->
+Not recorded yet (owner: replace this line with the `designated =>` line).
+<!-- designated-requirement:end -->
+
+### Checklist (owner, per architecture: arm64 and amd64)
+
+1. Build with Bazel and copy to a stable path (not `bazel-bin`):
+   `bazel build --config=release //:stapler-squad && cp bazel-bin/stapler-squad /path/stable/stapler-squad-bazel`
+   (add `--config=darwin_amd64` for Intel).
+2. Sign the copy: `make _codesign-binary BIN=/path/stable/stapler-squad-bazel`, then
+   `codesign --verify --strict /path/stable/stapler-squad-bazel` must exit 0.
+3. Compare requirements, and read the TCC guidance it prints:
+   `bazel run //tools/bzl/codesigndiff -- -make-bin ./stapler-squad -bazel-bin /path/stable/stapler-squad-bazel`
+   (exit 0 and `IDENTICAL`).
+   Also run `scripts/verify-bazel-codesign.sh /path/stable/stapler-squad-bazel ./stapler-squad`: it checks the
+   signature, the `StaplerSquadDev` authority and a certificate-anchored (not `cdhash`) requirement, and that the
+   requirement equals the make-built binary's. It exits 2 with a message anywhere but macOS.
+4. With the make-built binary's TCC grants in place, replace it with the Bazel-built signed binary and relaunch. PASS
+   only if macOS shows no new permission prompt. Do not run `make tcc-reset`.
+5. Record the result below and in the PR.
+
+| Architecture | Date | Result (no new prompt?) | Notes |
+|---|---|---|---|
+| arm64 | not run | | |
+| amd64 | not run | | |
+
+### Owner sign-off (OWNER-RUN, unverified by agents)
+
+Agents cannot run any of this: it needs a Mac, the login keychain with `StaplerSquadDev`, and live TCC state. The
+script's non-macOS exit and its pass/fail logic against a stub `codesign` are tested in
+`scripts/verify-bazel-codesign_test.sh`; the real `codesign` output format is not.
+
+- [ ] arm64: step 1-3 of the checklist, `scripts/verify-bazel-codesign.sh` exits 0
+- [ ] arm64: step 4, no new permission prompt after swapping in the signed Bazel binary
+- [ ] amd64 (`--config=darwin_amd64`): the same two items
+- [ ] The `designated =>` block above is recorded, so `verifybin -codesign` no longer fails closed
+- [ ] Results entered in the table above and in the PR

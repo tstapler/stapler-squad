@@ -1,0 +1,55 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "sshremote",
+    srcs = [
+        "approval_relay.go",
+        "health_prober.go",
+        "keygen.go",
+        "keystore.go",
+        "known_hosts.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/sshremote",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//session/tmux",
+        "@com_github_zalando_go_keyring//:go-keyring",
+        "@org_golang_x_crypto//ssh",
+        "@org_golang_x_crypto//ssh/knownhosts",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sshremote",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sshremote_test",
+    srcs = [
+        "approval_relay_test.go",
+        "health_prober_test.go",
+        "keygen_test.go",
+        "keystore_test.go",
+        "known_hosts_test.go",
+    ],
+    embed = [":sshremote"],
+    deps = [
+        "//config",
+        "//session/tmux",
+        "//testutil/socket",
+        "//testutil/wait",
+        "@com_github_gliderlabs_ssh//:ssh",
+        "@com_github_zalando_go_keyring//:go-keyring",
+        "@org_golang_x_crypto//ssh",
+    ],
+)
+
+exports_files(
+    ["approval_relay.go"],
+    visibility = ["//server/services:__pkg__"],
+)

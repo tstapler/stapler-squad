@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/git"
 )
 
 type itemPRFixture struct {
@@ -29,7 +28,7 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 		Status: string(BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
-	f := &itemPRFixture{t: t, storage: storage, repo: storage.repo, itemID: item.ID}
+	f := &itemPRFixture{t: t, storage: storage, repo: storage.Repo, itemID: item.ID}
 	if legacyNumber > 0 {
 		url := "https://github.com/acme/app/pull/" + strconv.Itoa(legacyNumber)
 		_, err = storage.UpdateBacklogItem(context.Background(), item.ID, BacklogItemUpdate{PrURL: &url, PrNumber: &legacyNumber}, nil)
@@ -73,7 +72,7 @@ func (f *itemPRFixture) itemEnt() *ent.BacklogItem {
 	f.t.Helper()
 	id, err := uuid.Parse(f.itemID)
 	require.NoError(f.t, err)
-	it, err := f.repo.client.BacklogItem.Get(context.Background(), id)
+	it, err := f.repo.Client.BacklogItem.Get(context.Background(), id)
 	require.NoError(f.t, err)
 	return it
 }
@@ -385,29 +384,6 @@ func TestItemMirror_ShouldFollowCurrentRound_WhenLaterWorkSessionLinks(t *testin
 	_, err := f.repo.RecomputeItemPRMirror(ctx, f.itemID)
 	require.NoError(t, err)
 	assert.Equal(t, 31, f.mirror())
-}
-
-func TestReconcilePRPending_ShouldSyncMirrorAtEndOfPass_OnlyWhenBacklogReaderOn(t *testing.T) {
-	t.Parallel()
-	for _, on := range []bool{false, true} {
-		on := on
-		t.Run(map[bool]string{false: "off", true: "on"}[on], func(t *testing.T) {
-			t.Parallel()
-			f := newItemPRFixture(t, 21)
-			f.link(ItemPROwner(f.itemID), 22, PRStateOpen)
-			listener := NewBacklogLifecycleListener(f.storage)
-			listener.backlogReaderOverride = func() bool { return on }
-			overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: false, status: &git.PRStatus{}})
-
-			listener.ReconcilePRPending(context.Background(), f.repo)
-
-			want := 21
-			if on {
-				want = 22
-			}
-			assert.Equal(t, want, f.mirror())
-		})
-	}
 }
 
 func TestAttachItemPRLink_ShouldLinkOnceAndHonorItemTombstone(t *testing.T) {

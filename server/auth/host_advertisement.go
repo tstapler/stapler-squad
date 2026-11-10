@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // maxHostAdvertisementBody caps an advertisement POST body. The endpoint is
@@ -31,9 +31,9 @@ const maxHostAdvertisementBody = 64 << 10
 // behavior); when set, a freshly-learned advertisement (Advertise returning
 // isNew) triggers one bounded re-gossip hop to this instance's own known
 // peers, excluding the sender's own AdvertisedAddress[].
-func RegisterHostAdvertisementRoute(mux *http.ServeMux, identity session.HostIdentity, registry *session.HostRegistry, advertiser *session.HostAdvertiser, addresses []string) {
-	mux.HandleFunc("POST "+session.AdvertisementEndpointPath, func(w http.ResponseWriter, r *http.Request) {
-		var record session.AdvertisementRecord
+func RegisterHostAdvertisementRoute(mux *http.ServeMux, identity hostclaim.HostIdentity, registry *hostclaim.HostRegistry, advertiser *hostclaim.HostAdvertiser, addresses []string) {
+	mux.HandleFunc("POST "+hostclaim.AdvertisementEndpointPath, func(w http.ResponseWriter, r *http.Request) {
+		var record hostclaim.AdvertisementRecord
 		r.Body = http.MaxBytesReader(w, r.Body, maxHostAdvertisementBody)
 		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
 			log.Debug("host_advertisement.received", "err", err)
@@ -62,7 +62,7 @@ func RegisterHostAdvertisementRoute(mux *http.ServeMux, identity session.HostIde
 			advertiser.ReGossip(r.Context(), record, exclude)
 		}
 
-		reply := session.BuildAdvertisement(identity, addresses, time.Now())
+		reply := hostclaim.BuildAdvertisement(identity, addresses, time.Now())
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(reply); err != nil {
 			log.Debug("host_advertisement.sent", "err", err)

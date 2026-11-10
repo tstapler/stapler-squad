@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -120,7 +121,7 @@ func TestResolveSessionType_should_ReturnError_When_SessionTypeUnrecognized(t *t
 
 func TestCreateSession_EmptyTitle_ReturnsInvalidArgument(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -135,7 +136,7 @@ func TestCreateSession_EmptyTitle_ReturnsInvalidArgument(t *testing.T) {
 
 func TestCreateSession_EmptyPath_NonOneOff_ReturnsInvalidArgument(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -150,7 +151,7 @@ func TestCreateSession_EmptyPath_NonOneOff_ReturnsInvalidArgument(t *testing.T) 
 
 func TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -167,7 +168,7 @@ func TestCreateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testi
 
 func TestCreateSession_should_SetAutoApprove_When_ProgramIsClaude(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -178,6 +179,7 @@ func TestCreateSession_should_SetAutoApprove_When_ProgramIsClaude(t *testing.T) 
 	}))
 
 	require.NoError(t, err)
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
 	assert.True(t, resp.Msg.Session.AutoApprove)
 }
 
@@ -185,10 +187,10 @@ func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	// one_off=true must NOT fail with "path is required".
 	// If tmux is available the call succeeds (err == nil); if not, it fails with
 	// CodeInternal at the tmux step — either way, CodeInvalidArgument must not appear.
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	withFakeHome(t)
+	svctest.WithFakeHome(t)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "scratch-session",
@@ -296,10 +298,10 @@ func TestRequiresExplicitPath(t *testing.T) {
 // An autonomous request that supplies its own path must use that path as-is, not
 // have it silently replaced by a generated ~/oneoff scratch directory.
 func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := withFakeHome(t)
+	baseDir := svctest.WithFakeHome(t)
 	explicitPath := t.TempDir()
 	oneOffDir := filepath.Join(baseDir, "oneoff")
 
@@ -319,7 +321,7 @@ func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *test
 
 func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	// Seed an existing session with the same title.
@@ -343,7 +345,7 @@ func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
 func TestCreateSession_EmptyTitleAndPath_TitleErrorFirst(t *testing.T) {
 	t.Parallel()
 	// Both title and path are missing; title validation must fire first.
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{}))
@@ -358,10 +360,10 @@ func TestCreateSession_EmptyTitleAndPath_TitleErrorFirst(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCreateSession_OneOff_CreatesDirectoryInBaseDir(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := withFakeHome(t) // ~/oneoff resolves under here
+	baseDir := svctest.WithFakeHome(t) // ~/oneoff resolves under here
 
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
@@ -388,10 +390,10 @@ func TestCreateSession_OneOff_CreatesDirectoryInBaseDir(t *testing.T) {
 }
 
 func TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := withFakeHome(t)
+	baseDir := svctest.WithFakeHome(t)
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	for i, title := range []string{"session-a", "session-b"} {
@@ -419,10 +421,10 @@ func TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories(t *testing.T)
 // its one-off counterpart, TestCreateSession_OneOff_CreatesDirectoryInBaseDir,
 // just below.
 func TestCreateSession_Autonomous_EmptyPath_GeneratesDirectoryInBaseDir(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	baseDir := withFakeHome(t)
+	baseDir := svctest.WithFakeHome(t)
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -525,7 +527,7 @@ func TestGenerateOneOffPath_BadBaseDir_ReturnsError(t *testing.T) {
 }
 
 func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	// Point HOME at a file (not a directory) so ~/oneoff cannot be created.
@@ -566,7 +568,7 @@ func TestCreateSessionTimeout_ComfortablyAboveGitCloneBound(t *testing.T) {
 // path threads ctx down to the clone anymore.
 func TestCreateSession_GitHubURLResolution_NotBoundByRequestContext(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	resolvedPath := t.TempDir()
@@ -596,7 +598,7 @@ func TestCreateSession_GitHubURLResolution_NotBoundByRequestContext(t *testing.T
 // the legacy scalars. The CreatePullRequest writer (row 6) is covered in
 // pr_creation_service_test.go; the one-shot writer (row 7) shares its SetGitHubPR wrapper.
 func TestCreatePaths_ShouldAttachViaAttachPR_WhenCreateFromURLOrResolutionOrOneShot(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -649,7 +651,7 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	// destroyCreatedSession/svc.Shutdown/bus.Close have fully torn everything down.
 	t.Cleanup(func() { goleak.VerifyNone(t, baseline) })
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -731,7 +733,7 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	)
 	// One isolated config dir shared by the write (UpsertProgramConfig) and the
 	// read (CreateSession -> resolveExtraEnvVars -> config.LoadConfig).
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	ctx := context.Background()
 	_, err := NewDefaultsService().UpsertProgramConfig(ctx, connect.NewRequest(&sessionv1.UpsertProgramConfigRequest{
@@ -744,9 +746,9 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	require.NoError(t, err)
 
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
-	svc := newCreateTestService(t, createTestStorage(t))
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 	resp, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "program-env-repro",
 		Path:        repoDir,
@@ -846,7 +848,7 @@ func destroyCreatedSession(t testing.TB, svc *SessionService, id string) {
 	svc.waitForPendingCleanup()
 	if inst != nil {
 		// Backstop for a refused or failed delete: never leave the driver polling.
-		stopSessionDriver(inst)
+		svctest.StopSessionDriver(inst)
 	}
 }
 
@@ -879,12 +881,12 @@ func assertNotConnectCode(t *testing.T, err error, notWant connect.Code, msg str
 // doc comment — so this is defense-in-depth, not an expected state), but must
 // log a Warn so the misconfiguration is visible instead of silently permissive.
 func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
-	svc.reviewQueuePoller = nil // simulate the degenerate construction this test targets
+	svc.ReviewQueuePoller = nil // simulate the degenerate construction this test targets
 
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	inst, err := session.NewInstance(session.InstanceOptions{
 		Title:            "wirecallbacks-nil-poller-" + t.Name(),
@@ -899,7 +901,7 @@ func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T)
 
 	svc.wireCallbacks(inst)
 
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	require.NoError(t, inst.Start(true), "nil reviewQueuePoller must fall back to permissive, not block the spawn")
 	assert.Equal(t, session.Active, inst.Status)
 	assert.Contains(t, logs.String(), "reviewQueuePoller is nil", "the fallback must log a warning, not silently allow")
@@ -910,10 +912,10 @@ func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T)
 // request-shape log must actually fire with the wire-level fields a future
 // isolation-bug report needs, without a fresh repro.
 func TestCreateSession_should_LogRequestShapeAtDebugLevel_When_SessionCreated(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "debug-log-shape-test",
 		Path:        t.TempDir(), // requiresExplicitPath would fail before the log line otherwise
@@ -937,11 +939,11 @@ func TestCreateSession_should_LogRequestShapeAtDebugLevel_When_SessionCreated(t 
 // env_var_keys must contain only key names, never values -- env vars can
 // carry secrets like API base URLs/tokens.
 func TestCreateSession_should_NotLogEnvVarValues_When_EnvVarsProvided(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	const secretValue = "http://127.0.0.1:47000"
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "debug-log-no-value-leak-test",
 		Path:        t.TempDir(),

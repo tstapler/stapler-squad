@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "hostclaim",
+    srcs = [
+        "claim_gossiper.go",
+        "claim_index.go",
+        "claim_lookup_auth.go",
+        "claim_url.go",
+        "federation.go",
+        "host_advertiser.go",
+        "host_identity.go",
+        "host_registry.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/hostclaim",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/internal/peeraddr",
+        "@com_github_gofrs_flock//:flock",
+        "@com_github_oklog_ulid_v2//:ulid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":hostclaim",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "hostclaim_test",
+    srcs = [
+        "claim_gossiper_test.go",
+        "claim_index_test.go",
+        "federation_test.go",
+        "host_identity_test.go",
+        "host_registry_test.go",
+    ],
+    data = glob(["*.go"]) + [
+        "//docs/adr:ADR-002-workspace-host-registry-gossip.md",
+    ],
+    embed = [":hostclaim"],
+    deps = [
+        "//log",
+        "//session/internal/peeraddr",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -1,0 +1,4 @@
+//session:session_test                                          PASSED in 1.2s
+test log excerpt: child process Killed (expected by the test)
+Killed
+INFO: Build completed successfully, 5 total actions

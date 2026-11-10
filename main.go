@@ -6,6 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"runtime/debug"
+	"sort"
+	"strings"
+	"syscall"
+	"text/tabwriter"
+	"time"
+
 	cmdbridge "github.com/tstapler/stapler-squad/cmd"
 	"github.com/tstapler/stapler-squad/cmd/commands"
 	"github.com/tstapler/stapler-squad/config"
@@ -20,26 +34,15 @@ import (
 	mcpserver "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/telemetry"
-	"io"
-	"net"
-	"net/http"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"regexp"
-	"runtime/debug"
-	"sort"
-	"strings"
-	"syscall"
-	"text/tabwriter"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -375,7 +378,7 @@ var (
 				svcDeps  *server.ServiceDeps
 				srv      *server.Server
 				// backlogSvc is captured from the runtime phase for startRemoteAccess.
-				backlogSvc *services.BacklogService
+				backlogSvc *backlogsvc.BacklogService
 			)
 
 			// The signal-bound ctx, not the phase's: PR maintenance retries must stop on
@@ -1518,13 +1521,13 @@ func initRemoteAuth(ctx context.Context, srv *server.Server, allRPIDs, origins [
 // project_plans/cross-host-claim-dedup/decisions/), and hands backlogSvc and
 // storage the claim checkers. backlogSvc may be nil. Failures disable gossip
 // with a warning rather than aborting remote access.
-func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService, sessionSvc *services.SessionService) {
-	hostIdentity, err := session.LoadOrCreateHostIdentity(configDir)
+func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, hostnames, lanIPs []string, remotePort int, storage *session.Storage, backlogSvc *backlogsvc.BacklogService, sessionSvc *services.SessionService) {
+	hostIdentity, err := hostclaim.LoadOrCreateHostIdentity(configDir)
 	if err != nil {
 		log.Warn("failed to load/create host identity, host advertisement disabled", "err", err)
 		return
 	}
-	hostRegistry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	hostRegistry, err := hostclaim.NewHostRegistry(configDir, hostclaim.DefaultHostRegistryTTL)
 	if err != nil {
 		log.Warn("failed to open host registry, host advertisement disabled", "err", err)
 		return
@@ -1536,24 +1539,24 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	for _, ip := range lanIPs {
 		selfAddresses = append(selfAddresses, fmt.Sprintf("%s:%d", ip, remotePort))
 	}
-	advertiser := session.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, session.DefaultHostAdvertisementInterval)
+	advertiser := hostclaim.NewHostAdvertiser(hostIdentity, hostRegistry, selfAddresses, hostclaim.DefaultHostAdvertisementInterval)
 	serverauth.RegisterHostAdvertisementRoute(mux, hostIdentity, hostRegistry, advertiser, selfAddresses)
 	go advertiser.Run(ctx)
 	if enableFederationFlag {
 		startSessionFederation(ctx, mux, hostIdentity, hostRegistry, sessionSvc)
 	}
-	pruneTicker := time.NewTicker(session.DefaultHostAdvertisementInterval)
+	pruneTicker := time.NewTicker(hostclaim.DefaultHostAdvertisementInterval)
 	go func() {
 		defer pruneTicker.Stop()
 		hostRegistry.RunPruneLoop(ctx, pruneTicker.C)
 	}()
 
-	claimIndex, err := session.NewClaimIndex(configDir, hostRegistry)
+	claimIndex, err := hostclaim.NewClaimIndex(configDir, hostRegistry)
 	if err != nil {
 		log.Warn("failed to open claim index, cross-host claim gossip disabled", "err", err)
 		return
 	}
-	claimGossiper, err := session.NewClaimGossiper(hostIdentity, hostRegistry, claimIndex, selfAddresses, session.DefaultHostAdvertisementInterval)
+	claimGossiper, err := hostclaim.NewClaimGossiper(hostIdentity, hostRegistry, claimIndex, selfAddresses, hostclaim.DefaultHostAdvertisementInterval)
 	if err != nil {
 		log.Warn("failed to build claim gossiper, cross-host claim gossip disabled", "err", err)
 		return
@@ -1575,7 +1578,7 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 	// The checks below are all gated by the cross_host_claim_dedup feature flag
 	// (off by default), so wiring them here changes nothing until it is enabled.
 	storage.SetForeignClaimLookup(services.NewFlagGatedForeignClaimLookup(recorder))
-	storage.SetPRProvenanceSource(services.NewFlagGatedPRProvenance(recorder))
+	storage.SetPRProvenanceSource(backlogsvc.NewFlagGatedPRProvenance(recorder))
 	if backlogSvc != nil {
 		checker := services.NewLocalClaimChecker(claimIndex, hostIdentity.ID, hostRegistry).SignLookupsWith(hostIdentity)
 		backlogSvc.SetClaimChecker(checker, checker)
@@ -1584,12 +1587,12 @@ func startHostGossip(ctx context.Context, mux *http.ServeMux, configDir string, 
 
 // startSessionFederation serves this host's own sessions to enrolled peers and
 // merges theirs into sessionSvc's ListSessions. sessionSvc may be nil.
-func startSessionFederation(ctx context.Context, mux *http.ServeMux, identity session.HostIdentity, registry *session.HostRegistry, sessionSvc *services.SessionService) {
+func startSessionFederation(ctx context.Context, mux *http.ServeMux, identity hostclaim.HostIdentity, registry *hostclaim.HostRegistry, sessionSvc *services.SessionService) {
 	if sessionSvc == nil {
 		return
 	}
-	mux.HandleFunc("GET "+session.SessionFederationEndpointPath, services.SessionFederationHandler(registry, sessionSvc.LocalSessions))
-	mux.HandleFunc("GET "+session.SessionFederationTerminalPath, services.SessionFederationTerminalHandler(registry, sessionSvc.LocalPaneSnapshot, 250*time.Millisecond))
+	mux.HandleFunc("GET "+hostclaim.SessionFederationEndpointPath, services.SessionFederationHandler(registry, sessionSvc.LocalSessions))
+	mux.HandleFunc("GET "+hostclaim.SessionFederationTerminalPath, services.SessionFederationTerminalHandler(registry, sessionSvc.LocalPaneSnapshot, 250*time.Millisecond))
 	federated := services.NewFederatedSessions(identity, registry)
 	sessionSvc.SetFederation(federated)
 	go federated.Run(ctx, services.DefaultFederationRefreshInterval)
@@ -1597,7 +1600,7 @@ func startSessionFederation(ctx context.Context, mux *http.ServeMux, identity se
 
 // startRemoteAccess starts a second HTTPS server on all interfaces with passkey
 // authentication, while the local server on localhost stays unchanged.
-func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage, backlogSvc *services.BacklogService, sessionSvc *services.SessionService) (*remoteAccessResult, error) {
+func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string, cfg *config.Config, remotePort int, storage *session.Storage, backlogSvc *backlogsvc.BacklogService, sessionSvc *services.SessionService) (*remoteAccessResult, error) {
 	// Detect every LAN IP (not just the OS-preferred outbound one, which can
 	// be a VPN tunnel) for QR code URLs and TLS cert SANs.
 	lanIPs := detectLANIPs(ctx)
@@ -1948,7 +1951,7 @@ func buildMCPDeps() (session.InstanceStore, *services.SessionService, *scrollbac
 
 // runListKnownHosts implements --list-known-hosts: open this instance's
 // local Workspace Host Registry (using the same state-dir resolution as
-// startRemoteAccess's session.NewHostRegistry call) and print its current
+// startRemoteAccess's hostclaim.NewHostRegistry call) and print its current
 // contents to out. Registry-open failures (e.g. a corrupted
 // host_registry.json) are returned as a single-line error, mirroring
 // runOpenURL's error-handling convention, rather than exiting via panic.
@@ -1957,7 +1960,7 @@ func runListKnownHosts(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("list-known-hosts: failed to resolve config directory: %w", err)
 	}
-	registry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	registry, err := hostclaim.NewHostRegistry(configDir, hostclaim.DefaultHostRegistryTTL)
 	if err != nil {
 		return fmt.Errorf("list-known-hosts: failed to open host registry: %w", err)
 	}
@@ -1969,7 +1972,7 @@ func runListKnownHosts(out io.Writer) error {
 // advertised address(es), last-seen time) to out, sorted by HostID for
 // deterministic output. Separated from runListKnownHosts so the formatting
 // logic is directly testable without touching disk.
-func formatKnownHosts(out io.Writer, entries []session.RegistryEntry) {
+func formatKnownHosts(out io.Writer, entries []hostclaim.RegistryEntry) {
 	if len(entries) == 0 {
 		fmt.Fprintln(out, "No known hosts.")
 		return

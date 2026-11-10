@@ -62,7 +62,7 @@ func clearTurnsKindOn(o flagOp) bool {
 	}
 	cfg := config.LoadConfig()
 	override, ok := cfg.GetFeatureFlagScopedOverride(o.name, o.scope)
-	return ok && !override && cfg.GetFeatureFlagWithDefault(o.name, featureFlagDefault(o.name))
+	return ok && !override && cfg.GetFeatureFlagWithDefault(o.name, FeatureFlagDefault(o.name))
 }
 
 func (o flagOp) mutationName() string {
@@ -128,7 +128,7 @@ func parseFlagOp(req *sessionv1.UpdateFeatureFlagRequest, scopes []string) (flag
 		if op.scope != "" {
 			return op, invalidFlagRequest("RESET_GLOBAL takes no scope, got %q", op.scope)
 		}
-		op.enabled = featureFlagDefault(op.name)
+		op.enabled = FeatureFlagDefault(op.name)
 	default:
 		return op, invalidFlagRequest("unknown flag mutation %d", int32(op.mutation))
 	}
@@ -159,7 +159,7 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 		cfg = c
 		previous, hadKey = c.GetFeatureFlagScopedOverride(op.name, op.scope)
 		if !hadKey {
-			previous = c.GetFeatureFlagWithDefault(op.name, featureFlagDefault(op.name))
+			previous = c.GetFeatureFlagWithDefault(op.name, FeatureFlagDefault(op.name))
 		}
 		if op.isSet() {
 			c.ApplyFeatureFlagScope(op.name, op.scope, op.enabled)
@@ -178,7 +178,7 @@ func (f *FeatureFlagService) persistScoped(ctx context.Context, op flagOp, audit
 	}
 	effective := op.enabled
 	if !op.isSet() {
-		effective = cfg.GetFeatureFlagWithDefault(op.name, featureFlagDefault(op.name))
+		effective = cfg.GetFeatureFlagWithDefault(op.name, FeatureFlagDefault(op.name))
 		if audit.active() {
 			audit.enabled = effective
 		}
@@ -253,7 +253,7 @@ const (
 // default flips on.
 func globalOffStatusDetail(cfg *config.Config) string {
 	name := config.HiddenSessionGateFeatureFlag
-	if cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name)) {
+	if cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name)) {
 		return ""
 	}
 	if _, explicit := cfg.GetFeatureFlagOverride(name); explicit {

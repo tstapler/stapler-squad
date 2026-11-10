@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // groupedApprovals is twenty pending approvals of one session whose twenty
@@ -25,7 +26,7 @@ const groupedSession = "session-X"
 
 func newGroupedApprovals(t *testing.T, n int) *groupedApprovals {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	history, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
 	require.NoError(t, err)
 	store := NewApprovalStore("")

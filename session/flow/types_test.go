@@ -1,7 +1,9 @@
 package flow
 
 import (
-	"os/exec"
+	"go/build"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -199,23 +201,59 @@ func TestSystemClock_should_ReturnUTC_When_Called(t *testing.T) {
 	assert.Equal(t, time.UTC, SystemClock{}.Now().Location())
 }
 
+// Walks imports in-process with go/build (no `go list` subprocess, so it runs in the Bazel sandbox);
+// follows every in-module package flow reaches. Third-party packages are checked where an in-module
+// package imports them, not resolved further.
 func TestFlowImports_should_ExcludeEntSessionServerProto_When_GoListDepsScanned(t *testing.T) {
 	t.Parallel()
-	//nolint:norawexec short-lived `go list` in a test; no long-running process to reap.
-	out, err := exec.Command("go", "list", "-deps", ".").CombinedOutput()
-	require.NoError(t, err, string(out))
+	root, module := findModuleRoot(t)
 	forbidden := []string{
 		"entgo.io/",
 		"connectrpc.com/",
-		"github.com/tstapler/stapler-squad/server",
-		"github.com/tstapler/stapler-squad/session/ent",
-		"github.com/tstapler/stapler-squad/proto",
+		module + "/server",
+		module + "/session/ent",
+		module + "/proto",
 	}
-	for _, dep := range strings.Fields(string(out)) {
-		assert.NotEqual(t, "github.com/tstapler/stapler-squad/session", dep, "flow must not import session")
-		for _, bad := range forbidden {
-			assert.False(t, strings.HasPrefix(dep, bad), "forbidden transitive dependency %s", dep)
+	seen := map[string]bool{}
+	var visit func(pkgPath string)
+	visit = func(pkgPath string) {
+		if seen[pkgPath] {
+			return
 		}
+		seen[pkgPath] = true
+		dir := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(pkgPath, module+"/")))
+		pkg, err := build.ImportDir(dir, 0)
+		require.NoError(t, err, pkgPath)
+		for _, imp := range pkg.Imports {
+			assert.NotEqual(t, module+"/session", imp, "flow must not import session")
+			for _, bad := range forbidden {
+				assert.False(t, strings.HasPrefix(imp, bad), "%s has forbidden dependency %s", pkgPath, imp)
+			}
+			if strings.HasPrefix(imp, module+"/") {
+				visit(imp)
+			}
+		}
+	}
+	visit(module + "/session/flow")
+	assert.Greater(t, len(seen), 1, "walk should reach flow plus its in-module deps")
+}
+
+func findModuleRoot(t *testing.T) (root, module string) {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if data, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if rest, ok := strings.CutPrefix(line, "module "); ok {
+					return dir, strings.TrimSpace(rest)
+				}
+			}
+			t.Fatalf("no module line in %s/go.mod", dir)
+		}
+		parent := filepath.Dir(dir)
+		require.NotEqual(t, dir, parent, "go.mod not found above the test directory")
+		dir = parent
 	}
 }
 

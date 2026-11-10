@@ -29,7 +29,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -221,11 +223,11 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 		t.Fatal("expected BacklogLifecycleListener.PipelineEngine() to be non-nil")
 	}
 
-	backlogCaching, ok := backlogSvcEngine.(*session.CachingPipelineEngine)
+	backlogCaching, ok := backlogSvcEngine.(*backlog.CachingPipelineEngine)
 	if !ok {
 		t.Fatalf("expected BacklogService.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", backlogSvcEngine)
 	}
-	listenerCaching, ok := listenerEngine.(*session.CachingPipelineEngine)
+	listenerCaching, ok := listenerEngine.(*backlog.CachingPipelineEngine)
 	if !ok {
 		t.Fatalf("expected BacklogLifecycleListener.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", listenerEngine)
 	}
@@ -473,6 +475,8 @@ func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadab
 	deps, err := BuildDependencies()
 	require.NoError(t, err, "an unreadable keychain must degrade the Jules feature, not fail server startup")
 
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // stop deps' background writers before the state dir is removed
+
 	assert.Nil(t, deps.JulesSessionPoller, "an unreadable keychain must leave the Jules poller unconstructed")
 	assert.NotNil(t, deps.SessionService, "every other subsystem must be unaffected")
 	assert.NotNil(t, deps.BacklogService, "every other subsystem must be unaffected")
@@ -548,7 +552,7 @@ func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBr
 	cache := githubpkg.NewUserPRCache()
 	cache.SeedPRsForTest([]githubpkg.UserPR{{Owner: "acme", Repo: "api", Number: 1, HeadRef: "has-pr"}})
 
-	poller := session.NewPRStatusPoller(nil)
+	poller := prpoller.NewPRStatusPoller(nil)
 	titles := []string{"no-pr-one", "no-pr-two"}
 	instances := make([]*session.Instance, 0, len(titles))
 	for _, title := range titles {

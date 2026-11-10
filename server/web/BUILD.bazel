@@ -1,0 +1,27 @@
+# gazelle:ignore
+load("@bazel_lib//lib:copy_directory.bzl", "copy_directory")
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+# ADR-007: //web-app:dist is staged at the exact relative path embed.go names (`all:dist`),
+# so embed.go is unchanged and `go build` / make keep working side by side.
+copy_directory(
+    name = "dist_staged",
+    src = "//web-app:dist",
+    out = "dist",
+    visibility = ["//:__pkg__"],  # the otel weave embeds it
+)
+
+go_library(
+    name = "web",
+    srcs = ["embed.go"],
+    embedsrcs = [":dist_staged"],
+    importpath = "github.com/tstapler/stapler-squad/server/web",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "web_test",
+    srcs = ["embed_test.go"],
+    deps = [":web"],
+)

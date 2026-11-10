@@ -1,0 +1,58 @@
+# gazelle:exclude testdata
+load("@rules_go//go:def.bzl", "go_library", "nogo")
+
+# Every analyzer under tools/lint, in the order of cmd/linter. tools/bzl/nogotwins fails when this list,
+# the tools/lint directories and cmd/linter's imports disagree (make nogo-twins-check).
+ANALYZERS = [
+    "entfullscan",
+    "hotpolllog",
+    "noarchivedrevival",
+    "nocommandpattern",
+    "nolegacylog",
+    "noliveinstanceraw",
+    "norawdb",
+    "norawexec",
+    "norawghrequest",
+    "norawgitcli",
+    "norawgitopen",
+    "nosessiondrivertest",
+    "notimesleeptest",
+    "novartestseam",
+    "nowrongdbentity",
+    "silenttransition",
+    "tmuxsocketscope",
+]
+
+_LINT = "github.com/tstapler/stapler-squad/tools/lint/"
+
+# Twins: the analyzer sources from tools/lint (never copied, so they cannot drift), compiled against the ROOT
+# x/tools. nogo links the root x/tools; the isolated @lint_x_tools copy that //tools/lint/<name> uses would
+# be a second copy at link time (spike S12 "package conflict error").
+go_library(
+    name = "nolintcomment",
+    srcs = ["//tools/lint/internal/nolintcomment:nolintcomment.go"],
+    importpath = _LINT + "internal/nolintcomment",
+    visibility = ["//visibility:private"],
+    deps = ["@org_golang_x_tools//go/analysis"],
+)
+
+[go_library(
+    name = name,
+    srcs = ["//tools/lint/%s:analyzer.go" % name],
+    importpath = _LINT + name,
+    visibility = ["//visibility:private"],
+    deps = [
+        ":nolintcomment",
+        "@org_golang_x_tools//go/analysis",
+        "@org_golang_x_tools//go/analysis/passes/inspect",
+        "@org_golang_x_tools//go/ast/inspector",
+    ],
+) for name in ANALYZERS]
+
+# go_sdk.nogo in MODULE.bazel registers this ONE nogo for every Go target in the repo.
+nogo(
+    name = "nogo",
+    config = "nogo_config.json",
+    visibility = ["//visibility:public"],
+    deps = [":" + name for name in ANALYZERS],
+)

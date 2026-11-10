@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // TestCreateSession_PathGuard_AliasNameBypassesPathRequired verifies that when
@@ -21,7 +22,7 @@ import (
 // guard condition explicitly exempts requests that carry an AliasName.
 func TestCreateSession_PathGuard_AliasNameBypassesPathRequired(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -57,7 +58,7 @@ func TestCreateSession_PathGuard_AliasNameBypassesPathRequired(t *testing.T) {
 // (including via a short poll for a subsequent Failed card, which must never
 // appear).
 func TestCreateSession_should_ReturnSynchronousNotFound_When_AliasNameDoesNotExist(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })

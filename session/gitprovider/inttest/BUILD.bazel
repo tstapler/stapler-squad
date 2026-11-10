@@ -1,0 +1,13 @@
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_test(
+    name = "inttest_test",
+    srcs = ["gitprovider_test.go"],
+    deps = [
+        "//session/git/backend",
+        "//session/gitprovider",
+        "//testutil/gitfake",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

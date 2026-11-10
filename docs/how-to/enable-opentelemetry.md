@@ -195,4 +195,4 @@ e.g. in non-browser test environments.
 
 ## Compile-time auto-instrumentation (opt-in)
 
-A separate, opt-in build (`make build-otel-auto` → `stapler-squad-otel`) uses `otelc` compile-time weaving to add spans for surfaces the hand-written instrumentation above doesn't cover (e.g. ent's `database/sql` queries), without any source change. See `docs/how-to/enable-otel-auto-instrumentation.md` for the install/build/run recipe and the validated operational findings.
+Every `stapler-squad` binary built by `make build` (and the release and Bazel builds) is also `otelc` compile-time woven, which adds spans for surfaces the hand-written instrumentation above doesn't cover (e.g. ent's `database/sql` queries) without any source change. See `docs/how-to/enable-otel-auto-instrumentation.md` for the install/build/run recipe and the validated operational findings.

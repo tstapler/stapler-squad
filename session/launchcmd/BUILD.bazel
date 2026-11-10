@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "launchcmd",
+    srcs = [
+        "launchcmd.go",
+        "parse.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/launchcmd",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@cc_mvdan_sh_v3//expand",
+        "@cc_mvdan_sh_v3//syntax",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":launchcmd",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "launchcmd_test",
+    srcs = ["launchcmd_test.go"],
+    embed = [":launchcmd"],
+    deps = [
+        "//executor/safeexec",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

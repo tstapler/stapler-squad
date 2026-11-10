@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "vnc",
+    srcs = [
+        "deps_check.go",
+        "display_alloc.go",
+        "manager.go",
+        "types.go",
+        "window_tracker.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/vnc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor",
+        "//executor/safeexec",
+        "//log",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":vnc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "vnc_test",
+    srcs = ["display_alloc_test.go"],
+    embed = [":vnc"],
+    deps = ["//executor/safeexec"],
+)

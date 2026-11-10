@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -71,7 +72,7 @@ func addArchivedInstanceLive(t *testing.T, fix *forkTestFixture, title string, a
 	require.NoError(t, err, "addArchivedInstanceLive: failed to reload after persist")
 	for _, li := range loaded {
 		if li.Title == title {
-			addInstanceToPoller(fix.poller, li)
+			svctest.AddInstanceToPoller(fix.poller, li)
 			return
 		}
 	}
@@ -152,10 +153,10 @@ func TestSessionRetentionSweeper_SkipsDirtyWorktree(t *testing.T) {
 	defer fix.cleanup()
 
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init", "-q")
+	svctest.RunGit(t, repoDir, "init", "-q")
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "committed.txt"), []byte("a"), 0o644))
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-q", "-m", "initial")
+	svctest.RunGit(t, repoDir, "add", ".")
+	svctest.RunGit(t, repoDir, "commit", "-q", "-m", "initial")
 	// Leave an uncommitted change so IsDirty() reports true.
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "dirty.txt"), []byte("uncommitted"), 0o644))
 
@@ -177,10 +178,10 @@ func TestSessionRetentionSweeper_DeletesCleanWorktreeSession(t *testing.T) {
 	defer fix.cleanup()
 
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init", "-q")
+	svctest.RunGit(t, repoDir, "init", "-q")
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "committed.txt"), []byte("a"), 0o644))
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-q", "-m", "initial")
+	svctest.RunGit(t, repoDir, "add", ".")
+	svctest.RunGit(t, repoDir, "commit", "-q", "-m", "initial")
 
 	addArchivedInstance(t, fix, "clean-worktree-archived", time.Now().AddDate(0, 0, -20), func(inst *session.Instance) {
 		wt := git.NewGitWorktreeFromStorage(repoDir, repoDir, "clean-worktree-archived", "test-branch", "0000000000000000000000000000000000000000")
@@ -205,10 +206,10 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 	defer fix.cleanup()
 
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init", "-q")
+	svctest.RunGit(t, repoDir, "init", "-q")
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "committed.txt"), []byte("a"), 0o644))
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-q", "-m", "initial")
+	svctest.RunGit(t, repoDir, "add", ".")
+	svctest.RunGit(t, repoDir, "commit", "-q", "-m", "initial")
 
 	ctx := context.Background()
 	item, err := fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{
@@ -280,17 +281,17 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 	defer fix.cleanup()
 
 	mainRepoDir := t.TempDir()
-	runGit(t, mainRepoDir, "init", "-q")
+	svctest.RunGit(t, mainRepoDir, "init", "-q")
 	require.NoError(t, os.WriteFile(filepath.Join(mainRepoDir, "committed.txt"), []byte("a"), 0o644))
-	runGit(t, mainRepoDir, "add", ".")
-	runGit(t, mainRepoDir, "commit", "-q", "-m", "initial")
-	headSHA := strings.TrimSpace(runGitTestCmd(t, mainRepoDir, "rev-parse", "HEAD"))
+	svctest.RunGit(t, mainRepoDir, "add", ".")
+	svctest.RunGit(t, mainRepoDir, "commit", "-q", "-m", "initial")
+	headSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, mainRepoDir, "rev-parse", "HEAD"))
 
 	// A single real linked worktree, shared by every round below -- mirroring
 	// nativeFindExistingWorktreeForBranch's reuse-by-branch-name behavior: reopen/rework
 	// never creates a second worktree, it reuses this exact directory.
 	worktreeDir := filepath.Join(t.TempDir(), "shared-worktree")
-	runGit(t, mainRepoDir, "worktree", "add", "-q", "-b", "shared-branch", worktreeDir, "HEAD")
+	svctest.RunGit(t, mainRepoDir, "worktree", "add", "-q", "-b", "shared-branch", worktreeDir, "HEAD")
 
 	ctx := context.Background()
 	item, err := fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{

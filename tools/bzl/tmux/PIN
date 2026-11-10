@@ -1,0 +1,8 @@
+# Single pin for the tmux build source (ADR-007). The submodule third_party/tmux is a version
+# pin only: its gitlink commit must equal `commit` below (checked by tools/ci/check-tymux-pin.sh
+# in Task 3.3d; the MODULE.bazel http_archive sha256 must equal `sha256`).
+# commit = git ls-remote https://github.com/tmux/tmux.git '3.8^{}'
+tag=3.8
+sha256=e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e
+commit=7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53
+url=https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz

@@ -9,7 +9,7 @@ import (
 
 // execSyscall on Windows starts a new process (true exec-replace is not available).
 func execSyscall(executable string, args []string, env []string) error {
-	cmd := exec.Command(executable, args[1:]...)
+	cmd := exec.Command(executable, args[1:]...) //nolint:norawexec Windows has no exec-replace; the child is started and deliberately left running
 	cmd.Env = env
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start new process: %w", err)

@@ -5,6 +5,12 @@ import (
 	"sync"
 )
 
+// BacklogListener is the on/off switch BacklogController flips; the lifecycle listener implements it.
+type BacklogListener interface {
+	SetEnabled(bool)
+	IsEnabled() bool
+}
+
 // BacklogController implements services.FeatureController for the backlog feature.
 // It enables/disables the BacklogLifecycleListener and SyncLoop at runtime
 // without requiring a server restart.
@@ -12,7 +18,7 @@ import (
 // Enable/Disable are safe to call concurrently.
 type BacklogController struct {
 	mu       sync.Mutex
-	listener *BacklogLifecycleListener
+	listener BacklogListener
 	storage  *Storage
 	registry *PluginRegistry
 	keyFunc  func() ([]byte, error)
@@ -28,7 +34,7 @@ type BacklogController struct {
 // NewBacklogController creates a controller that manages the given listener.
 // storage, registry, and keyFunc are used to create a new SyncLoop on Enable.
 func NewBacklogController(
-	listener *BacklogLifecycleListener,
+	listener BacklogListener,
 	storage *Storage,
 	registry *PluginRegistry,
 	keyFunc func() ([]byte, error),
@@ -110,5 +116,5 @@ func (c *BacklogController) Disable() error {
 
 // IsEnabled reports whether the backlog feature is currently active.
 func (c *BacklogController) IsEnabled() bool {
-	return c.listener.enabled.Load()
+	return c.listener.IsEnabled()
 }

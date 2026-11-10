@@ -61,7 +61,7 @@ func TestCoreHotQueries_should_SearchAnIndex_When_RunOnAMigratedDatabase(t *test
 	t.Parallel()
 	repo, err := NewEntRepository(WithDatabasePath(filepath.Join(t.TempDir(), "sessions.db")))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = repo.client.Close() })
+	t.Cleanup(func() { _ = repo.Client.Close() })
 
 	for _, hq := range coreHotQueries {
 		plan := strings.Join(queryPlan(t, repo, hq.sql, hq.args), " | ")

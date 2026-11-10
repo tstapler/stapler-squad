@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session/deeplink"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // prProvenanceMarker opens every provenance comment so a reader can find it
@@ -23,14 +24,14 @@ var (
 
 // PRProvenance identifies the backlog item and host a PR was created from.
 type PRProvenance struct {
-	HostID       HostID
+	HostID       hostclaim.HostID
 	ItemDeepLink string
 	ItemID       string
 }
 
 // FormatPRProvenanceComment renders the PR comment that stamps a PR with its
 // originating host and item.
-func FormatPRProvenanceComment(hostID HostID, itemDeepLink string) string {
+func FormatPRProvenanceComment(hostID hostclaim.HostID, itemDeepLink string) string {
 	return fmt.Sprintf("%s\nTracked by Stapler Squad backlog item: %s\nHost: %s\n",
 		prProvenanceMarker, itemDeepLink, hostID.String())
 }
@@ -47,7 +48,7 @@ func ParsePRProvenanceComment(body string) (PRProvenance, bool) {
 	if err != nil {
 		return PRProvenance{}, false
 	}
-	hostID, err := ParseHostID(provenanceHostIDPattern.FindString(body))
+	hostID, err := hostclaim.ParseHostID(provenanceHostIDPattern.FindString(body))
 	if err != nil {
 		return PRProvenance{}, false
 	}

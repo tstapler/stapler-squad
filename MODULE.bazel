@@ -1,37 +1,195 @@
-"""Bazel is used only for the own-built ghostty-vt.wasm (third_party/ghostty). The Go and web
-builds are untouched. Design: docs/explanation/own-ghostty-wasm-build.md, ADR-039.
+module(
+    name = "stapler_squad",
+    version = "0.0.0",
+)
 
-The pin values below are read by scripts/build-ghostty-wasm.sh (grep on `^NAME = "`), so keep
-each on one line.
-"""
+# Pins: project_plans/bazel-conversion/research/stack.md section 1.
+bazel_dep(name = "rules_go", version = "0.65.0")
+bazel_dep(name = "gazelle", version = "0.54.0")
+bazel_dep(name = "protobuf", version = "36.2")
+bazel_dep(name = "rules_cc", version = "0.2.27")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "rules_shell", version = "0.8.0")
+bazel_dep(name = "bazel_lib", version = "3.7.0")
 
-module(name = "stapler_squad")
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.from_file(go_mod = "//:go.mod")
 
-bazel_dep(name = "platforms", version = "1.0.0")
+# One nogo for the whole repo (Story 8.4): the twins of every tools/lint analyzer, scoped by tools/bzl/nogo/nogo_config.json.
+go_sdk.nogo(nogo = "//tools/bzl/nogo:nogo")
+
+# Root module universe. The go.mod `replace` for go-git is honoured here (root module only).
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+use_repo(go_deps, "cc_mvdan_sh_v3", "com_connectrpc_connect", "com_connectrpc_otelconnect", "com_github_atotto_clipboard", "com_github_bmatcuk_doublestar_v4", "com_github_bufbuild_buf", "com_github_bufbuild_connect_go", "com_github_creack_pty", "com_github_data_dog_go_sqlmock", "com_github_ebitengine_purego", "com_github_edsrzf_mmap_go", "com_github_fsnotify_fsnotify", "com_github_gliderlabs_ssh", "com_github_go_git_gcfg", "com_github_go_git_go_billy_v5", "com_github_go_git_go_git_v5", "com_github_go_webauthn_webauthn", "com_github_gofrs_flock", "com_github_google_uuid", "com_github_gorilla_websocket", "com_github_grafana_pyroscope_go", "com_github_grafana_pyroscope_go_godeltaprof", "com_github_klauspost_compress", "com_github_linkdata_deadlock", "com_github_mark3labs_mcp_go", "com_github_netflix_go_expect", "com_github_oklog_ulid_v2", "com_github_pelletier_go_toml_v2", "com_github_puzpuzpuz_xsync_v4", "com_github_robfig_cron_v3", "com_github_sergi_go_diff", "com_github_sherclockholmes_webpush_go", "com_github_shirou_gopsutil_v4", "com_github_skip2_go_qrcode", "com_github_spaolacci_murmur3", "com_github_spf13_cobra", "com_github_stretchr_testify", "com_github_tstapler_tymux_clients_go", "com_github_xeipuuv_gojsonschema", "com_github_zalando_go_keyring", "com_tailscale", "in_gopkg_natefinch_lumberjack_v2", "in_gopkg_yaml_v3", "io_entgo_ent", "io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp", "io_opentelemetry_go_otel", "io_opentelemetry_go_otel_exporters_otlp_otlpmetric_otlpmetricgrpc", "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc", "io_opentelemetry_go_otel_metric", "io_opentelemetry_go_otel_sdk", "io_opentelemetry_go_otel_sdk_metric", "io_opentelemetry_go_otel_trace", "io_opentelemetry_go_otelc_pkg", "org_golang_google_protobuf", "org_golang_x_crypto", "org_golang_x_mod", "org_golang_x_net", "org_golang_x_sync", "org_golang_x_sys", "org_golang_x_term", "org_golang_x_text", "org_golang_x_time", "org_golang_x_tools", "org_modernc_sqlite", "org_uber_go_goleak")
+
+# tools/lint keeps its own dependency universe so analyzer deps never bump app versions.
+lint_go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps", isolate = True)
+lint_go_deps.from_file(go_mod = "//tools/lint:go.mod")
+use_repo(lint_go_deps, lint_x_tools = "org_golang_x_tools")
+
+# --- S5 (tmux, Story 0.7): hermetic tmux from the release tarball, never the submodule. ---
+# Pin lives in tools/bzl/tmux/PIN; the sha256 here must equal it.
+bazel_dep(name = "rules_foreign_cc", version = "0.17.0")
+bazel_dep(name = "libevent", version = "2.1.12-stable.bcr.0")
+bazel_dep(name = "ncurses", version = "6.4.20221231.bcr.15")
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+http_archive(
+    name = "tmux_src",
+    build_file_content = """filegroup(name = "all_srcs", srcs = glob(["**"]), visibility = ["//visibility:public"])""",
+    sha256 = "e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e",
+    strip_prefix = "tmux-3.8",
+    urls = ["https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz"],
+)
+
+# Task 0.7c: prebuilt tymuxd v1.17.0 (Makefile TYMUX_VERSION), sha256 from scripts/tymuxd-checksums.txt.
+# Fetch/pin only: the binary is never executed by a build action.
+http_archive(
+    name = "tymuxd_aarch64_apple_darwin",
+    build_file_content = """exports_files(["tymuxd"])""",
+    sha256 = "ea645d821970f586c322278043bb9646dbcef4834d4a36b627c75764a75e3eac",
+    urls = ["https://github.com/tstapler/tymux/releases/download/v1.17.0/tymux-aarch64-apple-darwin.tar.gz"],
+)
+
+http_archive(
+    name = "tymuxd_x86_64_apple_darwin",
+    build_file_content = """exports_files(["tymuxd"])""",
+    sha256 = "f00f62d0388604e32321aba459b2a5405eb64a1661766c28318b03815203a274",
+    urls = ["https://github.com/tstapler/tymux/releases/download/v1.17.0/tymux-x86_64-apple-darwin.tar.gz"],
+)
+
+http_archive(
+    name = "tymuxd_x86_64_unknown_linux_musl",
+    build_file_content = """exports_files(["tymuxd"])""",
+    sha256 = "4cf61e0fdf8c7e69ac7790145f7080fa4b85c23bd96f7a94d86d4bdc7a392e18",
+    urls = ["https://github.com/tstapler/tymux/releases/download/v1.17.0/tymux-x86_64-unknown-linux-musl.tar.gz"],
+)
+
+http_archive(
+    name = "tymuxd_aarch64_unknown_linux_musl",
+    build_file_content = """exports_files(["tymuxd"])""",
+    sha256 = "066a84fce33cde098cc9c59dffb648f0f9052a92f7e6f8dbe4014ec42148a13c",
+    urls = ["https://github.com/tstapler/tymux/releases/download/v1.17.0/tymux-aarch64-unknown-linux-musl.tar.gz"],
+)
+
+# Story 3.1 (ADR-003): pinned Bun and Node per OS/arch (sha256 from the upstream SHASUMS256.txt of each
+# release), a `host_tool` repository per binary that selects the matching archive, and a repository rule
+# that runs `bun install --frozen-lockfile`. Keep these versions equal to .tool-versions.
+_BUN_VERSION = "1.4.3"
+
+_NODE_VERSION = "24.13.1"
+
+_BUN_ARCHIVES = {
+    "linux_x64": ("bun-linux-x64", "3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18"),
+    "linux_arm64": ("bun-linux-aarch64", "efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21"),
+    "darwin_x64": ("bun-darwin-x64", "62660e6438eb872278877acca77e1152d5d031324df368d4a81b428211489d2d"),
+    "darwin_arm64": ("bun-darwin-aarch64", "80afd4c069b46a6fa8f3ec520bebc750a7843e4a8d5b9583d29ad436c00a3403"),
+}
+
+_NODE_ARCHIVES = {
+    "linux_x64": ("node-v24.13.1-linux-x64", "30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089"),
+    "linux_arm64": ("node-v24.13.1-linux-arm64", "c827d3d301e2eed1a51f36d0116b71b9e3d9e3b728f081615270ea40faac34c1"),
+    "darwin_x64": ("node-v24.13.1-darwin-x64", "013a8f786a022ad1729cf435e3675e097a77d5a42eaf139a2d5d1d5309a027d4"),
+    "darwin_arm64": ("node-v24.13.1-darwin-arm64", "d82a321541d65109c696505135be3b7dd46e3358f0f04d664f50f0d1e1ccb8a6"),
+}
+
+[
+    http_archive(
+        name = "bun_" + platform,
+        build_file_content = 'exports_files(["%s/bun"])' % dir,
+        sha256 = sha,
+        urls = ["https://github.com/oven-sh/bun/releases/download/bun-v%s/%s.zip" % (_BUN_VERSION, dir)],
+    )
+    for platform, (dir, sha) in _BUN_ARCHIVES.items()
+]
+
+[
+    http_archive(
+        name = "node_" + platform,
+        build_file_content = 'exports_files(["bin/node"])',
+        sha256 = sha,
+        strip_prefix = dir,
+        urls = ["https://nodejs.org/dist/v%s/%s.tar.xz" % (_NODE_VERSION, dir)],
+    )
+    for platform, (dir, sha) in _NODE_ARCHIVES.items()
+]
+
+host_tool = use_repo_rule("//tools/bzl/bun:bun.bzl", "host_tool")
+
+host_tool(
+    name = "bun_host",
+    tool = "bun",
+    tools = {"@bun_%s//:%s/bun" % (platform, dir): platform for platform, (dir, _) in _BUN_ARCHIVES.items()},
+)
+
+host_tool(
+    name = "node_host",
+    tool = "node",
+    tools = {"@node_%s//:bin/node" % platform: platform for platform, _ in _NODE_ARCHIVES.items()},
+)
+
+bun_install = use_repo_rule("//tools/bzl/bun:bun.bzl", "bun_install")
+
+bun_install(
+    name = "web_node_modules",
+    bun = "@bun_host//:bun",
+    bun_lock = "//web-app:bun.lock",
+    bun_version = _BUN_VERSION,
+    bunfig = "//web-app:bunfig.toml",
+    files = [
+        "//web-app:eslint-plugin-analytics/index.js",
+        "//web-app:eslint-plugin-analytics/package.json",
+        "//web-app:eslint-plugin-analytics/rules/__tests__/no-direct-files-track.test.js",
+        "//web-app:eslint-plugin-analytics/rules/__tests__/require-omnibar-dispatch.test.js",
+        "//web-app:eslint-plugin-analytics/rules/__tests__/require-on-click.test.js",
+        "//web-app:eslint-plugin-analytics/rules/__tests__/require-page-analytics.test.js",
+        "//web-app:eslint-plugin-analytics/rules/__tests__/require-rpc-analytics.test.js",
+        "//web-app:eslint-plugin-analytics/rules/no-direct-files-track.js",
+        "//web-app:eslint-plugin-analytics/rules/require-omnibar-dispatch.js",
+        "//web-app:eslint-plugin-analytics/rules/require-on-click.js",
+        "//web-app:eslint-plugin-analytics/rules/require-page-analytics.js",
+        "//web-app:eslint-plugin-analytics/rules/require-rpc-analytics.js",
+        "//web-app:eslint-plugin-rpc-lifecycle/index.js",
+        "//web-app:eslint-plugin-rpc-lifecycle/package.json",
+        "//web-app:eslint-plugin-rpc-lifecycle/rules/require-abort-signal.js",
+        "//web-app:patches/eval@0.1.8.patch",
+    ],
+    node = "@node_host//:node",
+    package_json = "//web-app:package.json",
+)
+
+# --- Own ghostty-vt.wasm build (main #1491, ADR-039): pinned Ghostty fork + Zig, built by third_party/ghostty. ---
+# scripts/build-ghostty-wasm.sh greps the pin values below (`^NAME = "`), so keep each on one line.
 # ── Ghostty source: a commit of the tstapler/ghostty fork, pinned by sha256 ───
 # Upstream plus our patches as commits on ssq/main (tag ssq.1); see docs/how-to/ghostty-fork-workflow.md.
 GHOSTTY_ORG = "tstapler"
+
 GHOSTTY_REV = "38c7055f6ae361919d6f86c8521a0b9546783c25"
+
 GHOSTTY_SHA256 = "3fb42e5528eb1c461d0b16e61ed51d394e80d830fa5b0b5890438bd6866500fb"
 
 http_archive(
     name = "ghostty_src",
-    urls = ["https://github.com/%s/ghostty/archive/%s.tar.gz" % (GHOSTTY_ORG, GHOSTTY_REV)],
+    build_file = "//third_party/ghostty:ghostty_src.BUILD",
     sha256 = GHOSTTY_SHA256,
     strip_prefix = "ghostty-%s" % GHOSTTY_REV,
-    build_file = "//third_party/ghostty:ghostty_src.BUILD",
+    urls = ["https://github.com/%s/ghostty/archive/%s.tar.gz" % (GHOSTTY_ORG, GHOSTTY_REV)],
 )
 
 # ── Zig toolchain: official tarballs pinned by sha256 ────────────────────────
 # Must match the pinned Ghostty's build.zig.zon minimum_zig_version. sha256 values are from
 # https://ziglang.org/download/index.json (checked 2026-11-08).
 ZIG_VERSION = "0.15.2"
+
 ZIG_SHA256_AARCH64_MACOS = "3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b"
+
 ZIG_SHA256_X86_64_MACOS = "375b6909fc1495d16fc2c7db9538f707456bfc3373b14ee83fdd3e22b3d43f7f"
+
 ZIG_SHA256_X86_64_LINUX = "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+
 ZIG_SHA256_AARCH64_LINUX = "958ed7d1e00d0ea76590d27666efbf7a932281b3d7ba0c6b01b0ff26498f667f"
 
 ZIG_BUILD_FILE = """
@@ -42,32 +200,32 @@ filegroup(name = "lib", srcs = glob(["lib/**"]))
 
 http_archive(
     name = "zig_aarch64_macos",
-    urls = ["https://ziglang.org/download/%s/zig-aarch64-macos-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
+    build_file_content = ZIG_BUILD_FILE,
     sha256 = ZIG_SHA256_AARCH64_MACOS,
     strip_prefix = "zig-aarch64-macos-%s" % ZIG_VERSION,
-    build_file_content = ZIG_BUILD_FILE,
+    urls = ["https://ziglang.org/download/%s/zig-aarch64-macos-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
 )
 
 http_archive(
     name = "zig_x86_64_macos",
-    urls = ["https://ziglang.org/download/%s/zig-x86_64-macos-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
+    build_file_content = ZIG_BUILD_FILE,
     sha256 = ZIG_SHA256_X86_64_MACOS,
     strip_prefix = "zig-x86_64-macos-%s" % ZIG_VERSION,
-    build_file_content = ZIG_BUILD_FILE,
+    urls = ["https://ziglang.org/download/%s/zig-x86_64-macos-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
 )
 
 http_archive(
     name = "zig_x86_64_linux",
-    urls = ["https://ziglang.org/download/%s/zig-x86_64-linux-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
+    build_file_content = ZIG_BUILD_FILE,
     sha256 = ZIG_SHA256_X86_64_LINUX,
     strip_prefix = "zig-x86_64-linux-%s" % ZIG_VERSION,
-    build_file_content = ZIG_BUILD_FILE,
+    urls = ["https://ziglang.org/download/%s/zig-x86_64-linux-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
 )
 
 http_archive(
     name = "zig_aarch64_linux",
-    urls = ["https://ziglang.org/download/%s/zig-aarch64-linux-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
+    build_file_content = ZIG_BUILD_FILE,
     sha256 = ZIG_SHA256_AARCH64_LINUX,
     strip_prefix = "zig-aarch64-linux-%s" % ZIG_VERSION,
-    build_file_content = ZIG_BUILD_FILE,
+    urls = ["https://ziglang.org/download/%s/zig-aarch64-linux-%s.tar.xz" % (ZIG_VERSION, ZIG_VERSION)],
 )

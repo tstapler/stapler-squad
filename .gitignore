@@ -15,6 +15,7 @@ otel.instrumentation.go
 otelc.runtime.go
 claude-squad
 claude-mux
+/ssq-mux
 /ssq-hooks
 _CodeSignature/
 **.DS_Store
@@ -153,7 +154,16 @@ website/expected-media.json
 # promo recorder text dumps (DOM text, OCR text) scanned by termcheck/leak checks
 dom-text/
 ocr-text/
+
+# Bazel: personal overrides and root-level output symlinks only. ANCHORED on purpose:
+# an unanchored bazel-* would ignore tracked files like .github/workflows/bazel-parity.yml.
+user.bazelrc
 /bazel-*
+/.bazel-out
+.bazel-logs/
+# Captured Bazel failure fixtures are test data, not logs
+!tools/bzl/testdata/errors/**/*.log
+# Ghostty wasm build (main's #1491) tolerates a personal .bazelrc.user
 /.bazelrc.user
 
 # Build/test output that must never be tracked

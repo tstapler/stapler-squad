@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package session.v1;
 
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
 // SessionBundleService provides per-session diagnostic bundle export (RUM —
 // Real User Monitoring). Supports two delivery modes:
 //   - ExportSessionBundle: server-streaming, chunks the ZIP to the browser

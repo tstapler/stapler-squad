@@ -1,0 +1,64 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "mux",
+    srcs = [
+        "autodiscover.go",
+        "discovery.go",
+        "hooks.go",
+        "multiplexer.go",
+        "picker.go",
+        "protocol.go",
+        "signals_unix.go",
+        "signals_windows.go",
+        "socket_registry.go",
+        "tmux_options.go",
+        "tmux_socket.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/mux",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//pkg/localtoken",
+        "//session/tmux",
+        "@com_github_creack_pty//:pty",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@org_golang_x_term//:term",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mux",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "mux_test",
+    srcs = [
+        "autodiscover_test.go",
+        "discovery_scan_bench_test.go",
+        "discovery_skip_test.go",
+        "multiplexer_test.go",
+        "socket_registry_test.go",
+        "testmain_test.go",
+        "tmux_options_test.go",
+        "tmux_socket_test.go",
+    ],
+    embed = [":mux"],
+    deps = [
+        "//executor/safeexec",
+        "//session/tmux",
+        "//testutil/tmuxreap",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+exports_files(
+    ["hooks.go"],
+    visibility = ["//server/services:__pkg__"],
+)

@@ -1,0 +1,109 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "prwatch",
+    srcs = [
+        "catchup.go",
+        "classify.go",
+        "coalesce.go",
+        "coverage.go",
+        "deliver.go",
+        "filters.go",
+        "followup.go",
+        "heldage.go",
+        "instate.go",
+        "leader.go",
+        "loop.go",
+        "message.go",
+        "metrics.go",
+        "names.go",
+        "notify.go",
+        "ports.go",
+        "reconcile.go",
+        "ringbuffer.go",
+        "selflogin.go",
+        "settings.go",
+        "status.go",
+        "status_text.go",
+        "watchset.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/prwatch",
+    visibility = ["//visibility:public"],
+    deps = ["//server/prwatch/inbox"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prwatch",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "prwatch_test",
+    srcs = [
+        "catchup_test.go",
+        "classify_test.go",
+        "coalesce_test.go",
+        "coverage_test.go",
+        "deliver_test.go",
+        "deps_test.go",
+        "docs_test.go",
+        "e2e_ghsignal_test.go",
+        "fakes_test.go",
+        "filters_test.go",
+        "followup_test.go",
+        "heldage_test.go",
+        "instate_test.go",
+        "integration_deliver_test.go",
+        "integration_helpers_test.go",
+        "integration_instate_test.go",
+        "integration_loop_test.go",
+        "integration_window_test.go",
+        "leader_test.go",
+        "loop_test.go",
+        "message_test.go",
+        "notify_test.go",
+        "reconcile_test.go",
+        "ringbuffer_test.go",
+        "selflogin_test.go",
+        "source_guard_test.go",
+        "status_test.go",
+        "status_text_test.go",
+        "watchset_test.go",
+    ],
+    data = glob([
+        "*.go",
+        "testdata/**",
+    ]) + [
+        "//docs/how-to:inbox-pr-watch.md",
+        "//server/prwatch/inbox:go_sources",
+    ],
+    embed = [":prwatch"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//internal/testenv",
+        "//server/prwatch/inbox",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+forbidden_deps_test(
+    name = "forbidden_deps_test",
+    direct_only = True,
+    forbidden = [
+        "//server/services",
+        "//server/mcp",
+        "//server/wakes",
+        "//github",
+        "//config",
+        "//session/git",
+    ],
+    required = ["//server/prwatch/inbox"],
+    target = ":prwatch",
+    why = "prwatch direct imports only: adapters in server/ own the bridging (replaces deps_test.go)",
+)

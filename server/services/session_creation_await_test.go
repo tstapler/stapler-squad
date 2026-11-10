@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -31,7 +32,7 @@ func newAwaitTestInstance(t *testing.T, svc *SessionService, title string) *sess
 	require.NoError(t, err)
 	live := session.NewLiveInstance(inst)
 	t.Cleanup(live.Stop)
-	svc.reviewQueuePoller.AddInstance(inst)
+	svc.ReviewQueuePoller.AddInstance(inst)
 	return inst
 }
 
@@ -61,7 +62,7 @@ func (c *pollEnteredCtx) Done() <-chan struct{} {
 // of the transition, not at the full timeout.
 func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitionsBeforeTimeout(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newAwaitTestInstance(t, svc, "await-active")
 	epoch := inst.CreationEpoch()
@@ -88,7 +89,7 @@ func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitio
 // covers the terminal-Failed branch, and that FailureReason travels with it.
 func TestAwaitCreationTerminal_should_ReturnFailedOutcome_When_InstanceIsAlreadyFailed(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newAwaitTestInstance(t, svc, "await-failed")
 	epoch := inst.CreationEpoch()
@@ -107,7 +108,7 @@ func TestAwaitCreationTerminal_should_ReturnFailedOutcome_When_InstanceIsAlready
 // window times out rather than hanging indefinitely.
 func TestAwaitCreationTerminal_should_ReturnErrCreationAwaitTimeout_When_InstanceNeverLeavesCreating(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	newAwaitTestInstance(t, svc, "await-stuck")
 
@@ -124,14 +125,14 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationAwaitTimeout_When_Instanc
 // and immediately rather than waiting out the full timeout.
 func TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsRemovedMidWait(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	newAwaitTestInstance(t, svc, "await-vanish")
 
 	ctx := newPollEnteredCtx(context.Background())
 	go func() {
 		<-ctx.entered
-		svc.reviewQueuePoller.RemoveInstance("await-vanish")
+		svc.ReviewQueuePoller.RemoveInstance("await-vanish")
 	}()
 
 	start := time.Now()
@@ -149,7 +150,7 @@ func TestAwaitCreationTerminal_should_ReturnErrCreationVanished_When_InstanceIsR
 // never wrapped in one of this package's own sentinels.
 func TestAwaitCreationTerminal_should_ReturnCtxErr_When_CallerContextEndsFirst(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	newAwaitTestInstance(t, svc, "await-ctx-done")
 
@@ -180,7 +181,7 @@ func TestAwaitCreationTerminal_should_ReturnCtxErr_When_CallerContextEndsFirst(t
 // of the two legitimate states this scenario can be in.
 func TestAwaitCreationTerminal_should_ReturnConsistentSnapshot_When_StatusAndFailureReasonAreReadTogether(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newAwaitTestInstance(t, svc, "await-consistent")
 	epoch := inst.CreationEpoch()

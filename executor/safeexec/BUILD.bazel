@@ -1,0 +1,185 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "safeexec",
+    srcs = [
+        "safeexec.go",
+        "safeexec_metrics.go",
+        "safeexec_pdeathsig_linux.go",
+        "safeexec_pdeathsig_other.go",
+        "safeexec_pg.go",
+        "safeexec_pg_windows.go",
+        "safeexec_procstate.go",
+        "spawncount.go",
+        "tmuxspawn.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/executor/safeexec",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:android": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:js": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:osx": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "@com_github_shirou_gopsutil_v4//process",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":safeexec",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "safeexec_test",
+    srcs = [
+        "safeexec_pdeathsig_linux_test.go",
+        "safeexec_pg_test.go",
+        "safeexec_sigkill_helper_test.go",
+        "safeexec_testmain_other_test.go",
+        "spawncount_test.go",
+        "tmuxspawn_test.go",
+    ],
+    embed = [":safeexec"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:android": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:js": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:osx": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//testutil/wait",
+            "@io_opentelemetry_go_otel//:otel",
+            "@io_opentelemetry_go_otel_sdk_metric//:metric",
+            "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        ],
+        "//conditions:default": [],
+    }),
+)

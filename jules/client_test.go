@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/testenv"
 )
 
 // fakeTokenSource is a JulesTokenSource test double returning a fixed key.
@@ -165,6 +166,7 @@ func TestJulesClient_GetSession_should_ArmLimiterAndExposeRetryAfter_When_Server
 // package must never import session/ or server/, so alpha-API churn stays
 // confined to this directory.
 func TestJulesPackage_should_NotImportSessionOrServer_When_DepsListed(t *testing.T) {
+	testenv.SkipGoListUnderBazel(t)
 	// Use the fully-qualified import path (rather than "./jules") so this
 	// resolves correctly regardless of the test binary's working directory
 	// — "go test" runs with cwd set to this package's own source directory,

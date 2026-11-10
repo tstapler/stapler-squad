@@ -55,10 +55,10 @@ var systemRequiredOffGraph = []SystemEdge{
 // custom-stage archive edges; use IsSystemRequired for those. validTransitions
 // is deliberately unchanged, so Off and Shadow keep answering exactly as before.
 func SystemRequiredEdges() []SystemEdge {
-	edges := make([]SystemEdge, 0, len(systemRequiredCore)+len(systemRequiredOffGraph)+len(builtInStageOrder))
+	edges := make([]SystemEdge, 0, len(systemRequiredCore)+len(systemRequiredOffGraph)+len(BuiltInStageOrder))
 	edges = append(edges, systemRequiredCore...)
 	edges = append(edges, systemRequiredOffGraph...)
-	for _, from := range builtInStageOrder {
+	for _, from := range BuiltInStageOrder {
 		edges = append(edges, SystemEdge{from, BacklogStatusArchived})
 	}
 	sort.Slice(edges, func(i, j int) bool {
@@ -90,7 +90,7 @@ func IsSystemRequired(from, to BacklogStatus) bool {
 // systemRequiredTargets returns the non-archive system-required destinations
 // from from. The archive group is excluded so the UI-facing allowed list never
 // offers archive via the engine (Story 1.5.1 AC 3).
-func systemRequiredTargets(from BacklogStatus) []BacklogStatus {
+func SystemRequiredTargets(from BacklogStatus) []BacklogStatus {
 	var out []BacklogStatus
 	for _, e := range systemRequiredCore {
 		if e.From == from {

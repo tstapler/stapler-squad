@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -47,8 +49,8 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Program:   "claude",
-		gitManager: GitWorktreeManager{
-			worktree: git.NewGitWorktreeFromStorage(
+		GitManager: GitWorktreeManager{
+			Worktree: git.NewGitWorktreeFromStorage(
 				"/path/to/repo",
 				worktreePath,
 				"Test Instance",
@@ -81,8 +83,8 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Program:   "claude",
-		gitManager: GitWorktreeManager{
-			worktree: git.NewGitWorktreeFromStorage(
+		GitManager: GitWorktreeManager{
+			Worktree: git.NewGitWorktreeFromStorage(
 				"/path/to/repo",
 				worktreePath,
 				"Test Instance",
@@ -98,8 +100,8 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 	// earlier instance.Paused() call above already cached a snapshot, and a
 	// raw field write wouldn't republish it — Paused() below would then keep
 	// reading the stale pre-mutation snapshot. ForceStatus republishes.
-	if !instance.Paused() && instance.gitManager.worktree != nil {
-		worktreePath := instance.gitManager.worktree.GetWorktreePath()
+	if !instance.Paused() && instance.GitManager.Worktree != nil {
+		worktreePath := instance.GitManager.Worktree.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted, mark instance as paused
 			instance.ForceStatus(Paused)
@@ -154,11 +156,12 @@ func TestStatusEnumValues(t *testing.T) {
 
 func TestTildeExpansionInNewInstance(t *testing.T) {
 	t.Parallel()
-	// Get home directory for comparison
-	homeDir, err := os.UserHomeDir()
+	// ResolveSessionPath expands "~" through the passwd entry, not $HOME (which Bazel and CI override).
+	usr, err := user.Current()
 	if err != nil {
-		t.Fatalf("Failed to get home directory: %v", err)
+		t.Fatalf("Failed to get current user: %v", err)
 	}
+	homeDir := usr.HomeDir
 
 	tests := []struct {
 		name             string
@@ -223,11 +226,12 @@ func TestTildeExpansionInNewInstance(t *testing.T) {
 
 func TestMigrationOfCorruptedPaths(t *testing.T) {
 	t.Parallel()
-	// Get home directory for comparison
-	homeDir, err := os.UserHomeDir()
+	// ResolveSessionPath expands "~" through the passwd entry, not $HOME (which Bazel and CI override).
+	usr, err := user.Current()
 	if err != nil {
-		t.Fatalf("Failed to get home directory: %v", err)
+		t.Fatalf("Failed to get current user: %v", err)
 	}
+	homeDir := usr.HomeDir
 
 	tests := []struct {
 		name           string
@@ -466,7 +470,7 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 // fail-open default (which would also return true if "main" didn't resolve).
 func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits(t *testing.T) {
 	t.Parallel()
-	repoDir := setupTestGitRepo(t)
+	repoDir := sessiontest.SetupTestGitRepo(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "has-commits-ahead-test")
 	if err != nil {
@@ -907,7 +911,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 
 	assert.Equal(t, Active, inst.Status)
 	assert.True(t, inst.pm().IsAlive())
-	assert.NotEqual(t, repoDir, inst.gitManager.GetWorktreePath(), "a real, isolated worktree must have been created")
+	assert.NotEqual(t, repoDir, inst.GitManager.GetWorktreePath(), "a real, isolated worktree must have been created")
 }
 
 // TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturnsError

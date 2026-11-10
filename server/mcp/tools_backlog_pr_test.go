@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // T5.3.0: the caller-identity check is server-side (the MCP session credential in
@@ -235,7 +236,7 @@ func TestReportPRCreated_ShouldNotStampProvenance_WhenReassignedToForeignRepo(t 
 	storage := newTestBacklogStorage(t)
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)
-	host, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	host, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
 	storage.SetPRProvenanceSource(fakeProvenanceSource{host: host})
 	var posted int
@@ -276,7 +277,7 @@ func TestReportPRCreated_ShouldRequireOverride_WhenFirstPRIsInForeignOrUnresolve
 		t.Run(name, func(t *testing.T) {
 			storage := newTestBacklogStorage(t)
 			item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
-			host, err := session.LoadOrCreateHostIdentity(t.TempDir())
+			host, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 			require.NoError(t, err)
 			storage.SetPRProvenanceSource(fakeProvenanceSource{host: host})
 			var posted int

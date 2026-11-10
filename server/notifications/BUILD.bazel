@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "notifications",
+    srcs = [
+        "approval_group.go",
+        "prune.go",
+        "question_dedup.go",
+        "resolved_item_reaper.go",
+        "store.go",
+        "subscriber.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/notifications",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//pkg/events",
+        "//server/events",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":notifications",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "notifications_test",
+    srcs = [
+        "prune_test.go",
+        "question_dedup_test.go",
+        "resolved_item_reaper_test.go",
+        "store_test.go",
+        "subscriber_test.go",
+    ],
+    embed = [":notifications"],
+    deps = [
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//testutil",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

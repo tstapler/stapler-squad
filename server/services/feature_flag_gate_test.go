@@ -16,12 +16,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func newGatedFlagService(t *testing.T) *SessionService {
 	t.Helper()
-	withIsolatedStateDir(t)
-	svc := newGatedSessionService(createTestStorage(t))
+	svctest.WithIsolatedStateDir(t)
+	svc := newGatedSessionService(svctest.CreateTestStorage(t))
 	t.Cleanup(svc.Shutdown)
 	return svc
 }
@@ -37,7 +38,7 @@ func flagUpdateCtx(ctx context.Context, svc *FeatureFlagService, name string, en
 
 func TestGateFlag_ShouldBeRegisteredDefaultOnWithStatsWriterDetail_WhenNoWriterRuns(t *testing.T) {
 	svc := newGatedFlagService(t)
-	require.True(t, featureFlagDefault(config.HiddenSessionGateFeatureFlag))
+	require.True(t, FeatureFlagDefault(config.HiddenSessionGateFeatureFlag))
 	assert.True(t, svc.DeliveryGate().Flags().Enabled(), "the cache and the registry agree on the default")
 	assert.Equal(t, statsWriterNotRunning,
 		statusDetailOf(t, svc.featureFlagSvc, config.HiddenSessionGateFeatureFlag))
@@ -70,10 +71,10 @@ func TestGateFlag_ShouldRefuseEnableWhileStatsWriterNotRunningAndNeverRefuseDisa
 // T-FL-24: every gate flip appends a flag_change line carrying the request
 // record fields and the true previous value.
 func TestUpdateFeatureFlag_ShouldAppendFlagChangeLineForEveryHiddenSessionGateFlip_WhenSinkCoreFromPr2a2Present(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	dir, err := config.GetConfigDir()
 	require.NoError(t, err)
-	svc := newGatedSessionService(createTestStorage(t))
+	svc := newGatedSessionService(svctest.CreateTestStorage(t))
 	svc.DeliveryGate().Stats().SetWriterRunning(true)
 
 	var flipErr error

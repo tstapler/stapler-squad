@@ -1,0 +1,11 @@
+on: [push, pull_request]
+jobs:
+  write:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - run: bazel test --config=ci-cache-write //...
+  read:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bazel test --config=ci-cache-read //...

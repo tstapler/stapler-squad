@@ -1,0 +1,200 @@
+name: Fallback canary
+
+# PROVISIONAL (Bazel conversion Story 8.5). Exercises the `make` path with no Bazel on the runner so the
+# escape hatch cannot rot. `make-only` never installs Bazel and asserts it is absent; the post-flip
+# `pass-set-equality` job is the only one with Bazel. Action pins are SHAs (version in the trailing comment).
+on:
+  schedule:
+    - cron: '17 5 * * 1'  # weekly, Monday 05:17 UTC
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Makefile'
+      - 'make/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'proto/**'
+      - 'session/ent/schema/**'
+      - 'session/tmux/embed/**'
+      - '.github/workflows/fallback-canary.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fallback-canary-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_SYSTEM: make
+
+jobs:
+  make-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      # The make path must not silently depend on Bazel.
+      - name: Assert no Bazel on PATH
+        run: |
+          # The ubuntu-latest image ships bazelisk; remove it so the job proves make works without it.
+          for b in bazel bazelisk; do
+            while p=$(command -v "$b" 2>/dev/null); do sudo rm -f "$p" || break; hash -r; done
+          done
+          if command -v bazel >/dev/null 2>&1 || command -v bazelisk >/dev/null 2>&1; then
+            echo "::error::bazel or bazelisk is installed on this runner; the make-only job must run without it"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      # make's ensure-tools wants go, buf and bun on PATH (no asdf or Homebrew on the runner); same pin as prepare-stub.
+      - name: Install buf
+        run: |
+          curl -sSL "https://github.com/bufbuild/buf/releases/download/v1.41.0/buf-Linux-x86_64" -o /usr/local/bin/buf
+          chmod +x /usr/local/bin/buf
+
+      # make build compiles the embedded tmux itself (scripts/build-tmux.sh); same deps as .github/actions/build-tmux.
+      - name: Install tmux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config
+
+      # make lint-workflows needs actionlint, which the runner image does not ship (same version as local dev).
+      - name: Install actionlint
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # Tests commit in scratch repos and need an author identity; the runner has none.
+      - name: Configure git identity
+        run: |
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.invalid"
+
+      # make writes to a regular file, not a pipe: Bun/Node children can set a shared pipe non-blocking and make then
+      # dies with "write error: stdout" (seen after a fully green make ready). citime follows the file and writes a
+      # per-target and per-package timing table to the job summary (advisory); tail echoes the log live.
+      # `shell: bash` gives -e/pipefail semantics; rc is carried explicitly.
+      - name: make ready
+        shell: bash
+        run: |
+          go build -o "$RUNNER_TEMP/citime" ./tools/ci/citime
+          log="$RUNNER_TEMP/make-ready.log"; done="$log.done"
+          rm -f "$done"; : > "$log"
+          "$RUNNER_TEMP/citime" -in "$log" -done "$done" -out "$RUNNER_TEMP/make-ready-timing.json" -summary "$GITHUB_STEP_SUMMARY" &
+          timing=$!
+          tail -n +1 -F "$log" &
+          echo_pid=$!
+          rc=0
+          make --trace ready > "$log" 2>&1 || rc=$?
+          touch "$done"
+          wait "$timing" || true
+          sleep 2
+          kill "$echo_pid" 2>/dev/null || true
+          exit "$rc"
+
+      - name: Upload make timing
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: make-ready-timing
+          path: |
+            ${{ runner.temp }}/make-ready-timing.json
+            ${{ runner.temp }}/make-ready.log
+          if-no-files-found: ignore
+
+      - name: make build
+        run: |
+          make build
+          test -x ./stapler-squad && test ! -L ./stapler-squad
+          ./stapler-squad version
+
+      - name: Build the e2e seed tools
+        run: |
+          go build -o seed-demo ./tests/demo/seed
+          go build -o seed-hidden ./tests/e2e/seed-hidden
+          go build -o e2e-sshd ./tests/e2e/sshd
+
+      - name: Install test dependencies and browsers
+        run: |
+          cd tests/e2e
+          bun install --frozen-lockfile
+          npx playwright install --with-deps chromium
+
+      # One shard against the make-built binary. As in build.yml, raw Playwright failures are report-only
+      # (the recorded baseline holds failing specs); a blown budget or a harness crash (no report) fails.
+      - name: e2e shard 1 of 5 against the make-built binary
+        env:
+          TEST_SERVER_BINARY: ${{ github.workspace }}/stapler-squad
+          TEST_SEED_DEMO: ${{ github.workspace }}/seed-demo
+          TEST_SEED_HIDDEN: ${{ github.workspace }}/seed-hidden
+          TEST_SSHD_BINARY: ${{ github.workspace }}/e2e-sshd
+        run: |
+          cd tests/e2e
+          timeout 40m bash scripts/run-ci-shard.sh 1 5 || { rc=$?; [ "$rc" != 124 ] || exit "$rc"; }
+          test -s shard-report.json
+
+  # Pre-mortem #3: after the Story 8.6 flip the make path's pass set must equal Bazel's. A separate runner so
+  # `make-only` stays Bazel-free. Enabled by the repository variable BAZEL_FLIPPED=true, which the flip PR
+  # sets (owner-attestations.yaml records the sign-off).
+  pass-set-equality:
+    needs: make-only
+    if: ${{ vars.BAZEL_FLIPPED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bazelisk
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/bazelbuild/bazelisk@v1.28.1
+          ln -s "$RUNNER_TEMP/bin/bazelisk" "$RUNNER_TEMP/bin/bazel"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Compare the make and Bazel pass sets
+        run: |
+          BAZEL_REAL="$RUNNER_TEMP/bin/bazelisk" bash tools/bzl/parity/test-set-diff.sh default | tee test-set-diff.txt
+          grep -c 'missing_in_bazel: 0' test-set-diff.txt
+
+  # A scheduled failure opens (once) an issue labelled build-fallback.
+  report:
+    needs: [make-only, pass-set-equality]
+    if: ${{ always() && github.event_name == 'schedule' && (needs.make-only.result == 'failure' || needs.pass-set-equality.result == 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open an issue labelled build-fallback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Fallback canary failed: the make build path is broken"
+          gh label create build-fallback --repo "$GITHUB_REPOSITORY" --color B60205 \
+            --description "The make fallback build path failed its scheduled canary" 2>/dev/null || true
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label build-fallback --json number --jq length)
+          if [ "$existing" = 0 ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label build-fallback \
+              --body "The weekly fallback canary failed. Run: $RUN_URL. The make path (BUILD_SYSTEM=make) is the escape hatch from Bazel; fix it before it is needed."
+          fi

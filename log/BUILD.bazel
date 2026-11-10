@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "log",
+    srcs = [
+        "async_handler.go",
+        "async_writer.go",
+        "dropcounter.go",
+        "log.go",
+        "log_manager.go",
+        "package_level.go",
+        "service_log_rotation.go",
+        "testing.go",
+        "trace_handler.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/log",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config/workspacepath",
+        "@in_gopkg_natefinch_lumberjack_v2//:lumberjack_v2",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":log",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "log_test",
+    srcs = [
+        "async_handler_test.go",
+        "async_writer_test.go",
+        "log_test.go",
+        "package_level_external_test.go",
+        "package_level_test.go",
+        "service_log_rotation_test.go",
+        "testing_test.go",
+        "trace_context_test.go",
+        "trace_handler_test.go",
+        "workspace_state_dir_test.go",
+    ],
+    embed = [":log"],
+    deps = [
+        "//config/workspacepath",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
+)

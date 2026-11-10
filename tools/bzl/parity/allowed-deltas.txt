@@ -1,0 +1,3 @@
+# Pre-approved parity deltas between `bazel build //web-app:dist` and `make web-build` output.
+# One path (relative to dist/) per line. Initially only the minifier banner/version comment:
+# for the current unminified default (WEB_MINIFY=0) no file carries one, so the list is empty.

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // ClaimVerdictKind is the three-way outcome of a cross-host claim check.
@@ -31,14 +31,14 @@ const (
 // constructors so Kind and Record cannot be mismatched.
 type ClaimVerdict struct {
 	Kind   ClaimVerdictKind
-	Record session.ClaimRecord // meaningful only for ClaimHeldByOther
+	Record hostclaim.ClaimRecord // meaningful only for ClaimHeldByOther
 }
 
 func NewUnclaimedVerdict() ClaimVerdict { return ClaimVerdict{Kind: ClaimUnclaimed} }
 
 func NewIndeterminateVerdict() ClaimVerdict { return ClaimVerdict{Kind: ClaimCheckIndeterminate} }
 
-func NewHeldByOtherVerdict(record session.ClaimRecord) ClaimVerdict {
+func NewHeldByOtherVerdict(record hostclaim.ClaimRecord) ClaimVerdict {
 	return ClaimVerdict{Kind: ClaimHeldByOther, Record: record}
 }
 
@@ -54,22 +54,22 @@ type CrossHostClaimChecker interface {
 	CheckClaimLocalOnly(ctx context.Context, externalURL string) (ClaimVerdict, error)
 	// ListForeignClaims returns every claim in the local index held by another
 	// host, from one read of the index. Local-only.
-	ListForeignClaims() []session.ClaimRecord
+	ListForeignClaims() []hostclaim.ClaimRecord
 }
 
 // unimplementedClaimChecker is the nil-checker default: everything is unclaimed,
 // so single-host behavior is unchanged.
-type unimplementedClaimChecker struct{}
+type UnimplementedClaimChecker struct{}
 
-func (unimplementedClaimChecker) CheckClaim(context.Context, string) (ClaimVerdict, error) {
+func (UnimplementedClaimChecker) CheckClaim(context.Context, string) (ClaimVerdict, error) {
 	return NewUnclaimedVerdict(), nil
 }
 
-func (unimplementedClaimChecker) CheckClaimLocalOnly(context.Context, string) (ClaimVerdict, error) {
+func (UnimplementedClaimChecker) CheckClaimLocalOnly(context.Context, string) (ClaimVerdict, error) {
 	return NewUnclaimedVerdict(), nil
 }
 
-func (unimplementedClaimChecker) ListForeignClaims() []session.ClaimRecord { return nil }
+func (UnimplementedClaimChecker) ListForeignClaims() []hostclaim.ClaimRecord { return nil }
 
 // ClaimDisputeResolver clears the local Disputed flag on a claim.
 type ClaimDisputeResolver interface {
@@ -84,18 +84,18 @@ const defaultClaimLookupTimeout = 2 * time.Second
 type claimPeerLister interface {
 	// LiveSnapshot excludes entries past the registry TTL so a checker does not
 	// dial peers about to be pruned.
-	LiveSnapshot() []session.RegistryEntry
+	LiveSnapshot() []hostclaim.RegistryEntry
 }
 
 // LocalClaimChecker checks the local ClaimIndex and, for CheckClaim, live peers.
 type LocalClaimChecker struct {
-	index   *session.ClaimIndex
-	selfID  session.HostID
+	index   *hostclaim.ClaimIndex
+	selfID  hostclaim.HostID
 	peers   claimPeerLister
 	client  *http.Client
 	timeout time.Duration
 	// signer authenticates lookup requests to peers; zero means unsigned (tests).
-	signer session.HostIdentity
+	signer hostclaim.HostIdentity
 }
 
 var (
@@ -105,7 +105,7 @@ var (
 
 // NewLocalClaimChecker builds a checker for the host identified by selfID. peers
 // is queried fresh on every CheckClaim so pruned hosts drop out of the fan-out.
-func NewLocalClaimChecker(index *session.ClaimIndex, selfID session.HostID, peers claimPeerLister) *LocalClaimChecker {
+func NewLocalClaimChecker(index *hostclaim.ClaimIndex, selfID hostclaim.HostID, peers claimPeerLister) *LocalClaimChecker {
 	return &LocalClaimChecker{
 		index:  index,
 		selfID: selfID,
@@ -121,7 +121,7 @@ func NewLocalClaimChecker(index *session.ClaimIndex, selfID session.HostID, peer
 
 // SignLookupsWith makes the checker sign every peer lookup with identity, which
 // peers require (session.ClaimIndex.AuthorizeClaimLookup). It returns c.
-func (c *LocalClaimChecker) SignLookupsWith(identity session.HostIdentity) *LocalClaimChecker {
+func (c *LocalClaimChecker) SignLookupsWith(identity hostclaim.HostIdentity) *LocalClaimChecker {
 	c.signer = identity
 	return c
 }
@@ -135,8 +135,8 @@ func (c *LocalClaimChecker) CheckClaimLocalOnly(_ context.Context, externalURL s
 }
 
 // ListForeignClaims implements CrossHostClaimChecker.
-func (c *LocalClaimChecker) ListForeignClaims() []session.ClaimRecord {
-	var out []session.ClaimRecord
+func (c *LocalClaimChecker) ListForeignClaims() []hostclaim.ClaimRecord {
+	var out []hostclaim.ClaimRecord
 	for _, record := range c.index.Snapshot() {
 		if record.ClaimingHostID.String() != c.selfID.String() {
 			out = append(out, record)
@@ -163,7 +163,7 @@ func (c *LocalClaimChecker) CheckClaim(ctx context.Context, externalURL string) 
 }
 
 type peerAnswer struct {
-	record  session.ClaimRecord
+	record  hostclaim.ClaimRecord
 	claimed bool
 	failed  bool
 }
@@ -171,7 +171,7 @@ type peerAnswer struct {
 // queryPeers asks every known peer concurrently under one shared deadline; the
 // first verified foreign claim wins and cancels the rest.
 func (c *LocalClaimChecker) queryPeers(ctx context.Context, externalURL string) ClaimVerdict {
-	var peers []session.RegistryEntry
+	var peers []hostclaim.RegistryEntry
 	for _, p := range c.peers.LiveSnapshot() {
 		if p.HostID.String() != c.selfID.String() {
 			peers = append(peers, p)
@@ -188,7 +188,7 @@ func (c *LocalClaimChecker) queryPeers(ctx context.Context, externalURL string) 
 	var wg sync.WaitGroup
 	for _, peer := range peers {
 		wg.Add(1)
-		go func(peer session.RegistryEntry) {
+		go func(peer hostclaim.RegistryEntry) {
 			defer wg.Done()
 			answers <- c.askPeer(ctx, peer, externalURL)
 		}(peer)
@@ -211,7 +211,7 @@ func (c *LocalClaimChecker) queryPeers(ctx context.Context, externalURL string) 
 // askPeer tries the peer's addresses in order until one gives a definite
 // answer (200 or 404). A record is accepted only after ClaimIndex.RecordClaim
 // verifies its signature and TOFU pin; an unverifiable response is a failure.
-func (c *LocalClaimChecker) askPeer(ctx context.Context, peer session.RegistryEntry, externalURL string) peerAnswer {
+func (c *LocalClaimChecker) askPeer(ctx context.Context, peer hostclaim.RegistryEntry, externalURL string) peerAnswer {
 	for _, addr := range peer.AdvertisedAddress {
 		record, found, err := c.lookup(ctx, claimLookupURL(addr, externalURL), externalURL)
 		if err != nil {
@@ -221,7 +221,7 @@ func (c *LocalClaimChecker) askPeer(ctx context.Context, peer session.RegistryEn
 		if !found || record.ClaimingHostID.String() == c.selfID.String() {
 			return peerAnswer{}
 		}
-		if session.NormalizeClaimURL(record.ExternalURL) != session.NormalizeClaimURL(externalURL) {
+		if hostclaim.NormalizeClaimURL(record.ExternalURL) != hostclaim.NormalizeClaimURL(externalURL) {
 			// A validly signed claim for some other URL must not answer this query.
 			log.Warn("claim_check.peer_record_url_mismatch", "peer", peer.HostID.String(),
 				"queried", externalURL, "returned", record.ExternalURL)
@@ -241,32 +241,32 @@ func (c *LocalClaimChecker) askPeer(ctx context.Context, peer session.RegistryEn
 }
 
 func claimLookupURL(peerAddr, externalURL string) string {
-	return "https://" + peerAddr + session.ClaimLookupEndpointPath + "?url=" + url.QueryEscape(session.NormalizeClaimURL(externalURL))
+	return "https://" + peerAddr + hostclaim.ClaimLookupEndpointPath + "?url=" + url.QueryEscape(hostclaim.NormalizeClaimURL(externalURL))
 }
 
-func (c *LocalClaimChecker) lookup(ctx context.Context, target, externalURL string) (session.ClaimRecord, bool, error) {
+func (c *LocalClaimChecker) lookup(ctx context.Context, target, externalURL string) (hostclaim.ClaimRecord, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return session.ClaimRecord{}, false, err
+		return hostclaim.ClaimRecord{}, false, err
 	}
 	if c.signer.ID.IsValid() {
-		session.SignClaimLookup(req.Header, c.signer, externalURL, time.Now())
+		hostclaim.SignClaimLookup(req.Header, c.signer, externalURL, time.Now())
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return session.ClaimRecord{}, false, err
+		return hostclaim.ClaimRecord{}, false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusNotFound:
-		return session.ClaimRecord{}, false, nil
+		return hostclaim.ClaimRecord{}, false, nil
 	case http.StatusOK:
-		var record session.ClaimRecord
+		var record hostclaim.ClaimRecord
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&record); err != nil {
-			return session.ClaimRecord{}, false, fmt.Errorf("decode claim from %s: %w", target, err)
+			return hostclaim.ClaimRecord{}, false, fmt.Errorf("decode claim from %s: %w", target, err)
 		}
 		return record, true, nil
 	default:
-		return session.ClaimRecord{}, false, fmt.Errorf("claim lookup at %s: status %d", target, resp.StatusCode)
+		return hostclaim.ClaimRecord{}, false, fmt.Errorf("claim lookup at %s: status %d", target, resp.StatusCode)
 	}
 }

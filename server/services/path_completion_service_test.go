@@ -8,11 +8,11 @@ import (
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // makeDir creates a directory at the given path, failing the test on error.
@@ -427,23 +427,11 @@ func TestListPathCompletions_ContextCancellation(t *testing.T) {
 // ListWorktrees (AC4)
 // ---------------------------------------------------------------------------
 
-func runGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
-	)
-	out, err := cmd.CombinedOutput()
-	require.NoErrorf(t, err, "git %v failed: %s", args, out)
-}
-
 func TestListWorktrees_BasicListing(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
+	svctest.RunGit(t, dir, "init", "-q")
+	svctest.RunGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
 
 	svc := NewPathCompletionService()
 	resp, err := svc.ListWorktrees(context.Background(), newReq(&sessionv1.ListWorktreesRequest{

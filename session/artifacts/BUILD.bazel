@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "artifacts",
+    srcs = [
+        "caps.go",
+        "classify.go",
+        "extractor.go",
+        "jsonl.go",
+        "jsonl_flags.go",
+        "metrics.go",
+        "pairing.go",
+        "records.go",
+        "records_extract.go",
+        "redact.go",
+        "scan.go",
+        "store.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/artifacts",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//github",
+        "//log",
+        "//session/scanqueue",
+        "//session/scanstate",
+        "//telemetry",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":artifacts",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "artifacts_test",
+    srcs = [
+        "blobcap_test.go",
+        "extractor_test.go",
+        "jsonl_test.go",
+        "pairing_redact_test.go",
+        "records_test.go",
+        "redact_test.go",
+        "resume_test.go",
+        "scan_test.go",
+        "scanv2_flag_test.go",
+        "store_test.go",
+        "truncate_utf8_test.go",
+    ],
+    embed = [":artifacts"],
+    deps = [
+        "//session/scanstate",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

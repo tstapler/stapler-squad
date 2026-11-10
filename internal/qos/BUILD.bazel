@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "qos",
+    srcs = ["qos.go"],
+    importpath = "github.com/tstapler/stapler-squad/internal/qos",
+    visibility = ["//:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":qos",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "qos_test",
+    srcs = ["qos_test.go"],
+    embed = [":qos"],
+    deps = ["@com_github_stretchr_testify//assert"],
+)

@@ -1,9 +1,118 @@
-# Bazel is used only for third_party/ghostty (own ghostty-vt.wasm build). See ADR-039.
-common --enable_bzlmod
-build --incompatible_strict_action_env
-build --remote_cache_compression
+# Pins and flag names verified against `bazel help build` on 9.3.1
+# (project_plans/bazel-conversion/implementation/spike-results.md, "S-gomod / Task 0.2b").
+common --lockfile_mode=update
+common --experimental_isolated_extension_usages
+common --enable_platform_specific_config
 
-# Remote cache is opt-in; the action inputs are all sha256-pinned so cache hits are sound:
-#   bazel build --remote_cache=grpcs://<host> //third_party/ghostty:ghostty_vt_wasm
-# Per-machine overrides (cache endpoint, credentials) go in the gitignored .bazelrc.user.
-try-import %workspace%/.bazelrc.user
+# Startup: modest JVM so ~100 agent worktrees can each hold a server. The tools/bazel
+# wrapper passes --max_idle_secs=30 and -Xmx2g on the command line (startup:<config> lines are
+# ignored, and ~/.bazelrc sets an 8g heap that would override the line above).
+startup --max_idle_secs=300
+startup --host_jvm_args=-Xmx2g
+# Containment for callers that bypass tools/bazel (their effect is checked in Task 0.10g).
+startup --shutdown_on_low_sys_mem
+startup --io_nice_level=7
+startup --batch_cpu_scheduling
+
+# Caches live outside ~/.stapler-squad (live service state), on the same filesystem as the output
+# bases. Downloads and extracted repos are set together so they land side by side.
+common --repository_cache=~/.cache/stapler-squad-bazel/repo
+common --repo_contents_cache=~/.cache/stapler-squad-bazel/repo/contents
+common --repo_contents_cache_gc_max_age=30d
+build --disk_cache=~/.cache/stapler-squad-bazel/disk
+build --experimental_disk_cache_gc_max_size=100G
+build --experimental_disk_cache_gc_max_age=30d
+# Default idle delay (5m) never fires when the server exits after 30s idle.
+build --experimental_disk_cache_gc_idle_delay=10s
+build --local_resources=cpu=HOST_CPUS*.5
+build --local_resources=memory=HOST_RAM*.2
+
+build:agent --color=no
+build:agent --curses=no
+build:agent --noshow_progress
+build:agent --noshow_loading_progress
+build:agent --test_output=errors
+build:agent --test_summary=terse
+build:agent --verbose_failures
+
+build:dev --test_output=errors
+
+build:ci --lockfile_mode=error
+build:ci --noshow_progress
+build:ci --verbose_failures
+build:ci --test_output=errors
+
+# Remote cache for CI. A cache outage must cost seconds, not minutes. The failure policy is
+# timeout + retries + circuit breaker; --remote_local_fallback is a no-op for a cache-only setup
+# (Task 0.12c). ci-cache-read and ci-cache-write must carry identical policy lines
+# (check-bazelrc.sh). The --remote_cache URL is supplied by CI (Task 0.12), never committed.
+build:ci-cache-read --remote_timeout=3s
+build:ci-cache-read --remote_retries=1
+build:ci-cache-read --experimental_circuit_breaker_strategy=failure
+build:ci-cache-read --experimental_remote_failure_rate_threshold=10
+build:ci-cache-read --experimental_remote_failure_window_interval=60s
+build:ci-cache-read --remote_cache_compression
+build:ci-cache-read --remote_download_toplevel
+build:ci-cache-write --remote_timeout=3s
+build:ci-cache-write --remote_retries=1
+build:ci-cache-write --experimental_circuit_breaker_strategy=failure
+build:ci-cache-write --experimental_remote_failure_rate_threshold=10
+build:ci-cache-write --experimental_remote_failure_window_interval=60s
+build:ci-cache-write --remote_cache_compression
+build:ci-cache-write --remote_download_toplevel
+# Test-only jobs use --remote_download_minimal instead of --remote_download_toplevel.
+
+# Test environment (Story 4.1, Epic 0 findings S8/S9). Committed here, never in user.bazelrc, so an
+# agent cannot point tests at live state (pre-mortem #13). HOME, the tmux dir and PATH come from the
+# run_under wrapper (they need a runtime path). Deliberately absent: a global --test_env=TMPDIR (a
+# no-op, Bazel 9.3.1 already gives tests a short private /tmp) and a global
+# --test_env=STAPLER_SQUAD_TMUX_SOCKET (breaks tests that assert their own socket names).
+test --run_under=//tools/bzl:test_wrapper
+test --test_env=STAPLER_SQUAD_INSTANCE=bazel-test
+test --sandbox_default_allow_network=false
+
+# e2e (Story 12.3, ADR-009): the server binary reaches the tests out of band so it never enters a test key.
+# The value-less --test_env forms inherit the client environment; the paths are constant, so a rebuilt binary
+# does not change the key. Run `e2eguard` first (the revision guard); it is not a flag, see docs.
+test:e2e --test_env=TEST_SERVER_BINARY
+test:e2e --test_env=TEST_SEED_DEMO
+test:e2e --test_env=TEST_SEED_HIDDEN
+test:e2e --test_env=TEST_SSHD_BINARY
+test:e2e --test_env=E2E_REPO_ROOT
+test:e2e --test_env=PLAYWRIGHT_BROWSERS_PATH
+test:e2e --test_tag_filters=e2e
+test:e2e --cache_test_results=auto
+
+# TagConfig set (sealed: tools/bzl/configs.txt, checked by check-configs.sh). rules_go's `tags`
+# flag is last-wins, not additive (spike S7), so each config lists its FULL tag set in ONE line
+# and these configs cannot be combined pairwise; a combination needs its own named config.
+build:embed_tmux --@rules_go//go/config:tags=embed_tmux
+build:embed_tmux --//tools/bzl/flags:embed_tmux=true
+build:embed_tymux --@rules_go//go/config:tags=embed_tmux,embed_tymux
+build:embed_tymux --//tools/bzl/flags:embed_tmux=true
+build:embed_tymux --//tools/bzl/flags:embed_tymux=true
+build:sinkguard --@rules_go//go/config:tags=sinkguard
+build:gitoracle --@rules_go//go/config:tags=gitoracle
+build:integration --@rules_go//go/config:tags=integration
+# Linux builds are pure Go (no cgo sqlite driver left; ADR-006). Auto-applied by Bazel on Linux hosts.
+build:linux --@rules_go//go/config:pure
+# Race needs cgo and a host C compiler, so it turns off the pure-Go default (ADR-006).
+build:race --@rules_go//go/config:pure=false
+build:race --@rules_go//go/config:race
+# macOS (Story 5.1). enable_platform_specific_config applies build:macos on a macOS host. Only the cc toolchain reads
+# this minimum; the woven binary links through `go build` (tools/bzl/otel_weave_hermetic.sh). UNVERIFIED, needs a Mac,
+# and the 13.0 value is a placeholder the owner must confirm against the oldest macOS to support.
+build:macos --macos_minimum_os=13.0
+# Intel macOS target from an arm64 runner (Task 5.1d). cgo for it relies on `clang -arch x86_64` in the weave script;
+# if Bazel's cc toolchain resolution rejects the cross, use an Intel runner instead. UNVERIFIED, needs a Mac.
+build:darwin_amd64 --platforms=//macos:darwin_amd64
+# release == embed_tymux, repeated rather than `--config=embed_tymux` (no spike-verified row for
+# --config yet, and the full tag set must stay in one line anyway).
+build:release --@rules_go//go/config:tags=embed_tmux,embed_tymux
+build:release --//tools/bzl/flags:embed_tmux=true
+build:release --//tools/bzl/flags:embed_tymux=true
+build:release --stamp
+build:release --compilation_mode=opt
+build:release --workspace_status_command=tools/bzl/workspace_status.sh
+
+try-import %workspace%/user.bazelrc

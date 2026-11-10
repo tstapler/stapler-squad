@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -34,7 +35,7 @@ func TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload(t *testin
 	require.NoError(t, err)
 	for _, li := range loaded {
 		if li.Title == "stopped-auto-approve-session" {
-			addInstanceToPoller(fix.poller, li)
+			svctest.AddInstanceToPoller(fix.poller, li)
 			break
 		}
 	}
@@ -75,7 +76,7 @@ func TestUpdateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testi
 	require.NoError(t, err)
 	for _, li := range loaded {
 		if li.Title == "unsupported-agent-session" {
-			addInstanceToPoller(fix.poller, li)
+			svctest.AddInstanceToPoller(fix.poller, li)
 			break
 		}
 	}

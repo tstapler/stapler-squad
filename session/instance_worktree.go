@@ -49,10 +49,10 @@ func (i *Instance) RepoName() (string, error) {
 	if i.Status == Paused {
 		return "", fmt.Errorf("cannot get repo name for paused instance")
 	}
-	if !i.gitManager.HasWorktree() {
+	if !i.GitManager.HasWorktree() {
 		return "", fmt.Errorf("gitWorktree is nil")
 	}
-	return i.gitManager.GetRepoName(), nil
+	return i.GitManager.GetRepoName(), nil
 }
 
 // setupFirstTimeWorktree creates or attaches to the git worktree based on session type.
@@ -96,7 +96,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
-		i.gitManager.SetWorktree(gitWorktree)
+		i.GitManager.SetWorktree(gitWorktree)
 		// i.mu guards this write and the buildSnapshot() read below against
 		// legacy setters (MarkViewed, ForceStatus, etc. -- see ForceStatus's
 		// doc comment) that bypass the actor and run on arbitrary caller
@@ -177,7 +177,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			cancel()
 			gitWorktree := git.NewGitWorktreeFromStorage(i.Path, i.ExistingWorktree, i.Title, i.Branch, baseCommitSHA, git.WithCommandRunner(runner))
 			i.mu.Lock()
-			i.gitManager.SetWorktree(gitWorktree)
+			i.GitManager.SetWorktree(gitWorktree)
 			attachedBranch := i.Branch
 			i.mu.Unlock()
 			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", attachedBranch)
@@ -189,7 +189,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			return fmt.Errorf("failed to connect to existing worktree: %w", err)
 		}
 		i.mu.Lock()
-		i.gitManager.SetWorktree(gitWorktree)
+		i.GitManager.SetWorktree(gitWorktree)
 		connectedBranch := gitWorktree.GetBranchName()
 		i.Branch = connectedBranch
 		i.mu.Unlock()
@@ -224,13 +224,13 @@ func (i *Instance) setupFirstTimeWorktree() error {
 				return fmt.Errorf("new_project worktree creation failed: %w", err)
 			}
 			i.mu.Lock()
-			i.gitManager.SetWorktree(gitWorktree)
+			i.GitManager.SetWorktree(gitWorktree)
 			i.Branch = branchName
 			i.mu.Unlock()
 			log.Info("new project initialized with worktree", "path", i.Path, "branch", branchName)
 		} else {
 			i.mu.Lock()
-			i.gitManager.SetWorktree(nil)
+			i.GitManager.SetWorktree(nil)
 			i.Branch = ""
 			i.mu.Unlock()
 			log.Info("new project initialized", "path", i.Path)
@@ -250,7 +250,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			}
 		}
 		i.mu.Lock()
-		i.gitManager.SetWorktree(nil)
+		i.GitManager.SetWorktree(nil)
 		i.Branch = ""
 		i.mu.Unlock()
 	default:
@@ -446,7 +446,7 @@ func (i *Instance) resolveStartPath(basePath string) string {
 	startPath := i.WorkingDir
 	if !filepath.IsAbs(i.WorkingDir) {
 		startPath = filepath.Join(basePath, i.WorkingDir)
-	} else if i.gitManager.HasWorktree() && pathEscapesRoot(basePath, startPath) {
+	} else if i.GitManager.HasWorktree() && pathEscapesRoot(basePath, startPath) {
 		// For worktree sessions, an absolute WorkingDir must be within the worktree.
 		// CaptureCurrentState() can persist the process CWD (e.g. the main repo path
 		// when Claude cd's there) — this is a read-side backstop for that; see
@@ -505,8 +505,8 @@ func (i *Instance) GetEffectiveRootDir() string {
 // for, and which logs a warning for every paused session whose worktree
 // pause_session removed.
 func (i *Instance) ActiveDir() string {
-	if i.gitManager.HasWorktree() {
-		if p := i.gitManager.GetWorktreePath(); p != "" {
+	if i.GitManager.HasWorktree() {
+		if p := i.GitManager.GetWorktreePath(); p != "" {
 			return p
 		}
 	}
@@ -535,8 +535,8 @@ func (i *Instance) GetCreationWarning() string {
 func (i *Instance) Workspace() Workspace {
 	repoRoot := i.GetPath()
 	worktreeDir := ""
-	if i.gitManager.HasWorktree() {
-		worktreeDir = i.gitManager.GetWorktreePath()
+	if i.GitManager.HasWorktree() {
+		worktreeDir = i.GitManager.GetWorktreePath()
 	}
 	// Derived from worktreeDir rather than calling ActiveDir(), which would read
 	// the worktree a second time — the two fields must describe one instant.
@@ -566,8 +566,8 @@ func (i *Instance) Workspace() Workspace {
 
 // CleanupWorktree removes the git worktree, keeping session intact.
 func (i *Instance) CleanupWorktree() error {
-	if i.gitManager.HasWorktree() {
-		if err := i.gitManager.Cleanup(); err != nil {
+	if i.GitManager.HasWorktree() {
+		if err := i.GitManager.Cleanup(); err != nil {
 			return fmt.Errorf("failed to cleanup git worktree: %w", err)
 		}
 	}
@@ -579,12 +579,12 @@ func (i *Instance) GetGitWorktree() (*git.GitWorktree, error) {
 	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot get git worktree for instance that has not been started")
 	}
-	return i.gitManager.GetWorktree(), nil
+	return i.GitManager.GetWorktree(), nil
 }
 
 // HasGitWorktree returns true if the instance has a git worktree.
 func (i *Instance) HasGitWorktree() bool {
-	return i.gitManager.HasWorktree()
+	return i.GitManager.HasWorktree()
 }
 
 // GetBaseCommitSHA returns the commit SHA this session's branch diverged
@@ -593,15 +593,15 @@ func (i *Instance) HasGitWorktree() bool {
 // computeDirDiffStats's HasWorktree()-gated pattern. Returns "" if neither is
 // set yet.
 func (i *Instance) GetBaseCommitSHA() string {
-	if i.gitManager.HasWorktree() {
-		return i.gitManager.GetBaseCommitSHA()
+	if i.GitManager.HasWorktree() {
+		return i.GitManager.GetBaseCommitSHA()
 	}
-	return i.gitManager.GetDirBaseSHA()
+	return i.GitManager.GetDirBaseSHA()
 }
 
 // SetGitWorktree sets the git worktree for testing purposes.
 func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
-	i.gitManager.SetWorktree(worktree)
+	i.GitManager.SetWorktree(worktree)
 	i.started.Store(worktree != nil)
 }
 
@@ -612,7 +612,7 @@ func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
 // active for the periodic tick's activeFunc check. No-op if there's no
 // worktree.
 func (i *Instance) RecordVCSStatusRequest() {
-	i.gitManager.RecordRequest()
+	i.GitManager.RecordRequest()
 }
 
 // RefreshDiffStatsIfStale recomputes diff stats only if the cached value is
@@ -624,7 +624,7 @@ func (i *Instance) RecordVCSStatusRequest() {
 // guaranteed-fresh read (daemon.go's AutoYes loop, exit/destroy lifecycle
 // snapshots) must keep calling UpdateDiffStats directly.
 func (i *Instance) RefreshDiffStatsIfStale() error {
-	if i.gitManager.DiffStatsFresh() {
+	if i.GitManager.DiffStatsFresh() {
 		return nil
 	}
 	return i.UpdateDiffStats()
@@ -636,7 +636,7 @@ func (i *Instance) UpdateDiffStats() error {
 	// Read lock for initial state checks
 	i.mu.RLock()
 	if !i.started.Load() {
-		i.gitManager.ClearDiffStats()
+		i.GitManager.ClearDiffStats()
 		i.mu.RUnlock()
 		return nil
 	}
@@ -644,8 +644,8 @@ func (i *Instance) UpdateDiffStats() error {
 		i.mu.RUnlock()
 		return nil
 	}
-	if !i.gitManager.HasWorktree() {
-		dirBase := i.gitManager.GetDirBaseSHA()
+	if !i.GitManager.HasWorktree() {
+		dirBase := i.GitManager.GetDirBaseSHA()
 		workingDir := i.WorkingDir
 		if workingDir == "" {
 			workingDir = i.Path
@@ -657,14 +657,14 @@ func (i *Instance) UpdateDiffStats() error {
 		// Directory session with a known base SHA — compute diff outside the lock.
 		stats := computeDirDiffStats(workingDir, dirBase)
 		i.mu.Lock()
-		i.gitManager.SetDiffStats(stats)
+		i.GitManager.SetDiffStats(stats)
 		i.mu.Unlock()
 		return nil
 	}
 	i.mu.RUnlock()
 
 	// I/O outside lock: check worktree existence and compute diff
-	stats, needsPause := i.gitManager.ComputeDiffIfReady()
+	stats, needsPause := i.GitManager.ComputeDiffIfReady()
 
 	// Compute "has commits ahead of base" alongside the diff stats, also outside
 	// the lock — AC6 needs this cached on Session so the frontend can disable the
@@ -673,7 +673,7 @@ func (i *Instance) UpdateDiffStats() error {
 	// as diff stats (cleared below in that case).
 	var hasCommits bool
 	if !needsPause {
-		if wt := i.gitManager.GetWorktree(); wt != nil {
+		if wt := i.GitManager.GetWorktree(); wt != nil {
 			// bounceMainBranch, not a dynamically-resolved default branch: mirrors
 			// pushAndCreatePR's own HasCommitsAheadOfMain call
 			// (session/backlog_lifecycle_pr.go:564). Resolving the actual default
@@ -684,7 +684,7 @@ func (i *Instance) UpdateDiffStats() error {
 			// file (documented in session/worktree_pr_poller.go). Fails open
 			// (HasCommitsAheadOfMain returns true on error by contract) — ignore
 			// the error and trust the bool.
-			hasCommits, _ = wt.HasCommitsAheadOfMain(bounceMainBranch)
+			hasCommits, _ = wt.HasCommitsAheadOfMain(BounceMainBranch)
 		}
 	}
 
@@ -697,7 +697,7 @@ func (i *Instance) UpdateDiffStats() error {
 			didTransitionToPaused = true
 			transitionErr = i.transitionTo(context.Background(), Paused)
 		}
-		i.gitManager.ClearDiffStats()
+		i.GitManager.ClearDiffStats()
 		i.mu.Unlock()
 		if didTransitionToPaused {
 			log.Warn("worktree directory doesn't exist, marking as paused", "session", i.Title)
@@ -709,15 +709,15 @@ func (i *Instance) UpdateDiffStats() error {
 	}
 	if stats != nil && stats.Error != nil {
 		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
-			i.gitManager.ClearDiffStats()
+			i.GitManager.ClearDiffStats()
 			i.mu.Unlock()
 			return nil
 		}
 		i.mu.Unlock()
 		return fmt.Errorf("failed to get diff stats: %w", stats.Error)
 	}
-	i.gitManager.SetDiffStats(stats)
-	i.gitManager.SetHasCommitsAhead(hasCommits)
+	i.GitManager.SetDiffStats(stats)
+	i.GitManager.SetHasCommitsAhead(hasCommits)
 	i.mu.Unlock()
 	return nil
 }
@@ -726,7 +726,7 @@ func (i *Instance) UpdateDiffStats() error {
 func (i *Instance) GetDiffStats() *git.DiffStats {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	return i.gitManager.GetDiffStats()
+	return i.GitManager.GetDiffStats()
 }
 
 // GetHasCommitsAhead returns the cached signal for whether the session's
@@ -735,7 +735,7 @@ func (i *Instance) GetDiffStats() *git.DiffStats {
 func (i *Instance) GetHasCommitsAhead() bool {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	return i.gitManager.GetHasCommitsAhead()
+	return i.GitManager.GetHasCommitsAhead()
 }
 
 // SetDirBaseSHA sets the base commit SHA used to compute diff stats for
@@ -743,7 +743,7 @@ func (i *Instance) GetHasCommitsAhead() bool {
 func (i *Instance) SetDirBaseSHA(sha string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.gitManager.SetDirBaseSHA(sha)
+	i.GitManager.SetDirBaseSHA(sha)
 }
 
 // computeDirDiffStats computes diff stats for a directory session — the
@@ -812,8 +812,8 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 // TestBackgroundResolutionPipeline_*/TestSessionService_RetrySession_*/
 // TestTriggerTriage_* when tried.
 func (i *Instance) worktreeDetectPath() string {
-	if i.gitManager.HasWorktree() {
-		if worktreePath := i.gitManager.GetWorktreePath(); worktreePath != "" {
+	if i.GitManager.HasWorktree() {
+		if worktreePath := i.GitManager.GetWorktreePath(); worktreePath != "" {
 			return worktreePath
 		}
 	}

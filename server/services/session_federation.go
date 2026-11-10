@@ -14,7 +14,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 const (
@@ -29,8 +29,8 @@ const (
 
 // FederationPeers is the slice of HostRegistry the federation cache needs.
 type FederationPeers interface {
-	LiveSnapshot() []session.RegistryEntry
-	AuthorizePeerRequest(h http.Header, method, path string, now time.Time) (session.HostID, error)
+	LiveSnapshot() []hostclaim.RegistryEntry
+	AuthorizePeerRequest(h http.Header, method, path string, now time.Time) (hostclaim.HostID, error)
 }
 
 type peerSnapshot struct {
@@ -43,7 +43,7 @@ type peerSnapshot struct {
 // refresh round replaces a peer's snapshot; an unreachable peer keeps its last
 // snapshot, flagged host_stale, so the merged list degrades instead of blocking.
 type FederatedSessions struct {
-	identity session.HostIdentity
+	identity hostclaim.HostIdentity
 	peers    FederationPeers
 	client   *http.Client
 	// streamClient has no overall timeout (a terminal stream is long-lived); only
@@ -57,7 +57,7 @@ type FederatedSessions struct {
 	hosts map[string]*peerSnapshot
 }
 
-func NewFederatedSessions(identity session.HostIdentity, peers FederationPeers) *FederatedSessions {
+func NewFederatedSessions(identity hostclaim.HostIdentity, peers FederationPeers) *FederatedSessions {
 	streamTransport := federationTransport()
 	streamTransport.ResponseHeaderTimeout = peerFetchTimeout
 	return &FederatedSessions{
@@ -104,7 +104,7 @@ func (f *FederatedSessions) Refresh(ctx context.Context) {
 		}
 		liveIDs[peer.HostID.String()] = struct{}{}
 		wg.Add(1)
-		go func(peer session.RegistryEntry) {
+		go func(peer hostclaim.RegistryEntry) {
 			defer wg.Done()
 			f.refreshPeer(ctx, peer)
 		}(peer)
@@ -126,7 +126,7 @@ func (f *FederatedSessions) Refresh(ctx context.Context) {
 	}
 }
 
-func (f *FederatedSessions) refreshPeer(ctx context.Context, peer session.RegistryEntry) {
+func (f *FederatedSessions) refreshPeer(ctx context.Context, peer hostclaim.RegistryEntry) {
 	id := peer.HostID.String()
 	var lastErr error
 	for _, addr := range peer.AdvertisedAddress {
@@ -160,7 +160,7 @@ func (f *FederatedSessions) setSnapshot(hostID string, snap *peerSnapshot) {
 // Watch exposes peer session change events for WatchSessions.
 func (f *FederatedSessions) Watch() *FederatedWatchAggregator { return f.watch }
 
-func displayNameFor(peer session.RegistryEntry) string {
+func displayNameFor(peer hostclaim.RegistryEntry) string {
 	if len(peer.AdvertisedAddress) > 0 {
 		return peer.AdvertisedAddress[0]
 	}
@@ -170,11 +170,11 @@ func displayNameFor(peer session.RegistryEntry) string {
 func (f *FederatedSessions) fetch(ctx context.Context, addr string) ([]*sessionv1.Session, error) {
 	ctx, cancel := context.WithTimeout(ctx, peerFetchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+addr+session.SessionFederationEndpointPath, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+addr+hostclaim.SessionFederationEndpointPath, nil)
 	if err != nil {
 		return nil, err
 	}
-	session.SignPeerRequest(req.Header, f.identity, http.MethodGet, session.SessionFederationEndpointPath, f.now())
+	hostclaim.SignPeerRequest(req.Header, f.identity, http.MethodGet, hostclaim.SessionFederationEndpointPath, f.now())
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -215,7 +215,7 @@ func tagPeerSessions(hostID string, snap *peerSnapshot) []*sessionv1.Session {
 	out := make([]*sessionv1.Session, 0, len(snap.sessions))
 	for _, s := range snap.sessions {
 		tagged := proto.Clone(s).(*sessionv1.Session)
-		tagged.Id = session.FederatedSessionID{HostID: hostID, SessionID: s.Id}.String()
+		tagged.Id = hostclaim.FederatedSessionID{HostID: hostID, SessionID: s.Id}.String()
 		tagged.HostId = hostID
 		tagged.HostDisplayName = snap.displayName
 		tagged.HostStale = !snap.reachable

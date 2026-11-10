@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -40,7 +40,7 @@ func newEnforcedGateFixture(t *testing.T) *gateFixture {
 	cfg, err := session.NewConfiguredWorkflowEngine(repo, gates, nil)
 	require.NoError(t, err)
 	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), cfg, enforceEveryClass{})
-	reporter := services.NewBacklogService(storage, nil, nil, nil, nil, nil).TransitionDeniedReporter()
+	reporter := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil).TransitionDeniedReporter()
 	require.NoError(t, storage.SetTransitionGate(sel, reporter))
 	return &gateFixture{storage: storage, repo: repo, cfg: cfg, gates: gates}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -23,37 +24,8 @@ import (
 // Implements tokens.TokenStoreReader.
 // --------------------------------------------------------------------------
 
-type fakeTokenStore struct {
-	results   []*tokens.ParseResult
-	isLoading bool
-	// subscribeCh, when set, is returned as-is by Subscribe() so a test can
-	// push values directly onto it (deterministic control over watchInsights's
-	// receive loop, vs. racing a real TokenStore's background walk timing).
-	// Subscribe() falls back to a fresh unconnected channel when unset,
-	// preserving the original behavior for tests that don't care.
-	subscribeCh chan *tokens.ParseResult
-}
-
-func (f *fakeTokenStore) GetAll() []*tokens.ParseResult { return f.results }
-func (f *fakeTokenStore) GetByUUID(uuid string) *tokens.ParseResult {
-	for _, r := range f.results {
-		if r.SessionUUID == uuid {
-			return r
-		}
-	}
-	return nil
-}
-func (f *fakeTokenStore) IsLoading() bool { return f.isLoading }
-func (f *fakeTokenStore) Subscribe() <-chan *tokens.ParseResult {
-	if f.subscribeCh != nil {
-		return f.subscribeCh
-	}
-	return make(chan *tokens.ParseResult, 1)
-}
-func (f *fakeTokenStore) Unsubscribe(_ <-chan *tokens.ParseResult) {}
-
 // Compile-time assertion: fakeTokenStore must implement TokenStoreReader.
-var _ tokens.TokenStoreReader = (*fakeTokenStore)(nil)
+var _ tokens.TokenStoreReader = (*svctest.FakeTokenStore)(nil)
 
 // --------------------------------------------------------------------------
 // Fake SessionStorage (in-memory list)
@@ -69,24 +41,8 @@ func (f *fakeSessionStorage) ListSessionRecords() []tokens.SessionRecord { retur
 // Fake insightsBacklogReader (controllable entries + optional forced error)
 // --------------------------------------------------------------------------
 
-type fakeBacklogReader struct {
-	entries []session.ItemSessionBacklogEntry
-	err     error
-	// calls counts GetAllItemSessionsWithBacklogInfo invocations — see
-	// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce.
-	calls int
-}
-
-func (f *fakeBacklogReader) GetAllItemSessionsWithBacklogInfo(_ context.Context) ([]session.ItemSessionBacklogEntry, error) {
-	f.calls++
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.entries, nil
-}
-
 // Compile-time assertion: fakeBacklogReader must implement insightsBacklogReader.
-var _ insightsBacklogReader = (*fakeBacklogReader)(nil)
+var _ insightsBacklogReader = (*svctest.FakeBacklogReader)(nil)
 
 // --------------------------------------------------------------------------
 // Fake insightsDeletedCostLedgerReader (Story 3 — deleted-item cost ledger)
@@ -96,7 +52,7 @@ var _ insightsBacklogReader = (*fakeBacklogReader)(nil)
 // deleted-item cost ledger, mirroring fakeBacklogReader's controllable-entries
 // shape for the second seam InsightsService optionally asserts for.
 type fakeBacklogReaderWithLedger struct {
-	fakeBacklogReader
+	svctest.FakeBacklogReader
 	ledgerEntries []session.DeletedItemSessionCostEntry
 	ledgerErr     error
 	// ledgerCalls counts GetDeletedItemSessionCostLedger invocations — see
@@ -120,33 +76,10 @@ var _ insightsDeletedCostLedgerReader = (*fakeBacklogReaderWithLedger)(nil)
 // Helpers
 // --------------------------------------------------------------------------
 
-// newResult builds a minimal ParseResult for tests.
-func newResult(uuid, model, projectPath string, input, output, cacheRead int64, modTime time.Time) *tokens.ParseResult {
-	return &tokens.ParseResult{
-		SessionUUID:  uuid,
-		PrimaryModel: model,
-		ProjectPath:  projectPath,
-		TotalInput:   input,
-		TotalOutput:  output,
-		CacheRead:    cacheRead,
-		FileModTime:  modTime,
-		TurnTimeline: []tokens.TurnStats{
-			{
-				Model:     model,
-				Input:     input,
-				Output:    output,
-				CacheRead: cacheRead,
-				Timestamp: modTime,
-			},
-		},
-		ToolUsage: map[string]tokens.ToolTokenStats{},
-	}
-}
-
 // newInsightsFixture returns an InsightsService wired with a fake store and
 // the default pricing table. Pass nil sessionRecords to get nil associator (all orphans).
 func newInsightsFixture(results []*tokens.ParseResult, sessionRecords []tokens.SessionRecord) *InsightsService {
-	store := &fakeTokenStore{results: results}
+	store := &svctest.FakeTokenStore{Results: results}
 	pricing := tokens.DefaultPricingTable()
 	var associator *tokens.Associator
 	if sessionRecords != nil {
@@ -186,8 +119,8 @@ func TestGetInsightsSummary_AggregatesTokensAndCost(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-1", "claude-sonnet-4", "/home/user/proj", 1000, 500, 200, now),
-		newResult("uuid-2", "claude-sonnet-4", "/home/user/proj2", 2000, 1000, 400, now),
+		svctest.NewResult("uuid-1", "claude-sonnet-4", "/home/user/proj", 1000, 500, 200, now),
+		svctest.NewResult("uuid-2", "claude-sonnet-4", "/home/user/proj2", 2000, 1000, 400, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -214,8 +147,8 @@ func TestGetInsightsSummary_TimeFilter_ExcludesOutOfRange(t *testing.T) {
 	yesterday := now.Add(-24 * time.Hour)
 	nextWeek := now.Add(7 * 24 * time.Hour)
 
-	recent := newResult("uuid-recent", "claude-sonnet-4", "/proj", 1000, 500, 0, now)
-	old := newResult("uuid-old", "claude-sonnet-4", "/proj", 999, 499, 0, yesterday.Add(-2*time.Hour))
+	recent := svctest.NewResult("uuid-recent", "claude-sonnet-4", "/proj", 1000, 500, 0, now)
+	old := svctest.NewResult("uuid-old", "claude-sonnet-4", "/proj", 999, 499, 0, yesterday.Add(-2*time.Hour))
 	results := []*tokens.ParseResult{recent, old}
 	svc := newInsightsFixture(results, nil)
 
@@ -242,8 +175,8 @@ func TestGetInsightsSummary_ModelFilter_OnlyMatchingFamily(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-sonnet", "claude-sonnet-4", "/proj", 1000, 500, 0, now),
-		newResult("uuid-opus", "claude-opus-4", "/proj2", 2000, 1000, 0, now),
+		svctest.NewResult("uuid-sonnet", "claude-sonnet-4", "/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-opus", "claude-opus-4", "/proj2", 2000, 1000, 0, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -269,8 +202,8 @@ func TestGetInsightsSummary_OrphanFilter_ExcludesOrphansWhenNotRequested(t *test
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-matched", "claude-sonnet-4", "/home/user/matched", 1000, 500, 0, now),
-		newResult("uuid-orphan", "claude-sonnet-4", "/home/user/orphan", 999, 499, 0, now),
+		svctest.NewResult("uuid-matched", "claude-sonnet-4", "/home/user/matched", 1000, 500, 0, now),
+		svctest.NewResult("uuid-orphan", "claude-sonnet-4", "/home/user/orphan", 999, 499, 0, now),
 	}
 
 	// Only one session record matches uuid-matched via path prefix
@@ -299,8 +232,8 @@ func TestGetInsightsSummary_WhenConversationIdFilterMatchesOrphanSession_ExpectE
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("conv-orphan", "claude-sonnet-4", "/home/user/orphan", 1000, 500, 0, now),
-		newResult("conv-other", "claude-sonnet-4", "/home/user/other", 999, 499, 0, now),
+		svctest.NewResult("conv-orphan", "claude-sonnet-4", "/home/user/orphan", 1000, 500, 0, now),
+		svctest.NewResult("conv-other", "claude-sonnet-4", "/home/user/other", 999, 499, 0, now),
 	}
 	// No session records match either conversation — both are orphans, so
 	// session_id_filter could never select either of them.
@@ -325,8 +258,8 @@ func TestGetInsightsSummary_WhenSessionIdFilterSetAndNoConversationIdFilter_Expe
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-matched", "claude-sonnet-4", "/home/user/matched", 1000, 500, 0, now),
-		newResult("uuid-other", "claude-sonnet-4", "/home/user/other", 999, 499, 0, now),
+		svctest.NewResult("uuid-matched", "claude-sonnet-4", "/home/user/matched", 1000, 500, 0, now),
+		svctest.NewResult("uuid-other", "claude-sonnet-4", "/home/user/other", 999, 499, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-1", ConversationID: "uuid-matched", Path: "/home/user/matched"},
@@ -359,9 +292,9 @@ func TestGetInsightsSummary_DailyRollup_BucketsPerCalendarDay(t *testing.T) {
 	day2 := time.Date(2026, 5, 11, 12, 0, 0, 0, loc)
 
 	results := []*tokens.ParseResult{
-		newResult("uuid-1", "claude-sonnet-4", "/proj", 1000, 500, 0, day1),
-		newResult("uuid-2", "claude-sonnet-4", "/proj", 800, 400, 0, day1),
-		newResult("uuid-3", "claude-sonnet-4", "/proj", 600, 300, 0, day2),
+		svctest.NewResult("uuid-1", "claude-sonnet-4", "/proj", 1000, 500, 0, day1),
+		svctest.NewResult("uuid-2", "claude-sonnet-4", "/proj", 800, 400, 0, day1),
+		svctest.NewResult("uuid-3", "claude-sonnet-4", "/proj", 600, 300, 0, day2),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -389,9 +322,9 @@ func TestGetInsightsSummary_ModelBreakdown_AggregatesPerFamily(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-s1", "claude-sonnet-4", "/proj", 1000, 500, 0, now),
-		newResult("uuid-s2", "claude-sonnet-4", "/proj", 2000, 1000, 0, now),
-		newResult("uuid-o1", "claude-opus-4", "/proj", 3000, 1500, 0, now),
+		svctest.NewResult("uuid-s1", "claude-sonnet-4", "/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-s2", "claude-sonnet-4", "/proj", 2000, 1000, 0, now),
+		svctest.NewResult("uuid-o1", "claude-opus-4", "/proj", 3000, 1500, 0, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -427,9 +360,9 @@ func TestListSessionTokens_SortByCostDesc(t *testing.T) {
 	now := time.Now().UTC()
 	// opus is more expensive than sonnet.
 	results := []*tokens.ParseResult{
-		newResult("uuid-cheap", "claude-haiku-3", "/proj", 100, 50, 0, now),
-		newResult("uuid-expensive", "claude-opus-4", "/proj", 5000, 2500, 0, now),
-		newResult("uuid-mid", "claude-sonnet-4", "/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-cheap", "claude-haiku-3", "/proj", 100, 50, 0, now),
+		svctest.NewResult("uuid-expensive", "claude-opus-4", "/proj", 5000, 2500, 0, now),
+		svctest.NewResult("uuid-mid", "claude-sonnet-4", "/proj", 1000, 500, 0, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -456,7 +389,7 @@ func TestListSessionTokens_Pagination_ReturnsCorrectPage(t *testing.T) {
 	now := time.Now().UTC()
 	results := make([]*tokens.ParseResult, 5)
 	for i := range results {
-		results[i] = newResult(
+		results[i] = svctest.NewResult(
 			"uuid-"+string(rune('A'+i)),
 			"claude-sonnet-4",
 			"/proj",
@@ -547,7 +480,7 @@ func TestGetInsightsSummary_WhenUnpricedModelFamily_ExpectPricingUnavailableFlag
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -573,7 +506,7 @@ func TestGetInsightsSummary_WhenSonnet5ModelUsed_ExpectNonZeroCost(t *testing.T)
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-1", "claude-sonnet-5-20250929", "/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-1", "claude-sonnet-5-20250929", "/proj", 1000, 500, 0, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -596,7 +529,7 @@ func TestListSessionTokens_WhenUnpricedModelFamily_ExpectUnpricedModelsPopulated
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -667,7 +600,7 @@ func TestGetInsightsSummary_WhenCalledTwiceWithSameUnpricedFamily_ExpectLoggedOn
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-1", "gpt-99-turbo", "/proj", 1000, 500, 0, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -692,33 +625,7 @@ func TestGetInsightsSummary_WhenCalledTwiceWithSameUnpricedFamily_ExpectLoggedOn
 // seam (mirrors backlogItemEventSender/watchBacklogItems).
 // --------------------------------------------------------------------------
 
-// fakeInsightsEventSender is a hand-rolled fake implementing
-// insightsEventSender, capturing every sent message in a mutex-guarded slice
-// — watchInsights runs in a goroutine below while the test triggers a file
-// change concurrently, so Send is called concurrently with Sent().
-type fakeInsightsEventSender struct {
-	mu   sync.Mutex
-	sent []*sessionv1.InsightsEvent
-}
-
-func (f *fakeInsightsEventSender) Send(e *sessionv1.InsightsEvent) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sent = append(f.sent, e)
-	return nil
-}
-
-// Sent returns a snapshot copy of the messages sent so far, safe to read
-// concurrently with in-flight Send calls.
-func (f *fakeInsightsEventSender) Sent() []*sessionv1.InsightsEvent {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]*sessionv1.InsightsEvent, len(f.sent))
-	copy(out, f.sent)
-	return out
-}
-
-var _ insightsEventSender = (*fakeInsightsEventSender)(nil)
+var _ insightsEventSender = (*svctest.FakeInsightsEventSender)(nil)
 
 // runWatchInsights launches watchInsights in a goroutine, mirroring
 // runWatchBacklogItems (backlog_service_events_test.go). Cleanup/completion
@@ -737,7 +644,7 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 	store.Start(ctx)
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, nil)
 
-	sender := &fakeInsightsEventSender{}
+	sender := &svctest.FakeInsightsEventSender{}
 	runCtx, runCancel := context.WithCancel(context.Background())
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
@@ -759,7 +666,7 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 	}, 2*time.Second, 10*time.Millisecond)
 	assert.Equal(t, "update", sender.Sent()[len(sender.Sent())-1].EventType)
 
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 // --------------------------------------------------------------------------
@@ -770,7 +677,7 @@ func TestGetSessionTurnTimeline_should_returnTurns_When_ConversationIdMatches(t 
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-1", "claude-sonnet-4", "/proj", 1000, 500, 200, now),
+		svctest.NewResult("uuid-1", "claude-sonnet-4", "/proj", 1000, 500, 200, now),
 	}
 	svc := newInsightsFixture(results, nil)
 
@@ -879,14 +786,14 @@ func TestWatchInsights_should_unsubscribeAndReturn_When_ContextIsCanceled(t *tes
 	store.Start(ctx)
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, nil)
 
-	sender := &fakeInsightsEventSender{}
+	sender := &svctest.FakeInsightsEventSender{}
 	runCtx, runCancel := context.WithCancel(context.Background())
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
 
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 1 }, 2*time.Second, 10*time.Millisecond)
 
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 // --------------------------------------------------------------------------
@@ -1064,7 +971,7 @@ func TestGetInsightsSummary_WhenSessionHasTags_ExpectTagsPopulated(t *testing.T)
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-tagged", "claude-sonnet-4", "/home/user/tagged", 1000, 500, 0, now),
+		svctest.NewResult("uuid-tagged", "claude-sonnet-4", "/home/user/tagged", 1000, 500, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-1", ConversationID: "uuid-tagged", Path: "/home/user/tagged", Tags: []string{"backend", "urgent"}},
@@ -1085,7 +992,7 @@ func TestGetInsightsSummary_WhenSessionOrphaned_ExpectTagsEmpty(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-orphan", "claude-sonnet-4", "/home/user/orphan", 1000, 500, 0, now),
+		svctest.NewResult("uuid-orphan", "claude-sonnet-4", "/home/user/orphan", 1000, 500, 0, now),
 	}
 	// No matching session record — orphan.
 	svc := newInsightsFixture(results, []tokens.SessionRecord{})
@@ -1135,10 +1042,10 @@ func TestWatchInsights_WhenChannelReceivesNonNilParseResult_ExpectUpdateEventWit
 	// walk) gives deterministic control over exactly what the receive loop
 	// sees — no racing a real walk's timing.
 	ch := make(chan *tokens.ParseResult, 1)
-	store := &fakeTokenStore{subscribeCh: ch}
+	store := &svctest.FakeTokenStore{SubscribeCh: ch}
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, nil)
 
-	sender := &fakeInsightsEventSender{}
+	sender := &svctest.FakeInsightsEventSender{}
 	runCtx, runCancel := context.WithCancel(context.Background())
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
@@ -1148,7 +1055,7 @@ func TestWatchInsights_WhenChannelReceivesNonNilParseResult_ExpectUpdateEventWit
 	// notify(result) sends the non-nil *tokens.ParseResult for the reparsed
 	// file (Story 1.5.1), so the "update" event built from it must carry a
 	// populated Session, not the previous always-nil status quo.
-	ch <- newResult("conv-xyz", "claude-sonnet-4", "/proj", 1000, 500, 200, time.Now().UTC())
+	ch <- svctest.NewResult("conv-xyz", "claude-sonnet-4", "/proj", 1000, 500, 200, time.Now().UTC())
 
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
 
@@ -1157,16 +1064,16 @@ func TestWatchInsights_WhenChannelReceivesNonNilParseResult_ExpectUpdateEventWit
 	require.NotNil(t, last.Session)
 	assert.Equal(t, "conv-xyz", last.Session.ConversationId)
 
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 func TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpdate(t *testing.T) {
 	t.Parallel()
 	ch := make(chan *tokens.ParseResult, 1)
-	store := &fakeTokenStore{subscribeCh: ch}
+	store := &svctest.FakeTokenStore{SubscribeCh: ch}
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, nil)
 
-	sender := &fakeInsightsEventSender{}
+	sender := &svctest.FakeInsightsEventSender{}
 	runCtx, runCancel := context.WithCancel(context.Background())
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
@@ -1187,7 +1094,7 @@ func TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpd
 	assert.True(t, last.AllParsed)
 	assert.Nil(t, last.Session)
 
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 // --------------------------------------------------------------------------
@@ -1259,7 +1166,7 @@ func TestGetInsightsSummary_When25SessionsEachProduceOneFinding_ExpectTop20Sorte
 		results = append(results, findingsFixtureResult(i, now))
 	}
 
-	store := &fakeTokenStore{results: results}
+	store := &svctest.FakeTokenStore{Results: results}
 	pricing := findingsFixturePricingTable(n)
 	svc := NewInsightsService(store, pricing, nil, nil)
 
@@ -1291,7 +1198,7 @@ func TestGetInsightsSummary_WhenOneSessionHasDegenerateData_ExpectOtherSessionsF
 	degenerate := &tokens.ParseResult{SessionUUID: "uuid-degenerate"}
 	normal := findingsFixtureResult(1, now)
 
-	store := &fakeTokenStore{results: []*tokens.ParseResult{degenerate, normal}}
+	store := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{degenerate, normal}}
 	pricing := findingsFixturePricingTable(1)
 	svc := NewInsightsService(store, pricing, nil, nil)
 
@@ -1341,7 +1248,7 @@ func TestGetInsightsSummary_WhenMostCalledToolUnpricedAndLessCalledToolPriced_Ex
 		},
 	}
 
-	store := &fakeTokenStore{results: []*tokens.ParseResult{result}}
+	store := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{result}}
 	svc := NewInsightsService(store, pricing, nil, nil)
 
 	resp, err := svc.GetInsightsSummary(
@@ -1382,7 +1289,7 @@ func TestGetInsightsSummary_WhenMultiToolTurn_ExpectCostMayDoubleCountSetOnBothT
 		},
 	}
 
-	store := &fakeTokenStore{results: []*tokens.ParseResult{result}}
+	store := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{result}}
 	svc := NewInsightsService(store, pricing, nil, nil)
 
 	resp, err := svc.GetInsightsSummary(
@@ -1435,7 +1342,7 @@ func TestGetInsightsSummary_When3SessionsAcross2ActivityTypes_ExpectActivityBrea
 		ToolUsage: map[string]tokens.ToolTokenStats{},
 	}
 
-	store := &fakeTokenStore{results: []*tokens.ParseResult{featureDevSessionA, featureDevSessionB, debuggingSession}}
+	store := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{featureDevSessionA, featureDevSessionB, debuggingSession}}
 	svc := NewInsightsService(store, pricing, nil, nil)
 
 	resp, err := svc.GetInsightsSummary(
@@ -1471,7 +1378,7 @@ func TestGetInsightsSummary_WhenSessionClassified_ExpectActivityTypeSetOnSummary
 		ToolUsage: map[string]tokens.ToolTokenStats{},
 	}
 
-	store := &fakeTokenStore{results: []*tokens.ParseResult{result}}
+	store := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{result}}
 	svc := NewInsightsService(store, pricing, nil, nil)
 
 	resp, err := svc.GetInsightsSummary(
@@ -1493,16 +1400,16 @@ func TestGetInsightsSummary_WhenSessionHasItemSessionRole_ExpectSessionRolePopul
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-role", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-role", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-role", ConversationID: "uuid-role", Path: "/home/user/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-role", SessionRole: session.SessionRoleWork},
 	}}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 
 	resp, err := svc.GetInsightsSummary(
 		context.Background(),
@@ -1518,16 +1425,16 @@ func TestGetInsightsSummary_WhenBacklogItemArchived_ExpectSessionRoleAndTagsPopu
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-archived", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-archived", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-archived", ConversationID: "uuid-archived", Path: "/home/user/proj", Tags: []string{"triage-tag"}},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-archived", SessionRole: session.SessionRoleTriage, ItemStatus: string(session.BacklogStatusArchived)},
 	}}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 
 	resp, err := svc.GetInsightsSummary(
 		context.Background(),
@@ -1544,15 +1451,15 @@ func TestGetInsightsSummary_WhenNoItemSessionRow_ExpectSessionRoleClassifiedExte
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-no-row", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-no-row", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-no-row", ConversationID: "uuid-no-row", Path: "/home/user/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
 	// No matching entry for "sess-no-row" — simulates a session with no linked ItemSession row.
-	backlogReader := &fakeBacklogReader{}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+	backlogReader := &svctest.FakeBacklogReader{}
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 
 	resp, err := svc.GetInsightsSummary(
 		context.Background(),
@@ -1570,13 +1477,13 @@ func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndExternalRole(t 
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("uuid-nil-reader", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
+		svctest.NewResult("uuid-nil-reader", "claude-sonnet-4", "/home/user/proj", 1000, 500, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-nil-reader", ConversationID: "uuid-nil-reader", Path: "/home/user/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, nil)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, nil)
 
 	require.NotPanics(t, func() {
 		resp, err := svc.GetInsightsSummary(
@@ -1591,10 +1498,10 @@ func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndExternalRole(t 
 
 func TestSessionMetaForSessions_should_RetainItemIDAndItemTitle_When_BuildingMapFromBacklogEntries(t *testing.T) {
 	t.Parallel()
-	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-1", SessionRole: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
 	}}
-	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
 
 	meta := svc.sessionMetaForSessions(context.Background()).meta
 
@@ -1606,11 +1513,11 @@ func TestSessionMetaForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_Exp
 	t.Parallel()
 	// Mirrors the real query's explicit Order(Desc(CreatedAt)): the newest row
 	// comes first, so it must be the one the map keeps.
-	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 		{SessionUUID: "dup-uuid", SessionRole: session.SessionRoleWork},
 		{SessionUUID: "dup-uuid", SessionRole: session.SessionRoleTriage},
 	}}
-	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
 
 	meta := svc.sessionMetaForSessions(context.Background()).meta
 
@@ -1679,10 +1586,10 @@ func TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRole
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("conv-triage", "claude-haiku-4", "/proj", 0, 4000, 0, now),
-		newResult("conv-review", "claude-haiku-4", "/proj", 0, 30000, 0, now),
-		newResult("conv-work", "claude-haiku-4", "/proj", 0, 280000, 0, now),
-		newResult("conv-adhoc", "claude-haiku-4", "/proj", 0, 10000, 0, now),
+		svctest.NewResult("conv-triage", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+		svctest.NewResult("conv-review", "claude-haiku-4", "/proj", 0, 30000, 0, now),
+		svctest.NewResult("conv-work", "claude-haiku-4", "/proj", 0, 280000, 0, now),
+		svctest.NewResult("conv-adhoc", "claude-haiku-4", "/proj", 0, 10000, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-triage", ConversationID: "conv-triage", Path: "/proj"},
@@ -1691,13 +1598,13 @@ func TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRole
 		{SessionID: "sess-adhoc", ConversationID: "conv-adhoc", Path: "/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
 		{SessionUUID: "sess-review", SessionRole: session.SessionRoleReview, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
 		{SessionUUID: "sess-work", SessionRole: session.SessionRoleWork, ItemID: "bl_xyz789", ItemTitle: "Add feature"},
 		// sess-adhoc has no matching entry — an ad hoc session with no backlog attribution.
 	}}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
 	require.NoError(t, err)
@@ -1736,19 +1643,19 @@ func TestGetInsightsSummary_RoleBreakdown_should_ExcludeUnpricedSessionFromCostS
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("conv-review-priced", "claude-haiku-4", "/proj", 0, 4000, 0, now),
-		newResult("conv-review-unpriced", "claude-opus-9000", "/proj", 1000, 500, 0, now),
+		svctest.NewResult("conv-review-priced", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+		svctest.NewResult("conv-review-unpriced", "claude-opus-9000", "/proj", 1000, 500, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-review-priced", ConversationID: "conv-review-priced", Path: "/proj"},
 		{SessionID: "sess-review-unpriced", ConversationID: "conv-review-unpriced", Path: "/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-review-priced", SessionRole: session.SessionRoleReview, ItemID: "bl_1", ItemTitle: "Item One"},
 		{SessionUUID: "sess-review-unpriced", SessionRole: session.SessionRoleReview, ItemID: "bl_1", ItemTitle: "Item One"},
 	}}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
 	require.NoError(t, err)
@@ -1766,13 +1673,13 @@ func TestGetInsightsSummary_should_IncludeGeminiPricedSessionWithNoTranscript_Wh
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("conv-claude-triage", "claude-haiku-4", "/proj", 0, 4000, 0, now),
+		svctest.NewResult("conv-claude-triage", "claude-haiku-4", "/proj", 0, 4000, 0, now),
 	}
 	sessionRecords := []tokens.SessionRecord{
 		{SessionID: "sess-claude-triage", ConversationID: "conv-claude-triage", Path: "/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 		// Has a matching Claude transcript above — must be counted once, via the
 		// transcript path, not double-counted via this row's own EstimatedCostUsd.
 		{SessionUUID: "sess-claude-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_claude", ItemTitle: "Claude Item", EstimatedCostUsd: 0.02, CostPriced: true},
@@ -1780,7 +1687,7 @@ func TestGetInsightsSummary_should_IncludeGeminiPricedSessionWithNoTranscript_Wh
 		// writes no JSONL) — must be folded in via Story 4.1.4's synthetic pass.
 		{SessionUUID: "sess-gemini-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_gemini", ItemTitle: "Gemini Item", EstimatedCostUsd: 0.003, CostPriced: true},
 	}}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
 	require.NoError(t, err)
@@ -1842,7 +1749,7 @@ var _ DismissedFindingsRepository = (*fakeDismissedFindingsStore)(nil)
 
 func TestDismissFinding_WhenNoStoreWired_ExpectUnimplemented(t *testing.T) {
 	t.Parallel()
-	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, nil)
+	svc := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), nil, nil)
 
 	_, err := svc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{FindingId: "abc"}))
 
@@ -1852,7 +1759,7 @@ func TestDismissFinding_WhenNoStoreWired_ExpectUnimplemented(t *testing.T) {
 
 func TestDismissFinding_WhenFindingIdEmpty_ExpectInvalidArgument(t *testing.T) {
 	t.Parallel()
-	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, nil)
+	svc := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), nil, nil)
 	svc.SetDismissedFindingsStore(&fakeDismissedFindingsStore{})
 
 	_, err := svc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{}))
@@ -1866,7 +1773,7 @@ func TestDismissFinding_WhenPersisted_ExpectSubsequentGetInsightsSummaryExcludes
 	now := time.Now().UTC()
 
 	dismissedStore := &fakeDismissedFindingsStore{}
-	store := &fakeTokenStore{results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}
+	store := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}
 	svc := NewInsightsService(store, findingsFixturePricingTable(1), nil, nil)
 	svc.SetDismissedFindingsStore(dismissedStore)
 
@@ -1905,7 +1812,7 @@ func TestDismissFinding_WhenOnlyOneOfTwoSessionsDismissed_ExpectOtherSessionFind
 	now := time.Now().UTC()
 
 	dismissedStore := &fakeDismissedFindingsStore{}
-	store := &fakeTokenStore{results: []*tokens.ParseResult{
+	store := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{
 		findingsFixtureResult(1, now),
 		findingsFixtureResult(2, now),
 	}}
@@ -1957,7 +1864,7 @@ func TestDismissFinding_WhenActiveSessionConditionChangesAfterDismissal_ExpectNe
 
 	// "Before": the session as it stood when the user dismissed the finding.
 	beforeResult := findingsFixtureResult(1, now)
-	beforeStore := &fakeTokenStore{results: []*tokens.ParseResult{beforeResult}}
+	beforeStore := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{beforeResult}}
 	beforeSvc := NewInsightsService(beforeStore, pricing, nil, nil)
 	beforeSvc.SetDismissedFindingsStore(dismissedStore)
 
@@ -1980,7 +1887,7 @@ func TestDismissFinding_WhenActiveSessionConditionChangesAfterDismissal_ExpectNe
 	for i := range afterResult.TurnTimeline {
 		afterResult.TurnTimeline[i].Output = 800_000
 	}
-	afterStore := &fakeTokenStore{results: []*tokens.ParseResult{afterResult}}
+	afterStore := &svctest.FakeTokenStore{Results: []*tokens.ParseResult{afterResult}}
 	afterSvc := NewInsightsService(afterStore, pricing, nil, nil)
 	afterSvc.SetDismissedFindingsStore(dismissedStore)
 
@@ -2005,7 +1912,7 @@ func TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissal
 	dismissedStore := &fakeDismissedFindingsStore{}
 	pricing := findingsFixturePricingTable(1)
 
-	svc := NewInsightsService(&fakeTokenStore{results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}, pricing, nil, nil)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}, pricing, nil, nil)
 	svc.SetDismissedFindingsStore(dismissedStore)
 
 	first, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
@@ -2017,7 +1924,7 @@ func TestDismissFinding_WhenFinishedSessionRecomputedIdentically_ExpectDismissal
 	// Re-parsed from the same (now-finished, immutable) transcript on every
 	// subsequent request — a fresh ParseResult built with identical inputs,
 	// exactly like a real re-parse of an unchanged JSONL file.
-	svc2 := NewInsightsService(&fakeTokenStore{results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}, pricing, nil, nil)
+	svc2 := NewInsightsService(&svctest.FakeTokenStore{Results: []*tokens.ParseResult{findingsFixtureResult(1, now)}}, pricing, nil, nil)
 	svc2.SetDismissedFindingsStore(dismissedStore)
 
 	second, err := svc2.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
@@ -2035,7 +1942,7 @@ func TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce(t *te
 	t.Parallel()
 	now := time.Now().UTC()
 	backlogReader := &fakeBacklogReaderWithLedger{
-		fakeBacklogReader: fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+		FakeBacklogReader: svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 			{SessionUUID: "sess-once", SessionRole: session.SessionRoleWork, ItemID: "item-1", ItemTitle: "T", EstimatedCostUsd: 1, CostPriced: true, CreatedAt: now},
 		}},
 		ledgerEntries: []session.DeletedItemSessionCostEntry{
@@ -2043,12 +1950,12 @@ func TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce(t *te
 				ItemID: "deleted-1", ItemTitle: "Deleted", EstimatedCostUsd: 0.5, CostPriced: true, CreatedAt: now},
 		},
 	}
-	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
 
 	_, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, backlogReader.calls, "GetAllItemSessionsWithBacklogInfo must be fetched exactly once per GetInsightsSummary call")
+	assert.Equal(t, 1, backlogReader.Calls, "GetAllItemSessionsWithBacklogInfo must be fetched exactly once per GetInsightsSummary call")
 	assert.Equal(t, 1, backlogReader.ledgerCalls, "GetDeletedItemSessionCostLedger must be fetched exactly once per GetInsightsSummary call")
 }
 
@@ -2066,7 +1973,7 @@ func TestGetInsightsSummary_should_IncludeDeletedItemLedgerCost_When_NoMatchingT
 				ItemID: "deleted-1", ItemTitle: "Deleted Item", EstimatedCostUsd: 0.5, CostPriced: true, CreatedAt: now},
 		},
 	}
-	svc := NewInsightsService(&fakeTokenStore{}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), backlogReader)
 
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
 	require.NoError(t, err)
@@ -2089,7 +1996,7 @@ func TestGetInsightsSummary_WhenDeletedItemTranscriptStillOnDisk_ExpectAttribute
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("conv-deleted-2", "claude-sonnet-4", "/wt/deleted", 1000, 500, 0, now),
+		svctest.NewResult("conv-deleted-2", "claude-sonnet-4", "/wt/deleted", 1000, 500, 0, now),
 	}
 	// No live session record: the transcript is an orphan by path/UUID association.
 	associator := tokens.NewAssociator(&fakeSessionStorage{})
@@ -2099,7 +2006,7 @@ func TestGetInsightsSummary_WhenDeletedItemTranscriptStillOnDisk_ExpectAttribute
 				ItemID: "deleted-2", ItemTitle: "T2", EstimatedCostUsd: 9, CostPriced: true, CreatedAt: now},
 		},
 	}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
 	require.NoError(t, err)
@@ -2116,15 +2023,15 @@ func TestGetInsightsSummary_WhenSessionDeleted_ExpectAttributedByConversationUUI
 	t.Parallel()
 	now := time.Now().UTC()
 	results := []*tokens.ParseResult{
-		newResult("conv-gone", "claude-sonnet-4", "/wt/gone", 1000, 500, 0, now),
+		svctest.NewResult("conv-gone", "claude-sonnet-4", "/wt/gone", 1000, 500, 0, now),
 	}
 	// No live session record: the transcript is an orphan by path/UUID association.
 	associator := tokens.NewAssociator(&fakeSessionStorage{})
-	backlogReader := &fakeBacklogReader{entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-gone", ConversationUUID: "conv-gone", SessionRole: session.SessionRoleWork,
 			ItemID: "item-1", ItemTitle: "T", EstimatedCostUsd: 9, CostPriced: true, CreatedAt: now},
 	}}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 
 	// IncludeOrphans is false: a conversation-attributed transcript must not be filtered as an orphan.
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{}))
@@ -2144,10 +2051,10 @@ func TestGetInsightsSummary_UnattributedRoleBreakdown_GroupsByWorktreeTitle(t *t
 	wt1 := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
 	wt2 := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25/tests/e2e"
 	results := []*tokens.ParseResult{
-		newResult("u1", "claude-sonnet-4", wt1, 1000, 500, 0, now),
-		newResult("u2", "claude-sonnet-4", wt2, 1000, 500, 0, now),
+		svctest.NewResult("u1", "claude-sonnet-4", wt1, 1000, 500, 0, now),
+		svctest.NewResult("u2", "claude-sonnet-4", wt2, 1000, 500, 0, now),
 	}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
 
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
 
@@ -2171,10 +2078,10 @@ func TestGetInsightsSummary_UnattributedRoleBreakdown_SplitsExternalFromWorktree
 	worktreePath := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
 	externalPath := "/home/u/code/github/com/tstapler/kibitzer"
 	results := []*tokens.ParseResult{
-		newResult("u1", "claude-sonnet-4", worktreePath, 1000, 500, 0, now),
-		newResult("u2", "claude-sonnet-4", externalPath, 1000, 500, 0, now),
+		svctest.NewResult("u1", "claude-sonnet-4", worktreePath, 1000, 500, 0, now),
+		svctest.NewResult("u2", "claude-sonnet-4", externalPath, 1000, 500, 0, now),
 	}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
 
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
 
@@ -2210,10 +2117,10 @@ func TestGetInsightsSummary_SessionRole_MatchesRoleBreakdownBucket(t *testing.T)
 	worktreePath := "/home/u/.stapler-squad/workspaces/w/worktrees/steam-controls/18d2913c19117f25"
 	externalPath := "/home/u/code/github/com/tstapler/kibitzer"
 	results := []*tokens.ParseResult{
-		newResult("u1", "claude-sonnet-4", worktreePath, 1000, 500, 0, now),
-		newResult("u2", "claude-sonnet-4", externalPath, 1000, 500, 0, now),
+		svctest.NewResult("u1", "claude-sonnet-4", worktreePath, 1000, 500, 0, now),
+		svctest.NewResult("u2", "claude-sonnet-4", externalPath, 1000, 500, 0, now),
 	}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), tokens.NewAssociator(&fakeSessionStorage{}), nil)
 
 	resp, err := svc.GetInsightsSummary(context.Background(), connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: true}))
 

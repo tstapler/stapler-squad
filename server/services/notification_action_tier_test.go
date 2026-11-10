@@ -9,13 +9,14 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // enableInline turns on the inline-action flag for the given scopes and the
 // answer stages, in an isolated state dir.
 func enableInline(t *testing.T, scopes ...string) {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	cfg := config.LoadConfig()
 	for _, sc := range scopes {
 		require.NoError(t, cfg.SetFeatureFlagScope(notificationInlineActionsFlagName, sc, true))

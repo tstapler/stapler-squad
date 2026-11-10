@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // maxClaimAdvertisementBody caps a claim POST body; a real record is well under 1 KiB.
@@ -18,10 +18,10 @@ const maxClaimAdvertisementBody = 64 << 10
 // oversize fields) gets 400 and is never stored or re-gossiped. gossiper may be
 // nil (tests); when set, a record that changed the index triggers one bounded
 // re-gossip hop, run after the 200 reply is written.
-func RegisterClaimAdvertisementRoute(mux *http.ServeMux, index *session.ClaimIndex, gossiper *session.ClaimGossiper) {
+func RegisterClaimAdvertisementRoute(mux *http.ServeMux, index *hostclaim.ClaimIndex, gossiper *hostclaim.ClaimGossiper) {
 	registerClaimLookupRoute(mux, index)
-	mux.HandleFunc("POST "+session.ClaimAdvertisementEndpointPath, func(w http.ResponseWriter, r *http.Request) {
-		var record session.ClaimRecord
+	mux.HandleFunc("POST "+hostclaim.ClaimAdvertisementEndpointPath, func(w http.ResponseWriter, r *http.Request) {
+		var record hostclaim.ClaimRecord
 		r.Body = http.MaxBytesReader(w, r.Body, maxClaimAdvertisementBody)
 		if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
 			log.Debug("claim_advertisement.received", "err", err)
@@ -57,8 +57,8 @@ func RegisterClaimAdvertisementRoute(mux *http.ServeMux, index *session.ClaimInd
 // the port, so this limits readers to key holders, not approved hosts. The
 // asking peer verifies the returned record's signature itself, so the response
 // is not trusted blindly.
-func registerClaimLookupRoute(mux *http.ServeMux, index *session.ClaimIndex) {
-	mux.HandleFunc("GET "+session.ClaimLookupEndpointPath, func(w http.ResponseWriter, r *http.Request) {
+func registerClaimLookupRoute(mux *http.ServeMux, index *hostclaim.ClaimIndex) {
+	mux.HandleFunc("GET "+hostclaim.ClaimLookupEndpointPath, func(w http.ResponseWriter, r *http.Request) {
 		externalURL := r.URL.Query().Get("url")
 		if externalURL == "" {
 			http.Error(w, "url query parameter is required", http.StatusBadRequest)

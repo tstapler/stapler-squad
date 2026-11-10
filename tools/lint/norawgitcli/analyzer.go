@@ -51,6 +51,10 @@ var sanctionedPackages = []string{
 	modulePath + "/session/gitwiring",
 	modulePath + "/testutil/gitfixture",
 	modulePath + "/session/git/internal/gittest",
+	modulePath + "/server/services/internal/svctest",
+	// Standalone Bazel/CI developer CLIs (never linked into the product binary).
+	modulePath + "/tools/bzl",
+	modulePath + "/tools/ci",
 }
 
 const modulePath = "github.com/tstapler/stapler-squad"

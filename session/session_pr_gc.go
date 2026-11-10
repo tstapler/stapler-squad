@@ -76,19 +76,19 @@ func (r *EntRepository) RunSessionPRLinkGC(ctx context.Context, now time.Time) (
 		fn    func() (int, error)
 	}{
 		{"links", func() (int, error) {
-			return r.client.SessionPR.Delete().Where(sessionpr.SessionUUIDNEQ(""), sessionpr.AttachedAtLT(cutoff), sessionGone).Exec(ctx)
+			return r.Client.SessionPR.Delete().Where(sessionpr.SessionUUIDNEQ(""), sessionpr.AttachedAtLT(cutoff), sessionGone).Exec(ctx)
 		}},
 		{"links", func() (int, error) {
-			return r.client.SessionPR.Delete().Where(sessionpr.BacklogItemIDNEQ(""), sessionpr.AttachedAtLT(cutoff), itemGone).Exec(ctx)
+			return r.Client.SessionPR.Delete().Where(sessionpr.BacklogItemIDNEQ(""), sessionpr.AttachedAtLT(cutoff), itemGone).Exec(ctx)
 		}},
 		{"tombstones", func() (int, error) {
-			return r.client.SessionPRTombstone.Delete().Where(sessionprtombstone.SessionUUIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombSessionGone).Exec(ctx)
+			return r.Client.SessionPRTombstone.Delete().Where(sessionprtombstone.SessionUUIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombSessionGone).Exec(ctx)
 		}},
 		{"tombstones", func() (int, error) {
-			return r.client.SessionPRTombstone.Delete().Where(sessionprtombstone.BacklogItemIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombItemGone).Exec(ctx)
+			return r.Client.SessionPRTombstone.Delete().Where(sessionprtombstone.BacklogItemIDNEQ(""), sessionprtombstone.CreatedAtLT(cutoff), tombItemGone).Exec(ctx)
 		}},
 		{"states", func() (int, error) {
-			return r.client.PullRequestState.Delete().Where(pullrequeststate.Not(pullrequeststate.HasLinks()), pullrequeststate.CreatedAtLT(cutoff)).Exec(ctx)
+			return r.Client.PullRequestState.Delete().Where(pullrequeststate.Not(pullrequeststate.HasLinks()), pullrequeststate.CreatedAtLT(cutoff)).Exec(ctx)
 		}},
 	}
 	for _, s := range steps {
@@ -136,10 +136,10 @@ func NewSessionPRLinkGC(repo *EntRepository, interval time.Duration) *SessionPRL
 // NewSessionPRLinkGC returns the collector over this storage's repository, or
 // nil when the storage has none.
 func (s *Storage) NewSessionPRLinkGC(interval time.Duration) *SessionPRLinkGC {
-	if s == nil || s.repo == nil {
+	if s == nil || s.Repo == nil {
 		return nil
 	}
-	return NewSessionPRLinkGC(s.repo, interval)
+	return NewSessionPRLinkGC(s.Repo, interval)
 }
 
 // Start runs the collector in the background until ctx ends. A second call is a no-op.

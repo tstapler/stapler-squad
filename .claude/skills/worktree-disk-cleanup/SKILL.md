@@ -274,3 +274,21 @@ for triage worktrees.
   (repo-relative), and ad hoc paths like `~/tmp-verify/*` — `git worktree
   list --porcelain` is the only reliable source of truth, not a directory
   listing.
+
+## Bazel output bases
+
+Removing a worktree does not remove its Bazel output base under `~/.cache/bazel/_bazel_$USER/<hash>/`
+(bases kept inside a worktree as `.bazel-out` go with `git worktree remove`). Orphan bases are found by their
+`DO_NOT_BUILD_HERE` file, which holds the workspace path and no trailing newline.
+
+```bash
+bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh          # dry run: lists, removes nothing
+bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh --apply  # remove orphan bases
+bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh --apply --tmp  # also stale /tmp/ssq-* dirs
+```
+
+The dry run also reports install bases older than 30 days (Bazel collects them itself; the script only reports),
+the shared disk cache size against its 100 GB GC cap, and stale test temp directories. `--apply` never touches a
+base whose workspace exists, the shared disk cache, or the repository cache. `bazel shutdown` cannot be used on an
+orphan (its workspace is gone), so the script kills the server named by `server/server.pid.txt` only when
+`/proc/<pid>/cmdline` carries `--output_base=<base>`, waits for it to exit, then removes the base.

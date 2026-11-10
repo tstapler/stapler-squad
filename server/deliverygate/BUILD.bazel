@@ -1,0 +1,79 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "deliverygate",
+    srcs = [
+        "flagcache.go",
+        "gate.go",
+        "index.go",
+        "metrics.go",
+        "policy.go",
+        "prune.go",
+        "ratelimitlog.go",
+        "resolver.go",
+        "stats.go",
+        "stats_persist.go",
+        "stats_soak.go",
+        "statsstore.go",
+        "system_ids.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/deliverygate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/tmux",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":deliverygate",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "deliverygate_test",
+    srcs = [
+        "flag_env_guard_test.go",
+        "flag_scopes_test.go",
+        "flagcache_test.go",
+        "flaky_hazards_guard_test.go",
+        "gate_bench_test.go",
+        "gate_lockorder_test.go",
+        "gate_test.go",
+        "helpers_test.go",
+        "index_test.go",
+        "log_assertions_guard_test.go",
+        "metrics_test.go",
+        "policy_test.go",
+        "prune_test.go",
+        "resolver_test.go",
+        "seed_test.go",
+        "sink_guard_test.go",
+        "startup_test.go",
+        "stats_test.go",
+        "straggler_test.go",
+        "system_ids_test.go",
+    ],
+    data = glob(["*.go"]),
+    embed = [":deliverygate"],
+    deps = [
+        "//config",
+        "//envtest",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_tools//go/packages",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)

@@ -1,0 +1,8 @@
+# Hand-written: exposes scripts read by tests (Gazelle ignores BUILD files without Go sources).
+exports_files(
+    [
+        "ssq-hook-handler",
+        "ssq-notify",
+    ],
+    visibility = ["//server/services:__pkg__"],
+)

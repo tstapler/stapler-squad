@@ -1,0 +1,3524 @@
+{
+ "rows": [
+  {
+   "test": "TestADR002References_should_PointToCanonicalPath_When_CodeCommentsGrepped",
+   "package": "session",
+   "file": "session/host_registry_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open host_registry.go: no such file or directory"
+  },
+  {
+   "test": "TestBuildCostSnapshot_should_ReturnTotalTokensAndCost_When_RealTranscriptParsedByTokenStore",
+   "package": "session",
+   "file": "session/session_summary_snapshot_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestBuildDefaultSlashCommandSet_should_MatchPreRefactorGoldenOutput_When_GivenRepresentativeFixtures",
+   "package": "session",
+   "file": "session/pipeline_engine_characterization_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestBuildDefaultSlashCommandSet_should_MatchPreRefactorGoldenOutput_When_GivenRepresentativeFixtures/one_criterion"
+  },
+  {
+   "test": "TestBuildDefaultSlashCommandSet_should_MatchPreRefactorGoldenOutput_When_GivenRepresentativeFixtures/one_criterion",
+   "package": "session",
+   "file": "session/pipeline_engine_characterization_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pipeline_engine/one_criterion_slash_commands.golden: no such file"
+  },
+  {
+   "test": "TestBuildDefaultSlashCommandSet_should_MatchPreRefactorGoldenOutput_When_GivenRepresentativeFixtures/two_plus_criteria",
+   "package": "session",
+   "file": "session/pipeline_engine_characterization_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pipeline_engine/two_plus_criteria_slash_commands.golden: no such f"
+  },
+  {
+   "test": "TestBuildDefaultSlashCommandSet_should_MatchPreRefactorGoldenOutput_When_GivenRepresentativeFixtures/zero_criteria",
+   "package": "session",
+   "file": "session/pipeline_engine_characterization_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pipeline_engine/zero_criteria_slash_commands.golden: no such file"
+  },
+  {
+   "test": "TestClaudeCommandBuilderIntegration",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "parent-of:TestClaudeCommandBuilderIntegration/MultipleRestartCycles"
+  },
+  {
+   "test": "TestClaudeCommandBuilderIntegration/MultipleRestartCycles",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestClaudeCommandBuilderIntegration/SessionDataPersistence",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestClaudeProfile_Should_NotExtract_When_NotASingleSelectDialog",
+   "package": "session",
+   "file": "session/question_profile_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/permission_bash.txt: no such file"
+  },
+  {
+   "test": "TestCommitImportExternalSession_PersistsAndLinksAndSuspends_When_StartAndSuspendSucceed",
+   "package": "session",
+   "file": "session/import_commit_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestDetectorLocalGuards_should_CallTheSharedHelper",
+   "package": "session",
+   "file": "session/backlog_denied_guard_test.go",
+   "class": "cwd",
+   "evidence": "override:test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+  },
+  {
+   "test": "TestDetermineGolden_Should_MatchCommittedGoldens_When_RunOverClaudeAiderAgyPiGeminiOpencodeCorpus",
+   "package": "session",
+   "file": "session/review_queue_determiner_golden_test.go",
+   "class": "cwd",
+   "evidence": "override:test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+  },
+  {
+   "test": "TestDialogMatch_ShouldFailClosed_WhenTheLayoutIsNotTheMeasuredOne",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldMatchTheCapturedFixtures_WhenTheRealDialogIsOnScreen",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldRejectAStatusLineAfterTheFooter_WhenTheFooterIsNotTheLastNonBlankLine",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldRejectEveryRealPermissionDialog_WhenTheirNumberedRowsAreOnScreen",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestDialogMatch_ShouldRejectEveryRealPermissionDialog_WhenTheirNumberedRowsAreOnScreen/permission_bash.txt"
+  },
+  {
+   "test": "TestDialogMatch_ShouldRejectEveryRealPermissionDialog_WhenTheirNumberedRowsAreOnScreen/permission_bash.txt",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/permission_bash.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldRejectEveryRealPermissionDialog_WhenTheirNumberedRowsAreOnScreen/permission_edit_diff.txt",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/permission_edit_diff.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldRejectEveryRealPermissionDialog_WhenTheirNumberedRowsAreOnScreen/permission_mcp.txt",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/permission_mcp.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldRejectEveryRealPermissionDialog_WhenTheirNumberedRowsAreOnScreen/permission_read_outside_cwd.txt",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/permission_read_outside_cwd.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldRejectEveryRealPermissionDialog_WhenTheirNumberedRowsAreOnScreen/permission_webfetch.txt",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/permission_webfetch.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldStillRejectTheTabbedLayout",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_step1_single_select.txt: no such fil"
+  },
+  {
+   "test": "TestEveryStuckDetectorIsClassified",
+   "package": "session",
+   "file": "session/backlog_denied_guard_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open backlog_lifecycle.go: no such file or directory"
+  },
+  {
+   "test": "TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown",
+   "package": "session",
+   "file": "session/pause_stop_fail_closed_test.go",
+   "class": "home",
+   "evidence": "regex:home:no git author identity"
+  },
+  {
+   "test": "TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestInitialPrompt_should_MatchGolden_When_ScheduleWakeIsOff",
+   "package": "session",
+   "file": "session/wake_prompt_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/wake_prompt/initial_prompt_off.golden: no such file"
+  },
+  {
+   "test": "TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits",
+   "package": "session",
+   "file": "session/instance_test.go",
+   "class": "home",
+   "evidence": "regex:home:no git author identity"
+  },
+  {
+   "test": "TestOpenCodeProfile_Should_AnswerThroughTheSequenceDriver_When_AllowOnce",
+   "package": "session",
+   "file": "session/question_profile_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/panes/opencode/permission_bash.txt: no such file"
+  },
+  {
+   "test": "TestOutputShowsConversationStarted",
+   "package": "session",
+   "file": "session/session_driver_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open detection/testdata/claude_active.txt: no such file"
+  },
+  {
+   "test": "TestPaneShowsDialog_Captures",
+   "package": "session",
+   "file": "session/dialog_presence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestParseTabbedFrame_ShouldParseTheRecordedCaptures",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestParseTabbedFrame_ShouldParseTheRecordedCaptures/claude_auq_twoq_review_submit.txt"
+  },
+  {
+   "test": "TestParseTabbedFrame_ShouldParseTheRecordedCaptures/claude_auq_twoq_review_submit.txt",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_review_submit.txt: no such file"
+  },
+  {
+   "test": "TestParseTabbedFrame_ShouldParseTheRecordedCaptures/claude_auq_twoq_step1_single_select.txt",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_step1_single_select.txt: no such fil"
+  },
+  {
+   "test": "TestParseTabbedFrame_ShouldParseTheRecordedCaptures/claude_auq_twoq_step2_multiselect_AB_toggled.txt",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_step2_multiselect_AB_toggled.txt: no"
+  },
+  {
+   "test": "TestParseTabbedFrame_ShouldParseTheRecordedCaptures/claude_auq_twoq_step2_multiselect_initial.txt",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_step2_multiselect_initial.txt: no su"
+  },
+  {
+   "test": "TestParseTabbedFrame_ShouldParseTheRecordedCaptures/claude_auq_twoq_step2_multiselect_submit_focused.txt",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_step2_multiselect_submit_focused.txt"
+  },
+  {
+   "test": "TestPlanTabbedAnswer_ShouldMatchTheRecordedKeySequence_When_AnswersAreRedisAndAB",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_keys.txt: no such file"
+  },
+  {
+   "test": "TestReplyableProfile_Should_CreateRowWithSourceAskUserQuestionHookAndProfileName_When_OpenCodeFixtureDetected",
+   "package": "session",
+   "file": "session/question_profile_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/panes/opencode/permission_bash.txt: no such file"
+  },
+  {
+   "test": "TestScrollForwardKeybindingCanary_should_NotFire_When_RedrawMatchesGoldenScrollFixture",
+   "package": "session",
+   "file": "session/scroll_forward_canary_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/scroll_forward_claude_before.txt: no such file"
+  },
+  {
+   "test": "TestSessionCreationWithRealPrograms",
+   "package": "session",
+   "file": "session/session_creation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "parent-of:TestSessionCreationWithRealPrograms/Bash"
+  },
+  {
+   "test": "TestSessionCreationWithRealPrograms/Bash",
+   "package": "session",
+   "file": "session/session_creation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSessionRecoveryScenarios",
+   "package": "session",
+   "file": "session/integration_test.go",
+   "class": "exec-host-binary",
+   "evidence": "parent-of:TestSessionRecoveryScenarios/ExistingSessionResumption"
+  },
+  {
+   "test": "TestSessionRecoveryScenarios/ExistingSessionResumption",
+   "package": "session",
+   "file": "session/integration_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestSessionRecoveryScenarios/ExistingWorktreeResumption",
+   "package": "session",
+   "file": "session/integration_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSessionRecoveryScenarios/FullResumptionScenario",
+   "package": "session",
+   "file": "session/integration_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSessionRecoveryScenarios/MultipleSessionsRestoreIndependently",
+   "package": "session",
+   "file": "session/integration_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSessionRecoveryScenarios/SessionRecoveryWithExistingChanges",
+   "package": "session",
+   "file": "session/integration_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestSessionRecoveryScenarios/SessionRestoredInCorrectWorktreeAfterKill",
+   "package": "session",
+   "file": "session/integration_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSubmitReplyOnce_ShouldReportDialogStillOpenWithNoSecondByte_WhenPaneNeverChangesPastTwoSeconds",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestSubmitReplySequence_ShouldWriteTheRecordedKeysAndReportClosed_WhenTheDialogFollowsTheFixture",
+   "package": "session",
+   "file": "session/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_keys.txt: no such file"
+  },
+  {
+   "test": "TestTildeExpansionInNewInstance",
+   "package": "session",
+   "file": "session/instance_test.go",
+   "class": "home",
+   "evidence": "parent-of:TestTildeExpansionInNewInstance/Just_tilde"
+  },
+  {
+   "test": "TestTildeExpansionInNewInstance/Just_tilde",
+   "package": "session",
+   "file": "session/instance_test.go",
+   "class": "home",
+   "evidence": "regex:home:to start with /home/tstapler/.cache/stapler-squad-census/home"
+  },
+  {
+   "test": "TestTildeExpansionInNewInstance/Tilde_with_path",
+   "package": "session",
+   "file": "session/instance_test.go",
+   "class": "home",
+   "evidence": "regex:home:to start with /home/tstapler/.cache/stapler-squad-census/home"
+  },
+  {
+   "test": "TestWorktreeNeedsCommit_should_PreserveUntrackedFile_When_WorktreeRemoved",
+   "package": "session",
+   "file": "session/pause_stop_fail_closed_test.go",
+   "class": "home",
+   "evidence": "regex:home:no git author identity"
+  },
+  {
+   "test": "TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean",
+   "package": "session",
+   "file": "session/pause_stop_fail_closed_test.go",
+   "class": "home",
+   "evidence": "regex:home:no git author identity"
+  },
+  {
+   "test": "TestWriteBacklogContextFile_UntracksPreviouslyCommittedContextFile",
+   "package": "session",
+   "file": "session/backlog_commands_test.go",
+   "class": "home",
+   "evidence": "regex:home:Author identity unknown"
+  },
+  {
+   "test": "TestADR002PointerFile_should_ExistAtDocsAdrPath_When_RepoChecked",
+   "package": "session",
+   "file": "session/host_registry_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../docs/adr/ADR-002-workspace-host-registry-gossip.md: no such file"
+  },
+  {
+   "test": "TestAllTagRelevantSetters_should_CallReclassifyTagsLocked_When_SourceScanned",
+   "package": "session",
+   "file": "session/instance_actor_setters_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open instance_actor_setters.go: no such file or directory"
+  },
+  {
+   "test": "TestApplyJulesState_should_HandleEveryDeclaredState_When_StatesEnumerated",
+   "package": "session",
+   "file": "session/jules_session_poller_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open jules/types.go: no such file or directory"
+  },
+  {
+   "test": "TestCachingPipelineEngine_should_ProduceByteIdenticalOutputToGoldenFixtures_When_ModeIsDefault",
+   "package": "session",
+   "file": "session/pipeline_engine_characterization_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestCachingPipelineEngine_should_ProduceByteIdenticalOutputToGoldenFixtures_When_ModeIsDefault/one_criterion"
+  },
+  {
+   "test": "TestCachingPipelineEngine_should_ProduceByteIdenticalOutputToGoldenFixtures_When_ModeIsDefault/one_criterion",
+   "package": "session",
+   "file": "session/pipeline_engine_characterization_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pipeline_engine/one_criterion_slash_commands.golden: no such file"
+  },
+  {
+   "test": "TestCachingPipelineEngine_should_ProduceByteIdenticalOutputToGoldenFixtures_When_ModeIsDefault/two_plus_criteria",
+   "package": "session",
+   "file": "session/pipeline_engine_characterization_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pipeline_engine/two_plus_criteria_slash_commands.golden: no such f"
+  },
+  {
+   "test": "TestCachingPipelineEngine_should_ProduceByteIdenticalOutputToGoldenFixtures_When_ModeIsDefault/zero_criteria",
+   "package": "session",
+   "file": "session/pipeline_engine_characterization_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pipeline_engine/zero_criteria_slash_commands.golden: no such file"
+  },
+  {
+   "test": "TestClaudeProfile_Should_AnswerWithTheOptionDigit",
+   "package": "session",
+   "file": "session/question_profile_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestClaudeProfile_Should_WrapExistingDialogMatch_When_RealCaptureFixture",
+   "package": "session",
+   "file": "session/question_profile_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestClaudeScrollAdapter_ForwardScroll_should_ReturnDeliveredOutcome_When_GoldenBeforeAfterFixtureAppliedThroughFakePaneSource",
+   "package": "session",
+   "file": "session/scroll_forward_golden_fixture_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/scroll_forward_claude_before.txt: no such file"
+  },
+  {
+   "test": "TestCommitImportExternalSession_HonorsSessionNameOverrideMap",
+   "package": "session",
+   "file": "session/import_commit_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestCreateBacklogWorktree_UsesExplicitBaseBranch_When_Set",
+   "package": "session",
+   "file": "session/repo_path_test.go",
+   "class": "home",
+   "evidence": "regex:home:Author identity unknown"
+  },
+  {
+   "test": "TestDeniedGuards_should_AllShareOnePredicate",
+   "package": "session",
+   "file": "session/backlog_denied_guard_test.go",
+   "class": "cwd",
+   "evidence": "override:test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+  },
+  {
+   "test": "TestDialogMatch_ShouldMatchRegardlessOfAnsiGlyphAndTrailingBlankLines_WhenCaptureCarriesEscapes",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestDialogMatch_ShouldSeparateTwoQuestionsWithTheSameOptionLayout",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestDialogPresenceFromCapture_ErrorIsIndeterminate",
+   "package": "session",
+   "file": "session/dialog_presence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestEndReasonClassification_ShouldCoverEveryLiteralInSource",
+   "package": "session",
+   "file": "session/background_outcome_test.go",
+   "class": "cwd",
+   "evidence": "override:test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+  },
+  {
+   "test": "TestInstanceWithWorktreeAndClaudeSession",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestLoadInstances_DoesNotBlockOnStartingActiveSessions",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestMigrationOfCorruptedPaths",
+   "package": "session",
+   "file": "session/instance_test.go",
+   "class": "home",
+   "evidence": "parent-of:TestMigrationOfCorruptedPaths/Another_corrupted_pattern"
+  },
+  {
+   "test": "TestMigrationOfCorruptedPaths/Another_corrupted_pattern",
+   "package": "session",
+   "file": "session/instance_test.go",
+   "class": "home",
+   "evidence": "regex:home:to start with /home/tstapler/.cache/stapler-squad-census/home"
+  },
+  {
+   "test": "TestMigrationOfCorruptedPaths/Corrupted_path_with_tilde",
+   "package": "session",
+   "file": "session/instance_test.go",
+   "class": "home",
+   "evidence": "regex:home:to start with /home/tstapler/.cache/stapler-squad-census/home"
+  },
+  {
+   "test": "TestPaneShowsDialog_ReplyDialogFixtures",
+   "package": "session",
+   "file": "session/dialog_presence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs: no such file"
+  },
+  {
+   "test": "TestParseTabbedFrame_ShouldReadTheReviewSummary",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_review_submit.txt: no such file"
+  },
+  {
+   "test": "TestPiAdapter_ShouldDecodeEveryKnownEventType_WhenFedCapturedTranscript",
+   "package": "session",
+   "file": "session/pi_adapter_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open detection/testdata/pi/basic_session.jsonl: no such file"
+  },
+  {
+   "test": "TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap",
+   "package": "session",
+   "file": "session/wake_polling_guard_test.go",
+   "class": "cwd",
+   "evidence": "override:test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+  },
+  {
+   "test": "TestRegistry_Should_NotExtractUnmeasuredHarnessScreens",
+   "package": "session",
+   "file": "session/question_profile_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/panes/aider/confirm_run_output.txt: no such file"
+  },
+  {
+   "test": "TestReviewQueue_UncommittedChangesDetection",
+   "package": "session",
+   "file": "session/review_queue_uncommitted_changes_test.go",
+   "class": "home",
+   "evidence": "parent-of:TestReviewQueue_UncommittedChangesDetection/committed_changes_removed"
+  },
+  {
+   "test": "TestReviewQueue_UncommittedChangesDetection/committed_changes_removed",
+   "package": "session",
+   "file": "session/review_queue_uncommitted_changes_test.go",
+   "class": "home",
+   "evidence": "regex:home:no git author identity"
+  },
+  {
+   "test": "TestReviewQueue_UncommittedChanges_Integration",
+   "package": "session",
+   "file": "session/review_queue_uncommitted_changes_test.go",
+   "class": "home",
+   "evidence": "regex:home:no git author identity"
+  },
+  {
+   "test": "TestSessionCreationDoesNotHang",
+   "package": "session",
+   "file": "session/session_creation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "parent-of:TestSessionCreationDoesNotHang/ClaudeSessionCreation"
+  },
+  {
+   "test": "TestSessionCreationDoesNotHang/ClaudeSessionCreation",
+   "package": "session",
+   "file": "session/session_creation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestSessionCreationDoesNotHang/DirectorySessionCreation",
+   "package": "session",
+   "file": "session/session_creation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestSessionCreationWithWorktree",
+   "package": "session",
+   "file": "session/session_creation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSessionRestartWithConversationContinuity",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "parent-of:TestSessionRestartWithConversationContinuity/HealthCheckerAutoRestart"
+  },
+  {
+   "test": "TestSessionRestartWithConversationContinuity/HealthCheckerAutoRestart",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestSessionRestartWithConversationContinuity/LazyRecoveryRestart",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSessionRestartWithConversationContinuity/RestartWithValidClaudeSession",
+   "package": "session",
+   "file": "session/session_restart_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSetupFirstTimeWorktree_NewWorktree_BranchesFromOriginDefault_NotAmbientHEAD",
+   "package": "session",
+   "file": "session/instance_worktree_test.go",
+   "class": "home",
+   "evidence": "regex:home:Author identity unknown"
+  },
+  {
+   "test": "TestSubmitReplyOnce_ShouldFailFastWithIndeterminateStage_WhenPaneExitsAfterTheByte",
+   "package": "session",
+   "file": "session/pane_reply_exited_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestSubmitReplyOnce_ShouldWriteExactlyOneDigitAndNoEnterAndReportClosed_WhenTheDialogCloses",
+   "package": "session",
+   "file": "session/pane_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/question_single_select_3opts.txt: no such file"
+  },
+  {
+   "test": "TestSubmitReplySequence_ShouldFailFastAsIndeterminate_WhenPaneExitsAfterTheLastKey",
+   "package": "session",
+   "file": "session/pane_reply_exited_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_keys.txt: no such file"
+  },
+  {
+   "test": "TestSubmitReplySequence_ShouldReportNotSentVsSendIndeterminatePerStage_When_FaultInjectedAtEachStep",
+   "package": "session",
+   "file": "session/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_keys.txt: no such file"
+  },
+  {
+   "test": "TestSubmitReplySequence_ShouldRideThroughARestart_AfterTheLastKey",
+   "package": "session",
+   "file": "session/pane_reply_exited_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_keys.txt: no such file"
+  },
+  {
+   "test": "TestTabbedExpect_ShouldRejectForgedAndDriftedFrames",
+   "package": "session",
+   "file": "session/question_tabbed_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_step2_multiselect_initial.txt: no su"
+  },
+  {
+   "test": "TestTabbedRenderer_ShouldReproduceTheRecordedCaptures",
+   "package": "session",
+   "file": "session/question_tabbed_sim_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/reply_dialogs/claude_auq_twoq_step1_single_select.txt: no such fil"
+  },
+  {
+   "test": "TestWriteSlashCommands_UntracksPreviouslyCommittedSlashCommandFiles",
+   "package": "session",
+   "file": "session/backlog_commands_test.go",
+   "class": "home",
+   "evidence": "regex:home:Author identity unknown"
+  },
+  {
+   "test": "TestGitProviderCommit",
+   "package": "session/vc",
+   "file": "session/vc/git_provider_test.go",
+   "class": "home",
+   "evidence": "override:parent of subtest whose git commit fails: no user.name/email because the private HOME has no ~/.gitconfig (Author identity unknown)"
+  },
+  {
+   "test": "TestGitProviderCommit/commit_staged_changes",
+   "package": "session/vc",
+   "file": "session/vc/git_provider_test.go",
+   "class": "home",
+   "evidence": "override:git: Author identity unknown, ~/.gitconfig absent under the private HOME"
+  },
+  {
+   "test": "TestGitProviderGetChangedFiles_PathWithSpace",
+   "package": "session/vc",
+   "file": "session/vc/git_provider_test.go",
+   "class": "home",
+   "evidence": "override:git commit exit 128: identity from ~/.gitconfig absent under the private HOME"
+  },
+  {
+   "test": "TestGitProviderGetChangedFiles_RenameWithEditsMergesNumstat",
+   "package": "session/vc",
+   "file": "session/vc/git_provider_test.go",
+   "class": "home",
+   "evidence": "override:git commit exit 128: identity from ~/.gitconfig absent under the private HOME"
+  },
+  {
+   "test": "TestMetricLabelKeys_NeverIdentifyASession",
+   "package": "session/tymux",
+   "file": "session/tymux/metrics_guard_test.go",
+   "class": "cwd",
+   "evidence": "override:filepath.Glob(\"*.go\") and ../backend_*.go find nothing: package sources are not in the test runfiles/cwd"
+  },
+  {
+   "test": "TestAnnotate_should_LinkSameSessionsBeforeAndAfterKeyChange_When_SessionSnapshotReplayed",
+   "package": "github",
+   "file": "github/user_pr_cache_annotate_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/session_snapshot.json: no such file"
+  },
+  {
+   "test": "TestGetPRInfoCtx_should_DispatchToGraphQL_When_FlagOn",
+   "package": "github",
+   "file": "github/client_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pr_info_parity/approved_passing_checks/graphql.json: no such file"
+  },
+  {
+   "test": "TestGetPRInfoGraphQL_should_MatchCLIFieldByField_When_PRInStateVariant",
+   "package": "github",
+   "file": "github/client_graphql_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestGetPRInfoGraphQL_should_MatchCLIFieldByField_When_PRInStateVariant/approved_passing_checks"
+  },
+  {
+   "test": "TestGetPRInfoGraphQL_should_MatchCLIFieldByField_When_PRInStateVariant/approved_passing_checks",
+   "package": "github",
+   "file": "github/client_graphql_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pr_info_parity/approved_passing_checks/cli.json: no such file"
+  },
+  {
+   "test": "TestGetPRInfoGraphQL_should_MatchCLIFieldByField_When_PRInStateVariant/checks_failure",
+   "package": "github",
+   "file": "github/client_graphql_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pr_info_parity/checks_failure/cli.json: no such file"
+  },
+  {
+   "test": "TestGetPRInfoGraphQL_should_MatchCLIFieldByField_When_PRInStateVariant/draft_in_progress_checks",
+   "package": "github",
+   "file": "github/client_graphql_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pr_info_parity/draft_in_progress_checks/cli.json: no such file"
+  },
+  {
+   "test": "TestGetPRInfoGraphQL_should_PopulateFieldsMatchingCLI_When_PRHasApprovalsAndPassingChecks",
+   "package": "github",
+   "file": "github/client_graphql_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pr_info_parity/approved_passing_checks/graphql.json: no such file"
+  },
+  {
+   "test": "TestGetPRInfoGraphQL_should_QueryEnterpriseHost_When_RefIsGHE",
+   "package": "github",
+   "file": "github/client_graphql_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/pr_info_parity/approved_passing_checks/graphql.json: no such file"
+  },
+  {
+   "test": "TestNewSessionDialog",
+   "package": "tuitest/integration/claude_squad",
+   "file": "tuitest/integration/claude_squad/keyboard_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"go\": executable file not found"
+  },
+  {
+   "test": "TestStaplerSquadKeyboardShortcuts",
+   "package": "tuitest/integration/claude_squad",
+   "file": "tuitest/integration/claude_squad/keyboard_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"go\": executable file not found"
+  },
+  {
+   "test": "FuzzDecodeUnaryFrame",
+   "package": "server/services",
+   "file": "server/services/ws_unary_frame_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/unary-mux-vectors.json: no suc"
+  },
+  {
+   "test": "TestAckDetector_ShouldAcknowledge_WhenPostToolUseReceiptArrivesForAskUserQuestion",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAckDetector_ShouldGiveTheSameFailure_WhenTheWriteWasIndeterminate",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAckDetector_ShouldResumeTrackingSentRows_WhenRestored",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldMarkDeliveryFailedAndAllowRetry_WhenNothingWasWritten",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldReportSessionEnded_WhenTheReaperCancelledAHookRow",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldReportTheRouteOfEachSessionState",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldWriteNothingAndReportStale_WhenRetryAnywayFindsTheDialogGone",
+   "package": "server/services",
+   "file": "server/services/question_answer_retry_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldWriteOneDigitAndTrackDelivery_WhenVisibleSessionShowsTheDialog",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_should_ReVerifyDialogMatchAndWriteOneByte_When_AnsweredPastTheCacheTTL",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCanceled",
+   "package": "server/services",
+   "file": "server/services/session_creation_pipeline_test.go",
+   "class": "exec-host-binary",
+   "evidence": "override:needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+  },
+  {
+   "test": "TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHookConfig",
+   "package": "server/services",
+   "file": "server/services/session_creation_pipeline_test.go",
+   "class": "exec-host-binary",
+   "evidence": "override:needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+  },
+  {
+   "test": "TestConfigSurfaceProof_HiddenSessionReply_ChangesReplyOutcome",
+   "package": "server/services",
+   "file": "server/services/config_surface_proof_flags_session_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestConfigSurfaceProofs_EveryRegisteredSurfaceHasEntry_WhenFieldsEnumerated",
+   "package": "server/services",
+   "file": "server/services/config_surface_proof_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:proof test not found"
+  },
+  {
+   "test": "TestContractSchemas_should_BeStrict_When_GivenUnsafeOrUnknownInput",
+   "package": "server/services",
+   "file": "server/services/webhook_contract_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../contracts/webhook-management/v1/fixtures/reconcile-request.create.jso"
+  },
+  {
+   "test": "TestCreateDirectorySession_should_UseResolvedProgram_When_ProgramOverrideEmpty",
+   "package": "server/services",
+   "file": "server/services/session_service_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListenerPresent",
+   "package": "server/services",
+   "file": "server/services/create_pull_request_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:gh) is not installed"
+  },
+  {
+   "test": "TestCreatePullRequest_should_ReturnPersistedFalse_When_SaveInstancesFails",
+   "package": "server/services",
+   "file": "server/services/create_pull_request_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:gh) is not installed"
+  },
+  {
+   "test": "TestDialogGoneSampler_should_UseThreeSecondThenThirtySecondCadence",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsAlive_ReturnsInstance",
+   "package": "server/services",
+   "file": "server/services/liveness_consolidation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestHiddenFailureProducers_ShouldEachHaveTest_WhenTableEnumerated",
+   "package": "server/services",
+   "file": "server/services/session_service_events_hidden_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:not found in server/services"
+  },
+  {
+   "test": "TestJulesDispatchService_should_NeverCallConfirmEgressConsentMutation_When_SourceScanned",
+   "package": "server/services",
+   "file": "server/services/jules_config_service_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open jules_dispatch_service.go: no such file or directory"
+  },
+  {
+   "test": "TestMirror_should_ReverifyOpenRowsAtTheCap_AndClearTheOnesWhoseDialogIsGone",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestNoBareEnvMutationInServicesTests",
+   "package": "server/services",
+   "file": "server/services/home_env_test_helper_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:no *_test.go files found"
+  },
+  {
+   "test": "TestProbeProgram_should_ReturnAiderFlags_When_RealProberRunsFakeAiderHelp",
+   "package": "server/services",
+   "file": "server/services/defaults_service_probe_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../config/clihelp/testdata/help/aider-0.78.0.txt: no such file"
+  },
+  {
+   "test": "TestReply_ShouldNeverWriteToTheWrongInstance_WhenTwoInstancesSharePath",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldReturnInternalWithZeroWritesAndReleaseTheClaim_WhenPreWriteAuditAppendFails",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldWaitNoLonger_WhenFollowerContextIsCancelled",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldWriteOnceAndReturnFirstResult_WhenSameReplyIDSentAgainAfterATerminalResult",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFailed",
+   "package": "server/services",
+   "file": "server/services/session_service_retry_creation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "override:needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+  },
+  {
+   "test": "TestSendNotification_ShouldDeliverClaudeNotificationViaTmux_WhenSessionVisibleAndGateOn",
+   "package": "server/services",
+   "file": "server/services/ssq_hook_handler_stamp_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:scripts/ssq-hook-handler: No such file"
+  },
+  {
+   "test": "TestSequenceQuestions_should_RefuseARowThatIsNotAReplyableHookRow",
+   "package": "server/services",
+   "file": "server/services/question_tabbed_integration_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_keepAHiddenSessionOnTheOpenSessionPath",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_replayExactFixtureKeySequenceAndReturnBothAnswers_When_twoQuestionDialogWithMultiSelect",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportIndeterminateAndKeepTheRowOpen_When_theDialogStaysAfterTheLastKey",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSessionService_should_RegisterNewSessionWithTagPoller_When_SessionCreatedAfterServerStartup",
+   "package": "server/services",
+   "file": "server/services/session_tag_poller_wiring_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestSlackFormatter_ShouldBeUnchanged_WhenGateCompiledIn",
+   "package": "server/services",
+   "file": "server/services/slack_gate_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open slack_notifier.go: no such file or directory"
+  },
+  {
+   "test": "TestSpawnReviewSession_SetsBacklogCategory",
+   "package": "server/services",
+   "file": "server/services/session_service_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestStreamTerminal_SendsRawOutput",
+   "package": "server/services",
+   "file": "server/services/session_service_stream_terminal_test.go",
+   "class": "exec-host-binary",
+   "evidence": "override:needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+  },
+  {
+   "test": "TestTaggingClassifierService_should_ReturnTags_When_ReclassifySucceeds",
+   "package": "server/services",
+   "file": "server/services/tagging_classifier_service_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:exec: \"tmux\": executable file not found"
+  },
+  {
+   "test": "TestTriggerTriage_PersistenceContextsComeOnlyFromTheFactory",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open backlog_service_trigger_triage.go: no such file or directory"
+  },
+  {
+   "test": "TestUnaryFrameCodec_ShouldDecodeAndReencodeEveryVector",
+   "package": "server/services",
+   "file": "server/services/ws_unary_frame_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/unary-mux-vectors.json: no suc"
+  },
+  {
+   "test": "TestWebhookLifecycle_should_RefuseWithoutMutation_When_VersionStaleOrInvalid",
+   "package": "server/services",
+   "file": "server/services/webhook_lifecycle_handler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open /home/tstapler/.cache/bazel/_bazel_tstapler/fb0aa17dfc2f8e1c919a3cc24b3ec1f"
+  },
+  {
+   "test": "TestWebhookLifecycle_should_RequireAuthentication_When_AnyLifecycleRouteCalled",
+   "package": "server/services",
+   "file": "server/services/webhook_lifecycle_handler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open /home/tstapler/.cache/bazel/_bazel_tstapler/fb0aa17dfc2f8e1c919a3cc24b3ec1f"
+  },
+  {
+   "test": "TestWorkflowBypassInventory_GuardedTransitionCallersAreRegisteredWithTheirTargets",
+   "package": "server/services",
+   "file": "server/services/workflow_bypass_inventory_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:go.mod not found above"
+  },
+  {
+   "test": "TestWriteFile_ShouldRejectMixedEolAndLatin1_And_NeverRewrite_When_CorpusReadOnlyFiles",
+   "package": "server/services",
+   "file": "server/services/file_write_corpus_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/files_roundtrip: no such file"
+  },
+  {
+   "test": "TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldCloseCycle",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAgyCredentialSource_WrongProvider_ReturnsFalse",
+   "package": "server/services",
+   "file": "server/services/anthropic_client_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAnalyticsStoreFullQueueDropsWithoutBlocking",
+   "package": "server/services",
+   "file": "server/services/analytics_store_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAnalyticsStore_Stop_BeforeStart_NoPanic",
+   "package": "server/services",
+   "file": "server/services/analytics_store_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestApplyTriageResultToUpdate_should_OnlySetValidPriorityAndCategory",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestApprovalDetail_PrefersCommandOverFilePath",
+   "package": "server/services",
+   "file": "server/services/approval_handler_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestApprovalFlow_AskUserQuestion_DeferToNativeDialog",
+   "package": "server/services",
+   "file": "server/services/approval_handler_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestApprovalFlow_Timeout",
+   "package": "server/services",
+   "file": "server/services/approval_handler_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestApprovalHandler_LoadWindow_ContainsNoSecret",
+   "package": "server/services",
+   "file": "server/services/approval_handler_secret_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestApprovalStore_Create_ConcurrentEscalations_NoDataRace",
+   "package": "server/services",
+   "file": "server/services/approval_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoApproved_ShouldDropHiddenAllowKeepDenyAndAnalytics_WhenGateOn",
+   "package": "server/services",
+   "file": "server/services/approval_handler_gate_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoReopenAfterFailedReview_MapMissButTmuxAlive_ReusesInsteadOfRespawning",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoReopenAfterFailedReview_NoActiveWorkSession_SpawnsNewOne",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoReopenForPRFix_ActiveWorkSession_DegradesToNotifyOnly_When_NotReadyForSteer",
+   "package": "server/services",
+   "file": "server/services/backlog_service_pr_fix_steer_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoReopenForPRFix_ActiveWorkSession_RecordsRespawnBlockedActive",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoReopenForPRFix_ActiveWorkSession_SessionUUIDChanged_ReSteersDespiteIdenticalReasonAndCooldown",
+   "package": "server/services",
+   "file": "server/services/backlog_service_pr_fix_steer_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoReopenForPRFix_ActiveWorkSession_SteerInFlight_PreventsDuplicateConcurrentSend",
+   "package": "server/services",
+   "file": "server/services/backlog_service_pr_fix_steer_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoReopenForPRFix_ActiveWorkSession_SuccessfulSteer_PublishesInfoNotificationAndResolvesRespawnBlockedActive",
+   "package": "server/services",
+   "file": "server/services/backlog_service_pr_fix_steer_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoRespawnAutonomousWork_NoActiveSession_ResolvesAnyOpenRespawnBlockedActiveRow",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoRespawnReview_ActiveReviewSession_RecordsRespawnBlockedActive",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoRespawnReview_ReworkCapHit_UsesConfiguredCap_When_MaxAutoReworkIterationsSet",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutoRespawnTriage_should_retriggerTriage_When_ItemStillIdea",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutonomousOrchestrationService_DriverRegistry_RegisterAndDeregister",
+   "package": "server/services",
+   "file": "server/services/autonomous_orchestration_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomousStuck_When_WorkStillStuck",
+   "package": "server/services",
+   "file": "server/services/autonomous_orchestration_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomousStuck_When_NotDone",
+   "package": "server/services",
+   "file": "server/services/autonomous_orchestration_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOperator_When_RespawnAttemptFails",
+   "package": "server/services",
+   "file": "server/services/autonomous_orchestration_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestBacklogAttachmentUpload_JPEG_Success",
+   "package": "server/services",
+   "file": "server/services/backlog_attachment_upload_handler_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestBacklogAttachmentUpload_MissingFileField",
+   "package": "server/services",
+   "file": "server/services/backlog_attachment_upload_handler_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestBacklogAttachmentUpload_SVG_Rejected",
+   "package": "server/services",
+   "file": "server/services/backlog_attachment_upload_handler_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestBacklogDecider_Transition_ReachesHandlerAsNotificationActionCaller",
+   "package": "server/services",
+   "file": "server/services/backlog_gate_operator_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestBacklogItemEventPublisher_should_noOp_When_BusIsNil",
+   "package": "server/services",
+   "file": "server/services/backlog_item_event_publisher_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestBacklogItemEvent_should_returnNilForUnsetOneofVariant_When_NoVariantIsSet",
+   "package": "server/services",
+   "file": "server/services/backlog_service_events_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestBacklogItemToProto_should_IncludePipelineMode_When_ItemHasNonDefaultMode",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestBulkResetStuckRemediation_should_publishNotification_When_RowsReset",
+   "package": "server/services",
+   "file": "server/services/backlog_stuck_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCDPStreamHandler_UnknownSessionID_Returns404",
+   "package": "server/services",
+   "file": "server/services/cdp_stream_handler_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCLIAIClient_Complete_CancelsOnCtxDone",
+   "package": "server/services",
+   "file": "server/services/cli_ai_client_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCLIAgentSpec_PromptAsArg_appendsPromptToArgv",
+   "package": "server/services",
+   "file": "server/services/cli_ai_client_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCallbackDispatcher_Deliver_DoesNotFollowRedirect",
+   "package": "server/services",
+   "file": "server/services/callback_dispatcher_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCallbackDispatcher_Dispatch_NoopWhenURLUnconfigured",
+   "package": "server/services",
+   "file": "server/services/callback_dispatcher_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCapacityMonitor_AutoTransition",
+   "package": "server/services",
+   "file": "server/services/capacity_monitor_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCapacityMonitor_IdleWaitEscalation_NonBacklogSessionNotStopped",
+   "package": "server/services",
+   "file": "server/services/capacity_monitor_guardrails_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCapacityMonitor_IdleWaitLoop_FirstCrossingCompacts",
+   "package": "server/services",
+   "file": "server/services/capacity_monitor_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCapacityMonitor_IdleWaitWallClockTrigger",
+   "package": "server/services",
+   "file": "server/services/capacity_monitor_guardrails_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCapacityMonitor_SpendRateAlert_NegativeThresholdDisables",
+   "package": "server/services",
+   "file": "server/services/capacity_monitor_guardrails_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestClassify_DailyBucketAutoApproveRate",
+   "package": "server/services",
+   "file": "server/services/analytics_store_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestClaudeOAuthCredentialSource_WrongProvider_ReturnsFalse",
+   "package": "server/services",
+   "file": "server/services/anthropic_client_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotExpectWorktree",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestComputeSummary_should_PopulateRiskLevelCounts_When_EntriesSpanAllFourRiskLevels",
+   "package": "server/services",
+   "file": "server/services/analytics_store_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestComputeSummary_should_computeCorrectRates",
+   "package": "server/services",
+   "file": "server/services/analytics_store_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_KindVaries",
+   "package": "server/services",
+   "file": "server/services/backlog_service_events_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCountLiveBacklogWorkSessions_should_ExcludeJulesWorkRows_When_MixedRolesPresent",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreateBacklogItemFromChat_should_RejectEmptyMessage_When_MessageIsWhitespaceOnly",
+   "package": "server/services",
+   "file": "server/services/backlog_service_chat_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreateBacklogItem_ResolvesGitHubURL",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreateBacklogItem_StampsClaimingHostOnlyWithExternalURL",
+   "package": "server/services",
+   "file": "server/services/backlog_github_progress_sync_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreateBacklogItem_should_PersistCostBudgetThreshold_When_FieldSet",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreateCheckpoint_SessionNotFound",
+   "package": "server/services",
+   "file": "server/services/checkpoint_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreateLivenessDefinition_should_ReturnAlreadyExists_When_StageSlugAndPipelineModePairHasEnabledRow",
+   "package": "server/services",
+   "file": "server/services/backlog_service_liveness_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_ValidInput",
+   "package": "server/services",
+   "file": "server/services/backlog_service_pipeline_mode_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreatePipelineMode_should_Succeed_When_AllPlaceholdersAreRecognized",
+   "package": "server/services",
+   "file": "server/services/backlog_service_pipeline_mode_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCreateTransitionGate_should_ReturnInvalidArgumentAndPersistNothing_When_ConfigNamesKeyOutsideAllowlist",
+   "package": "server/services",
+   "file": "server/services/backlog_service_transitions_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestCredential_AnthropicAuthHeader_APIKey",
+   "package": "server/services",
+   "file": "server/services/anthropic_client_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestDeleteApprovalRule_EmptyID",
+   "package": "server/services",
+   "file": "server/services/approval_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestDequeueNextQueuedItems_should_NotAutoSpawnReadyItems_When_ConfigDisabled",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestDequeue_ConcurrentClaimsAreExclusive",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestEnvVarCredentialSource_UnknownProvider_ReturnsFalse",
+   "package": "server/services",
+   "file": "server/services/anthropic_client_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestEscapeMangleRate_should_ComputeRatio_When_TotalSequencesPositive",
+   "package": "server/services",
+   "file": "server/services/analytics_escape_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestEventBusNotifier_NotifyDecision_should_StampDecisionSchemaWithChoices_When_ItemAwaitsDecision",
+   "package": "server/services",
+   "file": "server/services/backlog_notifier_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestEventBusNotifier_NotifySession_should_PublishEventWithoutItemIdMetadata_When_Called",
+   "package": "server/services",
+   "file": "server/services/backlog_notifier_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestEveryBacklogKindMapped",
+   "package": "server/services",
+   "file": "server/services/backlog_item_event_publisher_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestForwardSyncSubscriber_UsesCloseIssueResponseTimestampForWatermark",
+   "package": "server/services",
+   "file": "server/services/backlog_github_forward_sync_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetApprovalAnalytics_IncludesEscalationReasonCounts",
+   "package": "server/services",
+   "file": "server/services/approval_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeDirectoryNoLongerExists",
+   "package": "server/services",
+   "file": "server/services/backlog_service_diff_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged",
+   "package": "server/services",
+   "file": "server/services/backlog_service_ship_status_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetBacklogItem_should_LeaveDependenciesEmpty_When_NoEdges",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetEscapeAnalyticsGlobalSummary_should_AggregateAcrossSessions_When_MultipleSessionsHaveEvents",
+   "package": "server/services",
+   "file": "server/services/analytics_escape_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetEscapeAnalyticsSummary_EmptySession",
+   "package": "server/services",
+   "file": "server/services/analytics_escape_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates",
+   "package": "server/services",
+   "file": "server/services/backlog_service_gates_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetSessionBacklogIndex_WithEntries",
+   "package": "server/services",
+   "file": "server/services/backlog_github_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestGetWorkflowEngineStatus_ClassReadiness_FollowsSoakVerdict",
+   "package": "server/services",
+   "file": "server/services/backlog_service_engine_status_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestHandleCurrentPaneRequest_should_SendRedrawVerbatim_When_BackendProvidesOne",
+   "package": "server/services",
+   "file": "server/services/connectrpc_websocket_fullstate_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestHandlePermissionRequest_ContextCancelPublishesApprovalResponseEvent",
+   "package": "server/services",
+   "file": "server/services/approval_handler_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestHandlePermissionRequest_ContextCancelStampsMetadata",
+   "package": "server/services",
+   "file": "server/services/approval_handler_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestHandlePermissionRequest_EscalationReason_DomainAge",
+   "package": "server/services",
+   "file": "server/services/approval_handler_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestHubRegistry_should_RefuseToCreateHub_When_OwnershipLockAlreadyResolvedLegacy",
+   "package": "server/services",
+   "file": "server/services/connectrpc_websocket_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestImportGitHubIssue_EmptyURL",
+   "package": "server/services",
+   "file": "server/services/backlog_github_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestIsRetriagePointless_MatchesUnchangedContentGate",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_skip_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestListBacklogItemDependencies_should_ReturnBothDirections",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestListCheckpoints_ReturnsExistingCheckpoints",
+   "package": "server/services",
+   "file": "server/services/checkpoint_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestListGitHubIssues_NilStorage",
+   "package": "server/services",
+   "file": "server/services/backlog_github_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestListPendingApprovals_EmptyInitially",
+   "package": "server/services",
+   "file": "server/services/approval_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestListPendingApprovals_should_ReturnEmptyRiskLevel_When_ApprovalPredatesFeature",
+   "package": "server/services",
+   "file": "server/services/approval_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestListStages_should_ReturnAllNineBuiltInStages_When_DatabaseIsFreshlySeeded",
+   "package": "server/services",
+   "file": "server/services/backlog_service_stages_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestListStuckBacklogItems_should_PopulatePlanArtifactsPath",
+   "package": "server/services",
+   "file": "server/services/backlog_stuck_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestMatchesIDData_TmuxNameBranch",
+   "package": "server/services",
+   "file": "server/services/approval_handler_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestNewAnthropicAIClientFromKey_EmptyKey_ReturnsError",
+   "package": "server/services",
+   "file": "server/services/anthropic_client_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestNormalizePiPayload_CopiesPathToFilePath",
+   "package": "server/services",
+   "file": "server/services/approval_handler_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestNotifyIfActiveWorkSessionStale_should_fire_When_IdleOver15Min",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestNotifyReworkCapHit_should_stillPublishNotification_When_MarkStuckReturnsError",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestNotifyTransitionFailed_should_NoOp_When_NoEventBusWired",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceHidden",
+   "package": "server/services",
+   "file": "server/services/autonomous_orchestration_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHasDisabledTheEdge",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestParseAskUserQuestion_ShouldClassifyRealFixtures",
+   "package": "server/services",
+   "file": "server/services/askuserquestion_parser_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestParseAskUserQuestion_ShouldClassifyRealFixtures/multi_select.json"
+  },
+  {
+   "test": "TestParseAskUserQuestion_ShouldClassifyRealFixtures/multi_select.json",
+   "package": "server/services",
+   "file": "server/services/askuserquestion_parser_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/askuserquestion/multi_select.json: no such file"
+  },
+  {
+   "test": "TestParseAskUserQuestion_ShouldClassifyRealFixtures/multi_two_questions.json",
+   "package": "server/services",
+   "file": "server/services/askuserquestion_parser_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/askuserquestion/multi_two_questions.json: no such file"
+  },
+  {
+   "test": "TestParseAskUserQuestion_ShouldClassifyRealFixtures/single_select.json",
+   "package": "server/services",
+   "file": "server/services/askuserquestion_parser_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/askuserquestion/single_select.json: no such file"
+  },
+  {
+   "test": "TestParseAskUserQuestion_ShouldClassifyRealFixtures/two_questions_single_then_multi.json",
+   "package": "server/services",
+   "file": "server/services/askuserquestion_parser_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/askuserquestion/two_questions_single_then_multi.json: no such file"
+  },
+  {
+   "test": "TestParseBacklogItemIntent_should_LeaveSuggestedRepoPathEmpty_When_NoKnownRepos",
+   "package": "server/services",
+   "file": "server/services/backlog_service_intent_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestParseBacklogItemIntent_should_ThreadRepoPathIntoPrompt_When_RepoPathSet",
+   "package": "server/services",
+   "file": "server/services/backlog_service_intent_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestPinnedClientFor_should_DisableKeepAlives_When_BuildingRealTransport",
+   "package": "server/services",
+   "file": "server/services/callback_dispatcher_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestPollFullStateFrame_should_TryOnce_When_DeadlineAlreadyPassed",
+   "package": "server/services",
+   "file": "server/services/connectrpc_websocket_firstpaint_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestPreviewBackwardSyncImpact_CountsOnlyEligibleItems",
+   "package": "server/services",
+   "file": "server/services/backlog_sources_preview_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestPreviewBackwardSyncImpact_ReturnsUnimplementedWithoutPluginRegistry",
+   "package": "server/services",
+   "file": "server/services/backlog_sources_preview_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestProgressComment_InProgressPostsHostAndAdvancesWatermark",
+   "package": "server/services",
+   "file": "server/services/backlog_github_progress_sync_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestProgressComment_ReviewWithoutPRURLSkips",
+   "package": "server/services",
+   "file": "server/services/backlog_github_progress_sync_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestProgressSubscriber_FlagOffPostsNothing_FlagOnPosts",
+   "package": "server/services",
+   "file": "server/services/backlog_github_progress_sync_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestQueryEscapeAnalytics_MangledOnlyFilter",
+   "package": "server/services",
+   "file": "server/services/analytics_escape_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestReReview_BlockedByInFlightListenerReservation",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestRecentWorkSessionFileLists_should_returnChangedFiles_When_CompletedWorkSessionsHaveValidRanges",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestReclassifyGaps_should_notMutateOriginalSlice",
+   "package": "server/services",
+   "file": "server/services/analytics_store_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestRejectPlan_HappyPath_SetsReasonAndTimestamp",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestRejectPlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestRemediateStaleWorkSession_should_killTombstoneAndRespawn_When_ActiveWorkSessionIsStale",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestRemediateStaleWorkSession_should_noop_When_ItemNoLongerInProgress",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestRemediationActionByReason_should_beDecidedForEveryStuckReason_When_NewReasonIsAdded",
+   "package": "server/services",
+   "file": "server/services/backlog_stuck_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestResetStuckRemediation_should_rejectInvalidArguments_When_ReasonOrItemMissing",
+   "package": "server/services",
+   "file": "server/services/backlog_stuck_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestResolveACSnapshot_MergesLiveNoteIntoStaleWorkSessionSnapshot",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestResolveApprovalReconciled_DefersToInFlightHumanResolution",
+   "package": "server/services",
+   "file": "server/services/approval_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestResolveCodebaseWorkDir_should_AllowFallback_When_NoWorkSessionAtAll",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestResolveReworkBlockedStaleIfRecovered_should_beNoOp_When_NoActiveWorkSession",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestResolveSessionID_ByTitle",
+   "package": "server/services",
+   "file": "server/services/approval_handler_integration_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSanitizeInitialContentRealWorldCapture",
+   "package": "server/services",
+   "file": "server/services/connectrpc_websocket_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSanitizeStopTail_EmptyAndInvalidInput",
+   "package": "server/services",
+   "file": "server/services/autonomous_stop_detail_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSendEndStreamSuccessEnvelopeFormat",
+   "package": "server/services",
+   "file": "server/services/connectrpc_websocket_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionAfterGates_should_ReturnAlreadyExistsNamingJulesSession_When_OpenJulesSessionPresent",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionFromItem_Reopen_ArchivesSupersededWorkSession",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionFromItem_Reopen_ReusesBranch",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionFromItem_WIPLimit_AllowsReopenAtCap",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionFromItem_should_CapAtOneConfirmedLiveWorkSession_AcrossManyReworkRounds",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionFromItem_should_NotInjectGitDriftCheckHook_When_NotAutonomous",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionFromItem_should_ReportSessionStopperNotWired_When_BlockedByActiveWorkSession",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionFromItem_should_SetInstanceProgramViaInstanceOptions_When_WorkStageOverrideConfigured",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestSpawnSessionFromItem_should_UseModeSpecificInitialPrompt_When_AutoSpawnSessionAndNonDefaultPipelineMode",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestStopDetail_ResuperviseKey",
+   "package": "server/services",
+   "file": "server/services/autonomous_stop_detail_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestStopReasonPhrase_EveryReasonHasRow",
+   "package": "server/services",
+   "file": "server/services/autonomous_stop_detail_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFallbackBothFail",
+   "package": "server/services",
+   "file": "server/services/connectrpc_websocket_test.go",
+   "class": "exec-host-binary",
+   "evidence": "override:needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+  },
+  {
+   "test": "TestSyncLoopDecryptsToken",
+   "package": "server/services",
+   "file": "server/services/backlog_service_encryption_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestToProtoStuckReason_should_ReturnMultipleReasons_When_DomainStuckReasonMultipleReasons",
+   "package": "server/services",
+   "file": "server/services/backlog_stuck_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTransitionBacklogItemStatus_CharacterizesOverrideAndErrorCodes_UnderDefaultEngine",
+   "package": "server/services",
+   "file": "server/services/backlog_transition_characterization_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideReason",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideReasonSet",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_TransitionIsNotTerminal",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTeardownFails",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTransitionHandler_Enforce_GraphEditAndGateDenyWithUnchangedCodes",
+   "package": "server/services",
+   "file": "server/services/backlog_gate_operator_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriageCallOptions_CostCeilingAppliesToEveryMode",
+   "package": "server/services",
+   "file": "server/services/backlog_service_trigger_triage_options_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriageInputHash_IgnoresACStatusButNotText",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_skip_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerReReview_CodebaseReadTimeout_RecordsUnverifiableNotFail",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerReReview_HappyPath_ThreadsCallCostIntoItemSession",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerReReview_NotInReviewStatus_ReturnsFailedPrecondition",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerReReview_should_ArchivePriorReviewSession_When_SpawningTmuxBacked",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow",
+   "package": "server/services",
+   "file": "server/services/backlog_stuck_rpc_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerShipPR_NotInReviewStatus_ReturnsFailedPrecondition",
+   "package": "server/services",
+   "file": "server/services/backlog_service_ship_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerShipPR_RunnerError_ReturnsFailedPrecondition",
+   "package": "server/services",
+   "file": "server/services/backlog_service_ship_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerSync_DecryptsTokenThroughServiceLayer",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerSync_ReturnsInvalidArgumentWhenSourceIDEmpty",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_AlreadyExists_LiveHeadlessSession",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_DoubleTriggerGuard",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_FallsBackToRepoPathDirectly_When_RepoPathIsNotAGitRepo",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_NilPool",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_PersistFailurePublishesNotification",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_RefineWithFeedback_RequiresPriorResult",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_should_EndWithShutdownReason_When_StillQueuedForSemaphoreDuringShutdown",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_should_NotClobberExistingPriorityOrCategory_When_LLMOmitsThem",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_should_NotPersistPlanArtifactsPath_When_SDDImplementationDirMissing",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_should_PersistFullRawOutputToDurableFile_When_HeadlessResultFailsToParse",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_should_Succeed_When_RepoPathIsValidAbsoluteExistingDirectory",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTriggerTriage_should_UseModeSpecificTriagePrompt_When_ItemHasNonDefaultPipelineModeAndFirstTriageBranch",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTruncateErrorDetail_should_ReturnEmpty_When_ErrorIsNil",
+   "package": "server/services",
+   "file": "server/services/backlog_service_triage_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestTruncateEscalationReason",
+   "package": "server/services",
+   "file": "server/services/approval_handler_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUnarchiveBacklogItem_Enforce_DeniesNonArchivedItem",
+   "package": "server/services",
+   "file": "server/services/backlog_gate_operator_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUnarchiveBacklogItem_Success",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpdateBacklogItem_GitHubResolveError_ReturnsInvalidArgument",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpdateBacklogItem_should_LeaveCategoryUntouched_When_FieldOmitted",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpdateBacklogItem_should_RejectPrUrl_When_NotRecognizableGitHubPRURL",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpdateBacklogItem_should_ResetPipelineModeToEmptyString_When_FieldExplicitlySetToEmptyString",
+   "package": "server/services",
+   "file": "server/services/backlog_service_lifecycle_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpdateItemSource_ClearsForwardSyncCloseLabel",
+   "package": "server/services",
+   "file": "server/services/backlog_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpdatePipelineMode_should_LeaveStageExecutorsUntouched_When_StageExecutorsFieldOmitted",
+   "package": "server/services",
+   "file": "server/services/backlog_service_pipeline_mode_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpdateStageTransition_should_ReturnFailedPreconditionAndPersistNothing_When_DisablingLastEnabledEdgeForStageWithLiveItems",
+   "package": "server/services",
+   "file": "server/services/backlog_service_transitions_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpdateStage_should_InvalidateStageConfigCache_When_UpdateSucceeds",
+   "package": "server/services",
+   "file": "server/services/backlog_service_stages_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestUpsertApprovalRule_UpdateExisting",
+   "package": "server/services",
+   "file": "server/services/approval_service_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestWaitForQuiescenceResetsTimerOnUpdates",
+   "package": "server/services",
+   "file": "server/services/connectrpc_websocket_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestWatchBacklogItems_should_excludeNonMatchingItems_When_CategoryFilterAppliedToSnapshot",
+   "package": "server/services",
+   "file": "server/services/backlog_service_events_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "TestWatchBacklogItems_should_forwardLiveEvent_When_PublishedWhileStreamIsLive",
+   "package": "server/services",
+   "file": "server/services/backlog_service_events_test.go",
+   "class": "shard-timeout",
+   "evidence": "regex:shard-timeout:No pass/skip/fail event found for test"
+  },
+  {
+   "test": "FuzzDecodeUnaryFrame",
+   "package": "server/services",
+   "file": "server/services/ws_unary_frame_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/unary-mux-vectors.json: no suc"
+  },
+  {
+   "test": "TestAckDetector_ShouldNeverCountAnIndeterminateCaptureAsGone",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAckDetector_ShouldReopenTheCard_WhenTheDialogIsStillShowingAt60Seconds",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAckDetector_ShouldStayUnconfirmedThenClear_WhenCaptureFailsAt60SecondsAndAReceiptComesLate",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAckDetector_should_RestoreATabbedSentRowWithItsTabBarMatcher",
+   "package": "server/services",
+   "file": "server/services/question_tabbed_integration_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldMarkTheRowStale_WhenTheDialogChanged",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldOnlyStoreTheAnswer_WhenSessionIsArchived",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldRefuseAnAnswerOutsideTheOptions_WhenSessionIsStopped",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldRefuseWithHumanActive_WhenWebTerminalTypedWithinFiveSeconds",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldReportAlreadyResolved_WhenRetryAnywayRacesAnAcknowledgement",
+   "package": "server/services",
+   "file": "server/services/question_answer_retry_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAttentionFlags_Should_NotReadEnvVars_When_ResolverBuilt",
+   "package": "server/services",
+   "file": "server/services/feature_flags_attention_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open feature_flags_attention.go: no such file or directory"
+  },
+  {
+   "test": "TestBackgroundResolutionPipeline_should_PublishProgressPerPhase_When_GithubURLSession",
+   "package": "server/services",
+   "file": "server/services/session_creation_pipeline_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted",
+   "package": "server/services",
+   "file": "server/services/session_service_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestClearOpenForSession_should_CancelOpenRowsOnly",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestClear_should_RetireTheCardOfATerminalAnswer_ButNotOfAnEndedSession",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestContractFixtures_should_ValidateAgainstTheirSchemas",
+   "package": "server/services",
+   "file": "server/services/webhook_contract_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../contracts/webhook-management/v1/fixtures/capability-response.json: no"
+  },
+  {
+   "test": "TestContract_should_ReturnSchemaValidErrors_When_EachFailureClassOccurs",
+   "package": "server/services",
+   "file": "server/services/webhook_contract_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open /home/tstapler/.cache/bazel/_bazel_tstapler/fb0aa17dfc2f8e1c919a3cc24b3ec1f"
+  },
+  {
+   "test": "TestCreatePullRequest_should_CallCreatePRDirectly_NotHeadlessPool",
+   "package": "server/services",
+   "file": "server/services/create_pull_request_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:gh) is not installed"
+  },
+  {
+   "test": "TestCreatePullRequest_should_RejectConcurrentCall_When_RacingRealGoroutines",
+   "package": "server/services",
+   "file": "server/services/create_pull_request_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:gh) is not installed"
+  },
+  {
+   "test": "TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession",
+   "package": "server/services",
+   "file": "server/services/session_service_remote_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:env: 'tmux': No such file"
+  },
+  {
+   "test": "TestCreateSession_RemoteTarget_ExistingWorktree_AttachesWithoutCreatingNewOne",
+   "package": "server/services",
+   "file": "server/services/session_service_remote_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:env: 'tmux': No such file"
+  },
+  {
+   "test": "TestCreateSession_RemoteTarget_GitRunsThroughBackendWithTheTargetsRunner",
+   "package": "server/services",
+   "file": "server/services/session_service_remote_backend_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:env: 'tmux': No such file"
+  },
+  {
+   "test": "TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSameWorktreePath",
+   "package": "server/services",
+   "file": "server/services/session_creation_pipeline_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancelCycles",
+   "package": "server/services",
+   "file": "server/services/session_service_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestCreateWorktreeSession_HonorsSessionNameOverrideMap",
+   "package": "server/services",
+   "file": "server/services/session_service_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestDialogGoneSampler_should_CancelDialogReplaced_WhenAnotherDialogShowsTwice",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_wrapped_2opts.txt: no such fi"
+  },
+  {
+   "test": "TestDialogGoneSampler_should_SampleAtMostTwentyRowsPerPass",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestEveryRemediationReasonIsClassified",
+   "package": "server/services",
+   "file": "server/services/backlog_transition_denied_recovery_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open backlog_service_stuck.go: no such file or directory"
+  },
+  {
+   "test": "TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore",
+   "package": "server/services",
+   "file": "server/services/insights_service_test.go",
+   "class": "cwd",
+   "evidence": "override:opens ../../session/tokens/testdata/valid_session.jsonl relative to cwd; still fails with tmux on PATH"
+  },
+  {
+   "test": "TestHookHandler_ShouldOnlyUseMappedTypeNames_WhenScanningScript",
+   "package": "server/services",
+   "file": "server/services/ssq_hook_handler_stamp_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:scripts/ssq-hook-handler: no such file"
+  },
+  {
+   "test": "TestHookSenders_ShouldBeProofedOrNotReplyableAsDecided_ForEachKnownSenderOfXCSSessionId",
+   "package": "server/services",
+   "file": "server/services/approval_question_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/mux/hooks.go: no such file or directory"
+  },
+  {
+   "test": "TestJudgeRow_should_MatchATabbedRowByItsTabBarNotByDialogMatch",
+   "package": "server/services",
+   "file": "server/services/question_tabbed_integration_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestMuxFrame_should_MatchSharedVectors",
+   "package": "server/services",
+   "file": "server/services/ws_terminal_mux_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/terminal-mux-vectors.json: no "
+  },
+  {
+   "test": "TestParseAskUserQuestion_ShouldKeepLabelsVerbatimAndFlagSecondQuestionMultiSelect",
+   "package": "server/services",
+   "file": "server/services/askuserquestion_parser_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/askuserquestion/multi_two_questions.json: no such file"
+  },
+  {
+   "test": "TestRehydrate_should_RestoreReplyableRows_AndFailClosedOnADifferentDialog",
+   "package": "server/services",
+   "file": "server/services/guidance_request_hook_mirror_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldIgnoreTheGuardsFlag_WhenItIsOffAndWhenOn",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldReturnDistinctOutcomeWithZeroWrites_WhenFlagOffNotHiddenNoPendingStaleNotWaiting",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldReturnNotSentAndAllowRetry_WhenTheWriteProvablyWroteNothing",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldWriteExactlyOnce_WhenTwoGoroutinesReplyWithDifferentReplyIDs",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_refuseABadAnswerWithoutWriting",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestSequence_should_refuseABadAnswerWithoutWriting/empty_multi"
+  },
+  {
+   "test": "TestSequence_should_refuseABadAnswerWithoutWriting/empty_multi",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_refuseABadAnswerWithoutWriting/free_text_pick",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_refuseABadAnswerWithoutWriting/not_json",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_refuseABadAnswerWithoutWriting/one_list_only",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_refuseABadAnswerWithoutWriting/unknown_label",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_writeNothing_When_theFirstFrameIsNotTheDialog",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSpawnEntryPoints_ShouldIndexBeforeStart_WhenCreatingHiddenSessions",
+   "package": "server/services",
+   "file": "server/services/session_service_diagnose_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open session_service_diagnose.go: no such file or directory"
+  },
+  {
+   "test": "TestSsqNotify_ShouldStampSchemaVersion_WhenDryRunPrintsMetadata",
+   "package": "server/services",
+   "file": "server/services/ssq_notify_enum_parity_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:scripts/ssq-notify: No such file"
+  },
+  {
+   "test": "TestStreamTerminal_RemoteSession_InputReachesRemotePTY",
+   "package": "server/services",
+   "file": "server/services/session_service_stream_terminal_remote_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:env: 'tmux': No such file"
+  },
+  {
+   "test": "TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButTmuxAlive",
+   "package": "server/services",
+   "file": "server/services/connectrpc_websocket_test.go",
+   "class": "exec-host-binary",
+   "evidence": "override:needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+  },
+  {
+   "test": "TestTransportSpike_WireCost_ShouldRecordContentEncodingAndSize_For128KiBAnd1MiB",
+   "package": "server/services",
+   "file": "server/services/transport_spike_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:only 0 bytes of distinct source"
+  },
+  {
+   "test": "TestUnaryFrameCodec_ShouldReassembleChunkedVector",
+   "package": "server/services",
+   "file": "server/services/ws_unary_frame_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/unary-mux-vectors.json: no suc"
+  },
+  {
+   "test": "TestUnaryFrameVectors_ShouldBeSelfConsistent",
+   "package": "server/services",
+   "file": "server/services/ws_unary_frame_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/unary-mux-vectors.json: no suc"
+  },
+  {
+   "test": "TestWebhookLifecycle_should_RemoveEverythingAndAllowRecreate_When_Deleted",
+   "package": "server/services",
+   "file": "server/services/webhook_lifecycle_handler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open /home/tstapler/.cache/bazel/_bazel_tstapler/fb0aa17dfc2f8e1c919a3cc24b3ec1f"
+  },
+  {
+   "test": "FuzzDecodeUnaryFrame",
+   "package": "server/services",
+   "file": "server/services/ws_unary_frame_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/unary-mux-vectors.json: no suc"
+  },
+  {
+   "test": "TestAckDetector_ShouldFailWithStillShowing_WhenTheRowsDialogIsUpAt60Seconds",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAckDetector_ShouldRetireTheCard_WhenTheSessionEndsOnASentAnswer",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAckDetector_ShouldStopTrackingWithoutChangingState_WhenTheSessionEnds",
+   "package": "server/services",
+   "file": "server/services/guidance_ack_detector_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldDelegateToTheHiddenHandler_WhenSessionIsHidden",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldRefuseWithHumanActive_WhenAHumanIsAttachedAndActive",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldReportAlreadyResolvedWithTheStoredValue_WhenAnsweredTwice",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldReturnStaleAndWriteNothing_WhenTheRouteChangedAfterTheTierGate",
+   "package": "server/services",
+   "file": "server/services/question_answer_router_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldReverifyAndRewriteOneDigit_WhenRetryAnywayOnStillShowingRow",
+   "package": "server/services",
+   "file": "server/services/question_answer_retry_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestAnswerRouter_ShouldRewrite_WhenRetryAnywayOnAnUnconfirmedSentRow",
+   "package": "server/services",
+   "file": "server/services/question_answer_retry_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestBackgroundResolutionPipeline_should_CompleteWithoutNetworkIO_When_PlainDirectorySession",
+   "package": "server/services",
+   "file": "server/services/session_creation_pipeline_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestContractSchemas_should_RejectUnsafeLifecycleRequests",
+   "package": "server/services",
+   "file": "server/services/webhook_contract_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../contracts/webhook-management/v1/fixtures/lifecycle-request.disable.js"
+  },
+  {
+   "test": "TestCreateDirectorySession_should_SetProgramFromOverride_When_ProgramOverrideNonEmpty",
+   "package": "server/services",
+   "file": "server/services/session_service_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestCreatePullRequest_should_PersistAndPublishEvent_When_CreateSucceeds",
+   "package": "server/services",
+   "file": "server/services/create_pull_request_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:gh) is not installed"
+  },
+  {
+   "test": "TestCreatePullRequest_should_ReturnInternalError_When_PRNumberIsZero",
+   "package": "server/services",
+   "file": "server/services/create_pull_request_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:expected: 0xd\n        \t            \tactual  : 0xe"
+  },
+  {
+   "test": "TestCreateSession_RemoteTarget_Directory_AttachesWithoutWorktree",
+   "package": "server/services",
+   "file": "server/services/session_service_remote_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:env: 'tmux': No such file"
+  },
+  {
+   "test": "TestCreateSession_RemoteTarget_NewWorktree_BranchesFromDefaultBranch_NotAmbientHEAD",
+   "package": "server/services",
+   "file": "server/services/session_service_remote_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:env: 'tmux': No such file"
+  },
+  {
+   "test": "TestCreateSession_StatusManagerWiredBeforeDriver",
+   "package": "server/services",
+   "file": "server/services/session_service_create_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransitionsBeforeStarted",
+   "package": "server/services",
+   "file": "server/services/session_service_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestDialogGoneSampler_should_KeepTheRowOpen_WhenOneMismatchIsFollowedByAMatch",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/dialog_presence/idle_composer.txt: no such file"
+  },
+  {
+   "test": "TestDialogGoneSampler_should_TreatAViewOnlyRowAsGoneOnlyWhenNoDialogShows",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_wrapped_2opts.txt: no such fi"
+  },
+  {
+   "test": "TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend",
+   "package": "server/services",
+   "file": "server/services/file_ops_conformance_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend/memBackend/read-all_and_stat_match_the_pre-refactor_corpus_byte_for_byte"
+  },
+  {
+   "test": "TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend/memBackend",
+   "package": "server/services",
+   "file": "server/services/file_ops_conformance_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend/memBackend/read-all_and_stat_match_the_pre-refactor_corpus_byte_for_byte"
+  },
+  {
+   "test": "TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend/memBackend/read-all_and_stat_match_the_pre-refactor_corpus_byte_for_byte",
+   "package": "server/services",
+   "file": "server/services/file_ops_conformance_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/file_ops_read_golden.json: no such file"
+  },
+  {
+   "test": "TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend/osRootBackend",
+   "package": "server/services",
+   "file": "server/services/file_ops_conformance_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend/osRootBackend/read-all_and_stat_match_the_pre-refactor_corpus_byte_for_byte"
+  },
+  {
+   "test": "TestFileOpsConformance_ShouldPassOnOsRootBackendAndMemBackend/osRootBackend/read-all_and_stat_match_the_pre-refactor_corpus_byte_for_byte",
+   "package": "server/services",
+   "file": "server/services/file_ops_conformance_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/file_ops_read_golden.json: no such file"
+  },
+  {
+   "test": "TestHeadersMatch_should_RejectATabbedFrameOfAnotherQuestionSet",
+   "package": "server/services",
+   "file": "server/services/question_tabbed_integration_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestHookEvents_ShouldYieldZeroRowsForHiddenPostToolErrorAndOneFailureForMainStop_WhenGateOn",
+   "package": "server/services",
+   "file": "server/services/ssq_hook_handler_stamp_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:scripts/ssq-hook-handler: No such file"
+  },
+  {
+   "test": "TestObservePostToolUse_should_ClearTheMirroredRowsOfAnAnsweredQuestion",
+   "package": "server/services",
+   "file": "server/services/guidance_dialog_gone_sampler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestPaneReplyCore_ShouldRefuseWithZeroWritesAndKeepTheQuestion_WhenTargetIsNotTheSessionKind",
+   "package": "server/services",
+   "file": "server/services/pane_reply_core_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestPaneReplyCore_ShouldRefuseWithZeroWritesAndKeepTheQuestion_WhenTargetIsNotTheSessionKind/hidden_target_on_a_visible_session"
+  },
+  {
+   "test": "TestPaneReplyCore_ShouldRefuseWithZeroWritesAndKeepTheQuestion_WhenTargetIsNotTheSessionKind/hidden_target_on_a_visible_session",
+   "package": "server/services",
+   "file": "server/services/pane_reply_core_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestPaneReplyCore_ShouldRefuseWithZeroWritesAndKeepTheQuestion_WhenTargetIsNotTheSessionKind/visible_target_on_a_hidden_session",
+   "package": "server/services",
+   "file": "server/services/pane_reply_core_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldPutNoOptionLabelInTheLogLine_WhenReplySent",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldReturnInvalidArgumentWithZeroWrites_WhenReplyTextIsNotExactlyOneAsciiDigitInOneToN",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldReturnNotSentWithZeroWrites_WhenTheLeaseIsBusy",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestReply_ShouldReturnRateLimitedWithRetryAfterBeforeTakingAnyClaim_WhenSecondReplyWithinFiveSeconds",
+   "package": "server/services",
+   "file": "server/services/hidden_question_reply_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestRetrySessionCreation_should_TransitionFailedToCreating_When_SameInstanceRetried",
+   "package": "server/services",
+   "file": "server/services/session_service_retry_creation_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:executable file not found in $PATH"
+  },
+  {
+   "test": "TestSequence_should_refuseWithHumanActive_WhenWebTerminalTypedWithinFiveSeconds",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "parent-of:TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_1"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_1",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_2",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_3",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_4",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_5",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_6",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_7",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_8",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/partial_write_at_key_9",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_1",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_2",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_3",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_4",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_5",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_6",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_7",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_8",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSequence_should_reportNotSentVsSendIndeterminatePerStage_When_faultInjectedAtEachStep/zero-byte_failure_at_key_9",
+   "package": "server/services",
+   "file": "server/services/pane_reply_sequence_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../session/testdata/reply_dialogs/question_single_select_3opts.txt: no s"
+  },
+  {
+   "test": "TestSpawnPointGuards_should_ShareOnePredicateAndCoverEveryRemediationAction",
+   "package": "server/services",
+   "file": "server/services/backlog_transition_denied_recovery_test.go",
+   "class": "cwd",
+   "evidence": "override:source-scanning guard finds no files (actual map is empty); sources are not in the sandbox cwd"
+  },
+  {
+   "test": "TestStreamTerminal_RemoteSession_RecoversAfterConnectionKilledMidStream",
+   "package": "server/services",
+   "file": "server/services/session_service_stream_terminal_remote_test.go",
+   "class": "exec-host-binary",
+   "evidence": "regex:exec-host-binary:env: 'tmux': No such file"
+  },
+  {
+   "test": "TestUnaryAllowlistFixture_ShouldLoad",
+   "package": "server/services",
+   "file": "server/services/ws_unary_frame_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/ws-unary-allowlist.json: no su"
+  },
+  {
+   "test": "TestUnaryBatch_should_MatchTheSharedClientFixture",
+   "package": "server/services",
+   "file": "server/services/ws_unary_batch_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open ../../web-app/src/lib/transport/__fixtures__/ws-unary-allowlist.json: no su"
+  },
+  {
+   "test": "TestWebhookLifecycle_should_StopAcceptingDeliveriesAndBumpVersion_When_Disabled",
+   "package": "server/services",
+   "file": "server/services/webhook_lifecycle_handler_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open /home/tstapler/.cache/bazel/_bazel_tstapler/fb0aa17dfc2f8e1c919a3cc24b3ec1f"
+  },
+  {
+   "test": "TestWebhookManagement_should_Return429BeforeCheckingCredential_When_FailureBudgetIsSpent",
+   "package": "server/services",
+   "file": "server/services/webhook_auth_limiter_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open /home/tstapler/.cache/bazel/_bazel_tstapler/fb0aa17dfc2f8e1c919a3cc24b3ec1f"
+  },
+  {
+   "test": "TestWorkflowBypassInventory_EveryCreatorIsClassifiedAndCreatesAtIdea",
+   "package": "server/services",
+   "file": "server/services/workflow_bypass_inventory_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:go.mod not found above"
+  },
+  {
+   "test": "TestWorkflowBypassInventory_EveryStatusWriteCallIsClassified",
+   "package": "server/services",
+   "file": "server/services/workflow_bypass_inventory_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:go.mod not found above"
+  },
+  {
+   "test": "TestWorkflowBypassStrict_EveryNonForwardingRegisteredCallerHasACallSite",
+   "package": "server/services",
+   "file": "server/services/workflow_bypass_strict_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:go.mod not found above"
+  },
+  {
+   "test": "TestWorkflowBypassStrict_EveryTransitionRequestNamesARegisteredCaller",
+   "package": "server/services",
+   "file": "server/services/workflow_bypass_strict_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:go.mod not found above"
+  },
+  {
+   "test": "TestWriteFile_ShouldRoundTripByteIdentical_When_NoOpSaveOfCorpus",
+   "package": "server/services",
+   "file": "server/services/file_write_corpus_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/files_roundtrip: no such file"
+  },
+  {
+   "test": "TestWriteFile_ShouldYieldOneSavedAnd19Conflicts_When_20ConcurrentSavesSameToken",
+   "package": "server/services",
+   "file": "server/services/file_write_corpus_test.go",
+   "class": "cwd",
+   "evidence": "regex:cwd:open testdata/files_roundtrip: no such file"
+  }
+ ],
+ "packages": {
+  "session": {
+   "targets": [
+    "//session:session_test"
+   ],
+   "passed": 4520,
+   "failed": 104,
+   "skipped": 37,
+   "load_start": "17.05",
+   "load_end": "17.05",
+   "status": {
+    "//session:session_test": ""
+   }
+  },
+  "session/vc": {
+   "targets": [
+    "//session/vc:vc_test"
+   ],
+   "passed": 127,
+   "failed": 4,
+   "skipped": 23,
+   "load_start": "18.01",
+   "load_end": "18.01",
+   "status": {
+    "//session/vc:vc_test": ""
+   }
+  },
+  "session/tymux": {
+   "targets": [
+    "//session/tymux:tymux_test"
+   ],
+   "passed": 363,
+   "failed": 1,
+   "skipped": 3,
+   "load_start": "19.13",
+   "load_end": "19.13",
+   "status": {
+    "//session/tymux:tymux_test": ""
+   }
+  },
+  "github": {
+   "targets": [
+    "//github:github_test"
+   ],
+   "passed": 317,
+   "failed": 8,
+   "skipped": 0,
+   "load_start": "19.13",
+   "load_end": "19.13",
+   "status": {
+    "//github:github_test": ""
+   }
+  },
+  "tuitest/integration/claude_squad": {
+   "targets": [
+    "//tuitest/integration/claude_squad:claude_squad_test"
+   ],
+   "passed": 0,
+   "failed": 2,
+   "skipped": 0,
+   "load_start": "20.08",
+   "load_end": "20.08",
+   "status": {
+    "//tuitest/integration/claude_squad:claude_squad_test": ""
+   }
+  },
+  "session/mux": {
+   "targets": [
+    "//session/mux:mux_test"
+   ],
+   "passed": 36,
+   "failed": 0,
+   "skipped": 2,
+   "load_start": "20.08",
+   "load_end": "20.08",
+   "status": {
+    "//session/mux:mux_test": ""
+   }
+  },
+  "session/tmux": {
+   "targets": [
+    "//session/tmux:tmux_test"
+   ],
+   "passed": 492,
+   "failed": 0,
+   "skipped": 16,
+   "load_start": "20.80",
+   "load_end": "20.80",
+   "status": {
+    "//session/tmux:tmux_test": ""
+   }
+  },
+  "config": {
+   "targets": [
+    "//config:config_test"
+   ],
+   "passed": 308,
+   "failed": 0,
+   "skipped": 0,
+   "load_start": "20.80",
+   "load_end": "20.80",
+   "status": {
+    "//config:config_test": ""
+   }
+  },
+  "pkg/events": {
+   "targets": [
+    "//pkg/events:events_test"
+   ],
+   "passed": 20,
+   "failed": 0,
+   "skipped": 0,
+   "load_start": "21.69",
+   "load_end": "21.69",
+   "status": {
+    "//pkg/events:events_test": ""
+   }
+  },
+  "server/services": {
+   "targets": [
+    "//server/services:services_test"
+   ],
+   "passed": 4326,
+   "failed": 365,
+   "skipped": 12,
+   "load_start": "22.89",
+   "load_end": "22.89",
+   "status": {
+    "//server/services:services_test": ""
+   }
+  }
+ }
+}

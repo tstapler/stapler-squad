@@ -12,13 +12,14 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
 func newClearTerminalService(insts ...*session.Instance) *SessionService {
-	poller := newEmptyPoller()
+	poller := svctest.NewEmptyPoller()
 	poller.SetInstances(insts)
-	return &SessionService{reviewQueuePoller: poller, eventBus: events.NewEventBus(8)}
+	return &SessionService{ReviewQueuePoller: poller, eventBus: events.NewEventBus(8)}
 }
 
 func probeOf(live bool, probed *bool) func(*session.Instance) func() bool {

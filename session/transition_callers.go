@@ -82,11 +82,11 @@ type ExemptSite struct {
 }
 
 const (
-	fileLifecycle    = "server/services/backlog_service_lifecycle.go"
+	fileLifecycle    = "server/services/backlogsvc/backlog_service_lifecycle.go"
 	fileNotifyAction = "server/services/notification_action_backlog.go"
-	fileTriage       = "server/services/backlog_service_triage.go"
-	fileTriggerTri   = "server/services/backlog_service_trigger_triage.go"
-	fileSync         = "server/services/backlog_service_sync.go"
+	fileTriage       = "server/services/backlogsvc/backlog_service_triage.go"
+	fileTriggerTri   = "server/services/backlogsvc/backlog_service_trigger_triage.go"
+	fileSync         = "server/services/backlogsvc/backlog_service_sync.go"
 	fileAutonomous   = "server/services/autonomous_orchestration_service.go"
 	fileDebugMutate  = "server/services/backlog_debug_mutate_handler.go"
 	fileJulesDisp    = "server/services/jules_dispatch_service.go"
@@ -94,9 +94,9 @@ const (
 	fileMCPBacklogPR = "server/mcp/tools_backlog_pr.go"
 	fileMCPDelegate  = "server/mcp/tools_backlog_dependencies.go"
 	fileRemediation  = "session/backlog_remediation.go"
-	fileSessLife     = "session/backlog_lifecycle.go"
-	fileSessLifeArch = "session/backlog_lifecycle_archive.go"
-	fileSessLifePR   = "session/backlog_lifecycle_pr.go"
+	fileSessLife     = "session/backlog/backlog_lifecycle.go"
+	fileSessLifeArch = "session/backlog/backlog_lifecycle_archive.go"
+	fileSessLifePR   = "session/backlog/backlog_lifecycle_pr.go"
 	fileSessSync     = "session/backlog_sync.go"
 	fileJulesPoller  = "session/jules_session_poller.go"
 )
@@ -282,8 +282,8 @@ var exemptTransitionSites = []ExemptSite{
 	{CallSite{fileTriage, "BacklogService.rollbackFailedReopen", 1}, ExemptRollback, "restores review after a failed respawn"},
 	{CallSite{fileTriage, "BacklogService.rollbackFailedPRFixReopen", 1}, ExemptRollback, "restores pr_pending after a failed respawn"},
 	{CallSite{fileTriage, "BacklogService.claimAndSpawnCandidate", 1}, ExemptRollback, "restores the pre-claim status after a failed spawn"},
-	{CallSite{fileDebugMutate, "BacklogDebugMutateHandler.handleTransition", 1}, ExemptDebug, "operator-only debug endpoint"},
-	{CallSite{fileDebugMutate, "BacklogDebugMutateHandler.handleArchive", 1}, ExemptDebug, "operator-only debug endpoint"},
+	{CallSite{fileDebugMutate, "BacklogDebugMutateHandler.HandleTransition", 1}, ExemptDebug, "operator-only debug endpoint"},
+	{CallSite{fileDebugMutate, "BacklogDebugMutateHandler.HandleArchive", 1}, ExemptDebug, "operator-only debug endpoint"},
 }
 
 // sharedGuardHelperSites hold the one primitive call that several registered
@@ -291,7 +291,7 @@ var exemptTransitionSites = []ExemptSite{
 // which re-attempts the transition under the denied caller's own name (only
 // the redriveByWrite callers).
 var sharedGuardHelperSites = []CallSite{
-	{fileTriage, "BacklogService.transitionWithGuard", 1},
+	{fileTriage, "BacklogService.TransitionWithGuard", 1},
 	{fileRemediation, "Storage.redriveOne", 1},
 }
 

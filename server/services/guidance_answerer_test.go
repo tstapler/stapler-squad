@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -28,7 +29,7 @@ func createPeerRequest(t *testing.T, storage *session.Storage, asker, answerer s
 
 func TestAnswerAs_should_AuthorizeOnlyTheNamedSessionOrTheHuman(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 	peer := createPeerRequest(t, storage, "asker-a", "peer-b")
@@ -72,7 +73,7 @@ func TestAnswerAs_should_AuthorizeOnlyTheNamedSessionOrTheHuman(t *testing.T) {
 
 func TestAnswerAs_should_SkipTheHumanNotification_When_RowIsAPeerRequest(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
 	svc := NewGuidanceRequestService(storage, bus, nil)
 	ctx := context.Background()
@@ -96,14 +97,14 @@ func TestAnswerAs_should_SkipTheHumanNotification_When_RowIsAPeerRequest(t *test
 
 func TestAnswerAs_should_ReturnNotFound_When_RequestDoesNotExist(t *testing.T) {
 	t.Parallel()
-	svc := NewGuidanceRequestService(createTestStorage(t), nil, nil)
+	svc := NewGuidanceRequestService(svctest.CreateTestStorage(t), nil, nil)
 	_, _, err := svc.AnswerAs(context.Background(), "5d1c8ec3-3f6b-4c0e-9a3e-0a6b4d6b1f11", "x", HumanAnswerer())
 	assert.ErrorIs(t, err, session.ErrNotFound)
 }
 
 func TestAnswerAs_should_WaiveCriterion_Only_When_OwnerPicksWaiveResponse(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 	raw, err := session.SerializeAcCriteria([]session.AcCriterion{

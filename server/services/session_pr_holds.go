@@ -18,6 +18,6 @@ func withSessionPRHoldsScoped(p *sessionv1.Session, inst *session.Instance, scop
 		return p
 	}
 	snap := inst.Snapshot()
-	p.PrHolds = nonTerminalPRHolds(snap.GitHub.PRs, snap.UUID)
+	p.PrHolds = NonTerminalPRHolds(snap.GitHub.PRs, snap.UUID)
 	return p
 }

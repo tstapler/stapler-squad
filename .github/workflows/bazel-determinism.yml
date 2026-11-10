@@ -1,0 +1,52 @@
+name: Bazel determinism
+
+# PROVISIONAL (Task 7.7a, pre-mortem #8). Nightly on main: builds //:stapler-squad (release config) in two clean
+# output bases with no cache and compares the execution logs (tools/bzl/determinism.sh). A digest mismatch names
+# the action mnemonic and fails the job; mismatches of actions listed in tools/bzl/hermetic-downgrades.txt are
+# reported but accepted, and the tool says when such an action now matches so its tag and row can go.
+# Action pins are SHAs (version in the trailing comment).
+on:
+  schedule:
+    - cron: '47 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bazel-determinism
+  cancel-in-progress: false
+
+jobs:
+  determinism:
+    name: two clean builds, same digests
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      # Only the repository cache is shared; the script disables the disk and remote caches so every action runs.
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: false
+          repository-cache: true
+
+      - name: Determinism comparison
+        run: |
+          set +e
+          bash tools/bzl/determinism.sh //:stapler-squad 2>&1 | tee "$RUNNER_TEMP/determinism.log"
+          code=${PIPESTATUS[0]}
+          {
+            echo '### Determinism'
+            echo '```'
+            grep -E '^(MISMATCH|NOTE|compared=)' "$RUNNER_TEMP/determinism.log" | head -200
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"

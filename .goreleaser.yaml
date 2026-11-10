@@ -3,6 +3,9 @@ version: 2.9
 builds:
   - id: stapler-squad
     binary: stapler-squad
+    # otelc-woven build (single stapler-squad binary is always instrumented); needs
+    # `otelc` on PATH and `goreleaser --parallelism 1` (the weave edits go.mod in place).
+    tool: ./scripts/goreleaser-go-tool.sh
     goos:
       - darwin
       - linux

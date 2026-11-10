@@ -41,7 +41,7 @@ const julesDispatchFailedEndReason = "dispatch_failed"
 // GetAllItemSessionsWithBacklogInfo) for the dispatcher/poller to act on it
 // without a second query.
 func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
-	sessions, err := r.client.ItemSession.Query().
+	sessions, err := r.Client.ItemSession.Query().
 		Where(
 			itemsession.SessionRole(SessionRoleJulesWork),
 			itemsession.EndedAtIsNil(),
@@ -75,7 +75,7 @@ func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]ItemSe
 // Jules-side outage doesn't consume the day's cap on attempts nothing was
 // actually billed for (pre-mortem P2 #5).
 func (r *EntRepository) CountJulesItemSessionsSince(ctx context.Context, since time.Time) (int, error) {
-	n, err := r.client.ItemSession.Query().
+	n, err := r.Client.ItemSession.Query().
 		Where(
 			itemsession.SessionRole(SessionRoleJulesWork),
 			itemsession.CreatedAtGTE(since),
@@ -100,7 +100,7 @@ func (r *EntRepository) TouchItemSessionProgress(ctx context.Context, id string,
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetLastProgressAt(at).
 		Save(ctx)
 	if err != nil {

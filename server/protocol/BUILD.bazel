@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "protocol",
+    srcs = [
+        "compression.go",
+        "envelope.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/protocol",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "@com_github_klauspost_compress//gzip",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":protocol",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "protocol_test",
+    srcs = [
+        "compression_test.go",
+        "envelope_test.go",
+    ],
+    embed = [":protocol"],
+    deps = ["@com_github_klauspost_compress//gzip"],
+)

@@ -1,0 +1,52 @@
+# gazelle:ignore
+load("@bazel_lib//lib:copy_file.bzl", "copy_file")
+
+# ADR-007: stage the pinned tymuxd release binary for the target platform at the path
+# binary_embedded.go's //go:embed names. Only referenced under --config=embed_tymux.
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "macos_x86_64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "macos_aarch64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+copy_file(
+    name = "tymuxd_staged",
+    src = select({
+        ":linux_aarch64": "@tymuxd_aarch64_unknown_linux_musl//:tymuxd",
+        ":linux_x86_64": "@tymuxd_x86_64_unknown_linux_musl//:tymuxd",
+        ":macos_aarch64": "@tymuxd_aarch64_apple_darwin//:tymuxd",
+        ":macos_x86_64": "@tymuxd_x86_64_apple_darwin//:tymuxd",
+    }),
+    out = "tymuxd",
+    is_executable = True,
+    visibility = [
+        "//:__pkg__",  # the otel weave stages it
+        "//session/tymux:__pkg__",
+    ],
+)

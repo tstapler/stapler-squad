@@ -6,10 +6,11 @@ import (
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func TestGetTmuxVersionStatus_ReturnsEmpty_When_NoMismatchDetected(t *testing.T) {
-	svc := newCreateTestService(t, createTestStorage(t))
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 
 	resp, err := svc.GetTmuxVersionStatus(context.Background(), connect.NewRequest(&sessionv1.GetTmuxVersionStatusRequest{}))
 	if err != nil {
@@ -21,7 +22,7 @@ func TestGetTmuxVersionStatus_ReturnsEmpty_When_NoMismatchDetected(t *testing.T)
 }
 
 func TestRestartTmuxServer_ReturnsErrServerDownAsSuccess_When_NoServerRunning(t *testing.T) {
-	svc := newCreateTestService(t, createTestStorage(t))
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 
 	// A socket with no running server: tmux.RestartTmuxServer treats
 	// "already gone" as success (nothing left to kill), not an error --

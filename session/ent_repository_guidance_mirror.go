@@ -88,7 +88,7 @@ func (r *EntRepository) SetDelivery(ctx context.Context, id uuid.UUID, route dom
 	if addAttempts < 0 {
 		return false, fmt.Errorf("set delivery %s: %w", id, errors.New("addAttempts must not be negative"))
 	}
-	n, err := r.client.GuidanceRequest.Update().
+	n, err := r.Client.GuidanceRequest.Update().
 		Where(guidancerequest.ID(id), anyDeliveryState(domain.PredecessorsOf(state))).
 		SetDeliveryRoute(string(route)).
 		SetDeliveryState(string(state)).
@@ -120,7 +120,7 @@ func anyDeliveryState(states []domain.DeliveryState) predicate.GuidanceRequest {
 // ListOpenGuidanceRequestsByAsker returns the open rows whose asker is
 // askerSessionUUID, newest first, optionally limited to sources.
 func (r *EntRepository) ListOpenGuidanceRequestsByAsker(ctx context.Context, askerSessionUUID string, sources ...domain.QuestionSource) ([]*GuidanceRequestData, error) {
-	q := r.client.GuidanceRequest.Query().Where(
+	q := r.Client.GuidanceRequest.Query().Where(
 		guidancerequest.AskerSessionUUID(askerSessionUUID),
 		guidancerequest.AnsweredAtIsNil(),
 		guidancerequest.CancelledAtIsNil(),
@@ -143,7 +143,7 @@ func (r *EntRepository) ListOpenGuidanceRequestsByAsker(ctx context.Context, ask
 // limited to route when route is set. Used to resume acknowledgement tracking
 // after a restart and to find pre-answered rows for a hook.
 func (r *EntRepository) ListGuidanceByDelivery(ctx context.Context, route domain.DeliveryRoute, state domain.DeliveryState) ([]*GuidanceRequestData, error) {
-	q := r.client.GuidanceRequest.Query().Where(guidancerequest.DeliveryState(string(state)))
+	q := r.Client.GuidanceRequest.Query().Where(guidancerequest.DeliveryState(string(state)))
 	if route != "" {
 		q = q.Where(guidancerequest.DeliveryRoute(string(route)))
 	}

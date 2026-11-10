@@ -28,7 +28,7 @@ import (
 // builtInStageOrder is the fixed order the 9 built-in BacklogStatus values
 // are seeded in. Order has no semantic meaning to ConfiguredWorkflowEngine
 // (Epic 2.3 looks stages up by slug) but keeps seeded rows deterministic.
-var builtInStageOrder = []BacklogStatus{
+var BuiltInStageOrder = []BacklogStatus{
 	BacklogStatusIdea,
 	BacklogStatusRefining,
 	BacklogStatusReady,
@@ -94,8 +94,8 @@ func EnsureBuiltInWorkflowStages(ctx context.Context, client *ent.Client) error 
 		return fmt.Errorf("EnsureBuiltInWorkflowStages: begin tx: %w", err)
 	}
 
-	stageIDs := make(map[BacklogStatus]uuid.UUID, len(builtInStageOrder))
-	for _, slug := range builtInStageOrder {
+	stageIDs := make(map[BacklogStatus]uuid.UUID, len(BuiltInStageOrder))
+	for _, slug := range BuiltInStageOrder {
 		row, createErr := tx.BacklogStage.Create().
 			SetSlug(string(slug)).
 			SetName(builtInStageNames[slug]).
@@ -198,7 +198,7 @@ func livenessLine(l *ent.StageLivenessDefinition) string {
 // liveness rows and no gates, so those sections are empty.
 func builtInSeedFingerprintInput() stageConfigFingerprint {
 	var c stageConfigFingerprint
-	for _, slug := range builtInStageOrder {
+	for _, slug := range BuiltInStageOrder {
 		c.Stages = append(c.Stages, stageRow{string(slug), builtInStageNames[slug], builtInEntryStages[slug], builtInTerminalStages[slug], true}.line())
 	}
 	for from, targets := range domain.ValidTransitions() {
@@ -369,7 +369,7 @@ type StrandedItem struct {
 // transitions are empty or smaller than Default's. A non-empty OverrideReason
 // skips operator gates only, never the graph, so it cannot free a lost edge.
 func StrandedItemPreview(def WorkflowEngine, cfg *ConfiguredWorkflowEngine, items []ItemStatusRef, disabledStages map[BacklogStatus]bool) []StrandedItem {
-	enf := enforceAnswer{def: def, cfg: cfg}
+	enf := EnforceAnswer{def: def, cfg: cfg}
 	var out []StrandedItem
 	for _, it := range items {
 		before := def.AllowedTransitions(it.Status, nil)

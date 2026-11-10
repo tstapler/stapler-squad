@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
@@ -31,7 +32,7 @@ func TestCreateSession_MainCheckoutBranchCollision(t *testing.T) {
 	wireRegistryForActorSerialization(fix)
 
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
 	// Actually check out a NEW branch "collide-branch" in the repo's own
 	// (main) working tree -- not a linked worktree -- so the collision is a

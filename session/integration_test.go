@@ -6,104 +6,24 @@ import (
 	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"hash/fnv"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/envtest"
-	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"github.com/tstapler/stapler-squad/testutil/tmuxreap"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
-	"github.com/zalando/go-keyring"
 )
 
-// TestMain runs before all tests to set up the test environment
+// TestMain runs before all tests to set up the test environment.
 func TestMain(m *testing.M) {
 	dirwatch.ForceFSNotify(true) // history/worktree tests need synchronous in-kernel event delivery
-	log.InitializeForTests(log.ERROR, log.ERROR)
-	defer log.Close()
-
-	// Switch go-keyring to its in-memory mock provider so backlog_plugin_github*
-	// tests (which call github.GetKeychainTokenForHost through Fetch/FetchAll/
-	// CloseIssue/PostIssueComment) never touch the real OS keychain. Without
-	// this, a machine with real GitHub accounts already connected (e.g. via
-	// Settings > GitHub Accounts) returns a real token instead of "", making
-	// those tests fail non-deterministically depending on local machine state.
-	keyring.MockInit()
-
-	// Fail the run on any non-loopback dial through http.DefaultTransport.
-	netGuard := envtest.DenyNonLoopbackNetwork()
-
-	// Tests that launch the real `claude` binary (restart/resume, MCP-config)
-	// must not use the developer's credentials or MCP servers.
-	restoreClaudeCLI, err := envtest.IsolateClaudeCLI()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
-		os.Exit(1)
-	}
-	defer restoreClaudeCLI()
-
-	// See envtest.ClearAmbientStaplerSquadStateEnv's doc comment: an ambient
-	// STAPLER_SQUAD_TEST_DIR/STAPLER_SQUAD_INSTANCE left set in the shell (e.g.
-	// by an earlier e2e run) silently wins over this package's own per-PID test
-	// isolation, so tests that call config.LoadConfig() (e.g. SwitchProgram's
-	// empty-string default resolution) read someone else's shared config.json
-	// instead of a fresh default. Previously worked around ad hoc per-test via
-	// t.Setenv (see TestSwitchProgram_EmptyString_ResolvesToConfigDefault's
-	// comment) — this closes the gap for every other test in the package that
-	// never got that treatment.
-	restoreStaplerSquadEnv := envtest.ClearAmbientStaplerSquadStateEnv()
-	defer restoreStaplerSquadEnv()
-
-	tmuxreap.ReapLeakedTestServers()
-	tmuxreap.StartTestServerWatchdog(os.Getpid())
-
-	// Periodic goroutine dump so hangs produce visible output rather than silence.
-	stop := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				dumpGoroutines("periodic")
-			case <-stop:
-				return
-			}
-		}
-	}()
-
-	// Also dump on interrupt so manual Ctrl-C reveals the hang site.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sigCh
-		dumpGoroutines("signal")
-	}()
-
-	code := m.Run()
-	close(stop)
-	removeGitTemplateRepos()
-	if report := netGuard.Report(); report != "" {
-		fmt.Fprint(os.Stderr, report)
-		code = 1
-	}
-	os.Exit(code)
-}
-
-func dumpGoroutines(reason string) {
-	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
-	fmt.Fprintf(os.Stderr, "\n=== goroutine dump (%s) ===\n%s\n", reason, buf[:n])
+	os.Exit(sessiontest.Main(m))
 }
 
 // Test utilities for waiting without static sleeps. Both delegate their polling
@@ -881,7 +801,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 		// Simulate kill and restore. This is a directory session (no git
 		// worktree), so gitManager.GetWorktreePath() returns "" — fall back
 		// to tempRepo like the production resume path does (instance.go).
-		worktreePath := instance.gitManager.GetWorktreePath()
+		worktreePath := instance.GitManager.GetWorktreePath()
 		if worktreePath == "" {
 			worktreePath = tempRepo
 		}

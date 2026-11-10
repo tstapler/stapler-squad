@@ -3,9 +3,7 @@ package services
 
 import (
 	"context"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,19 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/vc"
 )
-
-// stubLiveFinder is a test double for LiveInstanceFinder that returns a fixed instance.
-type stubLiveFinder struct {
-	inst *session.Instance
-}
-
-func (s *stubLiveFinder) FindLiveInstance(_ string) *session.Instance {
-	return s.inst
-}
 
 // workspaceTestFixture holds the WorkspaceService and its dependencies for a
 // single test. The storage is backed by a real SQLite database in a temp dir.
@@ -323,7 +313,7 @@ func TestWorkspaceService_FindInstanceFast_LiveFinderHit_BypassesStorage(t *test
 		Status:  session.Active,
 		Program: "claude",
 	}
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: liveInst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: liveInst})
 
 	// Session is NOT in storage — only the live finder can resolve it.
 	_, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
@@ -343,7 +333,7 @@ func TestWorkspaceService_FindInstanceFast_LiveFinderMiss_FallsBackToStorage(t *
 	t.Cleanup(fix.cleanup)
 
 	// Live finder always misses.
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: nil})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: nil})
 
 	// Session is in storage.
 	seedInstance(t, fix.storage, "storage-session")
@@ -454,35 +444,16 @@ func TestFileChangeToProto(t *testing.T) {
 // internal state the proto mapping is derived from.
 // --------------------------------------------------------------------------
 
-// newVCSStatusTestRepo creates a temp git repo with two commits on "main":
-// baseSHA (one file) then headSHA (a second file added) — so a caller with
-// baseSHA recorded sees exactly one unshipped commit and one changed file.
-func newVCSStatusTestRepo(t *testing.T) (dir, baseSHA, headSHA string) {
-	t.Helper()
-	dir = t.TempDir()
-	runGit(t, dir, "init", "-q", "-b", "main")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "base commit")
-	baseSHA = strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "HEAD"))
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("two\n"), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "second commit")
-	headSHA = strings.TrimSpace(runGitOutput(t, dir, "rev-parse", "HEAD"))
-	return dir, baseSHA, headSHA
-}
-
 func TestWorkspaceService_GetVCSStatus_DirectoryMode_PopulatesCommitsAndDiffStat(t *testing.T) {
 	t.Parallel()
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	dir, baseSHA, headSHA := newVCSStatusTestRepo(t)
+	dir, baseSHA, headSHA := svctest.NewVCSStatusTestRepo(t)
 
 	inst := &session.Instance{Title: "dir-mode-session", Path: dir, Status: session.Paused, Program: "claude"}
 	inst.SetDirBaseSHA(baseSHA)
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 
 	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
 		Id: "dir-mode-session",
@@ -521,7 +492,7 @@ func TestWorkspaceService_GetVCSStatus_WorktreeMode_PopulatesCommitsAndDiffStat(
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	dir, baseSHA, headSHA := newVCSStatusTestRepo(t)
+	dir, baseSHA, headSHA := svctest.NewVCSStatusTestRepo(t)
 
 	// repoPath == worktreePath here, matching the pattern already used by
 	// create_pull_request_test.go's newDraftPRTestRepo call sites — the test
@@ -530,7 +501,7 @@ func TestWorkspaceService_GetVCSStatus_WorktreeMode_PopulatesCommitsAndDiffStat(
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "wt-mode-session", "feature/x", baseSHA)
 	inst := &session.Instance{Title: "wt-mode-session", Status: session.Paused, Program: "claude"}
 	inst.SetGitWorktree(wt)
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 
 	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
 		Id: "wt-mode-session",
@@ -574,11 +545,11 @@ func TestWorkspaceService_GetVCSStatus_NoBaseSHA_LeavesCommitsAndDiffStatUnset(t
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	dir, _, _ := newVCSStatusTestRepo(t)
+	dir, _, _ := svctest.NewVCSStatusTestRepo(t)
 
 	// No SetDirBaseSHA call: GetBaseCommitSHA() returns "".
 	inst := &session.Instance{Title: "no-base-session", Path: dir, Status: session.Paused, Program: "claude"}
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 
 	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
 		Id: "no-base-session",
@@ -617,11 +588,11 @@ func TestWorkspaceService_GetVCSStatus_HeadResolutionFailure_SetsCommitsUnavaila
 	t.Cleanup(fix.cleanup)
 
 	dir := t.TempDir()
-	runGit(t, dir, "init", "-q", "-b", "main")
+	svctest.RunGit(t, dir, "init", "-q", "-b", "main")
 
 	inst := &session.Instance{Title: "unborn-head-session", Path: dir, Status: session.Paused, Program: "claude"}
 	inst.SetDirBaseSHA("0000000000000000000000000000000000dead")
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 
 	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
 		Id: "unborn-head-session",
@@ -654,13 +625,13 @@ func TestWorkspaceService_GetVCSStatus_ListShippedCommitsFailure_SetsCommitsUnav
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	dir, _, _ := newVCSStatusTestRepo(t)
+	dir, _, _ := svctest.NewVCSStatusTestRepo(t)
 
 	inst := &session.Instance{Title: "bad-base-sha-session", Path: dir, Status: session.Paused, Program: "claude"}
 	// HEAD resolves fine; this base SHA is well-formed but doesn't exist in
 	// the repo, so ListShippedCommits's CommitObject(baseSHA) lookup fails.
 	inst.SetDirBaseSHA("0000000000000000000000000000000000dead")
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 
 	resp, err := fix.svc.GetVCSStatus(context.Background(), connect.NewRequest(&sessionv1.GetVCSStatusRequest{
 		Id: "bad-base-sha-session",
@@ -686,11 +657,11 @@ func TestWorkspaceService_GetVCSStatus_CacheHit_ReturnsSameStatusAsOf(t *testing
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	dir, baseSHA, _ := newVCSStatusTestRepo(t)
+	dir, baseSHA, _ := svctest.NewVCSStatusTestRepo(t)
 
 	inst := &session.Instance{Title: "cache-hit-session", Path: dir, Status: session.Paused, Program: "claude"}
 	inst.SetDirBaseSHA(baseSHA)
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 
 	req := connect.NewRequest(&sessionv1.GetVCSStatusRequest{Id: "cache-hit-session"})
 
@@ -704,7 +675,7 @@ func TestWorkspaceService_GetVCSStatus_CacheHit_ReturnsSameStatusAsOf(t *testing
 	// A short sleep so a wrongly-recomputed second call would produce a
 	// detectably different time.Now() value, not one that happens to match
 	// by coincidence.
-	waitClockPast(t, entry1.cachedAt, 5*time.Millisecond)
+	svctest.WaitClockPast(t, entry1.cachedAt, 5*time.Millisecond)
 
 	resp2, err := fix.svc.GetVCSStatus(context.Background(), req)
 	require.NoError(t, err)
@@ -732,10 +703,10 @@ func TestWorkspaceService_GetVCSStatus_ConcurrentCacheHits_NoRace(t *testing.T) 
 	fix := setupWorkspaceTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	dir, baseSHA, _ := newVCSStatusTestRepo(t)
+	dir, baseSHA, _ := svctest.NewVCSStatusTestRepo(t)
 	inst := &session.Instance{Title: "race-warm-session", Path: dir, Status: session.Paused, Program: "claude"}
 	inst.SetDirBaseSHA(baseSHA)
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 
 	req := connect.NewRequest(&sessionv1.GetVCSStatusRequest{Id: "race-warm-session"})
 

@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -396,7 +397,7 @@ func TestActionIdempotency_ShouldEvictOldestKey_WhenOverCapacity(t *testing.T) {
 
 // Delegate checks stay in force: a CI-blocked approval is INVALID without confirm.
 func TestApprovalResolver_ShouldBeInvalidWithoutConfirmAndAppliedWithIt_WhenCIBlocksApproval(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
@@ -423,7 +424,7 @@ func TestApprovalResolver_ShouldBeInvalidWithoutConfirmAndAppliedWithIt_WhenCIBl
 
 func TestGuidanceAnswerer_ShouldReportAlreadyResolved_WhenAnswerNotApplied(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	created, err := svc.CreateGuidanceRequest(context.Background(), connect.NewRequest(&sessionv1.CreateGuidanceRequestRequest{
 		Scope: "standalone", QuestionText: "Which target?", QuestionType: "short-answer",
@@ -482,7 +483,7 @@ func TestInvokeNotificationAction_ShouldKeepTheCard_WhenAnswerWasNotApplied(t *t
 }
 
 func TestApprovalResolver_ShouldCarryTheStampedDecision_WhenAlreadyResolved(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	history, err := notifications.NewNotificationHistoryStore(filepath.Join(t.TempDir(), "notifications.json"))
 	require.NoError(t, err)
 	require.NoError(t, history.Append(&notifications.NotificationRecord{

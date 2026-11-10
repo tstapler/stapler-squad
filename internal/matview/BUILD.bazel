@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "matview",
+    srcs = [
+        "clock.go",
+        "subscribe.go",
+        "view.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/internal/matview",
+    visibility = ["//:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":matview",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "matview_test",
+    srcs = ["view_test.go"],
+    embed = [":matview"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

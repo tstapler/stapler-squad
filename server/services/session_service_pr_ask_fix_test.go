@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -40,9 +41,9 @@ func newAskFixFixture(t *testing.T, status session.Status) *askFixFixture {
 		require.NoError(t, err)
 		require.NoError(t, inst.AttachPR(ref, session.AttachSourceManual, session.PRInitial{State: session.PRStateOpen}))
 	}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 	rec := &guardedSteerRecorder{}
-	rec.install(fix.svc, notReadyNone, &fakeGuardClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
+	rec.install(fix.svc, notReadyNone, &svctest.FakeGuardClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
 	key, err := github.NewPRKey("", "acme", "app", 12)
 	require.NoError(t, err)
 	f := &fakeFetcher{detail: github.PRNudgeDetail{Key: key, State: "open",

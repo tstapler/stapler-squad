@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "tcc",
+    srcs = [
+        "consent.go",
+        "lexical.go",
+        "tcc.go",
+        "tcc_darwin.go",
+        "tcc_other.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/tcc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_sys//unix",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tcc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "tcc_test",
+    srcs = [
+        "consent_test.go",
+        "lexical_test.go",
+        "tcc_darwin_test.go",
+        "tcc_test.go",
+    ],
+    embed = [":tcc"],
+    deps = ["@com_github_stretchr_testify//require"],
+)

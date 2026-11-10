@@ -36,7 +36,7 @@ import (
 // session/backlog_lifecycle_triage.go:43-50). Keep both copies byte-identical
 // if either ever changes.
 const (
-	julesSessionUUIDPrefix = "jules-"
+	JulesSessionUUIDPrefix = "jules-"
 	julesPendingUUIDPrefix = "jules-pending-"
 )
 
@@ -70,7 +70,7 @@ var (
 // satisfied structurally by it (Dependency Inversion: the consumer owns the
 // interface it depends on). A test fake implements this directly, which is
 // what lets Task 2.2.1c inject one without a real HTTP round trip.
-type julesSessionCreator interface {
+type JulesSessionCreator interface {
 	CreateSession(ctx context.Context, req jules.CreateSessionRequest) (*jules.JulesSession, error)
 }
 
@@ -84,8 +84,8 @@ type julesSessionCreator interface {
 // convention for one server/services type reaching BacklogService behavior
 // via a consumer-owned interface rather than a concrete sibling pointer.
 type julesTransitionGuard interface {
-	transitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error)
-	hasUnresolvedBlockers(ctx context.Context, itemID string) (bool, error)
+	TransitionWithGuard(ctx context.Context, item *session.BacklogItemData, to session.BacklogStatus, precondition *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error)
+	HasUnresolvedBlockers(ctx context.Context, itemID string) (bool, error)
 }
 
 // julesUsageRecorder is the narrow slice of *JulesUsageCounter
@@ -148,7 +148,7 @@ type JulesDispatcher interface {
 type JulesDispatchService struct {
 	storage         *session.Storage
 	transitionGuard julesTransitionGuard
-	client          julesSessionCreator
+	client          JulesSessionCreator
 	sources         *jules.JulesSourceRegistry
 	// cfgFn is called fresh on every read (checkEgressConsent,
 	// checkSpendGuards) instead of holding a *config.Config captured once at
@@ -178,7 +178,7 @@ type JulesDispatchService struct {
 // pre-loaded *config.Config value, or config edits (egress consent, spend
 // caps) will never be observed without a server restart. See the cfgFn field
 // doc comment.
-func NewJulesDispatchService(storage *session.Storage, transitionGuard julesTransitionGuard, client julesSessionCreator, sources *jules.JulesSourceRegistry, cfgFn func() *config.Config) *JulesDispatchService {
+func NewJulesDispatchService(storage *session.Storage, transitionGuard julesTransitionGuard, client JulesSessionCreator, sources *jules.JulesSourceRegistry, cfgFn func() *config.Config) *JulesDispatchService {
 	return &JulesDispatchService{
 		storage:         storage,
 		transitionGuard: transitionGuard,
@@ -298,7 +298,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 	// 5. Blocker gate (Gap 2) — the exact same storage.UnresolvedBlockerItemIDs-
 	// backed check every other single-item transition in this codebase uses,
 	// run before any reservation is written or any billed call is made.
-	hasBlockers, err := s.transitionGuard.hasUnresolvedBlockers(ctx, item.ID)
+	hasBlockers, err := s.transitionGuard.HasUnresolvedBlockers(ctx, item.ID)
 	if err != nil {
 		return "", fmt.Errorf("jules: checking blockers for item %s: %w", item.ID, err)
 	}
@@ -347,7 +347,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 		return "", fmt.Errorf("jules: creating session: %w", createErr)
 	}
 
-	sessionUUID := julesSessionUUIDPrefix + string(julesSession.Name)
+	sessionUUID := JulesSessionUUIDPrefix + string(julesSession.Name)
 	if err := s.storage.UpdateItemSessionSessionUUID(ctx, reservation.ID, sessionUUID); err != nil {
 		return "", fmt.Errorf("jules: recording session name: %w", err)
 	}
@@ -358,7 +358,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *sessio
 	// hasBlockers is guaranteed false here — step 5 already returned early
 	// otherwise — so this call site can never drift back out of sync with
 	// the real check above if the guard sequence is ever reordered.
-	if _, err := s.transitionGuard.transitionWithGuard(ctx, item, session.BacklogStatusInProgress, precondition, session.TriggeredByUser, hasBlockers); err != nil {
+	if _, err := s.transitionGuard.TransitionWithGuard(ctx, item, session.BacklogStatusInProgress, precondition, session.TriggeredByUser, hasBlockers); err != nil {
 		return "", fmt.Errorf("jules: transitioning item %s to in_progress: %w", item.ID, err)
 	}
 

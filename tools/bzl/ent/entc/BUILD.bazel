@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "entc_lib",
+    srcs = [
+        "main.go",
+        "schemas.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/ent/entc",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/bzl/ent:schema",
+        "@io_entgo_ent//:ent",
+        "@io_entgo_ent//entc/gen",
+        "@io_entgo_ent//entc/load",
+        "@io_entgo_ent//schema/field",
+    ],
+)
+
+go_binary(
+    name = "entc",
+    embed = [":entc_lib"],
+    visibility = ["//tools/bzl/ent:__pkg__"],
+)
+
+# bazel run //tools/bzl/ent:update_packages
+go_binary(
+    name = "update_packages",
+    args = [
+        "-pkg=github.com/tstapler/stapler-squad/session/ent",
+        "-schema-pkg=github.com/tstapler/stapler-squad/session/ent/schema",
+        "-flags=$(rootpath //tools/bzl/ent:ent_flags.txt)",
+        "-update=tools/bzl/ent/packages.bzl",
+        "$(rootpaths //session/ent/schema:schema_srcs)",
+    ],
+    data = [
+        "//session/ent/schema:schema_srcs",
+        "//tools/bzl/ent:ent_flags.txt",
+    ],
+    embed = [":entc_lib"],
+    visibility = ["//tools/bzl/ent:__pkg__"],
+)

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // hiddenVisibleInList applies include_hidden / hidden_only to one session. hidden_only
@@ -91,10 +92,10 @@ func (s *SessionService) LocalSessions(ctx context.Context) ([]*sessionv1.Sessio
 // LocalPaneSnapshot captures the pane of a live local session, for serving a
 // peer's read-only terminal stream. It never starts or revives a session.
 func (s *SessionService) LocalPaneSnapshot(sessionID string) (string, error) {
-	if s.reviewQueuePoller == nil {
+	if s.ReviewQueuePoller == nil {
 		return "", fmt.Errorf("session not found")
 	}
-	inst := s.reviewQueuePoller.FindInstance(sessionID)
+	inst := s.ReviewQueuePoller.FindInstance(sessionID)
 	if inst == nil {
 		return "", fmt.Errorf("session not found")
 	}
@@ -154,8 +155,8 @@ func (s *SessionService) listLocalSessions(
 	// Use the poller's live in-memory instances to avoid the side effect of
 	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
 	var instances []*session.Instance
-	if s.reviewQueuePoller != nil {
-		instances = s.reviewQueuePoller.GetInstances()
+	if s.ReviewQueuePoller != nil {
+		instances = s.ReviewQueuePoller.GetInstances()
 	} else {
 		var err error
 		instances, err = s.loadInstancesWithWiring()
@@ -229,7 +230,7 @@ func (s *SessionService) GetSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
-	if !session.ParseFederatedSessionID(req.Msg.Id).IsLocal() {
+	if !hostclaim.ParseFederatedSessionID(req.Msg.Id).IsLocal() {
 		if s.federation != nil {
 			if remote, ok := s.federation.Session(req.Msg.Id); ok {
 				return connect.NewResponse(&sessionv1.GetSessionResponse{Session: remote}), nil
@@ -240,9 +241,9 @@ func (s *SessionService) GetSession(
 
 	// Use the poller's live in-memory instances to avoid the side effect of
 	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
-	if s.reviewQueuePoller != nil {
+	if s.ReviewQueuePoller != nil {
 		wfNames := s.workflowNames()
-		if inst := s.reviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
+		if inst := s.ReviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
 			return connect.NewResponse(&sessionv1.GetSessionResponse{
 				Session: withSessionPRHolds(adapters.InstanceToProto(inst, wfNames), inst),
 			}), nil
@@ -283,7 +284,7 @@ func (s *SessionService) GetSession(
 // session.WorkspacePeersBlockForPath, shared with BacklogService's initialPromptFor so the
 // two callers can't drift on how the nudge is built.
 func (s *SessionService) workspacePeersBlockFor(ctx context.Context, repoPath string) string {
-	return workspacePeersBlockFor(ctx, s.concStorage, repoPath)
+	return WorkspacePeersBlockFor(ctx, s.concStorage, repoPath)
 }
 
 // ─── Batch Session Creation ───────────────────────────────────────────────────

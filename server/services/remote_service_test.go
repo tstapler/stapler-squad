@@ -17,6 +17,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -103,7 +104,7 @@ func newTestRemoteService(t *testing.T, cfg *config.Config) (*RemoteService, *ss
 	// TestRemoteConnection to reject it, which silently passes for the
 	// wrong reason if that addr already carried a real trusted entry left
 	// over from another test. A per-test temp dir removes the shared file.
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	keyring.MockInit()
 
 	knownHosts, err := sshremote.NewKnownHostsStore()

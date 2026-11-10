@@ -132,8 +132,8 @@ func isTextRune(r rune) bool {
 }
 
 var (
-	terminalInputFramesCounter = sync.OnceValue(counterNamed("terminal_input_frames_total", "Terminal input frames by class, listener, entry path and stage (received|forwarded); never carries session or content"))
-	terminalInputBytesCounter  = sync.OnceValue(counterNamed("terminal_input_bytes_total", "Terminal input bytes by class, listener, entry path and stage; never carries session or content"))
+	terminalInputFramesCounter = sync.OnceValue(CounterNamed("terminal_input_frames_total", "Terminal input frames by class, listener, entry path and stage (received|forwarded); never carries session or content"))
+	terminalInputBytesCounter  = sync.OnceValue(CounterNamed("terminal_input_bytes_total", "Terminal input bytes by class, listener, entry path and stage; never carries session or content"))
 )
 
 type inputSeries [inputClassCount][inputListenerCount][inputPathCount][inputStageCount]struct {
@@ -176,9 +176,9 @@ func (m *terminalInputMetrics) initSeriesCells(class InputClass, listener int) {
 
 var defaultTerminalInput = newTerminalInputMetrics(time.Now, func(msg string, args ...any) { log.Info(msg, args...) })
 
-// inputSource identifies one input stream (one WebSocket or Connect stream) for
+// InputSource identifies one input stream (one WebSocket or Connect stream) for
 // counting and log throttling. It is safe for concurrent use; a nil source records nothing.
-type inputSource struct {
+type InputSource struct {
 	m         *terminalInputMetrics
 	path      InputPath
 	listener  int
@@ -191,24 +191,24 @@ type inputSource struct {
 	sumBytes    int64
 }
 
-func (m *terminalInputMetrics) source(path InputPath, listener, sessionID string) *inputSource {
-	return &inputSource{m: m, path: path, listener: normalizeInputListener(listener), sessionID: sessionID}
+func (m *terminalInputMetrics) source(path InputPath, listener, sessionID string) *InputSource {
+	return &InputSource{m: m, path: path, listener: normalizeInputListener(listener), sessionID: sessionID}
 }
 
-func newInputSource(path InputPath, listener, sessionID string) *inputSource {
+func NewInputSource(path InputPath, listener, sessionID string) *InputSource {
 	return defaultTerminalInput.source(path, listener, sessionID)
 }
 
-// recordTerminalInput counts one frame at the given stage. The frame is only
+// RecordTerminalInput counts one frame at the given stage. The frame is only
 // classified and measured; its bytes are never retained.
-func recordTerminalInput(src *inputSource, data []byte, stage InputStage) {
+func RecordTerminalInput(src *InputSource, data []byte, stage InputStage) {
 	if src == nil {
 		return
 	}
 	src.m.record(src, data, stage)
 }
 
-func (m *terminalInputMetrics) record(src *inputSource, data []byte, stage InputStage) {
+func (m *terminalInputMetrics) record(src *InputSource, data []byte, stage InputStage) {
 	class := classifyInput(data)
 	cell := &m.series[class][src.listener][src.path][stage]
 	cell.frames.Add(1)
@@ -230,7 +230,7 @@ func (m *terminalInputMetrics) record(src *inputSource, data []byte, stage Input
 
 // logReceived emits an Info line on the stream's first input and then at most
 // one summary per minute. Fields are class/size only, never content.
-func (s *inputSource) logReceived(now time.Time, n int) {
+func (s *InputSource) logReceived(now time.Time, n int) {
 	s.mu.Lock()
 	s.sumFrames++
 	s.sumBytes += int64(n)
@@ -395,3 +395,13 @@ func RenderTerminalInputText(rows []TerminalInputSession) string {
 	}
 	return b.String()
 }
+
+// newInputSourceFromContext builds a source for a Connect stream, whose listener comes
+// from the request record stamped on ctx (none: counted under "unknown").
+func newInputSourceFromContext(ctx context.Context, path InputPath, sessionID string) *InputSource {
+	rec, _ := RequestRecordFrom(ctx)
+	return NewInputSource(path, rec.Listener, sessionID)
+}
+
+// ListenerName is the bounded listener label this source counts under.
+func (s *InputSource) ListenerName() string { return inputListenerNames[s.listener] }

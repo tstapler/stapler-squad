@@ -1,0 +1,6 @@
+# Fixture for run-all --dry-run: one valid waiver (dates are far enough out not to expire in CI).
+waivers:
+  - row: P10.hit_ratio_floor
+    reason: owner accepts a lower hit ratio until the remote cache exists
+    granted: 2026-11-03
+    expires: 2027-01-31

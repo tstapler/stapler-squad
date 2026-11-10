@@ -84,3 +84,6 @@ var prFixTriggerUnknownCount atomic.Int64
 
 // PRFixTriggerUnknownCount returns how many trigger decisions classified as unknown.
 func PRFixTriggerUnknownCount() int64 { return prFixTriggerUnknownCount.Load() }
+
+// NotePRFixTriggerUnknown counts one trigger decision classified unknown.
+func NotePRFixTriggerUnknown() { prFixTriggerUnknownCount.Add(1) }

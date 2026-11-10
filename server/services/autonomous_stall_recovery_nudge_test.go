@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -80,7 +81,7 @@ func newStallNudgeFixture(t *testing.T, title string, itemStatus session.Backlog
 	base.itemID, base.itemSes = item.ID, is.ID
 
 	f := &stallNudgeFixture{charFixture: base, nudger: &fakeStallNudger{}, respawner: newSignalingRespawner()}
-	svc := base.svc.autonomousSvc
+	svc := base.svc.AutonomousSvc
 	svc.SetStallNudger(f.nudger)
 	svc.SetNudgeFlagReaders(func() bool { return diagnoseOn }, func() bool { return stallOn })
 	svc.SetAutonomousStuckRespawner(f.respawner)
@@ -130,7 +131,7 @@ func (f *stallNudgeFixture) rowContext(t *testing.T) string {
 }
 
 func snapshotFor(state domain.ObservedState) domain.StopSnapshot {
-	s := idleSnapshot
+	s := svctest.IdleSnapshot
 	switch state {
 	case domain.ObservedIdlePrompt:
 	case domain.ObservedWorking:
@@ -168,7 +169,7 @@ func TestStallRecovery_IdlePromptNudgesAndKeepsAutonomy(t *testing.T) {
 	row := f.rowContext(t)
 	assert.Contains(t, row, "action=nudged nudge=1/2")
 	assert.Contains(t, row, "nudge_outcome=success")
-	assert.Equal(t, []string{"Autonomous session nudged"}, notificationTitles(f.drain()),
+	assert.Equal(t, []string{"Autonomous session nudged"}, svctest.NotificationTitles(f.drain()),
 		"one INFO notification, no 'stuck' alarm")
 }
 
@@ -317,7 +318,7 @@ func TestStallRecovery_StopDuringNudgeCancelsIt(t *testing.T) {
 		t.Fatal("the nudger was never reached")
 	}
 
-	f.svc.autonomousSvc.StopDriverForSession(f.title)
+	f.svc.AutonomousSvc.StopDriverForSession(f.title)
 
 	select {
 	case <-done:
@@ -376,7 +377,7 @@ func TestStallRecovery_NotRestartableLeavesPaneAndStaysQuiet(t *testing.T) {
 	f.requireNoRespawn(t)
 	assert.Zero(t, f.restarts)
 	assert.Contains(t, f.rowContext(t), "nudge_outcome=not_restartable")
-	assert.Empty(t, notificationTitles(f.drain()), "a requested stop is not a stuck alarm")
+	assert.Empty(t, svctest.NotificationTitles(f.drain()), "a requested stop is not a stuck alarm")
 }
 
 // Cancelled-class stops reach no nudge and no re-attach even when every flag is on
@@ -401,7 +402,7 @@ func TestStallRecovery_CancelledStopsNeverNudgeOrRestart(t *testing.T) {
 func TestStallRecovery_FlagTurnedOffBeforeClaimRespawns(t *testing.T) {
 	f := newStallNudgeFixture(t, "flag-flips", session.BacklogStatusInProgress, true, true)
 	var reads int
-	f.svc.autonomousSvc.SetNudgeFlagReaders(func() bool { return true }, func() bool {
+	f.svc.AutonomousSvc.SetNudgeFlagReaders(func() bool { return true }, func() bool {
 		reads++
 		return reads == 1 // on for planning, off at the claim
 	})
@@ -416,7 +417,7 @@ func TestStallRecovery_FlagTurnedOffBeforeClaimRespawns(t *testing.T) {
 // A stop landing between the last canRestart and driver registration must drop the new driver.
 func TestStallRecovery_StopDuringReattachDropsNewDriver(t *testing.T) {
 	f := newStallNudgeFixture(t, "stop-in-reattach", session.BacklogStatusInProgress, true, true)
-	svc := f.svc.autonomousSvc
+	svc := f.svc.AutonomousSvc
 	f.restartFn = func() error {
 		svc.registerDriver(f.title, session.NewAutonomousDriver(f.inst, nil, "goal", 1))
 		f.inst.SetAutonomousMode(false, "")
@@ -436,7 +437,7 @@ func TestStallRecovery_StopDuringReattachDropsNewDriver(t *testing.T) {
 // A delivered nudge followed by a stop before re-attach reports the delivery and attaches nothing.
 func TestStallRecovery_StopAfterDeliveryDetaches(t *testing.T) {
 	f := newStallNudgeFixture(t, "detached", session.BacklogStatusInProgress, true, true)
-	f.svc.autonomousSvc.SetStallNudger(stopAfterNudge{inner: f.nudger, inst: f.inst})
+	f.svc.AutonomousSvc.SetStallNudger(stopAfterNudge{inner: f.nudger, inst: f.inst})
 
 	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 
@@ -444,7 +445,7 @@ func TestStallRecovery_StopAfterDeliveryDetaches(t *testing.T) {
 	f.requireNoRespawn(t)
 	assert.False(t, f.mode())
 	assert.Contains(t, f.rowContext(t), "action=nudged")
-	assert.Equal(t, []string{"Autonomous session nudged"}, notificationTitles(f.drain()))
+	assert.Equal(t, []string{"Autonomous session nudged"}, svctest.NotificationTitles(f.drain()))
 }
 
 type stopAfterNudge struct {
@@ -474,7 +475,7 @@ func TestStallRecovery_ItemMovedOnBeforeMarkStuckSkipsRecovery(t *testing.T) {
 	f := newStallNudgeFixture(t, "item-moved", session.BacklogStatusInProgress, true, true)
 	moved := false
 	// The flag reader runs during planning, after the item was loaded and before MarkStuck.
-	f.svc.autonomousSvc.SetNudgeFlagReaders(func() bool {
+	f.svc.AutonomousSvc.SetNudgeFlagReaders(func() bool {
 		if !moved {
 			moved = true
 			_, err := f.storage.RawTransitionBacklogItemStatus(context.Background(), f.itemID, session.BacklogStatusReview, nil, "test")
@@ -495,7 +496,7 @@ func TestOnAutonomousDriverComplete_ReplacedDriverCallbackLeavesNewDriver(t *tes
 	f := newCharFixture(t, "replaced-driver", session.SessionRoleWork, session.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
-	svc := f.svc.autonomousSvc
+	svc := f.svc.AutonomousSvc
 	oldDriver := session.NewAutonomousDriver(f.inst, nil, "goal", 1)
 	newDriver := session.NewAutonomousDriver(f.inst, nil, "goal", 1)
 	session.TestSetAutonomousDriverRunID(t, oldDriver, 1)

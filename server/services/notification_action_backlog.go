@@ -72,7 +72,7 @@ func (b backlogDecider) Decide(ctx context.Context, d BacklogDecision) (ActionRe
 	switch d.Choice {
 	case choiceAccept:
 		return b.transition(ctx, d, status, backlogStatusDone, backlogStatusReview)
-	case choiceRework:
+	case ChoiceRework:
 		return b.transition(ctx, d, status, backlogStatusReady, backlogStatusReview, backlogStatusPRPending)
 	case choiceMerge:
 		return b.merge(ctx, d, status)

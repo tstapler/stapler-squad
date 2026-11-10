@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "soak-append_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/soak/soak-append",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/bzl/soak",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_binary(
+    name = "soak-append",
+    embed = [":soak-append_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "soak-append_test",
+    srcs = ["main_test.go"],
+    embed = [":soak-append_lib"],
+    deps = ["//tools/bzl/soak"],
+)

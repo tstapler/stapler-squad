@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func postVerifiedQuestion(q *questionHarness) (title, message string, meta map[string]string) {
@@ -19,13 +20,13 @@ func postVerifiedQuestion(q *questionHarness) (title, message string, meta map[s
 }
 
 func TestGuidanceMirror_should_WriteNothingAndMatchLegacyOutput_When_StructuredFlagOff(t *testing.T) {
-	withIsolatedStateDir(t) // no config: askuserquestion_structured defaults off
+	svctest.WithIsolatedStateDir(t) // no config: askuserquestion_structured defaults off
 
 	legacy := newQuestionHarness(t) // no mirror wired at all
 	lTitle, lMsg, lMeta := postVerifiedQuestion(legacy)
 
 	mirrored := newQuestionHarness(t)
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	m := NewGuidanceHookMirror(storage, mirrored.store, nil, nil) // production default gate
 	mirrored.h.SetGuidanceMirror(m)
 	title, msg, meta := postVerifiedQuestion(mirrored)
@@ -43,8 +44,8 @@ func TestGuidanceMirror_should_WriteNothingAndMatchLegacyOutput_When_StructuredF
 }
 
 func TestGuidanceMirror_should_ReadTheFlagLivePerCall_When_ItFlipsAfterConstruction(t *testing.T) {
-	withIsolatedStateDir(t)
-	storage := createTestStorage(t)
+	svctest.WithIsolatedStateDir(t)
+	storage := svctest.CreateTestStorage(t)
 	m := NewGuidanceHookMirror(storage, NewPendingQuestionStore(nil), nil, nil)
 	_, ok := m.Mirror(mirrorReq(t, "toolu_a", "First?", true))
 	require.False(t, ok)

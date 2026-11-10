@@ -9,7 +9,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -254,7 +254,7 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 
 func TestStuckReport_ShouldListBlockedCleanupWithHolder_WhenGateWithholdsWorktree(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "blocked cleanup", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: session.SessionRoleWork})

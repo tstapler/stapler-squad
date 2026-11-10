@@ -14,8 +14,9 @@ import (
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/prwatch"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -336,17 +337,17 @@ func TestSoakStatus_ReportsPerClassVerdicts_ForOperatorAgentSystem(t *testing.T)
 func TestSoakStatusTarget_ReportsReviewLine_FromRealLedgerThroughActuator(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	rec := session.NewShadowLedgerRecorder(dir, session.WithShadowClock(fixedClock{soakTestNow.Add(-20 * 24 * time.Hour)}))
+	rec := backlog.NewShadowLedgerRecorder(dir, backlog.WithShadowClock(fixedClock{soakTestNow.Add(-20 * 24 * time.Hour)}))
 	rec.RecordShadowCall(session.MethodCanTransition, session.PathTransition)
 	if err := rec.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	src := &WorkflowEngineSoakSource{
 		Ledger: func() (session.ShadowLedger, error) {
-			return session.ReadShadowLedgerFile(session.ShadowLedgerPath(dir))
+			return backlog.ReadShadowLedgerFile(backlog.ShadowLedgerPath(dir))
 		},
 		Now:       func() time.Time { return soakTestNow },
-		ReproPath: session.ShadowLedgerPath(dir),
+		ReproPath: backlog.ShadowLedgerPath(dir),
 	}
 
 	body := getSoak(t, src, "format=text&class=operator").Body.String()
@@ -502,7 +503,7 @@ func TestActuatorWorkflowEngineAndNudgeEndpoints_Return401OnRemoteChain_AndHostG
 func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNewPerClass(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	rec := session.NewShadowLedgerRecorder(dir, session.WithShadowClock(fixedClock{soakTestNow.Add(-1 * time.Hour)}))
+	rec := backlog.NewShadowLedgerRecorder(dir, backlog.WithShadowClock(fixedClock{soakTestNow.Add(-1 * time.Hour)}))
 	rec.RecordShadowCallFor(session.ClassAgent, session.MethodValidateGates, session.PathTransition)
 	rec.RecordDivergenceFor(session.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
 	rec.RecordObservation(session.ShadowObservation{
@@ -514,7 +515,7 @@ func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNew
 	}
 	src := &WorkflowEngineSoakSource{
 		Ledger: func() (session.ShadowLedger, error) {
-			return session.ReadShadowLedgerFile(session.ShadowLedgerPath(dir))
+			return backlog.ReadShadowLedgerFile(backlog.ShadowLedgerPath(dir))
 		},
 		Now: func() time.Time { return soakTestNow },
 	}
@@ -601,7 +602,7 @@ func TestHandleActuatorUnfinishedScanner_ShouldServeCounterJSON_WithoutTelemetry
 func TestHandleActuatorWsUnary_ShouldServeEmptyReport_WhenBridgeNotBuilt(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	handleActuatorWsUnary(func() *services.UnaryWsBridge { return nil })(rec, httptest.NewRequest(http.MethodGet, "/actuator/ws-unary", nil))
+	handleActuatorWsUnary(func() *wsconn.UnaryWsBridge { return nil })(rec, httptest.NewRequest(http.MethodGet, "/actuator/ws-unary", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -623,7 +624,7 @@ func TestHandleActuatorWsUnary_ShouldServeEmptyReport_WhenBridgeNotBuilt(t *test
 func TestRegisterActuatorRoutes_ShouldServeWsUnary_WhenBridgeStoredAfterRegistration(t *testing.T) {
 	s := &Server{mux: http.NewServeMux()}
 	s.registerActuatorRoutes()
-	s.wsUnaryBridge.Store(services.NewUnaryWsBridge(func(string) http.Handler { return nil }))
+	s.wsUnaryBridge.Store(wsconn.NewUnaryWsBridge(func(string) http.Handler { return nil }))
 
 	rec := httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/actuator/ws-unary", nil))

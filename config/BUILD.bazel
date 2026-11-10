@@ -1,0 +1,80 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "config",
+    srcs = [
+        "background_models.go",
+        "claude.go",
+        "config.go",
+        "defaults.go",
+        "discovery.go",
+        "executor.go",
+        "inbox_pr_watch.go",
+        "launcher_presets.go",
+        "llm_backends.go",
+        "log_rotation.go",
+        "save_metrics.go",
+        "session_multi_pr_flag.go",
+        "singleton.go",
+        "state.go",
+        "tcc_consent.go",
+        "test_seams.go",
+        "types.go",
+        "wake_flags.go",
+        "workspace_meta.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config/workspacepath",
+        "//executor",
+        "//executor/safeexec",
+        "//log",
+        "//telemetry",
+        "@com_github_gofrs_flock//:flock",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_xeipuuv_gojsonschema//:gojsonschema",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":config",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "config_test",
+    srcs = [
+        "background_models_test.go",
+        "claude_test.go",
+        "config_alias_test.go",
+        "config_categories_test.go",
+        "config_test.go",
+        "defaults_test.go",
+        "encryption_test.go",
+        "feature_flag_scopes_test.go",
+        "feature_flags_test.go",
+        "import_session_test.go",
+        "launcher_presets_test.go",
+        "log_parity_test.go",
+        "session_multi_pr_flag_test.go",
+        "stream_hub_rollout_test.go",
+        "tcc_consent_test.go",
+        "types_test.go",
+        "update_config_w21a_test.go",
+        "workspace_meta_test.go",
+        "workspace_state_dir_test.go",
+    ],
+    embed = [":config"],
+    deps = [
+        "//config/workspacepath",
+        "//envtest",
+        "//executor/safeexec",
+        "//log",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

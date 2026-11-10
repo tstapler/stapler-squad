@@ -45,6 +45,9 @@ type activityHintState struct {
 	mu        sync.Mutex
 	requested qos.Activity
 	seq       uint64
+
+	// resends counts in-flight stream-open resends so tests can wait for them to settle.
+	resends sync.WaitGroup
 }
 
 // errPaneActivityPending marks a hint that was not delivered but may be later (no pane yet).
@@ -118,7 +121,9 @@ func (s *tymuxGRPCSession) resetPaneActivity(ctx context.Context, seenSeq uint64
 // open. tymuxd holds a hint that has no open stream for only a few seconds, so a hint sent before
 // the stream existed (or across a reconnect) would otherwise wait for the hub's next refresh.
 func (s *tymuxGRPCSession) resendPaneActivityAsync() {
+	s.activity.resends.Add(1)
 	go func() {
+		defer s.activity.resends.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), resetActivityTimeout)
 		defer cancel()
 		s.resendPaneActivity(ctx)

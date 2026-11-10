@@ -43,8 +43,8 @@ func newHibernationIdentityFixture(t *testing.T) (*SessionService, *session.Inst
 	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	poller.AddInstance(canonical)
 	svc := &SessionService{
-		storage: store, eventBus: bus, registry: registry, reviewQueuePoller: poller,
-		autonomousSvc: &AutonomousOrchestrationService{},
+		storage: store, eventBus: bus, registry: registry, ReviewQueuePoller: poller,
+		AutonomousSvc: &AutonomousOrchestrationService{},
 	}
 	release := session.HoldHibernationTeardownForTest(t, canonical)
 	t.Cleanup(func() {
@@ -86,8 +86,8 @@ func TestHibernateResumeRPC_RetainsCanonicalInstance(t *testing.T) {
 					require.NoError(t, err)
 				}
 				if name == "registry beats stale poller" {
-					svc.reviewQueuePoller.RemoveInstance(canonical.Title)
-					svc.reviewQueuePoller.AddInstance(store.loaded)
+					svc.ReviewQueuePoller.RemoveInstance(canonical.Title)
+					svc.ReviewQueuePoller.AddInstance(store.loaded)
 				}
 				_, err := svc.HibernateSession(t.Context(), connect.NewRequest(&sessionv1.HibernateSessionRequest{Id: canonical.UUID}))
 				require.NoError(t, err)

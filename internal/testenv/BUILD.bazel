@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "testenv",
+    srcs = ["testenv.go"],
+    importpath = "github.com/tstapler/stapler-squad/internal/testenv",
+    visibility = ["//:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":testenv",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "testenv_test",
+    srcs = ["testenv_test.go"],
+    embed = [":testenv"],
+)

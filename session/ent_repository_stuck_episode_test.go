@@ -59,11 +59,11 @@ func openEpisodeIndexSQL(t *testing.T, repo *EntRepository) string {
 }
 
 func insertOpenEpisode(ctx context.Context, repo *EntRepository, itemID uuid.UUID, reason string) error {
-	return repo.client.BacklogStuckEpisode.Create().SetItemID(itemID).SetReason(reason).Exec(ctx)
+	return repo.Client.BacklogStuckEpisode.Create().SetItemID(itemID).SetReason(reason).Exec(ctx)
 }
 
 func insertResolvedEpisode(ctx context.Context, repo *EntRepository, itemID uuid.UUID, reason string) error {
-	return repo.client.BacklogStuckEpisode.Create().SetItemID(itemID).SetReason(reason).
+	return repo.Client.BacklogStuckEpisode.Create().SetItemID(itemID).SetReason(reason).
 		SetResolvedAt(time.Now().UTC()).Exec(ctx)
 }
 
@@ -86,7 +86,7 @@ func TestStuckEpisodeSchema_should_RejectSecondOpenRowAcceptResolvedPlusOpen_Whe
 	require.NoError(t, insertResolvedEpisode(ctx, repo, item, "pr_needs_fix"))
 
 	// Close the open one; a new open row is then accepted.
-	_, err = repo.client.BacklogStuckEpisode.Update().SetResolvedAt(time.Now().UTC()).Save(ctx)
+	_, err = repo.Client.BacklogStuckEpisode.Update().SetResolvedAt(time.Now().UTC()).Save(ctx)
 	require.NoError(t, err)
 	require.NoError(t, insertOpenEpisode(ctx, repo, item, "pr_needs_fix"))
 
@@ -107,12 +107,12 @@ func TestMigration_should_BeReversible_When_StuckEpisodeTableAndIndexCreatedAndD
 	assert.Empty(t, sqliteMasterRows(t, repo, "backlog_stuck_episodes"), "table and its indexes are gone")
 
 	// The rest of the schema still works with the episode table absent.
-	_, err := repo.client.BacklogStuckState.Query().Count(ctx)
+	_, err := repo.Client.BacklogStuckState.Query().Count(ctx)
 	require.NoError(t, err)
 
 	// Re-running Schema.Create recreates it (additive migration).
 	EntSchemaCreateMu.Lock()
-	err = repo.client.Schema.Create(ctx)
+	err = repo.Client.Schema.Create(ctx)
 	EntSchemaCreateMu.Unlock()
 	require.NoError(t, err)
 	assert.Contains(t, openEpisodeIndexSQL(t, repo), "WHERE resolved_at IS NULL")
@@ -141,7 +141,7 @@ func TestStuckEpisodeSchema_should_CreatePartialIndexOnLiveCopy_When_SchemaCreat
 
 	idx := openEpisodeIndexSQL(t, repo)
 	assert.Contains(t, idx, "WHERE resolved_at IS NULL")
-	after, err := repo.client.BacklogStuckState.Query().Count(context.Background())
+	after, err := repo.Client.BacklogStuckState.Query().Count(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "backlog_stuck_states rows must be untouched")
 	t.Logf("sqlite_master partial index: %s", idx)
@@ -156,7 +156,7 @@ func episodesFor(t *testing.T, repo *EntRepository, itemID string) []*ent.Backlo
 	t.Helper()
 	id, err := uuid.Parse(itemID)
 	require.NoError(t, err)
-	eps, err := repo.client.BacklogStuckEpisode.Query().
+	eps, err := repo.Client.BacklogStuckEpisode.Query().
 		Where(backlogstuckepisode.ItemID(id)).
 		Order(ent.Asc(backlogstuckepisode.FieldOpenedAt)).
 		All(context.Background())
@@ -183,7 +183,7 @@ func TestMarkStuck_should_OpenOneEpisodeAndSecondOnRecurrence_When_ResolvedThenM
 	eps := episodesFor(t, repo, itemID)
 	require.Len(t, eps, 1)
 	assert.Nil(t, eps[0].ResolvedAt)
-	state := repo.client.BacklogStuckState.Query().OnlyX(ctx)
+	state := repo.Client.BacklogStuckState.Query().OnlyX(ctx)
 	assert.True(t, eps[0].OpenedAt.Equal(state.FirstDetectedAt), "opened_at %v must equal first_detected_at %v", eps[0].OpenedAt, state.FirstDetectedAt)
 	assert.Equal(t, time.UTC, eps[0].OpenedAt.Location())
 
@@ -196,7 +196,7 @@ func TestMarkStuck_should_OpenOneEpisodeAndSecondOnRecurrence_When_ResolvedThenM
 	require.Len(t, eps, 2)
 	assert.NotNil(t, eps[0].ResolvedAt, "first episode closed")
 	assert.Nil(t, eps[1].ResolvedAt, "second episode open")
-	state = repo.client.BacklogStuckState.Query().OnlyX(ctx)
+	state = repo.Client.BacklogStuckState.Query().OnlyX(ctx)
 	assert.True(t, eps[1].OpenedAt.Equal(state.FirstDetectedAt))
 }
 
@@ -316,7 +316,7 @@ func TestMarkStuck_should_CommitStateAndLogWarning_When_EpisodeTableMissing(t *t
 	applied, err := repo.MarkStuck(ctx, itemID, episodeReason, BacklogStatusPRPending, "ctx")
 	require.NoError(t, err)
 	assert.True(t, applied)
-	state, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	state, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	assert.Nil(t, state.ResolvedAt)
 	assert.Contains(t, buf.String(), "stuck episode")
@@ -341,7 +341,7 @@ func TestMarkStuck_should_TreatErrNoRowsAndConstraintErrorAsAlreadyOpen_When_Epi
 	item := uuid.New()
 
 	open := func() (bool, error) {
-		tx, err := repo.client.Tx(ctx)
+		tx, err := repo.Client.Tx(ctx)
 		require.NoError(t, err)
 		defer tx.Rollback() //nolint:errcheck
 		opened, err := openStuckEpisodeTx(ctx, tx, item, string(episodeReason), time.Now())
@@ -369,7 +369,7 @@ func TestResolveStuck_should_OpenNoTransaction_When_NothingToResolve(t *testing.
 	ctx := context.Background()
 	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
 	drv := &flowMarkerCountingDriver{Driver: repo.driver}
-	repo.client = ent.NewClient(ent.Driver(drv))
+	repo.Client = ent.NewClient(ent.Driver(drv))
 
 	resolved, err := repo.ResolveStuck(ctx, itemID, episodeReason)
 	require.NoError(t, err)

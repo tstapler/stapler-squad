@@ -17,13 +17,13 @@ func TestEntRepository_ReadsProceedWhileWriterTxOpen(t *testing.T) {
 	t.Cleanup(func() { _ = repo.Close() })
 
 	ctx := context.Background()
-	tx, err := repo.client.Tx(ctx)
+	tx, err := repo.Client.Tx(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := repo.client.Session.Query().Count(ctx)
+		_, err := repo.Client.Session.Query().Count(ctx)
 		done <- err
 	}()
 	select {
@@ -41,11 +41,11 @@ func TestEntRepository_ReadPoolDisabledByEnv(t *testing.T) {
 	t.Cleanup(func() { _ = repo.Close() })
 
 	ctx := context.Background()
-	tx, err := repo.client.Tx(ctx)
+	tx, err := repo.Client.Tx(ctx)
 	require.NoError(t, err)
 	done := make(chan error, 1)
 	go func() {
-		_, err := repo.client.Session.Query().Count(ctx)
+		_, err := repo.Client.Session.Query().Count(ctx)
 		done <- err
 	}()
 	select {
@@ -69,6 +69,6 @@ func TestEntRepository_InMemoryDatabaseKeepsSchemaVisibleToReads(t *testing.T) {
 	repo, err := NewEntRepository(WithDatabasePath(":memory:"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = repo.Close() })
-	_, err = repo.client.Session.Query().Count(context.Background())
+	_, err = repo.Client.Session.Query().Count(context.Background())
 	require.NoError(t, err)
 }

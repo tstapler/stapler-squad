@@ -50,11 +50,24 @@ var exemptPackageSuffixes = []string{
 	"/executor/safeexec",
 }
 
+// exemptPackageFragments are standalone Bazel/CI developer CLIs (never linked into the
+// product binary), where a hung child only stalls the developer's own command.
+var exemptPackageFragments = []string{
+	"/tools/bzl/",
+	"/tools/ci/",
+	"/scripts/edr-experiment/",
+}
+
 func run(pass *analysis.Pass) (interface{}, error) {
 	// Skip if this package is an approved wrapper.
 	pkgPath := pass.Pkg.Path()
 	for _, suffix := range exemptPackageSuffixes {
 		if strings.HasSuffix(pkgPath, suffix) {
+			return nil, nil
+		}
+	}
+	for _, fragment := range exemptPackageFragments {
+		if strings.Contains(pkgPath+"/", fragment) {
 			return nil, nil
 		}
 	}

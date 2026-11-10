@@ -24,10 +24,10 @@ import (
 // LoadInstances() for read-only and mutation operations that need the live instance
 // (with its PTY handles and controller state).
 func (s *SessionService) FindLiveInstance(id string) *session.Instance {
-	if s.reviewQueuePoller == nil {
+	if s.ReviewQueuePoller == nil {
 		return nil
 	}
-	return s.reviewQueuePoller.FindInstance(id)
+	return s.ReviewQueuePoller.FindInstance(id)
 }
 
 // LiveSnapshot implements session.LiveSnapshotSource for the live-work probe: the
@@ -291,14 +291,14 @@ func canonicalizeAbsPath(path string) (string, error) {
 // work — the exact situation the operator had to route around by killing
 // tmux panes directly during the 2026-09-12 incident this guards against.
 func (s *SessionService) OtherLiveSessionInsideWorktree(excludeUUID, worktreePath string) (blockingUUID string, blocked bool) {
-	if s.reviewQueuePoller == nil || worktreePath == "" {
+	if s.ReviewQueuePoller == nil || worktreePath == "" {
 		return "", false
 	}
 	cleanTarget, err := canonicalizeAbsPath(worktreePath)
 	if err != nil {
 		return "", false
 	}
-	for _, inst := range s.reviewQueuePoller.GetInstances() {
+	for _, inst := range s.ReviewQueuePoller.GetInstances() {
 		// Not IsLiveOrStoredSessionLive: a pane-less view has no cwd to compare, so its probe is a wasted RPC.
 		if inst == nil || inst.UUID == excludeUUID || !inst.IsBackendProcessAlive() {
 			continue
@@ -340,14 +340,14 @@ type conversationOwnershipQuery struct {
 // signature makes them easy to transpose at a call site with no compiler
 // signal (kibitzer primitive-obsession).
 func (s *SessionService) ConversationOwnedByOtherLiveSession(q conversationOwnershipQuery) (ownerUUID string, ownedByOther bool) {
-	if s.reviewQueuePoller == nil || q.conversationUUID == "" || q.path == "" {
+	if s.ReviewQueuePoller == nil || q.conversationUUID == "" || q.path == "" {
 		return "", false
 	}
 	cleanTarget, err := canonicalizeAbsPath(q.path)
 	if err != nil {
 		return "", false
 	}
-	for _, inst := range s.reviewQueuePoller.GetInstances() {
+	for _, inst := range s.ReviewQueuePoller.GetInstances() {
 		// Not IsLiveOrStoredSessionLive: the cwd check below needs a live pane, which a pane-less view lacks.
 		if inst == nil || inst.UUID == q.selfUUID || !inst.IsBackendProcessAlive() {
 			continue

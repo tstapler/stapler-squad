@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/procinfo"
 )
 
@@ -40,11 +41,11 @@ type ImportService struct {
 	// PreviewImportExternalSession works with detector+inspector alone, so
 	// existing tests constructing an ImportService via NewImportService keep
 	// working with these left as nil/zero.
-	aliveChecker session.AliveChecker
+	aliveChecker importer.AliveChecker
 	storage      session.InstanceStore
 	registry     *session.Registry
-	linker       *session.HistoryLinker
-	suspended    *session.SuspendedProcessStore
+	linker       *importer.HistoryLinker
+	suspended    *importer.SuspendedProcessStore
 	tmuxQuerier  session.TmuxSocketQuerier
 
 	// instanceLocks serializes ConfirmKillExternalSession and
@@ -91,8 +92,8 @@ func NewImportService(detector *session.HistoryFileDetector, inspector ProcessCr
 func NewImportServiceWithRealInspector(
 	storage session.InstanceStore,
 	registry *session.Registry,
-	linker *session.HistoryLinker,
-	suspended *session.SuspendedProcessStore,
+	linker *importer.HistoryLinker,
+	suspended *importer.SuspendedProcessStore,
 ) *ImportService {
 	inspector := procinfo.NewProcessInspector()
 	return &ImportService{
@@ -123,7 +124,7 @@ func (s *ImportService) PreviewImportExternalSession(
 
 	candidate := candidateFromProto(candidateRef)
 
-	result, err := session.CorrelateCandidate(s.detector, candidate)
+	result, err := importer.CorrelateCandidate(s.detector, candidate)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("correlation failed: %w", err))
 	}
@@ -134,7 +135,7 @@ func (s *ImportService) PreviewImportExternalSession(
 		Correlation: correlationResultToProto(result),
 	}
 
-	if result.Kind == session.CorrelationResolved {
+	if result.Kind == importer.CorrelationResolved {
 		// A read failure here is not fatal to the preview -- the user still
 		// sees correlation + program/path; turn_count/excerpt are simply
 		// omitted (zero value). Commit will attempt the same read again.
@@ -182,7 +183,7 @@ func (s *ImportService) CommitImportExternalSession(
 	}
 
 	pidIdentity := req.Msg.GetPidIdentity()
-	params := session.CommitImportParams{
+	params := importer.CommitImportParams{
 		Detector:             s.detector,
 		Storage:              s.storage,
 		Registry:             s.registry,
@@ -197,9 +198,9 @@ func (s *ImportService) CommitImportExternalSession(
 		OriginalCreateTimeMs: pidIdentity.GetCreateTimeMs(),
 	}
 
-	result, err := session.CommitImportExternalSession(ctx, params)
+	result, err := importer.CommitImportExternalSession(ctx, params)
 	if err != nil {
-		if errors.Is(err, session.ErrCorrelationDrifted) {
+		if errors.Is(err, importer.ErrCorrelationDrifted) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 		}
 		return connect.NewResponse(&sessionv1.CommitImportExternalSessionResponse{
@@ -256,21 +257,21 @@ func (s *ImportService) ConfirmKillExternalSession(
 		}
 	}
 
-	outcome := session.KillExternalOriginalProcess(s.aliveChecker, pidIdentity.GetPid(), pidIdentity.GetCreateTimeMs(), tmuxSession)
+	outcome := importer.KillExternalOriginalProcess(s.aliveChecker, pidIdentity.GetPid(), pidIdentity.GetCreateTimeMs(), tmuxSession)
 
 	resp := &sessionv1.ConfirmKillExternalSessionResponse{}
 	switch outcome.Status {
-	case session.KillOutcomeKilled:
+	case importer.KillOutcomeKilled:
 		resp.Status = sessionv1.KillStatus_KILL_STATUS_KILLED
 		if s.suspended != nil {
 			_ = s.suspended.Remove(instanceID)
 		}
-	case session.KillOutcomeAlreadyGone:
+	case importer.KillOutcomeAlreadyGone:
 		resp.Status = sessionv1.KillStatus_KILL_STATUS_ALREADY_GONE
 		if s.suspended != nil {
 			_ = s.suspended.Remove(instanceID)
 		}
-	case session.KillOutcomeFailed:
+	case importer.KillOutcomeFailed:
 		resp.Status = sessionv1.KillStatus_KILL_STATUS_FAILED
 		if outcome.Err != nil {
 			resp.Error = outcome.Err.Error()
@@ -317,7 +318,7 @@ func (s *ImportService) CancelPendingKill(
 		originalPID = req.Msg.GetPidIdentity().GetPid()
 	}
 
-	resumed, err := session.CancelPendingKill(session.CancelPendingKillParams{
+	resumed, err := importer.CancelPendingKill(importer.CancelPendingKillParams{
 		Storage:     s.storage,
 		Suspended:   s.suspended,
 		InstanceID:  instanceID,
@@ -333,12 +334,12 @@ func (s *ImportService) CancelPendingKill(
 
 // candidateFromProto maps the wire representation back into the domain
 // type. Pure mapping, no I/O.
-func candidateFromProto(ref *sessionv1.ExternalSessionCandidateRef) session.ExternalSessionCandidate {
-	sourceKind := session.MuxDiscovered
+func candidateFromProto(ref *sessionv1.ExternalSessionCandidateRef) importer.ExternalSessionCandidate {
+	sourceKind := importer.MuxDiscovered
 	if ref.GetSourceKind() == sessionv1.ImportSourceKind_IMPORT_SOURCE_KIND_PLAIN_TMUX {
-		sourceKind = session.PlainTmux
+		sourceKind = importer.PlainTmux
 	}
-	return session.ExternalSessionCandidate{
+	return importer.ExternalSessionCandidate{
 		SourceKind:  sourceKind,
 		Path:        ref.GetPath(),
 		Program:     ref.GetProgram(),
@@ -352,26 +353,26 @@ func candidateFromProto(ref *sessionv1.ExternalSessionCandidateRef) session.Exte
 // type. Pure mapping, no I/O. Exhaustively switches on CorrelationKind so a
 // future addition to the sum type fails to compile here rather than
 // silently defaulting.
-func correlationResultToProto(result session.CorrelationResult) *sessionv1.CorrelationResultProto {
+func correlationResultToProto(result importer.CorrelationResult) *sessionv1.CorrelationResultProto {
 	proto := &sessionv1.CorrelationResultProto{
 		Uuid: result.UUID,
 	}
 
 	switch result.Kind {
-	case session.CorrelationNotFound:
+	case importer.CorrelationNotFound:
 		proto.Kind = sessionv1.CorrelationKind_CORRELATION_KIND_NOT_FOUND
-	case session.CorrelationResolved:
+	case importer.CorrelationResolved:
 		proto.Kind = sessionv1.CorrelationKind_CORRELATION_KIND_RESOLVED
-	case session.CorrelationAmbiguous:
+	case importer.CorrelationAmbiguous:
 		proto.Kind = sessionv1.CorrelationKind_CORRELATION_KIND_AMBIGUOUS
 	default:
 		proto.Kind = sessionv1.CorrelationKind_CORRELATION_KIND_UNSPECIFIED
 	}
 
 	switch result.Confidence {
-	case session.ConfidencePIDExact:
+	case importer.ConfidencePIDExact:
 		proto.Confidence = sessionv1.CorrelationConfidence_CORRELATION_CONFIDENCE_PID_EXACT
-	case session.ConfidencePathHeuristic:
+	case importer.ConfidencePathHeuristic:
 		proto.Confidence = sessionv1.CorrelationConfidence_CORRELATION_CONFIDENCE_PATH_HEURISTIC
 	default:
 		proto.Confidence = sessionv1.CorrelationConfidence_CORRELATION_CONFIDENCE_NONE
@@ -395,25 +396,25 @@ func correlationResultToProto(result session.CorrelationResult) *sessionv1.Corre
 // matches a real CorrelationResolved result -- fine, since a zero
 // ExpectedCorrelation only appears if the caller skipped preview, and
 // resolveResumeUUID only compares against it when fresh.Kind is Resolved.
-func correlationResultFromProto(proto *sessionv1.CorrelationResultProto) session.CorrelationResult {
-	result := session.CorrelationResult{
+func correlationResultFromProto(proto *sessionv1.CorrelationResultProto) importer.CorrelationResult {
+	result := importer.CorrelationResult{
 		UUID: proto.GetUuid(),
 	}
 
 	switch proto.GetKind() {
 	case sessionv1.CorrelationKind_CORRELATION_KIND_NOT_FOUND:
-		result.Kind = session.CorrelationNotFound
+		result.Kind = importer.CorrelationNotFound
 	case sessionv1.CorrelationKind_CORRELATION_KIND_RESOLVED:
-		result.Kind = session.CorrelationResolved
+		result.Kind = importer.CorrelationResolved
 	case sessionv1.CorrelationKind_CORRELATION_KIND_AMBIGUOUS:
-		result.Kind = session.CorrelationAmbiguous
+		result.Kind = importer.CorrelationAmbiguous
 	}
 
 	switch proto.GetConfidence() {
 	case sessionv1.CorrelationConfidence_CORRELATION_CONFIDENCE_PID_EXACT:
-		result.Confidence = session.ConfidencePIDExact
+		result.Confidence = importer.ConfidencePIDExact
 	case sessionv1.CorrelationConfidence_CORRELATION_CONFIDENCE_PATH_HEURISTIC:
-		result.Confidence = session.ConfidencePathHeuristic
+		result.Confidence = importer.ConfidencePathHeuristic
 	}
 
 	for _, c := range proto.GetCandidates() {

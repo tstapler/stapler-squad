@@ -20,7 +20,7 @@ func TestUpdatePullRequestState_ReconcilerRefreshOnUnverifiedTerminal(t *testing
 		ref := mustPRRef(t, "", "acme", "app", n)
 		seedState(t, repo, ref, PRStateUnknown, true)
 		setPolled(t, repo, ref, prRepoT0)
-		require.NoError(t, repo.client.PullRequestState.Update().Where(refPredicate(ref)).
+		require.NoError(t, repo.Client.PullRequestState.Update().Where(refPredicate(ref)).
 			SetPollFailCount(4).SetFirstFailAt(prRepoT0.Add(-time.Hour)).SetPollError("network").Exec(context.Background()))
 		return repo, ref
 	}

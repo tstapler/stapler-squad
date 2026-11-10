@@ -1,0 +1,70 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "prpoller",
+    srcs = [
+        "poller_invalidation_adapter.go",
+        "pr_poll_classify.go",
+        "pr_state_poller.go",
+        "pr_status_poller.go",
+        "pr_terminal_listener.go",
+        "worktree_pr_poller.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/prpoller",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//github",
+        "//internal/qos",
+        "//log",
+        "//session",
+        "//telemetry",
+        "@com_github_linkdata_deadlock//:deadlock",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prpoller",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "prpoller_test",
+    srcs = [
+        "helpers_test.go",
+        "poller_invalidation_adapter_test.go",
+        "pr_followup_review_test.go",
+        "pr_multi_legacy_test.go",
+        "pr_multi_poller_test.go",
+        "pr_status_poller_discovery_test.go",
+        "pr_status_poller_test.go",
+        "pr_terminal_listener_poller_test.go",
+        "pr_title_verify_mirror_test.go",
+        "worktree_pr_poller_backoff_test.go",
+        "worktree_pr_poller_discovery_test.go",
+        "worktree_pr_poller_invalidate_test.go",
+        "worktree_pr_poller_mininterval_test.go",
+        "worktree_pr_poller_noprlift_test.go",
+        "worktree_pr_poller_test.go",
+    ],
+    embed = [":prpoller"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//github",
+        "//session",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session/legacy_pr_readers_test.go.
+exports_files(
+    ["pr_status_poller.go"],
+    visibility = ["//session:__pkg__"],
+)

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package session.v1;
 
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
 // HeadlessService provides streaming LLM calls via the headless pool.
 service HeadlessService {
   // RunHeadlessCall runs a headless LLM call and streams chunks back to the client.

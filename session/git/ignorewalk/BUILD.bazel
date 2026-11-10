@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "ignorewalk",
+    srcs = ["ignorewalk.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/git/ignorewalk",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_go_git_go_billy_v5//:go-billy",
+        "@com_github_go_git_go_git_v5//plumbing/format/gitignore",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ignorewalk",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ignorewalk_test",
+    srcs = ["ignorewalk_test.go"],
+    embed = [":ignorewalk"],
+    deps = [
+        "@com_github_go_git_go_billy_v5//:go-billy",
+        "@com_github_go_git_go_billy_v5//osfs",
+        "@com_github_go_git_go_git_v5//plumbing/format/gitignore",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
+)

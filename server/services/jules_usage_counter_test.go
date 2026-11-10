@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/jules"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -209,24 +210,24 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	// swap in this package -- log/log.go's logAt no longer consults
 	// slog.SetDefault, so this must use the injectable seam to actually
 	// capture log.Info/log.Warn output.
-	slogDefaultMu.Lock()
+	svctest.SlogDefaultMu.Lock()
 	handler := &capturingSlogHandler{}
 	prevDefault := ssqlog.SetSlogDefaultForTest(slog.New(handler))
 	t.Cleanup(func() {
 		ssqlog.SetSlogDefaultForTest(prevDefault)
-		slogDefaultMu.Unlock()
+		svctest.SlogDefaultMu.Unlock()
 	})
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "full cycle item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "full cycle item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	guard := &fakeJulesTransitionGuard{}
-	creator := &fakeJulesSessionCreator{resultName: "sessions/full-cycle"}
+	creator := &svctest.FakeJulesSessionCreator{ResultName: "sessions/full-cycle"}
 
 	usage := NewJulesUsageCounter()
-	dispatchSvc := NewJulesDispatchService(storage, guard, creator, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	dispatchSvc := NewJulesDispatchService(storage, guard, creator, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 	dispatchSvc.SetUsageCounter(usage)
 
 	// The prompt deliberately embeds the test API key: DispatchToJules must
@@ -300,16 +301,16 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 }
 
 func TestJulesUsageCounter_Snapshot_should_IncrementDispatchedAndAPIErrorExactlyOnce_When_OneDispatchAndOnePollFailure(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "dispatch plus failed poll item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "dispatch plus failed poll item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	guard := &fakeJulesTransitionGuard{}
-	creator := &fakeJulesSessionCreator{}
+	creator := &svctest.FakeJulesSessionCreator{}
 
 	usage := NewJulesUsageCounter()
-	dispatchSvc := NewJulesDispatchService(storage, guard, creator, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	dispatchSvc := NewJulesDispatchService(storage, guard, creator, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 	dispatchSvc.SetUsageCounter(usage)
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/e2e-1", "Fix the flaky poller test")

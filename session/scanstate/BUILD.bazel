@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "scanstate",
+    srcs = [
+        "position.go",
+        "store.go",
+        "writer.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/scanstate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/scanbuf",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:transcriptscanstate",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":scanstate",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "scanstate_test",
+    srcs = ["position_test.go"],
+    embed = [":scanstate"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

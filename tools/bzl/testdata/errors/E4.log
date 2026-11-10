@@ -1,0 +1,2 @@
+INFO: Analyzed 40 targets (0 packages loaded, 0 targets configured).
+Server terminated abruptly (error code: 14, error message: 'Socket closed', log file: '/home/u/.cache/bazel/_bazel_u/abc/server/jvm.out')

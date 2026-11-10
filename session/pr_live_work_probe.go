@@ -122,11 +122,11 @@ func liveWorkFactsFromData(d *InstanceData) LiveWorkFacts {
 	return LiveWorkFacts{Unended: unended, LastMeaningfulChangeAt: d.LastMeaningfulOutput}
 }
 
-// currentRoundWorkSessions is the live-work subject of an item: its newest work
+// CurrentRoundWorkSessions is the live-work subject of an item: its newest work
 // session. (The PR round walk skips sessions with no link or tombstone, which is
 // right for attributing PRs and wrong for liveness: the agent still working has
 // usually not opened a PR yet.)
-func currentRoundWorkSessions(sessions []ItemSessionSummary) []ItemSessionSummary {
+func CurrentRoundWorkSessions(sessions []ItemSessionSummary) []ItemSessionSummary {
 	var newest *ItemSessionSummary
 	for i := range sessions {
 		s := sessions[i]
@@ -146,7 +146,7 @@ func currentRoundWorkSessions(sessions []ItemSessionSummary) []ItemSessionSummar
 // NewestWorkSession returns the live-work subject of an item as a slice: its newest
 // work session, or none.
 func NewestWorkSession(sessions []ItemSessionSummary) []ItemSessionSummary {
-	return currentRoundWorkSessions(sessions)
+	return CurrentRoundWorkSessions(sessions)
 }
 
 // SplitLiveCurrentRound separates the sessions terminal-item archival may archive
@@ -159,7 +159,7 @@ func SplitLiveCurrentRound(ctx context.Context, probe LiveWorkProbe, now time.Ti
 		return sessions, false
 	}
 	live := map[string]bool{}
-	for _, s := range currentRoundWorkSessions(sessions) {
+	for _, s := range CurrentRoundWorkSessions(sessions) {
 		isLive, err := probe.IsLive(ctx, s.SessionUUID, now)
 		if err != nil {
 			log.WarningLog().Printf("[LiveWork] RULE L probe error session=%s, treated as live: %v", s.SessionUUID, err)

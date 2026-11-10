@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/internal/reporoot"
 	"github.com/tstapler/stapler-squad/jules"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 )
@@ -667,8 +667,7 @@ func TestApplyJulesState_should_LogUnknownStateAtError_When_StateIsUnrecognized(
 var julesStateConstPattern = regexp.MustCompile(`^\s*(JulesState\w+)\s+JulesSessionState\s*=`)
 
 // declaredJulesStateConstantNames reads jules/types.go directly (resolved
-// relative to this test file via runtime.Caller, so it works regardless of
-// `go test`'s working directory) and returns every `JulesState*` constant
+// through reporoot, so it works under both `go test` and Bazel runfiles) and returns every `JulesState*` constant
 // name declared there. This is what makes
 // TestApplyJulesState_should_HandleEveryDeclaredState_When_StatesEnumerated
 // actually fail when a new state is added without a corresponding table
@@ -677,9 +676,9 @@ var julesStateConstPattern = regexp.MustCompile(`^\s*(JulesState\w+)\s+JulesSess
 func declaredJulesStateConstantNames(t *testing.T) []string {
 	t.Helper()
 
-	_, thisFile, _, ok := runtime.Caller(0)
-	require.True(t, ok, "runtime.Caller(0) must resolve this test file's path")
-	typesPath := filepath.Join(filepath.Dir(thisFile), "..", "jules", "types.go")
+	root, err := reporoot.Find()
+	require.NoError(t, err)
+	typesPath := filepath.Join(root, "jules", "types.go")
 
 	src, err := os.ReadFile(typesPath)
 	require.NoError(t, err, "read %s", typesPath)

@@ -1,0 +1,54 @@
+# buf lint findings tolerated until the owner decides to fix them (tools/bzl/proto/buf_lint.sh ratchet).
+# Regenerate: bazel run //proto/session/v1:buf_lint_update_baseline. Entries only ever leave this file.
+# Owner decision 2026-11-06: the 8 enum findings are permanent exceptions in buf.yaml (ignore_only); the 44 RPC findings stay here until a versioned migration.
+# so none was applied (all 52 re-verified with `buf lint`; `buf breaking` flags each fix). Needs a versioned migration, not an in-place edit:
+#   RPC_*_STANDARD_NAME / RPC_REQUEST_RESPONSE_UNIQUE: rename/split shared messages (PRActionResponse, StreamHubRolloutStatus, TymuxRolloutStatus,
+#     TerminalData, *Event stream types). Binary wire/Connect paths are unaffected, but Go/TS/mobile generated type names change.
+#   events.proto ENUM_VALUE_PREFIX (7): renames JSON enum names; ScrollForwardOutcome/ScrollBlockedReason are used by session/instance_scroll_forward.go,
+#     the websocket path and web-app TerminalOutput.tsx.
+#   types.proto ENUM_NO_ALLOW_ALIAS: SessionStatus aliases (RUNNING/READY/LOADING/NEEDS_APPROVAL) preserve legacy wire values 1,2,3,5.
+proto/session/v1/backlog.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"BacklogItemEvent\" should be named \"WatchBacklogItemsResponse\" or \"BacklogServiceWatchBacklogItemsResponse\".
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.AddGitHubAccountWithTokenResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.AddGitHubAccountWithTokenResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRActionResponse\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRDraftToggleRequest\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.PRDraftToggleRequest\" is used as the request or response type for multiple RPCs.
+proto/session/v1/github_user.proto RPC_REQUEST_STANDARD_NAME RPC request type \"PRDraftToggleRequest\" should be named \"ConvertPRToDraftRequest\" or \"GitHubUserServiceConvertPRToDraftRequest\".
+proto/session/v1/github_user.proto RPC_REQUEST_STANDARD_NAME RPC request type \"PRDraftToggleRequest\" should be named \"MarkPRReadyRequest\" or \"GitHubUserServiceMarkPRReadyRequest\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"AddGitHubAccountWithTokenResponse\" should be named \"AddGitHubAccountFromCLIResponse\" or \"GitHubUserServiceAddGitHubAccountFromCLIResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"PRActionResponse\" should be named \"ClosePRDirectResponse\" or \"GitHubUserServiceClosePRDirectResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"PRActionResponse\" should be named \"ConvertPRToDraftResponse\" or \"GitHubUserServiceConvertPRToDraftResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"PRActionResponse\" should be named \"MarkPRReadyResponse\" or \"GitHubUserServiceMarkPRReadyResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"PRActionResponse\" should be named \"MergePRDirectResponse\" or \"GitHubUserServiceMergePRDirectResponse\".
+proto/session/v1/github_user.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"UserPREvent\" should be named \"WatchUserPRsResponse\" or \"GitHubUserServiceWatchUserPRsResponse\".
+proto/session/v1/insights.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"InsightsEvent\" should be named \"WatchInsightsResponse\" or \"InsightsServiceWatchInsightsResponse\".
+proto/session/v1/rum_bundle.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"BundleChunk\" should be named \"ExportSessionBundleResponse\" or \"SessionBundleServiceExportSessionBundleResponse\".
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE RPC \"StreamTerminal\" has the same type \"session.v1.TerminalData\" for the request and response.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.StreamHubRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/session.proto RPC_REQUEST_STANDARD_NAME RPC request type \"TerminalData\" should be named \"StreamTerminalRequest\" or \"SessionServiceStreamTerminalRequest\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"ReviewQueueEvent\" should be named \"WatchReviewQueueResponse\" or \"SessionServiceWatchReviewQueueResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"SessionEvent\" should be named \"WatchSessionsResponse\" or \"SessionServiceWatchSessionsResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"CompleteStreamHubRollbackRehearsalResponse\" or \"SessionServiceCompleteStreamHubRollbackRehearsalResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"GetStreamHubRolloutStatusResponse\" or \"SessionServiceGetStreamHubRolloutStatusResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"SetStreamHubGlobalOverrideResponse\" or \"SessionServiceSetStreamHubGlobalOverrideResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"StreamHubRolloutStatus\" should be named \"SetStreamHubSessionOverrideResponse\" or \"SessionServiceSetStreamHubSessionOverrideResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TerminalData\" should be named \"StreamTerminalResponse\" or \"SessionServiceStreamTerminalResponse\".
+proto/session/v1/session.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"WorkflowEvent\" should be named \"WatchWorkflowsResponse\" or \"SessionServiceWatchWorkflowsResponse\".
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_REQUEST_RESPONSE_UNIQUE \"session.v1.TymuxRolloutStatus\" is used as the request or response type for multiple RPCs.
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"CompleteTymuxRollbackRehearsalResponse\" or \"TymuxRolloutServiceCompleteTymuxRollbackRehearsalResponse\".
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"GetTymuxRolloutStatusResponse\" or \"TymuxRolloutServiceGetTymuxRolloutStatusResponse\".
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"ReplaceTymuxdResponse\" or \"TymuxRolloutServiceReplaceTymuxdResponse\".
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"SetTymuxGlobalOverrideResponse\" or \"TymuxRolloutServiceSetTymuxGlobalOverrideResponse\".
+proto/session/v1/tymux_rollout.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"TymuxRolloutStatus\" should be named \"SetTymuxSessionOverrideResponse\" or \"TymuxRolloutServiceSetTymuxSessionOverrideResponse\".
+proto/session/v1/types.proto ENUM_ZERO_VALUE_SUFFIX Enum zero value name \"POLL_ERROR_NONE\" should be suffixed with \"_UNSPECIFIED\".
+proto/session/v1/unfinished.proto RPC_RESPONSE_STANDARD_NAME RPC response type \"UnfinishedWorkEvent\" should be named \"WatchUnfinishedWorkResponse\" or \"UnfinishedWorkServiceWatchUnfinishedWorkResponse\".

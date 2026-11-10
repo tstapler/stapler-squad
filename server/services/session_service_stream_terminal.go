@@ -28,10 +28,29 @@ const (
 	fallbackPTYRows = 24
 )
 
+// CapturePollEvery is the poll interval of the resume and capture loops.
+const CapturePollEvery = 150 * time.Millisecond
+
+// ResumeHibernatedInstance restarts a hibernated instance's controller and
+// session driver before streaming. Hibernate() kills the tmux session
+// entirely, so without this, the streaming paths below would find no tmux
+// session and silently create a bare replacement, leaving Status stuck at
+// Hibernated even though a live tmux session now exists underneath it. The
+// brief race between this returning and the resumed tmux session actually
+// existing is absorbed by RestoreWithWorkDir's own retry/backoff (~1.5s
+// total) inside the streaming paths that follow.
+func ResumeHibernatedInstance(instance *session.Instance, sessionID string) error {
+	log.Info("[WebSocket] resuming hibernated session before streaming", "session", sessionID)
+	if err := instance.ResumeFromHibernation(context.Background()); err != nil {
+		return fmt.Errorf("failed to resume hibernated session %q: %w", sessionID, err)
+	}
+	return nil
+}
+
 func waitForTerminalResume(ctx context.Context, instance *session.Instance) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	ticker := time.NewTicker(capturePollEvery)
+	ticker := time.NewTicker(CapturePollEvery)
 	defer ticker.Stop()
 	for !instance.Started() {
 		switch instance.GetLifecycleStatus() {
@@ -73,8 +92,8 @@ func (s *SessionService) StreamTerminal(
 	// timestamp updates are visible to the review queue. Loading fresh from storage
 	// creates a separate object that the poller never sees.
 	var instance *session.Instance
-	if s.reviewQueuePoller != nil {
-		instance = s.reviewQueuePoller.FindInstance(initialMsg.SessionId)
+	if s.ReviewQueuePoller != nil {
+		instance = s.ReviewQueuePoller.FindInstance(initialMsg.SessionId)
 	}
 
 	// Fallback to storage if poller doesn't have it (shouldn't happen normally)
@@ -102,7 +121,7 @@ func (s *SessionService) StreamTerminal(
 	}
 	defer releaseView()
 	if instance.IsHibernated() {
-		if err := resumeHibernatedInstance(instance, initialMsg.SessionId); err != nil {
+		if err := ResumeHibernatedInstance(instance, initialMsg.SessionId); err != nil {
 			return connect.NewError(connect.CodeUnavailable, err)
 		}
 		if err := waitForTerminalResume(ctx, instance); err != nil {
@@ -438,7 +457,7 @@ func (s *SessionService) StreamTerminal(
 
 				switch data := msg.Data.(type) {
 				case *sessionv1.TerminalData_Input:
-					recordTerminalInput(inputSrc, data.Input.Data, StageReceived)
+					RecordTerminalInput(inputSrc, data.Input.Data, StageReceived)
 					if writer == nil {
 						log.Debug("[StreamTerminal] read-only attach: input frame dropped", "session", msg.SessionId, "bytes", len(data.Input.Data))
 						continue
@@ -478,7 +497,7 @@ func (s *SessionService) StreamTerminal(
 						return
 					}
 
-					recordTerminalInput(inputSrc, data.Input.Data, StageForwarded)
+					RecordTerminalInput(inputSrc, data.Input.Data, StageForwarded)
 
 					// Publish user interaction event for immediate review queue reactivity
 					s.eventBus.Publish(events.NewUserInteractionEvent(

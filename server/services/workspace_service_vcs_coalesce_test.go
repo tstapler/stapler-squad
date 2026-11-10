@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
@@ -98,10 +99,10 @@ func vcsStatusFixture(t *testing.T, spy *statusSpyBackend) (*WorkspaceService, s
 		spy.release()
 		fix.svc.vcsFlights.wait()
 	})
-	dir, baseSHA, _ := newVCSStatusTestRepo(t)
+	dir, baseSHA, _ := svctest.NewVCSStatusTestRepo(t)
 	inst := &session.Instance{Title: "coalesce", Path: dir, Status: session.Paused, Program: "claude"}
 	inst.SetDirBaseSHA(baseSHA)
-	fix.svc.SetLiveFinder(&stubLiveFinder{inst: inst})
+	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 	return fix.svc, dir
 }
 
