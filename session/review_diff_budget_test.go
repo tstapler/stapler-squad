@@ -57,6 +57,18 @@ func TestTruncateDiffByFile_RealCodeRankedAheadOfNoise(t *testing.T) {
 	assert.Less(t, strings.Index(got, ".github/workflows/a.yml"), strings.Index(got, "session/real.go"), "original file order kept")
 }
 
+func TestTruncateDiffByFile_LeftoverBudgetRefillsCutFiles(t *testing.T) {
+	t.Parallel()
+	raw := fileDiff("big.go", 300) + fileDiff("small.go", 5) + fileDiff("mid.go", 100)
+	require.Greater(t, len(raw), testBudget)
+	got, trunc := TruncateDiffByFile(raw, testBudget)
+	require.True(t, trunc)
+	assert.LessOrEqual(t, len(got), testBudget)
+	assert.Greater(t, len(got), testBudget-diffManifestReserve-2*100, "per-file cap must not strand budget")
+	assert.Contains(t, got, fileDiff("small.go", 5))
+	assert.Contains(t, got, "diff --git a/mid.go", "every file still represented")
+}
+
 func TestTruncateDiffByFile_ManifestMatchesOutput(t *testing.T) {
 	t.Parallel()
 	const n = 30

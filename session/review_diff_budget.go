@@ -124,6 +124,7 @@ func TruncateDiffByFile(raw string, limit int) (string, bool) {
 
 func selectDiffFiles(files []diffFile, order []int, remaining int) (kept map[int]string, cut, dropped []string) {
 	kept = make(map[int]string, len(files))
+	var cutIdx []int
 	for _, i := range order {
 		f := files[i]
 		budget := min(remaining, diffPerFileCap)
@@ -135,9 +136,19 @@ func selectDiffFiles(files []diffFile, order []int, remaining int) (kept map[int
 			part := cutAtLine(f.text, budget)
 			kept[i] = part
 			remaining -= len(part)
-			cut = append(cut, f.path)
+			cutIdx = append(cutIdx, i)
 		default:
 			dropped = append(dropped, f.path)
+		}
+	}
+	// The per-file cap only keeps one file from starving the rest; hand any
+	// leftover budget back to the cut files, highest-ranked first.
+	for _, i := range cutIdx {
+		part := cutAtLine(files[i].text, len(kept[i])+remaining)
+		remaining -= len(part) - len(kept[i])
+		kept[i] = part
+		if len(part) < len(files[i].text) {
+			cut = append(cut, files[i].path)
 		}
 	}
 	return kept, cut, dropped
