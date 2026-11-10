@@ -150,8 +150,8 @@ func mergeBundles(names []string, ref time.Time) (Bundle, error) {
 	return merged, nil
 }
 
-// SeedFiles runs the pre-boot stage: legacy sessions (default scenario) and
-// bundle session records.
+// SeedFiles runs the pre-boot stage: legacy sessions (default scenario),
+// bundle transcripts and bundle session records.
 func (c *Composite) SeedFiles(dir string, ref time.Time) error {
 	for _, n := range c.names {
 		if n == DefaultName {
@@ -165,6 +165,9 @@ func (c *Composite) SeedFiles(dir string, ref time.Time) error {
 	}
 	b, err := c.Bundle(ref)
 	if err != nil {
+		return err
+	}
+	if err := writeTranscripts(dir, b.Transcripts); err != nil {
 		return err
 	}
 	if len(b.Sessions) == 0 {

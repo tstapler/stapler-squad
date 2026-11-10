@@ -67,6 +67,13 @@ type RouteFixture struct {
 	Rows              []Row
 }
 
+// TranscriptFile is one Claude JSONL transcript, laid out as the token store
+// reads it: <historyDir>/<encoded project path>/<conversation uuid>.jsonl.
+type TranscriptFile struct {
+	ProjectDir, Name, Body string
+	ModTime                time.Time
+}
+
 // Bundle is the full data of one or more scenarios.
 type Bundle struct {
 	Sessions      []SessionRecord
@@ -78,6 +85,7 @@ type Bundle struct {
 	TaggingRules  []TaggingRule
 	Workflows     []Workflow
 	Routes        []RouteFixture
+	Transcripts   []TranscriptFile
 }
 
 func (b *Bundle) append(o Bundle) {
@@ -90,11 +98,12 @@ func (b *Bundle) append(o Bundle) {
 	b.TaggingRules = append(b.TaggingRules, o.TaggingRules...)
 	b.Workflows = append(b.Workflows, o.Workflows...)
 	b.Routes = append(b.Routes, o.Routes...)
+	b.Transcripts = append(b.Transcripts, o.Transcripts...)
 }
 
 // keys returns namespaced ids used for duplicate detection.
 func (b Bundle) keys() []string {
-	ks := make([]string, 0, len(b.Sessions)+len(b.Flags)+len(b.ApprovalRules)+len(b.Backlog)+len(b.Terminals)+len(b.Notifications)+len(b.TaggingRules)+len(b.Workflows)+len(b.Routes))
+	ks := make([]string, 0, len(b.Sessions)+len(b.Flags)+len(b.ApprovalRules)+len(b.Backlog)+len(b.Terminals)+len(b.Notifications)+len(b.TaggingRules)+len(b.Workflows)+len(b.Routes)+len(b.Transcripts))
 	for _, s := range b.Sessions {
 		ks = append(ks, "session:"+s.ID)
 	}
@@ -121,6 +130,9 @@ func (b Bundle) keys() []string {
 	}
 	for _, r := range b.Routes {
 		ks = append(ks, "route:"+r.ID)
+	}
+	for _, t := range b.Transcripts {
+		ks = append(ks, "transcript:"+t.Name)
 	}
 	return ks
 }

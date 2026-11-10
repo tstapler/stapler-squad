@@ -3,6 +3,7 @@ package scenario
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -88,5 +89,31 @@ func TestDefaultScenarioPathsAreAllowListed(t *testing.T) {
 		if hits := leakHits(m[1]); len(hits) > 0 {
 			t.Errorf("default path %s is not allow-listed: %v", m[1], hits)
 		}
+	}
+}
+
+func TestInsightsTranscriptsPredateRef(t *testing.T) {
+	t.Parallel()
+	ref := refA()
+	files := insightsTranscripts(ref)
+	if len(files) == 0 {
+		t.Fatal("no insights transcripts")
+	}
+	for _, f := range files {
+		if !f.ModTime.Before(ref) {
+			t.Errorf("%s last turn %v is not before ref %v", f.Name, f.ModTime, ref)
+		}
+	}
+}
+
+func TestSeedInsightsFilesWritesTokenStoreLayout(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := writeTranscripts(dir, insightsTranscripts(refA())); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "claude-projects", "*", "*.jsonl"))
+	if err != nil || len(matches) != len(insightsSessions) {
+		t.Fatalf("got %d transcripts (err %v), want %d", len(matches), err, len(insightsSessions))
 	}
 }
