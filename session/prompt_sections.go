@@ -27,7 +27,9 @@ func renderDefault(section string, values map[string]string) string {
 	return renderTemplate(forDefault(section), values)
 }
 
-const secWorkDiscipline = `For a bug, first write one sentence "this fails because X" and confirm X with a reproducing command or test before you change code. ` +
+const secSyncMain = `This worktree's branch may be behind main. Run ¦git merge main¦ before substantive work. If it conflicts, resolve the conflicts as part of this task: you have the context to do it correctly and a background process does not.`
+
+const secWorkDiscipline = secSyncMain + ` For a bug, first write one sentence "this fails because X" and confirm X with a reproducing command or test before you change code. ` +
 	`Before ¦/backlog/done-N¦, run the command or test that proves criterion N and put the exact command and its one-line result in the note. ` +
 	`If you only read the code, say so. ` +
 	`If a test fails, re-run it on a clean main first: when it fails there too it is pre-existing, so root-cause it and fix it in its own commit if small, otherwise record it with post_backlog_update. ` +
@@ -118,11 +120,15 @@ const (
 )
 
 const secReviewFailureClass = `For each criterion that is not PASS, set failure_class so the app routes it correctly: ` +
-	`NOT_DONE (default) when the worker has more to do; ` +
-	`CANNOT_VERIFY when you lack access to the evidence; ` +
-	`UNRELATED_FAILURE when the proof fails only because of a test or code the change did not touch; ` +
-	`ENVIRONMENTAL when tooling, network, or CI outside the change is broken; ` +
-	`WRONG_BRANCH when the cited commits are not on the reviewed branch; ` +
+	`NOT_DONE (default) when the worker has more to do. ` +
+	`CANNOT_VERIFY when you lack access to the evidence. ` +
+	`UNRELATED_FAILURE when the proof fails only because of a test or code the change did not touch. ` +
+	`ENVIRONMENTAL when tooling, network, or CI outside the change is broken. ` +
+	`WRONG_BRANCH when the cited commits are not on the reviewed branch. ` +
 	`UNATTAINABLE when the criterion cannot be met as written. ` +
 	`Anything except NOT_DONE goes to the owner instead of another rework round, so use it only when more work in this change cannot fix the gap. ` +
 	`When you judge the owner should waive the criterion, also set proposed_waiver=true and put the reason in evidence.`
+
+const secReviewScope = `Judge only what this change is responsible for. When a proof fails because of a test or code the change did not touch, confirm it also fails on a clean main, ` +
+	`then verdict that criterion with failure_class=UNRELATED_FAILURE (or ENVIRONMENTAL for broken tooling) rather than FAIL for the worker to rework. ` +
+	`When the work session cites commit SHAs, check they are on the branch under review before crediting them, and if they are not, use failure_class=WRONG_BRANCH.`

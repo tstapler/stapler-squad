@@ -3,6 +3,7 @@ package session
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func allPromptSections() map[string]string {
@@ -11,7 +12,7 @@ func allPromptSections() map[string]string {
 		"secContextLost": secContextLost, "secCommandsFail": secCommandsFail, "secNeverEnd": secNeverEnd,
 		"secAwaitVerdict": secAwaitVerdict, "secOnPass": secOnPass, "secOnFail": onFailSection(),
 		"secDoneNote": secDoneNote, "secFailNote": secFailNote, "secShipIntro": secShipIntro,
-		"secShipSteps": secShipSteps, "secTriageCriteriaCheck": secTriageCriteriaCheck,
+		"secShipSteps": secShipSteps, "secTriageCriteriaCheck": secTriageCriteriaCheck, "secReviewFailureClass": secReviewFailureClass, "secReviewScope": secReviewScope,
 		"triageOutputContract": triageOutputContract(), "retriageOutputContract": retriageOutputContract(), "helpOwnerActionLine": helpOwnerActionLine,
 	}
 }
@@ -57,5 +58,28 @@ func TestSDDTemplates_should_ShareTheDefaultProtocolRules(t *testing.T) {
 		if !strings.Contains(strings.ReplaceAll(taskProtocolBlock, "`", ""), want) {
 			t.Errorf("default protocol is missing the shared %s section", name)
 		}
+	}
+}
+
+func TestReworkContextFor_should_CarryPriorAttemptsAndFixesLine(t *testing.T) {
+	t.Parallel()
+	if got := reworkContextFor(&BacklogItemData{ID: "i"}, nil); got != "" {
+		t.Errorf("first attempt without an issue should add nothing, got %q", got)
+	}
+	item := &BacklogItemData{ID: "i", ExternalURL: "https://github.com/o/r/issues/7"}
+	ended := time.Now()
+	got := reworkContextFor(item, []ItemSessionSummary{{Role: "work", EndedAt: &ended, CommitCountSinceSpawn: 2}})
+	for _, want := range []string{"Prior Attempts", "Fixes https://github.com/o/r/issues/7"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rework context missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestWorkDiscipline_should_TellWorkerToSyncMain(t *testing.T) {
+	t.Parallel()
+	seed := forSeed(secWorkDiscipline)
+	if !strings.Contains(seed, "git merge main") || strings.Contains(seed, codeMark) {
+		t.Errorf("work discipline should name git merge main with the code mark stripped: %q", seed)
 	}
 }

@@ -316,9 +316,7 @@ func WriteBacklogContextFile(item *BacklogItemData, priorSessions []ItemSessionS
 	sb.WriteString("If MCP tools are unavailable, continue using the acceptance criteria above.\n")
 	sb.WriteString("Record completed criteria in commit messages. Run git commit after each criterion is done.\n")
 	sb.WriteString("\n## Before You Start\n")
-	sb.WriteString("This worktree's branch may be behind main (this file is rewritten on every spawn and re-attach, but the branch itself is not auto-synced). ")
-	sb.WriteString("Run `git merge main` before starting substantive work. If it merges cleanly, continue. ")
-	sb.WriteString("If it conflicts, resolve them as part of this task — you have the context to do it correctly; a background process does not.\n")
+	sb.WriteString(forDefault(secSyncMain) + "\n")
 
 	content := sb.String()
 

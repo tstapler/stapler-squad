@@ -490,7 +490,7 @@ func (e *CachingPipelineEngine) InitialPromptFor(item *BacklogItemData, priorSes
 	// decision (server/services/backlog_service_triage.go) applies identically
 	// regardless of pipeline mode; without this, an item on a custom mode would
 	// silently never receive the nudge on its escalated retry.
-	return EscalationNoticeFor(priorSessions) + withWakeGuidance(renderTemplate(rm.InitialPromptTemplate, itemPlaceholders(item)))
+	return EscalationNoticeFor(priorSessions) + reworkContextFor(item, priorSessions) + withWakeGuidance(renderTemplate(rm.InitialPromptTemplate, itemPlaceholders(item)))
 }
 
 // ContentHashFor implements PipelineEngine.

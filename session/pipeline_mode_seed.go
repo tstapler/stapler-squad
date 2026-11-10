@@ -260,7 +260,7 @@ object (no other text before or after):
 // parameters that CachingPipelineEngine silently drops for every non-default
 // mode (see research/expressiveness-and-design.md §1); the secondary,
 // tool-less path is told to mark criteria UNVERIFIABLE rather than guess.
-const sddReviewPromptTemplate = `# Review: {{item_title}}
+var sddReviewPromptTemplate = `# Review: {{item_title}}
 
 item_id: {{item_id}}
 
@@ -292,6 +292,10 @@ ONLY a single JSON object with no surrounding text:
 Valid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark every criterion
 UNVERIFIABLE rather than guessing if you cannot see the actual code changes - a missing
 diff in this mode is a known limitation, not a signal the work is wrong.
+
+Optional per-verdict fields: ` + forSeed(secReviewFailureClass) + `
+
+` + forSeed(secReviewScope) + `
 `
 
 // sddInitialPromptTemplate is the live prompt the interactive/autonomous

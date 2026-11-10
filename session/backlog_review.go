@@ -192,6 +192,34 @@ func writeSessionTranscriptSection(sb *strings.Builder, transcriptRelPath string
 
 // writeReviewContextExtras renders all ReviewContextExtras sections. Only called on the
 // diff == "" path — see BuildHeadlessReviewPrompt.
+// writeAcceptanceCriteria lists the criteria; a waived one is marked so the reviewer does not
+// fail the item for something the owner already decided not to require.
+func writeAcceptanceCriteria(sb *strings.Builder, acSnapshot []AcCriterion) {
+	if len(acSnapshot) == 0 {
+		sb.WriteString("(no acceptance criteria)\n")
+		return
+	}
+	for _, c := range acSnapshot {
+		fmt.Fprintf(sb, "%d. %s\n", c.Index, sanitizeField(c.Text, 500))
+		if c.Status == AcStatusWaived {
+			sb.WriteString("   WAIVED by the owner: do not evaluate it and leave it out of verdicts.\n")
+		}
+		if c.Note != "" {
+			fmt.Fprintf(sb, "   Note (self-reported by work session via report_progress): %s\n", sanitizeField(c.Note, 500))
+		}
+	}
+}
+
+// writeReviewScope tells the reviewer what evidence is in bounds and how to treat failures
+// the change did not cause.
+func writeReviewScope(sb *strings.Builder, item *BacklogItemData) {
+	sb.WriteString("## Review Scope\n")
+	if item.PlanArtifactsPath != "" {
+		fmt.Fprintf(sb, "Plan artifacts for this item live in %s; files there count as evidence you may read and cite.\n", item.PlanArtifactsPath)
+	}
+	sb.WriteString(forDefault(secReviewScope) + "\n\n")
+}
+
 func writeReviewContextExtras(sb *strings.Builder, extras ReviewContextExtras) {
 	writePriorReviewAttemptsSection(sb, extras.PriorSessions)
 	writeFullNotesHistorySection(sb, extras.ProgressNotes)
@@ -212,16 +240,7 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 
 	// Acceptance criteria list.
 	sb.WriteString("## Acceptance Criteria\n")
-	if len(acSnapshot) == 0 {
-		sb.WriteString("(no acceptance criteria)\n")
-	} else {
-		for _, c := range acSnapshot {
-			fmt.Fprintf(&sb, "%d. %s\n", c.Index, sanitizeField(c.Text, 500))
-			if c.Note != "" {
-				fmt.Fprintf(&sb, "   Note (self-reported by work session via report_progress): %s\n", sanitizeField(c.Note, 500))
-			}
-		}
-	}
+	writeAcceptanceCriteria(&sb, acSnapshot)
 	sb.WriteString("\n")
 
 	// Implementation plan (if available).
@@ -271,6 +290,8 @@ func BuildReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, diff str
 
 	writeVerificationEvidenceSection(&sb, verificationNotes)
 
+	writeReviewScope(&sb, item)
+
 	// --- instructions ---
 	sb.WriteString("## Instructions\n")
 	sb.WriteString("Call submit_review_verdict ONCE with ALL criteria verdicts in the verdicts array:\n")
@@ -306,16 +327,7 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	}
 
 	sb.WriteString("## Acceptance Criteria\n")
-	if len(acSnapshot) == 0 {
-		sb.WriteString("(no acceptance criteria)\n")
-	} else {
-		for _, c := range acSnapshot {
-			fmt.Fprintf(&sb, "%d. %s\n", c.Index, sanitizeField(c.Text, 500))
-			if c.Note != "" {
-				fmt.Fprintf(&sb, "   Note (self-reported by work session via report_progress): %s\n", sanitizeField(c.Note, 500))
-			}
-		}
-	}
+	writeAcceptanceCriteria(&sb, acSnapshot)
 	sb.WriteString("\n")
 
 	// Implementation plan (if available).
@@ -350,6 +362,8 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 
 	writeVerificationEvidenceSection(&sb, verificationNotes)
 
+	writeReviewScope(&sb, item)
+
 	sb.WriteString("## Instructions\n")
 	sb.WriteString("Evaluate every acceptance criterion against the diff above. Also verify the implementation follows the plan (if provided).\n")
 	sb.WriteString("Output ONLY a single JSON object with no surrounding text:\n")
@@ -363,6 +377,7 @@ func BuildHeadlessReviewPrompt(item *BacklogItemData, acSnapshot []AcCriterion, 
 	} else {
 		sb.WriteString(`{"overall":"PASS","summary":"concise assessment","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"direct quote from diff"}]}`)
 	}
+	sb.WriteString("\nOptional per-verdict fields failure_class and proposed_waiver: " + forDefault(secReviewFailureClass) + "\n")
 	sb.WriteString("\nValid outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE. Mark a criterion UNVERIFIABLE rather than guessing if you cannot confirm it from what's in front of you — a missing or incomplete diff is a known limitation of this mode, not a signal the work is wrong.\n")
 
 	return sb.String()
