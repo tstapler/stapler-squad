@@ -82,7 +82,7 @@ describe('tour sources vs scene files', () => {
 		.map((f) => f.replace(/\.mdx$/, ''))
 		.sort();
 	const scenes = (existsSync(SCENES_DIR) ? readdirSync(SCENES_DIR) : [])
-		.filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+		.filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.startsWith('_'))
 		.map((f) => f.replace(/\.ts$/, ''))
 		.sort();
 

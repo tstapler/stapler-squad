@@ -46,7 +46,7 @@ export default defineConfig({
 				},
 				// Smoke-mode unrecorded tours are excluded at the docs loader
 				// (content.config.ts), so they never reach this group.
-				{ label: 'Tours', items: [{ autogenerate: { directory: 'tours' } }] },
+				{ label: 'Tours', collapsed: true, items: [{ autogenerate: { directory: 'tours' } }] },
 				{
 					// Explicit slug list (not `autogenerate: { directory: 'help' }`)
 					// because help/ also holds getting-started.md and features.mdx,

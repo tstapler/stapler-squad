@@ -9,6 +9,7 @@ export class LandingPage {
 	readonly installCopyButton: Locator;
 	readonly viewOnGithubLink: Locator;
 	readonly heroVideo: Locator;
+	readonly heroPauseButton: Locator;
 	readonly featureGrid: Locator;
 	readonly searchTrigger: Locator;
 	/** Header site-title link -- NOT a "Docs" link; it points back at this same page. */
@@ -24,6 +25,7 @@ export class LandingPage {
 		this.installCopyButton = page.getByTestId('install-copy-button');
 		this.viewOnGithubLink = page.getByRole('link', { name: 'View on GitHub' });
 		this.heroVideo = page.getByTestId('hero-video');
+		this.heroPauseButton = page.getByTestId('hero-pause');
 		this.featureGrid = page.getByTestId('feature-grid');
 		this.searchTrigger = page.getByRole('button', { name: /^Search/ });
 		this.siteTitleLink = page.getByRole('link', { name: 'Stapler Squad', exact: true });

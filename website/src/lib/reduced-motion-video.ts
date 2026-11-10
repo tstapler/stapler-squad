@@ -13,17 +13,52 @@
 export function applyAutoplayUnlessReducedMotion(
 	video: HTMLVideoElement,
 	matchMedia: (query: string) => { matches: boolean } = (query) => window.matchMedia(query),
-): void {
+): Promise<void> {
 	const prefersReducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 	if (prefersReducedMotion) {
-		return;
+		return Promise.resolve();
 	}
 	video.setAttribute('autoplay', '');
-	video.play?.()?.catch(() => {
-		// Autoplay can still be blocked by browser policy even when the user's
-		// motion preference allows it -- the poster frame plus visible controls
-		// remain the fallback either way.
+	return Promise.resolve(video.play?.()).then(
+		() => undefined,
+		() => {
+			// Autoplay can still be blocked by browser policy even when the user's
+			// motion preference allows it -- the poster frame plus visible controls
+			// remain the fallback either way.
+		},
+	);
+}
+
+/**
+ * Pause/Play control for an autoplaying hero (WCAG 2.2.2). The button exists
+ * only when the clip can autoplay: under reduced motion it stays hidden and the
+ * native controls are the only affordance. Its state follows the video, so a
+ * rejected play() leaves it reading "Play" with aria-pressed="false".
+ */
+export function startHeroPlayback(
+	video: HTMLVideoElement,
+	button: HTMLButtonElement | null,
+	matchMedia: (query: string) => { matches: boolean } = (query) => window.matchMedia(query),
+): Promise<void> {
+	if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+		return Promise.resolve();
+	}
+	const sync = () => {
+		if (!button) return;
+		button.hidden = false;
+		button.textContent = video.paused ? 'Play' : 'Pause';
+		button.setAttribute('aria-pressed', String(!video.paused));
+	};
+	video.addEventListener('play', sync);
+	video.addEventListener('pause', sync);
+	button?.addEventListener('click', () => {
+		if (video.paused) {
+			void Promise.resolve(video.play?.()).catch(() => sync());
+		} else {
+			video.pause();
+		}
 	});
+	return applyAutoplayUnlessReducedMotion(video, matchMedia).then(sync);
 }
 
 // Caps how long a busy page can postpone the hero autoplay.
@@ -49,9 +84,10 @@ export function whenLoadedAndIdle(start: () => void, win: Window = window): void
 	}
 }
 
-/** Applies applyAutoplayUnlessReducedMotion to every hero video on the page, after load. */
+/** Starts every hero video (and its Pause/Play button) on the page, after load. */
 export function initHeroVideos(doc: Document = document): void {
 	doc.querySelectorAll<HTMLVideoElement>('[data-testid="hero-video"]').forEach((video) => {
-		whenLoadedAndIdle(() => applyAutoplayUnlessReducedMotion(video), doc.defaultView ?? window);
+		const button = video.parentElement?.querySelector<HTMLButtonElement>('[data-testid="hero-pause"]') ?? null;
+		whenLoadedAndIdle(() => void startHeroPlayback(video, button), doc.defaultView ?? window);
 	});
 }

@@ -41,7 +41,7 @@ describe('website Grimdark theme', () => {
 
 	it('themeCss_should_LoadFromAstroConfig_When_BuildingSite', () => {
 		const config = read('astro.config.mjs');
-		expect(config).toContain("customCss: ['./src/styles/grimdark.css']");
+		expect(config).toContain("customCss: ['./src/styles/grimdark.css', './src/styles/tours.css']");
 		expect(config).toContain("themes: ['vitesse-dark']");
 	});
 });

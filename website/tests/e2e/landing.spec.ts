@@ -187,3 +187,64 @@ test.describe('Landing page — UX acceptance', () => {
 		});
 	});
 });
+
+// Story 3.1.1 "Hero pause control" and "Hero edge cases" (WCAG 2.2.2).
+test.describe('Hero Pause/Play control', () => {
+	test('pauseButton_should_PrecedeVideoInTabOrderAndToggleThePlayback_When_HeroAutoplays', async ({ page }) => {
+		const landing = new LandingPage(page);
+		await landing.goto();
+
+		await expect(landing.heroPauseButton).toBeVisible();
+		await expect(landing.heroPauseButton).toHaveText('Pause');
+		await expect(landing.heroPauseButton).toHaveAttribute('aria-pressed', 'true');
+		const buttonBeforeVideo = await page.evaluate(() => {
+			const b = document.querySelector('[data-testid="hero-pause"]')!;
+			const v = document.querySelector('[data-testid="hero-video"]')!;
+			return !!(b.compareDocumentPosition(v) & Node.DOCUMENT_POSITION_FOLLOWING);
+		});
+		expect(buttonBeforeVideo).toBe(true);
+
+		await landing.heroPauseButton.focus();
+		await page.keyboard.press('Enter');
+		await expect(landing.heroPauseButton).toHaveText('Play');
+		await expect(landing.heroPauseButton).toHaveAttribute('aria-pressed', 'false');
+		expect(await landing.heroVideo.evaluate((v) => (v as HTMLVideoElement).paused)).toBe(true);
+	});
+
+	test('pauseButton_should_ReadPlayAndStartTheClip_When_AutoplayRejected', async ({ page }) => {
+		await page.addInitScript(() => {
+			const original = HTMLMediaElement.prototype.play;
+			let first = true;
+			HTMLMediaElement.prototype.play = function () {
+				if (first) {
+					first = false;
+					return Promise.reject(new DOMException('blocked', 'NotAllowedError'));
+				}
+				return original.call(this);
+			};
+		});
+		const landing = new LandingPage(page);
+		await landing.goto();
+
+		await expect(landing.heroPauseButton).toHaveText('Play');
+		await expect(landing.heroPauseButton).toHaveAttribute('aria-pressed', 'false');
+		await landing.heroPauseButton.click();
+		await expect(landing.heroPauseButton).toHaveText('Pause');
+		await expect(landing.heroPauseButton).toHaveAttribute('aria-pressed', 'true');
+	});
+
+	test.describe('JavaScript disabled', () => {
+		test.use({ javaScriptEnabled: false });
+
+		test('hero_should_ShowPosterWithNativeControlsAndNoPauseButton_When_JavaScriptDisabled', async ({ page }) => {
+			const landing = new LandingPage(page);
+			await landing.goto();
+
+			await expect(landing.heroVideo).toBeVisible();
+			await expect(landing.heroVideo).toHaveAttribute('poster', /.+/);
+			await expect(landing.heroVideo).toHaveAttribute('controls', '');
+			await expect(landing.heroVideo).not.toHaveAttribute('autoplay');
+			await expect(landing.heroPauseButton).toBeHidden();
+		});
+	});
+});
