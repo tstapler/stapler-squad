@@ -244,7 +244,7 @@ func ManualNudgeCounts(w FlowWindow, markers []Marker, first time.Time) ManualNu
 	}
 	out.Weekly = make([]ThroughputBucket, len(weeks))
 	for i, ws := range weeks {
-		out.Weekly[i] = ThroughputBucket{WeekStart: ws, Drill: DrillManualNudge}
+		out.Weekly[i] = ThroughputBucket{WeekStart: ws} // no per-week drill: DrillManualNudge spans the whole window
 	}
 	for _, m := range markers {
 		if m.Kind != MarkerManualNudge || !w.Contains(m.At) || m.At.Before(first) {

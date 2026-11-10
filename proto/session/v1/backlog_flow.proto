@@ -340,7 +340,8 @@ message FlowPRSection {
   FlowManualNudges nudges = 9;
 }
 
-// FlowManualNudges is the manual-intervention tally. When recording is false no
+// FlowManualNudges is the manual-intervention tally. Markers are deduped per item,
+// per intervention type, per 30 minutes, so total undercounts bursts. When recording is false no
 // nudge has been captured yet (forward-only, no backfill): show "not yet
 // recording", not zeros.
 message FlowManualNudges {

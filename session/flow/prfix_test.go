@@ -316,3 +316,40 @@ func TestManualNudgeCounts_should_ReportNotRecording_When_NoCapture(t *testing.T
 	got := ManualNudgeCounts(prWindow(t), []Marker{{Kind: MarkerManualNudge, At: prCapture}}, time.Time{})
 	assert.Equal(t, ManualNudges{Drill: DrillManualNudge}, got)
 }
+
+func TestAggregator_should_ExposeManualNudgesAndKeepSectionNonEmpty_When_OnlyNudgesRecorded(t *testing.T) {
+	t.Parallel()
+	first := fixtureClock.T.Add(-3 * 24 * time.Hour)
+	m := fakeMarkers{
+		markers: []Marker{{Item: "n", Kind: MarkerManualNudge, Value: "write", At: first}, {Item: "n", Kind: MarkerManualNudge, Value: "restart", At: first.Add(time.Hour)}},
+		capture: MarkerCapture{FirstNudge: first},
+	}
+
+	s := prSummary(t, newFakeSrc(), m, first)
+
+	assert.NotEqual(t, SectionEmpty, s.PR.Meta.Status)
+	assert.True(t, s.PR.Nudges.Recording)
+	assert.Equal(t, 2, s.PR.Nudges.Total)
+	assert.Equal(t, first, s.PR.Nudges.CaptureSince)
+	assert.Contains(t, s.PR.Meta.Estimated, EstimatedManualNudgeSinceCapture)
+}
+
+func TestDrilldown_should_ListNudgedItemsOnce_When_ManualNudgeKey(t *testing.T) {
+	t.Parallel()
+	first := fixtureClock.T.Add(-3 * 24 * time.Hour)
+	src := fixtureSrc(t).sources()
+	src.Markers = fakeMarkers{
+		markers: []Marker{
+			{Item: "tz-a", Kind: MarkerManualNudge, Value: "write", At: first},
+			{Item: "tz-a", Kind: MarkerManualNudge, Value: "restart", At: first.Add(time.Hour)},
+			{Item: "bounce-a", Kind: MarkerManualNudge, Value: "write", At: fixtureClock.T.Add(-400 * 24 * time.Hour)}, // outside window
+			{Item: "bounce-a", Kind: MarkerPRFixOutcome, Value: "steered", At: first},                                  // wrong kind
+		},
+		capture: MarkerCapture{FirstNudge: first},
+	}
+
+	page, err := NewAggregator(src, fixtureClock).Drilldown(context.Background(), DrilldownQuery{Key: DrillManualNudge, Query: FlowQuery{Window: WindowSpec{Days: 30}}})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, page.Items.TotalCount)
+}

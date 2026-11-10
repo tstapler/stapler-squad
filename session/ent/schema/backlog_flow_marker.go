@@ -11,7 +11,8 @@ import (
 
 // BacklogFlowMarker is an append-only log of server-decided flow markers
 // (PR-fix outcome and trigger). The table itself is the system-written
-// discriminator: only EntRepository.RecordFlowMarker inserts here (pr_fix_outcome, pr_fix_trigger, manual_nudge), so agent
+// discriminator: only EntRepository.RecordFlowMarker inserts here
+// (kinds: pr_fix_outcome, pr_fix_trigger, manual_nudge), so agent
 // notes posted via post_backlog_update can never forge a marker.
 //
 // item_id is deliberately a plain UUID, not an edge: markers are history and
