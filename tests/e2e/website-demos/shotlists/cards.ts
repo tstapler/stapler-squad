@@ -71,18 +71,6 @@ export const CARD_SHOTS: readonly CardShot[] = [
     },
   },
   {
-    heading: 'Workspace Switcher',
-    spec: {
-      name: 'workspace-switcher',
-      route: '/',
-      landmark: CARD,
-      prepare: async (page) => {
-        await page.locator('[aria-label^="Current workspace"]').first().click();
-        await page.getByRole('listbox', { name: 'Available workspaces' }).waitFor();
-      },
-    },
-  },
-  {
     heading: 'Bulk Actions',
     spec: {
       name: 'bulk-actions',

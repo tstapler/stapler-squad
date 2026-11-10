@@ -63,12 +63,6 @@ Switch between 8 grouping strategies — tag, category, status, branch, path, pr
 
 ---
 
-## Workspace Switcher
-
-Manage multiple project contexts from one UI. Each workspace gets its own isolated session state, configuration, and approval history.
-
----
-
 ## Bulk Actions
 
 Select multiple sessions and act on them together — pause, resume, delete, or tag in one operation.

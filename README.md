@@ -24,7 +24,6 @@ Short guided walkthroughs, about a minute of video each, with every step written
 **Organisation**
 - **Instant search** — filter across titles, paths, branches, and tags as you type
 - **Tag-based grouping** — view sessions across 8 grouping strategies (tag, category, status, branch, and more)
-- **Workspace switcher** — manage multiple project contexts from one UI
 - **Bulk actions** — select and act on multiple sessions simultaneously
 
 **Review & Approval**

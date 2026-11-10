@@ -39,10 +39,6 @@
 		"alt": "Sessions grouped by tag, with a single session appearing under more than one tag group",
 		"tour": "organise-at-scale"
 	},
-	"Workspace Switcher": {
-		"shot": "workspace-switcher",
-		"alt": "The workspace switcher dropdown listing the available project workspaces"
-	},
 	"Bulk Actions": {
 		"shot": "bulk-actions",
 		"alt": "Select mode on the session list with the bulk action toolbar for pausing, resuming and tagging several sessions at once"

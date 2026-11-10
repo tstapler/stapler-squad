@@ -67,13 +67,6 @@
 		"tour": "organise-at-scale"
 	},
 	{
-		"heading": "Workspace Switcher",
-		"description": "Manage multiple project contexts from one UI. Each workspace gets its own isolated session state, configuration, and approval history.",
-		"category": "Organisation",
-		"screenshot": "/shots/workspace-switcher.webp",
-		"alt": "The workspace switcher dropdown listing the available project workspaces"
-	},
-	{
 		"heading": "Bulk Actions",
 		"description": "Select multiple sessions and act on them together — pause, resume, delete, or tag in one operation.",
 		"category": "Organisation",
