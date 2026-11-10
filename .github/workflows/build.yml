@@ -370,7 +370,7 @@ jobs:
           # mode none skips every consumer; a one-element matrix keeps GitHub from rejecting an empty one.
           { echo "mode=$mode"; echo "total=$total"
             echo "matrix=$(jq -nc --argjson n "$total" 'if $n < 1 then [1] else [range(1; $n + 1)] end')"
-            echo "specs<<E2E_SPECS_EOF"; printf '%s\n' "$specs"; echo "E2E_SPECS_EOF"; } >> "$GITHUB_OUTPUT"
+            echo "specs<<E2E_SPECS_EOF"; printf '%s\n' "$specs" | grep -E '^[A-Za-z0-9._/-]+$' || true; echo "E2E_SPECS_EOF"; } >> "$GITHUB_OUTPUT"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # e2e-bun: the one e2e run. The full suite (every spec under tests/e2e/, every Chromium project)
@@ -562,9 +562,9 @@ jobs:
       - name: Fail if shard ${{ matrix.shard }} ran no tests or hit a setup error (Bun build)
         run: |
           # A PR subset run may leave a shard with no selected specs, or no stress pass; the full suite never does.
-          if [ "${{ needs.e2e-env.outputs.mode }}" = subset ] && [ ! -f tests/e2e/shard-report.json ]; then echo "shard ${{ matrix.shard }}: no selected specs"; exit 0; fi
+          if [ -f tests/e2e/shard-pass1-empty ]; then echo "shard ${{ matrix.shard }}: no selected specs"; exit 0; fi
           node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-bun shard ${{ matrix.shard }}"
-          if [ "${{ needs.e2e-env.outputs.mode }}" = subset ] && [ ! -f tests/e2e/shard-report-stress.json ]; then echo "shard ${{ matrix.shard }}: stress pass not selected"; exit 0; fi
+          if [ -f tests/e2e/shard-stress-skipped ]; then echo "shard ${{ matrix.shard }}: stress pass not selected"; exit 0; fi
           node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report-stress.json --label "e2e-bun shard ${{ matrix.shard }} (stress pass)"
 
       - name: Upload blob report

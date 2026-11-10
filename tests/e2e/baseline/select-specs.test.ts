@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { ALL_RULES, NONE_RULES, SAFETY_NET_SPECS, SUBSET_RULES, expandGlobs, select, shardCountFor, summarize } from "../scripts/select-specs";
+import { ALL_RULES, SAFETY_NET_SPECS, SUBSET_RULES, WEB_LEAF_GROUPS, expandGlobs, select, shardCountFor, summarize } from "../scripts/select-specs";
 
 const specs = [
   "smoke.spec.ts", "route-smoke.spec.ts", "backlog.spec.ts", "backlog-flow.spec.ts", "insights.spec.ts",
@@ -20,7 +20,7 @@ describe("select-specs", () => {
   });
 
   test("SS3: a leaf-area change selects its specs plus the safety net, nothing else", () => {
-    const s = select(["web-app/src/components/analytics/Chart.tsx"], specs);
+    const s = select(["server/analytics/db.go"], specs);
     expect(s).toMatchObject({ mode: "subset", specs: ["escape-analytics-global-view.spec.ts", "insights.spec.ts", "route-smoke.spec.ts", "smoke.spec.ts"] });
   });
 
@@ -52,9 +52,39 @@ describe("select-specs", () => {
   });
 
   test("SS9: no file can be both a shared surface and a subset leaf (the leaf would be dead)", () => {
-    const samples = ["server/analytics/db.go", "web-app/src/components/files/Tree.tsx", "web-app/src/app/insights/page.tsx", "web-app/src/components/backlog/List.tsx"];
+    const samples = ["server/analytics/db.go", "web-app/src/components/files/Tree.tsx", "web-app/src/app/analytics/escape/page.tsx", "web-app/src/app/notifications/page.tsx"];
     for (const f of samples) expect(ALL_RULES.some((r) => r.re.test(f))).toBe(false);
-    expect(NONE_RULES.length).toBeGreaterThan(0);
+    for (const f of samples) expect(SUBSET_RULES.some((r) => r.re.test(f))).toBe(true);
+  });
+
+  test("SS12: nothing imports a subset leaf from outside its group (else the leaf is really a shared component)", () => {
+    const src = path.join(__dirname, "../../../web-app/src");
+    const files: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(e.name) && !/\.test\.|\.stories\./.test(e.name) && !full.includes("__tests__")) files.push(full);
+      }
+    };
+    walk(src);
+    for (const group of WEB_LEAF_GROUPS) {
+      const importers: string[] = [];
+      for (const f of files) {
+        const rel = path.relative(src, f);
+        if (group.some((g) => rel.startsWith(g + "/"))) continue;
+        const text = fs.readFileSync(f, "utf8");
+        if (group.some((g) => new RegExp(`from ['"](@/${g}|(\\.\\./)+${g.split("/")[1]})(/|['"])`).test(text))) importers.push(rel);
+      }
+      expect({ group, importers }).toEqual({ group, importers: [] });
+    }
+  });
+
+  test("SS13: an empty change list is fail-safe, CHANGELOG.md is a build input, and dropped shared components select all", () => {
+    expect(select([""], specs).mode).toBe("all");
+    expect(select(["CHANGELOG.md"], specs).mode).toBe("all");
+    expect(select(["web-app/src/components/analytics/PageViewTracker.tsx"], specs).mode).toBe("all");
+    expect(select(["web-app/src/components/backlog/BacklogStreamContext.tsx"], specs).mode).toBe("all");
   });
 
   test("SS10: shard count follows recorded seconds, never exceeds files or the cap", () => {

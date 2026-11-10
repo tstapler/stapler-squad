@@ -53,20 +53,23 @@ export const ALL_RULES: { re: RegExp; why: string }[] = [
   { re: /^(go\.(mod|sum)|Makefile|install\.sh|main\.go|\.bun-version|\.gitmodules)$/, why: "build inputs" },
   { re: /^(web-app\/(build|patches|scripts)\/|web-app\/(package\.json|bun\.lock|bunfig\.toml|index\.html)$)/, why: "web build inputs" },
   { re: /^third_party\//, why: "vendored dependency" },
+  { re: /^CHANGELOG\.md$/, why: "embedded into the binary (changelog_embed.go)" },
   { re: /^server\/(middleware|server\.go|dependencies\.go)/, why: "server wiring" },
 ];
 
 /** Leaf areas: path -> the specs that exercise it. Globs are relative to tests/e2e; `*` never crosses `/`. */
 export const SUBSET_RULES: { name: string; re: RegExp; specs: string[] }[] = [
-  { name: "analytics", re: /^(server\/analytics\/|web-app\/src\/(app|components)\/analytics\/)/, specs: ["*analytics*.spec.ts", "insights*.spec.ts"] },
-  { name: "backlog", re: /^(web-app\/src\/(app|components)\/backlog(-flow|-stuck)?\/|server\/services\/backlog[^/]*\.go$)/, specs: ["backlog*.spec.ts"] },
-  { name: "backlog (Go)", re: /^(session|server)\/(.*\/)?[^/]*backlog[^/]*\.go$/, specs: ["backlog*.spec.ts"] },
+  { name: "analytics", re: /^(server\/analytics\/|web-app\/src\/app\/analytics\/)/, specs: ["*analytics*.spec.ts", "insights*.spec.ts"] },
   { name: "files viewer", re: /^web-app\/src\/(app|components)\/files\//, specs: ["files-*.spec.ts"] },
-  { name: "insights", re: /^web-app\/src\/app\/insights\//, specs: ["insights*.spec.ts"] },
   { name: "notifications page", re: /^web-app\/src\/app\/notifications\//, specs: ["notification*.spec.ts", "toast*.spec.ts"] },
-  { name: "jules", re: /(^|\/)jules[^/]*\.(go|tsx?)$/i, specs: ["jules-*.spec.ts"] },
-  { name: "alias settings", re: /^web-app\/src\/components\/settings\/Alias/, specs: ["alias*.spec.ts"] },
 ];
+
+/**
+ * Web directories a SUBSET_RULES entry treats as a leaf. A leaf must not be imported from outside its group, or a change
+ * there would reach pages the rule does not test (components/analytics, components/backlog* and app/insights failed this
+ * and were dropped). select-specs.test.ts scans web-app/src and fails if that ever stops holding.
+ */
+export const WEB_LEAF_GROUPS: string[][] = [["app/analytics"], ["app/files", "components/files"], ["app/notifications"]];
 
 const globToRe = (g: string): RegExp => new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*") + "$");
 
@@ -80,6 +83,9 @@ const SPEC_FILE = /^tests\/e2e\/(.+\.spec\.ts)$/;
 // that no allSpecs entry matches (a brand-new file) still selects itself, so a new spec always runs in its PR.
 
 export function select(changed: string[], allSpecs: string[]): Selection {
+  if (changed.every((f) => f.trim() === "")) {
+    return { mode: "all", specs: [], reasons: ["ALL    (no changed files reported): fail-safe"] };
+  }
   const reasons: string[] = [];
   const chosen = new Set<string>();
   let forceAll = false;

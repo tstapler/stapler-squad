@@ -43,17 +43,24 @@ if [ -n "${E2E_SPEC_SELECTION:-}" ]; then
 fi
 assigned=$(printf '%s\n' "$files" | bun scripts/shard-assign.ts assign --shard "$shard" --total "$total") \
   || fail_plan "shard-assign failed"
-if [ -z "$assigned" ]; then
-  [ "$selection_mode" = 1 ] && { echo "run-ci-shard: shard $shard/$total has no selected specs; nothing to run"; exit 0; }
+if [ -z "$assigned" ] && [ "$selection_mode" != 1 ]; then
   fail_plan "shard $shard/$total got no spec files"
 fi
 # Portable read loop (macOS bash 3 has no mapfile).
 shard_args=()
 while IFS= read -r line; do [ -n "$line" ] && shard_args+=("$line"); done <<<"$assigned"
 
-E2E_SKIP_STRESS=1 PLAYWRIGHT_JSON_OUTPUT_NAME="$PWD/shard-report.json" \
-  npx playwright test --reporter=list,blob,json "--global-timeout=$(( pass1_limit_s * 1000 ))" "${shard_args[@]}" "${projects[@]}"
-parallel_rc=$?
+# Selection mode only: a shard with no selected specs is intentional, and the marker tells the workflow's assert step
+# so apart from a shard that crashed before reporting.
+parallel_rc=0
+if [ "${#shard_args[@]}" -eq 0 ]; then
+  echo "run-ci-shard: shard $shard/$total has no selected specs; skipping the parallel pass"
+  : > shard-pass1-empty
+else
+  E2E_SKIP_STRESS=1 PLAYWRIGHT_JSON_OUTPUT_NAME="$PWD/shard-report.json" \
+    npx playwright test --reporter=list,blob,json "--global-timeout=$(( pass1_limit_s * 1000 ))" "${shard_args[@]}" "${projects[@]}"
+  parallel_rc=$?
+fi
 remaining_s=$(( budget_s - (SECONDS - start) ))
 [ "$remaining_s" -lt 60 ] && remaining_s=60
 
@@ -65,6 +72,7 @@ if [ "$selection_mode" = 1 ]; then
   fi
   if [ "${#stress_args[@]}" -eq 0 ]; then
     echo "run-ci-shard: selection mode, no stress specs selected for shard $shard; skipping the stress pass"
+    : > shard-stress-skipped
     exit $(( parallel_rc ))
   fi
 fi
