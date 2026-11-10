@@ -7,25 +7,25 @@ import FeatureCard from './FeatureCard.astro';
 import features from '../content/features.json';
 import { CATEGORY_ORDER } from '../../scripts/build-features.mjs';
 import { existsSync } from 'node:fs';
-import { basePath, builtTours } from '../lib/tours/site';
+import { join } from 'node:path';
+import { PUBLIC_DIR, basePath, builtTours } from '../lib/tours/site';
 
 // features.json declares clips by name (Story 3.1.2), so it is identical in git
 // and in the deployed build. Rendering is where file presence matters: a card
 // whose clip file is not in public/clips (a PR smoke build, a local build) shows
 // its screenshot instead of a dead <video>. A missing clip in a deploy is caught
 // by the freshness gate (mediatool fresh), not here.
-const CLIPS_DIR = new URL('../../public/clips/', import.meta.url);
+// PUBLIC_DIR, not a URL relative to this file: import.meta.url points into the build output here.
 const clipPresent = (clip?: { name: string; ext: string }) =>
-	clip ? existsSync(new URL(`${clip.name}.${clip.ext}`, CLIPS_DIR)) : false;
+	clip ? existsSync(join(PUBLIC_DIR, 'clips', `${clip.name}.${clip.ext}`)) : false;
 
 // Same idea for stills: a card shows its recorded shot (public/shots/<name>.webp), else the
 // legacy committed screenshot (public/features/<name>.png, retired in Phase 5), else no image.
-const PUBLIC = new URL('../../public/', import.meta.url);
 const shotFor = (screenshot?: string) => {
 	if (!screenshot) return undefined;
-	if (existsSync(new URL(screenshot.slice(1), PUBLIC))) return screenshot;
+	if (existsSync(join(PUBLIC_DIR, screenshot.slice(1)))) return screenshot;
 	const legacy = `/features/${screenshot.replace(/^\/shots\//, '').replace(/\.webp$/, '.png')}`;
-	return existsSync(new URL(legacy.slice(1), PUBLIC)) ? legacy : undefined;
+	return existsSync(join(PUBLIC_DIR, legacy.slice(1))) ? legacy : undefined;
 };
 
 // "See the tour" only for tours that are built, so smoke builds never link to an unbuilt page.

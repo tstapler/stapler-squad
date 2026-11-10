@@ -133,6 +133,10 @@ html {
 .tour-shot-phone {
 	max-width: 390px;
 }
+/* Block-level, so the inline line box adds no gap under the image (blocked media must not change the box). */
+.tour-shot-phone .tour-shot-link {
+	display: flex;
+}
 
 .tour-try {
 	margin-top: 2rem;

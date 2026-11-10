@@ -46,8 +46,9 @@ test.describe('prefers-reduced-motion -- tours and landing', () => {
 		test(`videos_should_NotAutoplayAndHavePosterAndControls_When_ReducedMotionOn ${path || '/'}`, async ({ page }) => {
 			await page.emulateMedia({ reducedMotion: 'reduce' });
 			await page.goto(path, { waitUntil: 'load' });
+			// Feature-card clips set `poster` lazily from data-poster, so either counts.
 			const videos = await page.locator('video').evaluateAll((vs) =>
-				vs.map((v) => ({ autoplay: v.hasAttribute('autoplay'), poster: !!v.getAttribute('poster'), controls: v.hasAttribute('controls'), paused: (v as HTMLVideoElement).paused })),
+				vs.map((v) => ({ autoplay: v.hasAttribute('autoplay'), poster: !!(v.getAttribute('poster') || v.getAttribute('data-poster')), controls: v.hasAttribute('controls'), paused: (v as HTMLVideoElement).paused })),
 			);
 			expect(videos.length).toBeGreaterThan(0);
 			for (const v of videos) {
