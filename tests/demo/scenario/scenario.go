@@ -60,8 +60,10 @@ type builder struct {
 
 // Names returns every registered scenario name, sorted.
 func Names() []string {
-	names := []string{DefaultName}
-	for _, b := range builders() {
+	bs := builders()
+	names := make([]string, 1, len(bs)+1)
+	names[0] = DefaultName
+	for _, b := range bs {
 		names = append(names, b.name)
 	}
 	sort.Strings(names)

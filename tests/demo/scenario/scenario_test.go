@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var refA = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+func refA() time.Time { return time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC) }
 
 type call struct{ service, method string }
 
@@ -41,13 +41,13 @@ func TestDefaultScenarioDelegatesToLegacySeeder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SeedFiles("d", refA); err != nil {
+	if err := c.SeedFiles("d", refA()); err != nil {
 		t.Fatal(err)
 	}
 	if gotDir != "d" || gotCount != 6 {
 		t.Fatalf("legacy seeder got (%q, %d), want (d, 6)", gotDir, gotCount)
 	}
-	b, _ := c.Bundle(refA)
+	b, _ := c.Bundle(refA())
 	if len(b.keys()) != 0 {
 		t.Fatalf("default scenario must add no bundle data, got %v", b.keys())
 	}
@@ -81,7 +81,7 @@ func TestEveryScenarioNonEmpty(t *testing.T) {
 		if n == DefaultName {
 			continue
 		}
-		b, err := BuildBundle(n, refA)
+		b, err := BuildBundle(n, refA())
 		if err != nil || len(b.keys()) == 0 {
 			t.Errorf("%s: err=%v keys=%d", n, err, len(b.keys()))
 		}
@@ -96,7 +96,7 @@ func TestSeedFilesWritesBundleSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SeedFiles(t.TempDir(), refA); err != nil {
+	if err := c.SeedFiles(t.TempDir(), refA()); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 4 {
@@ -116,7 +116,7 @@ func TestSeedRPCCallsExpectedEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	fc := &fakeClient{}
-	if err := c.SeedRPC(context.Background(), fc, refA); err != nil {
+	if err := c.SeedRPC(context.Background(), fc, refA()); err != nil {
 		t.Fatal(err)
 	}
 	count := map[call]int{}
@@ -137,22 +137,22 @@ func TestSeedRPCCallsExpectedEndpoints(t *testing.T) {
 
 func TestTimestampsAreFixedOffsetsFromRef(t *testing.T) {
 	t.Parallel()
-	refB := refA.Add(37*time.Hour + 5*time.Minute)
+	refB := refA().Add(37*time.Hour + 5*time.Minute)
 	for _, n := range Names() {
 		if n == DefaultName {
 			continue
 		}
-		a, _ := BuildBundle(n, refA)
+		a, _ := BuildBundle(n, refA())
 		b, _ := BuildBundle(n, refB)
 		ta, tb := collectTimes(reflect.ValueOf(a)), collectTimes(reflect.ValueOf(b))
 		if len(ta) != len(tb) {
 			t.Fatalf("%s: timestamp count differs", n)
 		}
 		for i := range ta {
-			if ta[i].Sub(refA) != tb[i].Sub(refB) {
-				t.Errorf("%s: timestamp %d offset differs: %v vs %v", n, i, ta[i].Sub(refA), tb[i].Sub(refB))
+			if ta[i].Sub(refA()) != tb[i].Sub(refB) {
+				t.Errorf("%s: timestamp %d offset differs: %v vs %v", n, i, ta[i].Sub(refA()), tb[i].Sub(refB))
 			}
-			if !ta[i].Before(refA) {
+			if !ta[i].Before(refA()) {
 				t.Errorf("%s: timestamp %d is not before ref", n, i)
 			}
 		}
@@ -164,8 +164,7 @@ func collectTimes(v reflect.Value) []time.Time {
 	timeType := reflect.TypeOf(time.Time{})
 	var walk func(reflect.Value)
 	walk = func(v reflect.Value) {
-		switch v.Kind() {
-		case reflect.Struct:
+		if v.Kind() == reflect.Struct {
 			if v.Type() == timeType {
 				out = append(out, v.Interface().(time.Time))
 				return
@@ -173,7 +172,7 @@ func collectTimes(v reflect.Value) []time.Time {
 			for i := 0; i < v.NumField(); i++ {
 				walk(v.Field(i))
 			}
-		case reflect.Slice:
+		} else if v.Kind() == reflect.Slice {
 			for i := 0; i < v.Len(); i++ {
 				walk(v.Index(i))
 			}
@@ -189,7 +188,7 @@ func TestRouteFixturesAreMarkedRoute(t *testing.T) {
 		if n == DefaultName {
 			continue
 		}
-		b, _ := BuildBundle(n, refA)
+		b, _ := BuildBundle(n, refA())
 		for _, r := range b.Routes {
 			if r.Seeded != SeededRoute {
 				t.Errorf("%s/%s: seeded = %q, want route", n, r.ID, r.Seeded)

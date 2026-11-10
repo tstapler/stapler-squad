@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var lkgNow = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+func lkgNow() time.Time { return time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC) }
 
 // stubGH answers `run list` with listJSON and `run download` by calling download.
 func stubGH(listJSON string, download func(args []string) error) ghRunner {
@@ -37,7 +37,7 @@ func TestLKG_NoSuccessfulRunFailsNamingArtifact(t *testing.T) {
 	t.Parallel()
 	var out, errb bytes.Buffer
 	gh := stubGH("[]", func([]string) error { t.Fatal("download must not run"); return nil })
-	code := runLKG([]string{"-out", t.TempDir()}, &out, &errb, gh, func() time.Time { return lkgNow })
+	code := runLKG([]string{"-out", t.TempDir()}, &out, &errb, gh, lkgNow)
 	if code != 1 || !strings.Contains(errb.String(), "promo-media-lkg") {
 		t.Fatalf("code=%d stderr=%q, want exit 1 naming promo-media-lkg", code, errb.String())
 	}
@@ -47,7 +47,7 @@ func TestLKG_ExpiredArtifactFailsNamingArtifact(t *testing.T) {
 	t.Parallel()
 	var out, errb bytes.Buffer
 	gh := stubGH(`[{"databaseId":42}]`, func([]string) error { return errors.New("no valid artifacts found") })
-	code := runLKG([]string{"-out", t.TempDir()}, &out, &errb, gh, func() time.Time { return lkgNow })
+	code := runLKG([]string{"-out", t.TempDir()}, &out, &errb, gh, lkgNow)
 	if code != 1 || !strings.Contains(errb.String(), "promo-media-lkg") || !strings.Contains(errb.String(), "expired") {
 		t.Fatalf("code=%d stderr=%q, want exit 1 naming the artifact and expiry", code, errb.String())
 	}
@@ -57,7 +57,7 @@ func TestLKG_EmptyArtifactFails(t *testing.T) {
 	t.Parallel()
 	var out, errb bytes.Buffer
 	gh := stubGH(`[{"databaseId":42}]`, func([]string) error { return nil })
-	code := runLKG([]string{"-out", t.TempDir()}, &out, &errb, gh, func() time.Time { return lkgNow })
+	code := runLKG([]string{"-out", t.TempDir()}, &out, &errb, gh, lkgNow)
 	if code != 1 || !strings.Contains(errb.String(), "empty") {
 		t.Fatalf("code=%d stderr=%q, want exit 1 for an empty artifact", code, errb.String())
 	}
@@ -70,8 +70,8 @@ func TestLKG_AgeBound(t *testing.T) {
 		finished string
 		want     int
 	}{
-		{"27 days old passes", lkgNow.AddDate(0, 0, -27).Format(time.RFC3339), 0},
-		{"28 days old fails", lkgNow.AddDate(0, 0, -28).Format(time.RFC3339), 1},
+		{"27 days old passes", lkgNow().AddDate(0, 0, -27).Format(time.RFC3339), 0},
+		{"28 days old fails", lkgNow().AddDate(0, 0, -28).Format(time.RFC3339), 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestLKG_AgeBound(t *testing.T) {
 				return nil
 			})
 			var out, errb bytes.Buffer
-			code := runLKG([]string{"-out", dir, "-max-age-days", "28"}, &out, &errb, gh, func() time.Time { return lkgNow })
+			code := runLKG([]string{"-out", dir, "-max-age-days", "28"}, &out, &errb, gh, lkgNow)
 			if code != tc.want {
 				t.Fatalf("code=%d stderr=%q, want %d", code, errb.String(), tc.want)
 			}

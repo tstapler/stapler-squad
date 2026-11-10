@@ -72,7 +72,7 @@ func (b *Bundle) append(o Bundle) {
 
 // keys returns namespaced ids used for duplicate detection.
 func (b Bundle) keys() []string {
-	var ks []string
+	ks := make([]string, 0, len(b.Sessions)+len(b.Flags)+len(b.ApprovalRules)+len(b.Backlog)+len(b.Terminals)+len(b.Routes))
 	for _, s := range b.Sessions {
 		ks = append(ks, "session:"+s.ID)
 	}

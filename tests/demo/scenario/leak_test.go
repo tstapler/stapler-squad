@@ -34,7 +34,7 @@ func TestSeedDataHasNoLeaks(t *testing.T) {
 		if n == DefaultName {
 			continue
 		}
-		b, err := BuildBundle(n, refA)
+		b, err := BuildBundle(n, refA())
 		if err != nil {
 			t.Fatal(err)
 		}

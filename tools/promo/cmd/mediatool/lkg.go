@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,8 +17,12 @@ import (
 // ghRunner runs `gh <args>` and returns stdout; injected so tests stub it.
 type ghRunner func(args ...string) ([]byte, error)
 
+const ghTimeout = 2 * time.Minute
+
 func execGH(args ...string) ([]byte, error) {
-	out, err := exec.Command("gh", args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), ghTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "gh", args...).Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
 			return out, fmt.Errorf("gh %v: %w: %s", args, err, ee.Stderr)
