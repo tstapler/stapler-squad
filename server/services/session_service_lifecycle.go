@@ -708,6 +708,7 @@ func (s *SessionService) RestartSession(
 	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save restarted instance: %w", err))
 	}
+	s.concStorage.RecordManualNudgeForSession(ctx, instance.GetStableID(), session.ManualNudgeRestart)
 
 	// Publish SessionUpdated event
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at"}))

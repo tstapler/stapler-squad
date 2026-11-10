@@ -1479,6 +1479,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	})
 	githubUserSvc := services.NewGitHubUserService(userPRCache, cfg.GetGitHubEnterpriseHosts())
 	githubUserSvc.SetPRNudger(sessionService)
+	if storage != nil {
+		githubUserSvc.SetNudgeRecorder(storage)
+	}
 	githubUserSvc.SetPRDetailFetcher(githubpkg.GraphQLPRDetailFetcher{})
 	githubUserSvc.SetPRTokenResolver(userPRCache)
 	sessionService.SetUserPRCache(userPRCache)

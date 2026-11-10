@@ -17,11 +17,15 @@ export const main = style({
   width: "100%",
   margin: "0 auto",
   padding: "2rem",
+  paddingRight: "calc(var(--tray-clearance, 0px) + 2rem)",
+  paddingLeft: "calc(var(--tray-clearance-left, 0px) + 2rem)",
   gap: "1rem",
   overflow: "hidden",
   "@media": {
     "screen and (max-width: 768px)": {
       padding: "1rem",
+      paddingRight: "calc(var(--tray-clearance, 0px) + 1rem)",
+      paddingLeft: "calc(var(--tray-clearance-left, 0px) + 1rem)",
     },
   },
 });

@@ -144,7 +144,7 @@ func TestBacklogFlowService_should_HaveLegendEntry_When_CodeInEstimatedVocabular
 	vocabulary := []string{
 		flow.EstimatedDeadlockHeuristic, "pr_fix_cause:unavailable", "pr_fix_dwell:combined", "stuck_history:lower_bound",
 		flow.EstimatedPRFixCauseSinceCapture, flow.EstimatedPRFixDwellSplit, flow.EstimatedPRFixOutcomeSinceCapture,
-		flow.EstimatedLeadTimeInWindowOnly, flow.EstimatedFPYInWindowOnly, flow.EstimatedDwellSeedMixedOffset,
+		flow.EstimatedLeadTimeInWindowOnly, flow.EstimatedFPYInWindowOnly, flow.EstimatedDwellSeedMixedOffset, flow.EstimatedManualNudgeSinceCapture,
 	}
 	for _, code := range vocabulary {
 		text, ok := flowEstimatedLegend[code]
@@ -436,6 +436,27 @@ func TestBacklogFlowService_should_MapPROutcomesAndTriggerDwell_When_Present(t *
 	assert.Equal(t, "ci", got.Pr.TriggerDwell[0].Trigger)
 	assert.EqualValues(t, 4, got.Pr.TriggerDwell[0].Cycles.Value)
 	assert.EqualValues(t, time.Hour.Milliseconds(), got.Pr.TriggerDwell[0].Dwell.P50Ms)
+}
+
+func TestBacklogFlowService_should_MapManualNudgesWithCaptureSinceAndDrill_When_Recording(t *testing.T) {
+	t.Parallel()
+	sum := sampleFlowSummary()
+	since := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	wk := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	sum.PR.Nudges = flow.ManualNudges{
+		Recording: true, CaptureSince: since, Total: 3, Drill: flow.DrillManualNudge,
+		Weekly: []flow.ThroughputBucket{{WeekStart: wk, N: 3, Drill: flow.DrillManualNudge}},
+	}
+	got, err := callSummary(t, NewBacklogFlowService(&fakeFlowAgg{summary: sum}), &sessionv1.GetFlowSummaryRequest{WindowDays: 7})
+	require.NoError(t, err)
+
+	n := got.Pr.Nudges
+	assert.True(t, n.Recording)
+	assert.EqualValues(t, 3, n.Total)
+	assert.Equal(t, since.Unix(), n.CaptureSince.AsTime().Unix())
+	assert.Equal(t, "pr.manual_nudge", n.DrillKey)
+	require.Len(t, n.Weekly, 1)
+	assert.EqualValues(t, 3, n.Weekly[0].N)
 }
 
 func TestBacklogFlowService_should_ClampWindowDaysTo365_When_RequestExceedsMax(t *testing.T) {
