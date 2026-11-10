@@ -37,10 +37,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Set up Bun
         uses: ./.github/actions/setup-bun
@@ -69,7 +68,7 @@ jobs:
 
       # Exact key, no restore-keys: see build.yml's web-checks job for why.
       - name: Cache shared node_modules
-        uses: actions/cache@v4
+        uses: ./.github/actions/cache-main-writes
         with:
           path: ~/.stapler-squad/shared-node-modules
           key: web-node-modules-${{ runner.os }}-${{ hashFiles('web-app/bun.lock', 'web-app/patches/**') }}
@@ -78,7 +77,7 @@ jobs:
         run: make stapler-squad || { echo "retrying once (host load)"; rm -rf web-app/out server/web/dist; make stapler-squad; }
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: ./.github/actions/cache-main-writes
         with:
           path: ~/.cache/ms-playwright
           key: playwright-secondary-${{ runner.os }}-${{ hashFiles('tests/e2e/bun.lock') }}
@@ -120,10 +119,9 @@ jobs:
           submodules: true
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       - name: Download generated files
         uses: actions/download-artifact@v4

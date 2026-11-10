@@ -49,22 +49,12 @@ jobs:
       - name: Set up Bazelisk
         uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3.0.0
 
-      - name: Cache Bazel repository and disk cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cache/bazel-disk
-            ~/.cache/bazel-repo
-          # Also hashes the BUILD/bzl files: an exact hit is never re-saved, so editing them kept
-          # restoring a stale disk cache and rebuilt Zig cold on every run.
-          key: ghostty-wasm-${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', 'third_party/ghostty/**') }}
-          restore-keys: |
-            ghostty-wasm-
+      - name: Bazel disk and repository cache
+        uses: ./.github/actions/bazel-cache
 
       - name: Build (and verify against the recorded sha256 once one is recorded)
         run: |
           set -o pipefail  # without it `| tee` hid a failed build behind tee's exit status
-          export BAZEL_FLAGS="--disk_cache=$HOME/.cache/bazel-disk --repository_cache=$HOME/.cache/bazel-repo"
           flags=(--test)
           if grep -qv '^#' scripts/ghostty-wasm.sha256; then flags+=(--verify); fi
           ./scripts/build-ghostty-wasm.sh "${flags[@]}" 2>&1 | tee "$RUNNER_TEMP/build.log"
