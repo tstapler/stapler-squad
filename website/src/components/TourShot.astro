@@ -22,7 +22,7 @@ if (!present && mode === 'deploy') {
 	throw new Error(`tour shot "${shot}" (${form}) is absent from media-manifest.json`);
 }
 const { width, height } = shotSize(manifest, shot, form);
-const src = shotUrl(basePath(), shot, form);
+const src = shotUrl(basePath(), shot);
 ---
 
 {

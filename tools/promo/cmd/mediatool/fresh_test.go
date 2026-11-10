@@ -133,3 +133,31 @@ func TestRun_UsageErrors(t *testing.T) {
 		assert.Equal(t, 2, run(args, &out, &errb, func(string) string { return "" }), args)
 	}
 }
+
+// A clip is only fresh when every rendition the site needs exists: webm alone is not enough.
+func TestFresh_OneRenditionMissingFailsNamingIt(t *testing.T) {
+	t.Parallel()
+	failedMP4 := rec("hero", manifest.FormatMP4, "C", "grimdark")
+	failedMP4.Status = manifest.StatusFailed
+	for _, tc := range []struct {
+		name    string
+		entries []manifest.MediaEntry
+		missing manifest.Format
+	}{
+		{"mp4 absent", []manifest.MediaEntry{rec("hero", manifest.FormatWebM, "C", "grimdark")}, manifest.FormatMP4},
+		{"webm absent", []manifest.MediaEntry{rec("hero", manifest.FormatMP4, "C", "grimdark")}, manifest.FormatWebM},
+		{"mp4 failed", []manifest.MediaEntry{rec("hero", manifest.FormatWebM, "C", "grimdark"), failedMP4}, manifest.FormatMP4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, tc.entries, []string{"hero"}, enforce)
+			raw, err := json.Marshal(manifest.ExpectedMedia{Version: 1, Media: []manifest.ExpectedItem{{Name: "hero", Formats: []manifest.Format{manifest.FormatWebM, manifest.FormatMP4}}}})
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(f.dir, "e.json"), raw, 0o644))
+
+			code, out, _ := f.run(t, map[string]string{"GITHUB_SHA": "C"})
+			assert.Equal(t, 1, code)
+			assert.Contains(t, out, "hero ("+string(tc.missing)+")")
+		})
+	}
+}

@@ -13,7 +13,7 @@
 #   --smoke     record only the PR smoke subset (the dashboard-lifecycle hero scene)
 #   --scenario  comma-separated seed scenarios (default: `default`, the legacy 6 sessions);
 #               `all` seeds every tour scenario
-#   Needs a built ./stapler-squad (SSQ_BIN overrides), ffmpeg, rsvg-convert, go, and
+#   Needs a built ./stapler-squad (SSQ_BIN overrides), ffmpeg, cwebp, rsvg-convert, go, and
 #   tests/e2e's dependencies (cd tests/e2e && bun install && npx playwright install chromium).
 #   Set TEST_SERVER_URL to record against an already-running server instead of starting one
 #   (then seeding is yours to do).
@@ -22,14 +22,18 @@
 # per-run HOME (BUG-116: a second instance's startup cleanup can delete a live instance's shared
 # ~/.stapler-squad/cdp-bins wrapper dirs; see docs/bugs/open/BUG-116*). Never the live service.
 #
-# Output: <out>/<name>.webm and <name>.mp4 per clip, <name>.transcript.json, shots/*.png,
-# dom-text/*.txt and media-manifest.json. Exit 3 = some scenes failed (the rest are usable);
+# Output (the shipped layout): <out>/clips/<name>.webm, .mp4 and .transcript.json per clip,
+# <out>/shots/<name>.webp (shots and clip posters, converted from the recorder's PNGs),
+# dom-text/*.txt and media-manifest.json (tools/promo/internal/manifest wire shape). Exit 3 = some scenes failed (the rest are usable);
 # exit 4 = a hard failure (wrong theme) that must fail the shard.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$REPO_ROOT/tests/e2e/website-demo-output"
 BIN="${SSQ_BIN:-$REPO_ROOT/stapler-squad}"
+BUDGETS="$REPO_ROOT/tools/promo/budgets.json"
+CLIP_MAX_BYTES="$(jq -r .clipMaxBytes "$BUDGETS")"
+IMAGE_MAX_BYTES="$(jq -r .imageMaxBytes "$BUDGETS")"
 READY_TIMEOUT_S=300   # hostname detection alone can take minutes on a corporate network
 
 ONLY=""
@@ -108,7 +112,7 @@ if [[ -z "${TEST_SERVER_URL:-}" ]]; then
   fi
 fi
 
-rm -rf "$OUT_DIR"/*.webm "$OUT_DIR"/*.mp4 "$OUT_DIR"/*.meta.json "$OUT_DIR"/*.transcript.json \
+rm -rf "$OUT_DIR"/clips "$OUT_DIR"/*.webm "$OUT_DIR"/*.mp4 "$OUT_DIR"/*.meta.json "$OUT_DIR"/*.transcript.json \
   "$OUT_DIR"/shots "$OUT_DIR"/dom-text "$OUT_DIR"/media-manifest.json "$OUT_DIR"/.manifest-parts \
   "$OUT_DIR"/.started-at "$OUT_DIR"/.fatal-*.txt
 # A failing clip must not discard the others: keep going, then report it.
@@ -138,9 +142,13 @@ process_clip() {
   trim_frames="$(awk -v ms="$(jq -r .trimStartMs "$meta")" -v fps="$fps" 'BEGIN{split(fps,f,"/"); printf "%d", ms/1000*f[1]/(f[2]?f[2]:1)}')" || return 1
   "$REPO_ROOT/scripts/demo-post-process.sh" --no-gif --title-card "$title" \
     --trim-start-frames "$trim_frames" "$clip"
-  # H.264 rendition for Safari/iOS (Cross-cutting 7e); same 3 MB budget as the WebM, checked by `mediatool fresh`.
-  ffmpeg -v error -y -i "$clip" -c:v libx264 -pix_fmt yuv420p -movflags +faststart -crf 30 -preset slow -an \
-    "$OUT_DIR/$name.mp4"
+  # H.264 rendition for Safari/iOS (Cross-cutting 7e): audio-less, raise CRF until it fits the clip budget.
+  local crf
+  for crf in 30 34 38; do
+    ffmpeg -v error -y -i "$clip" -c:v libx264 -pix_fmt yuv420p -movflags +faststart -crf "$crf" -preset slow -an \
+      "$OUT_DIR/$name.mp4"
+    [[ "$(wc -c <"$OUT_DIR/$name.mp4")" -le "$CLIP_MAX_BYTES" ]] && break
+  done
 }
 # One clip failing to post-process must not discard the others.
 for clip in "${clips[@]}"; do
@@ -166,6 +174,18 @@ done
 [[ ${#good[@]} -gt 0 ]] || { echo "❌  no playable clips" >&2; exit 1; }
 echo "✅  Recorded ${#good[@]} clip(s) in $OUT_DIR:"
 (cd "$OUT_DIR" && shasum -a 256 -- *.webm *.mp4)
+
+# Shipped layout: clips/ holds the renditions and transcript sidecars; shots become WebP within the image budget.
+mkdir -p "$OUT_DIR/clips"
+mv "$OUT_DIR"/*.webm "$OUT_DIR"/*.mp4 "$OUT_DIR"/*.transcript.json "$OUT_DIR/clips/"
+for png in "$OUT_DIR"/shots/*.png; do
+  webp="${png%.png}.webp"
+  for q in 82 70 58 46; do
+    cwebp -quiet -q "$q" -m 6 "$png" -o "$webp"
+    [[ "$(wc -c <"$webp")" -le "$IMAGE_MAX_BYTES" ]] && break
+  done
+  rm -f "$png"
+done
 
 # Re-measure what actually ships (post-processed bytes and hashes, mp4 rows) in the manifest.
 (cd "$REPO_ROOT" && go run ./tools/promo/cmd/mediatool refresh -dir "$OUT_DIR")

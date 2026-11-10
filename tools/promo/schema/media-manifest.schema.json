@@ -29,7 +29,9 @@
           "attempts": { "type": "integer", "minimum": 0 },
           "seeded": { "enum": ["db", "rpc", "route"] },
           "durationMs": { "type": "integer", "minimum": 0 },
-          "formFactor": { "type": "string" }
+          "formFactor": { "type": "string" },
+          "width": { "type": "integer", "minimum": 0 },
+          "height": { "type": "integer", "minimum": 0 }
         }
       }
     }

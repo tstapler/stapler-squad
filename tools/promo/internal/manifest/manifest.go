@@ -37,7 +37,9 @@ const (
 	StatusSkipped  Status = "skipped"
 )
 
-// MediaEntry is one recorded rendition.
+// MediaEntry is one recorded rendition. Every consumer (the TS recorder, mediatool, the
+// website's reader) uses this shape; the website derives its clip/shot kind from Format.
+// Transcripts are a convention, not a field: clips/<name>.transcript.json beside the clip.
 type MediaEntry struct {
 	Name       string `json:"name"`
 	Format     Format `json:"format"`
@@ -53,6 +55,9 @@ type MediaEntry struct {
 	Seeded     string `json:"seeded,omitempty"` // db, rpc or route
 	DurationMs int64  `json:"durationMs,omitempty"`
 	FormFactor string `json:"formFactor,omitempty"`
+	// Width and Height are the pixel size of an image rendition (reserves layout space on the site).
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
 }
 
 // MediaManifest is what one record shard (or the merge of all) wrote.

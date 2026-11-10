@@ -70,6 +70,22 @@ export function manifestFor(opts: { clip?: string; shots?: string[]; durationMs?
 	};
 }
 
+/** The recorder/Go shape on disk (one row per rendition), so builds exercise the real parser. */
+export function toWireManifest(m: MediaManifest) {
+	const base = { status: 'recorded', bytes: 1000, commit: m.commit, themeId: 'grimdark' };
+	return {
+		version: 1,
+		commit: m.commit,
+		startedAt: m.recordedAt,
+		finishedAt: m.recordedAt,
+		entries: m.entries.flatMap((e) =>
+			e.kind === 'clip'
+				? (['webm', 'mp4'] as const).map((format) => ({ ...base, name: e.name, format, src: `clips/${e.name}.${format}`, durationMs: e.durationMs, formFactor: e.formFactor }))
+				: [{ ...base, name: e.name, format: 'webp', src: `shots/${e.name}.webp`, formFactor: e.formFactor, width: e.width, height: e.height }],
+		),
+	};
+}
+
 export interface FixtureBuild {
 	outDir: string;
 	status: number | null;
@@ -103,7 +119,7 @@ export function buildWithFixtures(opts: {
 	if (captions !== null) for (const c of transcriptClips) put(join(CLIPS_DIR, `${c}.transcript.json`), JSON.stringify(captions));
 	for (const [file, bytes] of Object.entries(clipFiles)) put(join(CLIPS_DIR, file), 'x'.repeat(bytes));
 	const manifestPath = join(scratch, 'media-manifest.json');
-	if (manifest) writeFileSync(manifestPath, JSON.stringify(manifest));
+	if (manifest) writeFileSync(manifestPath, JSON.stringify(toWireManifest(manifest)));
 
 	const { npm_config_user_agent: _ua, BASE_URL: _b, SITE: _s, ...env } = process.env;
 	const result = spawnSync('bun', ['run', 'build', '--', '--outDir', outDir], {

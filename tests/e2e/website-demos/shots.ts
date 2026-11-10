@@ -105,7 +105,13 @@ export async function captureShot(page: Page, spec: ShotSpec, ctx: ShotContext):
     caret: 'hide',
     mask: [...DEFAULT_MASKS, ...(spec.mask ?? [])].map((s) => page.locator(s)),
   });
-  return { name: spec.name, format: 'png', status: 'recorded', src, ...fileFacts(file), commit: ctx.commit, themeId: THEME_ID, seeded: ctx.seeded, formFactor: ff };
+  return { name: spec.name, format: 'png', status: 'recorded', src, ...fileFacts(file), commit: ctx.commit, themeId: THEME_ID, seeded: ctx.seeded, formFactor: ff, ...pixelSize(ff) };
+}
+
+function pixelSize(ff: FormFactor): { width: number; height: number } {
+  const { width, height } = viewportFor(ff);
+  const scale = shotScale();
+  return { width: width * scale, height: height * scale };
 }
 
 /** Opens the shot's route in its own context, asserts landing and theme, then captures. */

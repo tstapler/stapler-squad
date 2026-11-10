@@ -1,6 +1,7 @@
 // @feature website-demos
 // Record-time media manifest: one JSON per shard, merged by `mediatool`. Field names and
-// the sort order mirror tools/promo/internal/manifest (MediaEntry, Merge). After post-processing,
+// the sort order mirror tools/promo/internal/manifest (MediaEntry, Merge); tools/promo/schema/media-manifest.example.json
+// is the shared example both sides and the website reader are tested against. After post-processing,
 // `mediatool refresh` re-measures the shipped files and adds the mp4 rows.
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -27,6 +28,9 @@ export interface MediaEntry {
   seeded?: Seeded;
   durationMs?: number;
   formFactor?: FormFactor;
+  /** Pixel size of an image rendition; the site reserves layout space from it. */
+  width?: number;
+  height?: number;
 }
 
 export interface MediaManifest {

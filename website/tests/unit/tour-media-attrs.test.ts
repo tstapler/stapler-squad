@@ -58,6 +58,6 @@ describe('built tour page media attributes', () => {
 	it('phoneFigure_should_LinkToFullSizeShot_WithAriaLabel', () => {
 		const link = doc.querySelector('[data-testid="tour-phone-figure"] a')!;
 		expect(link.getAttribute('aria-label')).toMatch(/^Open full-size screenshot: /);
-		expect(link.getAttribute('href')).toContain('zz-fixture-phone.mobile.webp');
+		expect(link.getAttribute('href')).toContain('zz-fixture-phone.webp');
 	});
 });

@@ -7,18 +7,48 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // FileName is the shard manifest the recorder writes into its output directory.
 const FileName = "media-manifest.json"
 
-// localPath is where the recorder left an entry: clips sit flat in dir as
-// <name>.<format>, images under their src (shots/<name>.png).
+// localPath is where an entry's file sits under dir: its src (clips/<name>.webm,
+// shots/<name>.webp), or flat <name>.<format> for a clip row that has no src.
 func localPath(dir string, e MediaEntry) string {
-	if e.Format.IsClip() {
+	if e.Src == "" && e.Format.IsClip() {
 		return filepath.Join(dir, e.Name+"."+string(e.Format))
 	}
 	return filepath.Join(dir, filepath.FromSlash(e.Src))
+}
+
+// toWebP repoints a recorded PNG row at its converted .webp sibling when only that
+// remains on disk (the record script converts shots and drops the PNG).
+func toWebP(dir string, e MediaEntry) MediaEntry {
+	if e.Format != FormatPNG || !strings.HasSuffix(e.Src, ".png") {
+		return e
+	}
+	webp := strings.TrimSuffix(e.Src, ".png") + ".webp"
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(e.Src))); err == nil {
+		return e
+	}
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(webp))); err != nil {
+		return e
+	}
+	e.Format, e.Src = FormatWebP, webp
+	return e
+}
+
+// posterToWebP follows a clip's poster to its converted file.
+func posterToWebP(dir string, e MediaEntry) MediaEntry {
+	if !strings.HasSuffix(e.Poster, ".png") {
+		return e
+	}
+	webp := strings.TrimSuffix(e.Poster, ".png") + ".webp"
+	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(webp))); err == nil {
+		e.Poster = webp
+	}
+	return e
 }
 
 func measure(path string) (bytes int64, sum string, err error) {
@@ -46,6 +76,7 @@ func RefreshFromDisk(dir string) (MediaManifest, error) {
 			next = append(next, e)
 			continue
 		}
+		e = posterToWebP(dir, toWebP(dir, e))
 		size, sum, err := measure(localPath(dir, e))
 		switch {
 		case os.IsNotExist(err):
