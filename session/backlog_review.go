@@ -735,10 +735,8 @@ func GetGitDiffRef(ctx context.Context, dir string, baseSHA string, headRef stri
 		return "", false, fmt.Errorf("git diff %s in %s: %w", rangeArg, dir, runErr)
 	}
 
-	if len(raw) > headless.MaxDiffSizeReview {
-		return raw[:headless.MaxDiffSizeReview], true, nil
-	}
-	return raw, false, nil
+	diff, truncated = TruncateDiffByFile(raw, headless.MaxDiffSizeReview)
+	return diff, truncated, nil
 }
 
 // RecoverBaseCommitSHA attempts to self-heal a base commit SHA that no longer
