@@ -1,0 +1,13 @@
+# Review authority for the promo guard code and its gate inputs. Guard inputs are
+# read from the base blob, so changes here take effect after merge. List individual
+# user logins (not only teams): GITHUB_TOKEN cannot resolve team membership, and
+# `mediaguard` honours the allow-media label only for users named on the
+# .github/promo-flags.json entry. Add a login to these entries before the first review that needs it.
+/.github/promo-flags.json @tstapler
+/tools/promo/** @tstapler
+/tools/promolib/** @tstapler
+/tools/docscoverage/** @tstapler
+/tools/promo/mediaguard/allowlist.txt @tstapler
+/tools/promo/termcheck/allowlist.txt @tstapler
+/.github/workflows/backlog-scaffolding-guard.yml @tstapler
+/.github/workflows/deploy-website.yml @tstapler

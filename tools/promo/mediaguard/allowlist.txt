@@ -1,0 +1,12 @@
+# Binary media that may be added or modified in a PR (doublestar globs, one per line).
+# Read from the base blob on pull requests, so a PR cannot extend it for itself.
+# Recorded promo media is CI-generated and never committed; do not add clips or shots here.
+logos/**
+website/public/favicon*
+website/public/apple-touch-icon.png
+website/src/assets/**
+web-app/public/*icon*
+web-app/public/icons/**
+tests/e2e/tests/snapshots/**
+project_plans/**/design/*.png
+web-app/build/__tests__/fixtures/app/public/icons/**

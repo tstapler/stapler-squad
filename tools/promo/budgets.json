@@ -1,0 +1,24 @@
+{
+  "clipMaxBytes": 3145728,
+  "imageMaxBytes": 409600,
+  "distMaxBytes": 41943040,
+  "recordWallClockMaxMinutes": 30,
+  "clipMaxDurationMs": 60000,
+  "recordInputPaths": [
+    "web-app/**",
+    "server/**",
+    "session/**",
+    "proto/**",
+    "config/**",
+    "app/**",
+    "go.mod",
+    "go.sum",
+    "tests/e2e/website-demos/**",
+    "tests/demo/**",
+    "docs/features.md",
+    "website/src/content/docs/tours/**",
+    "website/src/content/feature-media.json",
+    "tools/promo/**",
+    "tools/promolib/**"
+  ]
+}
