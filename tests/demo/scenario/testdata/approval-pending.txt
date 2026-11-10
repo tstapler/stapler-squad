@@ -1,0 +1,9 @@
+[1m> Refactor the session store to use a repository interface[0m
+
+Starting with the current store implementation.
+
+[32m*[0m Read(store/sessions.go)
+[32m*[0m Read(store/sessions_test.go)
+
+[33m* Bash(git push origin feature/repository-interface)[0m
+  Waiting for approval
