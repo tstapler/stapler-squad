@@ -55,11 +55,12 @@ export const ALL_RULES: { re: RegExp; why: string }[] = [
   { re: /^third_party\//, why: "vendored dependency" },
   { re: /^CHANGELOG\.md$/, why: "embedded into the binary (changelog_embed.go)" },
   { re: /^server\/(middleware|server\.go|dependencies\.go)/, why: "server wiring" },
+  { re: /^server\/analytics\//, why: "analytics DB, provider and client-metrics beacon (imported by server wiring and every page)" },
 ];
 
 /** Leaf areas: path -> the specs that exercise it. Globs are relative to tests/e2e; `*` never crosses `/`. */
 export const SUBSET_RULES: { name: string; re: RegExp; specs: string[] }[] = [
-  { name: "analytics", re: /^(server\/analytics\/|web-app\/src\/app\/analytics\/)/, specs: ["*analytics*.spec.ts", "insights*.spec.ts"] },
+  { name: "analytics", re: /^web-app\/src\/app\/analytics\//, specs: ["*analytics*.spec.ts", "insights*.spec.ts"] },
   { name: "files viewer", re: /^web-app\/src\/(app|components)\/files\//, specs: ["files-*.spec.ts"] },
   { name: "notifications page", re: /^web-app\/src\/app\/notifications\//, specs: ["notification*.spec.ts", "toast*.spec.ts"] },
 ];

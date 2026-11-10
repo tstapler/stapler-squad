@@ -20,7 +20,7 @@ describe("select-specs", () => {
   });
 
   test("SS3: a leaf-area change selects its specs plus the safety net, nothing else", () => {
-    const s = select(["server/analytics/db.go"], specs);
+    const s = select(["web-app/src/app/analytics/escape/page.tsx"], specs);
     expect(s).toMatchObject({ mode: "subset", specs: ["escape-analytics-global-view.spec.ts", "insights.spec.ts", "route-smoke.spec.ts", "smoke.spec.ts"] });
   });
 
@@ -52,7 +52,7 @@ describe("select-specs", () => {
   });
 
   test("SS9: no file can be both a shared surface and a subset leaf (the leaf would be dead)", () => {
-    const samples = ["server/analytics/db.go", "web-app/src/components/files/Tree.tsx", "web-app/src/app/analytics/escape/page.tsx", "web-app/src/app/notifications/page.tsx"];
+    const samples = ["web-app/src/components/files/Tree.tsx", "web-app/src/app/analytics/escape/page.tsx", "web-app/src/app/notifications/page.tsx"];
     for (const f of samples) expect(ALL_RULES.some((r) => r.re.test(f))).toBe(false);
     for (const f of samples) expect(SUBSET_RULES.some((r) => r.re.test(f))).toBe(true);
   });
@@ -81,6 +81,7 @@ describe("select-specs", () => {
   });
 
   test("SS13: an empty change list is fail-safe, CHANGELOG.md is a build input, and dropped shared components select all", () => {
+    expect(select(["server/analytics/db.go"], specs).mode).toBe("all");
     expect(select([""], specs).mode).toBe("all");
     expect(select(["CHANGELOG.md"], specs).mode).toBe("all");
     expect(select(["web-app/src/components/analytics/PageViewTracker.tsx"], specs).mode).toBe("all");
@@ -94,8 +95,8 @@ describe("select-specs", () => {
   });
 
   test("SS11: the summary names the decision and every reason", () => {
-    const md = summarize(select(["server/analytics/db.go"], specs), specs.length);
+    const md = summarize(select(["web-app/src/app/analytics/escape/page.tsx"], specs), specs.length);
     expect(md).toContain("SUBSET");
-    expect(md).toContain("server/analytics/db.go: analytics");
+    expect(md).toContain("web-app/src/app/analytics/escape/page.tsx: analytics");
   });
 });

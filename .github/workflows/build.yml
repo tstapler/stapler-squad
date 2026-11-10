@@ -562,8 +562,8 @@ jobs:
       - name: Fail if shard ${{ matrix.shard }} ran no tests or hit a setup error (Bun build)
         run: |
           # A PR subset run may leave a shard with no selected specs, or no stress pass; the full suite never does.
-          if [ -f tests/e2e/shard-pass1-empty ]; then echo "shard ${{ matrix.shard }}: no selected specs"; exit 0; fi
-          node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-bun shard ${{ matrix.shard }}"
+          if [ -f tests/e2e/shard-pass1-empty ]; then echo "shard ${{ matrix.shard }}: no selected specs in the parallel pass"
+          else node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report.json --label "e2e-bun shard ${{ matrix.shard }}"; fi
           if [ -f tests/e2e/shard-stress-skipped ]; then echo "shard ${{ matrix.shard }}: stress pass not selected"; exit 0; fi
           node tests/e2e/scripts/assert-e2e-report.mjs tests/e2e/shard-report-stress.json --label "e2e-bun shard ${{ matrix.shard }} (stress pass)"
 
