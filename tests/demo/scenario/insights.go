@@ -26,15 +26,17 @@ type insightsSession struct {
 	tools    []string
 }
 
-var insightsSessions = []insightsSession{
-	{"storefront-dark-mode", "claude-sonnet-4-6", 0, 3, 42, 20_000, 600, 0.985, []string{"Read", "Edit", "Edit", "Write", "Bash"}},
-	{"checkout-flaky-test", "claude-sonnet-4-6", 1, 5, 30, 22_000, 500, 0.80, []string{"Read", "Grep", "Bash", "Edit", "Bash"}},
-	{"orders-pagination", "claude-opus-4-7", 2, 8, 26, 25_000, 800, 0.97, []string{"Read", "Edit", "Write", "Edit", "Bash"}},
-	{"autoscale-tuning", "claude-sonnet-4-6", 3, 6, 22, 20_000, 500, 0.90, []string{"Read", "Grep", "Read", "Edit", "Bash"}},
-	{"docs-site-cleanup", "claude-haiku-5-5", 4, 9, 14, 15_000, 400, 0.98, []string{"Read", "Write", "Edit", "Edit"}},
-	{"search-index-refactor", "claude-opus-4-7", 5, 7, 34, 40_000, 2_500, 0.975, []string{"Read", "Edit", "Edit", "Grep", "Bash"}},
-	{"payments-retries", "claude-sonnet-4-6", 5, 14, 24, 22_000, 600, 0.96, []string{"Read", "Edit", "Bash", "Edit"}},
-	{"inventory-sync-api", "claude-sonnet-4-6", 6, 11, 36, 20_000, 700, 0.98, []string{"Read", "Write", "Edit", "Bash", "Edit"}},
+func insightsSessions() []insightsSession {
+	return []insightsSession{
+		{"storefront-dark-mode", "claude-sonnet-4-6", 0, 3, 42, 20_000, 600, 0.985, []string{"Read", "Edit", "Edit", "Write", "Bash"}},
+		{"checkout-flaky-test", "claude-sonnet-4-6", 1, 5, 30, 22_000, 500, 0.80, []string{"Read", "Grep", "Bash", "Edit", "Bash"}},
+		{"orders-pagination", "claude-opus-4-7", 2, 8, 26, 25_000, 800, 0.97, []string{"Read", "Edit", "Write", "Edit", "Bash"}},
+		{"autoscale-tuning", "claude-sonnet-4-6", 3, 6, 22, 20_000, 500, 0.90, []string{"Read", "Grep", "Read", "Edit", "Bash"}},
+		{"docs-site-cleanup", "claude-haiku-5-5", 4, 9, 14, 15_000, 400, 0.98, []string{"Read", "Write", "Edit", "Edit"}},
+		{"search-index-refactor", "claude-opus-4-7", 5, 7, 34, 40_000, 2_500, 0.975, []string{"Read", "Edit", "Edit", "Grep", "Bash"}},
+		{"payments-retries", "claude-sonnet-4-6", 5, 14, 24, 22_000, 600, 0.96, []string{"Read", "Edit", "Bash", "Edit"}},
+		{"inventory-sync-api", "claude-sonnet-4-6", 6, 11, 36, 20_000, 700, 0.98, []string{"Read", "Write", "Edit", "Bash", "Edit"}},
+	}
 }
 
 func (s insightsSession) transcript(n int, ref time.Time) TranscriptFile {
@@ -86,8 +88,8 @@ func (s insightsSession) transcript(n int, ref time.Time) TranscriptFile {
 }
 
 func insightsTranscripts(ref time.Time) []TranscriptFile {
-	out := make([]TranscriptFile, len(insightsSessions))
-	for i, s := range insightsSessions {
+	out := make([]TranscriptFile, len(insightsSessions()))
+	for i, s := range insightsSessions() {
 		out[i] = s.transcript(i, ref)
 	}
 	return out

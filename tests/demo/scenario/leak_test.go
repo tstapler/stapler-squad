@@ -113,7 +113,7 @@ func TestSeedInsightsFilesWritesTokenStoreLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	matches, err := filepath.Glob(filepath.Join(dir, "claude-projects", "*", "*.jsonl"))
-	if err != nil || len(matches) != len(insightsSessions) {
-		t.Fatalf("got %d transcripts (err %v), want %d", len(matches), err, len(insightsSessions))
+	if err != nil || len(matches) != len(insightsSessions()) {
+		t.Fatalf("got %d transcripts (err %v), want %d", len(matches), err, len(insightsSessions()))
 	}
 }
