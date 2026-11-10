@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Wrapper parity (Task 8.2c, 8.2d): for every wrapper target, `make -n` under BUILD_SYSTEM=make and
-# BUILD_SYSTEM=bazel must each produce a non-empty plan, and the build/test wrappers must call the cheap
+# BUILD_SYSTEM=bazel (ACCEPT_SESSION_LOSS=1 skips install-service's deployed-unit preflight, absent on CI) must each produce a non-empty plan, and the build/test wrappers must call the cheap
 # gen-freshness check within their first three plan lines. Needs make and bash only, never Bazel.
 set -u
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -12,7 +12,7 @@ count=0
 for t in $targets; do
   count=$((count + 1))
   for sys in make bazel; do
-    plan=$(BUILD_SYSTEM=$sys make --no-print-directory -n "$t" PKG=./config 2>&1) || { echo "check-wrappers: '$t' under BUILD_SYSTEM=$sys: make -n failed"; fail=1; continue; }
+    plan=$(BUILD_SYSTEM=$sys make --no-print-directory -n "$t" PKG=./config ACCEPT_SESSION_LOSS=1 2>&1) || { echo "check-wrappers: '$t' under BUILD_SYSTEM=$sys: make -n failed"; fail=1; continue; }
     [ -n "$plan" ] || { echo "check-wrappers: '$t' under BUILD_SYSTEM=$sys: empty plan"; fail=1; }
   done
 done
