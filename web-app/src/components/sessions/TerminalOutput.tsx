@@ -43,6 +43,7 @@ import { ScrollHint, useScrollHint } from "./ScrollHint";
 import { ScrollingPanel, ScrollModeChip, SCROLL_OPTIONS, shouldRenderPanelAsOverlay, useMisrouteCue } from "./ScrollingPanel";
 import { useEffectiveScrollMode, useScrollSettings } from "@/lib/hooks/useEffectiveScrollMode";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { ScrollbackPager } from "@/lib/terminal/scrollbackPager";
 import { createTerminalLatencyProbe } from "@/lib/telemetry/terminalLatency";
 import { terminalInputTimer } from "@/lib/telemetry/terminalInputTiming";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
@@ -428,9 +429,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // for the same reason; no local `theme` binding is needed here anymore.)
 
   // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
-  const isFetchingScrollbackRef = useRef(false);
-  const hasMoreScrollbackRef = useRef(false);
-  const oldestSequenceReceivedRef = useRef(0);
+  const [scrollbackPager] = useState(() => new ScrollbackPager());
 
   // Story 1.4.0 — client-local mirror of TerminalStreamManager's altScreenActive,
   // read by the wheel listener and passed to useTerminalGestures as
@@ -439,7 +438,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const altScreenActiveRef = useRef(false);
 
   // Story 1.4.4 (Task 1.4.4b) — "no more app-forwarded history" flag, distinct
-  // from hasMoreScrollbackRef above: the tmux-native path owns that ref
+  // from the pager's hasMore: the tmux-native path owns that
   // exclusively and this feature never reads or writes it, so a plain-shell /
   // flag-off / non-Claude session's exhaustion behavior can't be affected even
   // indirectly through shared state (plan.md Story 1.4.4 Scope correction).
@@ -464,8 +463,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // late response is simply ignored once this state has been reset).
   const handleCancelScrollLoading = useCallback(() => {
     clearScrollLoadingState();
-    isFetchingScrollbackRef.current = false;
-  }, [clearScrollLoadingState]);
+    scrollbackPager.release();
+  }, [clearScrollLoadingState, scrollbackPager]);
 
   // ---- Story 1.4.2 — ScrollSourceIndicator banner state ----
   const [appScrollbackState, setAppScrollbackState] = useState<{ active: boolean; program: string }>({
@@ -505,10 +504,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const bumpConnectionEpoch = useCallback(() => setConnectionEpoch((e) => e + 1), []);
 
   const resetScrollbackPaging = useCallback(() => {
-    hasMoreScrollbackRef.current = true;
+    scrollbackPager.reset();
     hasMoreAppScrollbackRef.current = true;
-    oldestSequenceReceivedRef.current = 0;
-    isFetchingScrollbackRef.current = false;
 
     // A full-pane replacement snapshot (reconnect, resize resync) means any
     // forwarded-history state from before it is now stale — design/ux.md
@@ -519,7 +516,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setAtTopVisible(false);
     dismissBlockedToast();
     echoGuard.clear();
-  }, [clearScrollLoadingState, dismissBlockedToast, echoGuard]);
+  }, [clearScrollLoadingState, dismissBlockedToast, echoGuard, scrollbackPager]);
 
   // Ref-mirror for handleAppScrollbackFrame (Story 1.4.1-1.4.4, defined further
   // below) — same temporal-dead-zone reason as notifyResyncOutputReceivedRef:
@@ -612,7 +609,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const handleAppScrollbackFrame = useCallback((frame: AppScrollbackFrame) => {
     // Task 1.4.5b — the pill never persists past outcome delivery.
     clearScrollLoadingState();
-    isFetchingScrollbackRef.current = false;
+    scrollbackPager.release();
 
     if (frame.program) {
       lastKnownAppProgramRef.current = frame.program;
@@ -631,7 +628,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         break;
       }
       case ScrollForwardOutcome.AT_TOP: {
-        // Task 1.4.4b — a distinct flag from hasMoreScrollbackRef, which
+        // Task 1.4.4b — a distinct flag from the pager's hasMore, which
         // this feature never reads or writes (plan.md Story 1.4.4's Scope
         // correction). Does NOT touch appScrollbackState — a banner already
         // showing stays up alongside this affordance (design/ux.md Surface
@@ -652,7 +649,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         showBlockedOutcome(frame);
         break;
     }
-  }, [clearScrollLoadingState, getOrCreateStreamManager, dismissBlockedToast, showBlockedOutcome, echoGuard]);
+  }, [clearScrollLoadingState, getOrCreateStreamManager, dismissBlockedToast, showBlockedOutcome, echoGuard, scrollbackPager]);
 
   useEffect(() => {
     handleAppScrollbackFrameRef.current = handleAppScrollbackFrame;
@@ -708,28 +705,21 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       console.log(`[TerminalOutput] Writing initial scrollback: ${scrollback.length} bytes`);
       isInitialScrollbackDoneRef.current = true;
       await manager.writeInitialContent(scrollback);
-      if (metadata) {
-        hasMoreScrollbackRef.current = metadata.hasMore;
-        oldestSequenceReceivedRef.current = metadata.oldestSequence;
-      }
+      scrollbackPager.complete(metadata);
     } else {
       // Paged history load
       console.log(`[TerminalOutput] Writing paged scrollback: ${scrollback.length} bytes`);
       try {
         await manager.prependScrollbackBatch(scrollback);
-        if (metadata) {
-          hasMoreScrollbackRef.current = metadata.hasMore;
-          oldestSequenceReceivedRef.current = metadata.oldestSequence;
-        }
+        scrollbackPager.complete(metadata);
       } catch (err) {
         console.error('[TerminalOutput] prependScrollbackBatch failed:', err);
-      } finally {
-        isFetchingScrollbackRef.current = false;
+        scrollbackPager.release();
       }
     }
 
     setIsLoadingInitialContent(false);
-  }, [getOrCreateStreamManager, clearScrollLoadingState, xtermRef]);
+  }, [getOrCreateStreamManager, clearScrollLoadingState, xtermRef, scrollbackPager]);
 
   // Ref to access current terminalState inside the handleOutput callback
   // (useCallback can't take terminalState as a dep without recreating on every state change)
@@ -1414,15 +1404,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // wheel (Task 1.4.0b) and touch (via useTerminalGestures) triggers, so the
   // two paths can't drift apart. For an alt-screen session the "more
   // available" guard is hasMoreAppScrollbackRef (Task 1.4.4b) — this feature's
-  // own flag — never hasMoreScrollbackRef, which a pure alt-screen session's
+  // own flag — never the pager's hasMore, which a pure alt-screen session's
   // tmux-native path never touches and so would never flip false.
   const triggerAltScreenScrollUp = useCallback(() => {
-    if (isFetchingScrollbackRef.current || !hasMoreAppScrollbackRef.current || !isConnected) {
-      return;
-    }
-    isFetchingScrollbackRef.current = true;
-    requestScrollbackWithPill(oldestSequenceReceivedRef.current, 500);
-  }, [isConnected, requestScrollbackWithPill]);
+    if (!hasMoreAppScrollbackRef.current || !isConnected) return;
+    const page = scrollbackPager.tryBeginIgnoringHasMore();
+    if (page) requestScrollbackWithPill(page.fromSequence, page.limit);
+  }, [isConnected, requestScrollbackWithPill, scrollbackPager]);
 
   // Stable accessor for useTerminalGestures's isAltScreenActive option
   // (Task 1.4.0c) — reads the same ref the wheel listener above holds.
@@ -1472,16 +1460,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     const onScroll = () => {
       const viewportY = terminal.buffer.active.viewportY;
-      if (
-        viewportY < 200 &&
-        !isFetchingScrollbackRef.current &&
-        hasMoreScrollbackRef.current &&
-        isConnected
-      ) {
-        isFetchingScrollbackRef.current = true;
-        console.log(`[TerminalOutput] Near top of buffer (viewportY=${viewportY}), requesting older scrollback from seq ${oldestSequenceReceivedRef.current}`);
-        requestScrollbackWithPill(oldestSequenceReceivedRef.current, 500);
-      }
+      if (!scrollbackPager.isNearTop(viewportY) || !isConnected) return;
+      const page = scrollbackPager.tryBegin();
+      if (!page) return;
+      console.log(`[TerminalOutput] Near top of buffer (viewportY=${viewportY}), requesting older scrollback from seq ${page.fromSequence}`);
+      requestScrollbackWithPill(page.fromSequence, page.limit);
     };
 
     // Task 1.4.0b — when altScreenActive, viewportY-gated 'scroll' never fires
@@ -1497,11 +1480,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     scrollEl?.addEventListener('scroll', onScroll, { passive: true });
     scrollEl?.addEventListener('wheel', onWheel, { passive: true });
+    // ghostty-web draws to a canvas: there is no .xterm-viewport DOM scroller, so the DOM 'scroll'
+    // listener never fires and older history would never be requested. Its onScroll fires on every
+    // user-driven viewport move (wheel, PgUp, touch drag, scrollbar).
+    const ghosttyScroll = terminal.element?.querySelector('.xterm-viewport')
+      ? undefined
+      : terminal.onScroll?.(onScroll);
     return () => {
       scrollEl?.removeEventListener('scroll', onScroll);
       scrollEl?.removeEventListener('wheel', onWheel);
+      ghosttyScroll?.dispose();
     };
-  }, [isLoadingInitialContent, isConnected, requestScrollbackWithPill, triggerAltScreenScrollUp, xtermRef]);
+  }, [isLoadingInitialContent, isConnected, requestScrollbackWithPill, triggerAltScreenScrollUp, scrollbackPager, xtermRef]);
 
   // Starts the connection for a session: pre-size from cache, then session-switch
   // connect, then post-disconnect connect. The effects inside run in that fixed

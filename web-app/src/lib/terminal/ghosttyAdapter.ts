@@ -16,6 +16,18 @@ import { createSoftResetRewriter } from "./ghosttySoftReset";
  */
 export const FRESH_TERMINAL_SCRUB = "\x1bc";
 
+/**
+ * ghostty-web's `scrollback` option is a byte budget for its WASM page allocator, not a line count:
+ * passing 5000 held only ~218 lines at 190 columns (probed on 0.4.0: 190 cols cost ~2.9 KB/line; 20 B/col leaves page-granularity headroom).
+ * Sized for a wide terminal so the requested line count survives; narrower terminals fit more.
+ */
+const GHOSTTY_BYTES_PER_COLUMN_PER_LINE = 20;
+const GHOSTTY_ASSUMED_COLUMNS = 200;
+
+export function ghosttyScrollbackBytes(lines: number): number {
+  return Math.max(0, Math.ceil(lines)) * GHOSTTY_ASSUMED_COLUMNS * GHOSTTY_BYTES_PER_COLUMN_PER_LINE;
+}
+
 /** `GhosttyCell.flags` bits, probed against ghostty-web@0.4.0's WASM (bold=1 … faint=128). */
 const FLAG_BOLD = 1;
 const FLAG_ITALIC = 2;
