@@ -17,8 +17,9 @@ import (
 const BackgroundBatchWindow = 3 * MaxBatchWindow
 
 // ActivityHinter is implemented by session controllers whose backend can use a per-pane priority
-// hint (tymuxd's SetPaneActivity). Implementations must no-op, not fail, when the backend or
-// daemon version cannot take the hint.
+// hint (tymuxd's SetPaneActivity). A nil return means the hint is settled: delivered, or
+// permanently impossible (backend or daemon version cannot take it). A non-nil return means it
+// was not delivered and the hub should retry.
 type ActivityHinter interface {
 	SetPaneActivity(ctx context.Context, activity qos.Activity) error
 }
@@ -27,6 +28,14 @@ type ActivityHinter interface {
 // it restarts and forgets them then, so a refresh bounds how long a restarted daemon runs a
 // boosted or demoted pane at Normal.
 const activityRefreshInterval = time.Minute
+
+// activityRetryInterval is how soon an undelivered hint (of any class) is retried, and
+// activityMaxClosedRetries bounds those retries once the hub is closed: a failed final Normal
+// would otherwise leave the pane demoted, but a dead hub must not retry forever.
+const (
+	activityRetryInterval    = 2 * time.Second
+	activityMaxClosedRetries = 5
+)
 
 // activityHintTimeout bounds one hint RPC; hints are advisory, so a slow daemon just misses one.
 const activityHintTimeout = 2 * time.Second
@@ -38,9 +47,9 @@ func WithQoSTracker(t *qos.Tracker) HubOption {
 
 // WithActivitySink makes the hub report its session's activity class to fn on every change. fn
 // runs on a hub-owned goroutine, never on the input path, and calls are serialized with
-// latest-wins coalescing. Supplying a sink also enables background deprioritization of the
-// hub's own output.
-func WithActivitySink(fn func(qos.Activity)) HubOption {
+// latest-wins coalescing. A non-nil error from fn means the hint was not delivered and is
+// retried. Supplying a sink also enables background deprioritization of the hub's own output.
+func WithActivitySink(fn func(qos.Activity) error) HubOption {
 	return func(h *StreamHub) { h.activitySink = fn }
 }
 
@@ -48,8 +57,14 @@ func WithActivitySink(fn func(qos.Activity)) HubOption {
 type activityState struct {
 	desired atomic.Int32 // qos.Activity the hub should be in
 	pending atomic.Bool  // a pump goroutine owns lastSent
-	// lastSent is touched only by the pump goroutine holding pending.
-	lastSent qos.Activity
+	// lastSent, confirmed and closedFailures are touched only by the pump goroutine holding pending.
+	// lastSent is the last value the sink confirmed; a fresh hub is unconfirmed so it sends an
+	// initial hint unconditionally instead of assuming the daemon already holds Normal.
+	lastSent  qos.Activity
+	confirmed bool
+	// closedFailures counts undelivered sends since the hub closed, so failures while it was open
+	// do not eat the retry budget of the final Normal.
+	closedFailures int
 
 	unwatch  func()
 	expiryMu sync.Mutex
@@ -66,12 +81,14 @@ func (h *StreamHub) initQoS() {
 	}
 	if h.activitySink == nil {
 		if hinter, ok := h.controller.(ActivityHinter); ok {
-			h.activitySink = func(a qos.Activity) {
+			h.activitySink = func(a qos.Activity) error {
 				ctx, cancel := context.WithTimeout(context.Background(), activityHintTimeout)
 				defer cancel()
-				if err := hinter.SetPaneActivity(ctx, a); err != nil {
+				err := hinter.SetPaneActivity(ctx, a)
+				if err != nil {
 					log.Debug("streamhub: pane activity hint failed", "session", h.sessionName, "activity", a.String(), "error", err)
 				}
+				return err
 			}
 		}
 	}
@@ -142,18 +159,26 @@ func (h *StreamHub) refreshActivity() {
 	h.kickActivityPump()
 }
 
-// armActivityRefresh re-sends a non-Normal hint every activityRefreshInterval until it changes.
-func (h *StreamHub) armActivityRefresh(sent qos.Activity) {
+// armActivityRefresh schedules the next send after one attempt: a retry soon if it was not
+// confirmed, else a periodic refresh of a non-Normal hint, else nothing.
+func (h *StreamHub) armActivityRefresh(sent qos.Activity, confirmed bool) {
 	h.activity.expiryMu.Lock()
 	defer h.activity.expiryMu.Unlock()
 	if h.activity.refresh != nil {
 		h.activity.refresh.Stop()
 		h.activity.refresh = nil
 	}
-	if sent == qos.ActivityNormal || h.activity.closed.Load() {
+	closed := h.activity.closed.Load()
+	var delay time.Duration
+	switch {
+	case !confirmed && (!closed || h.activity.closedFailures < activityMaxClosedRetries):
+		delay = activityRetryInterval
+	case confirmed && sent != qos.ActivityNormal && !closed:
+		delay = activityRefreshInterval
+	default:
 		return
 	}
-	h.activity.refresh = h.clock.AfterFunc(activityRefreshInterval, func() {
+	h.activity.refresh = h.clock.AfterFunc(delay, func() {
 		h.activity.force.Store(true)
 		h.kickActivityPump()
 	})
@@ -169,15 +194,24 @@ func (h *StreamHub) kickActivityPump() {
 func (h *StreamHub) pumpActivity() {
 	for {
 		want := qos.Activity(h.activity.desired.Load())
-		if refresh := h.activity.force.Swap(false); want != h.activity.lastSent || (refresh && want != qos.ActivityNormal) {
-			h.activity.lastSent = want
-			h.activitySink(want)
-			h.armActivityRefresh(want)
+		refresh := h.activity.force.Swap(false)
+		a := &h.activity
+		if !a.confirmed || want != a.lastSent || (refresh && want != qos.ActivityNormal) {
+			if err := h.activitySink(want); err == nil {
+				a.lastSent, a.confirmed, a.closedFailures = want, true, 0
+			} else {
+				a.confirmed = false
+				if a.closed.Load() {
+					a.closedFailures++
+				}
+			}
+			h.armActivityRefresh(want, a.confirmed)
 		}
-		sent := h.activity.lastSent // read before releasing ownership of lastSent
-		h.activity.pending.Store(false)
-		if qos.Activity(h.activity.desired.Load()) == sent ||
-			!h.activity.pending.CompareAndSwap(false, true) {
+		// Retrying a failure is the timer's job; looping on it here would spin.
+		a.pending.Store(false) // releases ownership of lastSent/confirmed/closedFailures
+		// A timer that fired while we still owned the pump found it busy and left force set.
+		rearm := a.force.Load()
+		if (qos.Activity(a.desired.Load()) == want && !rearm) || !a.pending.CompareAndSwap(false, true) {
 			return
 		}
 	}

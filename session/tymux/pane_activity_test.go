@@ -167,13 +167,122 @@ func TestStart_should_ClearAStaleHint_When_AdoptingAPane(t *testing.T) {
 	assert.Equal(t, sentHint{testPaneID, qos.ActivityNormal}, sender.calls()[0])
 }
 
-func TestSetPaneActivity_should_NoOp_When_TheSessionHasNoPaneYet(t *testing.T) {
+func TestSetPaneActivity_should_ReportNotDelivered_When_TheSessionHasNoPaneYet(t *testing.T) {
+	t.Parallel()
 	sender := &fakeActivitySender{}
 	sess := NewTymuxGRPCSession(&fakeTransport{capabilities: []string{capPaneActivityHint}}).(*tymuxGRPCSession)
 	var s paneActivitySender = sender
 	sess.activity.sender.Store(&s)
 
-	require.NoError(t, sess.SetPaneActivity(context.Background(), qos.ActivityInteractive))
+	err := sess.SetPaneActivity(context.Background(), qos.ActivityInteractive)
 
+	assert.ErrorIs(t, err, errPaneActivityPending, "a pane-less no-op is not a confirmed delivery")
 	assert.Empty(t, sender.calls())
+}
+
+func TestToWireActivity_should_MapEveryClass(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, v1.PaneActivity_PANE_ACTIVITY_UNSPECIFIED, toWireActivity(qos.ActivityNormal))
+	assert.Equal(t, v1.PaneActivity_PANE_ACTIVITY_INTERACTIVE, toWireActivity(qos.ActivityInteractive))
+	assert.Equal(t, v1.PaneActivity_PANE_ACTIVITY_BACKGROUND, toWireActivity(qos.ActivityBackground))
+}
+
+func TestNewRealTransport_should_CarryTheSetPaneActivityRPC(t *testing.T) {
+	t.Parallel()
+	_, ok := NewRealTransport("127.0.0.1:1").(paneActivityTransport)
+	assert.True(t, ok, "the production wrapper must expose SetPaneActivity, else hints are silently never sent")
+}
+
+func TestSetPaneActivity_should_ReportNotDelivered_When_TheCapabilityProbeFailsTransiently(t *testing.T) {
+	sender := &fakeActivitySender{}
+	transport := &fakeTransport{capabilities: []string{capPaneActivityHint}}
+	sess := NewTymuxGRPCSession(transport).(*tymuxGRPCSession)
+	var s paneActivitySender = sender
+	sess.activity.sender.Store(&s)
+	sess.mu.Lock()
+	sess.paneID = testPaneID
+	sess.mu.Unlock()
+	var down error = connect.NewError(connect.CodeUnavailable, errors.New("down"))
+	transport.serverInfoErr.Store(&down)
+
+	require.Error(t, sess.SetPaneActivity(context.Background(), qos.ActivityInteractive), "retry later, not settled")
+	assert.Empty(t, sender.calls())
+
+	transport.serverInfoErr.Store(nil)
+	require.NoError(t, sess.SetPaneActivity(context.Background(), qos.ActivityInteractive), "the failed probe was not cached")
+	assert.Len(t, sender.calls(), 1)
+}
+
+func TestResendPaneActivity_should_ReassertTheLastNonNormalHint_AfterAReattach(t *testing.T) {
+	sender := &fakeActivitySender{}
+	sess, _ := activitySessionWith(t, []string{capPaneActivityHint}, sender)
+	require.NoError(t, sess.SetPaneActivity(context.Background(), qos.ActivityBackground))
+	sender.forget()
+
+	sess.resendPaneActivity(context.Background())
+
+	assert.Equal(t, []sentHint{{testPaneID, qos.ActivityBackground}}, sender.calls())
+}
+
+func TestResendPaneActivity_should_StaySilent_When_TheLastHintWasNormal(t *testing.T) {
+	sender := &fakeActivitySender{}
+	sess, _ := activitySessionWith(t, []string{capPaneActivityHint}, sender)
+	require.NoError(t, sess.SetPaneActivity(context.Background(), qos.ActivityInteractive))
+	require.NoError(t, sess.SetPaneActivity(context.Background(), qos.ActivityNormal))
+	sender.forget()
+
+	sess.resendPaneActivity(context.Background())
+
+	assert.Empty(t, sender.calls(), "a stale Interactive must never be re-sent over a newer Normal")
+}
+
+func TestResendPaneActivity_should_SendTheRequestedHint_When_TheFirstSendFailed(t *testing.T) {
+	sender := &fakeActivitySender{}
+	sess, _ := activitySessionWith(t, []string{capPaneActivityHint}, sender)
+	sender.setErr(connect.NewError(connect.CodeUnavailable, errors.New("no stream yet")))
+	require.Error(t, sess.SetPaneActivity(context.Background(), qos.ActivityInteractive))
+	sender.setErr(nil)
+	sender.forget()
+
+	sess.resendPaneActivity(context.Background())
+
+	assert.Equal(t, []sentHint{{testPaneID, qos.ActivityInteractive}}, sender.calls())
+}
+
+func TestOpenStandingStream_should_ReassertTheHint_OnceTheStreamIsOpen(t *testing.T) {
+	sender := &fakeActivitySender{}
+	sess, _ := activitySessionWith(t, []string{capPaneActivityHint}, sender)
+	require.NoError(t, sess.SetPaneActivity(context.Background(), qos.ActivityBackground))
+	sender.forget()
+
+	require.NoError(t, sess.openStandingStream(testPaneID))
+
+	require.Eventually(t, func() bool { return len(sender.calls()) == 1 }, 5*time.Second, time.Millisecond)
+	assert.Equal(t, sentHint{testPaneID, qos.ActivityBackground}, sender.calls()[0])
+}
+
+func TestResetPaneActivity_should_YieldToAHintRequestedAfterItWasScheduled(t *testing.T) {
+	sender := &fakeActivitySender{}
+	sess, _ := activitySessionWith(t, []string{capPaneActivityHint}, sender)
+	sess.activity.mu.Lock()
+	seen := sess.activity.seq
+	sess.activity.mu.Unlock()
+	require.NoError(t, sess.SetPaneActivity(context.Background(), qos.ActivityNormal)) // newer hint, even if Normal
+	sender.forget()
+
+	sess.resetPaneActivity(context.Background(), seen)
+
+	assert.Empty(t, sender.calls(), "a late startup reset must not overwrite a newer hub hint")
+}
+
+func TestResetPaneActivity_should_Send_When_NoHintWasRequestedMeanwhile(t *testing.T) {
+	sender := &fakeActivitySender{}
+	sess, _ := activitySessionWith(t, []string{capPaneActivityHint}, sender)
+	sess.activity.mu.Lock()
+	seen := sess.activity.seq
+	sess.activity.mu.Unlock()
+
+	sess.resetPaneActivity(context.Background(), seen)
+
+	assert.Equal(t, []sentHint{{testPaneID, qos.ActivityNormal}}, sender.calls())
 }

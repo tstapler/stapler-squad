@@ -77,6 +77,7 @@ func (s *tymuxGRPCSession) openStandingStreamForView(parent context.Context, pan
 	s.mu.Unlock()
 
 	log.Info("tymux: standing Attach stream opened", "pane_id", paneID)
+	s.resendPaneActivityAsync()
 
 	// One observability span/gauge-slot per stream generation (Task
 	// 2.2.1a); genCtx replaces ctx in the readAttachLoop call so
@@ -116,10 +117,16 @@ func (s *tymuxGRPCSession) teardownStandingStream() {
 	cancel := s.cancelAttach
 	done := s.streamDone
 	wait := s.teardownWait
+	stream := s.stream
 	s.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
+	}
+	// Once response headers have arrived, cancelling the Attach ctx does not wake an HTTP/2
+	// stream's blocked Receive (it returned only after ~5s in practice); closing the response does.
+	if stream != nil {
+		_ = stream.CloseResponse()
 	}
 	if done != nil {
 		if !lifecycle.AwaitBounded(done, wait) {
@@ -619,6 +626,7 @@ func (s *tymuxGRPCSession) ReconnectLoop(genCtx context.Context, paneID string, 
 		s.markStreamEvent() // the reattach's priming Snapshot just arrived
 
 		log.Info("tymux: standing Attach stream reconnect succeeded", "session_id", sessionID, "pane_id", paneID, "cause", cause, "attempt", attempt)
+		s.resendPaneActivityAsync() // a restarted daemon forgot the hint
 		return stream, first, true, lifecycle.ReasonUnknown
 	}
 

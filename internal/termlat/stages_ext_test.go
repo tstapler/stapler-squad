@@ -15,6 +15,8 @@ func TestNormalizeStage_should_AcceptEveryDecompositionStage(t *testing.T) {
 		StageOutputQueueWait, StageFanoutWait, StageFanoutDepth, StageFrameHandle, StagePTYWrite,
 		StageCaptureRender, StageCaptureRevive, StageStreamLockWait, StageStreamSend, StagePMLockWait,
 		StageInputQueue, StageEchoRender, StageWSBufferedKiB, StageEventLoopLag,
+		StageAttachPrepare, StageAttachAliveCheck, StageAttachRestore,
+		StageRestoreList, StageRestoreRevive, StageRestoreAdopt, StageRestoreStart,
 		StageEchoDaemon, StageOutputTransit,
 	} {
 		assert.Equal(t, s, NormalizeStage(s))

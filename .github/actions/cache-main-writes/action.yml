@@ -1,0 +1,90 @@
+name: 'Cache: main writes, everything else reads'
+description: >
+  Single-writer cache policy. The default branch restores AND saves (actions/cache, whose post
+  step saves only on a primary-key miss); every other ref only restores (actions/cache/restore),
+  so PR refs never write their own copy of a big shared cache. A PR can read caches from its own
+  ref and the base branch, never from sibling PR refs, so main must be the one that writes.
+
+inputs:
+  path:
+    description: Paths to cache (newline-separated).
+    required: true
+  key:
+    description: Primary key. With rolling=true the UTC date (-YYYYMMDD) is appended.
+    required: true
+  restore-keys:
+    description: Newline-separated prefix fallbacks (PRs always use them; see main-fallback).
+    default: ''
+  rolling:
+    description: >-
+      'true' appends today's UTC date to key, so the first main run each day saves a fresh entry
+      (later same-day runs hit the exact key and do not re-save). 'false' keys purely on the
+      caller's key.
+    default: 'false'
+  main-fallback:
+    description: >-
+      'false' makes main restore the exact key only. Use for caches that only ever grow when
+      seeded from a previous entry (Bun install cache, Bazel disk cache).
+    default: 'true'
+  write:
+    description: >-
+      'false' makes this call restore-only even on main, for jobs that should not own the entry
+      (several jobs sharing a key would race to save partial contents).
+    default: 'true'
+
+outputs:
+  cache-hit:
+    description: "'true' on an exact primary-key hit."
+    value: ${{ steps.main.outputs.cache-hit || steps.reader.outputs.cache-hit }}
+  cache-matched-key:
+    description: Key of the entry that was restored, if any.
+    value: ${{ steps.main.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
+  writer:
+    description: "'true' when this run is allowed to save the entry."
+    value: ${{ steps.policy.outputs.writer }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide cache role
+      id: policy
+      shell: bash
+      env:
+        DEFAULT_REF: refs/heads/${{ github.event.repository.default_branch }}
+        WRITE: ${{ inputs.write }}
+      run: |
+        {
+          echo "day=$(date -u +%Y%m%d)"
+          if [ "$GITHUB_REF" = "$DEFAULT_REF" ] && [ "$WRITE" = "true" ]; then
+            echo "writer=true"
+          else
+            echo "writer=false"
+          fi
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore and save cache (default branch)
+      id: main
+      if: steps.policy.outputs.writer == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}${{ inputs.rolling == 'true' && format('-{0}', steps.policy.outputs.day) || '' }}
+        restore-keys: ${{ inputs.main-fallback == 'true' && inputs.restore-keys || '' }}
+
+    - name: Restore cache (read-only)
+      id: reader
+      if: steps.policy.outputs.writer != 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}${{ inputs.rolling == 'true' && format('-{0}', steps.policy.outputs.day) || '' }}
+        restore-keys: ${{ inputs.restore-keys }}
+
+    - name: Report cache role
+      if: steps.policy.outputs.writer != 'true'
+      shell: bash
+      env:
+        KEY: ${{ inputs.key }}
+        MATCHED: ${{ steps.reader.outputs.cache-matched-key }}
+      run: |
+        echo "cache-policy: read-only on $GITHUB_REF (only the default branch saves); not saving '$KEY'; restored from '${MATCHED:-<miss>}'"

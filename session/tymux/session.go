@@ -826,13 +826,18 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 		return err
 	}
 	ctx := context.Background()
+	listStart := time.Now()
 	listResp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	termlat.Default.Record(termlat.StageRestoreList, tymuxLabels, time.Since(listStart))
 	if err != nil {
 		return classifyRPCError("RestoreWithWorkDir", err)
 	}
 	found, viaStoredID := s.claimOwnSession(workDir, listResp.Msg.GetSessions())
 	if found == nil {
-		return s.Start(workDir)
+		startAt := time.Now()
+		err := s.Start(workDir)
+		termlat.Default.Record(termlat.StageRestoreStart, tymuxLabels, time.Since(startAt))
+		return err
 	}
 	return s.adopt(ctx, found, viaStoredID)
 }
@@ -946,7 +951,9 @@ func (s *tymuxGRPCSession) cacheForViewing(ctx context.Context, id string, found
 // adopt attaches to a session this owner has claimed, reviving it when tymuxd lists it dead.
 func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStoredID bool) error {
 	if found.GetLiveness() == v1.Liveness_LIVENESS_DEAD {
+		reviveStart := time.Now()
 		revived, err := s.reviveForRestore(ctx, found)
+		termlat.Default.Record(termlat.StageRestoreRevive, tymuxLabels, time.Since(reviveStart))
 		if err != nil {
 			claimedSessions.CompareAndDelete(found.GetId(), any(s))
 			return err
@@ -957,7 +964,10 @@ func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStor
 	s.recordOwned = viaStoredID
 	s.adoptedPreexisting = true
 	s.mu.Unlock()
-	return s.cacheFromSession(found)
+	adoptStart := time.Now()
+	err := s.cacheFromSession(found)
+	termlat.Default.Record(termlat.StageRestoreAdopt, tymuxLabels, time.Since(adoptStart))
+	return err
 }
 
 // reviveForRestore returns the session record to adopt in place of a DEAD-listed one. A pane
