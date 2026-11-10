@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // Budgets is tools/promo/budgets.json, the single home of every size, time and
@@ -37,6 +39,11 @@ func ReadBudgets(path string) (Budgets, error) {
 		b.RecordWallClockMaxMinutes <= 0 || b.ClipMaxDurationMs <= 0 || len(b.RecordInputPaths) == 0 ||
 		b.OCRMinConfidence <= 0 || b.OCRMinConfidence > 100 || b.OCRFixtureMinRecall <= 0 || b.OCRFixtureMinRecall > 1 {
 		return Budgets{}, fmt.Errorf("%s: every budget must be positive and recordInputPaths non-empty", path)
+	}
+	for _, g := range b.RecordInputPaths {
+		if !doublestar.ValidatePattern(g) {
+			return Budgets{}, fmt.Errorf("%s: invalid recordInputPaths glob %q", path, g)
+		}
 	}
 	return b, nil
 }

@@ -46,6 +46,18 @@ func TestChanges_MergeCommitYieldsPRChangesOnly(t *testing.T) {
 	assert.Equal(t, []string{"gone.txt"}, ch.Deleted)
 }
 
+func TestChanges_SkipsGitlinkEntries(t *testing.T) {
+	t.Parallel()
+	dir := gitbasetest.PRRepoWithGitlink(t, gitbasetest.Files{"keep.txt": []byte("k")}, "third_party/tmux")
+	r, err := gitbase.Open(dir)
+	require.NoError(t, err)
+
+	ch, err := r.Changes("")
+	require.NoError(t, err)
+	assert.Empty(t, ch.Changed)
+	assert.Empty(t, ch.Deleted)
+}
+
 func TestReadBlob_ReturnsBaseContentNotPRContent(t *testing.T) {
 	t.Parallel()
 	dir := gitbasetest.PRRepo(t,

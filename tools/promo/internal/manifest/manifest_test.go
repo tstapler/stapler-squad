@@ -85,6 +85,7 @@ func TestReadBudgets_Rejects(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown key": `{"clipMaxBytes":1,"imageMaxBytes":1,"distMaxBytes":1,"recordWallClockMaxMinutes":1,"clipMaxDurationMs":1,"recordInputPaths":["a"],"x":1}`,
 		"zero value":  `{"clipMaxBytes":0,"imageMaxBytes":1,"distMaxBytes":1,"recordWallClockMaxMinutes":1,"clipMaxDurationMs":1,"recordInputPaths":["a"]}`,
+		"bad glob":    `{"clipMaxBytes":1,"imageMaxBytes":1,"distMaxBytes":1,"recordWallClockMaxMinutes":1,"clipMaxDurationMs":1,"ocrMinConfidence":50,"ocrFixtureMinRecall":0.5,"recordInputPaths":["a/[b"]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

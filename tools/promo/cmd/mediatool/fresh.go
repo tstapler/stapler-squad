@@ -89,11 +89,12 @@ func fresh(f freshFlags, stdout io.Writer, summaryPath string) (int, error) {
 	if f.decideReuse {
 		return decide(f, m, b, cmp, stdout)
 	}
-	var exp manifest.ExpectedMedia
-	if f.expected != "" {
-		if exp, err = manifest.ReadExpected(f.expected); err != nil {
-			return 0, err
-		}
+	if f.expected == "" {
+		return 0, fmt.Errorf("-expected is required outside -decide-reuse")
+	}
+	exp, err := manifest.ReadExpected(f.expected)
+	if err != nil {
+		return 0, err
 	}
 	fl, err := flags.FromTree(f.flagsPath)
 	if err != nil {

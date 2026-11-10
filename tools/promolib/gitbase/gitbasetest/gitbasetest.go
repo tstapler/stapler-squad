@@ -121,3 +121,32 @@ func RepoWithGitlink(t *testing.T, submodule string) string {
 	}
 	return dir
 }
+
+// PRRepoWithGitlink is PRRepo where the PR side adds a gitlink entry named
+// submodule next to base.
+func PRRepoWithGitlink(t *testing.T, base Files, submodule string) string {
+	t.Helper()
+	dir := t.TempDir()
+	baseHash := Commit(t, dir, base)
+	repo, wt := openRaw(t, dir)
+	idx, err := repo.Storer.Index()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.Entries = append(idx.Entries, &index.Entry{
+		Name: submodule, Hash: baseHash, Mode: filemode.Submodule,
+	})
+	if err := repo.Storer.SetIndex(idx); err != nil {
+		t.Fatal(err)
+	}
+	prHash, err := wt.Commit("add gitlink", &git.CommitOptions{Author: sig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Commit("merge", &git.CommitOptions{
+		Author: sig(), Parents: []plumbing.Hash{baseHash, prHash}, AllowEmptyCommits: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}

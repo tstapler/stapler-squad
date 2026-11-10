@@ -180,6 +180,9 @@ func (c *Changes) add(headTree *object.Tree, ch *object.Change, action merkletri
 	case merkletrie.Delete:
 		c.Deleted = append(c.Deleted, ch.From.Name)
 	case merkletrie.Insert, merkletrie.Modify:
+		if ch.To.TreeEntry.Mode == filemode.Submodule {
+			return nil // gitlink: no blob to stat
+		}
 		f, err := headTree.File(ch.To.Name)
 		if err != nil {
 			return fmt.Errorf("stat %q at HEAD: %w", ch.To.Name, err)

@@ -65,6 +65,16 @@ func TestFresh_MissingExpectedExitsOne(t *testing.T) {
 	assert.Contains(t, out, "approvals-queue: missing")
 }
 
+func TestFresh_OmittedExpectedExitsTwo(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, []manifest.MediaEntry{rec("a", manifest.FormatPNG, "C", "grimdark")}, []string{"a"}, enforce)
+	var out, errb bytes.Buffer
+	code := run([]string{"fresh", "-manifest", filepath.Join(f.dir, "m.json"), "-budgets", filepath.Join(f.dir, "b.json"),
+		"-flags", filepath.Join(f.dir, "f.json")}, &out, &errb, func(string) string { return "" })
+	assert.Equal(t, 2, code)
+	assert.Contains(t, errb.String(), "-expected is required")
+}
+
 func TestFresh_ReportOnlyWhenFreshnessEnforceFalse(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, []manifest.MediaEntry{rec("a", manifest.FormatPNG, "abc123", "clean")}, []string{"a"},
