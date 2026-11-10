@@ -74,12 +74,13 @@ func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEve
 // Hidden instances are filtered by the delivery gate (routine WARNING).
 func (s *SessionService) onColdRestoreLostHistory(inst *session.Instance) {
 	linkedItemID := s.rateLimitLinkedItemID(inst)
+	instTitle := inst.Snapshot().Title // lock-free read; bare inst.Title races with actor setters
 	notifID := fmt.Sprintf("cold-restore-lost-history-%s", inst.UUID)
 	s.eventBus.Publish(events.NewNotificationEvent(
-		inst.UUID, inst.Title, notifID,
+		inst.UUID, instTitle, notifID,
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING),
 		DerivePriority(false, true), // urgent, important — real context loss, but not a drop-everything alert
-		fmt.Sprintf("Session %q started fresh — previous conversation could not be resumed", inst.Title),
+		fmt.Sprintf("Session %q started fresh — previous conversation could not be resumed", instTitle),
 		"The session's tmux pane restarted and the previous conversation history could not be found on disk. Earlier context is not available.",
 		events.SessionScopedMetadata(nil, linkedItemID),
 	))
@@ -219,15 +220,16 @@ func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
 // Hidden instances are filtered by the delivery gate (routine WARNING).
 func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID string, resetTime time.Time) {
 	linkedItemID := s.rateLimitLinkedItemID(inst)
+	instTitle := inst.Snapshot().Title // lock-free read; bare inst.Title races with actor setters
 
 	var resetMsg string
 	if !resetTime.IsZero() {
 		resetMsg = fmt.Sprintf(" — resumes at %s", resetTime.Format("3:04 PM"))
 	}
-	title := fmt.Sprintf("Session \"%s\" rate limited%s", inst.Title, resetMsg)
+	title := fmt.Sprintf("Session \"%s\" rate limited%s", instTitle, resetMsg)
 	notifID := fmt.Sprintf("rl-detect-%s", sessionID)
 	s.eventBus.Publish(events.NewNotificationEvent(
-		sessionID, inst.Title, notifID,
+		sessionID, instTitle, notifID,
 		int32(8),                   // NotificationType_WARNING
 		DerivePriority(true, true), // urgent, important — the session just stopped making progress right now
 		title,
@@ -257,11 +259,12 @@ func (s *SessionService) onRateLimitDetected(inst *session.Instance, sessionID s
 // passing a flag.
 func (s *SessionService) onRateLimitRecoverySucceeded(inst *session.Instance, sessionID string) {
 	linkedItemID := s.rateLimitLinkedItemID(inst)
+	instTitle := inst.Snapshot().Title // lock-free read; bare inst.Title races with actor setters
 	s.eventBus.Publish(events.NewNotificationEvent(
-		sessionID, inst.Title, fmt.Sprintf("rl-recover-%s", sessionID),
+		sessionID, instTitle, fmt.Sprintf("rl-recover-%s", sessionID),
 		int32(10), // NotificationType_INFO
 		DerivePriority(false, false),
-		fmt.Sprintf("Session \"%s\" resumed after rate limit", inst.Title),
+		fmt.Sprintf("Session \"%s\" resumed after rate limit", instTitle),
 		"Session auto-resumed after rate limit expiry.",
 		events.SessionScopedMetadata(nil, linkedItemID),
 	))
@@ -273,11 +276,12 @@ func (s *SessionService) onRateLimitRecoverySucceeded(inst *session.Instance, se
 // reason, surfaced in the notification body.
 func (s *SessionService) onRateLimitRecoveryFailed(inst *session.Instance, sessionID, errMsg string) {
 	linkedItemID := s.rateLimitLinkedItemID(inst)
+	instTitle := inst.Snapshot().Title // lock-free read; bare inst.Title races with actor setters
 	s.eventBus.Publish(events.NewNotificationEvent(
-		sessionID, inst.Title, fmt.Sprintf("rl-recover-%s", sessionID),
+		sessionID, instTitle, fmt.Sprintf("rl-recover-%s", sessionID),
 		int32(9), // NotificationType_FAILURE
 		DerivePriority(true, true),
-		fmt.Sprintf("Session \"%s\" failed to resume after rate limit", inst.Title),
+		fmt.Sprintf("Session \"%s\" failed to resume after rate limit", instTitle),
 		fmt.Sprintf("Auto-resume failed: %s", errMsg),
 		events.SessionScopedMetadata(nil, linkedItemID),
 	))

@@ -1073,6 +1073,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	resolveStuckOnManualTransition(ctx, s.storage, req.Msg.ItemId, to)
 	if services.TransitionActorFromContext(ctx) == session.TriggeredByUser { // an operator move obsoletes any spawn backoff; agent moves don't
 		s.clearDequeueSpawnFailure(ctx, req.Msg.ItemId)
+		s.storage.RecordManualNudgeForItem(ctx, req.Msg.ItemId, session.ManualNudgeStatusTransition)
 	}
 
 	// override_reason set means this was a manual operator override (bypassing

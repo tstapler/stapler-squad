@@ -81,6 +81,7 @@ go_test(
         "backlog_gate_operator_bsvc_test.go",
         "backlog_gate_system_bsvc_test.go",
         "backlog_github_rpc_bsvc_test.go",
+        "backlog_manual_nudge_bsvc_test.go",
         "backlog_service_annotate_duplicate_test.go",
         "backlog_service_background_models_test.go",
         "backlog_service_budget_test.go",

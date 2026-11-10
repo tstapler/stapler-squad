@@ -12,6 +12,16 @@ type FlowMarkerKind string
 const (
 	FlowMarkerPRFixOutcome FlowMarkerKind = "pr_fix_outcome"
 	FlowMarkerPRFixTrigger FlowMarkerKind = "pr_fix_trigger"
+	// FlowMarkerManualNudge is a user-originated intervention on a backlog
+	// session; written only by RPC handlers a human drives, never by automation.
+	FlowMarkerManualNudge FlowMarkerKind = "manual_nudge"
+)
+
+// Manual-nudge values (the intervention type).
+const (
+	ManualNudgeWrite            = "write"
+	ManualNudgeRestart          = "restart"
+	ManualNudgeStatusTransition = "status_transition"
 )
 
 // PR-fix outcome values.

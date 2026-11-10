@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -292,6 +293,10 @@ var _ InstanceStore = (*Storage)(nil)
 // Storage handles saving and loading instances via the repository backend.
 type Storage struct {
 	Repo *EntRepository
+
+	// nudgeGate dedupes manual-nudge recording per session before any DB read.
+	nudgeGate     *MarkerLimiter
+	nudgeGateOnce sync.Once
 
 	// saved lets saveInstancesToRepo skip instances unchanged since their last save.
 	saved savedFingerprints
@@ -2061,6 +2066,39 @@ func (s *Storage) RecordFlowMarker(ctx context.Context, itemID string, kind Flow
 		return
 	}
 	s.Repo.RecordFlowMarker(ctx, itemID, kind, value, prNumber)
+}
+
+// RecordManualNudgeForSession records a user-originated intervention on the
+// backlog item linked to sessionUUID. Non-backlog sessions and lookup errors are
+// silent no-ops. Callers must be human-driven handlers, never agent-reachable
+// ones. The name deliberately omits "FlowMarker" (see
+// flow_marker_no_mcp_exposure_test.go): no MCP handler may call this.
+func (s *Storage) RecordManualNudgeForSession(ctx context.Context, sessionUUID, value string) {
+	if s == nil || s.Repo == nil || sessionUUID == "" {
+		return
+	}
+	// The gate runs before the item lookup so a hot input path (WriteToSession)
+	// pays one map read per 30m window, and non-backlog sessions are remembered too.
+	s.nudgeGateOnce.Do(func() { s.nudgeGate = NewMarkerLimiter(nil) })
+	if !s.nudgeGate.Allow(sessionUUID, value) {
+		return
+	}
+	// A client disconnect must not drop the marker mid-lookup.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	is, err := s.Repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
+	if err != nil || is.BacklogItemID == "" {
+		return
+	}
+	s.Repo.RecordFlowMarker(ctx, is.BacklogItemID, FlowMarkerManualNudge, value, 0)
+}
+
+// RecordManualNudgeForItem records a user-originated intervention on itemID.
+func (s *Storage) RecordManualNudgeForItem(ctx context.Context, itemID, value string) {
+	if s == nil || s.Repo == nil {
+		return
+	}
+	s.Repo.RecordFlowMarker(ctx, itemID, FlowMarkerManualNudge, value, 0)
 }
 
 // RecordFlowMarkerForItemPR passes through to EntRepository.RecordFlowMarkerForItemPR

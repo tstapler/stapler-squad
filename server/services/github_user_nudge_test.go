@@ -823,3 +823,41 @@ func TestNudgeSessionForPR_should_RefuseAHiddenSessionWithZeroSteersAndZeroFetch
 	assert.Zero(t, f.nudger.steerCount())
 	assert.Zero(t, f.fetcher.callCount())
 }
+
+type fakeNudgeRecorder struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *fakeNudgeRecorder) RecordManualNudgeForSession(_ context.Context, sessionUUID, value string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, sessionUUID+"|"+value)
+}
+
+func TestNudgeSessionForPR_should_RecordManualNudge_When_SteerDelivered(t *testing.T) {
+	f := newNudgeFixture(t)
+	rec := &fakeNudgeRecorder{}
+	f.svc.SetNudgeRecorder(rec)
+
+	_, err := f.call("fix-ci")
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"uuid-fix-ci|" + session.ManualNudgeWrite}, rec.calls)
+}
+
+func TestNudgeSessionForPR_should_NotRecordManualNudge_When_SteerNotDelivered(t *testing.T) {
+	for _, outcome := range []SteerOutcome{SteerDuplicate, SteerCoolingDown, SteerGuardBusy, SteerBusy} {
+		t.Run(outcome.String(), func(t *testing.T) {
+			f := newNudgeFixture(t)
+			f.nudger.outcome = outcome
+			rec := &fakeNudgeRecorder{}
+			f.svc.SetNudgeRecorder(rec)
+
+			_, err := f.call("fix-ci")
+
+			require.NoError(t, err)
+			assert.Empty(t, rec.calls)
+		})
+	}
+}

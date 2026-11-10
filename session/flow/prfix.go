@@ -15,6 +15,7 @@ type MarkerKind string
 const (
 	MarkerPRFixOutcome MarkerKind = "pr_fix_outcome"
 	MarkerPRFixTrigger MarkerKind = "pr_fix_trigger"
+	MarkerManualNudge  MarkerKind = "manual_nudge"
 )
 
 // PR-fix outcome values.
@@ -27,6 +28,7 @@ const (
 // Estimated codes emitted by the capture-dependent PR-fix metrics.
 const (
 	EstimatedPRFixOutcomeSinceCapture = "pr_fix_outcome:since_capture"
+	EstimatedManualNudgeSinceCapture  = "manual_nudge:since_capture"
 	EstimatedPRFixCauseSinceCapture   = "pr_fix_cause:since_capture"
 	EstimatedPRFixCauseUnavailable    = "pr_fix_cause:unavailable"
 	EstimatedPRFixDwellSplit          = "pr_fix_dwell_split:since_capture"
@@ -56,6 +58,7 @@ type Marker struct {
 type MarkerCapture struct {
 	FirstOutcome time.Time
 	FirstTrigger time.Time
+	FirstNudge   time.Time
 }
 
 // MarkerSource reads the system-written marker table only, never note text,
@@ -221,4 +224,36 @@ func markerOutcomes(in PRFixOutcomeInput, out *PRFixOutcomes) []outcomeEvent {
 func isSystemPRFixReopen(rs RealSpan) bool {
 	return rs.From() == domain.BacklogStatusPRPending && rs.To() == domain.BacklogStatusInProgress &&
 		rs.TriggeredBy() == "system" && ClassifyNote(rs.Note()) == CausePRFixReopen
+}
+
+// ManualNudgeCounts tallies manual_nudge markers inside the window, bucketed
+// by ISO week (every week in the window present, quiet ones with N 0). Not
+// recording (first is zero) yields no counts and no buckets.
+func ManualNudgeCounts(w FlowWindow, markers []Marker, first time.Time) ManualNudges {
+	out := ManualNudges{Recording: !first.IsZero(), CaptureSince: first, Drill: DrillManualNudge}
+	if !out.Recording {
+		return out
+	}
+	last := isoWeekStart(w.End().Add(-time.Nanosecond))
+	var weeks []time.Time
+	for ws := isoWeekStart(w.Start()); !ws.After(last); ws = ws.AddDate(0, 0, 7) {
+		weeks = append(weeks, ws)
+	}
+	if len(weeks) > maxTrendWeeks {
+		weeks = weeks[len(weeks)-maxTrendWeeks:]
+	}
+	out.Weekly = make([]ThroughputBucket, len(weeks))
+	for i, ws := range weeks {
+		out.Weekly[i] = ThroughputBucket{WeekStart: ws} // no per-week drill: DrillManualNudge spans the whole window
+	}
+	for _, m := range markers {
+		if m.Kind != MarkerManualNudge || !w.Contains(m.At) || m.At.Before(first) {
+			continue
+		}
+		if i, ok := weekIndex(weeks, m.At); ok {
+			out.Weekly[i].N++
+			out.Total++
+		}
+	}
+	return out
 }

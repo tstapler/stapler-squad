@@ -1,7 +1,7 @@
 // +feature: notification-tray
 "use client";
 
-import { useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useDraggableBell } from "@/lib/hooks/useDraggableBell";
 import { useDeckViewport } from "@/lib/contexts/deckViewportContext";
 import { useNotificationCommands, useNotificationState } from "@/lib/contexts/notificationContexts";
@@ -51,7 +51,22 @@ export function TrayHandle() {
   const ref = useRef<HTMLButtonElement>(null);
   const bell = useDraggableBell(ref, !isInnerScreen);
   // The phone's standing entry is the bottom nav; the floating bell is opt-in and yields to the keyboard.
-  if (!isInnerScreen && (!bell.floatingBellEnabled || isVirtualKeyboardOpen)) return null;
+  const visible = isInnerScreen || (bell.floatingBellEnabled && !isVirtualKeyboardOpen);
+
+  // Scroll containers pad the bell's side by this so rows don't sit under the fixed bell.
+  const edge = bell.edge;
+  useEffect(() => {
+    if (!visible) return;
+    const root = document.documentElement.style;
+    root.setProperty("--tray-handle-width", "44px");
+    root.setProperty("--tray-handle-edge", edge);
+    return () => {
+      root.removeProperty("--tray-handle-width");
+      root.removeProperty("--tray-handle-edge");
+    };
+  }, [visible, edge]);
+
+  if (!visible) return null;
 
   return (
     <button
