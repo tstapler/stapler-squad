@@ -173,8 +173,8 @@ func (r followReader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		if _, statErr := os.Stat(r.done); statErr == nil {
-			if n, err = r.f.Read(p); n > 0 {
-				return n, nil
+			if m, _ := r.f.Read(p); m > 0 { // drain what landed between the EOF and the done marker
+				return m, nil
 			}
 			return 0, io.EOF
 		}

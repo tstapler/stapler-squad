@@ -63,10 +63,9 @@ func TestFollowReaderStopsAfterDoneFile(t *testing.T) {
 	}
 	defer f.Close()
 	done := filepath.Join(dir, "make.log.done")
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		os.WriteFile(done, nil, 0o644) //nolint:errcheck // test helper
-	}()
+	if err := os.WriteFile(done, nil, 0o644); err != nil { // already finished: the reader drains the log, then stops
+		t.Fatal(err)
+	}
 	rep, err := scan(followReader{f: f, done: done}, time.Now)
 	if err != nil || len(rep.Targets) != 1 {
 		t.Fatalf("rep=%+v err=%v", rep, err)
