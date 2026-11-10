@@ -475,6 +475,8 @@ func TestServerDependencies_should_DegradeFeatureNotServer_When_KeychainUnreadab
 	deps, err := BuildDependencies()
 	require.NoError(t, err, "an unreadable keychain must degrade the Jules feature, not fail server startup")
 
+	newShutdownOnCleanupServer(t, "localhost:0", deps) // stop deps' background writers before the state dir is removed
+
 	assert.Nil(t, deps.JulesSessionPoller, "an unreadable keychain must leave the Jules poller unconstructed")
 	assert.NotNil(t, deps.SessionService, "every other subsystem must be unaffected")
 	assert.NotNil(t, deps.BacklogService, "every other subsystem must be unaffected")
