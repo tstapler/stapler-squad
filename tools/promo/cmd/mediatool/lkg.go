@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/tools/promo/internal/manifest"
 )
 
@@ -22,9 +24,10 @@ const ghTimeout = 2 * time.Minute
 func execGH(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), ghTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "gh", args...).Output()
+	out, err := safeexec.CommandContext(ctx, "gh", args...).Output()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			return out, fmt.Errorf("gh %v: %w: %s", args, err, ee.Stderr)
 		}
 		return out, fmt.Errorf("gh %v: %w", args, err)

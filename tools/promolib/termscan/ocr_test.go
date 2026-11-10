@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/tools/promolib/termscan"
 )
 
@@ -34,7 +35,7 @@ func TestOCRRecoversKnownText(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	out := filepath.Join(t.TempDir(), "known-text")
-	cmd := exec.CommandContext(ctx, bin, filepath.Join("testdata", "ocr", "known-text.png"), out, "tsv")
+	cmd := safeexec.CommandContext(ctx, bin, filepath.Join("testdata", "ocr", "known-text.png"), out, "tsv")
 	require.NoError(t, cmd.Run())
 	data, err := os.ReadFile(out + termscan.TSVExt)
 	require.NoError(t, err)
