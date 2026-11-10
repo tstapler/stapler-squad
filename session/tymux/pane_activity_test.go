@@ -73,6 +73,7 @@ func activitySessionWith(t *testing.T, caps []string, sender *fakeActivitySender
 	if sender != nil && slices.Contains(caps, capPaneActivityHint) {
 		// Start clears any stale hint asynchronously; let it land so tests count only their own.
 		require.Eventually(t, func() bool { return len(sender.calls()) == 1 }, 5*time.Second, time.Millisecond)
+		sess.activity.resends.Wait() // Start's stream-open resend must not land inside the test body
 		sender.forget()
 	}
 	return sess, transport
