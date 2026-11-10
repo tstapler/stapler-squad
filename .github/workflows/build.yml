@@ -330,6 +330,7 @@ jobs:
             tests/e2e/shard-timings.json
             .bun-version
             .github/actions/setup-bun
+            .github/actions/cache-main-writes
           sparse-checkout-cone-mode: false
 
       - name: Read pinned Playwright version
