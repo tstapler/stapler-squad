@@ -102,6 +102,11 @@ test.describe('Landing page — UX acceptance', () => {
 		await expect(card).toHaveCount(1);
 		const clip = card.getByTestId('feature-card-video');
 		const media = (await clip.count()) > 0 ? clip : card.getByAltText(alt);
+		if ((await media.count()) === 0) {
+			// Card shots are recorded only by the deploy job; the smoke build renders text-only cards.
+			expect(process.env.TOURS_MEDIA_MODE, 'a card without media is only valid in smoke mode').toBe('smoke');
+			return;
+		}
 		await media.scrollIntoViewIfNeeded();
 		await expect(media).toBeVisible();
 		const mediaBox = await media.boundingBox();
