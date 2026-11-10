@@ -1,0 +1,41 @@
+---
+title: "Approval review"
+description: "Decide what agents may run in the Review Queue, then automate the safe cases with approval rules."
+tour:
+  title: "Approval review"
+  outcome: "Approve what needs a human, then write rules so routine commands stop interrupting you."
+  clip: approval-review
+  features:
+    - review-queue
+    - approval-rules
+    - analytics
+  helpDoc: help/getting-started
+  order: 2
+  category: "Review & Approval"
+  audience: Anyone who wants agents to run with fewer interruptions
+  durationMin: 2
+  phoneFigure: review-queue-mobile
+  steps:
+    - text: "Open the Review Queue to see every agent waiting for a decision."
+      shot: approval-review-1
+      alt: "The Review Queue page listing agents that are waiting for approval, with queue statistics at the top."
+      caption: "Marker 1 shows a queue item for an agent waiting on a command."
+      narration: "The Review Queue opens with the agents that need a decision. Each item names the command the agent wants to run."
+      why: "One place shows every blocked agent, so none sits idle unnoticed."
+    - text: "Open Auto-Approval Rules to see what is already decided for you."
+      shot: approval-review-2
+      alt: "The Auto-Approval Rules page with a table of rules and an Add Custom Rule button above it."
+      caption: "Marker 1 shows the rules table; marker 2 shows the Add Custom Rule button."
+      narration: "The rules page lists each rule with its decision. Built-in rules cover read-only commands and safe git operations."
+    - text: "Add a custom rule for a command you always trust, such as git log."
+      shot: approval-review-3
+      alt: "The custom rule form open with the name field filled in, ready for a tool, program and subcommand."
+      caption: "Marker 1 shows the rule name field of the custom rule form."
+      narration: "The custom rule form opens and the name Allow git log is typed in. The form is cancelled, so nothing is saved."
+    - text: "Check Approval Analytics to see how often each rule decided for you."
+      shot: approval-review-4
+      alt: "The Approval Analytics panel under the rules table, summarising how approvals were decided over a time window."
+      caption: "Marker 1 shows the Approval Analytics heading."
+      narration: "The page scrolls to Approval Analytics, which summarises decisions over a chosen time window."
+      quote: "Approval Analytics"
+---

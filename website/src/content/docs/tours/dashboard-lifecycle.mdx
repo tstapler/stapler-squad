@@ -1,0 +1,42 @@
+---
+title: "Dashboard lifecycle"
+description: "Start an agent, watch it work, review its changes and pause it, all from one Stapler Squad dashboard."
+tour:
+  title: "Dashboard lifecycle"
+  outcome: "See every agent at a glance, then start, watch, review and pause one without leaving the dashboard."
+  clip: dashboard-lifecycle
+  features:
+    - session-list
+    - session-create-omnibar
+    - "session:stream-terminal"
+    - "session:get-diff"
+  helpDoc: help/getting-started
+  order: 1
+  category: Visibility
+  audience: Anyone running more than one agent
+  durationMin: 2
+  phoneFigure: terminal-mobile
+  steps:
+    - text: "Open the dashboard to see every agent, its status and its diff size in one list."
+      shot: dashboard-lifecycle-1
+      alt: "Dashboard listing agent sessions with status badges and added and removed line counts, with a search box above the list."
+      caption: "Marker 1 shows a session card; marker 2 shows the search box."
+      narration: "The dashboard loads with a row for each agent. Each row carries a status badge and a count of lines added and removed."
+      why: "You see which agents are working and which are waiting without opening each one."
+      quote: "checkout-retry-logic"
+    - text: "Press New Session to open the omnibar and point a new agent at a repository."
+      shot: dashboard-lifecycle-2
+      alt: "The omnibar dialog open over the dashboard, with a single input for a repository path, branch or session name."
+      caption: "Marker 1 shows the omnibar input that takes a path, branch or name."
+      narration: "A dialog opens with one input. Typing a repository path or branch starts the session setup, and Escape closes it."
+    - text: "Select a running session and open its Terminal tab to watch the agent live."
+      shot: dashboard-lifecycle-3
+      alt: "A session open on its Terminal tab, showing the agent's live output while it waits for a decision."
+      caption: "Marker 1 shows the Terminal tab of the selected session."
+      narration: "Selecting the session opens its detail view. The Terminal tab streams the agent's output as it works."
+    - text: "Switch to the Diff tab to review what the agent changed, then pause or resume it from the session bar."
+      shot: dashboard-lifecycle-4
+      alt: "A session open on its Diff tab, listing the files the agent has changed so far."
+      caption: "Marker 1 shows the Diff tab of the selected session."
+      narration: "The Diff tab lists the agent's changes. The session bar above it carries the pause and resume controls."
+---
