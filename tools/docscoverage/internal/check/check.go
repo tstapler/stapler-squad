@@ -232,13 +232,15 @@ func countGrandfathered(s registry.Sidecars) (n int) {
 	return n
 }
 
-// checkTourBacklinks warns when a tour lists a feature whose sidecar does not link back.
+// checkTourBacklinks warns when a tour lists a feature whose sidecar links to no
+// tour that lists it. A sidecar holds one tour, so a feature listed by several
+// tours is linked back by whichever of them its sidecar names.
 func (res *Result) checkTourBacklinks(in Input) {
 	var out []string
 	for _, tid := range in.Resolver.TourIDs() {
 		for _, fid := range in.Resolver.TourFeatures(tid) {
 			sc, ok := in.Sidecars.ByID[model.FeatureID(fid)]
-			if !ok || sc.Tour != tid {
+			if !ok || !in.Resolver.TourLists(sc.Tour, fid) {
 				out = append(out, fmt.Sprintf("tour %s lists %s but that feature's sidecar has no tour: %q", tid, fid, tid))
 			}
 		}

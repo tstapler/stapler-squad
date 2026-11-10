@@ -1,4 +1,5 @@
 {
   "id": "backlog-board",
-  "status": "grandfathered"
+  "tour": "backlog-pipeline",
+  "website": "tours/backlog-pipeline"
 }

@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/tools/docscoverage/internal/check"
 	"github.com/tstapler/stapler-squad/tools/docscoverage/internal/fixture"
+	"github.com/tstapler/stapler-squad/tools/docscoverage/internal/model"
 	"github.com/tstapler/stapler-squad/tools/promolib/gitbase/gitbasetest"
 )
 
@@ -144,6 +146,35 @@ func TestCommittedBaselineHasNoViolations(t *testing.T) {
 	res, _, err := assess(checkOpts{repo: "../../../..", base: noBase, enforce: "false"})
 	require.NoError(t, err)
 	assert.Empty(t, res.Violations)
-	assert.Equal(t, 163, res.Counts.InScope)
+	// 163 default-userFacing ids plus the 6 backend ids the tours cover (sidecars set userFacing: true).
+	assert.Equal(t, 169, res.Counts.InScope)
 	assert.Equal(t, res.Counts.InScope, res.Counts.Covered+res.Counts.Exempt+res.Counts.Grandfathered, "every in-scope id is covered, exempt or grandfathered")
+}
+
+// TestAllTourFeaturesHaveSidecars runs the checker over the real repo: every id
+// the tours list is covered through a tour link, with no mismatch warning.
+func TestAllTourFeaturesHaveSidecars(t *testing.T) {
+	t.Parallel()
+	in, err := loadInput(filepath.Join("..", "..", "..", ".."))
+	require.NoError(t, err)
+	tours := in.Resolver.TourIDs()
+	require.Len(t, tours, 8)
+	res := check.Assess(in)
+	covered := map[model.FeatureID]bool{}
+	for _, e := range res.Entries {
+		covered[e.ID] = e.Status == model.StatusCovered
+	}
+	for _, tour := range tours {
+		for _, id := range in.Resolver.TourFeatures(tour) {
+			sc, ok := in.Sidecars.ByID[model.FeatureID(id)]
+			require.True(t, ok, "tour %s lists %s with no sidecar", tour, id)
+			assert.NotEqual(t, model.Grandfathered, sc.Status, id)
+			assert.Equal(t, "tours/"+sc.Tour, sc.Website, id)
+			assert.True(t, in.Resolver.TourLists(sc.Tour, id), "%s: sidecar tour %s does not list it", id, sc.Tour)
+			assert.True(t, covered[model.FeatureID(id)], "%s is not covered", id)
+		}
+	}
+	for _, w := range res.Warnings {
+		assert.NotContains(t, w, "sidecar has no tour")
+	}
 }

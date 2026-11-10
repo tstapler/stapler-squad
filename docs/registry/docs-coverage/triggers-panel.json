@@ -1,4 +1,5 @@
 {
   "id": "triggers-panel",
-  "status": "grandfathered"
+  "tour": "automation-rules",
+  "website": "tours/automation-rules"
 }

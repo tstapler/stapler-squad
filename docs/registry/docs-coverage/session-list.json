@@ -1,4 +1,5 @@
 {
   "id": "session-list",
-  "status": "grandfathered"
+  "tour": "dashboard-lifecycle",
+  "website": "tours/dashboard-lifecycle"
 }

@@ -188,3 +188,16 @@ func TestBackendFeatureInScopeOnlyWithSidecarUserFacing(t *testing.T) {
 	assert.Equal(t, 1, res.Counts.InScope)
 	assert.Equal(t, model.FeatureID("rpc:b"), res.Entries[0].ID)
 }
+
+func TestFeatureInTwoToursNeedsOnlyOneBacklink(t *testing.T) {
+	t.Parallel()
+	tree := docsTree()
+	tree[resolve.WebsiteDocs+"/tours/t2.mdx"] = []byte("---\ntour:\n  features:\n    - tour-feature\n    - lonely\n---\n")
+	r, err := resolve.Load(fixture.Write(t, tree))
+	require.NoError(t, err)
+	res := check.Assess(check.Input{Registry: regOf(t, "tour-feature", "lonely"), Resolver: r,
+		Budgets:  check.Budgets{ExemptRatioCeiling: 0.5, MaxExemptIncrease: 5},
+		Sidecars: sidecars(`{"id":"tour-feature","tour":"t1","website":"tours/t1"}`, `{"id":"lonely","status":"grandfathered"}`)})
+	require.Len(t, res.Warnings, 1)
+	assert.Contains(t, res.Warnings[0], "t2 lists lonely")
+}

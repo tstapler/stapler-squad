@@ -1,4 +1,5 @@
 {
   "id": "insights-findings-panel",
-  "status": "grandfathered"
+  "tour": "insights-cost",
+  "website": "tours/insights-cost"
 }

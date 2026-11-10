@@ -1,4 +1,5 @@
 {
   "id": "ui:notifications-page",
-  "status": "grandfathered"
+  "tour": "attention-notifications",
+  "website": "tours/attention-notifications"
 }

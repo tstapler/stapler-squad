@@ -1,4 +1,5 @@
 {
   "id": "analytics",
-  "status": "grandfathered"
+  "tour": "approval-review",
+  "website": "tours/approval-review"
 }

@@ -1,4 +1,5 @@
 {
   "id": "notification-tray",
-  "status": "grandfathered"
+  "tour": "attention-notifications",
+  "website": "tours/attention-notifications"
 }

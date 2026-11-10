@@ -1,4 +1,5 @@
 {
   "id": "backlog:flow",
-  "status": "grandfathered"
+  "tour": "backlog-pipeline",
+  "website": "tours/backlog-pipeline"
 }

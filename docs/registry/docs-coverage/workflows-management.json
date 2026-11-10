@@ -1,4 +1,5 @@
 {
   "id": "workflows-management",
-  "status": "grandfathered"
+  "tour": "automation-rules",
+  "website": "tours/automation-rules"
 }

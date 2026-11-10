@@ -1,4 +1,5 @@
 {
   "id": "insights-dashboard",
-  "status": "grandfathered"
+  "tour": "insights-cost",
+  "website": "tours/insights-cost"
 }

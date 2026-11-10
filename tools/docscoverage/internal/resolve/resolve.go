@@ -223,6 +223,9 @@ func (r *Resolver) TourFeatures(tourID string) []string {
 	return out
 }
 
+// TourLists reports whether tour tourID exists and lists registry id.
+func (r *Resolver) TourLists(tourID, id string) bool { return r.tours[tourID].features[id] }
+
 // CheckHelp returns problems with a "slug[#anchor]" help reference.
 func (r *Resolver) CheckHelp(ref string) []string {
 	slug, anchor := model.SplitRef(ref)

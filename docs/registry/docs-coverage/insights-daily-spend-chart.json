@@ -1,4 +1,5 @@
 {
   "id": "insights-daily-spend-chart",
-  "status": "grandfathered"
+  "tour": "insights-cost",
+  "website": "tours/insights-cost"
 }
