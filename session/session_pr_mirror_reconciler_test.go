@@ -35,7 +35,7 @@ func loadByTitle(t *testing.T, s *Storage, title string) *Instance {
 }
 
 func TestMirrorReconciler_ShouldCorrectViaActor_WhenLegacyNumberDriftsFromActivePR(t *testing.T) {
-	t.Parallel()
+	// Serial: asserts exact deltas on the process-global drift counters, which parallel reconcilers also bump.
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	prLoadFixture(t, storage, "drifted", "u-drift", "acme", "app", 11)
@@ -59,7 +59,7 @@ func TestMirrorReconciler_ShouldCorrectViaActor_WhenLegacyNumberDriftsFromActive
 }
 
 func TestMirrorReconciler_ShouldSkipAndCount_WhenLegacyPRUnrepresented(t *testing.T) {
-	t.Parallel()
+	// Serial: asserts exact deltas on the process-global drift counters, which parallel reconcilers also bump.
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	prLoadFixture(t, storage, "skipped", "u-skip", "", "", 41)
