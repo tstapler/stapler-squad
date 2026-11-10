@@ -43,7 +43,7 @@ function Harness() {
           triggerRef.current = event.currentTarget;
           setOpen(true);
         }}
-      >
+      >{/* analytics-exempt */}
         Browse Files
       </button>
       {open && (

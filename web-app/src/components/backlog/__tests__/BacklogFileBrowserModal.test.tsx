@@ -72,7 +72,7 @@ describe("BacklogFileBrowserModal", () => {
     render(<BacklogFileBrowserModal sessionId="s1" onClose={() => {}} />);
 
     await waitFor(() => expect(capturedFileTreeProps).not.toBeNull());
-    const gitStatusMap = capturedFileTreeProps!.gitStatusMap as Map<string, string>;
+    const gitStatusMap = capturedFileTreeProps?.gitStatusMap as Map<string, string>;
     expect(gitStatusMap.get("src/foo.go")).toBe("M");
     expect(gitStatusMap.get("src/new.go")).toBe("?");
   });
@@ -83,7 +83,7 @@ describe("BacklogFileBrowserModal", () => {
     render(<BacklogFileBrowserModal sessionId="s1" onClose={() => {}} />);
 
     await waitFor(() => expect(capturedFileTreeProps).not.toBeNull());
-    const gitStatusMap = capturedFileTreeProps!.gitStatusMap as Map<string, string>;
+    const gitStatusMap = capturedFileTreeProps?.gitStatusMap as Map<string, string>;
     expect(gitStatusMap.size).toBe(0);
   });
 });

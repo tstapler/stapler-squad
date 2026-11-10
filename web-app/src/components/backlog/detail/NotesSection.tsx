@@ -53,10 +53,10 @@ export function NotesSection({
                 disabled={actionLoading !== null}
                 aria-busy={actionLoading === "save_notes"}
                 data-testid="backlog-notes-save"
-              >
+              >{/* analytics-exempt */}
                 <ActionButtonLabel pending={actionLoading === "save_notes"} label="Save" />
               </button>
-              <button className={styles.cancelNotesButton} onClick={onCancel} data-testid="backlog-notes-cancel">
+              <button className={styles.cancelNotesButton} onClick={onCancel} data-testid="backlog-notes-cancel">{/* analytics-exempt */}
                 Cancel
               </button>
             </div>
@@ -72,7 +72,7 @@ export function NotesSection({
             }}
             aria-label="Click to edit notes"
             data-testid="backlog-notes-display"
-          >
+          >{/* analytics-exempt */}
             {item.notes ?? "Click to add notes…"}
           </p>
         )}

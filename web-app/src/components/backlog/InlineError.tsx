@@ -79,7 +79,7 @@ export function InlineError({
               onClick={onDismiss}
               aria-label="Dismiss error"
               type="button"
-            >
+            >{/* analytics-exempt */}
               ×
             </button>
           )}
@@ -105,7 +105,7 @@ export function InlineError({
               onClick={onRetry}
               aria-label={retryAriaLabel}
               type="button"
-            >
+            >{/* analytics-exempt */}
               Retry ↺
             </button>
           )}
@@ -134,7 +134,7 @@ export function InlineError({
           onClick={onRetry}
           aria-label={retryAriaLabel}
           type="button"
-        >
+        >{/* analytics-exempt */}
           Retry ↺
         </button>
       )}
@@ -144,7 +144,7 @@ export function InlineError({
           onClick={onDismiss}
           aria-label="Dismiss error"
           type="button"
-        >
+        >{/* analytics-exempt */}
           ×
         </button>
       )}

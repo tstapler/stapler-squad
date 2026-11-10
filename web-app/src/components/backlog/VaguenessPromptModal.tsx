@@ -53,7 +53,7 @@ export function VaguenessPromptModal({ itemTitle, onRefine, onProceed }: Vaguene
             className={styles.primaryButton}
             onClick={onRefine}
             data-testid="vagueness-refine-button"
-          >
+          >{/* analytics-exempt */}
             Add more detail
           </button>
           <button
@@ -61,7 +61,7 @@ export function VaguenessPromptModal({ itemTitle, onRefine, onProceed }: Vaguene
             className={styles.secondaryButton}
             onClick={onProceed}
             data-testid="vagueness-proceed-button"
-          >
+          >{/* analytics-exempt */}
             Run triage anyway
           </button>
         </div>

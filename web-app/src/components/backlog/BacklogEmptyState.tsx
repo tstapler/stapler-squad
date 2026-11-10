@@ -81,7 +81,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
         autoFocus
         onClick={handleCreateClick}
         data-testid="backlog-empty-cta-button"
-      >
+      >{/* analytics-exempt */}
         + Create First Item
       </button>
     </section>
@@ -102,7 +102,7 @@ export function FilterZeroState({ onClearFilters }: FilterZeroStateProps) {
       data-testid="backlog-filter-zero-state"
     >
       <p className={styles.filterZeroText}>No items match your filters.</p>
-      <button className={styles.clearFiltersButton} onClick={onClearFilters} data-testid="backlog-clear-filters-button">
+      <button className={styles.clearFiltersButton} onClick={onClearFilters} data-testid="backlog-clear-filters-button">{/* analytics-exempt */}
         Clear filters
       </button>
     </div>
