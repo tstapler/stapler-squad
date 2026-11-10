@@ -1,9 +1,4 @@
-//go:build ssq_port_pending
-
-// Pending port: needs the session package's poller fixtures (recordingPRClient, newRowPoller,
-// seedStateRow) exposed to the prpoller package. Excluded from every build until then.
-
-package backlog
+package prpoller
 
 import (
 	"context"
@@ -34,13 +29,13 @@ func TestPoller_ShouldNotifyTerminalListener_WhenOpenPRMerges_AndNotForStillOpen
 	}))
 	owner := session.ItemPROwner("item-1")
 	for _, n := range []int{12, 13} {
-		seedStateRow(t, storage.repo, owner, testRef(n), session.PRInitial{State: session.PRStateOpen})
+		seedStateRow(t, storage.Repo, owner, prRefN(t, n), session.PRInitial{State: session.PRStateOpen})
 	}
-	seedStateRow(t, storage.repo, owner, testRef(14), session.PRInitial{State: session.PRStateMerged, Terminal: true})
+	seedStateRow(t, storage.Repo, owner, prRefN(t, 14), session.PRInitial{State: session.PRStateMerged, Terminal: true})
 
 	p.pollPullRequestStates(context.Background(), false)
 
-	merged, err := storage.GetPullRequestState(context.Background(), testRef(12))
+	merged, err := storage.GetPullRequestState(context.Background(), prRefN(t, 12))
 	require.NoError(t, err)
 	mu.Lock()
 	defer mu.Unlock()

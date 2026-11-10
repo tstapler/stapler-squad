@@ -37,8 +37,13 @@ go_test(
     srcs = [
         "helpers_test.go",
         "poller_invalidation_adapter_test.go",
+        "pr_followup_review_test.go",
+        "pr_multi_legacy_test.go",
+        "pr_multi_poller_test.go",
         "pr_status_poller_discovery_test.go",
         "pr_status_poller_test.go",
+        "pr_terminal_listener_poller_test.go",
+        "pr_title_verify_mirror_test.go",
         "worktree_pr_poller_backoff_test.go",
         "worktree_pr_poller_discovery_test.go",
         "worktree_pr_poller_invalidate_test.go",
@@ -53,6 +58,8 @@ go_test(
         "//github",
         "//session",
         "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
 

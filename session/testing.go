@@ -113,6 +113,10 @@ func NewPausedTestInstance(title string) *Instance {
 	return inst
 }
 
+// FinishInstanceForTest publishes the initial snapshot of an Instance built from a struct literal,
+// so tests of packages above session (e.g. session/prpoller) can call Snapshot()/AttachPR on it.
+func FinishInstanceForTest(i *Instance) { finishInstanceConstruction(i) }
+
 // TestBackdateCreationProgress rewrites a persisted instance's
 // creation_progress_updated_at column directly to `when`, simulating elapsed
 // wall-clock time without a real sleep. There is no production setter for an

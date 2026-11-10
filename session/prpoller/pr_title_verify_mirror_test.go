@@ -1,8 +1,4 @@
-//go:build ssq_port_pending
-
-// Pending port: drives PRStatusPoller through unexported session fixtures; see pr_multi_poller_test.go.
-
-package session
+package prpoller
 
 import (
 	"errors"
@@ -13,9 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session"
 )
 
-func viewOf(t *testing.T, inst *Instance, n int) PRView {
+func viewOf(t *testing.T, inst *session.Instance, n int) session.PRView {
 	t.Helper()
 	for _, v := range inst.Snapshot().GitHub.PRs {
 		if v.Ref.Number() == n {
@@ -23,7 +20,7 @@ func viewOf(t *testing.T, inst *Instance, n int) PRView {
 		}
 	}
 	t.Fatalf("PR #%d not in the session's set", n)
-	return PRView{}
+	return session.PRView{}
 }
 
 func TestPoller_ShouldPersistAndMirrorTitle_WhenFetchSucceeds(t *testing.T) {
@@ -31,10 +28,10 @@ func TestPoller_ShouldPersistAndMirrorTitle_WhenFetchSucceeds(t *testing.T) {
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open", Title: "Add the thing"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newPRTestInstance(t)
-	inst.Status = Active
-	require.NoError(t, inst.AttachPR(prRefN(t, 12), AttachSourceManual, PRInitial{State: PRStateOpen}))
-	p.SetInstances([]*Instance{inst})
-	seedStateRow(t, storage.repo, SessionPROwner(inst.UUID), prRefN(t, 12), PRInitial{State: PRStateOpen})
+	inst.Status = session.Active
+	require.NoError(t, inst.AttachPR(prRefN(t, 12), session.AttachSourceManual, session.PRInitial{State: session.PRStateOpen}))
+	p.SetInstances([]*session.Instance{inst})
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen})
 
 	p.checkAllSessions()
 
@@ -46,7 +43,7 @@ func TestPoller_ShouldKeepStoredTitle_WhenFetchCarriesNone(t *testing.T) {
 	t.Parallel()
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
-	seedStateRow(t, storage.repo, SessionPROwner("u1"), prRefN(t, 12), PRInitial{State: PRStateOpen, Title: "Seeded title"})
+	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen, Title: "Seeded title"})
 
 	p.checkAllSessions()
 
@@ -57,15 +54,15 @@ func TestPoller_ShouldMirrorVerifyAttemptsToLiveSession_WhenUnverifiedTerminalPo
 	t.Parallel()
 	client := &failingPRClient{err: errors.New("GitHub API: not found (404)")}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
-	storage.repo.MarkPRMaintenanceSucceeded()
+	storage.Repo.MarkPRMaintenanceSucceeded()
 	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	p.clock = func() time.Time { return now }
 	inst := newPRTestInstance(t)
-	inst.Status = Active
-	unverified := PRInitial{State: PRStateUnknown, Terminal: true}
-	require.NoError(t, inst.AttachPR(prRefN(t, 9), AttachSourceBackfill, unverified))
-	p.SetInstances([]*Instance{inst})
-	seedStateRow(t, storage.repo, SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
+	inst.Status = session.Active
+	unverified := session.PRInitial{State: session.PRStateUnknown, Terminal: true}
+	require.NoError(t, inst.AttachPR(prRefN(t, 9), session.AttachSourceBackfill, unverified))
+	p.SetInstances([]*session.Instance{inst})
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 	require.True(t, viewOf(t, inst, 9).UnverifiedTerminal())
 
 	seen := make([]int, 0, 6)
@@ -85,17 +82,17 @@ func TestPoller_ShouldClearMirroredVerifyAttempts_WhenLaterFetchResolvesTheRow(t
 	client := &recordingPRClient{info: map[int]*github.PRInfo{9: {Number: 9, State: "merged"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newPRTestInstance(t)
-	inst.Status = Active
-	unverified := PRInitial{State: PRStateUnknown, Terminal: true}
-	require.NoError(t, inst.AttachPR(prRefN(t, 9), AttachSourceBackfill, unverified))
-	inst.MirrorPRPollFacts(prRefN(t, 9), PRView{PollFailCount: 3, PollError: "not_found", FirstFailAt: time.Now()})
-	p.SetInstances([]*Instance{inst})
-	seedStateRow(t, storage.repo, SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
+	inst.Status = session.Active
+	unverified := session.PRInitial{State: session.PRStateUnknown, Terminal: true}
+	require.NoError(t, inst.AttachPR(prRefN(t, 9), session.AttachSourceBackfill, unverified))
+	inst.MirrorPRPollFacts(prRefN(t, 9), session.PRView{PollFailCount: 3, PollError: "not_found", FirstFailAt: time.Now()})
+	p.SetInstances([]*session.Instance{inst})
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 
 	p.checkAllSessions()
 
 	got := viewOf(t, inst, 9)
-	assert.Equal(t, PRStateMerged, got.State)
+	assert.Equal(t, session.PRStateMerged, got.State)
 	assert.Zero(t, got.PollFailCount)
 	assert.Empty(t, got.PollError)
 }
