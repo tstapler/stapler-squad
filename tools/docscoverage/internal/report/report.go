@@ -15,6 +15,8 @@ type Options struct {
 	Enforce bool
 	// Notices are run-level remarks, such as an unresolved base.
 	Notices []string
+	// Trend, when set, adds the one-line trend to the summary.
+	Trend *Trend
 }
 
 // Write prints violations, ungrandfathered gaps and the counts. Covered,
@@ -30,6 +32,9 @@ func Write(w io.Writer, res check.Result, opt Options) {
 	c := res.Counts
 	fmt.Fprintf(w, "In scope: %d | covered: %d | exempt: %d | grandfathered: %d | gap: %d\n\n",
 		c.InScope, c.Covered, c.Exempt, c.Grandfathered, c.Gap)
+	if opt.Trend != nil {
+		fmt.Fprintf(w, "%s\n\n", opt.Trend.Line())
+	}
 	for _, n := range opt.Notices {
 		fmt.Fprintf(w, "NOTICE: %s\n", n)
 	}

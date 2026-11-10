@@ -648,6 +648,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read # docs-coverage-trend artifacts from build.yml runs
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -660,9 +661,8 @@ jobs:
       LKG_USED: ${{ needs.build.outputs.lkg_used }}
       FRESH_REPORT_ONLY: ${{ needs.mediafresh.outputs.report_only }}
     steps:
+      # Full tree (not sparse): the docs-coverage trend check builds a Go tool that imports session/git.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
-        with:
-          sparse-checkout: .github/promo-flags.json
 
       # One tracking issue per problem: opened (or commented on) while it
       # persists, closed on the first healthy run. A skipped job (reuse mode, or
@@ -711,6 +711,38 @@ jobs:
               gh issue comment "$number" --body "Flag \`$flag\` is still \`false\` in .github/promo-flags.json, $age_days days after this flip was opened. Record the soak criterion and flip it, or say why not: $RUN_URL"
             fi
           done
+
+      # Bypass monitoring (Task 4.1.4b): build.yml uploads docs-coverage-trend.json on each main push.
+      # Comment on the flag tracking issue when `exempt` grew in 3 of the last 4 weeks or its ratio
+      # passed 80% of the ceiling. Needs the full tree: docscoverage imports session/git.
+      - name: Set up Go for the docs-coverage trend check
+        if: ${{ github.event_name == 'schedule' }}
+        uses: ./.github/actions/setup-go-cached
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Docs coverage trend check
+        if: ${{ github.event_name == 'schedule' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/trend"
+          # One artifact per main push; keep the newest per ISO week, newest 8 weeks.
+          declare -A seen
+          kept=0
+          while read -r created id; do
+            week=$(date -d "$created" +%G-%V)
+            [ -n "${seen[$week]:-}" ] && continue
+            seen[$week]=1
+            gh api "repos/$GH_REPO/actions/artifacts/$id/zip" > "$RUNNER_TEMP/trend/$id.zip"
+            unzip -oq "$RUNNER_TEMP/trend/$id.zip" -d "$RUNNER_TEMP/trend/$id"
+            kept=$((kept + 1))
+            [ "$kept" -ge 8 ] && break
+          done < <(gh api "repos/$GH_REPO/actions/artifacts?name=docs-coverage-trend&per_page=100" \
+            --jq '.artifacts[] | select(.expired | not) | "\(.created_at) \(.id)"' | sort -r)
+          reasons=$(go run ./tools/docscoverage/cmd/docscoverage trend -dir "$RUNNER_TEMP/trend")
+          [ -z "$reasons" ] && exit 0
+          issue=$(gh issue list --state open --search '"Promo flag flip: docsCoverageEnforce" in:title' --json number --jq '.[0].number // empty')
+          [ -z "$issue" ] && { echo "::warning::docs-coverage trend alert but no open flag tracking issue: $reasons"; exit 0; }
+          gh issue comment "$issue" --body "Docs-coverage bypass trend: $reasons. Run: $RUN_URL"
 
       # Imagery, logos and decorative art are unreadable to OCR; theme changes need owner review (CODEOWNERS).
       - name: Owner review reminder

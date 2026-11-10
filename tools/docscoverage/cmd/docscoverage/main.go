@@ -3,6 +3,7 @@
 //
 //	docscoverage [-repo d] [-base sha|none] [-enforce=bool] [-flags file]   check and report
 //	docscoverage baseline [-repo d]                                    write grandfather sidecars
+//	docscoverage trend -dir d                                          weekly trend alerts
 //	docscoverage enforce [-repo d] [-base sha|none]                    print docsCoverageEnforce at the base
 //
 // Report-only unless docsCoverageEnforce is true in .github/promo-flags.json
@@ -19,6 +20,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/tstapler/stapler-squad/tools/docscoverage/internal/check"
 	"github.com/tstapler/stapler-squad/tools/docscoverage/internal/registry"
@@ -39,6 +41,9 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, os.Getenv)) }
 func run(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
 	if len(args) > 0 && args[0] == "baseline" {
 		return runBaseline(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "trend" {
+		return runTrend(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "enforce" {
 		return runEnforce(args[1:], stdout, stderr)
@@ -70,6 +75,7 @@ func runEnforce(args []string, stdout, stderr io.Writer) int {
 type checkOpts struct {
 	repo, base, flagsFile string
 	enforce               string
+	trendOut              string
 }
 
 func runCheck(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
@@ -80,6 +86,7 @@ func runCheck(args []string, stdout, stderr io.Writer, getenv func(string) strin
 	fs.StringVar(&o.base, "base", "", "base commit (CI: HEAD^1 on pull_request, github.event.before on push); default merge-base with origin/main")
 	fs.StringVar(&o.enforce, "enforce", "", "true|false; default reads docsCoverageEnforce from the flags file")
 	fs.StringVar(&o.flagsFile, "flags", flagsPath, "rollout flags file, relative to -repo")
+	fs.StringVar(&o.trendOut, "trend-out", "", "write docs-coverage-trend.json to this path")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -89,6 +96,12 @@ func runCheck(args []string, stdout, stderr io.Writer, getenv func(string) strin
 		return 2
 	}
 	report.Write(stdout, res, opt)
+	if o.trendOut != "" {
+		if err := writeTrend(o.trendOut, opt.Trend); err != nil {
+			fmt.Fprintln(stderr, "docscoverage: write trend:", err)
+			return 2
+		}
+	}
 	if p := getenv("GITHUB_STEP_SUMMARY"); p != "" {
 		if err := appendSummary(p, res, opt); err != nil {
 			fmt.Fprintln(stderr, "docscoverage: write step summary:", err)
@@ -117,7 +130,68 @@ func assess(o checkOpts) (check.Result, report.Options, error) {
 		opt.Notices = append(opt.Notices, notice)
 	}
 	opt.Enforce = enforce
-	return check.Assess(in), opt, nil
+	res := check.Assess(in)
+	var baseCounts *check.Counts
+	if base != nil {
+		// Same resolver as head: exempt and grandfathered counts come from the sidecars.
+		c := check.Assess(check.Input{Registry: base.Registry, Sidecars: base.Sidecars, Resolver: in.Resolver, Budgets: in.Budgets}).Counts
+		baseCounts = &c
+	}
+	t := report.NewTrend(time.Now().UTC().Format(time.DateOnly), res.Counts, baseCounts)
+	opt.Trend = &t
+	return res, opt, nil
+}
+
+func writeTrend(path string, t *report.Trend) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return t.WriteJSON(f)
+}
+
+// runTrend reads every *.json trend row under -dir (one per weekly artifact)
+// and prints one line per reason to comment on the flag tracking issue; no
+// output means nothing to report.
+func runTrend(args []string, stdout, stderr io.Writer) int {
+	set := flag.NewFlagSet("docscoverage trend", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	var o checkOpts
+	dir := set.String("dir", ".", "directory holding docs-coverage-trend.json files (searched recursively)")
+	set.StringVar(&o.repo, "repo", ".", "repository root, for the exempt ratio ceiling in budgets.json")
+	if err := set.Parse(args); err != nil {
+		return 2
+	}
+	var series []report.Trend
+	err := filepath.WalkDir(*dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(p) != ".json" {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		var t report.Trend
+		if err := json.Unmarshal(data, &t); err != nil {
+			return fmt.Errorf("%s: %w", p, err)
+		}
+		series = append(series, t)
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, "docscoverage:", err)
+		return 2
+	}
+	b, err := readBudgets(o.repo)
+	if err != nil {
+		fmt.Fprintln(stderr, "docscoverage:", err)
+		return 2
+	}
+	for _, r := range report.Analyze(series, b.ExemptRatioCeiling) {
+		fmt.Fprintln(stdout, r)
+	}
+	return 0
 }
 
 func loadInput(repo string) (check.Input, error) {

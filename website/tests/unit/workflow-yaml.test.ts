@@ -406,3 +406,18 @@ test('buildWorkflow_should_PassExplicitBasePerEvent_When_DocsCoverageStepParsed'
   assert.ok(!/promo-flags\.json/.test(run), 'the step does not read the flags file from the working tree');
   assert.equal(step.env?.EVENT_BEFORE, '${{ github.event.before }}');
 });
+
+// Task 4.1.4b: build.yml uploads the trend artifact on push; the weekly notify run reads it.
+test('workflows_should_ProduceAndConsumeDocsCoverageTrend_When_YamlParsed', () => {
+  const build = yaml.load(readFileSync(path.join(repoRoot, '.github/workflows/build.yml'), UTF8)) as Workflow;
+  const upload = Object.values(build.jobs)
+    .flatMap((job) => job.steps ?? [])
+    .find((step) => step.name === 'Upload docs-coverage trend');
+  assert.ok(upload, 'build.yml uploads the trend artifact');
+  assert.equal(upload.with?.name, 'docs-coverage-trend');
+
+  const trend = loadDeploy().jobs.notify.steps.find((step) => step.name === 'Docs coverage trend check');
+  assert.ok(trend, 'notify has a trend step');
+  assert.match(String(trend.if), /schedule/);
+  assert.match(String((trend as Step & { run?: string }).run), /docscoverage trend/);
+});

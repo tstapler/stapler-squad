@@ -222,3 +222,29 @@ func TestEnforceSubcommandReadsBaseBlob(t *testing.T) {
 	assert.Equal(t, 0, code)
 	assert.Equal(t, "false\n", out)
 }
+
+func TestTrendOutAndTrendSubcommand(t *testing.T) {
+	t.Parallel()
+	dir := prRepo(t, false, false)
+	trendFile := filepath.Join(t.TempDir(), "docs-coverage-trend.json")
+	code, out, _ := exec(t, "-repo", dir, "-base", "HEAD^1", "-trend-out", trendFile)
+	require.Equal(t, 0, code)
+	assert.Contains(t, out, "Trend: covered 0 | exempt 0 (+0)")
+	data, err := os.ReadFile(trendFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"gap": 1`)
+
+	seriesDir := t.TempDir()
+	for i, exempt := range []int{1, 2, 3, 4, 5} {
+		name := filepath.Join(seriesDir, fmt.Sprintf("w%d.json", i))
+		body := fmt.Sprintf(`{"date":"2026-11-%02d","inScope":100,"exempt":%d}`, i+1, exempt)
+		require.NoError(t, os.WriteFile(name, []byte(body), 0o644))
+	}
+	code, out, _ = exec(t, "trend", "-repo", dir, "-dir", seriesDir)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, out, "exempt grew in 4 of the last 4 weeks")
+
+	code, out, _ = exec(t, "trend", "-repo", dir, "-dir", t.TempDir())
+	assert.Equal(t, 0, code)
+	assert.Empty(t, out)
+}
