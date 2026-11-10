@@ -71,14 +71,15 @@ const CLIP_EXT = 'webm';
  * files exist is the freshness gate's job (tools/promo mediatool fresh), not this
  * script's.
  *
- * @typedef {{clip?: string, shot: string, alt: string}} FeatureMedia
- * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {name: string, ext: string}}} FeatureCard
+ * `tour` (optional) is the id of the tour that covers the card; the site shows a "See the tour"
+ * link when that tour is built.
+ * @typedef {{clip?: string, shot: string, alt: string, tour?: string}} FeatureMedia
+ * @typedef {{heading: string, description: string, category: string, screenshot?: string, alt?: string, demoClip?: {name: string, ext: string}, tour?: string}} FeatureCard
  */
 
-// Until the recorder emits shots/ (Epic 2), a shot name is the basename of a
-// committed screenshot under website/public/features/. This is the one place
-// that mapping lives.
-const shotPath = (/** @type {string} */ shot) => `/features/${shot}.png`;
+// A shot name is the manifest name of a recorded still; the deploy stages it at
+// public/shots/<name>.webp. This is the one place that mapping lives.
+const shotPath = (/** @type {string} */ shot) => `/shots/${shot}.webp`;
 
 /**
  * @param {string} path
@@ -89,6 +90,9 @@ export function readFeatureMedia(path) {
 	for (const [heading, entry] of Object.entries(media)) {
 		if (typeof entry?.shot !== 'string' || typeof entry?.alt !== 'string' || !entry.shot || !entry.alt) {
 			throw new Error(`feature-media.json entry "${heading}" needs a non-empty "shot" and "alt"`);
+		}
+		if (entry.tour !== undefined && (typeof entry.tour !== 'string' || !entry.tour)) {
+			throw new Error(`feature-media.json entry "${heading}" has an empty "tour"`);
 		}
 	}
 	return media;
@@ -200,7 +204,10 @@ export function extractReadmeCategoryNames(readmeMarkdown) {
  * Builds the full FeatureCard[] data set, reconciling README.md's category
  * names with docs/features.md's sections.
  *
- * @param {{readmePath?: string, featuresMdPath?: string, mediaPath?: string}} [options]
+ * `requireMedia` fails the build naming any card without a feature-media.json entry (every real
+ * build sets it; fixtures leave it off).
+ *
+ * @param {{readmePath?: string, featuresMdPath?: string, mediaPath?: string, requireMedia?: boolean}} [options]
  * @returns {FeatureCard[]}
  */
 export function buildFeaturesJson(options = {}) {
@@ -218,6 +225,13 @@ export function buildFeaturesJson(options = {}) {
 	for (const heading of Object.keys(media)) {
 		if (!headings.has(heading)) {
 			throw new Error(`feature-media.json has "${heading}", which is not a section heading in docs/features.md`);
+		}
+	}
+
+	if (options.requireMedia) {
+		const missing = sections.map((s) => s.heading).filter((h) => !media[h]);
+		if (missing.length > 0) {
+			throw new Error(`docs/features.md card(s) without a feature-media.json entry (shot + alt): ${missing.map((h) => `"${h}"`).join(', ')}`);
 		}
 	}
 
@@ -245,6 +259,7 @@ export function buildFeaturesJson(options = {}) {
 			card.screenshot = shotPath(entry.shot);
 			card.alt = entry.alt;
 			if (entry.clip) card.demoClip = { name: entry.clip, ext: CLIP_EXT };
+			if (entry.tour) card.tour = entry.tour;
 		}
 		return card;
 	});
@@ -253,7 +268,7 @@ export function buildFeaturesJson(options = {}) {
 function main() {
 	const outputPath = DEFAULT_OUTPUT_PATH;
 	try {
-		const cards = buildFeaturesJson();
+		const cards = buildFeaturesJson({ requireMedia: true });
 		writeFileSync(outputPath, `${JSON.stringify(cards, null, '\t')}\n`, ENCODING);
 		console.log(`wrote ${cards.length} FeatureCard entries to ${outputPath}`);
 	} catch (err) {

@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { discoverScenes, sceneFiles, selectScenes, validateScene } from '../scene';
+import { discoverScenes, discoverShotLists, sceneFiles, selectScenes, validateScene, validateShotList } from '../scene';
 import { tmpDir } from './helpers';
 
 const sceneSrc = (name: string) => `export const scene = { name: '${name}', title: 'T', scenes: async () => {} };\n`;
@@ -29,6 +29,22 @@ describe('scene discovery', () => {
     const dir = path.resolve(__dirname, '../tours');
     expect(fs.existsSync(dir)).toBe(true);
     expect(() => discoverScenes(dir)).not.toThrow();
+  });
+});
+
+describe('shotlist discovery', () => {
+  const shot = { name: 's-1', route: '/', landmark: 'main' };
+  test('the file name must equal shotlist.name and the list must have shots', () => {
+    expect(() => validateShotList('a.ts', { shotlist: { name: 'b', shots: [shot] } })).toThrow(/shotlist.name/);
+    expect(() => validateShotList('a.ts', { shotlist: { name: 'a', shots: [] } })).toThrow(/no shots/);
+    expect(() => validateShotList('a.ts', {})).toThrow(/export `shotlist`/);
+  });
+
+  test('a shotlist file is picked up by glob, and the real shotlists validate', () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'zz.ts'), `export const shotlist = { name: 'zz', shots: [{ name: 's-1', route: '/', landmark: 'main' }] };\n`);
+    expect(discoverShotLists(dir).map((l) => l.name)).toEqual(['zz']);
+    expect(discoverShotLists(path.resolve(__dirname, '../shotlists')).map((l) => l.name)).toEqual(['cards', 'mobile']);
   });
 });
 

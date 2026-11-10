@@ -22,6 +22,7 @@ export function fakeBrowser(opts: FakeOpts = {}) {
     evaluate: async (fn: (...a: unknown[]) => unknown) => {
       const src = String(fn);
       if (src.includes('backgroundColor')) return { stored: 'grimdark', background: opts.background ?? 'rgb(12, 10, 8)' };
+      if (src.includes('fonts.ready')) return true;
       if (src.includes('innerText')) return opts.domText ?? 'Six agents on screen';
       return undefined;
     },

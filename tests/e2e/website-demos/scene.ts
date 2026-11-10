@@ -62,6 +62,18 @@ export interface ClipSpec {
 
 export type Scene = ClipSpec;
 
+/**
+ * Stills with no clip: the feature-card shots and the mobile set. Found by glob in
+ * shotlists/<name>.ts (file name = list name), recorded like a scene by `--only <name>`.
+ */
+export interface ShotListSpec {
+  name: string;
+  /** Feature flags the shots need on; enabled and read back before capturing. */
+  flags?: string[];
+  seeded?: Seeded;
+  shots: ShotSpec[];
+}
+
 /** Files in a tours directory that are scenes: *.ts, minus tests and `_`-prefixed helpers. */
 export function sceneFiles(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -92,4 +104,18 @@ export function selectScenes<T extends { name: string }>(all: T[], only: string 
   const unknown = wanted.filter((w) => !all.some((s) => s.name === w));
   if (unknown.length > 0) throw new Error(`--only names no known scene: ${unknown.join(', ')}`);
   return all.filter((s) => wanted.includes(s.name));
+}
+
+/** A shotlist module must export `shotlist` named after its file, mirroring validateScene. */
+export function validateShotList(file: string, mod: { shotlist?: ShotListSpec }): ShotListSpec {
+  const id = path.basename(file, '.ts');
+  if (!mod.shotlist) throw new Error(`${file}: must export \`shotlist\``);
+  if (mod.shotlist.name !== id) throw new Error(`${file}: shotlist.name is "${mod.shotlist.name}" but the file is "${id}"`);
+  if (mod.shotlist.shots.length === 0) throw new Error(`${file}: shotlist has no shots`);
+  return mod.shotlist;
+}
+
+export function discoverShotLists(dir: string): ShotListSpec[] {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- collection is synchronous; ESM import() is async
+  return sceneFiles(dir).map((f) => validateShotList(f, require(path.join(dir, f))));
 }

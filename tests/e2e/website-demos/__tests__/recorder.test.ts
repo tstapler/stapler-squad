@@ -3,8 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { readParts } from '../manifest';
-import { caption, ensureFlags, readClipMaxDurationMs, recordClip, type RecordEnv } from '../recorder';
-import type { ClipSpec } from '../scene';
+import { caption, ensureFlags, readClipMaxDurationMs, recordClip, recordShotList, type RecordEnv } from '../recorder';
+import type { ClipSpec, ShotListSpec } from '../scene';
 import { fakeBrowser, tmpDir } from './helpers';
 
 const env = (outDir: string, extra: Partial<RecordEnv> = {}): RecordEnv => ({ outDir, commit: 'C', clipMaxDurationMs: 60_000, fetchFn: (async () => new Response('ok')) as typeof fetch, ...extra });
@@ -90,5 +90,46 @@ describe('ensureFlags', () => {
 describe('budgets', () => {
   test('the clip cap comes from tools/promo/budgets.json (60 s)', () => {
     expect(readClipMaxDurationMs()).toBe(60_000);
+  });
+});
+
+describe('recordShotList', () => {
+  const list = (extra: Partial<ShotListSpec> = {}): ShotListSpec => ({
+    name: 'mobile',
+    shots: [
+      { name: 'a-mobile', route: '/', landmark: 'main', formFactor: 'mobile' },
+      { name: 'b-mobile', route: '/x', landmark: 'main', formFactor: 'mobile' },
+    ],
+    ...extra,
+  });
+
+  test('records every shot as one manifest part with the form factor and attempts', async () => {
+    const out = tmpDir();
+    const { browser } = fakeBrowser({ url: 'http://localhost/x' });
+    await recordShotList(browser, 'http://localhost:1', list({ shots: [{ name: 'b-mobile', route: '/x', landmark: 'main', formFactor: 'mobile' }] }), env(out));
+    const rows = readParts(out);
+    expect(rows.map((r) => `${r.name}:${r.format}:${r.status}`)).toEqual(['b-mobile:png:recorded']);
+    expect(rows[0]).toMatchObject({ attempts: 1, themeId: 'grimdark', formFactor: 'mobile', src: 'shots/b-mobile.png', width: 390, height: 844 });
+    expect(fs.existsSync(path.join(out, 'shots', 'b-mobile.png'))).toBe(true);
+  });
+
+  test('a wrong theme fails once, leaves a fatal marker and one failed row per shot', async () => {
+    const out = tmpDir();
+    const { browser } = fakeBrowser({ background: 'rgb(15, 17, 23)' });
+    await expect(recordShotList(browser, 'http://localhost:1', list(), env(out))).rejects.toThrow('expected theme class grimdark');
+    expect(fs.existsSync(path.join(out, '.fatal-mobile.txt'))).toBe(true);
+    expect(readParts(out).map((r) => `${r.name}:${r.status}`)).toEqual(['a-mobile:failed', 'b-mobile:failed']);
+  });
+
+  test('flags are enabled and read back first', async () => {
+    const urls: string[] = [];
+    const fetchFn = (async (u: string) => {
+      urls.push(String(u));
+      return new Response(JSON.stringify({ flags: [{ name: 'backlog', enabled: true }] }));
+    }) as unknown as typeof fetch;
+    const { browser } = fakeBrowser({ url: 'http://localhost/' });
+    await recordShotList(browser, 'http://localhost:1', list({ flags: ['backlog'], shots: [{ name: 'a-mobile', route: '/', landmark: 'main', formFactor: 'mobile' }] }), env(tmpDir(), { fetchFn }));
+    expect(urls.some((u) => u.endsWith('/UpdateFeatureFlag'))).toBe(true);
+    expect(urls.some((u) => u.endsWith('/GetFeatureFlags'))).toBe(true);
   });
 });

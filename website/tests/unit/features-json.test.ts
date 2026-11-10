@@ -111,7 +111,7 @@ describe('buildFeaturesJson', () => {
 		expect(liveTerminal).not.toHaveProperty('screenshot');
 
 		const dashboard = cards.find((card) => card.heading === 'Dashboard');
-		expect(dashboard?.screenshot).toBe('/features/01-dashboard.png');
+		expect(dashboard?.screenshot).toBe('/shots/01-dashboard.webp');
 		expect(dashboard?.alt).toBe('Dashboard alt');
 	});
 
@@ -138,5 +138,22 @@ describe('buildFeaturesJson', () => {
 	it('buildFeaturesJson_should_NameHeading_When_MediaEntryMissingAlt', async () => {
 		await writeFile(mediaPath, JSON.stringify({ Dashboard: { shot: 's' } }), ENCODING);
 		expect(() => buildFeaturesJson({ readmePath, featuresMdPath, mediaPath })).toThrow(/"Dashboard" needs a non-empty "shot" and "alt"/);
+	});
+
+	// Story 3.3.3: a new card without media fails the build, naming it.
+	it('buildFeaturesJson_should_NameEveryCardWithoutMedia_When_RequireMediaSet', () => {
+		expect(() => buildFeaturesJson({ readmePath, featuresMdPath, mediaPath, requireMedia: true })).toThrow(/"Live Terminal Streaming"/);
+	});
+
+	it('buildFeaturesJson_should_CarryTourId_When_MediaEntryNamesATour', async () => {
+		await writeFile(mediaPath, JSON.stringify({ Dashboard: { shot: 's', alt: 'a', tour: 'dashboard-lifecycle' } }), ENCODING);
+		const cards = buildFeaturesJson({ readmePath, featuresMdPath, mediaPath });
+		expect(cards.find((c) => c.heading === 'Dashboard')?.tour).toBe('dashboard-lifecycle');
+		expect(cards.find((c) => c.heading === 'Review Queue')).not.toHaveProperty('tour');
+	});
+
+	it('buildFeaturesJson_should_NameHeading_When_TourIsEmpty', async () => {
+		await writeFile(mediaPath, JSON.stringify({ Dashboard: { shot: 's', alt: 'a', tour: '' } }), ENCODING);
+		expect(() => buildFeaturesJson({ readmePath, featuresMdPath, mediaPath })).toThrow(/"Dashboard" has an empty "tour"/);
 	});
 });

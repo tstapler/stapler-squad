@@ -10,7 +10,7 @@ import { SceneAssertionError, THEME_ID, assertGrimdark, assertLanding, assertNoD
 import { hold } from './hold';
 import { type MediaEntry, failedEntry, fileFacts, writePart } from './manifest';
 import { NoRetryError, RetriesExhaustedError, withRetry } from './retry';
-import type { ClipControl, ClipSpec, Scenes, ShotSpec } from './scene';
+import type { ClipControl, ClipSpec, Scenes, ShotListSpec, ShotSpec } from './scene';
 import { DESKTOP_VIEWPORT, newShotContext, recordShot } from './shots';
 import { CaptionLog, attachCaptionLog, captionLogOf } from './transcript';
 
@@ -197,6 +197,41 @@ async function recordShotRow(browser: Browser, baseURL: string, shot: ShotSpec, 
     init: (c) => initContext(c, spec.theme ?? THEME_ID, env.refTime),
   });
   return { ...row, attempts: attempt };
+}
+
+/**
+ * Records a shotlist (stills only) with the same retry, theme-failure and manifest-part
+ * rules as a clip. A failure writes one failed row per shot so the freshness check names them.
+ */
+export async function recordShotList(browser: Browser, baseURL: string, list: ShotListSpec, env: RecordEnv = defaultEnv()): Promise<void> {
+  const fetchFn = env.fetchFn ?? fetch;
+  const attempt = async (n: number): Promise<MediaEntry[]> => {
+    if (list.flags?.length) await ensureFlags(baseURL, list.flags, fetchFn);
+    const rows: MediaEntry[] = [];
+    for (const shot of list.shots) {
+      const row = await recordShot(browser, shot, {
+        baseURL,
+        outDir: env.outDir,
+        commit: env.commit,
+        seeded: list.seeded,
+        init: (c) => initContext(c, THEME_ID, env.refTime),
+      });
+      rows.push({ ...row, attempts: n });
+    }
+    return rows;
+  };
+  try {
+    const { value } = await withRetry(attempt, { between: () => serverStillUp(baseURL, fetchFn) });
+    writePart(env.outDir, list.name, value);
+  } catch (error) {
+    const attempts = error instanceof RetriesExhaustedError ? error.attempts : 1;
+    writePart(env.outDir, list.name, list.shots.map((s) => failedEntry(s.name, 'png', env.commit, attempts)));
+    if (error instanceof NoRetryError) {
+      fs.mkdirSync(env.outDir, { recursive: true });
+      fs.writeFileSync(path.join(env.outDir, `.fatal-${list.name}.txt`), error.message);
+    }
+    throw error;
+  }
 }
 
 /** Between attempts, confirm the server still answers; a dead server aborts instead of recording garbage twice. */

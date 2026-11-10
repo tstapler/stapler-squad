@@ -2,32 +2,88 @@
 	"Dashboard": {
 		"clip": "session-dashboard",
 		"shot": "01-dashboard",
-		"alt": "Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance"
+		"alt": "Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance",
+		"tour": "dashboard-lifecycle"
+	},
+	"Live Terminal Streaming": {
+		"shot": "live-terminal",
+		"alt": "A session open on its live terminal tab, showing the agent output streaming in real time",
+		"tour": "dashboard-lifecycle"
+	},
+	"Browser Element Inspector": {
+		"shot": "browser-inspector",
+		"alt": "A session open on its Browser tab, where page elements can be inspected and sent to the agent"
+	},
+	"Diff Viewer": {
+		"shot": "diff-viewer",
+		"alt": "A session open on its diff tab, listing the files the agent changed with added and removed lines",
+		"tour": "dashboard-lifecycle"
+	},
+	"Notifications": {
+		"shot": "notifications",
+		"alt": "The notifications page listing alerts for agents that need attention, with an unread count",
+		"tour": "attention-notifications"
 	},
 	"Instant Search": {
 		"shot": "02-search-payment",
-		"alt": "Instant search narrowing the session list from 6 agents down to 2 as the query \"payment\" is typed"
+		"alt": "Instant search narrowing the session list from 6 agents down to 2 as the query \"payment\" is typed",
+		"tour": "organise-at-scale"
 	},
 	"Status Filtering": {
 		"shot": "03-needs-approval",
-		"alt": "Status filter showing every session with a Needs Approval gate, with other statuses hidden"
+		"alt": "Status filter showing every session with a Needs Approval gate, with other statuses hidden",
+		"tour": "organise-at-scale"
 	},
 	"Tag-Based Grouping": {
 		"shot": "04-group-by-tag",
-		"alt": "Sessions grouped by tag, with a single session appearing under more than one tag group"
+		"alt": "Sessions grouped by tag, with a single session appearing under more than one tag group",
+		"tour": "organise-at-scale"
+	},
+	"Workspace Switcher": {
+		"shot": "workspace-switcher",
+		"alt": "The workspace switcher dropdown listing the available project workspaces"
+	},
+	"Bulk Actions": {
+		"shot": "bulk-actions",
+		"alt": "Select mode on the session list with the bulk action toolbar for pausing, resuming and tagging several sessions at once"
 	},
 	"Review Queue": {
 		"shot": "05-review-queue",
-		"alt": "Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase"
+		"alt": "Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase",
+		"tour": "approval-review"
 	},
 	"Auto-Approval Rules": {
 		"clip": "auto-approval-rules",
 		"shot": "06-rules",
-		"alt": "List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks"
+		"alt": "List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks",
+		"tour": "approval-review"
 	},
 	"Custom Rules": {
 		"shot": "07-add-rule",
-		"alt": "Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again"
+		"alt": "Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again",
+		"tour": "approval-review"
+	},
+	"Approval Analytics": {
+		"shot": "approval-analytics",
+		"alt": "The Approval Analytics section showing how automatic rules decided past approval requests",
+		"tour": "approval-review"
+	},
+	"History Search": {
+		"shot": "history-search",
+		"alt": "The history browser with full-text search across past agent conversations"
+	},
+	"Logs Viewer": {
+		"shot": "logs-viewer",
+		"alt": "The application logs page with time range, export and density controls"
+	},
+	"Config Viewer": {
+		"shot": "config-viewer",
+		"alt": "The configuration page showing the current settings sections"
+	},
+	"Parallel Fan-Out": {
+		"shot": "parallel-fan-out",
+		"alt": "Three variants of the same task side by side so one can be picked as the winner",
+		"tour": "fanout-compare"
 	},
 	"Isolated Git Workspaces": {
 		"shot": "08-final",
