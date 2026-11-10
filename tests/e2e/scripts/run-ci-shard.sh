@@ -10,6 +10,8 @@
 # killed by the caller's `timeout` with no report.
 # Raw test failures stay report-only; the caller still checks for blob reports and runs
 # assert-e2e-report.mjs on both JSON reports.
+# PR runs may set E2E_SPEC_SELECTION (newline-separated spec paths from scripts/select-specs.ts): only those files are
+# planned across the shards, and the stress pass runs only the selected terminal-stress specs, on shard 1. Unset = full suite.
 #   usage: run-ci-shard.sh <shard> <total>
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -32,9 +34,19 @@ list_json=$(E2E_SKIP_STRESS=1 npx playwright test --list --reporter=json "${proj
 files=$(printf '%s' "$list_json" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const r=JSON.parse(d);const s=new Set();const w=x=>{(x.specs||[]).forEach(p=>s.add(p.file));(x.suites||[]).forEach(w)};(r.suites||[]).forEach(w);console.log([...s].join("\n"))})') \
   || fail_plan "could not read the spec list from playwright --list"
 [ -n "$files" ] || fail_plan "playwright --list returned no spec files"
+selection_mode=0
+if [ -n "${E2E_SPEC_SELECTION:-}" ]; then
+  selection_mode=1
+  files=$(printf '%s\n' "$files" | grep -Fxf <(printf '%s\n' "$E2E_SPEC_SELECTION") || true)
+  [ -n "$files" ] || fail_plan "E2E_SPEC_SELECTION matched none of the specs Playwright lists"
+  echo "run-ci-shard: selection mode, $(printf '%s\n' "$files" | wc -l | tr -d ' ') spec files in play"
+fi
 assigned=$(printf '%s\n' "$files" | bun scripts/shard-assign.ts assign --shard "$shard" --total "$total") \
   || fail_plan "shard-assign failed"
-[ -n "$assigned" ] || fail_plan "shard $shard/$total got no spec files"
+if [ -z "$assigned" ]; then
+  [ "$selection_mode" = 1 ] && { echo "run-ci-shard: shard $shard/$total has no selected specs; nothing to run"; exit 0; }
+  fail_plan "shard $shard/$total got no spec files"
+fi
 # Portable read loop (macOS bash 3 has no mapfile).
 shard_args=()
 while IFS= read -r line; do [ -n "$line" ] && shard_args+=("$line"); done <<<"$assigned"
@@ -45,10 +57,22 @@ parallel_rc=$?
 remaining_s=$(( budget_s - (SECONDS - start) ))
 [ "$remaining_s" -lt 60 ] && remaining_s=60
 
+stress_args=("--shard=$shard/$total")
+if [ "$selection_mode" = 1 ]; then
+  stress_args=()
+  if [ "$shard" = 1 ]; then
+    while IFS= read -r line; do [ -n "$line" ] && stress_args+=("tests/e2e/${line//./\\.}\$"); done < <(printf '%s\n' "$E2E_SPEC_SELECTION" | grep '^terminal-stress/' || true)
+  fi
+  if [ "${#stress_args[@]}" -eq 0 ]; then
+    echo "run-ci-shard: selection mode, no stress specs selected for shard $shard; skipping the stress pass"
+    exit $(( parallel_rc ))
+  fi
+fi
+
 # The blob reporter empties blob-report/ at start unless told not to; keep pass 1's zip.
 E2E_STRESS_ONLY=1 E2E_WORKERS=1 PWTEST_BLOB_DO_NOT_REMOVE=1 \
   PLAYWRIGHT_BLOB_OUTPUT_NAME="report-stress-$shard.zip" PLAYWRIGHT_JSON_OUTPUT_NAME="$PWD/shard-report-stress.json" \
-  npx playwright test --reporter=list,blob,json "--global-timeout=$(( remaining_s * 1000 ))" "--shard=$shard/$total" --project=chromium --project=chromium-dom
+  npx playwright test --reporter=list,blob,json "--global-timeout=$(( remaining_s * 1000 ))" "${stress_args[@]}" --project=chromium --project=chromium-dom
 stress_rc=$?
 
 echo "run-ci-shard: parallel pass exit=$parallel_rc, stress pass exit=$stress_rc"
