@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,4 +104,50 @@ func TestGlobalThemesDirFor_should_EndInSharedThemes_When_NotIsolated(t *testing
 
 func TestGlobalThemesDir_should_BeEmpty_UnderGoTest(t *testing.T) {
 	assert.Empty(t, globalThemesDir(), "go test binaries are isolated (config.IsTestMode)")
+}
+
+func TestLoadUserThemes_should_NormalizeLegacyBase_And_LeaveFileUntouched(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, base, want string }{
+		{"legacy", "wh40k", "grimdark"},
+		{"canonical", "grimdark", "grimdark"},
+		{"unknown", "bogus", defaultThemeBase},
+		{"other", "matrix", "matrix"},
+	}
+	dir := t.TempDir()
+	body := map[string]string{}
+	for _, c := range cases {
+		body[c.name] = fmt.Sprintf(`{"base":%q,"tokens":{"color.primary":"#111111"}}`, c.base)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, c.name+".json"), []byte(body[c.name]), 0o600))
+	}
+
+	got := map[string]string{}
+	for _, th := range loadUserThemes(dir) {
+		got[th.ID] = th.Base
+	}
+
+	for _, c := range cases {
+		assert.Equal(t, c.want, got[c.name], c.name)
+		onDisk, err := os.ReadFile(filepath.Join(dir, c.name+".json"))
+		require.NoError(t, err)
+		assert.Equal(t, body[c.name], string(onDisk), "%s file bytes must be unchanged", c.name)
+	}
+}
+
+// The /api/themes handler encodes exactly mergeUserThemes' result, so this is the payload the picker reads.
+func TestMergeUserThemes_should_EchoNormalizedBase_InThemesPayload(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ember.json"), []byte(`{"base":"wh40k","tokens":{}}`), 0o600))
+
+	raw, err := json.Marshal(map[string]any{"themes": mergeUserThemes(dir)})
+	require.NoError(t, err)
+
+	var payload struct {
+		Themes []struct{ ID, Base string } `json:"themes"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	require.Len(t, payload.Themes, 1)
+	assert.Equal(t, "ember", payload.Themes[0].ID)
+	assert.Equal(t, "grimdark", payload.Themes[0].Base)
 }

@@ -73,7 +73,7 @@ export const previewSwatch = styleVariants({
     background: "linear-gradient(135deg, #0d0d1a 0%, #12122a 50%, #1a1a3e 100%)",
     border: "1px solid #ff2d78",
   },
-  wh40k: {
+  grimdark: {
     height: "48px",
     borderRadius: vars.radii.md,
     background: "linear-gradient(135deg, #0c0a08 0%, #1a1510 50%, #3d3020 100%)",

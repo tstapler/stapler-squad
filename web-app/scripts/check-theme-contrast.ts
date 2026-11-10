@@ -32,7 +32,7 @@ const themes: Record<string, ThemeColors> = {
     primary: "#cc245f",
     primaryText: "#ffffff",
   },
-  wh40k: {
+  grimdark: {
     textPrimary: "#c8b89a",
     textSecondary: "#a89878",
     textMuted: "#a08870",

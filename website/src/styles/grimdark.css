@@ -1,6 +1,6 @@
 /*
- * WH40K theme: grimdark parchment + gold on near-black. Values mirror
- * wh40kTheme in web-app/src/styles/theme.css.ts (the app's own theme); keep
+ * Grimdark theme: grimdark parchment + gold on near-black. Values mirror
+ * grimdarkTheme in web-app/src/styles/theme.css.ts (the app's own theme); keep
  * the two in sync, including its WCAG notes (textMuted #a08870, successText).
  * Dark only: light mode maps to the same palette and the theme picker is
  * removed (src/components/NoThemeSelect.astro).

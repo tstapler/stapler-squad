@@ -20,13 +20,13 @@ export type Scenes = (page: Page, clip: ClipControl) => Promise<void>;
 export interface ClipSpec {
   name: string;
   title: string;
-  /** App theme the clip is recorded in; defaults to the site's own, wh40k. */
+  /** App theme the clip is recorded in; defaults to the site's own, grimdark. */
   theme?: string;
   scenes: Scenes;
 }
 
 export async function recordClip(browser: Browser, baseURL: string, clip: ClipSpec): Promise<string> {
-  const { name, title, theme = 'wh40k', scenes } = clip;
+  const { name, title, theme = 'grimdark', scenes } = clip;
   const rawDir = path.join(OUT_DIR, '.raw', name);
   fs.rmSync(rawDir, { recursive: true, force: true });
   fs.mkdirSync(rawDir, { recursive: true });

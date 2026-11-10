@@ -1,4 +1,4 @@
-// The site's palette must track the app's own WH40K theme, and the favicon must
+// The site's palette must track the app's own Grimdark theme, and the favicon must
 // be the logo's mark -- both silently rot otherwise.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,13 +8,13 @@ const WEBSITE_ROOT = join(import.meta.dirname, '..', '..');
 const read = (...parts: string[]) => readFileSync(join(WEBSITE_ROOT, ...parts), 'utf8');
 
 const appTheme = read('..', 'web-app', 'src', 'styles', 'theme.css.ts');
-const wh40kStart = appTheme.indexOf('export const wh40kTheme');
+const grimdarkStart = appTheme.indexOf('export const grimdarkTheme');
 // Bounded to this theme: an unbounded slice would silently match the next theme's tokens.
-const wh40kBlock = appTheme.slice(wh40kStart, appTheme.indexOf('export const', wh40kStart + 1));
-const appColor = (token: string) => wh40kBlock.match(new RegExp(`\\b${token}: "(#[0-9a-fA-F]{6})"`))?.[1];
-const siteCss = read('src', 'styles', 'wh40k.css');
+const grimdarkBlock = appTheme.slice(grimdarkStart, appTheme.indexOf('export const', grimdarkStart + 1));
+const appColor = (token: string) => grimdarkBlock.match(new RegExp(`\\b${token}: "(#[0-9a-fA-F]{6})"`))?.[1];
+const siteCss = read('src', 'styles', 'grimdark.css');
 
-describe('website WH40K theme', () => {
+describe('website Grimdark theme', () => {
 	// site CSS variable -> app theme token it must equal
 	const SHARED: [string, string][] = [
 		['--sl-color-black', 'background'],
@@ -34,14 +34,14 @@ describe('website WH40K theme', () => {
 
 	it.each(SHARED)('themeCss_should_MatchAppToken_When_%s', (cssVar, token) => {
 		const appValue = appColor(token);
-		expect(appValue, `app wh40kTheme has no ${token}`).toBeDefined();
+		expect(appValue, `app grimdarkTheme has no ${token}`).toBeDefined();
 		const siteValue = siteCss.match(new RegExp(`${cssVar}: (#[0-9a-fA-F]{6})`))?.[1];
 		expect(siteValue?.toLowerCase()).toBe(appValue?.toLowerCase());
 	});
 
 	it('themeCss_should_LoadFromAstroConfig_When_BuildingSite', () => {
 		const config = read('astro.config.mjs');
-		expect(config).toContain("customCss: ['./src/styles/wh40k.css']");
+		expect(config).toContain("customCss: ['./src/styles/grimdark.css']");
 		expect(config).toContain("themes: ['vitesse-dark']");
 	});
 });

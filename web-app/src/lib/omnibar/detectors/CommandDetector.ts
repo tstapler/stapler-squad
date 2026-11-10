@@ -1,12 +1,13 @@
 import { DetectionResult, InputType } from "../types";
 import { Detector } from "../detector";
+import { LEGACY_THEME_IDS, parseThemeId } from "@/lib/theme/legacy-theme-ids";
 
 /**
  * CommandDetector — detects VS Code-style `>command` prefix.
  * Priority 5 — runs before all other detectors.
  *
  * Recognized commands:
- *   >theme matrix | cyberpunk77 | wh40k | clean | light | dark
+ *   >theme matrix | cyberpunk77 | grimdark | clean | light | dark
  *   >go sessions | review | history
  *   >shell [dir] [-- command]   — open a terminal session, optionally rooted at
  *     `dir` and/or running `command` as the session program instead of a plain shell.
@@ -39,7 +40,14 @@ export class CommandDetector implements Detector {
   }> = [
     { pattern: /^>theme\s+matrix$/i, commandType: "theme", commandArg: "matrix", suggestedName: "Switch to Matrix theme" },
     { pattern: /^>theme\s+cyberpunk77$/i, commandType: "theme", commandArg: "cyberpunk77", suggestedName: "Switch to Cyberpunk 77 theme" },
-    { pattern: /^>theme\s+wh40k$/i, commandType: "theme", commandArg: "wh40k", suggestedName: "Switch to WH40K theme" },
+    { pattern: /^>theme\s+grimdark$/i, commandType: "theme", commandArg: "grimdark", suggestedName: "Switch to Grimdark theme" },
+    // Retired ids keep working, resolved to their current theme.
+    ...Object.keys(LEGACY_THEME_IDS).map((legacy) => ({
+      pattern: new RegExp(`^>theme\\s+${legacy}$`, "i"),
+      commandType: "theme" as const,
+      commandArg: parseThemeId(legacy),
+      suggestedName: "Switch to Grimdark theme",
+    })),
     { pattern: /^>theme\s+clean$/i, commandType: "theme", commandArg: "clean", suggestedName: "Switch to Clean theme" },
     { pattern: /^>theme\s+light$/i, commandType: "theme", commandArg: "light", suggestedName: "Switch to Light theme" },
     { pattern: /^>theme\s+dark$/i, commandType: "theme", commandArg: "dark", suggestedName: "Switch to Dark theme" },

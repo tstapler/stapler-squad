@@ -25,8 +25,8 @@ const THEME_META: Record<ThemeName, { label: string; description: string }> = {
     label: "Cyberpunk 77",
     description: "Neon yellow + pink on navy",
   },
-  wh40k: {
-    label: "WH40K",
+  grimdark: {
+    label: "Grimdark",
     description: "Grimdark parchment + gold",
   },
   clean: {

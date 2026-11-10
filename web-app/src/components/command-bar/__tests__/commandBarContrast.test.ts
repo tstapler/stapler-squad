@@ -7,7 +7,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 const THEMES_SRC = fs.readFileSync(path.resolve(__dirname, "../../../styles/theme.css.ts"), "utf-8");
-const THEME_NAMES = ["lightTheme", "darkTheme", "matrixTheme", "cyberpunk77Theme", "wh40kTheme", "cleanTheme"];
+const THEME_NAMES = ["lightTheme", "darkTheme", "matrixTheme", "cyberpunk77Theme", "grimdarkTheme", "cleanTheme"];
 const AA_TEXT = 4.5;
 
 function themeBlock(name: string): string {

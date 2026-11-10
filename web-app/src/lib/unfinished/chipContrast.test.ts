@@ -35,7 +35,7 @@ describe("chipContrast", () => {
 
   it("parses every theme", () => {
     expect(Object.keys(themes).sort()).toEqual(
-      ["cleanTheme", "cyberpunk77Theme", "darkTheme", "lightTheme", "matrixTheme", "wh40kTheme"].sort()
+      ["cleanTheme", "cyberpunk77Theme", "darkTheme", "lightTheme", "matrixTheme", "grimdarkTheme"].sort()
     );
   });
 

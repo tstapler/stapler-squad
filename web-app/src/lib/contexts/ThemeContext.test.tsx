@@ -1,5 +1,5 @@
 import { render, screen, act, waitFor } from "@testing-library/react";
-import { ThemeProvider, useTheme } from "./ThemeContext";
+import { ThemeProvider, useTheme, THEME_CLASSES } from "./ThemeContext";
 import { vars } from "@/styles/theme-contract.css";
 
 // Jest stubs .css.ts files with a proxy; supply the real shape (`var(--name__hash)`) vanilla-extract emits.
@@ -92,7 +92,7 @@ describe("ThemeProvider user themes", () => {
     );
     await waitFor(() => expect(screen.getByTestId("theme").textContent).toBe("clean"));
     expect(localStorage.getItem("stapler-theme")).toBe("clean");
-    expect(localStorage.getItem("stapler-theme-custom")).toBeNull();
+    expect(localStorage.getItem("stapler-theme-custom-v2")).toBeNull();
   });
 
   it("caches the applied custom theme for the FOUC script", async () => {
@@ -103,8 +103,31 @@ describe("ThemeProvider user themes", () => {
     );
     await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("1"));
     act(() => screen.getByText("netflix").click());
-    const cache = JSON.parse(localStorage.getItem("stapler-theme-custom")!);
+    const cache = JSON.parse(localStorage.getItem("stapler-theme-custom-v2")!);
     expect(cache.id).toBe("custom:netflix");
     expect(cache.props[propName(vars.color.primary)]).toBe("#e50914");
+  });
+
+  it("migrates a stored legacy theme id to grimdark and writes it back", async () => {
+    localStorage.setItem("stapler-theme", "wh40k");
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("theme").textContent).toBe("grimdark"));
+    expect(localStorage.getItem("stapler-theme")).toBe("grimdark");
+    expect(document.documentElement.classList.contains(THEME_CLASSES.grimdark)).toBe(true);
+  });
+
+  it("discards a custom-theme cache from the previous key version", async () => {
+    localStorage.setItem("stapler-theme-custom", JSON.stringify({ id: "custom:netflix", cls: "oldHashedClass", props: {} }));
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("1"));
+    expect(localStorage.getItem("stapler-theme-custom")).toBeNull();
   });
 });

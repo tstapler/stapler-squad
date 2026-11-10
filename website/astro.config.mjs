@@ -11,8 +11,8 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Stapler Squad',
-			// The app's own WH40K theme (web-app/src/styles/theme.css.ts); dark only.
-			customCss: ['./src/styles/wh40k.css'],
+			// The app's own Grimdark theme (web-app/src/styles/theme.css.ts); dark only.
+			customCss: ['./src/styles/grimdark.css'],
 			components: { ThemeSelect: './src/components/NoThemeSelect.astro' },
 			favicon: '/favicon.svg',
 			// One dark code theme: with Expressive Code's default light+dark pair the

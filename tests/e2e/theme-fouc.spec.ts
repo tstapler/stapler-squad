@@ -10,8 +10,8 @@ import { AppShellPage } from './pages/AppShellPage';
 import { baseUrl } from './helpers/base-url';
 
 const BASE_URL = baseUrl();
-const THEMES = ['matrix', 'cyberpunk77', 'wh40k', 'clean', 'light', 'dark'] as const;
-const DARK_THEMES = ['matrix', 'cyberpunk77', 'wh40k', 'dark'] as const;
+const THEMES = ['matrix', 'cyberpunk77', 'grimdark', 'clean', 'light', 'dark'] as const;
+const DARK_THEMES = ['matrix', 'cyberpunk77', 'grimdark', 'dark'] as const;
 const FONT_VARS = ['--font-jetbrains-mono', '--font-rajdhani', '--font-cinzel', '--font-inter'];
 
 interface FirstPaintFacts {
@@ -78,11 +78,24 @@ test.describe('theme FOUC prevention', () => {
     }
   });
 
+  test('a legacy stored theme id resolves to Grimdark before first paint', async ({ browser }) => {
+    const contextFor = async (stored: string) => {
+      const context = await browser.newContext();
+      const facts = await loadWithStorage(await context.newPage(), { 'stapler-theme': stored });
+      await context.close();
+      return facts;
+    };
+    const grimdark = await contextFor('grimdark');
+    const legacy = await contextFor('wh40k');
+    expect(legacy.classes.join(' ')).toBe(grimdark.classes.join(' '));
+    expect(legacy.tokens).toBe(grimdark.tokens);
+  });
+
   test('a custom: theme applies its class and CSS variables before first paint', async ({ page }) => {
     const custom = { id: 'custom:e2e', cls: 'e2e-custom-theme', props: { '--e2e-probe': '42px' } };
     const facts = await loadWithStorage(page, {
       'stapler-theme': 'custom:e2e',
-      'stapler-theme-custom': JSON.stringify(custom),
+      'stapler-theme-custom-v2': JSON.stringify(custom),
     });
     expect(facts.classes).toContain('e2e-custom-theme');
     expect(facts.style).toContain('--e2e-probe');
