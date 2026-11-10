@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "bazel-trend_lib",
+    srcs = [
+        "bep.go",
+        "main.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/ci/bazel-trend",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "bazel-trend",
+    embed = [":bazel-trend_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "bazel-trend_test",
+    srcs = ["bep_test.go"],
+    embed = [":bazel-trend_lib"],
+)

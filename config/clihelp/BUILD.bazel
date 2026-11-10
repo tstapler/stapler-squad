@@ -1,0 +1,189 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "clihelp",
+    srcs = [
+        "cache.go",
+        "capwriter.go",
+        "execute.go",
+        "loginpath.go",
+        "loginpath_other.go",
+        "loginpath_unix.go",
+        "parser.go",
+        "parser_lines.go",
+        "prober.go",
+        "resolve.go",
+        "runner.go",
+        "runner_other.go",
+        "runner_unix.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/config/clihelp",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_x_sync//singleflight",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:android": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:js": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:osx": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:windows": [
+            "//executor/safeexec",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":clihelp",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "clihelp_test",
+    srcs = [
+        "capwriter_test.go",
+        "loginpath_test.go",
+        "parser_fuzz_test.go",
+        "parser_test.go",
+        "prober_confirm_test.go",
+        "prober_run_test.go",
+        "prober_test.go",
+        "resolve_test.go",
+        "runner_helper_test.go",
+        "runner_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":clihelp"],
+    deps = [
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:android": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:js": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:osx": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//executor/safeexec",
+            "@org_golang_x_sys//unix",
+            "@org_uber_go_goleak//:goleak",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//server/services:__pkg__"],
+)

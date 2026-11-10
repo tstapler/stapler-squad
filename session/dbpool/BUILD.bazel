@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "dbpool",
+    srcs = [
+        "doc.go",
+        "foreign.go",
+        "handles.go",
+        "lazy.go",
+        "open.go",
+        "profile.go",
+        "registry.go",
+        "spec.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/dbpool",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/sqlitedsn",
+        "//log",
+        "//session/dbobs",
+        "//session/dbsplit",
+        "//telemetry",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dbpool",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "dbpool_test",
+    srcs = ["dbpool_test.go"],
+    embed = [":dbpool"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

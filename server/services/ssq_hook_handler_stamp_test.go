@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/reporoot"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -24,6 +24,15 @@ func runHookHandler(t *testing.T, hookType, input string) []string {
 	return runHookHandlerEnv(t, hookType, input)
 }
 
+func hookHandlerPath(t *testing.T) string {
+	t.Helper()
+	root, err := reporoot.Find()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, "scripts", "ssq-hook-handler")
+}
+
 // runHookHandlerEnv is runHookHandler with extra KEY=VALUE env entries, which
 // override the defaults (last wins).
 func runHookHandlerEnv(t *testing.T, hookType, input string, extraEnv ...string) []string {
@@ -31,8 +40,7 @@ func runHookHandlerEnv(t *testing.T, hookType, input string, extraEnv ...string)
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not installed")
 	}
-	_, file, _, _ := runtime.Caller(0)
-	handler := filepath.Join(filepath.Dir(file), "..", "..", "scripts", "ssq-hook-handler")
+	handler := hookHandlerPath(t)
 
 	dir := t.TempDir()
 	record := filepath.Join(dir, "calls.txt")
@@ -97,8 +105,7 @@ func TestHookHandler_ShouldStampRoutineOnPostToolAndSubagentOnly_WhenCurlPayload
 // (Task 2.5c): an unmapped name would silently become INFO.
 func TestHookHandler_ShouldOnlyUseMappedTypeNames_WhenScanningScript(t *testing.T) {
 	t.Parallel()
-	_, file, _, _ := runtime.Caller(0)
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "scripts", "ssq-hook-handler"))
+	data, err := os.ReadFile(hookHandlerPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}

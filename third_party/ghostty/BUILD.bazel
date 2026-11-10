@@ -4,22 +4,34 @@ package(default_visibility = ["//visibility:public"])
 
 config_setting(
     name = "macos_arm64",
-    constraint_values = ["@platforms//os:macos", "@platforms//cpu:arm64"],
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:arm64",
+    ],
 )
 
 config_setting(
     name = "macos_x86_64",
-    constraint_values = ["@platforms//os:macos", "@platforms//cpu:x86_64"],
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
 )
 
 config_setting(
     name = "linux_x86_64",
-    constraint_values = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
 )
 
 config_setting(
     name = "linux_arm64",
-    constraint_values = ["@platforms//os:linux", "@platforms//cpu:arm64"],
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+    ],
 )
 
 alias(
@@ -45,9 +57,9 @@ alias(
 # bazel build //third_party/ghostty:ghostty_vt_wasm  ->  bazel-bin/third_party/ghostty/ghostty_vt_wasm.wasm
 ghostty_zig(
     name = "ghostty_vt_wasm",
+    srcs = "@ghostty_src//:srcs",
     build_zig = "@ghostty_src//:build.zig",
     mode = "wasm",
-    srcs = "@ghostty_src//:srcs",
     zig = ":zig",
     zig_lib = ":zig_lib",
 )
@@ -55,9 +67,9 @@ ghostty_zig(
 # Zig unit test for DECSTR (commit ffd0420 on the fork). Build it to run it: a failing test fails the build.
 ghostty_zig(
     name = "softreset_test",
+    srcs = "@ghostty_src//:srcs",
     build_zig = "@ghostty_src//:build.zig",
     mode = "test",
-    srcs = "@ghostty_src//:srcs",
     test_filter = "softReset",
     zig = ":zig",
     zig_lib = ":zig_lib",

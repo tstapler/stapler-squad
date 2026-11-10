@@ -5,7 +5,7 @@
   "method": "CreateBacklogItem",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_lifecycle.go",
   "tested": true,
   "testIds": [
     "TestCreateBacklogItem_should_DefaultAutoCreatePrToFalse_When_FieldOmitted",
@@ -14,5 +14,5 @@
     "TestCreateBacklogItem_should_PersistCategory_When_FieldSet",
     "TestCreateBacklogItem_should_RejectInvalidCategory_When_UnknownValueProvided"
   ],
-  "lastModified": "2026-07-29T00:00:00-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

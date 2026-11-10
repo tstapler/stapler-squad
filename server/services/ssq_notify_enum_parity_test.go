@@ -5,9 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/reporoot"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -16,11 +16,11 @@ import (
 // ssqNotifyScript returns the repo's scripts/ssq-notify path regardless of cwd.
 func ssqNotifyScript(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	root, err := reporoot.Find()
+	if err != nil {
+		t.Fatal(err)
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "scripts", "ssq-notify")
+	return filepath.Join(root, "scripts", "ssq-notify")
 }
 
 // ssqNotifyDryRun runs `ssq-notify --dry-run` and returns the request body it

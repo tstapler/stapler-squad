@@ -1,0 +1,30 @@
+load("//tools/bzl:go_test.bzl", "go_test")
+
+# Throwaway S9 probe (Task 0.9b); not part of the product build.
+go_test(
+    name = "sock_test",
+    srcs = ["sock_test.go"],
+)
+
+# Expected to fail: binds under the long TEST_TMPDIR. Manual so it never runs in //...
+go_test(
+    name = "sock_long_test",
+    srcs = ["sock_long_test.go"],
+    tags = ["manual"],
+)
+
+go_test(
+    name = "spike_test",
+    srcs = [
+        "env_test.go",
+        "sock_long_test.go",
+        "sock_test.go",
+    ],
+    tags = ["manual"],  # keep
+)
+
+# Task 4.1b probe: prints and asserts the env that `test --run_under=//tools/bzl:test_wrapper` builds.
+go_test(
+    name = "env_test",
+    srcs = ["env_test.go"],
+)

@@ -24,7 +24,7 @@ func TestGateSatisfactionRepository_should_RejectDuplicate_When_ItemAndGatePairA
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	fromStage, err := client.BacklogStage.Create().SetSlug("in_progress").SetName("In Progress").Save(ctx)
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestGateSatisfactionRepository_should_Allow_When_SameItemDifferentGate(t *t
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	fromStage, err := client.BacklogStage.Create().SetSlug("in_progress").SetName("In Progress").Save(ctx)
 	require.NoError(t, err)

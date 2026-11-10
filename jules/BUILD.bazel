@@ -1,0 +1,68 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "jules",
+    srcs = [
+        "client.go",
+        "errors.go",
+        "keychain.go",
+        "rate_limit.go",
+        "source_registry.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/jules",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "@com_github_zalando_go_keyring//:go-keyring",
+        "@org_golang_x_sync//singleflight",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jules",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "jules_test",
+    srcs = [
+        "client_test.go",
+        "errors_test.go",
+        "golden_test.go",
+        "keychain_test.go",
+        "secrets_guard_test.go",
+        "source_registry_test.go",
+        "types_test.go",
+    ],
+    data = glob([
+        "*.go",
+        "testdata/**",
+    ]),
+    embed = [":jules"],
+    deps = [
+        "//executor/safeexec",
+        "//internal/testenv",
+        "//log",
+        "//testutil/wait",
+        "@com_github_zalando_go_keyring//:go-keyring",
+    ],
+)
+
+exports_files(
+    ["types.go"],
+    visibility = ["//session:__pkg__"],
+)
+
+forbidden_deps_test(
+    name = "forbidden_deps_test",
+    forbidden = [
+        "//session/...",
+        "//server/...",
+    ],
+    target = ":jules",
+    why = "jules/ must not import session/ or server/ so alpha-API churn stays confined (replaces the go list -deps test in client_test.go)",
+)

@@ -340,7 +340,9 @@ func TestPoller_should_ProcessFurtherPages_When_FirstPageHas200ItemsAndAcksFreeS
 	for i := range 1300 {
 		h.inbox.items = append(h.inbox.items, comment(fmt.Sprintf("i%d", i)))
 	}
-	h.start(nil)
+	// Tick's context deadline is wall-clock PollInterval; delivering 1000 items
+	// takes >5s on a loaded -race runner, so this page-cap test must not race it.
+	h.start(func(d *LoopDeps) { d.Settings.PollInterval = time.Hour })
 	h.tick()
 	assert.Equal(t, MaxPagesPerTick, h.count("events:"))
 	assert.Len(t, h.inbox.items, 1300-MaxPagesPerTick*EventsPageSize, "remainder waits for the next tick")

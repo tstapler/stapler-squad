@@ -199,19 +199,19 @@ func (i *Instance) ToInstanceData() InstanceData {
 	}
 
 	// Only include worktree data if gitWorktree is initialized
-	if i.gitManager.HasWorktree() {
+	if i.GitManager.HasWorktree() {
 		data.Worktree = GitWorktreeData{
-			RepoPath:      i.gitManager.GetRepoPath(),
-			WorktreePath:  i.gitManager.GetWorktreePath(),
+			RepoPath:      i.GitManager.GetRepoPath(),
+			WorktreePath:  i.GitManager.GetWorktreePath(),
 			SessionName:   snap.Title,
-			BranchName:    i.gitManager.GetBranchName(),
-			BaseCommitSHA: i.gitManager.GetBaseCommitSHA(),
+			BranchName:    i.GitManager.GetBranchName(),
+			BaseCommitSHA: i.GitManager.GetBaseCommitSHA(),
 		}
 	}
 
 	// Only include diff stats if they exist
 	// GetDiffStats takes gm.mu; the bare field races with SetDiffStats.
-	if ds := i.gitManager.GetDiffStats(); ds != nil {
+	if ds := i.GitManager.GetDiffStats(); ds != nil {
 		data.DiffStats = DiffStatsData{
 			Added:   ds.Added,
 			Removed: ds.Removed,
@@ -455,14 +455,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	instance.processManager = pm
 
 	// Restore git worktree and diff stats via manager (cannot use struct literal for sub-manager fields).
-	instance.gitManager.SetWorktree(git.NewGitWorktreeFromStorage(
+	instance.GitManager.SetWorktree(git.NewGitWorktreeFromStorage(
 		data.Worktree.RepoPath,
 		data.Worktree.WorktreePath,
 		data.Worktree.SessionName,
 		data.Worktree.BranchName,
 		data.Worktree.BaseCommitSHA,
 	))
-	instance.gitManager.SetDiffStats(&git.DiffStats{
+	instance.GitManager.SetDiffStats(&git.DiffStats{
 		Added:   data.DiffStats.Added,
 		Removed: data.DiffStats.Removed,
 		Content: data.DiffStats.Content,
@@ -488,8 +488,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 
 	// Check if the worktree still exists on disk if the instance is not paused or hibernated.
 	// No mutex is needed here because the instance is not yet shared.
-	if !instance.Paused() && !instance.Hibernated() && instance.gitManager.HasWorktree() {
-		worktreePath := instance.gitManager.GetWorktreePath()
+	if !instance.Paused() && !instance.Hibernated() && instance.GitManager.HasWorktree() {
+		worktreePath := instance.GitManager.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
 			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})

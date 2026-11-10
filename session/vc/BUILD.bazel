@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "vc",
+    srcs = [
+        "detector.go",
+        "git_provider.go",
+        "jj_provider.go",
+        "provider.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/vc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor/safeexec",
+        "//session/git",
+        "//session/git/backend",
+        "//session/gitprovider",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":vc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "vc_test",
+    srcs = [
+        "detector_test.go",
+        "git_provider_refs_test.go",
+        "git_provider_test.go",
+        "gitwiring_test.go",
+        "jj_provider_test.go",
+        "main_test.go",
+        "types_test.go",
+    ],
+    embed = [":vc"],
+    deps = [
+        "//executor/safeexec",
+        "//session/git/backend",
+        "//session/gitwiring",
+        "//testutil/gitfake",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

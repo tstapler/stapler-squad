@@ -13,32 +13,32 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 type fakePeers struct {
-	reg  *session.HostRegistry
-	live []session.RegistryEntry
+	reg  *hostclaim.HostRegistry
+	live []hostclaim.RegistryEntry
 }
 
-func (p *fakePeers) LiveSnapshot() []session.RegistryEntry { return p.live }
-func (p *fakePeers) AuthorizePeerRequest(h http.Header, m, path string, now time.Time) (session.HostID, error) {
+func (p *fakePeers) LiveSnapshot() []hostclaim.RegistryEntry { return p.live }
+func (p *fakePeers) AuthorizePeerRequest(h http.Header, m, path string, now time.Time) (hostclaim.HostID, error) {
 	return p.reg.AuthorizePeerRequest(h, m, path, now)
 }
 
 // federationFixture runs a peer's handler on a TLS server and returns a
 // FederatedSessions on a second identity that has the peer as its only live host.
-func federationFixture(t *testing.T) (*FederatedSessions, *httptest.Server, session.HostID) {
+func federationFixture(t *testing.T) (*FederatedSessions, *httptest.Server, hostclaim.HostID) {
 	t.Helper()
-	peerIdentity, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	peerIdentity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
-	selfIdentity, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	selfIdentity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
 
 	// The peer's registry must hold the caller's key, as gossip would enrol it.
-	peerReg, err := session.NewHostRegistry(t.TempDir(), time.Hour)
+	peerReg, err := hostclaim.NewHostRegistry(t.TempDir(), time.Hour)
 	require.NoError(t, err)
-	_, ok, err := peerReg.Advertise(session.BuildAdvertisement(selfIdentity, []string{"198.51.100.1:8444"}, time.Now()))
+	_, ok, err := peerReg.Advertise(hostclaim.BuildAdvertisement(selfIdentity, []string{"198.51.100.1:8444"}, time.Now()))
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -49,7 +49,7 @@ func federationFixture(t *testing.T) (*FederatedSessions, *httptest.Server, sess
 	t.Cleanup(srv.Close)
 
 	addr := strings.TrimPrefix(srv.URL, "https://")
-	live := []session.RegistryEntry{{HostID: peerIdentity.ID, AdvertisedAddress: []string{addr}}}
+	live := []hostclaim.RegistryEntry{{HostID: peerIdentity.ID, AdvertisedAddress: []string{addr}}}
 	allowLoopbackFederationDialsForTest(t)
 	return NewFederatedSessions(selfIdentity, &fakePeers{live: live}), srv, peerIdentity.ID
 }
@@ -86,14 +86,14 @@ func TestFederatedSessions_should_DropPeer_When_NoLongerLive(t *testing.T) {
 }
 
 func TestSessionFederationHandler_should_Reject_When_RequestUnsigned(t *testing.T) {
-	reg, err := session.NewHostRegistry(t.TempDir(), time.Hour)
+	reg, err := hostclaim.NewHostRegistry(t.TempDir(), time.Hour)
 	require.NoError(t, err)
 	h := SessionFederationHandler(&fakePeers{reg: reg}, func(context.Context) ([]*sessionv1.Session, error) {
 		t.Fatal("list must not run for an unauthenticated request")
 		return nil, nil
 	})
 	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, session.SessionFederationEndpointPath, nil))
+	h(rec, httptest.NewRequest(http.MethodGet, hostclaim.SessionFederationEndpointPath, nil))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 

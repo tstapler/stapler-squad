@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -30,13 +31,13 @@ func addTestPeer(t *testing.T, storage *session.Storage, repoPath string) {
 // initialPromptFor, covered separately in backlog_service_workspace_peers_test.go): the nudge
 // is opt-in via the workspacePeersNudgeFlagName feature flag.
 func TestSessionServiceWorkspacePeersBlockFor_should_IncludePeerNudge_When_FlagEnabledAndPeerExists(t *testing.T) {
-	withIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
+	svctest.WithIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 
@@ -53,12 +54,12 @@ func TestSessionServiceWorkspacePeersBlockFor_should_IncludePeerNudge_When_FlagE
 // covers AC0: the nudge must not appear by default even when a peer exists, since the flag
 // defaults to off/unset.
 func TestSessionServiceWorkspacePeersBlockFor_should_OmitPeerNudge_When_FlagDisabledByDefault(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 
@@ -68,13 +69,13 @@ func TestSessionServiceWorkspacePeersBlockFor_should_OmitPeerNudge_When_FlagDisa
 }
 
 func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExist(t *testing.T) {
-	withIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(workspacePeersNudgeFlagName, true))
+	svctest.WithIsolatedStateDir(t)
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
-	initGitRepoWithCommit(t, repoPath)
+	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 
@@ -83,7 +84,7 @@ func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExi
 
 func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_RepoPathIsEmpty(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 

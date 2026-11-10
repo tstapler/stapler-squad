@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -60,7 +61,7 @@ func TestApplyInstanceStop_WriteFailed_NoEventAndWarns(t *testing.T) {
 	// Not parallel: captureLogs swaps the shared slog seam.
 	svc, inst, li, ch := newApplyStopFixture(t)
 	li.Stop() // actor ctx done: the instance is going away
-	buf := captureLogs(t)
+	buf := svctest.CaptureLogs(t)
 
 	err := svc.applyInstanceStop(inst, domain.StallActionNone, session.AutonomousDriverOutcome{StopReason: domain.StopReasonOrchestratorError})
 

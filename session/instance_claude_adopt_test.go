@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,7 +16,7 @@ func extractFixtureInstance(f *claimFixture, repo string, mutate func(*Instance)
 		Path:            repo,
 		SessionType:     SessionTypeDirectory,
 		CreatedAt:       f.now.Add(-time.Minute),
-		historyDetector: f.linker.detector,
+		historyDetector: f.detector,
 	}
 	if mutate != nil {
 		mutate(inst)
@@ -94,4 +96,40 @@ func TestTryExtract_ClearedAt_SkipsStaleAndTakesNewer(t *testing.T) {
 	inst.tryExtractConversationUUID()
 
 	require.Equal(t, claimOther, extractedUUID(inst))
+}
+
+const (
+	claimSibling  = "cccccccc-0000-0000-0000-000000000000"
+	claimOther    = "dddddddd-0000-0000-0000-000000000000"
+	claimOldStart = "eeeeeeee-0000-0000-0000-000000000000"
+	claimOwnStart = "ffffffff-0000-0000-0000-000000000000"
+)
+
+type claimFixture struct {
+	detector *HistoryFileDetector
+	dir      string
+	now      time.Time
+}
+
+func newClaimFixture(t *testing.T, repoPath string) *claimFixture {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".claude", "projects", ClaudeProjectDirName(repoPath))
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	detector := NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, home)
+	return &claimFixture{detector: detector, dir: dir, now: time.Now()}
+}
+
+// write creates <uuid>.jsonl with the given content and mtime = now - age.
+func (f *claimFixture) write(t *testing.T, uuid, content string, age time.Duration) string {
+	t.Helper()
+	p := filepath.Join(f.dir, uuid+".jsonl")
+	require.NoError(t, os.WriteFile(p, []byte(content), 0644))
+	mt := f.now.Add(-age)
+	require.NoError(t, os.Chtimes(p, mt, mt))
+	return p
+}
+
+func stampedEntry(ts time.Time) string {
+	return `{"type":"queue-operation","timestamp":"` + ts.UTC().Format(time.RFC3339Nano) + `"}` + "\n"
 }

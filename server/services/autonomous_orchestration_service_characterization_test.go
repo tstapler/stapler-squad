@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -36,7 +37,7 @@ func newUnlinkedCharFixture(t *testing.T, title string) *charFixture {
 
 func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status session.Status) *charFixture {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	bus := events.NewEventBus(100)
@@ -50,7 +51,7 @@ func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status session
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
-	svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
 	ch, _ := bus.Subscribe(ctx)
 	return &charFixture{svc: svc, storage: storage, inst: inst, title: title, ch: ch}
@@ -69,7 +70,7 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus session.
 }
 
 func (f *charFixture) complete(outcome session.AutonomousDriverOutcome) {
-	f.svc.autonomousSvc.onAutonomousDriverComplete(f.title, outcome)
+	f.svc.AutonomousSvc.OnAutonomousDriverComplete(f.title, outcome)
 }
 
 // drain returns every event already published; the callback publishes synchronously.
@@ -83,16 +84,6 @@ func (f *charFixture) drain() []*events.Event {
 			return out
 		}
 	}
-}
-
-func notificationTitles(evs []*events.Event) []string {
-	var titles []string
-	for _, ev := range evs {
-		if ev.Type == events.EventNotification {
-			titles = append(titles, ev.NotificationTitle)
-		}
-	}
-	return titles
 }
 
 // seedAutonomousStuckRow opens the item's autonomous_stuck row with the given
@@ -136,7 +127,7 @@ func TestOnAutonomousDriverComplete_Characterization_RemediationNotDue_SkipsResp
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	future := time.Now().Add(time.Hour)
 	f.seedAutonomousStuckRow(t, 1, &future)
-	buf := captureLogs(t)
+	buf := svctest.CaptureLogs(t)
 
 	f.complete(stallOutcome)
 
@@ -148,7 +139,7 @@ func TestOnAutonomousDriverComplete_Characterization_RemediationNotDue_SkipsResp
 	is, err := f.storage.GetItemSessionBySessionUUID(context.Background(), f.inst.UUID)
 	require.NoError(t, err)
 	assert.NotNil(t, is.EndedAt, "the stalled ItemSession is ended before the gate, even when the respawn is skipped")
-	assert.Contains(t, notificationTitles(f.drain()), "Autonomous fix stuck")
+	assert.Contains(t, svctest.NotificationTitles(f.drain()), "Autonomous fix stuck")
 }
 
 func TestOnAutonomousDriverComplete_Characterization_JustParked_NotifiesAndStillRespawns(t *testing.T) {
@@ -160,7 +151,7 @@ func TestOnAutonomousDriverComplete_Characterization_JustParked_NotifiesAndStill
 
 	f.complete(stallOutcome)
 
-	titles := notificationTitles(f.drain())
+	titles := svctest.NotificationTitles(f.drain())
 	assert.Contains(t, titles, "Automated retry paused")
 	assert.Contains(t, titles, "Autonomous fix stuck")
 	select {
@@ -180,7 +171,7 @@ func TestOnAutonomousDriverComplete_Characterization_UpdateItemSessionEndedFails
 
 	f.complete(stallOutcome)
 
-	titles := notificationTitles(f.drain())
+	titles := svctest.NotificationTitles(f.drain())
 	assert.Contains(t, titles, "Stuck-work bookkeeping failed")
 	assert.Contains(t, titles, "Autonomous fix stuck", "the generic notification still fires after a bookkeeping failure")
 	select {
@@ -205,7 +196,7 @@ func TestOnAutonomousDriverComplete_Characterization_NilRespawner_LeavesItemInPr
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusInProgress), item.Status)
-	assert.Equal(t, []string{"Autonomous fix stuck"}, notificationTitles(f.drain()))
+	assert.Equal(t, []string{"Autonomous fix stuck"}, svctest.NotificationTitles(f.drain()))
 }
 
 // SVC-11: the SessionUpdatedEvent carries the values the write left on the instance.

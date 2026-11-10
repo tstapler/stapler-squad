@@ -17,6 +17,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -394,7 +395,7 @@ func TestRepairSettingsJSON(t *testing.T) {
 // newHandlerWithStorage creates an ApprovalHandler wired with a real storage.
 func newHandlerWithStorage(t *testing.T) (*ApprovalHandler, *session.Storage) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
 	t.Cleanup(bus.Close)
 	h := NewApprovalHandler(NewApprovalStore(""), storage, bus)
@@ -961,7 +962,7 @@ func TestHandlePermissionRequest_ContextCancelStampsMetadata(t *testing.T) {
 // event published on the event bus has the session UUID, not the title.
 func TestHandlePermissionRequest_NotificationUsesUUID(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(32)
 	t.Cleanup(bus.Close)
 

@@ -5,7 +5,7 @@
   "method": "TriggerShipPR",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_ship.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_ship.go",
   "tested": true,
   "testIds": [
     "TestTriggerShipPR_HappyPath_RunsOneShotForMostRecentWorkSession",
@@ -15,5 +15,5 @@
     "TestTriggerShipPR_NoOneShotRunnerWired_ReturnsUnimplemented",
     "TestTriggerShipPR_RunnerError_ReturnsFailedPrecondition"
   ],
-  "lastModified": "2026-07-18T09:54:00.881911857-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

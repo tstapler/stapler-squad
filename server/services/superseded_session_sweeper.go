@@ -108,7 +108,7 @@ func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 			log.Warn("superseded session sweeper: ListItemSessions failed", "item", item.ID, "err", err)
 			continue
 		}
-		superseded = append(superseded, findSupersededSessions(sessions)...)
+		superseded = append(superseded, FindSupersededSessions(sessions)...)
 	}
 	// Already-archived sessions stay superseded forever; one batched lookup
 	// replaces an IsSessionLive plus an archive-by-id query per session per tick.

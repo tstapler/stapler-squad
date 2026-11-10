@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "profiling",
+    srcs = [
+        "goroutine_watch.go",
+        "profiling.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/profiling",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/tmux",
+        "//session/unfinished",
+        "@com_github_grafana_pyroscope_go//:pyroscope-go",
+        "@com_github_grafana_pyroscope_go_godeltaprof//http/pprof",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":profiling",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "profiling_test",
+    srcs = [
+        "goroutine_watch_test.go",
+        "lockprofile_bench_test.go",
+        "profiling_test.go",
+    ],
+    embed = [":profiling"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

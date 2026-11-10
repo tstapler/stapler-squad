@@ -12,7 +12,7 @@ import (
 
 func linkPR(t *testing.T, s *Storage, uuid string, n int, role PRRole, at time.Time) {
 	t.Helper()
-	_, err := s.repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid), mustPRRef(t, "", "acme", "app", n),
+	_, err := s.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid), mustPRRef(t, "", "acme", "app", n),
 		PRLink{Role: role, Source: AttachSourceManual, AttachedAt: at, Initial: PRInitial{State: PRStateOpen}})
 	require.NoError(t, err)
 }
@@ -35,7 +35,7 @@ func loadByTitle(t *testing.T, s *Storage, title string) *Instance {
 }
 
 func TestMirrorReconciler_ShouldCorrectViaActor_WhenLegacyNumberDriftsFromActivePR(t *testing.T) {
-	t.Parallel()
+	// Serial: asserts exact deltas on the process-global drift counters, which parallel reconcilers also bump.
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	prLoadFixture(t, storage, "drifted", "u-drift", "acme", "app", 11)
@@ -59,7 +59,7 @@ func TestMirrorReconciler_ShouldCorrectViaActor_WhenLegacyNumberDriftsFromActive
 }
 
 func TestMirrorReconciler_ShouldSkipAndCount_WhenLegacyPRUnrepresented(t *testing.T) {
-	t.Parallel()
+	// Serial: asserts exact deltas on the process-global drift counters, which parallel reconcilers also bump.
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	prLoadFixture(t, storage, "skipped", "u-skip", "", "", 41)
@@ -84,7 +84,7 @@ func TestMirrorReconciler_ShouldOverwriteTombstonedValue_WhenSessionHasOtherLink
 	defer cleanup()
 	prLoadFixture(t, storage, "tombstoned", "u-tomb", "acme", "app", 12)
 	linkPR(t, storage, "u-tomb", 11, PRRolePrimary, time.Now())
-	_, err := storage.repo.DeleteSessionPR(context.Background(), SessionPROwner("u-tomb"), mustPRRef(t, "", "acme", "app", 12))
+	_, err := storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner("u-tomb"), mustPRRef(t, "", "acme", "app", 12))
 	require.NoError(t, err)
 	inst := loadByTitle(t, storage, "tombstoned")
 	require.False(t, inst.Snapshot().GitHub.LegacyPRUnrepresented)

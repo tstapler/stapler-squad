@@ -1,0 +1,82 @@
+name: Bazel macOS
+
+# PROVISIONAL and never run: written without a Mac (Epic 5). Non-blocking and off pull requests on purpose
+# (docs/reference/ci-job-budget.md: OS/arch matrices run on main only), so it adds no PR check. The runner image is
+# pinned, never `macos-latest` (pre-mortem #9). Action pins are SHAs, copied from bazel.yml.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'macos/**'
+      - 'tools/bzl/otel_weave_hermetic.*'
+      - 'tools/bzl/wrapper_test.sh'
+      - 'tools/bazel'
+      - '.bazelrc'
+      - '.github/workflows/bazel-macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bazel-macos-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  bazel-macos:
+    name: bazel macos arm64 (non-blocking)
+    runs-on: macos-14
+    continue-on-error: true
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      # macos-14 ships several Xcode versions; pick one explicitly so the C toolchain does not drift.
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app
+          xcode-select -p
+          clang --version
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      # Stock macOS has bash 3.2 and no flock, ionice or systemd-run: prove the wrapper's mkdir-lock and CI bypass.
+      - name: Wrapper test on bash 3.2
+        run: /bin/bash tools/bzl/wrapper_test.sh
+
+      - name: Build release arm64 and check the embedded Info.plist
+        run: |
+          bazel build --config=ci --config=release --lockfile_mode=error //:stapler-squad
+          file bazel-bin/stapler-squad | grep -q arm64
+          otool -s __TEXT __info_plist bazel-bin/stapler-squad | grep -q 'Contents of'
+
+      # The Go test reads the section with debug/macho, so it does not depend on otool's hex output.
+      - name: Info.plist test
+        run: bazel test --config=ci --config=release --lockfile_mode=error //macos:infoplist_test
+
+      # Exit 4 means no test carries the darwin tag yet, which is not a failure.
+      - name: darwin-tagged tests
+        run: |
+          set +e
+          bazel test --config=ci --lockfile_mode=error --build_tests_only --test_tag_filters=darwin //...
+          rc=$?
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 4 ]
+
+      # Task 5.1d: Intel build from the arm64 runner. If Bazel's cc toolchain resolution rejects the cross, switch to an
+      # Intel runner and record the choice in docs/how-to/macos-codesigning.md.
+      - name: Build release amd64
+        run: |
+          bazel build --config=ci --config=release --config=darwin_amd64 --lockfile_mode=error //:stapler-squad
+          file -b "$(bazel cquery --config=release --config=darwin_amd64 --output=files //:stapler-squad 2>/dev/null)" | grep -q x86_64

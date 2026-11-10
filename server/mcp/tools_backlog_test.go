@@ -24,6 +24,7 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -38,9 +39,9 @@ import (
 // FAILED_PRECONDITION) rather than scripting a fake — backlogHandlers.backlogSvc
 // is a concrete *services.BacklogService field, not an interface, so a fake
 // double can no longer be injected there.
-func newTestLinkBacklogSvc(t *testing.T, storage *session.Storage) *services.BacklogService {
+func newTestLinkBacklogSvc(t *testing.T, storage *session.Storage) *backlogsvc.BacklogService {
 	t.Helper()
-	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	t.Cleanup(svc.Shutdown)
 	return svc
 }
@@ -1138,7 +1139,7 @@ func TestRequestReview_SucceedsAgain_AfterAutoReopenFollowingZombieReviewerFailu
 
 	// Simulates the crash-recovery sweep handing the confirmed-zombie item to
 	// AutoReopenAfterFailedReview.
-	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	require.NoError(t, svc.AutoReopenAfterFailedReview(ctx, item.ID))
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
@@ -2814,7 +2815,7 @@ func TestImportGitHubIssue_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathS
 	defer restoreGhBaseURL()
 
 	storage := newTestBacklogStorage(t)
-	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	backlogSvc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	backlogSvc.SetHeadlessPool(&fakeTriageHeadlessPool{})
 	t.Cleanup(backlogSvc.Shutdown)
 
@@ -3772,7 +3773,7 @@ func (f *fakeTriageHeadlessPool) CallBlocking(ctx context.Context, key headless.
 // can never originate the first attempt for an item created this way.
 func TestCreateBacklogItem_should_TriggerTriage_When_BacklogSvcWiredAndRepoPathSet(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	backlogSvc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	backlogSvc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	backlogSvc.SetHeadlessPool(&fakeTriageHeadlessPool{})
 	t.Cleanup(backlogSvc.Shutdown)
 
@@ -4999,7 +5000,7 @@ func TestReportDuplicate_IgnoresOtherLinksWhoseSessionIsDead(t *testing.T) {
 
 			// Zero-value service: no triage call is in flight for any item. The
 			// in-flight-still-blocks branch is IsTriageLive's own contract, tested in server/services.
-			svc := &services.BacklogService{}
+			svc := &backlogsvc.BacklogService{}
 			handler := &backlogHandlers{
 				storage:         storage,
 				backlogSvc:      svc,
@@ -6084,7 +6085,7 @@ func TestCurrentStateWaitResult_should_ReportBuiltInDoneArchivedUnchanged(t *tes
 func newTestListBacklogHandlers(t *testing.T) *backlogHandlers {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
-	svc := services.NewBacklogService(storage, nil, nil, nil, nil, nil)
+	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
 	return &backlogHandlers{storage: storage, backlogSvc: svc}
 }
 
@@ -6982,7 +6983,7 @@ func TestGetBacklogItem_should_CapActivityLogAtTwentyEntries_When_MoreThanTwenty
 }
 
 // TestGetBacklogItem_should_SanitizeActivityLogEntry_When_MessageContainsHTML
-// proves session.SanitizeForAgentContext is applied at render time,
+// proves backlog.SanitizeForAgentContext is applied at render time,
 // independent of post_backlog_update's own persist-time stripping — the note
 // is written directly via storage.AppendActivityNote, bypassing the handler
 // entirely, so any stripping observed here can only be render-time.

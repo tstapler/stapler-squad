@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "citime_lib",
+    srcs = [
+        "citime.go",
+        "main.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/ci/citime",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "citime",
+    embed = [":citime_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "citime_test",
+    srcs = ["citime_test.go"],
+    embed = [":citime_lib"],
+)

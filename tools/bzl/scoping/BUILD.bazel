@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "scoping_lib",
+    srcs = [
+        "boundaries.go",
+        "budget.go",
+        "closure.go",
+        "criteria.go",
+        "deps.go",
+        "golist.go",
+        "leaves.go",
+        "main.go",
+        "model.go",
+        "move.go",
+        "relocate.go",
+        "replay.go",
+        "t9.go",
+        "touch.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/scoping",
+    visibility = ["//visibility:private"],
+    deps = [
+        "@org_golang_x_tools//go/ast/astutil",
+        "@org_golang_x_tools//go/packages",
+        "@org_golang_x_tools//imports",
+    ],
+)
+
+go_binary(
+    name = "scoping",
+    embed = [":scoping_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "scoping_test",
+    srcs = [
+        "boundaries_test.go",
+        "budget_test.go",
+        "closure_test.go",
+        "criteria_test.go",
+        "deps_test.go",
+        "leaves_test.go",
+        "move_test.go",
+        "relocate_test.go",
+        "scoping_test.go",
+        "touch_test.go",
+    ],
+    embed = [":scoping_lib"],
+)

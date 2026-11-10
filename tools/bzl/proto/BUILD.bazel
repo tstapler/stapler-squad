@@ -1,0 +1,19 @@
+# Managed by hand, not Gazelle (listed in tools/bzl/hand-build-files.txt).
+# gazelle:ignore
+alias(
+    name = "protoc_gen_connect_go",
+    actual = "@com_connectrpc_connect//cmd/protoc-gen-connect-go",
+    visibility = ["//visibility:public"],
+)
+
+# web-app/src/gen comes from //proto/session/v1:session_ts (Story 2.2); this alias keeps the old label.
+alias(
+    name = "gen_ts",
+    actual = "//proto/session/v1:session_ts",
+    visibility = ["//visibility:public"],
+)
+
+exports_files([
+    "buf_lint.sh",
+    "buf-lint-baseline.txt",
+])

@@ -1,0 +1,422 @@
+#!/usr/bin/env bash
+# Bazelisk runs this file automatically (tools/bazel) and passes the real binary in BAZEL_REAL.
+# Host containment (pre-mortem #1): at most N concurrent Bazel invocations host-wide, each in a
+# memory-capped, low-priority systemd scope whose processes are the OOM killer's first victims.
+# Single-tenant CI (CI / GITHUB_ACTIONS set) skips all of it.
+# Agent legibility (Story 1.6): non-TTY / CLAUDECODE callers get --config=agent, a capped failure
+# view with a one-line remedy (tools/bzl/errors.yaml), queue-wait messages, heartbeats and auto-detach.
+# Knobs: BAZEL_WRAPPER_SLOTS (default 2, max 4), BAZEL_WRAPPER_NO_FLOCK=1 (force the mkdir lock),
+#        BAZEL_WRAPPER_NO_SYSTEMD=1, BAZEL_WRAPPER_MEMORY_MAX (default 14G),
+#        BAZEL_WORKTREE_OUTPUT_BASE=1 (absolute --output_base=<worktree>/.bazel-out, S6 fallback),
+#        BAZEL_WRAPPER_LOCK_DIR (lock location; tests use a private dir),
+#        BAZEL_HUMAN=1 / --config=human (no agent mode), BAZEL_BG=1 (detach at once),
+#        BAZEL_AUTO_DETACH_SECS (default 0; 600 when agent mode was auto-selected),
+#        BAZEL_SLOT_TIMEOUT (default 900), BAZEL_LOG_DIR, BAZEL_SLOT_HISTORY,
+#        BAZEL_WRAPPER_TICK (seconds per heartbeat tick, default 1; tests shrink it),
+#        BAZEL_WRAPPER_NO_STALE_NOTE=1, BAZEL_WRAPPER_OUTPUT_BASE (test override of the cold check).
+# Exit codes of its own: 2 (no BAZEL_REAL), 75 (no slot before the timeout), 76 (detached, result pending).
+set -eu
+
+real="${BAZEL_REAL:-}"
+if [ -z "$real" ]; then
+  echo "tools/bazel: BAZEL_REAL is unset; run this through bazelisk (it sets BAZEL_REAL)" >&2
+  exit 2
+fi
+
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
+  exec "$real" "$@"
+fi
+
+# `BAZEL_REAL=$(command -v bazelisk) tools/bazel ...` makes bazelisk re-run this wrapper with the real
+# binary; the inner copy must not take a second slot or add flags a second time.
+if [ -n "${BAZEL_WRAPPER_ACTIVE:-}" ]; then
+  exec "$real" "$@"
+fi
+export BAZEL_WRAPPER_ACTIVE=1
+
+wrapper_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ws_root=$(cd "$wrapper_dir/.." && pwd -P)
+bzl="$wrapper_dir/bzl"
+# shellcheck source=bzl/slot_history.sh disable=SC1091
+[ -f "$bzl/slot_history.sh" ] && . "$bzl/slot_history.sh"
+
+# ---- argument handling -------------------------------------------------------------------
+cmd=""
+human_cfg=""
+args=()
+for a in "$@"; do
+  case "$a" in
+    --config=human) human_cfg=1 ;;
+    *) args+=("$a") ;;
+  esac
+done
+for a in ${args[@]+"${args[@]}"}; do
+  case "$a" in -*) ;; *) cmd=$a; break ;; esac
+done
+
+agent=""
+if [ -z "${BAZEL_HUMAN:-}" ] && [ -z "$human_cfg" ]; then
+  if [ ! -t 1 ] || [ -n "${CLAUDECODE:-}" ] || [ -n "${STAPLER_SQUAD_SESSION:-}" ]; then agent=1; fi
+fi
+auto_agent_cfg=""
+final=()
+added=""
+for a in ${args[@]+"${args[@]}"}; do
+  final+=("$a")
+  # --config=agent is added right after the command word; never for query (rejects a build: config)
+  # and not for cquery/aquery/info, whose acceptance is unverified.
+  if [ -z "$added" ] && [ "$a" = "$cmd" ] && [ -n "$agent" ]; then
+    case "$cmd" in
+      build|test|run|coverage)
+        final+=("--config=agent")
+        auto_agent_cfg=1
+        ;;
+    esac
+    added=1
+  fi
+done
+
+capture=""
+case "$cmd" in build|test|coverage) if [ -n "$agent" ] || [ -n "${BAZEL_BG:-}" ]; then capture=1; fi ;; esac
+timed_cmd=""
+case "$cmd" in build|test|coverage|run) timed_cmd=1 ;; esac
+
+detach_secs="${BAZEL_AUTO_DETACH_SECS:-}"
+if [ -z "$detach_secs" ]; then
+  if [ -n "$auto_agent_cfg" ] && [ -n "$capture" ]; then detach_secs=600; else detach_secs=0; fi
+fi
+
+# ---- slot queue --------------------------------------------------------------------------
+slots="${BAZEL_WRAPPER_SLOTS:-2}"
+if [ "$slots" -gt 4 ]; then slots=4; fi
+base="${BAZEL_WRAPPER_LOCK_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}}"
+slot_timeout="${BAZEL_SLOT_TIMEOUT:-900}"
+held=""        # flock fd number or mkdir slot dir
+slot_i=""
+mode=""
+handed=""      # set once a detached holder process owns the slot
+child=""
+wait_start=""
+last_msg=0
+waiter_file="$base/stapler-squad-bazel.wait.$$"
+
+# shellcheck disable=SC2329
+release() {
+  [ -z "$handed" ] || return 0
+  rm -f "$waiter_file"
+  [ -z "$slot_i" ] || rm -f "$base/stapler-squad-bazel.holder.$slot_i"
+  if [ "$mode" = mkdir ] && [ -n "$held" ]; then
+    rm -f "$held/pid"
+    rmdir "$held" 2>/dev/null || true
+  fi
+}
+trap release EXIT
+
+# shellcheck disable=SC2329
+on_signal() {
+  if [ -n "$child" ]; then
+    pkill -TERM -P "$child" 2>/dev/null || true
+    kill -TERM "$child" 2>/dev/null || true
+  fi
+  exit 143
+}
+trap on_signal TERM INT HUP
+
+# E7 templates live in errors.yaml; <p> <n> <s> <T> are filled in here.
+msg() { # <E7|E7.repeat|E7.timeout> <p> <n> <s> <T>
+  local t=""
+  [ ! -x "$bzl/translate-errors.sh" ] || t=$("$bzl/translate-errors.sh" --text "$1" 2>/dev/null || true)
+  if [ -z "$t" ]; then
+    case "$1" in
+      E7.repeat) t="bazel: still waiting (position <p>, ETA ~<s>s)" ;;
+      E7.timeout) t="bazel: no build slot after <T>s. Remedy: run 'make bazel-doctor' to see the holders, or retry." ;;
+      *) t="bazel: waiting for a build slot (position <p> of <n>, ETA ~<s>s, gives up after <T>s). Another Bazel run is using the host; this is not a hang." ;;
+    esac
+  fi
+  printf '%s\n' "$t" | sed -e "s/<p>/${2:-1}/g" -e "s/<n>/${3:-1}/g" -e "s/<s>/${4:-120}/g" -e "s/<T>/${5:-$slot_timeout}/g"
+}
+
+queue_position() { # prints "<p> <n>": my place among live waiters and their count
+  local f pid mine older=0 total=0 content
+  mine=$(cat "$waiter_file" 2>/dev/null || true)
+  for f in "$base"/stapler-squad-bazel.wait.*; do
+    [ -e "$f" ] || continue
+    pid=${f##*.}
+    if ! kill -0 "$pid" 2>/dev/null; then rm -f "$f"; continue; fi
+    total=$((total + 1))
+    content=$(cat "$f" 2>/dev/null || true)
+    if [ -n "$content" ] && [ "$content" \< "$mine" ]; then older=$((older + 1)); fi
+  done
+  echo "$((older + 1)) $total"
+}
+
+eta_secs() {
+  local m=""
+  if command -v slot_history_median >/dev/null 2>&1; then m=$(slot_history_median "" 5 1 2>/dev/null || true); fi
+  echo "${m:-120}"
+}
+
+wait_turn() { # called after a failed attempt; prints E7 messages, exits 75 on timeout
+  local now elapsed pos
+  now=$SECONDS
+  if [ -z "$wait_start" ]; then
+    wait_start=$now
+    printf '%s%07d\n' "$(date +%s)" "$$" > "$waiter_file"
+    last_msg=$now
+    pos=$(queue_position)
+    msg E7 "${pos%% *}" "${pos##* }" "$(eta_secs)" "$slot_timeout" >&2
+  fi
+  elapsed=$((now - wait_start))
+  if [ "$elapsed" -ge "$slot_timeout" ]; then
+    msg E7.timeout 1 1 0 "$slot_timeout" >&2
+    exit 75
+  fi
+  if [ $((now - last_msg)) -ge 15 ]; then
+    last_msg=$now
+    pos=$(queue_position)
+    msg E7.repeat "${pos%% *}" "${pos##* }" "$(eta_secs)" "$slot_timeout" >&2
+  fi
+  sleep 1
+}
+
+note_holder() { # <slot index>
+  slot_i=$1
+  printf '%s %s %s\n' "$$" "$(date +%s)" "${cmd:-?}" > "$base/stapler-squad-bazel.holder.$1" 2>/dev/null || true
+  rm -f "$waiter_file"
+}
+
+acquire_flock() {
+  local i fd
+  while :; do
+    i=1
+    while [ "$i" -le "$slots" ]; do
+      fd=$((8 + i))
+      # shellcheck disable=SC2093
+      eval "exec $fd>>\"$base/stapler-squad-bazel.lock.$i\""
+      if flock -n "$fd"; then
+        held=$fd
+        note_holder "$i"
+        return 0
+      fi
+      eval "exec $fd>&-"
+      i=$((i + 1))
+    done
+    wait_turn
+  done
+}
+
+acquire_mkdir() {
+  local i d p
+  while :; do
+    i=1
+    while [ "$i" -le "$slots" ]; do
+      d="$base/stapler-squad-bazel.slot.$i"
+      if mkdir "$d" 2>/dev/null; then
+        echo "$$" > "$d/pid"
+        held=$d
+        note_holder "$i"
+        return 0
+      fi
+      p=$(cat "$d/pid" 2>/dev/null || true)
+      if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+        rm -f "$d/pid"
+        rmdir "$d" 2>/dev/null || true
+      fi
+      i=$((i + 1))
+    done
+    wait_turn
+  done
+}
+
+if command -v flock >/dev/null 2>&1 && [ -z "${BAZEL_WRAPPER_NO_FLOCK:-}" ]; then
+  mode="flock"
+  acquire_flock
+else
+  mode="mkdir"
+  acquire_mkdir
+fi
+
+# Hand the slot to a background holder that releases it when the detached run ends, so the
+# wrapper can exit while Bazel keeps running. Its stdio is detached so a caller's pipe can close.
+handoff() { # <child pid>
+  local target=$1 holder
+  (
+    while kill -0 "$target" 2>/dev/null; do sleep 1; done
+    if [ -n "$slot_i" ]; then rm -f "$base/stapler-squad-bazel.holder.$slot_i"; fi
+    if [ "$mode" = mkdir ] && [ -n "$held" ]; then rm -f "$held/pid"; rmdir "$held" 2>/dev/null || true; fi
+  ) </dev/null >/dev/null 2>&1 &
+  holder=$!
+  if [ -n "$slot_i" ]; then printf '%s %s %s\n' "$holder" "$(date +%s)" "${cmd:-?}" > "$base/stapler-squad-bazel.holder.$slot_i" 2>/dev/null || true; fi
+  if [ "$mode" = mkdir ] && [ -n "$held" ]; then echo "$holder" > "$held/pid"; fi
+  handed=1
+}
+
+# ---- startup flags -------------------------------------------------------------------------
+# ~/.bazelrc sets an 8g heap and wins over the committed .bazelrc, so the heap is passed here.
+startup=("--host_jvm_args=-Xmx${BAZEL_WRAPPER_HEAP:-2g}")
+# Agents (non-tty stdout) get a short idle timeout so ~100 worktrees do not each pin a JVM.
+if [ ! -t 1 ] || [ -n "${BAZEL_AGENT:-}" ] || [ -n "$agent" ]; then
+  startup+=("--max_idle_secs=30")
+fi
+
+# S6 fallback (Story 0.10): one output base per worktree, inside it. %workspace% is NOT expanded
+# in startup flags, so the absolute path comes from here; .bazel-out must be in .bazelignore.
+if [ -n "${BAZEL_WORKTREE_OUTPUT_BASE:-}" ]; then
+  ws=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  startup+=("--output_base=$ws/.bazel-out")
+fi
+
+# Raising oom_score_adj needs no privilege; a systemd *scope* rejects OOMScoreAdjust= as a
+# property (verified: "Unknown assignment: OOMScoreAdjust=500"), so it is set inside the scope.
+run_cmd=(sh -c 'echo 500 > /proc/self/oom_score_adj 2>/dev/null || true; exec "$@"' sh)
+nice_cmd=(nice -n 10)
+if command -v ionice >/dev/null 2>&1; then
+  nice_cmd+=(ionice -c3)
+fi
+if [ "$(uname -s)" = Darwin ] && command -v taskpolicy >/dev/null 2>&1; then
+  nice_cmd=(taskpolicy -b nice -n 10)
+fi
+
+use_systemd=""
+if [ -z "${BAZEL_WRAPPER_NO_SYSTEMD:-}" ] && command -v systemd-run >/dev/null 2>&1 \
+   && systemctl --user show-environment >/dev/null 2>&1; then
+  use_systemd=1
+fi
+
+inner=("${run_cmd[@]}" "${nice_cmd[@]}" "$real" "${startup[@]}" ${final[@]+"${final[@]}"})
+if [ -n "$use_systemd" ]; then
+  inner=(systemd-run --user --scope --quiet
+    -p "MemoryMax=${BAZEL_WRAPPER_MEMORY_MAX:-14G}" -p CPUWeight=20 -p IOWeight=20 "${inner[@]}")
+fi
+
+# ---- cold-first-build note and BUILD staleness note ----------------------------------------
+extra=0   # lines the wrapper itself printed before the run; counted inside the output caps
+is_cold=""
+if [ -n "$timed_cmd" ]; then
+  if [ -n "${BAZEL_WRAPPER_OUTPUT_BASE:-}" ]; then
+    ob="$BAZEL_WRAPPER_OUTPUT_BASE"
+  elif [ -n "${BAZEL_WORKTREE_OUTPUT_BASE:-}" ]; then
+    ob="$ws_root/.bazel-out"
+  else
+    if command -v md5sum >/dev/null 2>&1; then h=$(printf '%s' "$ws_root" | md5sum | cut -d' ' -f1)
+    else h=$(printf '%s' "$ws_root" | md5 -q 2>/dev/null || echo none); fi
+    ob="${BAZEL_USER_ROOT:-$HOME/.cache/bazel/_bazel_${USER:-$(id -un)}}/$h"
+  fi
+  if [ ! -d "$ob/execroot" ]; then
+    is_cold=1
+    cold_secs=""
+    if command -v slot_history_median >/dev/null 2>&1; then cold_secs=$(slot_history_median cold 5 3 2>/dev/null || true); fi
+    if [ -n "$cold_secs" ]; then cold_min=$(((cold_secs + 59) / 60)); else cold_min="${BAZEL_COLD_DEFAULT_MIN:-3}"; fi
+    echo "note: first build in this worktree is cold, about $cold_min min (later builds are cached)"
+    extra=$((extra + 1))
+  fi
+fi
+case "$cmd" in
+  build|test)
+    if [ -z "${BAZEL_WRAPPER_NO_STALE_NOTE:-}" ] && [ -x "$bzl/check-build-fresh-cheap.sh" ]; then
+      notes=$("$bzl/check-build-fresh-cheap.sh" --warn 2>/dev/null | grep '^note:' | head -n 3 || true)
+      if [ -n "$notes" ]; then
+        printf '%s\n' "$notes"
+        extra=$((extra + $(printf '%s\n' "$notes" | wc -l)))
+      fi
+    fi
+    ;;
+esac
+
+# ---- run -------------------------------------------------------------------------------------
+logdir="${BAZEL_LOG_DIR:-$ws_root/.bazel-logs}"
+logname=last-build.log
+case "$cmd" in test|coverage) logname=last-test.log ;; esac
+logfile="$logdir/$logname"
+exitfile="-"
+kind=none
+if [ -n "$timed_cmd" ]; then
+  kind=warm
+  [ -z "$is_cold" ] || kind=cold
+fi
+if [ -n "$capture" ]; then
+  mkdir -p "$logdir"
+  exitfile="$logdir/last-exit"
+  rm -f "$exitfile"
+  : > "$logfile"
+fi
+
+runner=(bash "$bzl/slot_history.sh" run "$exitfile" "$kind" --)
+# The lock fds are closed for the child so a daemonized Bazel server never keeps the slot busy.
+if [ -n "$capture" ]; then
+  "${runner[@]}" "${inner[@]}" 9>&- 10>&- 11>&- 12>&- </dev/null >"$logfile" 2>&1 &
+else
+  "${runner[@]}" "${inner[@]}" 9>&- 10>&- 11>&- 12>&- <&0 &
+fi
+child=$!
+
+if [ -z "$capture" ]; then
+  status=0
+  wait "$child" || status=$?
+  exit "$status"
+fi
+
+rel_log=".bazel-logs/$logname"
+if [ -n "${BAZEL_BG:-}" ]; then
+  echo "started in background (pid $child), log: $rel_log, poll: bash tools/bzl/bg-status.sh"
+  handoff "$child"
+  exit 0
+fi
+
+tick="${BAZEL_WRAPPER_TICK:-1}"
+elapsed=0
+next_hb=30
+hb=0
+while kill -0 "$child" 2>/dev/null; do
+  sleep "$tick"
+  elapsed=$((elapsed + 1))
+  if [ "$detach_secs" -gt 0 ] && [ "$elapsed" -ge "$detach_secs" ] && kill -0 "$child" 2>/dev/null; then
+    echo "detached after ${elapsed}s; poll with tools/bzl/bg-status.sh"
+    handoff "$child"
+    exit 76
+  fi
+  if [ "$elapsed" -ge "$next_hb" ]; then
+    if [ "$hb" -lt 10 ]; then
+      echo "bazel: still running, ${elapsed}s elapsed, log: $rel_log"
+      hb=$((hb + 1))
+    fi
+    if [ "$next_hb" -lt 120 ]; then next_hb=$((next_hb * 2)); else next_hb=$((next_hb + 120)); fi
+  fi
+done
+status=0
+wait "$child" || status=$?
+extra=$((extra + hb))
+
+hints() { "$bzl/translate-errors.sh" --hints-only --exit "$1" < "$logfile" 2>/dev/null || true; }
+
+view=$(mktemp "$logdir/.view.XXXXXX")
+if [ "$status" -eq 0 ]; then
+  h=$(hints 0)
+  hn=0
+  [ -z "$h" ] || hn=$(printf '%s\n' "$h" | wc -l)
+  room=$((40 - extra - hn))
+  [ "$room" -ge 1 ] || room=1
+  tail -n "$room" "$logfile" > "$view"
+  cat "$view"
+  [ -z "$h" ] || printf '%s\n' "$h"
+else
+  total=$(wc -l < "$logfile")
+  first=$(grep -n -m1 -E '^(ERROR|FAIL):' "$logfile" | cut -d: -f1 || true)
+  tail_start=$((total - 19))
+  {
+    if [ -n "$first" ]; then
+      sed -n "${first},$((first + 11))p" "$logfile"
+      [ "$tail_start" -ge $((first + 12)) ] || tail_start=$((first + 12))
+    fi
+    hints "$status"
+    [ "$tail_start" -ge 1 ] || tail_start=1
+    if [ "$tail_start" -le "$total" ]; then sed -n "${tail_start},\$p" "$logfile"; fi
+  } > "$view"
+  shown=$(grep -c '^ERROR:' "$view" || true)
+  all=$(grep -c '^ERROR:' "$logfile" || true)
+  cat "$view"
+  if [ "$all" -gt "$shown" ]; then echo "... $((all - shown)) more ERROR lines not shown"; fi
+  echo "full log: $logdir/$logname"
+fi
+rm -f "$view"
+exit "$status"

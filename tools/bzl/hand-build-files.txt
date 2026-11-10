@@ -1,0 +1,26 @@
+# Every planned HandBuildFile, one per line: path  # planned: <Task>
+# Checked by tools/bzl/check-build-paths.sh: not git-ignored, not under a gitlink, not .bazelignore'd.
+tools/bzl/tmux/BUILD.bazel  # planned: Task 0.7
+tools/bzl/flags/BUILD.bazel  # planned: Task 0.8
+tools/bzl/windows/BUILD.bazel  # planned: Epic 6
+tools/bzl/ent/BUILD.bazel  # planned: Task 0.4
+tools/bzl/BUILD.bazel  # planned: Task 2.3a
+tools/bzl/proto/BUILD.bazel  # planned: Task 0.3a
+proto/session/v1/BUILD.bazel  # planned: Task 0.3a
+server/web/BUILD.bazel  # planned: Task 0.5
+web-app/BUILD.bazel  # planned: Task 0.6
+macos/BUILD.bazel  # planned: Epic 6
+session/tmux/embed/BUILD.bazel  # planned: Task 0.7
+session/tymux/embed/BUILD.bazel  # planned: Task 0.7
+docs/how-to/BUILD.bazel  # planned: Task 4.10a
+contracts/BUILD.bazel  # planned: Task 4.10a
+session/testdata/BUILD.bazel  # planned: Task 4.10a
+docs/adr/BUILD.bazel  # planned: Task 4.10a
+scripts/BUILD.bazel  # planned: Task 4.10a
+tools/bzl/otel_overlay/BUILD.bazel  # planned: S15b (otel_weave_hermetic)
+tools/bzl/forbidden_deps_test_data/BUILD.bazel  # planned: forbidden_deps_test
+tools/bzl/forbidden_deps_test_data/bad/inner/BUILD.bazel  # planned: forbidden_deps_test
+tools/bzl/e2e/BUILD.bazel  # planned: Task 12.2a
+third_party/ghostty/BUILD.bazel  # planned: main #1491 (own ghostty-vt.wasm build, ADR-039)
+docs/observability/grafana/dashboards/BUILD.bazel  # planned: dashboard JSON test data (bazel-ci-tests)
+docs/reference/BUILD.bazel  # planned: session-lifecycle.md test input (bazel-ci-tests)

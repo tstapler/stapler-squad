@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+exports_files(["nolintcomment.go"])
+
+go_library(
+    name = "nolintcomment",
+    srcs = ["nolintcomment.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/internal/nolintcomment",
+    visibility = ["//tools/lint:__subpackages__"],
+    deps = ["@lint_x_tools//go/analysis"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":nolintcomment",
+    visibility = ["//tools/lint:__subpackages__"],
+)

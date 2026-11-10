@@ -1,0 +1,2 @@
+# Resolve `# shellcheck source=` directives relative to the sourcing script.
+source-path=SCRIPTDIR

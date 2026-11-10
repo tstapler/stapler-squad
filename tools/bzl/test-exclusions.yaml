@@ -1,0 +1,10 @@
+# Tests whose result differs between `go test` and Bazel. Ratchet: this list only shrinks.
+# Mechanism: the BUILD target carries tags = ["manual"]  # keep   (Gazelle preserves it).
+# sandbox_class values: cwd, home, tmpdir-socket, exec-host-binary, network, runtime-caller, shard-timeout
+exclusions:
+  - target: //tools/bzl/spike:spike_test
+    sandbox_class: tmpdir-socket
+    owner: tstapler
+    issue: https://github.com/tstapler/stapler-squad/issues/1425 # owner to file one tracking issue per class; Epic 4 sweep fixes at source
+    reason: >-
+      Gazelle merged the manual-only sock_long_test.go into this target; it binds a unix socket under TEST_TMPDIR (171 bytes > 108 limit). Intentional S9 negative probe, not a product test.

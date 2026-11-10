@@ -157,7 +157,7 @@ dispatcher), the task protocol, the default review command and custom pipeline
 mode review and initial prompts add one paragraph pointing at `schedule_wake`.
 The existing ban on the client-side wake tool and `/loop` stays in the text.
 With the row off the prompts are byte-identical to before
-(`session/testdata/wake_prompt/`). `TestPollingToolReferencesInGo_*`
+(`session/backlog/testdata/wake_prompt/`). `TestPollingToolReferencesInGo_*`
 (`session/wake_polling_guard_test.go`) pins the lines per Go file that mention
 the banned tool.
 

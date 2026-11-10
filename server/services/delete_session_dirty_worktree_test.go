@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -52,7 +53,7 @@ func TestCleanupPartialCreation_should_RemoveDirtyWorktree_When_Forced(t *testin
 
 func TestDeleteSession_should_RefuseDirtyWorktree_When_NotForced(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	t.Cleanup(func() { svc.Shutdown() })
 	inst := newCancelTestInstance(t, svc, storage, "delete-dirty-refused", false)
@@ -64,13 +65,13 @@ func TestDeleteSession_should_RefuseDirtyWorktree_When_NotForced(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-	assert.NotNil(t, svc.reviewQueuePoller.FindInstance("delete-dirty-refused"), "a refused delete must leave the session registered")
+	assert.NotNil(t, svc.ReviewQueuePoller.FindInstance("delete-dirty-refused"), "a refused delete must leave the session registered")
 	assert.FileExists(t, precious)
 }
 
 func TestDeleteSession_should_DiscardDirtyWorktree_When_Forced(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	t.Cleanup(func() { svc.Shutdown() })
 	inst := newCancelTestInstance(t, svc, storage, "delete-dirty-forced", false)

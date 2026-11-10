@@ -9,7 +9,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // federatedReadProcedures are served for remote IDs by the handler itself, from
@@ -50,7 +50,7 @@ func remoteSessionHost(msg proto.Message) (string, bool) {
 		if fd == nil || fd.Kind() != protoreflect.StringKind || fd.IsList() || fd.IsMap() {
 			continue
 		}
-		if id := session.ParseFederatedSessionID(m.Get(fd).String()); !id.IsLocal() {
+		if id := hostclaim.ParseFederatedSessionID(m.Get(fd).String()); !id.IsLocal() {
 			return id.HostID, true
 		}
 	}

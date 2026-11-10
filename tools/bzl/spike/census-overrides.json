@@ -1,0 +1,74 @@
+{
+ "session/vc:TestGitProviderCommit": {
+  "class": "home",
+  "reason": "parent of subtest whose git commit fails: no user.name/email because the private HOME has no ~/.gitconfig (Author identity unknown)"
+ },
+ "session/vc:TestGitProviderCommit/commit_staged_changes": {
+  "class": "home",
+  "reason": "git: Author identity unknown, ~/.gitconfig absent under the private HOME"
+ },
+ "session/vc:TestGitProviderGetChangedFiles_PathWithSpace": {
+  "class": "home",
+  "reason": "git commit exit 128: identity from ~/.gitconfig absent under the private HOME"
+ },
+ "session/vc:TestGitProviderGetChangedFiles_RenameWithEditsMergesNumstat": {
+  "class": "home",
+  "reason": "git commit exit 128: identity from ~/.gitconfig absent under the private HOME"
+ },
+ "session/tymux:TestMetricLabelKeys_NeverIdentifyASession": {
+  "class": "cwd",
+  "reason": "filepath.Glob(\"*.go\") and ../backend_*.go find nothing: package sources are not in the test runfiles/cwd"
+ },
+ "session:TestDetectorLocalGuards_should_CallTheSharedHelper": {
+  "class": "cwd",
+  "reason": "test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+ },
+ "session:TestDeniedGuards_should_AllShareOnePredicate": {
+  "class": "cwd",
+  "reason": "test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+ },
+ "session:TestEndReasonClassification_ShouldCoverEveryLiteralInSource": {
+  "class": "cwd",
+  "reason": "test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+ },
+ "session:TestDetermineGolden_Should_MatchCommittedGoldens_When_RunOverClaudeAiderAgyPiGeminiOpencodeCorpus": {
+  "class": "cwd",
+  "reason": "test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+ },
+ "session:TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap": {
+  "class": "cwd",
+  "reason": "test scans package source/corpus files relative to cwd (filepath.Glob/WalkDir/Getwd walk-up); sources and testdata are not in the sandbox runfiles"
+ },
+ "server/services:TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCanceled": {
+  "class": "exec-host-binary",
+  "reason": "needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+ },
+ "server/services:TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHookConfig": {
+  "class": "exec-host-binary",
+  "reason": "needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+ },
+ "server/services:TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFailed": {
+  "class": "exec-host-binary",
+  "reason": "needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+ },
+ "server/services:TestStreamTerminal_SendsRawOutput": {
+  "class": "exec-host-binary",
+  "reason": "needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+ },
+ "server/services:TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButTmuxAlive": {
+  "class": "exec-host-binary",
+  "reason": "needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+ },
+ "server/services:TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFallbackBothFail": {
+  "class": "exec-host-binary",
+  "reason": "needs tmux on PATH: passes when PATH includes /home/linuxbrew/.linuxbrew/bin (repair run), fails alone at load 3.4 without it; Bazel test PATH is /usr/bin:/bin"
+ },
+ "server/services:TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore": {
+  "class": "cwd",
+  "reason": "opens ../../session/tokens/testdata/valid_session.jsonl relative to cwd; still fails with tmux on PATH"
+ },
+ "server/services:TestSpawnPointGuards_should_ShareOnePredicateAndCoverEveryRemediationAction": {
+  "class": "cwd",
+  "reason": "source-scanning guard finds no files (actual map is empty); sources are not in the sandbox cwd"
+ }
+}

@@ -17,6 +17,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -46,7 +47,7 @@ func mirrorFlagOn() bool { return true }
 
 func newTestMirror(t *testing.T) (*GuidanceHookMirror, *session.Storage, *PendingQuestionStore, *mirrorCounts) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	pending := NewPendingQuestionStore(nil)
 	counts := &mirrorCounts{}
 	return newRealStoreMirror(storage, pending, counts), storage, pending, counts
@@ -221,7 +222,7 @@ func TestRehydrate_should_RestoreReplyableRows_AndFailClosedOnADifferentDialog(t
 
 func TestEnsureRegistered_should_ReRegisterAnOpenRow_AfterTheCacheTTL(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	now := time.Now()
 	clock := func() time.Time { return now }
 	cache := NewPendingQuestionStore(clock)
@@ -288,7 +289,7 @@ func TestClearByHookCall_should_CancelOnlyThatCallsRow(t *testing.T) {
 
 func TestNotifyAnswered_should_BeSuppressed_ForHookSourceRows(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
 	svc := NewGuidanceRequestService(storage, bus, nil)
 	m := newRealStoreMirror(storage, NewPendingQuestionStore(nil), &mirrorCounts{})
@@ -318,7 +319,7 @@ func peeked(s *PendingQuestionStore, k QuestionKey) bool {
 func TestNotifyAnswered_should_BeSuppressed_ForPeerRows_ButNotForAgentRows(t *testing.T) {
 	t.Parallel()
 	const asker, peer = "asker-uuid", "peer-uuid"
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
 	svc := NewGuidanceRequestService(storage, bus, nil)
 	ctx := context.Background()

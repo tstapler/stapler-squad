@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -102,7 +103,7 @@ func (i *Instance) legacyPRRef() (PRRef, error) {
 
 // repoRef converts a PRRef to the github package's repo reference. github.com is
 // the empty host there, matching what the legacy scalars carried.
-func (r PRRef) repoRef() (github.RepoRef, error) {
+func (r PRRef) RepoRef() (github.RepoRef, error) {
 	host := r.host
 	if github.IsGitHubCom(host) {
 		host = ""
@@ -123,7 +124,7 @@ func (i *Instance) RefreshPRInfo(ctx context.Context) (*github.PRInfo, error) {
 func (i *Instance) refreshPRInfoFor(ctx context.Context, pr PRRef) (*github.PRInfo, error) {
 	log.Info("refreshing PR info", "session", i.Title, "pr", pr.Number(), "owner", pr.Owner(), "repo", pr.Repo())
 
-	ref, err := pr.repoRef()
+	ref, err := pr.RepoRef()
 	if err != nil {
 		return nil, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -147,7 +148,7 @@ func (i *Instance) GetPRComments(ctx context.Context, target *PRRef) ([]github.P
 
 	log.Info("fetching PR comments", "session", i.Title, "pr", pr.Number(), "owner", pr.Owner(), "repo", pr.Repo())
 
-	ref, err := pr.repoRef()
+	ref, err := pr.RepoRef()
 	if err != nil {
 		return nil, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -171,7 +172,7 @@ func (i *Instance) GetPRDiff(ctx context.Context, target *PRRef) (string, error)
 
 	log.Info("fetching PR diff", "session", i.Title, "pr", pr.Number(), "owner", pr.Owner(), "repo", pr.Repo())
 
-	ref, err := pr.repoRef()
+	ref, err := pr.RepoRef()
 	if err != nil {
 		return "", fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -199,7 +200,7 @@ func (i *Instance) PostComment(ctx context.Context, target *PRRef, body string) 
 
 	log.Info("posting comment to PR", "pr", pr.Number(), "session", i.Title)
 
-	ref, err := pr.repoRef()
+	ref, err := pr.RepoRef()
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -235,7 +236,7 @@ func (i *Instance) SetCommitStatus(ctx context.Context, state github.CommitStatu
 		return fmt.Errorf("invalid commit status request for instance '%s': %w", i.Title, err)
 	}
 
-	repo, err := pr.repoRef()
+	repo, err := pr.RepoRef()
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -272,7 +273,7 @@ func (i *Instance) MergePR(ctx context.Context, target *PRRef, method string) er
 
 	log.Info("merging PR", "pr", pr.Number(), "session", i.Title, "method", method)
 
-	ref, err := pr.repoRef()
+	ref, err := pr.RepoRef()
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -295,7 +296,7 @@ func (i *Instance) ClosePR(ctx context.Context, target *PRRef) error {
 
 	log.Info("closing PR without merging", "pr", pr.Number(), "session", i.Title)
 
-	ref, err := pr.repoRef()
+	ref, err := pr.RepoRef()
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/google/uuid"
@@ -108,7 +109,7 @@ func (h *ApprovalHandler) SetAutoApprovedGate(g AutoApprovedGate) {
 
 // NewApprovalHandler creates a new ApprovalHandler.
 func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
-	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: session.DefaultPRStatusPollerConfig().PollInterval}
+	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute, pollInterval: prpoller.DefaultPRStatusPollerConfig().PollInterval}
 }
 
 // SetPollInterval overrides the interval used to bound CI-status staleness (Task 1.1.2b).
@@ -447,7 +448,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		// can never hold the native dialog back (pre-mortem #7).
 		h.writeDeferDecision(w)
 		_ = http.NewResponseController(w).Flush()
-		h.broadcastQuestionNotification(sessionID, payload, qa)
+		h.BroadcastQuestionNotification(sessionID, payload, qa)
 		return
 	}
 
@@ -607,7 +608,7 @@ Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`
 	}
 
 	// Notify all web UI clients about the pending approval
-	h.broadcastApprovalNotification(sessionID, approval)
+	h.BroadcastApprovalNotification(sessionID, approval)
 
 	// Trigger immediate review queue check for this session (Story 3, Task 3.1).
 	// This provides <100ms feedback in the review queue instead of waiting for the
@@ -761,7 +762,7 @@ func approvalNotificationMetadata(approval *PendingApproval) map[string]string {
 
 // broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
 // The approval ID is passed in the notification metadata so the UI can resolve it.
-func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approval *PendingApproval) {
+func (h *ApprovalHandler) BroadcastApprovalNotification(sessionID string, approval *PendingApproval) {
 	metadata := approvalNotificationMetadata(approval)
 
 	title := approvalNotificationTitle(approval)
@@ -772,7 +773,7 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		h.resolveSessionName(sessionID),
 		approval.ID, // Use approval ID as notification ID for correlation
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED),
-		derivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
+		DerivePriority(true, true), // urgent, important — a pending permission request blocks the session right now
 		title,
 		message,
 		metadata,
@@ -803,7 +804,7 @@ const maxNotificationMessageLen = 120
 // key). A single-select question whose sender proof verified is registered for Reply and
 // stamps question_id, question_shape and question_options; every other question stamps
 // question_shape and reply_unavailable so the card says "Answer in the terminal".
-func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload, qa questionAttribution) {
+func (h *ApprovalHandler) BroadcastQuestionNotification(sessionID string, payload classifier.PermissionRequestPayload, qa QuestionAttribution) {
 	asked := ParseAskUserQuestion(payload.ToolInput)
 	message := "Check the terminal to respond."
 	switch {
@@ -823,7 +824,7 @@ func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payloa
 		h.resolveSessionName(sessionID),
 		newQuestionNotificationID(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
-		derivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
+		DerivePriority(true, true), // urgent, important — Claude is blocked waiting on the user right now
 		"Claude has a question",
 		message,
 		meta,
@@ -1008,7 +1009,7 @@ type hookEntry struct {
 }
 
 // hookMatcherGroup is a group of hooks optionally filtered by a matcher.
-type hookMatcherGroup struct {
+type HookMatcherGroup struct {
 	Matcher string      `json:"matcher,omitempty"`
 	Hooks   []hookEntry `json:"hooks"`
 }
@@ -1211,7 +1212,7 @@ func parseSettingsWithRepair(existingData []byte, logPrefix string) map[string]j
 // hookMatcherGroup list, returning nil (not an error) if either level is absent or malformed --
 // every caller already treats "no existing entries" and "couldn't parse existing entries"
 // identically.
-func permissionRequestGroupsFromSettings(raw map[string]json.RawMessage) []hookMatcherGroup {
+func permissionRequestGroupsFromSettings(raw map[string]json.RawMessage) []HookMatcherGroup {
 	hooksRaw, ok := raw["hooks"]
 	if !ok {
 		return nil
@@ -1224,14 +1225,14 @@ func permissionRequestGroupsFromSettings(raw map[string]json.RawMessage) []hookM
 	if !ok {
 		return nil
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	_ = json.Unmarshal(prRaw, &groups)
 	return groups
 }
 
 // hookAlreadyPresentInGroups reports whether any command-type hook in groups matches
 // alreadyPresentFn.
-func hookAlreadyPresentInGroups(groups []hookMatcherGroup, alreadyPresentFn func(command string) bool) bool {
+func hookAlreadyPresentInGroups(groups []HookMatcherGroup, alreadyPresentFn func(command string) bool) bool {
 	for _, g := range groups {
 		for _, h := range g.Hooks {
 			if h.Type == "command" && alreadyPresentFn(h.Command) {
@@ -1245,9 +1246,9 @@ func hookAlreadyPresentInGroups(groups []hookMatcherGroup, alreadyPresentFn func
 // mergePermissionRequestGroups prepends a group containing entry ahead of existingGroups, while
 // migrating away old http-type entries that point at our own URL (hookApprovalURL()) -- a group
 // left with zero hooks after that filtering is dropped entirely rather than kept empty.
-func mergePermissionRequestGroups(existingGroups []hookMatcherGroup, entry hookEntry) []hookMatcherGroup {
-	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
-	var kept []hookMatcherGroup
+func mergePermissionRequestGroups(existingGroups []HookMatcherGroup, entry hookEntry) []HookMatcherGroup {
+	group := HookMatcherGroup{Hooks: []hookEntry{entry}}
+	var kept []HookMatcherGroup
 	for _, g := range existingGroups {
 		filtered := g.Hooks[:0]
 		for _, h := range g.Hooks {
@@ -1260,7 +1261,7 @@ func mergePermissionRequestGroups(existingGroups []hookMatcherGroup, entry hookE
 			kept = append(kept, g)
 		}
 	}
-	return append([]hookMatcherGroup{group}, kept...)
+	return append([]HookMatcherGroup{group}, kept...)
 }
 
 // InjectHookConfigRemote is InjectHookConfig's remote-host counterpart

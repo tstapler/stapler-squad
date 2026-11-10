@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "soak",
+    srcs = ["soak.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/soak",
+    visibility = ["//visibility:public"],
+    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":soak",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "soak_test",
+    srcs = ["soak_test.go"],
+    embed = [":soak"],
+)

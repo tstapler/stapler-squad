@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -30,9 +31,6 @@ func setupUtilityServiceWithPollerFixture() (*UtilityService, *session.ReviewQue
 
 	return svc, poller
 }
-
-// strPtr returns a pointer to s; used to set optional proto string fields.
-func strPtr(s string) *string { return &s }
 
 // --------------------------------------------------------------------------
 // GetLogs – nil poller (no session ID resolution available)
@@ -104,7 +102,7 @@ func TestGetLogs_WithUUID_MatchingInstance(t *testing.T) {
 	// The log file for "my-resolved-session" does not exist → empty response.
 	// The call must succeed: UUID is resolved to Title before path lookup.
 	resp, err := svc.GetLogs(context.Background(), connect.NewRequest(&sessionv1.GetLogsRequest{
-		SessionId: strPtr(testUUID),
+		SessionId: svctest.StrPtr(testUUID),
 	}))
 
 	require.NoError(t, err, "GetLogs should succeed when UUID resolves to a known instance")
@@ -121,7 +119,7 @@ func TestGetLogs_WithUUID_NoMatchingInstance(t *testing.T) {
 	// Poller is wired but has no instances.
 
 	resp, err := svc.GetLogs(context.Background(), connect.NewRequest(&sessionv1.GetLogsRequest{
-		SessionId: strPtr("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+		SessionId: svctest.StrPtr("cccccccc-cccc-cccc-cccc-cccccccccccc"),
 	}))
 
 	require.NoError(t, err, "GetLogs should not error when UUID has no matching instance")
@@ -145,7 +143,7 @@ func TestGetLogs_WithTitle_FindsLogByTitle(t *testing.T) {
 	})
 
 	resp, err := svc.GetLogs(context.Background(), connect.NewRequest(&sessionv1.GetLogsRequest{
-		SessionId: strPtr("title-session"),
+		SessionId: svctest.StrPtr("title-session"),
 	}))
 
 	require.NoError(t, err, "GetLogs should accept a Title as session ID")

@@ -1,0 +1,57 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "workflows",
+    srcs = [
+        "migrate.go",
+        "model_families.go",
+        "retention.go",
+        "scheduler.go",
+        "trigger_render.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/workflows",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//session",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:session",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_robfig_cron_v3//:cron",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workflows",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "workflows_test",
+    srcs = [
+        "model_families_test.go",
+        "retention_test.go",
+        "scheduler_test.go",
+        "trigger_render_test.go",
+    ],
+    embed = [":workflows"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//server/events",
+        "//session",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:session",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_time//rate",
+    ],
+)

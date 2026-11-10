@@ -66,7 +66,7 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	er := storage.repo
+	er := storage.Repo
 
 	// newTestInstance alone (bare directory-mode, no gitManager.worktree) never
 	// produces a worktrees table row -- SaveInstances only persists a worktree
@@ -76,12 +76,12 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 	// disk, since it returns non-nil whenever any of repoPath/worktreePath/
 	// branchName is non-empty.
 	inst := newTestInstance("shared-cache-visibility-test")
-	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
-	db, err := sql.Open("sqlite", er.dbPath)
+	db, err := sql.Open("sqlite", er.DbPath)
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -682,7 +682,7 @@ func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDi
 
 	inst := newTestInstance("worktree-session-records")
 	inst.UUID = "33333333-3333-3333-3333-333333333333"
-	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session-records", "worktree-session-records", "backlog/some-item", "abc123def")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
@@ -897,7 +897,7 @@ func TestSaveInstances_WorktreeDataQueryableImmediately(t *testing.T) {
 
 	inst := newTestInstance("worktree-session")
 	inst.UUID = "11111111-1111-1111-1111-111111111111"
-	inst.gitManager.worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session", "worktree-session", "backlog/some-item", "abc123def")
 
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
@@ -1364,10 +1364,10 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 
 	a := newTestInstance("batch-a")
 	a.UUID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	a.gitManager.worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
+	a.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
 	b := newTestInstance("batch-b")
 	b.UUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	b.gitManager.worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
+	b.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
 	noWT := newTestInstance("batch-dir")
 	noWT.UUID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 	require.NoError(t, storage.SaveInstances([]*Instance{a, b, noWT}))
@@ -1407,7 +1407,7 @@ func prLoadFixture(t *testing.T, storage *Storage, title, uuid, owner, repo stri
 		data.GitHubPRNumber = legacyNumber
 		data.GitHubPRURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, legacyNumber)
 	}
-	require.NoError(t, storage.repo.Create(context.Background(), data))
+	require.NoError(t, storage.Repo.Create(context.Background(), data))
 }
 
 func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
@@ -1418,13 +1418,13 @@ func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
 	for i := 0; i < n; i++ {
 		uuid := fmt.Sprintf("uuid-%03d", i)
 		prLoadFixture(t, storage, fmt.Sprintf("bulk-%03d", i), uuid, "acme", "app", 0)
-		_, err := storage.repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid),
+		_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid),
 			mustPRRef(t, "", "acme", "app", 1000+i), PRLink{Source: AttachSourceManual, Initial: PRInitial{State: PRStateOpen}})
 		require.NoError(t, err)
 	}
 
 	var loaded []*Instance
-	stmts := countStatementsMatching(t, storage.repo, func(q string) bool {
+	stmts := countStatementsMatching(t, storage.Repo, func(q string) bool {
 		return strings.Contains(q, "session_prs") || strings.Contains(q, "pull_request_states")
 	}, func() {
 		var err error
@@ -1448,7 +1448,7 @@ func TestLoadSaveLoad_ShouldKeepUnrepresentedLegacyNumber_WhenSkippedClass(t *te
 	prLoadFixture(t, storage, "skipped", "uuid-skipped", "", "", 41)
 	// A represented legacy number for contrast.
 	prLoadFixture(t, storage, "represented", "uuid-represented", "acme", "app", 42)
-	_, err := storage.repo.UpsertSessionPR(context.Background(), SessionPROwner("uuid-represented"),
+	_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner("uuid-represented"),
 		mustPRRef(t, "", "acme", "app", 42), PRLink{Source: AttachSourceBackfill})
 	require.NoError(t, err)
 

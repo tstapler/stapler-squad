@@ -5,7 +5,7 @@
   "method": "TriggerRemediationNow",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_stuck.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_stuck.go",
   "tested": true,
   "testIds": [
     "TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow",
@@ -13,5 +13,5 @@
     "TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction",
     "TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns"
   ],
-  "lastModified": "2026-07-19T22:09:56.440056245-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

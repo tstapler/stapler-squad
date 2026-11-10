@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "verifybin_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/verifybin",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/bzl/codesign"],
+)
+
+go_binary(
+    name = "verifybin",
+    embed = [":verifybin_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "verifybin_test",
+    srcs = ["main_test.go"],
+    embed = [":verifybin_lib"],
+)

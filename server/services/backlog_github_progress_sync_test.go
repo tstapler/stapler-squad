@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -38,8 +40,8 @@ func (p *fakeProgressPlugin) posted() []string {
 
 func newProgressFixture(t *testing.T, fake *fakeProgressPlugin, prURL string) (*session.Storage, *session.PluginRegistry, *session.SyncLoop, *session.BacklogItemData) {
 	t.Helper()
-	storage := newForwardSyncTestStorage(t)
-	sourceID := createForwardSyncTestSource(t, storage, fake.pluginID, false, "")
+	storage := svctest.NewForwardSyncTestStorage(t)
+	sourceID := svctest.CreateForwardSyncTestSource(t, storage, fake.pluginID, false, "")
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title:          "progress item",
 		Status:         string(session.BacklogStatusInProgress),
@@ -191,7 +193,7 @@ func TestProgressSubscriber_FlagOffPostsNothing_FlagOnPosts(t *testing.T) {
 
 func TestResolveProgressTarget_SourcelessGitHubIssueURL(t *testing.T) {
 	t.Parallel()
-	storage := newForwardSyncTestStorage(t)
+	storage := svctest.NewForwardSyncTestStorage(t)
 	registry := session.NewPluginRegistry()
 	syncLoop := session.NewSyncLoop(storage, registry)
 
@@ -206,8 +208,8 @@ func TestResolveProgressTarget_SourcelessGitHubIssueURL(t *testing.T) {
 
 func TestForwardSyncClose_PostsCommentWithHostID(t *testing.T) {
 	t.Parallel()
-	storage := newForwardSyncTestStorage(t)
-	sourceID := createForwardSyncTestSource(t, storage, "fake_closer", true, "")
+	storage := svctest.NewForwardSyncTestStorage(t)
+	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "fake_closer", true, "")
 	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
 		Title: "t", Status: string(session.BacklogStatusDone), SourceID: sourceID, ExternalID: "42", ClaimingHostID: "host-abc",
 	})
@@ -230,7 +232,7 @@ func TestForwardSyncCloseCommentFor_IncludesHostWhenKnown(t *testing.T) {
 
 func TestCreateBacklogItem_StampsClaimingHostOnlyWithExternalURL(t *testing.T) {
 	t.Parallel()
-	storage := newForwardSyncTestStorage(t)
+	storage := svctest.NewForwardSyncTestStorage(t)
 	storage.SetClaimRecorder(stubHostRecorder{id: "host-xyz"})
 
 	withURL, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "a", Status: "idea", ExternalURL: "https://github.com/o/r/issues/1"})
@@ -243,8 +245,8 @@ func TestCreateBacklogItem_StampsClaimingHostOnlyWithExternalURL(t *testing.T) {
 
 type stubHostRecorder struct{ id string }
 
-func (stubHostRecorder) RecordClaim(context.Context, session.ClaimRecord) error { return nil }
-func (s stubHostRecorder) LocalHostID() string                                  { return s.id }
+func (stubHostRecorder) RecordClaim(context.Context, hostclaim.ClaimRecord) error { return nil }
+func (s stubHostRecorder) LocalHostID() string                                    { return s.id }
 
 func TestProgressSync_ShouldLinkAllPRs_WhenTwoPRs(t *testing.T) {
 	body := progressReviewComments([]progressPR{

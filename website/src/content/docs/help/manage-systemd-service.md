@@ -38,3 +38,14 @@ Fix: set the variable explicitly before running the command, or use `make instal
 ## Prefer `make install-service`
 
 `make install-service` builds the web UI + Go binary and restarts the service in one step. Prefer it over manual `systemctl --user restart` to ensure the binary is up to date.
+
+Under `BUILD_SYSTEM=bazel` it builds `--config=release` with Bazel instead and verifies the copied binary before it
+stops the old unit; the order and the owner-run rule are in [build-with-bazel](https://github.com/tstapler/stapler-squad/blob/main/docs/how-to/build-with-bazel.md). Agents never run
+either form to test a change (`sh scripts/install-service.sh --dry-run` prints the unit on Linux).
+
+## OOM settings in the generated unit
+
+`scripts/install-service.sh` writes `OOMScoreAdjust=-900` and `OOMPolicy=continue` into `[Service]`. `OOMPolicy=continue`
+keeps the unit (and the tmux server and sessions it holds) alive when the kernel kills one child; the default stops the
+whole cgroup. A negative score may be ignored by a user manager and an operator drop-in such as `oom.conf` overrides it;
+see [protect-live-service-from-bazel](https://github.com/tstapler/stapler-squad/blob/main/docs/how-to/protect-live-service-from-bazel.md) for the check and the owner-run drop-in.

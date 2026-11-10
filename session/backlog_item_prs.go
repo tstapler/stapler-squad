@@ -42,7 +42,7 @@ func (r *EntRepository) ItemPRsByID(ctx context.Context, itemID string) ([]PRVie
 	if err != nil {
 		return nil, fmt.Errorf("item prs: invalid item id %q: %w", itemID, err)
 	}
-	item, err := r.client.BacklogItem.Get(ctx, id)
+	item, err := r.Client.BacklogItem.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("item prs: load item %s: %w", itemID, err)
 	}

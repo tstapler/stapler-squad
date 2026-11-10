@@ -1,0 +1,47 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "inbox",
+    srcs = [
+        "client.go",
+        "errors.go",
+        "token.go",
+        "token_owner_unix.go",
+        "token_owner_windows.go",
+        "types.go",
+        "url.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/prwatch/inbox",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":inbox",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "inbox_test",
+    srcs = [
+        "client_test.go",
+        "contract_test.go",
+        "hardening_test.go",
+        "token_test.go",
+        "url_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":inbox"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by server/prwatch's source-guard tests, which scan this package's sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/prwatch:__pkg__"],
+)

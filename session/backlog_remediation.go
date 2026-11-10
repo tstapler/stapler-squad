@@ -83,7 +83,7 @@ var MaxRemediationAttempts = int32(len(remediationBackoffSchedule))
 // turned up only unrelated session/UI heartbeat concepts); this is a new,
 // deliberately unconfigurable constant rather than a new knob, matching
 // remediationBackoffSchedule's own un-configurable style.
-const remediationColdRetryInterval = 7 * 24 * time.Hour
+const RemediationColdRetryInterval = 7 * 24 * time.Hour
 
 // MaxRemediationColdRetries bounds the cold-retry heartbeat: a parked row gets
 // this many extra automatic attempts (attempts counts past the cap), then stays
@@ -98,7 +98,7 @@ func remediationAttemptCeiling() int32 { return MaxRemediationAttempts + MaxReme
 // restart-grace check in evaluateRemediation. Evaluated at package init,
 // which is early enough in process startup that no BacklogStuckState row
 // could have been checked (LastCheckedAt) before it.
-var serverStartTime = time.Now()
+var ServerStartTime = time.Now()
 
 // ErrRemediationParked is returned by RecordManualRemediationAttempt when the
 // targeted row already exhausted its attempt budget (remediation_attempts >=
@@ -122,10 +122,10 @@ const (
 	// The row stays open (still visible/actionable in the UI) and automated
 	// FAST remediation stays stopped, but this is not permanent — see
 	// remediationGrantedColdRetry.
-	remediationSkippedParked remediationDecision = iota
+	RemediationSkippedParked remediationDecision = iota
 	// remediationSkippedNotDue: next_remediation_at is set and in the future
 	// (row not yet parked — still mid fast-backoff-schedule).
-	remediationSkippedNotDue
+	RemediationSkippedNotDue
 	// remediationGranted: eligible now; the caller should invoke its
 	// remediation action and then record a normal attempt (consumes budget).
 	remediationGranted
@@ -155,7 +155,7 @@ const (
 // bootTime is the current process's serverStartTime, passed explicitly
 // (rather than read as a package var) so tests can simulate "server
 // restarted since this row was last checked" without process-level tricks.
-func evaluateRemediation(row OpenStuckStateData, now, bootTime time.Time) remediationDecision {
+func EvaluateRemediation(row OpenStuckStateData, now, bootTime time.Time) remediationDecision {
 	if row.RemediationAttempts >= MaxRemediationAttempts {
 		// Parked. While parked, next_remediation_at is repurposed (by
 		// RemediationDue) to hold the cold-retry deadline rather than a
@@ -168,15 +168,15 @@ func evaluateRemediation(row OpenStuckStateData, now, bootTime time.Time) remedi
 		// RemediationDue) — treat that as "not yet due" rather than panicking
 		// or treating a missing deadline as "always due."
 		if row.RemediationAttempts >= remediationAttemptCeiling() {
-			return remediationSkippedParked
+			return RemediationSkippedParked
 		}
 		if row.NextRemediationAt != nil && !now.Before(*row.NextRemediationAt) {
 			return remediationGrantedColdRetry
 		}
-		return remediationSkippedParked
+		return RemediationSkippedParked
 	}
 	if row.NextRemediationAt != nil && now.Before(*row.NextRemediationAt) {
-		return remediationSkippedNotDue
+		return RemediationSkippedNotDue
 	}
 
 	restartedSinceLastCheck := bootTime.After(row.LastCheckedAt)
@@ -226,7 +226,7 @@ func nextRemediationAt(attemptNumber int32, now time.Time) *time.Time {
 // only RemediationDue's default branch were fixed.
 func nextRemediationAtForAttempt(attemptNumber int32, now time.Time) *time.Time {
 	if attemptNumber >= MaxRemediationAttempts {
-		t := now.Add(remediationColdRetryInterval)
+		t := now.Add(RemediationColdRetryInterval)
 		return &t
 	}
 	return nextRemediationAt(attemptNumber, now)
@@ -242,7 +242,7 @@ func (s *Storage) findOpenStuckStateForReason(ctx context.Context, itemID string
 	if err != nil {
 		return OpenStuckStateData{}, false, err
 	}
-	row, ok := findOpenStuckStateFor(rows, itemID, reason)
+	row, ok := FindOpenStuckStateFor(rows, itemID, reason)
 	return row, ok, nil
 }
 
@@ -285,11 +285,11 @@ func (s *Storage) RemediationDue(ctx context.Context, itemID string, reason doma
 	}
 
 	now := time.Now()
-	switch evaluateRemediation(row, now, serverStartTime) {
-	case remediationSkippedParked, remediationSkippedNotDue:
+	switch EvaluateRemediation(row, now, ServerStartTime) {
+	case RemediationSkippedParked, RemediationSkippedNotDue:
 		return false, false, nil
 	case remediationGrantedRestartGrace:
-		if _, recErr := s.RecordRemediationRestartGrace(ctx, itemID, reason, serverStartTime); recErr != nil {
+		if _, recErr := s.RecordRemediationRestartGrace(ctx, itemID, reason, ServerStartTime); recErr != nil {
 			return true, false, fmt.Errorf("remediation due %s/%s: record restart grace: %w", itemID, reason, recErr)
 		}
 		return true, false, nil
@@ -298,7 +298,7 @@ func (s *Storage) RemediationDue(ctx context.Context, itemID string, reason doma
 		// cap so MaxRemediationColdRetries bounds the heartbeat, and push the
 		// deadline out another interval. justParked fires only on the final cold
 		// retry so the operator is told the item is now permanently parked.
-		coldAt := now.Add(remediationColdRetryInterval)
+		coldAt := now.Add(RemediationColdRetryInterval)
 		if _, recErr := s.RecordRemediationAttempt(ctx, itemID, reason, row.RemediationAttempts+1, &coldAt); recErr != nil {
 			return true, false, fmt.Errorf("remediation due %s/%s: record cold retry: %w", itemID, reason, recErr)
 		}
@@ -338,8 +338,8 @@ func (s *Storage) RemediationBlocked(ctx context.Context, itemID string, reason 
 	if !ok {
 		return false, nil
 	}
-	switch evaluateRemediation(row, time.Now(), serverStartTime) {
-	case remediationSkippedParked, remediationSkippedNotDue:
+	switch EvaluateRemediation(row, time.Now(), ServerStartTime) {
+	case RemediationSkippedParked, RemediationSkippedNotDue:
 		return true, nil
 	default:
 		return false, nil
@@ -360,13 +360,13 @@ func (s *Storage) RemediationBlockedItems(ctx context.Context, reason domain.Stu
 		if row.Reason != reason {
 			continue
 		}
-		switch evaluateRemediation(row, now, serverStartTime) {
-		case remediationSkippedParked, remediationSkippedNotDue:
+		switch EvaluateRemediation(row, now, ServerStartTime) {
+		case RemediationSkippedParked, RemediationSkippedNotDue:
 			blocked[row.ItemID] = true
 		}
 	}
 	// A snooze silences the UI, not the gate: a snoozed row keeps its item blocked.
-	snoozed, err := s.repo.FindSnoozedStuckItemIDs(ctx, reason)
+	snoozed, err := s.Repo.FindSnoozedStuckItemIDs(ctx, reason)
 	if err != nil {
 		return nil, fmt.Errorf("remediation blocked items %s: %w", reason, err)
 	}
@@ -386,25 +386,25 @@ func (s *Storage) OpenStuckState(ctx context.Context, itemID string, reason doma
 // reach the unexported repo field. Returns false, nil (never an error) when
 // the backend does not support stuck-state writes.
 func (s *Storage) RecordRemediationAttempt(ctx context.Context, itemID string, reason domain.StuckReason, attempts int32, nextAt *time.Time) (bool, error) {
-	return s.repo.RecordRemediationAttempt(ctx, itemID, reason, attempts, nextAt)
+	return s.Repo.RecordRemediationAttempt(ctx, itemID, reason, attempts, nextAt)
 }
 
 // RecordRemediationRestartGrace is a thin passthrough to *EntRepository, same
 // rationale as RecordRemediationAttempt above.
 func (s *Storage) RecordRemediationRestartGrace(ctx context.Context, itemID string, reason domain.StuckReason, bootTime time.Time) (bool, error) {
-	return s.repo.RecordRemediationRestartGrace(ctx, itemID, reason, bootTime)
+	return s.Repo.RecordRemediationRestartGrace(ctx, itemID, reason, bootTime)
 }
 
 // ResetStuckRemediation is a thin passthrough to *EntRepository, same
 // rationale as RecordRemediationAttempt above.
 func (s *Storage) ResetStuckRemediation(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
-	return s.repo.ResetStuckRemediation(ctx, itemID, reason)
+	return s.Repo.ResetStuckRemediation(ctx, itemID, reason)
 }
 
 // BulkResetStuckRemediation is a thin passthrough to *EntRepository, same
 // rationale as RecordRemediationAttempt above.
 func (s *Storage) BulkResetStuckRemediation(ctx context.Context, reason *domain.StuckReason, onlyParked bool) (int, error) {
-	return s.repo.BulkResetStuckRemediation(ctx, reason, onlyParked)
+	return s.Repo.BulkResetStuckRemediation(ctx, reason, onlyParked)
 }
 
 // RecordManualRemediationAttempt implements the operator-triggered "Retry
@@ -462,7 +462,7 @@ func liftableDenial(reason string) bool {
 // describes its item: the item is in the status the denial recorded as "from".
 // selfHealStuck resolves the row once the item has moved on, whichever path
 // moved it.
-func transitionDenialAnchored(row OpenStuckStateData) bool {
+func TransitionDenialAnchored(row OpenStuckStateData) bool {
 	d, ok := domain.ParseTransitionDeniedContext(row.Context)
 	return ok && d.From == string(row.ItemStatus)
 }

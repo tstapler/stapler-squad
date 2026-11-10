@@ -6,19 +6,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 type noLiveSessions struct{}
 
 func (noLiveSessions) LiveSnapshot(string) (*session.InstanceSnapshot, bool) { return nil, false }
 
-func newWiringFixtures(t *testing.T) (*session.BacklogLifecycleListener, *services.BacklogService, *session.Storage) {
+func newWiringFixtures(t *testing.T) (*backlog.BacklogLifecycleListener, *backlogsvc.BacklogService, *session.Storage) {
 	t.Helper()
 	storage, err := session.NewStorageWithRepository(session.NewTestEntRepository(t))
 	require.NoError(t, err)
-	return session.NewBacklogLifecycleListener(storage), services.NewBacklogService(storage, nil, nil, nil, nil, nil), storage
+	return backlog.NewBacklogLifecycleListener(storage), backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil), storage
 }
 
 // The real dependency wiring seam shares ONE non-nil probe between the lifecycle

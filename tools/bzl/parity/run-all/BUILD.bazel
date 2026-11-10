@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "run-all_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/parity/run-all",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/bzl/parity/waivers",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_binary(
+    name = "run-all",
+    embed = [":run-all_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "run-all_test",
+    srcs = ["main_test.go"],
+    data = ["//tools/bzl/parity:testdata"],
+    embed = [":run-all_lib"],
+    deps = ["//tools/bzl/parity/waivers"],
+)

@@ -1,0 +1,5 @@
+=== RUN   TestOpenMissing
+    open_test.go:21: got expected error: open /tmp/x: no such file or directory
+--- PASS: TestOpenMissing (0.00s)
+//config:config_test                                            PASSED in 0.3s
+INFO: Build completed successfully, 4 total actions

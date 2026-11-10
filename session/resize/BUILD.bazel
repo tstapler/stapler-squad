@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "resize",
+    srcs = ["nudge.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/resize",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":resize",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "resize_test",
+    srcs = ["nudge_test.go"],
+    embed = [":resize"],
+)

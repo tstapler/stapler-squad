@@ -1,0 +1,99 @@
+{
+  "runs": [
+    {
+      "run": 1,
+      "make_exit": 0,
+      "wall_s": 57.28,
+      "disk_kb_worktree": 516316,
+      "disk_kb_node_modules": 525388,
+      "node_modules_is_symlink": true,
+      "disk_kb_gocache": 1969496,
+      "loadavg1": 0.99,
+      "mem_used_gb": 25,
+      "ref_sha": "7cfd08a69"
+    },
+    {
+      "run": 2,
+      "make_exit": 0,
+      "wall_s": 56.95,
+      "disk_kb_worktree": 516316,
+      "disk_kb_node_modules": 525388,
+      "node_modules_is_symlink": true,
+      "disk_kb_gocache": 1969488,
+      "loadavg1": 1.73,
+      "mem_used_gb": 25,
+      "ref_sha": "7cfd08a69"
+    },
+    {
+      "run": 3,
+      "make_exit": 0,
+      "wall_s": 56.04,
+      "disk_kb_worktree": 516316,
+      "disk_kb_node_modules": 525388,
+      "node_modules_is_symlink": true,
+      "disk_kb_gocache": 1969488,
+      "loadavg1": 1.75,
+      "mem_used_gb": 25,
+      "ref_sha": "7cfd08a69"
+    },
+    {
+      "run": 4,
+      "make_exit": 0,
+      "wall_s": 55.72,
+      "disk_kb_worktree": 516316,
+      "disk_kb_node_modules": 525388,
+      "node_modules_is_symlink": true,
+      "disk_kb_gocache": 1969488,
+      "loadavg1": 1.98,
+      "mem_used_gb": 25,
+      "ref_sha": "7cfd08a69"
+    },
+    {
+      "run": 5,
+      "make_exit": 0,
+      "wall_s": 55.17,
+      "disk_kb_worktree": 516316,
+      "disk_kb_node_modules": 525388,
+      "node_modules_is_symlink": true,
+      "disk_kb_gocache": 1969488,
+      "loadavg1": 1.87,
+      "mem_used_gb": 25,
+      "ref_sha": "7cfd08a69"
+    }
+  ],
+  "gocache_mode": "cold",
+  "ref": "7cfd08a69",
+  "run_date": "2026-11-04T06:34:08Z",
+  "note": "make build includes the otelc weave (scripts/otel-auto-build.sh); one run per script invocation, load gated <=2.0 before each; loadavg1 is the pre-run sample",
+  "wall_s": {
+    "median": 56.04,
+    "min": 55.17,
+    "max": 57.28
+  },
+  "disk_kb_worktree": {
+    "median": 516316,
+    "min": 516316,
+    "max": 516316
+  },
+  "disk_kb_node_modules": {
+    "median": 525388,
+    "min": 525388,
+    "max": 525388
+  },
+  "disk_kb_gocache": {
+    "median": 1969488,
+    "min": 1969488,
+    "max": 1969496
+  },
+  "loadavg1": {
+    "median": 1.75,
+    "min": 0.99,
+    "max": 1.98
+  },
+  "mem_used_gb": {
+    "median": 25,
+    "min": 25,
+    "max": 25
+  },
+  "all_builds_ok": true
+}

@@ -1,0 +1,65 @@
+# Verdict rows; schema {spike, verdict, path, cost}. Validated by tools/bzl/check-spike-results.py (Task 0.14a).
+- spike: S-gomod
+  verdict: Pass
+  path: direct
+  cost: M
+- spike: S1
+  verdict: FallbackWorkaround
+  path: buf-generate-genrule-local-plugins
+  cost: M
+- spike: S2
+  verdict: FallbackWorkaround
+  path: declared-output ent_gen rule + entc program (no GoSource rule, no fork); importer check run on a subset only (see spike-results.md S2)
+  cost: M
+- spike: S5
+  verdict: Pass
+  path: rules_foreign_cc-0.17.0-configure_make
+  cost: M
+- spike: S7
+  verdict: Pass
+  path: direct
+  cost: S
+- spike: S3
+  verdict: Pass
+  path: copy_directory+embedsrcs
+  cost: S
+- spike: S4
+  verdict: Pass
+  path: repo-rule+no-sandbox
+  cost: M+M+S+S
+- spike: S1-ts
+  verdict: Pass
+  path: buf-generate+protoc-gen-es-from-bun-install
+  cost: S
+- spike: S13
+  verdict: FallbackWorkaround
+  path: commit-lock + client-merge-driver + CI-auto-regen-workflow + required-check (GitHub merges ignore the driver; scratch repo 32 pairs, 32 green)
+  cost: S
+- spike: S11
+  verdict: Pass
+  path: gazelle-directives+map_kind (no extension)
+  cost: M
+- spike: S12
+  verdict: FallbackWorkaround
+  path: nogo with norawgitcli recompiled against root x/tools (isolated @lint_x_tools copy collides at link); make lint-custom stays whole-suite path; Story 8.4 needs per-analyzer twin libs
+  cost: M
+- spike: S8
+  verdict: Pass
+  path: census.py+census-check.py over 10 packages (484 failing test cases, each in exactly 1 class, script-checked); env needs private HOME with gitconfig, tmux on test PATH and no STAPLER_SQUAD_TMUX_SOCKET override (see spike-results.md S8/S9)
+  cost: M
+- spike: S9
+  verdict: Pass
+  path: Bazel 9.3.1 default hermetic /tmp (linux-sandbox -M _hermetic_tmp -m /tmp, TMPDIR forced to /tmp); no flag needed; the without-arm is a bind under the long TEST_TMPDIR (cannot be switched off)
+  cost: S
+- spike: S15
+  verdict: FallbackWorkaround
+  path: "SUPERSEDED by S15b (otel_weave deleted). otel_weave rule (tools/bzl/otel_weave.bzl + otel_weave.sh): unsandboxed local action, no remote cache, runs the pinned otelc through scripts/otel-auto-build.sh in a private copy of the checkout; Bazel supplies the Go SDK, generated proto/ent, web dist and embed staging, but the weave itself is non-hermetic (module resolution, host go cache); windows cross-builds stay on //:stapler-squad_plain"
+  cost: M
+- spike: S15b
+  verdict: FallbackWorkaround
+  path: "otel_weave_hermetic rule behind //:stapler-squad (tools/bzl/otel_weave_hermetic.{bzl,sh}, committed overlay tools/bzl/otel_overlay): sandboxed, remote-cacheable toolexec build, byte-reproducible, stamped/embedded/Windows verified; residual non-hermetic parts: the module cache comes from a networked go mod download action (S15b-4), cgo uses the host gcc (S15b-7), every cache miss is a cold GOCACHE (S15b-5), darwin cross not run"
+  cost: M
+- spike: S14
+  verdict: Fail
+  path: sound-slice selective e2e not adopted on the measured data (selected-share median 1.00 at package, file and line granularity; S-e start-up 18.4 s vs 3.5 s limit; zero-miss claim not established, sampled backtest); e2e stays a full run and the directive applies to the Go, Jest and integration layers (owner decides per ADR-009, not taken here)
+  cost: M

@@ -13,7 +13,7 @@ func TestResultsPanelFlagsRegisteredDefaultOff(t *testing.T) {
 		if !found {
 			t.Errorf("flag %q not registered in knownFeatureFlags", name)
 		}
-		if featureFlagDefault(name) {
+		if FeatureFlagDefault(name) {
 			t.Errorf("flag %q must default to off", name)
 		}
 	}

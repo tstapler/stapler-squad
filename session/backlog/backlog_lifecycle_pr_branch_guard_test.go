@@ -1,0 +1,726 @@
+package backlog
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+)
+
+// newTrackedWorkSession creates a real ItemSession (SessionRoleWork) backed
+// by a genuine Session+Worktree row (via SaveInstances, mirroring
+// newOrphanedAgentPRTestItem's identical recipe) so
+// GetWorktreeDataBySessionUUID resolves branchName as itemID's tracked
+// branch — the fixture shape Story 6's verifyPRBelongsToItem
+// guard needs to see a non-empty tracked branch instead of failing closed on
+// an empty one. lastCommitSHA, if non-empty, is also recorded via
+// UpdateItemSessionGitActivity (needed by closeIfSupersededByMain's separate
+// LastCommitSha/IsCommitOnMain check).
+func newTrackedWorkSession(t *testing.T, storage *session.Storage, itemID, repoPath, branchName, lastCommitSHA string) {
+	t.Helper()
+	ctx := context.Background()
+
+	inst := newTestInstance("tracked-work-session")
+	inst.UUID = uuid.New().String()
+	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath+"/../wt", "tracked-work-session", branchName, "abc123")
+	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+
+	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+
+	if lastCommitSHA != "" {
+		require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, is.ID, lastCommitSHA, "work", time.Now(), 1))
+	}
+}
+
+// newUntrackedWorkSessionWithBranchName creates an ItemSession (SessionRoleWork)
+// with branchName stamped directly onto the row, but — unlike
+// newTrackedWorkSession — WITHOUT any backing Session+Worktree row. This is
+// the shape a work session has once its underlying Session row is gone (see
+// EntRepository.Delete, called by both the "Mark done manually"/DeleteSession
+// RPC path and the retention sweeper): GetWorktreeDataBySessionUUID then
+// resolves to an empty GitWorktreeData, and only ItemSession.BranchName
+// (trackedBranchFor's preferred source) can still answer Story 6's guard.
+func newUntrackedWorkSessionWithBranchName(t *testing.T, storage *session.Storage, itemID, branchName string) {
+	t.Helper()
+	ctx := context.Background()
+
+	_, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleWork,
+		BranchName:  branchName,
+	})
+	require.NoError(t, err)
+}
+
+// stubMatchingPRByNumberFinder installs a PRByNumberFinder on listener that
+// reports headBranch as the head ref of whatever PR number is looked up —
+// the "verified" stub shape a pre-existing mutation-path test needs so
+// Story 6's new guard confirms the match instead of failing closed.
+func stubMatchingPRByNumberFinder(listener *BacklogLifecycleListener, headBranch string) {
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: headBranch}, nil
+	})
+}
+
+func TestVerifyPRBelongsToItem_should_ReturnTrue_When_HeadBranchMatches(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: "backlog/x"}, nil
+	})
+
+	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", prOwnership{branches: []string{"backlog/x"}}, 42)
+
+	require.NoError(t, err)
+	assert.True(t, matches)
+}
+
+func TestVerifyPRBelongsToItem_should_ReturnFalse_When_HeadBranchDiffers(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: "feature/y"}, nil
+	})
+
+	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", prOwnership{branches: []string{"backlog/x"}}, 42)
+
+	require.NoError(t, err)
+	assert.False(t, matches)
+}
+
+// TestVerifyPRBelongsToItem_should_ReturnFalse_When_TrackedBranchEmpty
+// proves the fail-closed path short-circuits before any GitHub call: an
+// empty tracked branch (the caller couldn't resolve the item's own tracked
+// branch) must never be treated as "nothing to check, so it matches".
+func TestVerifyPRBelongsToItem_should_ReturnFalse_When_TrackedBranchEmpty(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	listener := NewBacklogLifecycleListener(storage)
+	finderCalled := false
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		finderCalled = true
+		return &github.PRInfo{HeadRef: "backlog/x"}, nil
+	})
+
+	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", prOwnership{}, 42)
+
+	assert.False(t, matches)
+	require.Error(t, err)
+	assert.False(t, finderCalled, "the finder must never be called when there is no tracked branch to verify against")
+}
+
+func TestVerifyPRBelongsToItem_should_ReturnFalse_When_FinderErrors(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return nil, errors.New("transient GitHub failure")
+	})
+
+	matches, err := listener.verifyPRBelongsToItem(ctx, "/tmp/fake-repo", prOwnership{branches: []string{"backlog/x"}}, 42)
+
+	assert.False(t, matches, "a lookup failure must never be read as a verified match")
+	require.Error(t, err)
+}
+
+// TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetected
+// is the direct proof of adversarial-review.md's Blocker fix for
+// closeIfSupersededByMain: an item whose PR head branch no longer matches
+// its tracked branch (the override_reason-linked shape) must never be
+// auto-closed on the strength of item.PrNumber alone, even when its last
+// work-session commit is confirmed already on main.
+func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init", "-b", "main")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "shipped.txt"), []byte("already shipped\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "shipped.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "the fix, already on main via a different PR")
+	shippedSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:              "Branch-mismatch superseded test item",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusPRPending),
+		RepoPath:           dir,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/owner/repo/pull/999"
+	prNumber := 999
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/tracked-branch", shippedSHA)
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		// Mismatched: report_pr_created's override_reason path would attach
+		// a PR whose real head branch differs from the item's tracked one.
+		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
+	})
+	checker := &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}}
+
+	closed := listener.closeIfSupersededByMain(ctx, checker, updated)
+
+	assert.False(t, closed, "a head-branch mismatch must prevent the auto-close")
+	assert.False(t, checker.closeCalled, "ClosePR must never be called when the guard trips")
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "the item must remain pr_pending, not be auto-completed")
+	assert.Equal(t, prNumber, fetched.PrNumber, "PrNumber must remain set — not cleared by a guard-blocked close")
+}
+
+// TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDetected
+// is the direct proof of adversarial-review.md's Blocker fix for
+// ReconcilePRPending's merge-detected done transition (Task 6.4): a merged
+// PR whose head branch doesn't match the item's tracked branch must not
+// auto-complete the item.
+// TestPRMergeDone_TriggersCleanup proves AC1: the PR-merge-detected done
+// transition (ReconcilePRPending's merged branch) synchronously invokes the
+// injected WorktreeCleaner right after the done transition succeeds, rather
+// than depending solely on the 60s reconcileTerminalItemSessions sweep.
+func TestPRMergeDone_TriggersCleanup(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 149)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/tracked-branch-cleanup", "")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/tracked-branch-cleanup")
+	cleaner := &fakeWorktreeCleaner{}
+	listener.SetWorktreeCleaner(cleaner)
+
+	er := storage.Repo
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	assert.Contains(t, cleaner.calls(), item.ID,
+		"ReconcilePRPending's merge-detected done transition must trigger synchronous cleanup, not rely solely on the 60s sweep")
+}
+
+func TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 148)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/tracked-branch", "")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
+	})
+
+	er := storage.Repo
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+		"a merged PR whose head branch no longer matches the tracked branch must not auto-complete the item")
+}
+
+// TestReconcilePRPending_should_TransitionToDone_When_WorkSessionRowAlreadyDeleted
+// is the regression test for the bug found 2026-10-08 on item bl_01M4D1MTJ0A9RH0KCQ7Y65WZX1
+// (PR #951): a merged PR was never auto-completed because its work session's
+// Session+Worktree rows were already gone by the time ReconcilePRPending ran
+// (e.g. after DeleteSession/the retention sweeper, or — per EntRepository.Delete's
+// own ConversationUUID-stamping precedent — any other path that outlives the
+// Session row), leaving GetWorktreeDataBySessionUUID unable to resolve any
+// tracked branch and the Story 6 guard failing closed forever. ItemSession.BranchName
+// (trackedBranchFor's preferred source) fixes this by surviving the Session row's
+// deletion.
+func TestReconcilePRPending_should_TransitionToDone_When_WorkSessionRowAlreadyDeleted(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 951)
+	newUntrackedWorkSessionWithBranchName(t, storage, item.ID, "backlog/stapler-squad-terminal-bar-layout-fix")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "backlog/stapler-squad-terminal-bar-layout-fix")
+
+	er := storage.Repo
+	listener.ReconcilePRPending(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status,
+		"a merged PR must still auto-complete the item when the work session's Session/Worktree rows are already gone, as long as ItemSession.BranchName records the tracked branch")
+}
+
+// TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismatchDetected
+// is the direct proof of adversarial-review.md's Blocker fix for
+// reconcileBouncingItems' IsPRMerged-driven done transition (Task 6.5).
+func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.Repo
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:    "Bouncing item with merged PR, mismatched head branch",
+		Status:   string(session.BacklogStatusInProgress),
+		RepoPath: "/tmp/fake-repo",
+	})
+	require.NoError(t, err)
+	prNumber := 172
+	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/172"
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+		PrURL:    &prURL,
+		PrNumber: &prNumber,
+	}, nil)
+	require.NoError(t, err)
+	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/tracked-branch", "")
+
+	for i := 0; i < 3; i++ {
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
+		require.NoError(t, err)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+		require.NoError(t, err)
+	}
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
+	})
+	notifier := &sessiontest.FakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.reconcileBouncingItems(ctx, er)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(session.BacklogStatusDone), fetched.Status,
+		"a merged PR whose head branch no longer matches the tracked branch must not auto-complete the item")
+}
+
+// TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHeadBranchMismatchDetected
+// covers the closed-without-merging fixCtx-building call site (~line 4045):
+// closeIfSupersededByMain falls through for its own ordinary reason (the
+// work session's last commit isn't on main yet), and Task 6.3a's independent
+// re-check must still catch the head-branch mismatch and disclose it.
+func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init", "-b", "main")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "base.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "base commit")
+	runGitTestCmd(t, dir, "checkout", "-b", "backlog/closed-mismatch")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("wip\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "feature.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "feature work, not yet on main")
+	featureSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+	runGitTestCmd(t, dir, "checkout", "main")
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:              "Closed PR, unverified association",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusPRPending),
+		RepoPath:           dir,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/owner/repo/pull/501"
+	prNumber := 501
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/closed-mismatch", featureSHA)
+
+	listener := NewBacklogLifecycleListener(storage)
+	checker := &fakePRPendingChecker{status: &git.PRStatus{IsClosed: true}}
+	overridePRPendingChecker(t, listener, checker)
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+	// Mismatched: the finder reports a different head branch than this
+	// item's actually-tracked branch (backlog/closed-mismatch).
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
+	})
+
+	er := storage.Repo
+	listener.ReconcilePRPending(ctx, er)
+
+	require.True(t, fakeSpawner.spawnCalled, "closeIfSupersededByMain must have fallen through to the normal reopen path (commit not yet on main)")
+	assert.Contains(t, fakeSpawner.lastFixContext, "NOTE: this PR's association with this backlog item could not be verified",
+		"an unverified PR association must be disclosed to the spawned fix session")
+}
+
+// TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRHeadBranchMismatchDetected
+// covers the CI-failing/blocked/conflicting fixCtx-building call site
+// (~line 4158).
+func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRHeadBranchMismatchDetected(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init", "-b", "main")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "base.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "base commit")
+	runGitTestCmd(t, dir, "checkout", "-b", "backlog/ci-mismatch")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("wip\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "feature.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "feature work, not yet on main")
+	featureSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+	runGitTestCmd(t, dir, "checkout", "main")
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:              "CI-failing PR, unverified association",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusPRPending),
+		RepoPath:           dir,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/owner/repo/pull/502"
+	prNumber := 502
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/ci-mismatch", featureSHA)
+
+	listener := NewBacklogLifecycleListener(storage)
+	checker := &fakePRPendingChecker{
+		status: &git.PRStatus{
+			CIFailing:    true,
+			FeedbackText: "## Failing CI checks\n- build FAILED\n",
+		},
+	}
+	overridePRPendingChecker(t, listener, checker)
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: "some-other-branch"}, nil
+	})
+
+	er := storage.Repo
+	listener.ReconcilePRPending(ctx, er)
+
+	require.True(t, fakeSpawner.spawnCalled, "closeIfSupersededByMain must have fallen through to the normal fix-spawn path (commit not yet on main)")
+	assert.Contains(t, fakeSpawner.lastFixContext, "NOTE: this PR's association with this backlog item could not be verified",
+		"an unverified PR association must be disclosed to the spawned fix session")
+}
+
+// TestReconcilePRPending_should_OmitUnverifiedDisclaimer_When_CIFailingPRHeadBranchMatchesTracked
+// is the control case: when the PR's head branch genuinely matches the
+// item's tracked branch, fixCtx must be byte-for-byte identical to what the
+// pre-Task-6.3a behavior already produced — this task must not change the
+// normal, verified CI-fix path.
+func TestReconcilePRPending_should_OmitUnverifiedDisclaimer_When_CIFailingPRHeadBranchMatchesTracked(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	runGitTestCmd(t, dir, "init", "-b", "main")
+	runGitTestCmd(t, dir, "config", "user.email", "test@example.com")
+	runGitTestCmd(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "base.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "base commit")
+	runGitTestCmd(t, dir, "checkout", "-b", "backlog/ci-matches")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.txt"), []byte("wip\n"), 0o644))
+	runGitTestCmd(t, dir, "add", "feature.txt")
+	runGitTestCmd(t, dir, "commit", "-m", "feature work, not yet on main")
+	featureSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
+	runGitTestCmd(t, dir, "checkout", "main")
+
+	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		Title:              "CI-failing PR, verified association",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(session.BacklogStatusPRPending),
+		RepoPath:           dir,
+	})
+	require.NoError(t, err)
+	prURL := "https://github.com/owner/repo/pull/503"
+	prNumber := 503
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	require.NoError(t, err)
+
+	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/ci-matches", featureSHA)
+
+	listener := NewBacklogLifecycleListener(storage)
+	feedbackText := "## Failing CI checks\n- build FAILED\n"
+	checker := &fakePRPendingChecker{
+		status: &git.PRStatus{
+			CIFailing:    true,
+			FeedbackText: feedbackText,
+		},
+	}
+	overridePRPendingChecker(t, listener, checker)
+	fakeSpawner := &fakePRFixSpawner{}
+	listener.SetPRFixSpawner(fakeSpawner)
+	// Verified: the finder reports the same head branch this item is
+	// actually tracking.
+	stubMatchingPRByNumberFinder(listener, "backlog/ci-matches")
+
+	er := storage.Repo
+	listener.ReconcilePRPending(ctx, er)
+
+	require.True(t, fakeSpawner.spawnCalled)
+	assert.NotContains(t, fakeSpawner.lastFixContext, "NOTE:", "a verified PR association must not carry the unverified disclaimer")
+	expected := fmt.Sprintf("PR #%d (%s) needs fixes:\n\n%s", prNumber, prURL, feedbackText)
+	assert.Equal(t, expected, fakeSpawner.lastFixContext, "the normal, verified CI-fix fixCtx must be byte-for-byte unchanged by Task 6.3a")
+}
+
+// TestReconcilePRPending_should_TransitionToDone_When_StampedBranchLacksBacklogPrefix
+// is the regression test for PR #960 (item 4daf7ced), stuck in pr_pending
+// after a clean merge: spawnSessionAfterGates stamped the bare slug
+// ("stapler-squad-x") onto ItemSession.BranchName while the real branch — and
+// so the PR's head ref — is BacklogBranchPrefix+slug, and the guard compared
+// the two literally.
+func TestReconcilePRPending_should_TransitionToDone_When_StampedBranchLacksBacklogPrefix(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 960)
+	newUntrackedWorkSessionWithBranchName(t, storage, item.ID, "stapler-squad-triage-error-observability")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, session.BacklogBranchPrefix+"stapler-squad-triage-error-observability")
+
+	listener.ReconcilePRPending(ctx, storage.Repo)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+}
+
+// TestReconcilePRPending_should_TransitionToDone_When_OnlyTipCommitSurvives
+// is the regression test for PR #951 (item 229df75a): the work session
+// predates ItemSession.branch_name and its Session/Worktree rows are gone, so
+// no branch name is recorded anywhere — but the PR's head commit is the
+// session's recorded tip commit.
+func TestReconcilePRPending_should_TransitionToDone_When_OnlyTipCommitSurvives(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 951)
+	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: uuid.New().String(),
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.SetItemSessionBaseCommit(ctx, is.ID, "7a2352ca98deb8e1a81c054fc1d743863fa8802e"))
+	const tip = "21687aa57a5fb76dcc23e80e711b058b33bb784a"
+	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, is.ID, tip, "work", time.Now(), 6))
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: "backlog/stapler-squad-terminal-bar-layout-fix", HeadSHA: tip}, nil
+	})
+
+	listener.ReconcilePRPending(ctx, storage.Repo)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+}
+
+// TestReconcilePRPending_should_MarkStuckAndNotifyOnce_When_MergedPRCannotBeVerified
+// proves the guard's fail-closed refusal is durable: a merged PR with no
+// matching branch/tip evidence leaves the item in pr_pending but opens a
+// merged_pr_unverified row (and notifies once) instead of only logging.
+func TestReconcilePRPending_should_MarkStuckAndNotifyOnce_When_MergedPRCannotBeVerified(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 777)
+	newUntrackedWorkSessionWithBranchName(t, storage, item.ID, "backlog/mine")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	stubMatchingPRByNumberFinder(listener, "someone-elses-branch")
+	notifier := &sessiontest.FakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	listener.ReconcilePRPending(ctx, storage.Repo)
+	listener.ReconcilePRPending(ctx, storage.Repo)
+
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "an unverifiable merged PR must not auto-complete the item")
+	rows, err := storage.Repo.FindOpenStuckStates(ctx)
+	require.NoError(t, err)
+	_, found := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonMergedPRUnverified)
+	assert.True(t, found, "the refusal must be recorded as an open merged_pr_unverified stuck row")
+	assert.Len(t, notifier.Calls, 1, "the operator must be notified exactly once across ticks")
+}
+
+// TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerificationTransientlyRejected
+// is the regression proof for the bug where a GitHub rate-limit/admission-control
+// rejection on the ownership re-verification call (verifyPRBelongsToItem) was
+// treated identically to a genuine branch mismatch: it called
+// markMergedPRUnverified, which — per that function's own doc comment — "never
+// auto-resolves" without a manual operator fix, permanently stranding an
+// already-merged, genuinely-owned PR's item at pr_pending. The fix must retry
+// on the next tick instead, exactly like the IsPRMerged check two lines above
+// already does for its own errors.
+func TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerificationTransientlyRejected(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	item := newPRPendingTestItem(t, storage, 1101)
+	newUntrackedWorkSessionWithBranchName(t, storage, item.ID, "backlog/mine")
+
+	listener := NewBacklogLifecycleListener(storage)
+	overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: true})
+	calls := 0
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		calls++
+		if calls == 1 {
+			return nil, fmt.Errorf("PR request failed: %w", errors.New("github: admission control rejected request: background headroom reserved for resource core"))
+		}
+		return &github.PRInfo{HeadRef: "backlog/mine"}, nil
+	})
+	notifier := &sessiontest.FakeNotifier{}
+	listener.SetNotifier(notifier)
+
+	// Tick 1: the ownership check is transiently rejected.
+	listener.ReconcilePRPending(ctx, storage.Repo)
+	assertNotStuckAsMergedPRUnverified(t, storage, item.ID, notifier)
+
+	// Tick 2: the retry succeeds, so the item completes normally.
+	listener.ReconcilePRPending(ctx, storage.Repo)
+	fetched, err := storage.GetBacklogItem(ctx, item.ID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status, "once the transient rejection clears, the merge must still be detected and auto-completed")
+}
+
+// assertNotStuckAsMergedPRUnverified asserts itemID is still pr_pending with
+// no open merged_pr_unverified stuck row and no operator notification fired —
+// the expected shape immediately after a retryable (not definitive) ownership
+// re-verification failure.
+func assertNotStuckAsMergedPRUnverified(t *testing.T, storage *session.Storage, itemID string, notifier *sessiontest.FakeNotifier) {
+	t.Helper()
+	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
+	require.NoError(t, err)
+	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "a transient rejection must not block the item from later completing")
+	rows, err := storage.Repo.FindOpenStuckStates(context.Background())
+	require.NoError(t, err)
+	_, found := session.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMergedPRUnverified)
+	assert.False(t, found, "a transient admission-control rejection must never be recorded as a merged_pr_unverified stuck row")
+	assert.Empty(t, notifier.Calls, "a retryable error must not trigger the never-auto-resolving operator notification")
+}
+
+func TestPROwnershipFor(t *testing.T) {
+	t.Parallel()
+	const tip, base = "tip111", "base222"
+
+	t.Run("bare stamped slug also yields its prefixed branch", func(t *testing.T) {
+		own := prOwnershipFor(&session.ItemSessionSummary{BranchName: "x"}, nil)
+		assert.Equal(t, []string{"x", session.BacklogBranchPrefix + "x"}, own.branches)
+	})
+	t.Run("already-prefixed branch is not double-prefixed and dedupes the worktree copy", func(t *testing.T) {
+		own := prOwnershipFor(&session.ItemSessionSummary{BranchName: "backlog/x"}, &session.GitWorktreeData{BranchName: "backlog/x"})
+		assert.Equal(t, []string{"backlog/x"}, own.branches)
+	})
+	t.Run("tip commit is evidence", func(t *testing.T) {
+		own := prOwnershipFor(&session.ItemSessionSummary{LastCommitSha: tip, BaseCommitSha: base}, nil)
+		assert.Equal(t, tip, own.tipSHA)
+	})
+	t.Run("tip equal to base commit is not evidence", func(t *testing.T) {
+		own := prOwnershipFor(&session.ItemSessionSummary{LastCommitSha: base, BaseCommitSha: base}, nil)
+		assert.True(t, own.empty())
+	})
+	t.Run("nothing recorded is empty", func(t *testing.T) {
+		assert.True(t, prOwnershipFor(nil, &session.GitWorktreeData{}).empty())
+	})
+}
+
+func TestVerifyPRBelongsToItem_should_ReturnFalse_When_NeitherBranchNorTipMatches(t *testing.T) {
+	t.Parallel()
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetPRByNumberFinder(func(context.Context, string, int) (*github.PRInfo, error) {
+		return &github.PRInfo{HeadRef: "someone-elses-branch", HeadSHA: "ffff"}, nil
+	})
+
+	matches, err := listener.verifyPRBelongsToItem(context.Background(), "/tmp/fake-repo",
+		prOwnership{branches: []string{"backlog/x"}, tipSHA: "aaaa"}, 42)
+
+	require.NoError(t, err)
+	assert.False(t, matches)
+}

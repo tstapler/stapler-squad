@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func (q *questionHarness) withMirror(t *testing.T) (*mirrorCounts, func(id, asker string) bool) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	counts := &mirrorCounts{}
 	q.h.SetGuidanceMirror(newRealStoreMirror(storage, q.store, counts))
 	return counts, func(id, asker string) bool {
@@ -90,7 +91,7 @@ func TestAskUserQuestionHook_should_ReplyDeferWithinBound_WhenMirrorRepositoryBl
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Empty(t, resp.Header.Get("Content-Type"), "an empty body defers to the native dialog")
 
-	ev := requireOneNotification(t, q.events)
+	ev := svctest.RequireOneNotification(t, q.events)
 	assert.NotContains(t, ev.NotificationMetadata, metaGuidanceRequestID)
 	assert.Equal(t, []string{mirrorFailTimeout}, counts.failures())
 }

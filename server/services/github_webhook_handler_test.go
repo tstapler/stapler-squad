@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -46,7 +47,7 @@ func newGitHubPushWorkflow(t *testing.T, infra *webhookTestInfra, slug, secret, 
 		GitHubBranch:           branch,
 		WebhookSecretEncrypted: infra.encryptSecret(t, secret),
 		PromptTemplate:         promptTemplate,
-		Enabled:                boolPtr(true),
+		Enabled:                svctest.BoolPtr(true),
 	})
 	require.NoError(t, err)
 	return wf
@@ -132,7 +133,7 @@ func TestGitHubWebhookHandler_should_Return200AndRecordNoMatch_When_EnabledIsFal
 		WebhookSecretEncrypted: infra.encryptSecret(t, "s3cr3t"),
 		PromptTemplate:         "Review {{.head_commit.message}}",
 		CronEnabled:            true,
-		Enabled:                boolPtr(false),
+		Enabled:                svctest.BoolPtr(false),
 	})
 	require.NoError(t, err)
 	h := NewGitHubWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg, nil, nil)

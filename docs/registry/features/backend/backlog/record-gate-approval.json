@@ -5,8 +5,8 @@
   "method": "RecordGateApproval",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_gates.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_gates.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-09-04T16:20:26.29889642-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

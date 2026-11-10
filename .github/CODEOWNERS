@@ -1,0 +1,18 @@
+# Owner-controlled files for the Bazel build (project_plans/bazel-conversion). Review is
+# enforced only if branch protection requires code-owner review (decision D-PROTECT-MERGE),
+# so the attestation gate does not rely on this file alone.
+/project_plans/bazel-conversion/implementation/owner-attestations.yaml  @tstapler
+/tools/bzl/parity/  @tstapler
+/.github/workflows/bazel-parity.yml  @tstapler
+/.github/workflows/bazel.yml  @tstapler
+/MODULE.bazel  @tstapler
+/.bazelrc  @tstapler
+/tools/bzl/  @tstapler
+/tools/bazel  @tstapler
+*.bzl  @tstapler
+# Root BUILD.bazel holds the `# gazelle:` directives; never treated as generated.
+/BUILD.bazel  @tstapler
+# Reviewability (Story 11.6): upgrade canary, fork register and the hand-written BUILD list.
+/.github/workflows/bazel-upgrade-canary.yml  @tstapler
+/docs/reference/bazel-forks.md  @tstapler
+/.gitattributes  @tstapler

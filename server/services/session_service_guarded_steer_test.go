@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -19,7 +20,7 @@ type guardedSteerRecorder struct {
 	writeErr  error
 }
 
-func (r *guardedSteerRecorder) install(svc *SessionService, ready notReadyReason, clk *fakeGuardClock) {
+func (r *guardedSteerRecorder) install(svc *SessionService, ready notReadyReason, clk *svctest.FakeGuardClock) {
 	svc.guardedSteer.guard.now = clk.Now
 	svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return ready }
 	svc.guardedSteer.verifyPane = func(context.Context, *session.Instance) error {
@@ -33,7 +34,7 @@ func (r *guardedSteerRecorder) install(svc *SessionService, ready notReadyReason
 	}
 }
 
-func newGuardedSteerFixture(t *testing.T, ready notReadyReason) (*SessionService, *session.Instance, *guardedSteerRecorder, *fakeGuardClock) {
+func newGuardedSteerFixture(t *testing.T, ready notReadyReason) (*SessionService, *session.Instance, *guardedSteerRecorder, *svctest.FakeGuardClock) {
 	t.Helper()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
@@ -43,9 +44,9 @@ func newGuardedSteerFixture(t *testing.T, ready notReadyReason) (*SessionService
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 	rec := &guardedSteerRecorder{}
-	clk := &fakeGuardClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	clk := &svctest.FakeGuardClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	rec.install(fix.svc, ready, clk)
 	return fix.svc, inst, rec, clk
 }

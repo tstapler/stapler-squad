@@ -10,7 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 type fakeClaimCheckService struct {
@@ -31,9 +32,9 @@ func callCheckClaim(t *testing.T, svc claimCheckService, args map[string]interfa
 }
 
 func TestCheckCrossHostClaimTool_should_ReturnClaimedTrueWithHostAndDeepLink_When_VerdictHeldByOther(t *testing.T) {
-	hostA, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	hostA, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
-	record := session.NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/42", "ssq://hostA/backlog/v1/bl_1", time.Now())
+	record := hostclaim.NewSignedClaimRecord(hostA, "https://github.com/o/r/issues/42", "ssq://hostA/backlog/v1/bl_1", time.Now())
 
 	m := callCheckClaim(t, fakeClaimCheckService{verdict: services.NewHeldByOtherVerdict(record)},
 		map[string]interface{}{"external_url": "https://github.com/o/r/issues/42"})
@@ -64,7 +65,7 @@ func TestCheckCrossHostClaimTool_should_ReturnCheckedTrue_When_VerdictUnclaimed(
 }
 
 func TestCheckCrossHostClaimTool_should_ReportDisabledNotClear_When_FeatureFlagOff(t *testing.T) {
-	m := callCheckClaim(t, fakeClaimCheckService{err: services.ErrCrossHostClaimDedupDisabled},
+	m := callCheckClaim(t, fakeClaimCheckService{err: backlogsvc.ErrCrossHostClaimDedupDisabled},
 		map[string]interface{}{"external_url": "https://github.com/o/r/issues/42"})
 
 	assert.Equal(t, false, m["claimed"])
@@ -78,7 +79,7 @@ func TestCheckCrossHostClaimTool_should_RejectMissingExternalURL(t *testing.T) {
 }
 
 func TestCheckCrossHostClaimTool_should_ReturnUnclaimedResult_When_RegisteredAndCalledAgainstRealBacklogServiceWithNoClaims(t *testing.T) {
-	svc := services.NewBacklogService(nil, nil, nil, nil, nil, nil)
+	svc := backlogsvc.NewBacklogService(nil, nil, nil, nil, nil, nil)
 	s := mcpserver.NewMCPServer("test", "0")
 	registerClaimTools(s, &claimHandlers{svc: svc})
 	require.NotNil(t, s.GetTool("check_cross_host_claim"), "tool is registered")

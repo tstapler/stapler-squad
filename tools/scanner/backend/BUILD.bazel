@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "backend",
+    srcs = [
+        "http_scanner.go",
+        "marker_scanner.go",
+        "proto_scanner.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/scanner/backend",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backend",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "backend_test",
+    srcs = [
+        "integration_test.go",
+        "marker_scanner_test.go",
+        "proto_scanner_completeness_test.go",
+        "proto_scanner_test.go",
+        "service_pattern_parity_test.go",
+        "testhelpers_test.go",
+    ],
+    data = glob(["testdata/**"]) + [
+        "//proto/session/v1:protos",
+        "//tools/scanner:list-backend-protos.sh",
+    ],
+    embed = [":backend"],
+)

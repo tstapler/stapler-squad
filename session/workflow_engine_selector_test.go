@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,97 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
-	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
-	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // --- fakes ---------------------------------------------------------------
-
-type fixedMode struct{ m EngineMode }
-
-func (f fixedMode) Mode() EngineMode { return f.m }
-
-type selectorClock struct{ now atomic.Int64 }
-
-func newSelectorClock() *selectorClock {
-	c := &selectorClock{}
-	c.now.Store(time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC).UnixNano())
-	return c
-}
-func (c *selectorClock) Now() time.Time          { return time.Unix(0, c.now.Load()).UTC() }
-func (c *selectorClock) Advance(d time.Duration) { c.now.Add(int64(d)) }
-
-type divergenceKey struct {
-	Method EngineMethod
-	Class  DivergenceClass
-	Config string
-	Path   CallPath
-}
-
-type callKey struct {
-	Method EngineMethod
-	Path   CallPath
-}
-
-type recordingShadow struct {
-	mu          sync.Mutex
-	calls       map[callKey]int
-	divergences map[divergenceKey]int
-	notCompared map[NotComparedReason]int
-}
 
 func newRecordingShadow() *recordingShadow {
 	return &recordingShadow{calls: map[callKey]int{}, divergences: map[divergenceKey]int{}, notCompared: map[NotComparedReason]int{}}
 }
 
-func (r *recordingShadow) RecordShadowCall(m EngineMethod, p CallPath) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls[callKey{m, p}]++
-}
-
-func (r *recordingShadow) RecordDivergence(m EngineMethod, c DivergenceClass, config string, p CallPath) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.divergences[divergenceKey{m, c, config, p}]++
-}
-
-func (r *recordingShadow) RecordNotCompared(reason NotComparedReason) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.notCompared[reason]++
-}
-
-func (r *recordingShadow) totalDivergences() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n := 0
-	for _, v := range r.divergences {
-		n += v
-	}
-	return n
-}
-
 type panickingShadow struct{ discardRecorder }
 
 func (panickingShadow) RecordShadowCall(EngineMethod, CallPath) { panic("recorder boom") }
-
-type lineSink struct {
-	mu    sync.Mutex
-	lines []string
-}
-
-func (l *lineSink) logf(format string, args ...any) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.lines = append(l.lines, fmt.Sprintf(format, args...))
-}
-
-func (l *lineSink) snapshot() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([]string(nil), l.lines...)
-}
 
 // failIfCalledGateRepo is a GateSatisfactionRepository that fails the test on
 // any read; the embedded nil interface panics on every other method.
@@ -128,19 +48,9 @@ func (failingStageRepo) ListEnabledStages(context.Context) ([]*ent.BacklogStage,
 
 // --- builders ------------------------------------------------------------
 
-type selectorHarness struct {
-	sel      *SwitchableWorkflowEngine
-	cfg      *ConfiguredWorkflowEngine
-	client   *ent.Client
-	recorder *recordingShadow
-	warns    *lineSink
-	infos    *lineSink
-	clock    *selectorClock
-}
-
 func newSelectorHarness(t *testing.T, mode EngineMode, cfg *ConfiguredWorkflowEngine, opts ...SelectorOption) *selectorHarness {
 	t.Helper()
-	h := &selectorHarness{cfg: cfg, recorder: newRecordingShadow(), warns: &lineSink{}, infos: &lineSink{}, clock: newSelectorClock()}
+	h := &selectorHarness{cfg: cfg, recorder: newRecordingShadow(), warns: &lineSink{}, infos: &lineSink{}, clock: sessiontest.NewSelectorClock()}
 	base := make([]SelectorOption, 0, 4+len(opts))
 	base = append(base,
 		WithShadowRecorder(h.recorder),
@@ -158,43 +68,6 @@ func newSeededSelectorHarness(t *testing.T, mode EngineMode, opts ...SelectorOpt
 	h := newSelectorHarness(t, mode, cfg, opts...)
 	h.client = client
 	return h
-}
-
-func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *ConfiguredWorkflowEngine, from, to BacklogStatus, enabled bool) {
-	t.Helper()
-	ctx := context.Background()
-	n, err := client.StageTransition.Update().
-		Where(
-			stagetransition.HasFromStageWith(backlogstage.Slug(string(from))),
-			stagetransition.HasToStageWith(backlogstage.Slug(string(to))),
-		).
-		SetEnabled(enabled).
-		Save(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, n, "edge %s->%s must exist", from, to)
-	require.NoError(t, cfg.InvalidateCache(ctx))
-}
-
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *ConfiguredWorkflowEngine, from, to BacklogStatus, kind GateKind, config map[string]interface{}) {
-	t.Helper()
-	ctx := context.Background()
-	tr, err := client.StageTransition.Query().
-		Where(
-			stagetransition.HasFromStageWith(backlogstage.Slug(string(from))),
-			stagetransition.HasToStageWith(backlogstage.Slug(string(to))),
-		).Only(ctx)
-	require.NoError(t, err)
-	c := client.TransitionGate.Create().SetTransitionID(tr.ID).SetKind(string(kind)).SetStateful(isStatefulGateKind(kind)).SetEnabled(true)
-	if config != nil {
-		c = c.SetConfig(config)
-	}
-	_, err = c.Save(ctx)
-	require.NoError(t, err)
-	require.NoError(t, cfg.InvalidateCache(ctx))
-}
-
-func passingReviewItem() BacklogItemTransitionInput {
-	return BacklogItemTransitionInput{Status: BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
 }
 
 // --- Off / Shadow / Enforce basics ---------------------------------------
@@ -270,7 +143,7 @@ func TestSwitchableWorkflowEngine_ShadowCountsGateExtra_WhenOperatorAddsStructur
 func TestSwitchableWorkflowEngine_FallsBackToDefaultGraph_WhenConfiguredCacheEmptyOrNil(t *testing.T) {
 	t.Parallel()
 	emptyRepo := NewTestEntRepository(t)
-	emptyCfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(emptyRepo.client), nil, nil)
+	emptyCfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(emptyRepo.Client), nil, nil)
 	require.NoError(t, err)
 	loadErrCfg, err := NewConfiguredWorkflowEngine(failingStageRepo{}, nil, nil)
 	require.NoError(t, err)
@@ -431,11 +304,11 @@ func TestSwitchableWorkflowEngine_LogsFromToReason_WhenTransitionDeniedByGraphOp
 func TestSwitchableWorkflowEngine_ShadowDoesNoStatefulGateIo_WhenStatefulGateOnEdge(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
-	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.client))
+	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 	gateRepo := &failIfCalledGateRepo{t: t}
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), gateRepo, nil)
+	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
-	from, to := newCustomTransitionWithGates(t, repo.client, cfg,
+	from, to := newCustomTransitionWithGates(t, repo.Client, cfg,
 		[]GateKind{GateKindHumanApproval, GateKindAutomatedReview, GateKindCustom}, []bool{true, true, true})
 	h := newSelectorHarness(t, ModeShadow, cfg)
 	item := BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString()}
@@ -499,12 +372,12 @@ func (r *countingGateRepo) GetByItemAndGate(context.Context, uuid.UUID, uuid.UUI
 func TestSwitchableWorkflowEngine_ReadsModeFromTtlCache_NotConfigFileEveryCall(t *testing.T) {
 	t.Parallel()
 	var loads atomic.Int64
-	clock := newSelectorClock()
+	clock := sessiontest.NewSelectorClock()
 	modes := NewCachedModeSource(func() EngineMode { loads.Add(1); return ModeShadow }, time.Second, clock)
 	gateRepo := &countingGateRepo{}
 	repo := NewTestEntRepository(t)
-	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.client))
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), gateRepo, nil)
+	require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
+	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
 	sel := NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), cfg, modes, WithSelectorClock(clock))
 
@@ -551,19 +424,12 @@ func TestEnforceAnswer_MatchesDefaultOn81PairsAndGateCorpus_ExceptSystemArchiveE
 
 // --- Story 1.5.2: class-aware selector -----------------------------------------
 
-type classModes map[CallerClass]EngineMode
-
-func (c classModes) Mode() EngineMode                 { return c[ClassOperator] }
-func (c classModes) ModeFor(k CallerClass) EngineMode { return c[k] }
-func allClasses(m EngineMode) classModes {
-	return classModes{ClassOperator: m, ClassAgent: m, ClassSystem: m, "bogus": m}
-}
 func enforceAll(h *selectorHarness) *selectorHarness {
-	h.sel.modes = allClasses(ModeEnforce)
+	h.sel.Modes = allClasses(ModeEnforce)
 	return h
 }
 func shadowAll(h *selectorHarness) *selectorHarness {
-	h.sel.modes = allClasses(ModeShadow)
+	h.sel.Modes = allClasses(ModeShadow)
 	return h
 }
 func viewFor(h *selectorHarness, class CallerClass, g GuardPolicy) WorkflowEngine {
@@ -726,7 +592,7 @@ func TestForCaller_UncheckedCallerIsAllowedInOffAndShadow_AndEnforcesInEnforce(t
 
 	for _, mode := range []EngineMode{ModeOff, ModeShadow} {
 		h := newSeededSelectorHarness(t, mode)
-		h.sel.modes = allClasses(mode)
+		h.sel.Modes = allClasses(mode)
 		v := h.sel.ForCaller(spec)
 		require.True(t, v.CanTransition(BacklogStatusIdea, BacklogStatusDone, nil), "legacy answer is allow, mode %d", mode)
 		require.NoError(t, v.ValidateGates(noPlan, BacklogStatusInProgress, nil), "mode %d", mode)
@@ -771,7 +637,7 @@ func TestShadow_UncheckedCallers_SeededConfig_ZeroDivergenceExceptGuardNewForBui
 	t.Parallel()
 	rec := newClassedShadow()
 	h := shadowAll(newSeededSelectorHarness(t, ModeShadow, WithShadowRecorder(rec)))
-	statuses := append([]BacklogStatus(nil), builtInStageOrder...)
+	statuses := append([]BacklogStatus(nil), BuiltInStageOrder...)
 
 	known := map[string]bool{}
 	for _, k := range KnownOffGraphCallerEdges() {

@@ -5,7 +5,7 @@
   "method": "UpdateBacklogItem",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_lifecycle.go",
   "tested": true,
   "testIds": [
     "TestCreateBacklogItem_should_PersistAutoCreatePr_When_FieldSetTrue",

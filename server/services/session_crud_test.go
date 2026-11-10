@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // newCRUDService returns a SessionService with real storage and a wired poller
@@ -24,7 +25,7 @@ func newCRUDService(t *testing.T) *SessionService {
 
 func TestCreateSession_MissingTitle(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 
@@ -40,7 +41,7 @@ func TestCreateSession_MissingTitle(t *testing.T) {
 
 func TestCreateSession_MissingPath(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewSessionService(storage, events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 

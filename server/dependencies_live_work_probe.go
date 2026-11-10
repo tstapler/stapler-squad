@@ -3,8 +3,9 @@ package server
 import (
 	"fmt"
 
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 // wireLiveWorkProbe builds the one session.LiveWorkProbe and hands the same instance
@@ -12,7 +13,7 @@ import (
 // gate), then asserts the three consumers share one non-nil probe and records
 // ssq_live_work_probe_wired. It is the narrow seam the wiring test drives, because
 // BuildDependencies itself makes network calls.
-func wireLiveWorkProbe(listener *session.BacklogLifecycleListener, backlog *services.BacklogService, live session.LiveSnapshotSource, store session.InstanceDataReader) error {
+func wireLiveWorkProbe(listener *backlog.BacklogLifecycleListener, backlog *backlogsvc.BacklogService, live session.LiveSnapshotSource, store session.InstanceDataReader) error {
 	probe := session.NewSnapshotLiveWorkProbe(live, store)
 	listener.SetLiveWorkProbe(probe)
 	backlog.SetLiveWorkProbe(probe)
@@ -24,7 +25,7 @@ func wireLiveWorkProbe(listener *session.BacklogLifecycleListener, backlog *serv
 	return nil
 }
 
-func assertLiveWorkProbeShared(listener *session.BacklogLifecycleListener, backlog *services.BacklogService) error {
+func assertLiveWorkProbeShared(listener *backlog.BacklogLifecycleListener, backlog *backlogsvc.BacklogService) error {
 	fromListener, fromService := listener.LiveWorkProbe(), backlog.LiveWorkProbe()
 	var fromGate session.LiveWorkProbe
 	if g := backlog.CleanupGate(); g != nil {

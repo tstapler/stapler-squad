@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "analytics",
+    srcs = [
+        "escape_code_descriptions.go",
+        "escape_code_parser.go",
+        "escape_code_store.go",
+        "escape_event_writer.go",
+        "mangle_correlator.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/pkg/analytics",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//pkg/ansi",
+        "@com_github_spaolacci_murmur3//:murmur3",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":analytics",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "analytics_test",
+    srcs = [
+        "escape_code_parser_test.go",
+        "escape_code_store_test.go",
+        "mangle_correlator_test.go",
+    ],
+    embed = [":analytics"],
+)

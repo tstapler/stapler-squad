@@ -9,12 +9,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 type stampingBacklogReader struct {
-	fakeBacklogReader
+	svctest.FakeBacklogReader
 	stamped map[string]string // item session ID -> conversation UUID
 }
 
@@ -38,26 +39,26 @@ func TestBackfillConversationUUIDs(t *testing.T) {
 		want    map[string]string
 	}{
 		{"unique match within window", []session.ItemSessionBacklogEntry{entry("is-1", created)},
-			[]*tokens.ParseResult{newResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(4*time.Second))},
+			[]*tokens.ParseResult{svctest.NewResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(4*time.Second))},
 			map[string]string{"is-1": "conv-1"}},
 		{"ambiguous: two candidates in window", []session.ItemSessionBacklogEntry{entry("is-1", created), entry("is-2", created.Add(time.Minute))},
-			[]*tokens.ParseResult{newResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(90*time.Second))},
+			[]*tokens.ParseResult{svctest.NewResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(90*time.Second))},
 			map[string]string{}},
 		{"transcript before the item session", []session.ItemSessionBacklogEntry{entry("is-1", created)},
-			[]*tokens.ParseResult{newResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(-2*time.Minute))},
+			[]*tokens.ParseResult{svctest.NewResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(-2*time.Minute))},
 			map[string]string{}},
 		{"not a worktree transcript", []session.ItemSessionBacklogEntry{entry("is-1", created)},
-			[]*tokens.ParseResult{newResult("conv-1", "claude-sonnet-4", "/home/u/code/kibitzer", 1, 1, 0, created.Add(time.Second))},
+			[]*tokens.ParseResult{svctest.NewResult("conv-1", "claude-sonnet-4", "/home/u/code/kibitzer", 1, 1, 0, created.Add(time.Second))},
 			map[string]string{}},
 		{"synthetic session uuid", []session.ItemSessionBacklogEntry{{ItemSessionID: "is-1", SessionUUID: "headless-triage-x", CreatedAt: created}},
-			[]*tokens.ParseResult{newResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(time.Second))},
+			[]*tokens.ParseResult{svctest.NewResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(time.Second))},
 			map[string]string{}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			reader := &stampingBacklogReader{fakeBacklogReader: fakeBacklogReader{entries: tc.entries}, stamped: map[string]string{}}
-			svc := NewInsightsService(&fakeTokenStore{results: tc.results}, tokens.DefaultPricingTable(),
+			reader := &stampingBacklogReader{FakeBacklogReader: svctest.FakeBacklogReader{Entries: tc.entries}, stamped: map[string]string{}}
+			svc := NewInsightsService(&svctest.FakeTokenStore{Results: tc.results}, tokens.DefaultPricingTable(),
 				tokens.NewAssociator(&fakeSessionStorage{}), reader)
 
 			n, err := svc.BackfillConversationUUIDs(context.Background())
@@ -80,9 +81,9 @@ func TestBackfillConversationUUIDs_RespectsCanceledContext(t *testing.T) {
 	entries := []session.ItemSessionBacklogEntry{
 		{ItemSessionID: "is-1", SessionUUID: uuid.NewString(), SessionRole: session.SessionRoleWork, CreatedAt: created},
 	}
-	results := []*tokens.ParseResult{newResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(4*time.Second))}
-	reader := &stampingBacklogReader{fakeBacklogReader: fakeBacklogReader{entries: entries}, stamped: map[string]string{}}
-	svc := NewInsightsService(&fakeTokenStore{results: results}, tokens.DefaultPricingTable(),
+	results := []*tokens.ParseResult{svctest.NewResult("conv-1", "claude-sonnet-4", wt, 1, 1, 0, created.Add(4*time.Second))}
+	reader := &stampingBacklogReader{FakeBacklogReader: svctest.FakeBacklogReader{Entries: entries}, stamped: map[string]string{}}
+	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(),
 		tokens.NewAssociator(&fakeSessionStorage{}), reader)
 
 	ctx, cancel := context.WithCancel(context.Background())

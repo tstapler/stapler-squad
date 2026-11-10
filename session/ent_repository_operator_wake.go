@@ -23,7 +23,7 @@ func (r *EntRepository) ListWakeTriggersByStatus(ctx context.Context, statuses .
 	if len(statuses) == 0 {
 		return nil, nil
 	}
-	return r.listWakeTriggers(ctx, r.client.WakeTrigger.Query().
+	return r.listWakeTriggers(ctx, r.Client.WakeTrigger.Query().
 		Where(waketrigger.StatusIn(wakeStatusStrings(statuses)...)).
 		Order(ent.Desc(waketrigger.FieldCreatedAt)))
 }
@@ -31,7 +31,7 @@ func (r *EntRepository) ListWakeTriggersByStatus(ctx context.Context, statuses .
 // ListPeerGuidanceRequests returns peer-help rows that are open or were created
 // at or after since, newest first.
 func (r *EntRepository) ListPeerGuidanceRequests(ctx context.Context, since time.Time) ([]*GuidanceRequestData, error) {
-	rows, err := r.client.GuidanceRequest.Query().
+	rows, err := r.Client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Source(string(domain.QuestionSourcePeer)),
 			guidancerequest.Or(
@@ -49,7 +49,7 @@ func (r *EntRepository) ListPeerGuidanceRequests(ctx context.Context, since time
 
 // ListOpenPeerGuidanceRequests returns the open peer-help rows, oldest first.
 func (r *EntRepository) ListOpenPeerGuidanceRequests(ctx context.Context) ([]*GuidanceRequestData, error) {
-	rows, err := r.client.GuidanceRequest.Query().
+	rows, err := r.Client.GuidanceRequest.Query().
 		Where(
 			guidancerequest.Source(string(domain.QuestionSourcePeer)),
 			guidancerequest.AnsweredAtIsNil(),
@@ -68,7 +68,7 @@ func (r *EntRepository) ListOpenPeerGuidanceRequests(ctx context.Context) ([]*Gu
 // answered in the peer's place (answerer_session_uuid keeps naming the peer).
 // Same guard as AnswerGuidanceRequest.
 func (r *EntRepository) AnswerGuidanceRequestOnBehalf(ctx context.Context, id uuid.UUID, answer string) (applied bool, err error) {
-	n, err := r.client.GuidanceRequest.Update().
+	n, err := r.Client.GuidanceRequest.Update().
 		Where(
 			guidancerequest.ID(id),
 			guidancerequest.AnsweredAtIsNil(),

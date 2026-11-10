@@ -5,7 +5,7 @@
   "method": "ImportGitHubIssue",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_sync.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_sync.go",
   "tested": true,
   "testIds": [
     "TestImportGitHubIssue_NilStorage",
@@ -15,5 +15,5 @@
     "TestImportGitHubIssue_CreatesItemFromIssue",
     "TestImportGitHubIssue_ResolvesRepoPathWhenNotProvided"
   ],
-  "lastModified": "2026-07-23T14:24:01.97033608-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

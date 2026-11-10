@@ -133,7 +133,7 @@ func TestApplyWebhookLifecycle_should_RefuseWithoutMutation_When_ProvenanceDiffe
 	t.Run("persisted tuple no longer hashes to its stored digest", func(t *testing.T) {
 		r := NewTestEntRepository(t)
 		seedConsistent(t, r)
-		require.NoError(t, r.client.WebhookRegistration.Update().SetCompatTuple(`{"corrupted":true}`).Exec(ctx))
+		require.NoError(t, r.Client.WebhookRegistration.Update().SetCompatTuple(`{"corrupted":true}`).Exec(ctx))
 		in := consistentLifecycle("d-1", WebhookActionDelete, 1)
 		in.CompatTuple = `{"corrupted":true}` // even a request that matches the corrupted bytes must fail closed
 
@@ -187,7 +187,7 @@ func TestApplyWebhookLifecycle_should_CleanUpOrphanedRegistration_When_WorkflowW
 	r := NewTestEntRepository(t)
 	ctx := context.Background()
 	seed := seedConsistent(t, r)
-	require.NoError(t, r.client.Workflow.DeleteOneID(seed.Registration.WorkflowID).Exec(ctx))
+	require.NoError(t, r.Client.Workflow.DeleteOneID(seed.Registration.WorkflowID).Exec(ctx))
 
 	_, errDisable := r.ApplyWebhookLifecycle(ctx, consistentLifecycle("d-1", WebhookActionDisable, 1))
 	res, errDelete := r.ApplyWebhookLifecycle(ctx, consistentLifecycle("del-1", WebhookActionDelete, 1))

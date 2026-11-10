@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // claudeConfigTestDir creates a temporary directory that impersonates ~/.claude for
@@ -18,7 +19,7 @@ import (
 func claudeConfigTestDir(t *testing.T) string {
 	t.Helper()
 
-	tmpHome := withFakeHome(t)
+	tmpHome := svctest.WithFakeHome(t)
 
 	claudeDir := filepath.Join(tmpHome, ".claude")
 	if err := os.MkdirAll(claudeDir, 0755); err != nil {

@@ -1,0 +1,47 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "ssq-hooks_lib",
+    srcs = [
+        "ask_user_question.go",
+        "main.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/cmd/ssq-hooks",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//internal/claudehooks",
+        "//internal/hookipc",
+        "//log",
+        "//pkg/classifier",
+        "//pkg/localtoken",
+        "//server/services",
+        "//session",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+go_binary(
+    name = "ssq-hooks",
+    embed = [":ssq-hooks_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ssq-hooks_test",
+    srcs = [
+        "ask_user_question_test.go",
+        "main_test.go",
+    ],
+    embed = [":ssq-hooks_lib"],
+    deps = [
+        "//internal/claudehooks",
+        "//internal/hookipc",
+        "//log",
+        "//pkg/classifier",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // newWorktreeConsistencyTestStorage returns a Storage backed by an isolated in-memory
@@ -414,7 +415,7 @@ func TestClassifyIssues_should_ReturnRepoPathUnresolvableFinding_When_ActiveAndD
 // real repo, not a mocked sentinel.
 func TestClassifyIssues_should_ReturnBaseCommitShaUnresolvableFinding_When_ShaGenuinelyMissingFromRealRepo(t *testing.T) {
 	t.Parallel()
-	repoPath := setupTestGitRepo(t)
+	repoPath := sessiontest.SetupTestGitRepo(t)
 	candidate := SessionWorktreeCandidate{
 		Data: InstanceData{UUID: "sess-6", Branch: "work/sha-gone", Status: Active},
 		Worktree: &GitWorktreeData{
@@ -442,8 +443,8 @@ func TestClassifyIssues_should_ReturnNoFindings_When_RepoPathCheckErrorsTransien
 	require.NoError(t, os.Mkdir(blocked, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
 
-	repoPath := setupTestGitRepo(t)
-	sha := strings.TrimSpace(runGitOutputOrFail(t, repoPath, "rev-parse", "HEAD"))
+	repoPath := sessiontest.SetupTestGitRepo(t)
+	sha := strings.TrimSpace(sessiontest.RunGitOutputOrFail(t, repoPath, "rev-parse", "HEAD"))
 	candidate := SessionWorktreeCandidate{
 		Data: InstanceData{UUID: "sess-transient-path", Branch: "work/transient", Status: Active},
 		Worktree: &GitWorktreeData{
@@ -466,7 +467,7 @@ func TestClassifyIssues_should_ReturnNoFindings_When_RepoPathCheckErrorsTransien
 // missing there, defeating this test's purpose of proving a genuine open-failure.
 func TestClassifyIssues_should_ReturnNoFindings_When_BaseCommitShaCheckErrorsTransiently(t *testing.T) {
 	t.Parallel()
-	repoPath := setupTestGitRepo(t)
+	repoPath := sessiontest.SetupTestGitRepo(t)
 	unrelated := filepath.Join(t.TempDir(), "not-a-repo")
 	candidate := SessionWorktreeCandidate{
 		Data: InstanceData{UUID: "sess-transient-sha", Branch: "work/transient-sha", Status: Active},
@@ -491,8 +492,8 @@ func TestResolveFinding_should_CreateWorktreeRowAndNotify_When_UniqueMatchOnNonI
 	ctx := context.Background()
 
 	sessionUUID := uuid.New().String()
-	repoPath := setupTestGitRepo(t)
-	worktreePath := setupLinkedWorktree(t, repoPath, "repair-target")
+	repoPath := sessiontest.SetupTestGitRepo(t)
+	worktreePath := sessiontest.SetupLinkedWorktree(t, repoPath, "repair-target")
 
 	// The real branch name carries config.BranchPrefix (e.g. "tstapler/repair-target"),
 	// not the raw session name — read it back from the live worktree rather than
@@ -519,15 +520,15 @@ func TestResolveFinding_should_CreateWorktreeRowAndNotify_When_UniqueMatchOnNonI
 		Match: &entries[0],
 	}
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	err = resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
 	assert.Equal(t, ResolutionRepaired, finding.Resolution)
-	require.Len(t, notifier.calls, 1, "repair must always notify — never silent")
-	assert.Equal(t, "NotifySession", notifier.calls[0].Method, "no BacklogItem is linked to this session")
-	assert.Equal(t, sessionUUID, notifier.calls[0].RecipientID)
-	assert.Equal(t, notificationTypeInfo, notifier.calls[0].NotificationType)
+	require.Len(t, notifier.Calls, 1, "repair must always notify — never silent")
+	assert.Equal(t, "NotifySession", notifier.Calls[0].Method, "no BacklogItem is linked to this session")
+	assert.Equal(t, sessionUUID, notifier.Calls[0].RecipientID)
+	assert.Equal(t, notificationTypeInfo, notifier.Calls[0].NotificationType)
 
 	wt, err := storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	require.NoError(t, err)
@@ -552,15 +553,15 @@ func TestResolveFinding_should_FlagAndNotifyWarning_When_MatchCountIsAmbiguous(t
 		},
 	}
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	err := resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
 	assert.Equal(t, ResolutionFlagged, finding.Resolution)
-	require.Len(t, notifier.calls, 1)
-	assert.Equal(t, notificationTypeWarning, notifier.calls[0].NotificationType)
-	assert.Contains(t, notifier.calls[0].Message, "What the sweep tried", "message must include ux.md's 3-field shape")
-	assert.Contains(t, notifier.calls[0].Message, "What to do", "message must include ux.md's 3-field shape")
+	require.Len(t, notifier.Calls, 1)
+	assert.Equal(t, notificationTypeWarning, notifier.Calls[0].NotificationType)
+	assert.Contains(t, notifier.Calls[0].Message, "What the sweep tried", "message must include ux.md's 3-field shape")
+	assert.Contains(t, notifier.Calls[0].Message, "What to do", "message must include ux.md's 3-field shape")
 }
 
 // TestResolveFinding_should_FlagWithErrorSeverity_When_DerivedBaseCommitShaStillUnresolved
@@ -577,8 +578,8 @@ func TestResolveFinding_should_FlagWithErrorSeverity_When_DerivedBaseCommitShaSt
 	ctx := context.Background()
 
 	sessionUUID := uuid.New().String()
-	repoPath := setupTestGitRepo(t)
-	worktreePath := setupLinkedWorktree(t, repoPath, "repair-degraded")
+	repoPath := sessiontest.SetupTestGitRepo(t)
+	worktreePath := sessiontest.SetupLinkedWorktree(t, repoPath, "repair-degraded")
 
 	// Sever the linked worktree's HEAD resolution: its symbolic ref now names a branch
 	// that doesn't exist, so getCurrentBranchName (a plain ref-name read) still succeeds
@@ -600,15 +601,15 @@ func TestResolveFinding_should_FlagWithErrorSeverity_When_DerivedBaseCommitShaSt
 		Match: &git.NativeWorktreeEntry{BranchRef: entries[0].BranchRef, WorktreePath: worktreePath},
 	}
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	err = resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
 	require.Equal(t, SeverityError, finding.Severity,
 		"finding.Detail=%q — this environment's NewGitWorktreeFromExisting may have failed to open the worktree entirely rather than just failing HEAD resolution", finding.Detail)
 	assert.Equal(t, ResolutionFlagged, finding.Resolution, "nothing was writable without a base_commit_sha — the row was never created")
-	require.Len(t, notifier.calls, 1)
-	assert.Equal(t, notificationTypeError, notifier.calls[0].NotificationType)
+	require.Len(t, notifier.Calls, 1)
+	assert.Equal(t, notificationTypeError, notifier.Calls[0].NotificationType)
 }
 
 func TestResolveFinding_should_CallMarkStuck_When_LiveNonTerminalBacklogItemLinked(t *testing.T) {
@@ -642,13 +643,13 @@ func TestResolveFinding_should_CallMarkStuck_When_LiveNonTerminalBacklogItemLink
 		},
 	}
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	err = resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
-	require.Len(t, notifier.calls, 1)
-	assert.Equal(t, "Notify", notifier.calls[0].Method, "a linked BacklogItem must use Notify, not NotifySession")
-	assert.Equal(t, item.ID, notifier.calls[0].RecipientID)
+	require.Len(t, notifier.Calls, 1)
+	assert.Equal(t, "Notify", notifier.Calls[0].Method, "a linked BacklogItem must use Notify, not NotifySession")
+	assert.Equal(t, item.ID, notifier.Calls[0].RecipientID)
 
 	stuckStates, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
@@ -677,7 +678,7 @@ func TestResolveFinding_should_NotCallMarkStuck_When_NoBacklogItemLinked(t *test
 		},
 	}
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	err := resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding)
 	require.NoError(t, err)
 
@@ -734,7 +735,7 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 			Data: InstanceData{UUID: sessionUUID, Title: "flag-then-repair-stuck"},
 		},
 	}
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	deps := resolveFindingDeps{Repo: repo, Notifier: notifier}
 	require.NoError(t, resolveFinding(ctx, deps, flagFinding))
 
@@ -744,8 +745,8 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 		"precondition: MarkStuck must have fired on the flag tick")
 
 	// Tick N+1: the match becomes unique — repair fires for the same session.
-	repoPath := setupTestGitRepo(t)
-	setupLinkedWorktree(t, repoPath, "flag-then-repair-stuck")
+	repoPath := sessiontest.SetupTestGitRepo(t)
+	sessiontest.SetupLinkedWorktree(t, repoPath, "flag-then-repair-stuck")
 	entries, err := git.ListWorktrees(repoPath)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -787,8 +788,8 @@ func TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBac
 		storage, repo := newWorktreeConsistencyTestRepo(t)
 		ctx := context.Background()
 		sessionUUID := uuid.New().String()
-		repoPath := setupTestGitRepo(t)
-		worktreePath := setupLinkedWorktree(t, repoPath, "unlinked-repair")
+		repoPath := sessiontest.SetupTestGitRepo(t)
+		worktreePath := sessiontest.SetupLinkedWorktree(t, repoPath, "unlinked-repair")
 
 		seedCandidateInstance(t, storage, "unlinked-repair",
 			withUUID(sessionUUID),
@@ -807,12 +808,12 @@ func TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBac
 			Match: &git.NativeWorktreeEntry{BranchRef: "refs/heads/unlinked-repair", WorktreePath: worktreePath},
 		}
 
-		notifier := &fakeNotifier{}
+		notifier := &sessiontest.FakeNotifier{}
 		require.NoError(t, resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding))
 
-		require.NotEmpty(t, notifier.calls)
-		assert.Equal(t, "NotifySession", notifier.calls[0].Method)
-		assert.Equal(t, sessionUUID, notifier.calls[0].RecipientID)
+		require.NotEmpty(t, notifier.Calls)
+		assert.Equal(t, "NotifySession", notifier.Calls[0].Method)
+		assert.Equal(t, sessionUUID, notifier.Calls[0].RecipientID)
 	})
 
 	t.Run("flag path", func(t *testing.T) {
@@ -831,12 +832,12 @@ func TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBac
 			},
 		}
 
-		notifier := &fakeNotifier{}
+		notifier := &sessiontest.FakeNotifier{}
 		require.NoError(t, resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier}, finding))
 
-		require.Len(t, notifier.calls, 1)
-		assert.Equal(t, "NotifySession", notifier.calls[0].Method)
-		assert.Equal(t, sessionUUID, notifier.calls[0].RecipientID)
+		require.Len(t, notifier.Calls, 1)
+		assert.Equal(t, "NotifySession", notifier.Calls[0].Method)
+		assert.Equal(t, sessionUUID, notifier.Calls[0].RecipientID)
 	})
 }
 
@@ -866,9 +867,9 @@ func TestSweep_should_NotifyOnce_When_FindingFirstDetected(t *testing.T) {
 		}
 	}
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	require.NoError(t, resolveFinding(ctx, resolveFindingDeps{Repo: repo, Notifier: notifier, Backoff: backoff}, newFinding()))
-	assert.Len(t, notifier.calls, 1)
+	assert.Len(t, notifier.Calls, 1)
 }
 
 // TestSweep_should_SuppressDuplicateNotify_When_SameFindingWithinBackoffWindow covers
@@ -891,14 +892,14 @@ func TestSweep_should_SuppressDuplicateNotify_When_SameFindingWithinBackoffWindo
 		}
 	}
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	deps := resolveFindingDeps{Repo: repo, Notifier: notifier, Backoff: backoff}
 	require.NoError(t, resolveFinding(ctx, deps, newFinding()))
-	require.Len(t, notifier.calls, 1)
+	require.Len(t, notifier.Calls, 1)
 
 	// Second tick, same still-unresolved pair, well within worktreeConsistencyBackoffWindow.
 	require.NoError(t, resolveFinding(ctx, deps, newFinding()))
-	assert.Len(t, notifier.calls, 1, "a still-unresolved finding must not re-notify within the backoff window")
+	assert.Len(t, notifier.Calls, 1, "a still-unresolved finding must not re-notify within the backoff window")
 }
 
 // TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAndIssueWasFlaggedWithinBackoffWindow
@@ -915,7 +916,7 @@ func TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAnd
 	ctx := context.Background()
 	sessionUUID := uuid.New().String()
 	backoff := newNotifyBackoff()
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	deps := resolveFindingDeps{Repo: repo, Notifier: notifier, Backoff: backoff}
 
 	// Tick N: flagged (ambiguous match), recording the (sessionUUID, IssueMissingWorktreeRow)
@@ -930,12 +931,12 @@ func TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAnd
 		},
 	}
 	require.NoError(t, resolveFinding(ctx, deps, flagFinding))
-	require.Len(t, notifier.calls, 1, "flag must notify")
+	require.Len(t, notifier.Calls, 1, "flag must notify")
 
 	// Tick N+1: the match becomes unique — repair fires for the same SessionID/IssueKind,
 	// same *notifyBackoff instance, well within worktreeConsistencyBackoffWindow.
-	repoPath := setupTestGitRepo(t)
-	setupLinkedWorktree(t, repoPath, "flag-then-repair")
+	repoPath := sessiontest.SetupTestGitRepo(t)
+	sessiontest.SetupLinkedWorktree(t, repoPath, "flag-then-repair")
 	entries, err := git.ListWorktrees(repoPath)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -959,10 +960,10 @@ func TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAnd
 	}
 	require.NoError(t, resolveFinding(ctx, deps, repairFinding))
 
-	require.Len(t, notifier.calls, 2,
+	require.Len(t, notifier.Calls, 2,
 		"repair must still notify even though the flag already recorded this (sessionID, issueKind) backoff key")
-	assert.Equal(t, "Worktree row auto-repaired", notifier.calls[1].Title)
-	assert.Equal(t, notificationTypeInfo, notifier.calls[1].NotificationType)
+	assert.Equal(t, "Worktree row auto-repaired", notifier.Calls[1].Title)
+	assert.Equal(t, notificationTypeInfo, notifier.Calls[1].NotificationType)
 }
 
 // TestNotifyBackoff_should_PruneStaleEntry_When_WindowElapsed covers the leak fix: a
@@ -990,13 +991,13 @@ func TestNotifyBackoff_should_PruneStaleEntry_When_WindowElapsed(t *testing.T) {
 // Task 1.2.3a-prep's fakeNotifier.NotifySession addition itself.
 func TestNotifySession_should_RecordCall_When_FakeNotifierInvoked(t *testing.T) {
 	t.Parallel()
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	notifier.NotifySession("sess-123", "title", "message", notificationTypeWarning, true, false)
 
-	require.Len(t, notifier.calls, 1)
-	assert.Equal(t, "NotifySession", notifier.calls[0].Method)
-	assert.Equal(t, "sess-123", notifier.calls[0].RecipientID)
-	assert.Equal(t, notificationTypeWarning, notifier.calls[0].NotificationType)
+	require.Len(t, notifier.Calls, 1)
+	assert.Equal(t, "NotifySession", notifier.Calls[0].Method)
+	assert.Equal(t, "sess-123", notifier.Calls[0].RecipientID)
+	assert.Equal(t, notificationTypeWarning, notifier.Calls[0].NotificationType)
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,15 +1011,15 @@ func TestNotifySession_should_RecordCall_When_FakeNotifierInvoked(t *testing.T) 
 // up — only a memoized result would still report just the first.
 func TestWorktreeEntryCache_EntriesFor_should_MemoizeListing_When_CalledTwiceForSameRepo(t *testing.T) {
 	t.Parallel()
-	repoPath := setupTestGitRepo(t)
-	setupLinkedWorktree(t, repoPath, "cache-memo-a")
+	repoPath := sessiontest.SetupTestGitRepo(t)
+	sessiontest.SetupLinkedWorktree(t, repoPath, "cache-memo-a")
 
 	cache := newWorktreeEntryCache()
 	entries1, ok1 := cache.entriesFor(repoPath)
 	require.True(t, ok1)
 	require.Len(t, entries1, 1)
 
-	setupLinkedWorktree(t, repoPath, "cache-memo-b")
+	sessiontest.SetupLinkedWorktree(t, repoPath, "cache-memo-b")
 
 	entries2, ok2 := cache.entriesFor(repoPath)
 	require.True(t, ok2)
@@ -1092,10 +1093,10 @@ func TestSweep_should_ProceedPastFlagGate_When_FeatureFlagOn(t *testing.T) {
 		withStatus(Active),
 	)
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	sweep(context.Background(), storage, notifier, flagCfgFn(true), newNotifyBackoff())
 
-	assert.NotEmpty(t, notifier.calls, "flag on: sweep must have listed and processed the seeded candidate")
+	assert.NotEmpty(t, notifier.Calls, "flag on: sweep must have listed and processed the seeded candidate")
 }
 
 // ---------------------------------------------------------------------------
@@ -1122,14 +1123,14 @@ func TestResolveFinding_should_DowngradeToFlagged_When_IsolatedInstanceAndUnique
 		Match: &git.NativeWorktreeEntry{BranchRef: "refs/heads/work/isolated", WorktreePath: "/tmp/does-not-matter"},
 	}
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	deps := resolveFindingDeps{Repo: repo, Notifier: notifier, IsIsolated: true}
 	err := resolveFinding(ctx, deps, finding)
 	require.NoError(t, err)
 
 	assert.Equal(t, ResolutionFlagged, finding.Resolution, "an isolated instance must never write a repair")
 	assert.Equal(t, "repair skipped: running on isolated instance", finding.Detail)
-	require.Len(t, notifier.calls, 1, "the downgrade must still notify — never a silent no-op")
+	require.Len(t, notifier.Calls, 1, "the downgrade must still notify — never a silent no-op")
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,7 +1192,7 @@ func TestSweep_ShouldRepairRegressionPR625_When_WorktreeRowMissingButOnDiskWorkt
 
 	const branch = "work/b8ccca59"
 	sessionUUID := uuid.New().String()
-	repoPath := setupTestGitRepo(t)
+	repoPath := sessiontest.SetupTestGitRepo(t)
 	worktreePath := setupLinkedWorktreeWithBranch(t, repoPath, "pr625-repro", branch)
 
 	seedCandidateInstance(t, storage, "pr625-repro",
@@ -1212,17 +1213,17 @@ func TestSweep_ShouldRepairRegressionPR625_When_WorktreeRowMissingButOnDiskWorkt
 	entries, err := git.ListWorktrees(candidateRepoPath(candidate))
 	require.NoError(t, err)
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	deps := resolveFindingDeps{Repo: repo, Notifier: notifier, Backoff: newNotifyBackoff(), IsIsolated: false}
 	repaired, flagged := resolveCandidate(ctx, candidate, entries, deps)
 
 	assert.Equal(t, 1, repaired, "exactly one finding, repaired")
 	assert.Equal(t, 0, flagged)
-	require.Len(t, notifier.calls, 1, "repair must always notify — never silent")
-	assert.Equal(t, "NotifySession", notifier.calls[0].Method, "no BacklogItem is linked to this session")
-	assert.Equal(t, notificationTypeInfo, notifier.calls[0].NotificationType)
-	assert.Equal(t, "Worktree row auto-repaired", notifier.calls[0].Title)
-	assert.Contains(t, notifier.calls[0].Message, string(IssueMissingWorktreeRow))
+	require.Len(t, notifier.Calls, 1, "repair must always notify — never silent")
+	assert.Equal(t, "NotifySession", notifier.Calls[0].Method, "no BacklogItem is linked to this session")
+	assert.Equal(t, notificationTypeInfo, notifier.Calls[0].NotificationType)
+	assert.Equal(t, "Worktree row auto-repaired", notifier.Calls[0].Title)
+	assert.Contains(t, notifier.Calls[0].Message, string(IssueMissingWorktreeRow))
 
 	wt, err := storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	require.NoError(t, err)
@@ -1244,7 +1245,7 @@ func TestSweep_ShouldFlagRegressionPR625_When_WorktreeRowAndOnDiskWorktreeBothMi
 	ctx := context.Background()
 
 	sessionUUID := uuid.New().String()
-	repoPath := setupTestGitRepo(t) // a real repo, but no worktree is ever registered on it
+	repoPath := sessiontest.SetupTestGitRepo(t) // a real repo, but no worktree is ever registered on it
 
 	seedCandidateInstance(t, storage, "pr625-repro-gone",
 		withUUID(sessionUUID),
@@ -1254,14 +1255,14 @@ func TestSweep_ShouldFlagRegressionPR625_When_WorktreeRowAndOnDiskWorktreeBothMi
 		withPath(repoPath),
 	)
 
-	notifier := &fakeNotifier{}
+	notifier := &sessiontest.FakeNotifier{}
 	sweep(ctx, storage, notifier, flagCfgFn(true), newNotifyBackoff())
 
-	require.Len(t, notifier.calls, 1, "the double-missing state must still produce exactly one finding, never zero")
-	assert.Equal(t, "NotifySession", notifier.calls[0].Method, "no BacklogItem is linked to this session")
-	assert.Equal(t, notificationTypeWarning, notifier.calls[0].NotificationType, "flagged findings notify at warning, not info")
-	assert.Contains(t, notifier.calls[0].Title, string(IssueMissingWorktreeRow))
-	assert.Contains(t, notifier.calls[0].Message, "nothing to repair from")
+	require.Len(t, notifier.Calls, 1, "the double-missing state must still produce exactly one finding, never zero")
+	assert.Equal(t, "NotifySession", notifier.Calls[0].Method, "no BacklogItem is linked to this session")
+	assert.Equal(t, notificationTypeWarning, notifier.Calls[0].NotificationType, "flagged findings notify at warning, not info")
+	assert.Contains(t, notifier.Calls[0].Title, string(IssueMissingWorktreeRow))
+	assert.Contains(t, notifier.Calls[0].Message, "nothing to repair from")
 
 	wt, err := storage.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 	require.NoError(t, err)

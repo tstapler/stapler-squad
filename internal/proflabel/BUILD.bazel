@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "proflabel",
+    srcs = ["proflabel.go"],
+    importpath = "github.com/tstapler/stapler-squad/internal/proflabel",
+    visibility = ["//:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":proflabel",
+    visibility = ["//:__subpackages__"],
+)

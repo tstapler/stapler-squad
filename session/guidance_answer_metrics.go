@@ -103,7 +103,7 @@ func countGuidanceDelivery(ctx context.Context, route domain.DeliveryRoute, stat
 // recordGuidanceAnswered observes the latency of a just-applied answer. It is
 // best effort: an unreadable row only skips the observation.
 func (r *EntRepository) recordGuidanceAnswered(ctx context.Context, id uuid.UUID) {
-	row, err := r.client.GuidanceRequest.Query().Where(guidancerequest.ID(id)).Only(ctx)
+	row, err := r.Client.GuidanceRequest.Query().Where(guidancerequest.ID(id)).Only(ctx)
 	if err != nil {
 		if !ent.IsNotFound(err) {
 			log.Warn("[GuidanceRequest] answered but latency not observed", "id", id, "err", err)

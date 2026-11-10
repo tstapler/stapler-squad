@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package session.v1;
 
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
 import "session/v1/github_user.proto";

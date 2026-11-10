@@ -117,7 +117,7 @@ var bypassInventory = []bypassSite{
 	exempt("session/storage.go", "Storage.RawUnarchiveBacklogItem", 1, wrapperReason),
 	exempt("session/storage.go", "Storage.setPRAndTransition", 1, "single-UPDATE PR write shared by RawSetBacklogItemPRAndTransition and GatedSetPRAndTransition; its call is rawTransitionBacklogItemStatusWithPRFields"),
 	exempt("session/transition_gate.go", "Storage.writeGated", 1, gateReason+": the write after the engine allowed"),
-	exempt("session/ent_repository_backlog.go", "EntRepository.rawTransitionBacklogItemStatus", 1, "the raw writer delegating to its note-appending variant; both are unexported and reachable only through the gate and the Raw* wrappers"),
+	exempt("session/ent_repository_backlog.go", "EntRepository.RawTransitionBacklogItemStatus", 1, "the raw writer delegating to its note-appending variant; both are unexported and reachable only through the gate and the Raw* wrappers"),
 	exempt("session/transition_gate.go", "Storage.writeGatedArchive", 1, gateReason+": the archive write after the engine allowed"),
 	exempt("session/transition_gate.go", "Storage.writeGatedUnarchive", 1, gateReason+": the unarchive write after the engine allowed"),
 	exempt("session/transition_gate.go", "Storage.writeGatedReconcile", 1, gateReason+": the reconcile write after the engine allowed, appending the [auto] note in the same UPDATE"),
@@ -126,15 +126,15 @@ var bypassInventory = []bypassSite{
 	exempt("server/mcp/tools_backlog_dependencies.go", "backlogHandlers.transitionBacklogItemStatus", 1, delegateReason),
 
 	// Engine-routed: operator handlers that reach the gate with a caller resolved at request time.
-	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.TransitionBacklogItemStatus", 1, "GatedTransition as operator_transition_rpc or mcp_transition_delegate, by context actor (Story 1.5.5a)"),
-	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", 1, "GatedTransition as operator_override_verdict (Story 1.5.5a)"),
+	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.TransitionBacklogItemStatus", 1, "GatedTransition as operator_transition_rpc or mcp_transition_delegate, by context actor (Story 1.5.5a)"),
+	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.OverrideVerdict", 1, "GatedTransition as operator_override_verdict (Story 1.5.5a)"),
 
 	// Gate-routed in Story 1.5.5 (operator and agent writers).
 	gateRouted("server/services/notification_action_backlog.go", "backlogDecider.transition", 1, "forwards the operator's inline click to the transition handler as operator_notification_action"),
-	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.SubmitManualReview", 1, "GatedTransition as operator_submit_manual_review (Story 1.5.5a)"),
-	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.ArchiveBacklogItem", 1, "GatedArchive as operator_archive_rpc (Story 1.5.5b)"),
-	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.UnarchiveBacklogItem", 1, "GatedUnarchive as operator_unarchive_rpc (Story 1.5.5b)"),
-	gateRouted("server/services/backlog_service_lifecycle.go", "BacklogService.UpdateBacklogItem", 1, "GatedSetPRAndTransition as operator_update_pr_association (Story 1.5.5b)"),
+	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.SubmitManualReview", 1, "GatedTransition as operator_submit_manual_review (Story 1.5.5a)"),
+	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.ArchiveBacklogItem", 1, "GatedArchive as operator_archive_rpc (Story 1.5.5b)"),
+	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.UnarchiveBacklogItem", 1, "GatedUnarchive as operator_unarchive_rpc (Story 1.5.5b)"),
+	gateRouted("server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.UpdateBacklogItem", 1, "GatedSetPRAndTransition as operator_update_pr_association (Story 1.5.5b)"),
 	gateRouted("server/mcp/tools_backlog.go", "backlogHandlers.requestReview", 2, "GatedTransition as mcp_request_review, recovery reopen and the transition (Story 1.5.5c)"),
 	gateRouted("server/mcp/tools_backlog.go", "backlogHandlers.reportBlocked", 1, "GatedTransition as mcp_report_blocked (Story 1.5.5c)"),
 	gateRouted("server/mcp/tools_backlog.go", "backlogHandlers.resumeWork", 1, "GatedTransition as mcp_resume_work (Story 1.5.5c)"),
@@ -144,34 +144,34 @@ var bypassInventory = []bypassSite{
 	// Gated, Story 1.5.6 (system writers in server/services, the two operator triage writers,
 	// the rollbacks and the debug handler).
 	gated("server/services/autonomous_orchestration_service.go", "AutonomousOrchestrationService.advanceItemOnDriverComplete", 1, "GatedTransition as autonomous_complete"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.transitionWithGuard", 1, "GatedTransition; caller derived from target and actor (queue, claim, Jules dispatch)"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.AutoReopenAfterFailedReview", 1, "GatedTransition as auto_reopen_after_failed_review"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.rollbackFailedReopen", 1, "gate.Rollback (exempt, counted)"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.autoReopenForPRFix", 1, "GatedTransition as auto_reopen_for_pr_fix"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.rollbackFailedPRFixReopen", 1, "gate.Rollback (exempt, counted)"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.claimAndSpawnCandidate", 1, "gate.Rollback (exempt, counted)"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.spawnSessionAfterGates", 1, "GatedTransition as spawn_session_after_gates (Unconditional)"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.respawnTriage", 1, "GatedTransition as respawn_triage"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.skipTriageForNewItem", 1, "GatedTransition as maybe_trigger_triage"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.TriggerReReview", 1, "GatedTransition as trigger_re_review"),
-	gated("server/services/backlog_service_triage.go", "BacklogService.forceResetItem", 1, "GatedTransition as operator_force_reset (Unconditional)"),
-	gated("server/services/backlog_service_trigger_triage.go", "BacklogService.TriggerTriage", 2, "GatedTransition as operator_trigger_triage and triage_complete"),
-	gated("server/services/backlog_service_sync.go", "BacklogService.AttachSessionToItem", 1, "GatedTransition as attach_session_to_item (Unconditional)"),
-	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleTransition", 1, "gate.DebugForce (exempt class debug, counted)"),
-	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.TransitionWithGuard", 1, "GatedTransition; caller derived from target and actor (queue, claim, Jules dispatch)"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.AutoReopenAfterFailedReview", 1, "GatedTransition as auto_reopen_after_failed_review"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.rollbackFailedReopen", 1, "gate.Rollback (exempt, counted)"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.autoReopenForPRFix", 1, "GatedTransition as auto_reopen_for_pr_fix"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.rollbackFailedPRFixReopen", 1, "gate.Rollback (exempt, counted)"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.claimAndSpawnCandidate", 1, "gate.Rollback (exempt, counted)"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.spawnSessionAfterGates", 1, "GatedTransition as spawn_session_after_gates (Unconditional)"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.respawnTriage", 1, "GatedTransition as respawn_triage"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.skipTriageForNewItem", 1, "GatedTransition as maybe_trigger_triage"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.TriggerReReview", 1, "GatedTransition as trigger_re_review"),
+	gated("server/services/backlogsvc/backlog_service_triage.go", "BacklogService.forceResetItem", 1, "GatedTransition as operator_force_reset (Unconditional)"),
+	gated("server/services/backlogsvc/backlog_service_trigger_triage.go", "BacklogService.TriggerTriage", 2, "GatedTransition as operator_trigger_triage and triage_complete"),
+	gated("server/services/backlogsvc/backlog_service_sync.go", "BacklogService.AttachSessionToItem", 1, "GatedTransition as attach_session_to_item (Unconditional)"),
+	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleTransition", 1, "gate.DebugForce (exempt class debug, counted)"),
+	gated("server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.HandleArchive", 1, "gate.DebugForce (exempt class debug, counted)"),
 
 	// Gated, Story 1.5.7 (system writers in session).
 	gated("session/backlog_remediation.go", "Storage.redriveOne", 1, "GatedTransition as the recorded denied caller: autonomous_complete, maybe_trigger_triage or triage_complete (Story 1.5.8e)"),
-	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.onSessionExited", 1, "GatedTransition as lifecycle_session_exited"),
-	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.transitionBouncingItemToDone", 2, "GatedTransition as lifecycle_bouncing_to_done"),
-	gated("session/backlog_lifecycle.go", "BacklogLifecycleListener.ReconcileStuck", 1, "GatedReconcileStuck as lifecycle_reconcile_stuck"),
-	gated("session/backlog_lifecycle_archive.go", "BacklogLifecycleListener.archiveStaleDoneItems", 1, "GatedTransition as lifecycle_archive_stale_done"),
-	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.closeIfSupersededByMain", 1, "GatedTransition as lifecycle_close_superseded_pr"),
-	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.pushAndCreatePR", 1, "GatedTransition as lifecycle_push_create_pr_fallback"),
-	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recordOrphanedAgentPR", 1, "GatedSetPRAndTransition as lifecycle_orphaned_agent_pr"),
-	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.reconcilePRPendingItem", 1, "GatedTransition as lifecycle_reconcile_pr_pending"),
-	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recoverDriftedPRItem", 1, "GatedTransition as lifecycle_recover_drifted_pr"),
-	gated("session/backlog_lifecycle_pr.go", "BacklogLifecycleListener.resolveToPRPending", 1, "GatedTransition as lifecycle_resolve_to_pr_pending"),
+	gated("session/backlog/backlog_lifecycle.go", "BacklogLifecycleListener.onSessionExited", 1, "GatedTransition as lifecycle_session_exited"),
+	gated("session/backlog/backlog_lifecycle.go", "BacklogLifecycleListener.transitionBouncingItemToDone", 2, "GatedTransition as lifecycle_bouncing_to_done"),
+	gated("session/backlog/backlog_lifecycle.go", "BacklogLifecycleListener.ReconcileStuck", 1, "GatedReconcileStuck as lifecycle_reconcile_stuck"),
+	gated("session/backlog/backlog_lifecycle_archive.go", "BacklogLifecycleListener.archiveStaleDoneItems", 1, "GatedTransition as lifecycle_archive_stale_done"),
+	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.closeIfSupersededByMain", 1, "GatedTransition as lifecycle_close_superseded_pr"),
+	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.pushAndCreatePR", 1, "GatedTransition as lifecycle_push_create_pr_fallback"),
+	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recordOrphanedAgentPR", 1, "GatedSetPRAndTransition as lifecycle_orphaned_agent_pr"),
+	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.reconcilePRPendingItem", 1, "GatedTransition as lifecycle_reconcile_pr_pending"),
+	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recoverDriftedPRItem", 1, "GatedTransition as lifecycle_recover_drifted_pr"),
+	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.resolveToPRPending", 1, "GatedTransition as lifecycle_resolve_to_pr_pending"),
 	gated("session/jules_session_poller.go", "JulesSessionPoller.failJulesSession", 1, "GatedTransition as jules_fail_session"),
 	gated("session/jules_session_poller.go", "JulesSessionPoller.applyCompletedState", 3, "GatedTransition twice and GatedSetPRAndTransition as jules_apply_completed"),
 	gated("session/backlog_sync.go", "SyncLoop.transitionBackward", 1, "GatedTransition as sync_loop_backward"),
@@ -194,7 +194,8 @@ func walkModuleFuncs(t *testing.T, root string, visit func(rel string, fd *ast.F
 			case rel == ".":
 				return nil
 			case strings.HasPrefix(d.Name(), "."), d.Name() == "node_modules", d.Name() == "vendor",
-				rel == "web-app", rel == "tools/lint", rel == "gen":
+				rel == "web-app", rel == "tools/lint", rel == "gen",
+				rel == "server/services/internal/svctest": // testonly support code, scanned like the _test.go files it came from
 				return filepath.SkipDir
 			}
 			return nil
@@ -411,7 +412,7 @@ func TestWorkflowBypassInventory_GuardedTransitionCallersAreRegisteredWithTheirT
 			owners[cs.File+" "+cs.Func] = append(owners[cs.File+" "+cs.Func], c)
 		}
 	}
-	guarded := map[string]bool{"transitionWithGuard": true, "GuardedTransitionAllowed": true}
+	guarded := map[string]bool{"TransitionWithGuard": true, "GuardedTransitionAllowed": true}
 	found := map[string]bool{}
 	var problems []string
 	walkModuleFuncs(t, moduleRoot(t), func(rel string, fd *ast.FuncDecl) {
@@ -551,8 +552,8 @@ var createInventory = []createSite{
 	{"server/mcp/tools_backlog.go", "backlogHandlers.createBacklogItem", 1, classCreate, idleCreateReason},
 	{"server/mcp/tools_backlog.go", "backlogHandlers.importGitHubIssue", 1, classCreate, idleCreateReason},
 	{"server/mcp/tools_backlog_import_tracker.go", "backlogHandlers.importTrackerIssue", 1, classCreate, idleCreateReason},
-	{"server/services/backlog_service_lifecycle.go", "BacklogService.CreateBacklogItem", 1, classCreate, idleCreateReason + " (through its data literal)"},
-	{"server/services/backlog_service_sync.go", "BacklogService.ImportGitHubIssue", 1, classCreate, idleCreateReason},
+	{"server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.CreateBacklogItem", 1, classCreate, idleCreateReason + " (through its data literal)"},
+	{"server/services/backlogsvc/backlog_service_sync.go", "BacklogService.ImportGitHubIssue", 1, classCreate, idleCreateReason},
 	{"session/backlog_sync.go", "SyncLoop.SyncOne", 1, classCreateForwarder, "item comes from the source plugin's MapToBacklogItem (not resolvable here): the GitHub plugins set idea and the Jira and Linear plugins set no status"},
 
 	{"server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleCreate", 1, classCreateDebug, debugCreateReason},

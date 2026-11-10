@@ -1,0 +1,1 @@
+bazel-hint: a BUILD label for generated code is missing or misnamed; 'make sync' will not help because Bazel does not read gen/. Remedy: run 'make gazelle', then check //proto/session/v1 and //tools/bzl/ent (stale ent package list: 'bazel run //tools/bzl/ent:update_packages').

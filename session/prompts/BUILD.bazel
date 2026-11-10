@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "prompts",
+    srcs = ["store.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/prompts",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_linkdata_deadlock//:deadlock"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":prompts",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "prompts_test",
+    srcs = ["store_test.go"],
+    embed = [":prompts"],
+    deps = ["//testutil/wait"],
+)

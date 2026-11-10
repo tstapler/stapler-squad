@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 const errBacklogSvcNotWired = "backlog service not wired"
@@ -269,7 +270,7 @@ func (h *backlogHandlers) writeDependenciesSection(ctx context.Context, sb *stri
 		}
 		fmt.Fprintf(sb, "%s:\n", label)
 		for _, r := range refs {
-			fmt.Fprintf(sb, "- %s \"%s\" (status: %s)\n", r.ItemID, session.SanitizeForAgentContext(r.Title, 200), r.Status)
+			fmt.Fprintf(sb, "- %s \"%s\" (status: %s)\n", r.ItemID, backlog.SanitizeForAgentContext(r.Title, 200), r.Status)
 		}
 	}
 	writeRefs("blocked_by", blockedBy)

@@ -14,6 +14,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -68,7 +69,7 @@ func newReplyEnv(t *testing.T) *replyEnv {
 	inst.Program = "claude"
 	inst.Hidden = true
 	inst.CreatedAt, inst.UpdatedAt = time.Now(), time.Now()
-	addInstanceToPoller(e.fix.poller, inst)
+	svctest.AddInstanceToPoller(e.fix.poller, inst)
 
 	re := &replyEnv{steerEnv: e, clock: clock, pm: pm, inst: inst}
 	re.qid = re.register(inst, colorDialog)

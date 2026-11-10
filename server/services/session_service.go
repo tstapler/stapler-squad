@@ -26,12 +26,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -89,7 +91,7 @@ type SessionService struct {
 	storage           session.InstanceStore
 	eventBus          *events.EventBus
 	statusManager     *session.InstanceStatusManager
-	reviewQueuePoller *session.ReviewQueuePoller
+	ReviewQueuePoller *session.ReviewQueuePoller
 	federation        *FederatedSessions // nil unless host gossip is running
 
 	// prRefs holds the outside calls of the PR set RPCs (session_service_pr_refs.go).
@@ -206,7 +208,7 @@ type SessionService struct {
 	// historyLinker tracks JSONL conversation files per session.
 	// Must be kept in sync with deletions so the shutdown hook does not
 	// re-persist sessions the user has deleted.
-	historyLinker *session.HistoryLinker
+	historyLinker *importer.HistoryLinker
 
 	// approvalStore holds pending Claude Code hook approval requests.
 	approvalStore *ApprovalStore
@@ -312,7 +314,7 @@ type SessionService struct {
 
 	// backlogLifecycleListener is wired to each newly created session so that
 	// backlog item state transitions fire when the session exits.
-	backlogLifecycleListener *session.BacklogLifecycleListener
+	backlogLifecycleListener *backlog.BacklogLifecycleListener
 
 	// sessionSummaryGenerator is wired to each newly created session (alongside
 	// backlogLifecycleListener, at the same call sites) so that session-completion-
@@ -348,7 +350,7 @@ type SessionService struct {
 	headlessClient headless.PoolClient
 
 	// autonomousSvc manages the lifecycle of AutonomousDriver instances.
-	autonomousSvc *AutonomousOrchestrationService
+	AutonomousSvc *AutonomousOrchestrationService
 
 	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
 	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
@@ -699,7 +701,7 @@ func publishClaudeSettingsNotification(eventBus *events.EventBus, content claude
 	eventBus.Publish(events.NewNotificationEvent(
 		"", "System", uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO),
-		derivePriority(false, false), // urgent, important — informational config-reload notice
+		DerivePriority(false, false), // urgent, important — informational config-reload notice
 		content.title, content.message,
 		map[string]string{"type": "claude_settings_reload", "origin": content.origin},
 	))
@@ -1060,7 +1062,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		}
 		return nil
 	})
-	svc.autonomousSvc = autonomousSvc
+	svc.AutonomousSvc = autonomousSvc
 
 	return svc
 }
@@ -1316,3 +1318,6 @@ func (s *SessionService) setGitBackend(b backend.Backend) {
 func (s *SessionService) remoteWorktreeOps(runner tmux.CommandRunner, host string) *git.RemoteWorktreeOps {
 	return git.NewRemoteWorktreeOps(runner, git.WithGitBackend(s.gitBackendOrDefault()), git.WithRemoteHost(host))
 }
+
+// Federation returns the federated-sessions view, nil unless host gossip is running.
+func (s *SessionService) Federation() *FederatedSessions { return s.federation }

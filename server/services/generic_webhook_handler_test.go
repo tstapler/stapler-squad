@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -30,7 +31,7 @@ func newGenericWebhookWorkflow(t *testing.T, infra *webhookTestInfra, slug, secr
 		EventFilter:            eventFilter,
 		LabelFilter:            labelFilter,
 		PromptTemplate:         promptTemplate,
-		Enabled:                boolPtr(true),
+		Enabled:                svctest.BoolPtr(true),
 	})
 	require.NoError(t, err)
 	return wf
@@ -182,7 +183,7 @@ func TestGenericWebhookHandler_should_Return404_When_EnabledIsFalse_EvenIfCronEn
 		EventFilter:            "issue_created",
 		PromptTemplate:         "Triage {{.issue.key}}",
 		CronEnabled:            true,
-		Enabled:                boolPtr(false),
+		Enabled:                svctest.BoolPtr(false),
 	})
 	require.NoError(t, err)
 	h := NewGenericWebhookHandler(infra.workflowRepo, infra.scheduler, infra.fireEvents, infra.cfg)

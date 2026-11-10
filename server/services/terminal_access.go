@@ -73,7 +73,7 @@ func AccessForUnary(inst *session.Instance, flag GuardsFlag) TerminalAccess {
 // or ErrReadOnly. A nil TerminalWriter means "this attach cannot write": stream
 // handlers hold the writer, never the TerminalAccess or a bool, so an ignored
 // check cannot compile into a write.
-func (a TerminalAccess) Writer(sender tmuxInputSender) (TerminalWriter, error) {
+func (a TerminalAccess) Writer(sender TmuxInputSender) (TerminalWriter, error) {
 	if a != TerminalReadWrite {
 		return nil, ErrReadOnly
 	}
@@ -112,16 +112,16 @@ type TerminalWriter interface {
 	// stream: keystrokes may be lost under load but the stream stays alive.
 	SendInput(ctx context.Context, in PaneInput) error
 	// Sender is the tmux subprocess seam for the capture-pane and fallback routes.
-	Sender() tmuxInputSender
+	Sender() TmuxInputSender
 }
 
 // tmuxInputSender is the test seam in front of the tmux send-keys and
 // resize-window/resize-pane subprocesses. Production wires realTmuxInputSender;
 // a test injects a fake per handler, so a read-only attach is observable as
 // zero calls instead of an exec the test cannot see.
-type tmuxInputSender interface {
+type TmuxInputSender interface {
 	SendInput(serverSocket, tmuxSession string, data []byte) error
-	Resize(p capturePaneStreamParams, cols, rows int)
+	Resize(p ExternalPaneTarget, cols, rows int)
 }
 
 // realTmuxInputSender wraps the subprocess helpers unchanged.
@@ -131,18 +131,18 @@ func (realTmuxInputSender) SendInput(serverSocket, tmuxSession string, data []by
 	return sendInputToTmuxWithRetry(serverSocket, tmuxSession, data)
 }
 
-func (realTmuxInputSender) Resize(p capturePaneStreamParams, cols, rows int) {
+func (realTmuxInputSender) Resize(p ExternalPaneTarget, cols, rows int) {
 	resizeExternalCapturePaneSession(p, cols, rows)
 }
 
 // paneWriter is the only TerminalWriter implementation. It is constructed only
 // by TerminalAccess.Writer (guard check (a)).
 type paneWriter struct {
-	sender   tmuxInputSender
+	sender   TmuxInputSender
 	activity *HumanActivity
 }
 
-func (w *paneWriter) Sender() tmuxInputSender { return w.sender }
+func (w *paneWriter) Sender() TmuxInputSender { return w.sender }
 
 func (w *paneWriter) SendInput(ctx context.Context, in PaneInput) error {
 	w.activity.Record(in.TmuxSession) // every browser keystroke is human activity, sent or not

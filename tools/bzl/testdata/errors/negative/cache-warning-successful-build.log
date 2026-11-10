@@ -1,0 +1,3 @@
+INFO: Analyzed target //config:all (0 packages loaded, 0 targets configured).
+WARNING: remote cache hit rate is 12%; consider warming it
+INFO: Build completed successfully, 3 total actions

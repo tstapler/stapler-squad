@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "threatscan",
+    srcs = [
+        "doc.go",
+        "patterns.go",
+        "result.go",
+        "scanner.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/pkg/threatscan",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":threatscan",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "threatscan_test",
+    srcs = [
+        "patterns_test.go",
+        "scanner_test.go",
+    ],
+    embed = [":threatscan"],
+)

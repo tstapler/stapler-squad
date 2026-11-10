@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "sessiontest",
+    testonly = True,
+    srcs = [
+        "helpers.go",
+        "main.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/internal/sessiontest",
+    visibility = ["//session:__subpackages__"],
+    deps = [
+        "//envtest",
+        "//log",
+        "//session/git",
+        "//testutil/gitfixture",
+        "//testutil/tmuxreap",
+        "//testutil/wait",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_zalando_go_keyring//:go-keyring",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sessiontest",
+    visibility = ["//session:__subpackages__"],
+)

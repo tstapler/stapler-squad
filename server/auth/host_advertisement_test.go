@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 func TestHostAdvertisementRoute_should_RejectMalformedPayload_When_BodyIsNotValidJSON(t *testing.T) {
-	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	identity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
 	}
-	registry, err := session.NewHostRegistry(t.TempDir(), session.DefaultHostRegistryTTL)
+	registry, err := hostclaim.NewHostRegistry(t.TempDir(), hostclaim.DefaultHostRegistryTTL)
 	if err != nil {
 		t.Fatalf("NewHostRegistry() error = %v, want nil", err)
 	}
@@ -24,7 +24,7 @@ func TestHostAdvertisementRoute_should_RejectMalformedPayload_When_BodyIsNotVali
 	mux := http.NewServeMux()
 	RegisterHostAdvertisementRoute(mux, identity, registry, nil, []string{"self.example:8444"})
 
-	req := httptest.NewRequest(http.MethodPost, session.AdvertisementEndpointPath, bytes.NewReader([]byte("{not valid json")))
+	req := httptest.NewRequest(http.MethodPost, hostclaim.AdvertisementEndpointPath, bytes.NewReader([]byte("{not valid json")))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -34,11 +34,11 @@ func TestHostAdvertisementRoute_should_RejectMalformedPayload_When_BodyIsNotVali
 }
 
 func TestHostAdvertisementRoute_should_UpsertRegistryAndReturnOwnSignedRecord_When_AdvertisementValid(t *testing.T) {
-	identity, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	identity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity() error = %v, want nil", err)
 	}
-	registry, err := session.NewHostRegistry(t.TempDir(), session.DefaultHostRegistryTTL)
+	registry, err := hostclaim.NewHostRegistry(t.TempDir(), hostclaim.DefaultHostRegistryTTL)
 	if err != nil {
 		t.Fatalf("NewHostRegistry() error = %v, want nil", err)
 	}
@@ -46,17 +46,17 @@ func TestHostAdvertisementRoute_should_UpsertRegistryAndReturnOwnSignedRecord_Wh
 	mux := http.NewServeMux()
 	RegisterHostAdvertisementRoute(mux, identity, registry, nil, []string{"self.example:8444"})
 
-	peerIdentity, err := session.LoadOrCreateHostIdentity(t.TempDir())
+	peerIdentity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity(peer) error = %v, want nil", err)
 	}
-	record := session.BuildAdvertisement(peerIdentity, []string{"peer.example:8444"}, time.Now())
+	record := hostclaim.BuildAdvertisement(peerIdentity, []string{"peer.example:8444"}, time.Now())
 	body, err := json.Marshal(record)
 	if err != nil {
 		t.Fatalf("failed to marshal advertisement: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, session.AdvertisementEndpointPath, bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, hostclaim.AdvertisementEndpointPath, bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -68,7 +68,7 @@ func TestHostAdvertisementRoute_should_UpsertRegistryAndReturnOwnSignedRecord_Wh
 		t.Fatalf("registry.Lookup(peer) = not found, want the advertisement to have been upserted")
 	}
 
-	var reply session.AdvertisementRecord
+	var reply hostclaim.AdvertisementRecord
 	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
 		t.Fatalf("failed to decode response body: %v", err)
 	}

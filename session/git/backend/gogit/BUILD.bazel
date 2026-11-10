@@ -1,0 +1,71 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "gogit",
+    srcs = [
+        "config.go",
+        "enrichment.go",
+        "fileid_other.go",
+        "fileid_unix.go",
+        "gogit.go",
+        "hostfs.go",
+        "layout.go",
+        "refname.go",
+        "refs.go",
+        "refstore.go",
+        "repoview.go",
+        "revision.go",
+        "unsupported.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/git/backend/gogit",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/git/backend",
+        "@com_github_go_git_gcfg//:gcfg",
+        "@com_github_go_git_go_billy_v5//:go-billy",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/cache",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_go_git_go_git_v5//storage/filesystem",
+        "@com_github_go_git_go_git_v5//storage/filesystem/dotgit",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gogit",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gogit_test",
+    srcs = [
+        "broken_repo_oracle_test.go",
+        "config_oracle_test.go",
+        "enrichment_test.go",
+        "fifo_unix_test.go",
+        "fixtures_oracle_test.go",
+        "gogit_test.go",
+        "hostfs_test.go",
+        "layout_dangling_test.go",
+        "mutation_oracle_test.go",
+        "refs_oracle_test.go",
+        "symlink_oracle_test.go",
+    ],
+    embed = [":gogit"],
+    deps = [
+        "//executor/safeexec",
+        "//session/git/backend",
+        "//session/git/backend/cli",
+        "//testutil/gitoracle",
+        "@com_github_go_git_go_billy_v5//:go-billy",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel_metric//noop",
+    ],
+)

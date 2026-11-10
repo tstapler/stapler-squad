@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -21,7 +22,7 @@ func cancelledOutcome(reason domain.StopReason) session.AutonomousDriverOutcome 
 }
 
 func (f *charFixture) setReadoption(on bool) {
-	f.svc.autonomousSvc.SetReadoptionEnabled(func() bool { return on })
+	f.svc.AutonomousSvc.SetReadoptionEnabled(func() bool { return on })
 }
 
 // assertNoRowOrRecovery asserts the item has no open stuck row, its ItemSession is
@@ -35,7 +36,7 @@ func (f *charFixture) assertNoRowOrRecovery(t *testing.T, _ *signalingRespawner)
 	is, err := f.storage.GetItemSessionBySessionUUID(context.Background(), f.inst.UUID)
 	require.NoError(t, err)
 	assert.Nil(t, is.EndedAt, "UpdateItemSessionEnded must not run")
-	assert.Empty(t, notificationTitles(f.drain()))
+	assert.Empty(t, svctest.NotificationTitles(f.drain()))
 }
 
 // SVC-4. Observable silence (row, ItemSession end, notifications) is asserted here;
@@ -93,7 +94,7 @@ func TestOnAutonomousDriverComplete_CancelledClassGuards(t *testing.T) {
 						assert.Equal(t, "stuck", snap.AutonomousOutcome)
 					}
 					if r.role == "" {
-						assert.Empty(t, notificationTitles(f.drain()))
+						assert.Empty(t, svctest.NotificationTitles(f.drain()))
 						return
 					}
 					f.assertNoRowOrRecovery(t, respawner)
@@ -181,7 +182,7 @@ func TestOnAutonomousDriverComplete_UnlinkedCancelled_NoFinalNotification(t *tes
 	f.complete(cancelledOutcome(domain.StopReasonCancelledExternal))
 
 	evs := f.drain()
-	assert.Empty(t, notificationTitles(evs))
+	assert.Empty(t, svctest.NotificationTitles(evs))
 	var updated bool
 	for _, ev := range evs {
 		updated = updated || ev.Type == events.EventSessionUpdated
@@ -198,5 +199,5 @@ func TestOnAutonomousDriverComplete_StallOutcomeUnlinked_TodayHandling(t *testin
 	snap := f.inst.Snapshot().Autonomous
 	assert.False(t, snap.AutonomousMode)
 	assert.Equal(t, "stuck", snap.AutonomousOutcome)
-	assert.Equal(t, []string{"Autonomous fix stuck"}, notificationTitles(f.drain()))
+	assert.Equal(t, []string{"Autonomous fix stuck"}, svctest.NotificationTitles(f.drain()))
 }

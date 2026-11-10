@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
 	"github.com/tstapler/stapler-squad/testutil/gitfake"
@@ -122,7 +123,7 @@ func TestGitLogSummary_EmptyOnErrorOrMissingInput(t *testing.T) {
 func listBranchesVia(t *testing.T, includeRemote bool) (*connect.Response[sessionv1.ListBranchesResponse], error) {
 	t.Helper()
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	repo := filepath.Join(home, "repo")
 	require.NoError(t, os.Mkdir(repo, 0o755))
 	return NewWorkspaceService(nil, nil).ListBranches(context.Background(),

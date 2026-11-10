@@ -1,0 +1,652 @@
+package prpoller
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/internal/qos"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
+)
+
+// pollerAuthResult is an immutable snapshot of the auth check state.
+// Stored in PRStatusPoller.authState (atomic.Value) so readers are lock-free.
+type pollerAuthResult struct {
+	ok        bool
+	checkedAt time.Time
+}
+
+// prGitHubClient is every outbound GitHub call PRStatusPoller makes. It exists so
+// tests can inject a fake instead of shelling out to `gh` (checkAllSessions and
+// fetchAndUpdatePRStatus would otherwise require real gh auth and network access
+// to exercise). realGHClient below is the only production implementation.
+type prGitHubClient interface {
+	CheckGHAuth(ctx context.Context) error
+	GetPRForBranchConditional(ctx context.Context, ref github.RepoRef, branch, etag string) (info *github.PRInfo, newEtag string, changed bool, err error)
+	GetPRInfoConditional(ctx context.Context, ref github.RepoRef, prNumber int, cache *github.ETagCache) (info *github.PRInfo, changed bool, err error)
+}
+
+type realGHClient struct{}
+
+func (realGHClient) CheckGHAuth(ctx context.Context) error { return github.CheckGHAuth(ctx) }
+
+func (realGHClient) GetPRForBranchConditional(ctx context.Context, ref github.RepoRef, branch, etag string) (*github.PRInfo, string, bool, error) {
+	return github.GetPRForBranchConditional(ctx, ref, branch, etag)
+}
+
+func (realGHClient) GetPRInfoConditional(ctx context.Context, ref github.RepoRef, prNumber int, cache *github.ETagCache) (*github.PRInfo, bool, error) {
+	return github.GetPRInfoConditional(ctx, ref, prNumber, cache)
+}
+
+// PRStatusPollerConfig contains configuration for the PR status poller.
+type PRStatusPollerConfig struct {
+	// PollInterval controls how often all sessions are checked.
+	PollInterval time.Duration
+	// ConcurrentFetches limits simultaneous gh CLI calls (respects secondary rate limits).
+	ConcurrentFetches int
+	// CallTimeout is the maximum time for a single gh API call.
+	CallTimeout time.Duration
+	// AuthCacheDuration controls how long a successful auth check is cached.
+	AuthCacheDuration time.Duration
+	// NoPRBackoff is how long to wait before re-checking a session after ErrNoPR.
+	// Zero disables the backoff (always re-check).
+	NoPRBackoff time.Duration
+	// MaxColdPollsPerTick bounds unknown or never-polled PR states fetched per
+	// tick after a deploy (zero means the default, 20).
+	MaxColdPollsPerTick int
+}
+
+// DefaultPRStatusPollerConfig returns sensible defaults.
+func DefaultPRStatusPollerConfig() PRStatusPollerConfig {
+	return PRStatusPollerConfig{
+		PollInterval:      60 * time.Second,
+		ConcurrentFetches: 5,
+		CallTimeout:       10 * time.Second,
+		AuthCacheDuration: 5 * time.Minute,
+		NoPRBackoff:       5 * time.Minute,
+	}
+}
+
+// PRStatusPoller polls GitHub PR status for all sessions at a shared interval.
+// Uses a single workspace-level ticker (not per-session goroutines) and an ETag
+// cache so unchanged PRs return HTTP 304 and cost zero rate-limit quota.
+type PRStatusPoller struct {
+	instances []*session.Instance
+	storage   *session.Storage
+	config    PRStatusPollerConfig
+	etagCache *github.ETagCache
+	ghClient  prGitHubClient
+
+	// onUpdated is called when a session's PR priority changes.
+	// Intended for EventBus notification; injected from the server layer.
+	onUpdated func(*session.Instance)
+
+	// terminalListener is told which PullRequestState rows just went terminal.
+	terminalListener PRTerminalListener
+
+	// multiPRScope reports whether a session_multi_pr reader scope is effective.
+	// A field so tests can pin scopes without a config file; production reads the live config.
+	multiPRScope func(scope string) bool
+
+	// refresherOn reads the live state-refresher kill switch (default: config).
+	refresherOn func() bool
+	// clock is the injected time source of the state loop (nil means time.Now).
+	clock func() time.Time
+	// onPRUnknown is raised once when a polled PR becomes unknown. Guarded by mu.
+	onPRUnknown func(session.PRView)
+
+	// stateBackoffs holds the in-memory retry gates of non-counted failures,
+	// keyed by PullRequestState id; guarded by stateMu, never p.mu.
+	stateMu       sync.Mutex
+	stateBackoffs map[int]stateBackoff
+	// terminalDiscoveryAfter is the next branch discovery per session key; guarded by stateMu.
+	terminalDiscoveryAfter map[string]time.Time
+	hostHealth             *hostHealth
+	// refresherState remembers the last logged switch value (0 unset, 1 off, 2 on).
+	refresherState atomic.Int32
+
+	// authState stores pollerAuthResult atomically; readers are lock-free.
+	authState atomic.Value //nolint:exhaustruct
+
+	// noPRPollAfter tracks the earliest time at which we should re-check a
+	// session that had no PR on the previous poll. Keyed by session title.
+	// Guarded by mu.
+	noPRPollAfter map[string]time.Time
+
+	// listEtags stores ETags for the branch→PR list endpoint, keyed by
+	// "owner/repo/branch". Allows 304 responses during PR discovery.
+	listEtags sync.Map
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	mu     deadlock.RWMutex
+
+	// dispatchWG tracks InvalidateAndRefresh's out-of-band fetchAndUpdatePRStatus
+	// goroutines, so tests can wait for a dispatch to fully finish rather than
+	// just for its HTTP request to reach a fake server (see pr_status_poller_test.go).
+	dispatchWG sync.WaitGroup
+}
+
+// NewPRStatusPoller creates a new poller with default configuration.
+func NewPRStatusPoller(storage *session.Storage) *PRStatusPoller {
+	return NewPRStatusPollerWithConfig(storage, DefaultPRStatusPollerConfig())
+}
+
+// NewPRStatusPollerWithConfig creates a poller with custom configuration.
+func NewPRStatusPollerWithConfig(storage *session.Storage, cfg PRStatusPollerConfig) *PRStatusPoller {
+	return &PRStatusPoller{
+		instances:              make([]*session.Instance, 0),
+		storage:                storage,
+		config:                 cfg,
+		etagCache:              github.NewETagCache(),
+		ghClient:               realGHClient{},
+		noPRPollAfter:          make(map[string]time.Time),
+		multiPRScope:           config.SessionMultiPR,
+		refresherOn:            config.SessionMultiPRRefresher,
+		stateBackoffs:          map[int]stateBackoff{},
+		terminalDiscoveryAfter: map[string]time.Time{},
+		hostHealth:             newHostHealth(),
+	}
+}
+
+// PollInterval returns the poller's configured poll interval, so other components
+// (e.g. ApprovalHandler's CI-status staleness guard) can bound freshness against the
+// same live-configured value rather than a disconnected duplicate literal.
+func (p *PRStatusPoller) PollInterval() time.Duration {
+	return p.config.PollInterval
+}
+
+// ETagCache returns the poller's shared *github.ETagCache, so other pollers
+// (e.g. WorktreePRPoller) reuse the same conditional-request cache instead of
+// each maintaining their own — per ADR-022, a separate cache would double
+// GitHub API call volume for repos both pollers hit.
+func (p *PRStatusPoller) ETagCache() *github.ETagCache {
+	return p.etagCache
+}
+
+// InvalidateAndRefresh drops the shared ETagCache entry for ref and dispatches
+// out-of-band fetches: one per-PR refresh of its PullRequestState row (when it has
+// one) and, for sessions still tracking the PR only through the legacy scalars, the
+// per-session fetch. Returns matched=true if a row or an instance matched; a miss
+// still invalidates the cache (harmless) and returns false. src is webhook, or
+// webhook_reopened for a pull_request.reopened event, the only observation allowed
+// to reopen a terminal row.
+//
+// The dispatched fetch's context is built from p.ctx (the poller's own lifetime),
+// not the passed-in ctx: the webhook handler does not block on this call, so a
+// request-scoped ctx would cancel the fetch as soon as the HTTP response is written.
+func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, ref session.PRRef, src session.PRObservationSource) bool {
+	_ = ctx // request-scoped; not used for the dispatched fetch's lifetime, see doc comment
+	if repoRef, err := ref.RepoRef(); err == nil {
+		p.etagCache.Invalidate(repoRef, ref.Number())
+	}
+
+	matched := p.dispatchRowRefresh(ref, src)
+	rowsDriveSessions := p.multiPRScope(config.SessionMultiPRScopePoller)
+	for _, inst := range p.GetInstances() {
+		snap := inst.Snapshot()
+		if (rowsDriveSessions && snap.GitHub.HasPRLinks) || !legacyScalarsName(snap.GitHub, ref) {
+			continue
+		}
+		matched = true
+
+		captured := inst
+		fetchCtx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+		fetchCtx = github.WithGitHubCallOrigin(fetchCtx, github.OriginWebhookReconcile)
+		p.dispatchWG.Add(1)
+		go func() {
+			defer cancel()
+			defer p.dispatchWG.Done()
+			p.fetchAndUpdatePRStatus(fetchCtx, captured)
+		}()
+	}
+
+	return matched
+}
+
+// dispatchRowRefresh starts Refresh for ref's row, if it has one.
+func (p *PRStatusPoller) dispatchRowRefresh(ref session.PRRef, src session.PRObservationSource) bool {
+	if p.storage == nil || p.ctx == nil {
+		return false
+	}
+	if _, err := p.storage.GetPullRequestState(p.ctx, ref); err != nil {
+		return false
+	}
+	p.dispatchWG.Add(1)
+	go func() {
+		defer p.dispatchWG.Done()
+		if err := p.Refresh(p.ctx, ref, src); err != nil {
+			log.Warn("PR status poller: webhook refresh did not complete", "pr", ref, "err", err)
+		}
+	}()
+	return true
+}
+
+// legacyScalarsName reports whether a session's legacy scalars name ref.
+func legacyScalarsName(g session.GitHubIntegration, ref session.PRRef) bool {
+	return strings.EqualFold(g.GitHubOwner, ref.Owner()) && strings.EqualFold(g.GitHubRepo, ref.Repo()) &&
+		g.GitHubPRNumber == ref.Number()
+}
+
+// SetInstances replaces the full list of monitored instances.
+func (p *PRStatusPoller) SetInstances(instances []*session.Instance) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.instances = instances
+}
+
+// GetInstances returns a defensive copy of the currently monitored instances.
+// Callers must not modify the returned slice elements.
+func (p *PRStatusPoller) GetInstances() []*session.Instance {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]*session.Instance, len(p.instances))
+	copy(out, p.instances)
+	return out
+}
+
+// AddInstance adds a single instance to monitor.
+func (p *PRStatusPoller) AddInstance(inst *session.Instance) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.instances = append(p.instances, inst)
+}
+
+// RemoveInstance removes an instance from monitoring.
+func (p *PRStatusPoller) RemoveInstance(title string) {
+	var removedKeys []string
+	p.mu.Lock()
+	filtered := make([]*session.Instance, 0, len(p.instances))
+	for _, inst := range p.instances {
+		if inst.MatchesID(title) {
+			key := pollKey(inst.Snapshot())
+			removedKeys = append(removedKeys, key)
+			delete(p.noPRPollAfter, key)
+			continue
+		}
+		filtered = append(filtered, inst)
+	}
+	p.instances = filtered
+	delete(p.noPRPollAfter, title)
+	p.mu.Unlock()
+
+	p.stateMu.Lock()
+	for _, key := range removedKeys {
+		delete(p.terminalDiscoveryAfter, key)
+	}
+	p.stateMu.Unlock()
+}
+
+// SetOnUpdated registers a callback called when a session's PR priority changes.
+// The callback is invoked from a goroutine; it must be concurrency-safe.
+func (p *PRStatusPoller) SetOnUpdated(fn func(*session.Instance)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onUpdated = fn
+}
+
+// Start begins the polling loop. Safe to call multiple times; subsequent calls are no-ops.
+func (p *PRStatusPoller) Start(ctx context.Context) {
+	p.mu.Lock()
+	if p.ctx != nil {
+		p.mu.Unlock()
+		return
+	}
+	p.ctx, p.cancel = context.WithCancel(ctx)
+	p.mu.Unlock()
+
+	p.wg.Add(1)
+	go p.pollLoop()
+	log.Info("PR status poller started", "interval", p.config.PollInterval, "concurrency", p.config.ConcurrentFetches)
+}
+
+// Wait blocks until the poll loop launched by Start has exited. Unlike Stop it
+// does not cancel anything; call it after cancelling Start's ctx.
+func (p *PRStatusPoller) Wait() {
+	p.wg.Wait()
+}
+
+// Stop gracefully shuts down the poller and waits for in-flight requests.
+func (p *PRStatusPoller) Stop() {
+	p.mu.Lock()
+	if p.cancel != nil {
+		p.cancel()
+	}
+	p.mu.Unlock()
+	p.wg.Wait()
+	log.Info("PR status poller stopped")
+}
+
+// pollLoop runs the main ticker loop.
+func (p *PRStatusPoller) pollLoop() {
+	defer p.wg.Done()
+	ticker := time.NewTicker(p.config.PollInterval)
+	defer ticker.Stop()
+
+	// Run an immediate check so sessions show real status without waiting a
+	// full PollInterval. ETag caching and rate-limit guards still apply.
+	p.checkAllSessions()
+
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-ticker.C:
+			if qos.Default.Defer("pr_status_poller", qos.BackgroundMaxDeferral) {
+				continue
+			}
+			p.checkAllSessions()
+		}
+	}
+}
+
+// checkAllSessions iterates all monitored instances and updates PR status concurrently.
+func (p *PRStatusPoller) checkAllSessions() {
+	if limited, until := github.DefaultRateLimiter.IsLimited(); limited {
+		log.Info("PR status poller: rate limited, skipping tick", "until", until)
+		return
+	}
+
+	p.mu.RLock()
+	instances := make([]*session.Instance, len(p.instances))
+	copy(instances, p.instances)
+	p.mu.RUnlock()
+
+	if !p.isAuthOK() {
+		return
+	}
+
+	// The PR-keyed loop owns snapshots of linked sessions only when reader:poller
+	// is effective and the refresher runs; otherwise the legacy per-session loop does.
+	stateLoopOwnsLinked := p.multiPRScope(config.SessionMultiPRScopePoller) && p.refresherEnabled()
+	if p.refresherEnabled() {
+		p.pollPullRequestStates(p.ctx, stateLoopOwnsLinked)
+	}
+	if stateLoopOwnsLinked {
+		p.discoverForResolvedSessions(p.ctx)
+		instances = withoutPRLinks(instances)
+	}
+
+	sem := make(chan struct{}, p.config.ConcurrentFetches)
+	var wg sync.WaitGroup
+
+	now := time.Now()
+	p.mu.RLock()
+	noPRPollAfter := make(map[string]time.Time, len(p.noPRPollAfter))
+	for k, v := range p.noPRPollAfter {
+		noPRPollAfter[k] = v
+	}
+	p.mu.RUnlock()
+
+	for _, captured := range pollableSessions(instances, now, noPRPollAfter) {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
+			defer cancel()
+			ctx = github.WithGitHubCallOrigin(ctx, github.OriginPRStatusPoller)
+			p.fetchAndUpdatePRStatus(ctx, captured)
+		}()
+	}
+
+	wg.Wait()
+}
+
+// withoutPRLinks keeps the sessions the PR-keyed loop cannot serve (no link rows).
+func withoutPRLinks(instances []*session.Instance) []*session.Instance {
+	var out []*session.Instance
+	for _, inst := range instances {
+		if !inst.Snapshot().GitHub.HasPRLinks {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// pollKey keys a session's discovery backoff: its uuid, else its title (legacy
+// rows without a uuid).
+func pollKey(snap *session.InstanceSnapshot) string {
+	if snap.UUID != "" {
+		return snap.UUID
+	}
+	return snap.Title
+}
+
+// pollableSessions filters instances to those the legacy per-session loop should
+// fetch now: not suspended, with GitHub info, not terminal, not a fork and past
+// any no-PR backoff. noPRPollAfter is a copy, so no lock is held here.
+func pollableSessions(instances []*session.Instance, now time.Time, noPRPollAfter map[string]time.Time) []*session.Instance {
+	var out []*session.Instance
+	for _, inst := range instances {
+		// Lock-free snapshot replaces both the unguarded GitHubOwner/GitHubRepo reads and
+		// the explicit stateMutex.RLock() for GitHubPRStatusTerminal / GitHubIsFork.
+		instSnap := inst.Snapshot()
+
+		if instSnap.Status.IsSuspended() {
+			continue // paused/hibernated/stopped/crashed/permanently-failed: nothing to poll for
+		}
+
+		if instSnap.GitHub.GitHubOwner == "" || instSnap.GitHub.GitHubRepo == "" {
+			continue // no GitHub info for this session
+		}
+
+		if instSnap.GitHub.GitHubPRStatusTerminal {
+			continue // merged/closed; poller already marked it terminal
+		}
+		if instSnap.GitHub.GitHubIsFork {
+			log.Info("PR status poller: skipping fork session (upstream PR lookup Phase 2)", "session", instSnap.Title)
+			continue
+		}
+
+		if pollAfter, ok := noPRPollAfter[pollKey(instSnap)]; ok && now.Before(pollAfter) {
+			continue // no-PR backoff still in effect
+		}
+		out = append(out, inst)
+	}
+	return out
+}
+
+// isAuthOK returns true if gh auth check passes, using a time-based cache.
+// Auth state is stored in an atomic.Value so this read path is lock-free.
+func (p *PRStatusPoller) isAuthOK() bool {
+	// Fast path: cached result still fresh (lock-free read).
+	if v := p.authState.Load(); v != nil {
+		if r := v.(pollerAuthResult); time.Since(r.checkedAt) < p.config.AuthCacheDuration {
+			return r.ok
+		}
+	}
+
+	if err := p.ghClient.CheckGHAuth(p.ctx); err != nil {
+		log.Warn("PR status poller: github auth unavailable", "err", err)
+		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
+		return false
+	}
+
+	p.authState.Store(pollerAuthResult{ok: true, checkedAt: time.Now()})
+	return true
+}
+
+// fetchAndUpdatePRStatus fetches fresh PR status for one instance and applies it.
+// ctx carries the caller's timeout and github.CallOrigin tag — the ticker fan-out
+// loop (checkAllSessions) tags OriginPRStatusPoller; InvalidateAndRefresh tags
+// OriginWebhookReconcile — so the two call paths stay distinguishable in telemetry.
+func (p *PRStatusPoller) fetchAndUpdatePRStatus(ctx context.Context, inst *session.Instance) {
+	// Use Snapshot() — actor-based writes (SetGitHubPRNumber etc.) do not hold mu,
+	// so mu.RLock would not synchronize with them.
+	snap := inst.Snapshot()
+	prNumber := snap.GitHub.GitHubPRNumber
+	owner := snap.GitHub.GitHubOwner
+	repo := snap.GitHub.GitHubRepo
+	ref, refErr := github.NewRepoRefWithHost(owner, repo, snap.GitHub.GitHubHost)
+	if refErr != nil {
+		return // owner/repo empty — already guarded by caller, but stay defensive
+	}
+
+	if prNumber == 0 {
+		p.discoverPRsForBranch(ctx, inst, ref)
+		return
+	}
+	p.pollOne(ctx, inst, ref, prNumber)
+}
+
+// discoverPRsForBranch finds the PR for the session's current branch when no PR
+// number is known yet, persisting it and clearing the no-PR backoff.
+// CurrentBranch() reads live from git for directory sessions (Branch field is empty).
+func (p *PRStatusPoller) discoverPRsForBranch(ctx context.Context, inst *session.Instance, ref github.RepoRef) {
+	owner, repo := ref.Owner(), ref.Repo()
+	branch := inst.CurrentBranch()
+	if branch == "" {
+		return
+	}
+	listKey := owner + "/" + repo + "/" + branch
+	var listEtag string
+	if v, ok := p.listEtags.Load(listKey); ok {
+		listEtag = v.(string)
+	}
+	prInfo, newEtag, changed, err := p.ghClient.GetPRForBranchConditional(ctx, ref, branch, listEtag)
+	if newEtag != "" {
+		p.listEtags.Store(listKey, newEtag)
+	}
+	if err != nil {
+		if errors.Is(err, github.ErrNoPR) {
+			p.applyNoPR(inst)
+			return
+		}
+		if p.handleFetchError(err) {
+			return
+		}
+		log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
+		return
+	}
+	if !changed {
+		// 304: branch list unchanged, still no PR — re-arm backoff to avoid constant polling.
+		if p.config.NoPRBackoff > 0 {
+			p.mu.Lock()
+			p.noPRPollAfter[pollKey(inst.Snapshot())] = time.Now().Add(p.config.NoPRBackoff)
+			p.mu.Unlock()
+		}
+		return
+	}
+	// Persist discovered PR number and clear no-PR backoff.
+	inst.SetGitHubPRNumber(prInfo.Number)
+	p.mu.Lock()
+	delete(p.noPRPollAfter, pollKey(inst.Snapshot()))
+	p.mu.Unlock()
+	if p.storage != nil {
+		if err := p.storage.UpdateInstancePRNumber(inst.Title, prInfo.Number); err != nil {
+			log.Warn("PR status poller: failed to persist PR number", "session", inst.Title, "err", err)
+		}
+	}
+	p.applyPRUpdate(inst, prInfo)
+}
+
+// pollOne fetches prNumber conditionally (ETag cache: 304 = no change) and applies the result.
+func (p *PRStatusPoller) pollOne(ctx context.Context, inst *session.Instance, ref github.RepoRef, prNumber int) {
+	prInfo, changed, err := p.ghClient.GetPRInfoConditional(ctx, ref, prNumber, p.etagCache)
+	if err != nil {
+		if p.handleFetchError(err) {
+			return
+		}
+		log.Warn("PR status poller: failed to fetch PR", "pr", prNumber, "session", inst.Title, "err", err)
+		return
+	}
+
+	if !changed {
+		// 304 Not Modified — PR unchanged; just bump the check timestamp
+		inst.SetLastPRStatusCheck(time.Now())
+		return
+	}
+
+	p.applyPRUpdate(inst, prInfo)
+}
+
+// handleFetchError inspects an error for rate limits, auth failures, and
+// admission-control rejections (AdmitOrigin, github/http_client.go).
+// Returns true if the error was handled (caller should not log separately).
+// Rate-limit state is managed by github.DefaultRateLimiter (updated by the
+// transport); this method only needs to detect the error type and signal auth
+// cache invalidation.
+func (p *PRStatusPoller) handleFetchError(err error) bool {
+	msg := err.Error()
+	if strings.Contains(msg, "rate limit") || strings.Contains(msg, "429") {
+		log.Warn("PR status poller: github rate limit hit")
+		return true
+	}
+	if strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized") {
+		log.Warn("PR status poller: github auth error, invalidating auth cache")
+		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
+		return true
+	}
+	if strings.Contains(msg, "admission control rejected") {
+		log.Warn("PR status poller: admission control rejected request")
+		return true
+	}
+	return false
+}
+
+// applyNoPR sets the session to no_pr state (branch has no PR yet) and
+// schedules a backoff so the branch is not re-queried every poll tick.
+func (p *PRStatusPoller) applyNoPR(inst *session.Instance) {
+	if p.config.NoPRBackoff > 0 {
+		p.mu.Lock()
+		p.noPRPollAfter[pollKey(inst.Snapshot())] = time.Now().Add(p.config.NoPRBackoff)
+		p.mu.Unlock()
+	}
+	p.applyPRUpdate(inst, nil)
+}
+
+// applyPRUpdate derives priority from prInfo (nil = no_pr) and persists the result.
+func (p *PRStatusPoller) applyPRUpdate(inst *session.Instance, prInfo *github.PRInfo) {
+	priority := string(github.DerivePRPriority(prInfo))
+	terminal := github.IsTerminal(github.PRPriority(priority))
+
+	update := session.PRStatusUpdate{Priority: priority, Terminal: terminal}
+	if prInfo != nil {
+		update.State = prInfo.State
+		update.CheckConclusion = prInfo.CheckConclusion
+		update.Mergeable = prInfo.Mergeable
+		update.ApprovedCount = prInfo.ApprovedCount
+		update.ChangesReqCount = prInfo.ChangesRequestedCount
+		update.IsDraft = prInfo.IsDraft
+		update.Checks = prInfo.Checks
+		update.Reviews = prInfo.Reviews
+	}
+
+	result := inst.UpdatePRStatus(update)
+
+	if p.storage != nil {
+		if err := p.storage.UpdateInstancePRStatus(inst.Title, update.State, priority, update.CheckConclusion,
+			update.ApprovedCount, update.ChangesReqCount, update.IsDraft, terminal); err != nil {
+			log.Warn("PR status poller: failed to persist PR status", "session", inst.Title, "err", err)
+		}
+	}
+
+	// Fire on either a priority change or a CI-conclusion-only change (Task 3.2.1a) — a
+	// conclusion flip that doesn't cross a priority boundary (e.g. pending -> failure with
+	// priority already "blocking") would otherwise leave the diff-viewer badge stale
+	// between poll ticks. Neither changed: no event, per the changed-only-publish guard.
+	if result.PriorityChanged || result.CheckConclusionChanged {
+		p.mu.RLock()
+		onUpdated := p.onUpdated
+		p.mu.RUnlock()
+		if onUpdated != nil {
+			onUpdated(inst)
+		}
+		if result.PriorityChanged {
+			log.Info("PR status poller: PR priority changed", "session", inst.Title, "new", priority)
+		}
+		if result.CheckConclusionChanged {
+			log.Info("PR status poller: CI check conclusion changed", "session", inst.Title, "new", update.CheckConclusion)
+		}
+	}
+}

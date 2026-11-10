@@ -16,6 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -38,8 +39,8 @@ func TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess(t *
 	if _, err := exec.LookPath(tmuxBin); err != nil {
 		t.Skip("tmux not available")
 	}
-	withFakeHome(t)
-	withIsolatedStateDir(t)
+	svctest.WithFakeHome(t)
+	svctest.WithIsolatedStateDir(t)
 
 	tmp := t.TempDir()
 	argvOut := filepath.Join(tmp, "argv.txt")
@@ -72,9 +73,9 @@ func TestCreateSession_CustomClaudeProgram_SettingsEnvReachesLaunchedProcess(t *
 	require.NoError(t, err)
 
 	repoDir := t.TempDir()
-	initGitRepoWithCommit(t, repoDir)
+	svctest.InitGitRepoWithCommit(t, repoDir)
 
-	svc := newCreateTestService(t, createTestStorage(t))
+	svc := newCreateTestService(t, svctest.CreateTestStorage(t))
 	resp, err := svc.CreateSession(ctx, connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:       "settings-env-repro",
 		Path:        repoDir,

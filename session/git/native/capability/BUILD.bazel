@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "capability",
+    srcs = [
+        "attributes.go",
+        "capability.go",
+        "exec_other.go",
+        "exec_unix.go",
+        "hooks.go",
+        "index.go",
+        "layout.go",
+        "signing.go",
+        "transport.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/git/native/capability",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/git/backend",
+        "//session/git/native/gitconfig",
+        "@com_github_go_git_go_git_v5//plumbing/filemode",
+        "@com_github_go_git_go_git_v5//plumbing/format/index",
+        "@com_github_go_git_go_git_v5//plumbing/transport",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":capability",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "capability_test",
+    srcs = [
+        "capability_oracle_test.go",
+        "capability_test.go",
+        "router_test.go",
+        "subs_test.go",
+    ],
+    embed = [":capability"],
+    deps = [
+        "//session/git/backend",
+        "//session/git/native/gitconfig",
+        "//testutil/gitoracle",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/filemode",
+        "@com_github_go_git_go_git_v5//plumbing/format/index",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

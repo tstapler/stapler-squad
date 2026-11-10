@@ -10,13 +10,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/gorilla/websocket"
-	"google.golang.org/protobuf/proto"
-
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/protocol"
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 const (
@@ -86,8 +81,8 @@ func SessionFederationTerminalHandler(peers FederationPeers, capture func(sessio
 // StreamTerminal relays pane snapshots of a peer's session to send until ctx is
 // done, the peer closes the stream, or send fails. Read-only: nothing is sent
 // to the peer beyond the signed request.
-func (f *FederatedSessions) StreamTerminal(ctx context.Context, id session.FederatedSessionID, send func(content string) error) error {
-	var entry *session.RegistryEntry
+func (f *FederatedSessions) StreamTerminal(ctx context.Context, id hostclaim.FederatedSessionID, send func(content string) error) error {
+	var entry *hostclaim.RegistryEntry
 	for _, e := range f.peers.LiveSnapshot() {
 		if e.HostID.String() == id.HostID && e.HostID != f.identity.ID {
 			e := e
@@ -112,12 +107,12 @@ func (f *FederatedSessions) StreamTerminal(ctx context.Context, id session.Feder
 // streamFrom reports connected=true once the peer accepted the stream, after
 // which its error is final rather than a reason to try another address.
 func (f *FederatedSessions) streamFrom(ctx context.Context, addr, sessionID string, send func(string) error) (connected bool, err error) {
-	u := "https://" + addr + session.SessionFederationTerminalPath + "?session=" + url.QueryEscape(sessionID)
+	u := "https://" + addr + hostclaim.SessionFederationTerminalPath + "?session=" + url.QueryEscape(sessionID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return false, err
 	}
-	session.SignPeerRequest(req.Header, f.identity, http.MethodGet, session.SessionFederationTerminalPath, f.now())
+	hostclaim.SignPeerRequest(req.Header, f.identity, http.MethodGet, hostclaim.SessionFederationTerminalPath, f.now())
 	resp, err := f.streamClient.Do(req)
 	if err != nil {
 		return false, err
@@ -145,32 +140,4 @@ func (f *FederatedSessions) streamFrom(ctx context.Context, addr, sessionID stri
 		return true, err
 	}
 	return true, nil
-}
-
-// streamFederatedTerminal shows a peer's session in the browser's terminal,
-// read-only: browser input and resize frames are discarded, never forwarded.
-func (h *ConnectRPCWebSocketHandler) streamFederatedTerminal(stream *connectWebSocketStream, id session.FederatedSessionID, wireID string) error {
-	fed := h.sessionService.federation
-	if fed == nil {
-		return fmt.Errorf("%w: federation is not enabled", ErrFederatedHostUnavailable)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	// Drain the browser so a disconnect is noticed; its frames are read-only-dropped.
-	go func() {
-		defer cancel()
-		for {
-			if _, _, err := stream.conn.ReadMessage(); err != nil {
-				return
-			}
-		}
-	}()
-	return fed.StreamTerminal(ctx, id, func(content string) error {
-		frame := newTerminalOutputData(wireID, ansiSnapshotPrefix+prepareSnapshotContent(streamhub.RawPaneContent(content)), false)
-		b, err := proto.Marshal(frame)
-		if err != nil {
-			return err
-		}
-		return stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, b))
-	})
 }

@@ -12,6 +12,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -40,7 +41,7 @@ func (f *fakeTriageRespawner) called() []string {
 // the row is durably readable back via GetGuidanceRequest.
 func TestCreateGuidanceRequest_should_PersistDurably_When_ScopeIsStandalone(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
@@ -66,7 +67,7 @@ func TestCreateGuidanceRequest_should_PersistDurably_When_ScopeIsStandalone(t *t
 // answer back regardless of whether anything was subscribed at answer time.
 func TestAnswerGuidanceRequest_should_PublishDurableNotification_When_ScopeIsSession(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(10)
 	svc := NewGuidanceRequestService(storage, bus, nil)
 	ctx := context.Background()
@@ -123,7 +124,7 @@ func TestAnswerGuidanceRequest_should_PublishDurableNotification_When_ScopeIsSes
 // overwriting it or erroring.
 func TestAnswerGuidanceRequest_should_NotReapplyOrRenotify_When_AlreadyAnswered(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
@@ -152,7 +153,7 @@ func TestAnswerGuidanceRequest_should_NotReapplyOrRenotify_When_AlreadyAnswered(
 // question's state after it's been answered, not just while pending.
 func TestListGuidanceRequests_should_IncludeAnsweredRows_When_IncludeAnsweredSet(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
@@ -183,7 +184,7 @@ func TestListGuidanceRequests_should_IncludeAnsweredRows_When_IncludeAnsweredSet
 // every other mutating backlog MCP tool.
 func TestCreateGuidanceRequest_should_RejectPermissionDenied_When_CallerNotLinkedToItem(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
@@ -207,7 +208,7 @@ func TestCreateGuidanceRequest_should_RejectPermissionDenied_When_CallerNotLinke
 // covers AC5 for scope=session: a caller may only ask about its own session.
 func TestCreateGuidanceRequest_should_RejectPermissionDenied_When_SessionScopeMismatch(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
@@ -229,7 +230,7 @@ func TestCreateGuidanceRequest_should_RejectPermissionDenied_When_SessionScopeMi
 // covered by session/ent_repository_guidance_test.go).
 func TestCreateGuidanceRequest_should_RejectResourceExhausted_When_OverPendingCap(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
@@ -260,7 +261,7 @@ func TestCreateGuidanceRequest_should_RejectResourceExhausted_When_OverPendingCa
 // waiting for a human to manually re-trigger it.
 func TestAnswerGuidanceRequest_should_RespawnTriage_When_BacklogItemScopeAnswered(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	respawner := &fakeTriageRespawner{}
 	svc := NewGuidanceRequestService(storage, nil, respawner)
 	ctx := context.Background()
@@ -301,7 +302,7 @@ func TestAnswerGuidanceRequest_should_RespawnTriage_When_BacklogItemScopeAnswere
 
 func TestAnswerGuidanceRequest_should_CallAnswerListenerOnce_When_AnswerApplied(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	var mu sync.Mutex
 	var heard []string

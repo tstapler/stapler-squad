@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "perf_lib",
+    srcs = [
+        "check.go",
+        "main.go",
+        "measure.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/parity/perf",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/bzl/parity/collect",
+        "//tools/bzl/parity/ghci",
+    ],
+)
+
+go_binary(
+    name = "perf",
+    embed = [":perf_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "perf_test",
+    srcs = ["perf_test.go"],
+    data = glob(["testdata/**"]),  # keep
+    embed = [":perf_lib"],
+    deps = [
+        "//tools/bzl/parity/collect",
+        "//tools/bzl/parity/ghci",
+    ],
+)

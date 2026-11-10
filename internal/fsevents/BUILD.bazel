@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "fsevents",
+    srcs = [
+        "decode.go",
+        "stream_darwin.go",
+        "stub.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/internal/fsevents",
+    visibility = ["//:__subpackages__"],
+    deps = select({
+        "@rules_go//go/platform:darwin": [
+            "//log",
+            "@com_github_ebitengine_purego//:purego",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//log",
+            "@com_github_ebitengine_purego//:purego",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fsevents",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "fsevents_test",
+    srcs = [
+        "decode_test.go",
+        "spike_darwin_test.go",
+        "stream_darwin_test.go",
+    ],
+    embed = [":fsevents"],
+    deps = [
+        "@org_uber_go_goleak//:goleak",
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "//executor/safeexec",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//executor/safeexec",
+        ],
+        "//conditions:default": [],
+    }),
+)

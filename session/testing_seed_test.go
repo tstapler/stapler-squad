@@ -18,7 +18,7 @@ import (
 func TestNewTestEntRepository_SeededSchemaIsVisibleToSecondConnection(t *testing.T) {
 	repo := NewTestEntRepository(t)
 
-	db, err := sql.Open("sqlite", sqlitedsn.New(repo.dbPath).Build())
+	db, err := sql.Open("sqlite", sqlitedsn.New(repo.DbPath).Build())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 

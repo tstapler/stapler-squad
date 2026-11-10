@@ -1,0 +1,244 @@
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
+load("//tools/bzl:go_test.bzl", "go_test")
+load("//tools/bzl:otel_weave_hermetic.bzl", "otel_weave_hermetic")
+
+# gazelle:prefix github.com/tstapler/stapler-squad
+# gazelle:go_naming_convention import_alias
+# gazelle:build_tags integration,gitoracle,sinkguard,harness,live_github,embed_tmux,embed_tymux,otelcauto,e2e_ghsignal
+# gazelle:map_kind go_test go_test //tools/bzl:go_test.bzl
+# gazelle:exclude .claude
+# gazelle:exclude worktrees
+# gazelle:exclude **/node_modules
+# gazelle:exclude third_party/tmux
+# gazelle:exclude project_plans
+# gazelle:exclude website
+# gazelle:exclude build
+# gazelle:exclude **/testdata
+# gazelle:exclude gen
+# gazelle:exclude web-app/src/gen
+# Keep Gazelle out of the generated ent tree (present after `make sync`) but inside the hand-kept
+# session/ent/schema: these seven globs exclude every name under session/ent except exactly "schema"
+# (a prefix-by-prefix negation, because the doublestar matcher has no whole-word negation). S11 found
+# the earlier two-line form leaked a BUILD file into any new entity whose name starts with "sc".
+# gazelle:exclude session/ent/[!s]*
+# gazelle:exclude session/ent/s[!c]*
+# gazelle:exclude session/ent/sc[!h]*
+# gazelle:exclude session/ent/sch[!e]*
+# gazelle:exclude session/ent/sche[!m]*
+# gazelle:exclude session/ent/schem[!a]*
+# gazelle:exclude session/ent/schema?*
+# Generated ent packages live in //tools/bzl/ent (2 lines cover all 52; the schema alias is there too).
+# gazelle:resolve go github.com/tstapler/stapler-squad/session/ent //tools/bzl/ent:ent
+# gazelle:resolve_regexp go ^github.com/tstapler/stapler-squad/session/ent/(.+)$ //tools/bzl/ent:$1
+
+# Generated protos live in //proto/session/v1 (genrule from buf); the hand-written S1 go_proto_library
+# attempts there claim the same importpaths, so Gazelle needs these to disambiguate.
+# gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1 //proto/session/v1:sessionv1_go
+# gazelle:resolve go github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect //proto/session/v1:sessionv1connect_go
+# The nogo twin libraries (tools/bzl/nogo) reuse each analyzer's importpath; prefer the real package.
+# gazelle:resolve_regexp go ^github.com/tstapler/stapler-squad/tools/lint/(.+)$ //tools/lint/$1
+
+gazelle(name = "gazelle")
+
+# `make sync` (BUILD_SYSTEM=bazel) runs this: copies proto Go/connect and ent outputs into the tree.
+sh_binary(
+    name = "sync-gen",
+    srcs = ["//tools/bzl:sync_gen.sh"],
+    args = [
+        "$(rootpaths //proto/session/v1:gen_go)",
+        "$(rootpaths //tools/bzl/ent:ent_gen)",
+    ],
+    data = [
+        "//proto/session/v1:gen_go",
+        "//tools/bzl/ent:ent_gen",
+    ],
+)
+
+exports_files([
+    "buf.yaml",
+    "buf.gen.bazel.yaml",
+    "buf.gen.bazel-ts.yaml",
+    "go.mod",
+    "CHANGELOG.md",
+    ".gitignore",
+])
+
+go_library(
+    name = "stapler-squad_lib",
+    srcs = [
+        "changelog_embed.go",
+        "contract_bundle_cmd.go",
+        "desktop_registration.go",
+        "hostname_detector.go",
+        "hostname_detector_endpoint.go",
+        "infoplist_darwin.go",
+        "integration_credential_cmd.go",
+        "local_auth.go",
+        "main.go",
+        "main_cleanup.go",
+        "netchange_source.go",
+        "open_url.go",
+    ],
+    cgo = True,
+    embedsrcs = ["CHANGELOG.md"],
+    importpath = "github.com/tstapler/stapler-squad",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//cmd",
+        "//cmd/commands",
+        "//config",
+        "//daemon",
+        "//executor",
+        "//executor/safeexec",
+        "//log",
+        "//pkg/buildinfo",
+        "//pkg/changelog",
+        "//pkg/localtoken",
+        "//pkg/warren",
+        "//profiling",
+        "//server",
+        "//server/auth",
+        "//server/integrations/contractarchive",
+        "//server/mcp",
+        "//server/middleware",
+        "//server/services",
+        "//server/services/backlogsvc",
+        "//session",
+        "//session/deeplink",
+        "//session/detection",
+        "//session/git",
+        "//session/hostclaim",
+        "//session/scrollback",
+        "//session/tmux",
+        "//session/tymux",
+        "//telemetry",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_zalando_go_keyring//:go-keyring",
+        "@com_tailscale//net/netmon",
+        "@com_tailscale//types/logger",
+        "@com_tailscale//util/eventbus",
+    ],
+)
+
+config_setting(
+    name = "stamped",
+    values = {"stamp": "1"},
+)
+
+# Uninstrumented go_binary: kept only for the P5 parity harness. It is not shipped. The
+# shipped binary is //:stapler-squad below. main.version and the buildinfo fields mirror Makefile's LDFLAGS. Only set when stamping (the
+# {KEY} placeholders are workspace-status values); unstamped builds keep the "dev" defaults.
+# runtime.godebugDefault carries go.mod's `godebug netdns=go`, which rules_go does not read (Task 3.4d).
+go_binary(
+    name = "stapler-squad_plain",
+    embed = [":stapler-squad_lib"],
+    visibility = ["//visibility:public"],
+    x_defs = select({
+        ":stamped": {
+            "runtime.godebugDefault": "netdns=go",
+            "main.version": "{STABLE_GIT_VERSION}",
+            "github.com/tstapler/stapler-squad/pkg/buildinfo.Version": "{STABLE_GIT_VERSION}",
+            "github.com/tstapler/stapler-squad/pkg/buildinfo.Branch": "{STABLE_GIT_BRANCH}",
+            "github.com/tstapler/stapler-squad/pkg/buildinfo.Commit": "{STABLE_GIT_COMMIT}",
+            "github.com/tstapler/stapler-squad/pkg/buildinfo.Worktree": "{STABLE_GIT_WORKTREE}",
+        },
+        "//conditions:default": {"runtime.godebugDefault": "netdns=go"},
+    }),
+)
+
+config_setting(
+    name = "embed_tmux_and_tymux",
+    flag_values = {
+        "//tools/bzl/flags:embed_tmux": "true",
+        "//tools/bzl/flags:embed_tymux": "true",
+    },
+)
+
+# The one stapler-squad binary: always the otelc-woven build (owner decision, ADR-005 amendment, spike S15b).
+# Sandboxed and remote-cacheable (tools/bzl/otel_weave_hermetic.bzl): declared inputs only, the committed otelc
+# overlay in tools/bzl/otel_overlay, and a go.sum-verified module cache. Stamping comes from --stamp.
+otel_weave_hermetic(
+    name = "otel_modcache",
+    mode = "modcache",
+)
+
+otel_weave_hermetic(
+    name = "stapler-squad",
+    ent = ["//tools/bzl/ent:ent_gen"],
+    gen = ["//proto/session/v1:gen_go"],
+    go_tags = select({
+        ":embed_tmux_and_tymux": [
+            "embed_tmux",
+            "embed_tymux",
+        ],
+        "//tools/bzl/flags:embed_tmux_on": ["embed_tmux"],
+        "//conditions:default": [],
+    }),
+    libs = [
+        ":stapler-squad_lib",
+        "//instrumentation/otelc/safeexec",
+    ],
+    modcache = ":otel_modcache",
+    # On a macOS target the weave also stages macos/Info.plist and links it with -sectcreate (Task 5.1b).
+    stage = select({
+        ":embed_tmux_and_tymux": [
+            "//session/tmux/embed:tmux_staged",
+            "//session/tymux/embed:tymuxd_staged",
+        ],
+        "//tools/bzl/flags:embed_tmux_on": ["//session/tmux/embed:tmux_staged"],
+        "//conditions:default": [],
+    }) + select({
+        "@platforms//os:macos": ["//macos:Info.plist"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+    web = "//server/web:dist_staged",
+)
+
+go_test(
+    name = "stapler-squad_test",
+    srcs = [
+        "deps_guard_test.go",
+        "desktop_registration_test.go",
+        "hostname_detector_endpoint_test.go",
+        "hostname_detector_test.go",
+        "local_auth_test.go",
+        "main_cleanup_test.go",
+        "main_integration_test.go",
+        "main_test.go",
+        "main_tymux_supervise_test.go",
+        "netchange_source_integration_test.go",
+        "netchange_source_test.go",
+        "open_url_test.go",
+    ],
+    embed = [":stapler-squad_lib"],
+    deps = [
+        "//config",
+        "//envtest",
+        "//internal/testenv",
+        "//log",
+        "//server",
+        "//server/auth",
+        "//server/middleware",
+        "//session",
+        "//session/deeplink",
+        "//session/hostclaim",
+        "//session/tymux",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+forbidden_deps_test(
+    name = "forbidden_deps_test",
+    forbidden = [
+        "@com_github_shoenig_go_m1cpu//...",
+        "@com_github_shirou_gopsutil_v3//...",
+    ],
+    target = ":stapler-squad_plain",
+    why = "go-m1cpu's cgo init() segfaults at startup on some Apple Silicon machines (PR #129); gopsutil/v3 pulls it in (replaces deps_guard_test.go)",
+)

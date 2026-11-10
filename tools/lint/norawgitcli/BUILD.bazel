@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+# Lets the tools/bzl/nogo twin recompile this analyzer against the root x/tools.
+exports_files(["analyzer.go"])
+
+go_library(
+    name = "norawgitcli",
+    srcs = ["analyzer.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/norawgitcli",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@lint_x_tools//go/analysis",
+        "@lint_x_tools//go/analysis/passes/inspect",
+        "@lint_x_tools//go/ast/inspector",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":norawgitcli",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "norawgitcli_test",
+    srcs = [
+        "analyzer_test.go",
+        "baseline_test.go",
+    ],
+    data = glob(["testdata/**"]) + ["@rules_go//go"],
+    deps = [
+        ":norawgitcli",
+        "//tools/lint/internal/gotool",
+        "@lint_x_tools//go/analysis/analysistest",
+    ],
+)

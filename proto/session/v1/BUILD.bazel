@@ -1,0 +1,200 @@
+# Managed by hand, not Gazelle (listed in tools/bzl/hand-build-files.txt).
+# gazelle:ignore
+#
+# proto -> Go and connect-go via `buf generate` as one hermetic genrule with pinned local plugins
+# (spike S1: rules_go go_proto_library cannot reproduce buf managed mode, so it is not used).
+# The root BUILD.bazel `gazelle:resolve` lines name :sessionv1_go and :sessionv1connect_go below.
+load("@rules_go//go:def.bzl", "go_library")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//tools/bzl/proto:ts.bzl", "buf_gen_ts")
+
+# buf generate (managed mode, buf.gen.bazel.yaml) with local pinned plugins. buf.yaml has no deps, so
+# nothing is fetched. HOME/BUF_CACHE_DIR point into the action's scratch dir.
+genrule(
+    name = "gen_go",
+    srcs = glob(["*.proto"]) + [
+        "//:buf.gen.bazel.yaml",
+        "//:buf.yaml",
+    ],
+    outs = [
+        "gen/proto/go/session/v1/backlog.pb.go",
+        "gen/proto/go/session/v1/backlog_flow.pb.go",
+        "gen/proto/go/session/v1/diagnose.pb.go",
+        "gen/proto/go/session/v1/events.pb.go",
+        "gen/proto/go/session/v1/github_user.pb.go",
+        "gen/proto/go/session/v1/guidance_request.pb.go",
+        "gen/proto/go/session/v1/handoff_summary.pb.go",
+        "gen/proto/go/session/v1/headless.pb.go",
+        "gen/proto/go/session/v1/import.pb.go",
+        "gen/proto/go/session/v1/insights.pb.go",
+        "gen/proto/go/session/v1/llm_backend.pb.go",
+        "gen/proto/go/session/v1/notification_action.pb.go",
+        "gen/proto/go/session/v1/quota.pb.go",
+        "gen/proto/go/session/v1/remote.pb.go",
+        "gen/proto/go/session/v1/rum_bundle.pb.go",
+        "gen/proto/go/session/v1/session.pb.go",
+        "gen/proto/go/session/v1/session_summary.pb.go",
+        "gen/proto/go/session/v1/sessionv1connect/backlog.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/backlog_flow.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/diagnose.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/github_user.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/guidance_request.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/handoff_summary.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/headless.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/import.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/insights.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/llm_backend.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/quota.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/remote.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/rum_bundle.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/session.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/session_summary.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/tymux_rollout.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/unfinished.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/wake_trigger.connect.go",
+        "gen/proto/go/session/v1/tymux_rollout.pb.go",
+        "gen/proto/go/session/v1/types.pb.go",
+        "gen/proto/go/session/v1/unfinished.pb.go",
+        "gen/proto/go/session/v1/wake_trigger.pb.go",
+    ],
+    cmd = """
+set -eu
+export BUF_CACHE_DIR=$$(mktemp -d) HOME=$$(mktemp -d)
+root=$$PWD
+sed -e "s#@PROTOC_GEN_GO@#$$root/$(execpath @org_golang_google_protobuf//cmd/protoc-gen-go)#" \\
+    -e "s#@PROTOC_GEN_CONNECT_GO@#$$root/$(execpath //tools/bzl/proto:protoc_gen_connect_go)#" \\
+    $(execpath //:buf.gen.bazel.yaml) > $$BUF_CACHE_DIR/gen.yaml
+$(execpath @com_github_bufbuild_buf//cmd/buf) generate proto --template $$BUF_CACHE_DIR/gen.yaml -o $(RULEDIR)
+""",
+    tools = [
+        "//tools/bzl/proto:protoc_gen_connect_go",
+        "@com_github_bufbuild_buf//cmd/buf",
+        "@org_golang_google_protobuf//cmd/protoc-gen-go",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# The generated sources compiled under the import paths importers use.
+go_library(
+    name = "sessionv1_go",
+    srcs = [
+        "gen/proto/go/session/v1/backlog.pb.go",
+        "gen/proto/go/session/v1/backlog_flow.pb.go",
+        "gen/proto/go/session/v1/diagnose.pb.go",
+        "gen/proto/go/session/v1/events.pb.go",
+        "gen/proto/go/session/v1/github_user.pb.go",
+        "gen/proto/go/session/v1/guidance_request.pb.go",
+        "gen/proto/go/session/v1/handoff_summary.pb.go",
+        "gen/proto/go/session/v1/headless.pb.go",
+        "gen/proto/go/session/v1/import.pb.go",
+        "gen/proto/go/session/v1/insights.pb.go",
+        "gen/proto/go/session/v1/llm_backend.pb.go",
+        "gen/proto/go/session/v1/notification_action.pb.go",
+        "gen/proto/go/session/v1/quota.pb.go",
+        "gen/proto/go/session/v1/remote.pb.go",
+        "gen/proto/go/session/v1/rum_bundle.pb.go",
+        "gen/proto/go/session/v1/session.pb.go",
+        "gen/proto/go/session/v1/session_summary.pb.go",
+        "gen/proto/go/session/v1/tymux_rollout.pb.go",
+        "gen/proto/go/session/v1/types.pb.go",
+        "gen/proto/go/session/v1/unfinished.pb.go",
+        "gen/proto/go/session/v1/wake_trigger.pb.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+go_library(
+    name = "sessionv1connect_go",
+    srcs = [
+        "gen/proto/go/session/v1/sessionv1connect/backlog.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/backlog_flow.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/diagnose.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/github_user.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/guidance_request.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/handoff_summary.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/headless.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/import.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/insights.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/llm_backend.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/quota.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/remote.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/rum_bundle.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/session.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/session_summary.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/tymux_rollout.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/unfinished.connect.go",
+        "gen/proto/go/session/v1/sessionv1connect/wake_trigger.connect.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":sessionv1_go",
+        "@com_connectrpc_connect//:connect",
+    ],
+)
+
+# TypeScript half of buf.gen.yaml as a tree artifact equal to web-app/src/gen (bazel-bin/proto/session/v1/ts).
+# protoc-gen-es comes from the pinned Bun install (ADR-003). The consuming web actions carry
+# no-remote-cache because that install is not proven byte-reproducible (Story 7.7); the action carries it too.
+buf_gen_ts(
+    name = "session_ts",
+    srcs = [":protos"],
+    out = "ts",
+    buf = "@com_github_bufbuild_buf//cmd/buf",
+    buf_yaml = "//:buf.yaml",
+    node = "@node_host//:node",
+    node_modules = "@web_node_modules//:node_modules",
+    template = "//:buf.gen.bazel-ts.yaml",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "protos",
+    srcs = glob(["*.proto"]),
+    visibility = ["//visibility:public"],
+)
+
+# buf lint (STANDARD, buf.yaml) as hermetic tests with the Go-built buf (no rules_buf toolchain, no
+# network). Findings listed in the baseline are tolerated (owner decision pending); anything new fails
+# with its rule name, and a baseline entry that stops firing fails too (ratchet).
+_BUF_LINT_ARGS = [
+    "$(rootpath @com_github_bufbuild_buf//cmd/buf)",
+    "$(rootpath //:buf.yaml)",
+    "$(rootpath //tools/bzl/proto:buf-lint-baseline.txt)",
+    "$(rootpaths :protos)",
+]
+
+_BUF_LINT_DATA = [
+    ":protos",
+    "//:buf.yaml",
+    "//tools/bzl/proto:buf-lint-baseline.txt",
+    "@com_github_bufbuild_buf//cmd/buf",
+]
+
+sh_test(
+    name = "buf_lint_test",
+    srcs = ["//tools/bzl/proto:buf_lint.sh"],
+    args = _BUF_LINT_ARGS,
+    data = _BUF_LINT_DATA,
+)
+
+sh_test(
+    name = "buf_lint_seeded_test",
+    srcs = ["//tools/bzl/proto:buf_lint.sh"],
+    args = ["--seeded"] + _BUF_LINT_ARGS,
+    data = _BUF_LINT_DATA,
+)
+
+sh_binary(
+    name = "buf_lint_update_baseline",
+    srcs = ["//tools/bzl/proto:buf_lint.sh"],
+    args = ["--update"] + _BUF_LINT_ARGS,
+    data = _BUF_LINT_DATA,
+)

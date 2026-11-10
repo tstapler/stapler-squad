@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "push",
+    srcs = [
+        "notifier.go",
+        "subscriber.go",
+        "trigger_constants.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/push",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//server/events",
+        "//server/services",
+        "//session",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":push",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "push_test",
+    srcs = [
+        "delivery_gate_test.go",
+        "subscriber_test.go",
+    ],
+    embed = [":push"],
+    deps = [
+        "//server/deliverygate",
+        "//server/events",
+        "//session",
+        "//testutil",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

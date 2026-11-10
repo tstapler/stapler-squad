@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 var attentionFlagNames = []string{
@@ -18,7 +19,7 @@ var attentionFlagNames = []string{
 }
 
 func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceForEachOfSixFlags(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	for _, name := range attentionFlagNames {
 		t.Run(name, func(t *testing.T) {
 			found := false
@@ -30,7 +31,7 @@ func TestGetFeatureFlag_Should_ReturnFalseWithRegistryEntry_When_FreshInstanceFo
 				}
 			}
 			require.True(t, found, "registry entry missing")
-			require.False(t, featureFlagDefault(name))
+			require.False(t, FeatureFlagDefault(name))
 		})
 	}
 	require.Equal(t, AttentionFlags{}, LoadAttentionFlags())
@@ -45,7 +46,7 @@ func TestAttentionFlags_Should_NotReadEnvVars_When_ResolverBuilt(t *testing.T) {
 }
 
 func TestFlagFlip_Should_TakeEffectNextPollCycleWithoutRestart_When_SetLive(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	before := LoadAttentionFlags()
 	require.False(t, before.ProseQuestionDetection)

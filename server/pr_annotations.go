@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -19,7 +20,7 @@ var prNumFromTitle = regexp.MustCompile(`(?i)^pr-(\d+)-`)
 // buildPRAnnotations collects the live sessions and worktrees a PR can link to.
 // The cache re-reads it (SetAnnotationSource) before every publish. Lives here,
 // not in the github package, to avoid an import cycle: github → session → github.
-func buildPRAnnotations(poller *session.PRStatusPoller, scanner *unfinished.Scanner) ([]githubpkg.PRAnnotationSession, []githubpkg.PRAnnotationWorktree) {
+func buildPRAnnotations(poller *prpoller.PRStatusPoller, scanner *unfinished.Scanner) ([]githubpkg.PRAnnotationSession, []githubpkg.PRAnnotationWorktree) {
 	ghHosts := config.LoadConfig().GetGitHubEnterpriseHosts()
 	enterpriseHosts := make([]string, 0, len(ghHosts))
 	for _, h := range ghHosts {
@@ -70,7 +71,7 @@ func annotationsForPRs(title string, snap *session.InstanceSnapshot) []githubpkg
 	return out
 }
 
-func annotationSessions(poller *session.PRStatusPoller, enterpriseHosts []string) []githubpkg.PRAnnotationSession {
+func annotationSessions(poller *prpoller.PRStatusPoller, enterpriseHosts []string) []githubpkg.PRAnnotationSession {
 	if poller == nil {
 		return nil
 	}

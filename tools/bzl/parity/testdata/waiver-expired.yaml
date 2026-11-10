@@ -1,0 +1,5 @@
+waivers:
+  - row: P10.disk_ceiling
+    reason: owner accepts the disk ceiling overrun for one release
+    granted: 2026-01-01
+    expires: 2026-03-01

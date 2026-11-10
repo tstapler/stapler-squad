@@ -44,7 +44,7 @@ import (
 // SetBacklogItemPRAndTransition's secondary-write discipline.
 func runBacklogItemUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) error {
 	//nolint:entfullscan one-time backfill normalizing every BacklogItem's updated_at to UTC; idempotent, safe to re-run.
-	items, err := er.client.BacklogItem.Query().All(ctx)
+	items, err := er.Client.BacklogItem.Query().All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
 		// mirroring runStatusRemap's same defensive posture.
@@ -56,7 +56,7 @@ func runBacklogItemUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) 
 		if item.UpdatedAt.Location() == time.UTC {
 			continue
 		}
-		if _, saveErr := er.client.BacklogItem.UpdateOneID(item.ID).
+		if _, saveErr := er.Client.BacklogItem.UpdateOneID(item.ID).
 			SetUpdatedAt(item.UpdatedAt.UTC()).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] backlog item updated_at UTC backfill: item=%s: %v", item.ID, saveErr)

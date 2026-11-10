@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -18,7 +19,7 @@ import (
 // but not installed on the bus, for tests that only read the visibility index.
 func newCountingGateService(t *testing.T) (*SessionService, *pkgevents.EventBus, *deliverygate.Gate) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := pkgevents.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -103,10 +104,10 @@ func TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGa
 	}
 	e := newHiddenSiteEnv(t, true, inst)
 	require.NoError(t, e.svc.storage.AddInstance(inst))
-	e.svc.autonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
+	e.svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	e.svc.autonomousSvc.onAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: false, Reason: "stuck", Turns: 3})
-	e.svc.autonomousSvc.onAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "all good"})
+	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: false, Reason: "stuck", Turns: 3})
+	e.svc.AutonomousSvc.OnAutonomousDriverComplete(title, session.AutonomousDriverOutcome{Done: true, Reason: "all good"})
 
 	got := e.collect(t)
 	failures := notificationsOf(got, int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE))

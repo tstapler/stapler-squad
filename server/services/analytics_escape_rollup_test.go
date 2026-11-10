@@ -13,6 +13,7 @@ import (
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // Summaries keep counting events whose raw rows were evicted, because they read rollups.
@@ -40,7 +41,7 @@ func TestGetEscapeAnalyticsGlobalSummary_CountsEventsWhoseRawRowsWereEvicted(t *
 	require.NoError(t, err)
 	require.Zero(t, remaining, "raw rows evicted")
 
-	svc := NewSessionService(createTestStorage(t), events.NewEventBus(100))
+	svc := NewSessionService(svctest.CreateTestStorage(t), events.NewEventBus(100))
 	t.Cleanup(func() { svc.Shutdown() })
 	svc.SetEscapeEventsClient(client)
 	svc.SetEscapeAggregateReader(escapedb.NewReader(client, db.Driver(), escapedb.RollupTiers{}, nil))
