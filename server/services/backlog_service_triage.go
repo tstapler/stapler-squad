@@ -3984,6 +3984,14 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 	if diffBaseSHA == "" && workSession.BaseCommitSha != "" {
 		diffBaseSHA = workSession.BaseCommitSha
 	}
+	// No branch means no head: a directory-mode session (no worktree row) would diff
+	// repoPath's ambient HEAD~1..HEAD, i.e. whatever commit last landed on the shared
+	// checkout, and present it as this item's work. Return empty so the caller's
+	// codebase-read/degraded path refuses instead of reviewing an unrelated diff.
+	if diffHeadRef == "" {
+		log.Warn("[TriggerReReview] work session has no resolvable branch; refusing to diff the shared checkout", "session", workSession.SessionUUID)
+		return "", false
+	}
 	diff, truncated, diffErr := session.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
 	if diffErr == nil {
 		return diff, truncated
