@@ -33,7 +33,7 @@ import (
 // single row's save failure (or unrecoverable host) is logged and does not
 // abort the rest.
 func runGitHubPRURLBackfill(ctx context.Context, er *EntRepository) error {
-	rows, err := er.client.Session.Query().
+	rows, err := er.Client.Session.Query().
 		Where(
 			session.GithubPrNumberGT(0),
 			session.Or(session.GithubPrURLEQ(""), session.GithubPrURLIsNil()),
@@ -64,7 +64,7 @@ func runGitHubPRURLBackfill(ctx context.Context, er *EntRepository) error {
 			continue
 		}
 		url := (&GitHubRef{Host: host, Owner: ref.Owner(), Repo: ref.Repo(), PRNumber: row.GithubPrNumber}).PRURL()
-		if _, saveErr := er.client.Session.UpdateOneID(row.ID).
+		if _, saveErr := er.Client.Session.UpdateOneID(row.ID).
 			SetGithubPrURL(url).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] github pr url backfill: session=%d: %v", row.ID, saveErr)

@@ -43,7 +43,7 @@ const (
 	CleanupPathTombstone  = "tombstone"
 	CleanupPathListener   = "listener"
 	CleanupPathDetach     = "detach"
-	cleanupPathUnknown    = "unknown"
+	CleanupPathUnknown    = "unknown"
 )
 
 type cleanupPathKey struct{}
@@ -58,7 +58,7 @@ func CleanupPathFrom(ctx context.Context) string {
 	if p, ok := ctx.Value(cleanupPathKey{}).(string); ok && p != "" {
 		return p
 	}
-	return cleanupPathUnknown
+	return CleanupPathUnknown
 }
 
 // CleanupDoneOutcome is the all-clear outcome.
@@ -120,7 +120,7 @@ func (g *PRCleanupGate) Blocked(ctx context.Context, sessions []ItemSessionSumma
 	if opts.IgnoreLive || g.probe == nil || g.liveEnabled == nil || !g.liveEnabled() {
 		return CleanupBlock{}, false
 	}
-	for _, s := range currentRoundWorkSessions(sessions) {
+	for _, s := range CurrentRoundWorkSessions(sessions) {
 		live, err := g.probe.IsLive(ctx, s.SessionUUID, g.now())
 		if err != nil {
 			return CleanupBlock{Reason: fmt.Sprintf("session %s: live-work probe failed: %v", s.SessionUUID, err), LiveOnly: true}, true

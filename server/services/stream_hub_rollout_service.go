@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -51,10 +52,10 @@ func NewStreamHubRolloutService(findInstance func(title string) *session.Instanc
 func (s *StreamHubRolloutService) resolveSessionOverrideKey(title string) string {
 	if s.findInstance != nil {
 		if inst := s.findInstance(title); inst != nil {
-			return tmuxSessionNameForStreamPath(inst)
+			return TmuxSessionNameForStreamPath(inst)
 		}
 	}
-	return streamHubSessionKey(title, "")
+	return StreamHubSessionKey(title, "")
 }
 
 // status builds the current StreamHubRolloutStatus from live config —
@@ -142,4 +143,26 @@ func (s *StreamHubRolloutService) SetStreamHubGlobalOverride(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(s.status()), nil
+}
+
+// streamHubSessionKey computes the StreamOwnershipLock/HubRegistry key from a
+// session's title and TmuxPrefix (empty meaning "staplersquad_").
+// tmuxSessionNameForStreamPath and SetStreamHubSessionOverride must derive it
+// identically — they used to duplicate this independently and diverged,
+// silently no-opping every canary override (2026-09-01).
+func StreamHubSessionKey(title, tmuxPrefix string) string {
+	if tmuxPrefix == "" {
+		tmuxPrefix = "staplersquad_"
+	}
+	return tmux.NewSessionName(title, tmuxPrefix).String()
+}
+
+// tmuxSessionNameForStreamPath computes the tmux session name StreamPath
+// resolution keys on for instance, mirroring streamViaHub's own derivation
+// (session title + tmux prefix, default "staplersquad_"). Resolution must
+// use this same name so a session's StreamOwnershipLock lookup here and its
+// hub lookup inside streamViaHub (HubRegistry.GetOrCreate) agree.
+func TmuxSessionNameForStreamPath(instance *session.Instance) string {
+	snap := instance.Snapshot()
+	return StreamHubSessionKey(snap.Title, snap.TmuxPrefix)
 }

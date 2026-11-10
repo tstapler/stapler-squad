@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "testrepo",
+    srcs = [
+        "age.go",
+        "builders.go",
+        "fixtures.go",
+        "repo.go",
+        "worktree.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/unfinished/internal/testrepo",
+    visibility = ["//session/unfinished:__subpackages__"],
+    deps = [
+        "//session/git/native",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/filemode",
+        "@com_github_go_git_go_git_v5//plumbing/format/index",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":testrepo",
+    visibility = ["//session/unfinished:__subpackages__"],
+)
+
+go_test(
+    name = "testrepo_test",
+    srcs = ["testrepo_test.go"],
+    data = [
+        ":go_sources",
+        "//:go.mod",
+        "//config/workspacepath:go_sources",
+        "//log:go_sources",
+        "//session/git/ignorewalk:go_sources",
+        "//session/git/native:go_sources",
+        "//session/git/redact:go_sources",
+        "//telemetry:go_sources",
+    ],
+    deps = [
+        ":testrepo",
+        "//session/git/native",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/filemode",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+    ],
+)
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
+)

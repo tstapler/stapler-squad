@@ -171,7 +171,7 @@ func (r *EntRepository) CreateWakeTrigger(ctx context.Context, in CreateWakeTrig
 		maxFires = 1
 	}
 
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("create wake trigger: begin transaction: %w", err)
 	}
@@ -241,7 +241,7 @@ func validateCreateWakeTriggerInput(in CreateWakeTriggerInput) (key domain.WakeD
 
 // GetWakeTrigger reads one row; ent.IsNotFound reports a missing id.
 func (r *EntRepository) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*WakeTriggerData, error) {
-	row, err := r.client.WakeTrigger.Get(ctx, id)
+	row, err := r.Client.WakeTrigger.Get(ctx, id)
 	if ent.IsNotFound(err) {
 		return nil, fmt.Errorf("get wake trigger %s: %w", id, ErrNotFound)
 	}

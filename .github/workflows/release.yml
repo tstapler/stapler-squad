@@ -50,11 +50,14 @@ jobs:
       - name: Generate protos, ent ORM code, and build web UI
         uses: ./.github/actions/prepare
 
+      - name: Install otelc (compile-time auto-instrumentation weaver)
+        run: go install go.opentelemetry.io/otelc/tool/cmd/otelc@v1.0.1
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean
+          args: release --clean --parallelism 1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}

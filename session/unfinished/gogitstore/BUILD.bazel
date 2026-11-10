@@ -1,0 +1,90 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "gogitstore",
+    srcs = [
+        "index.go",
+        "mmapindex.go",
+        "mmapwatch.go",
+        "open.go",
+        "registry.go",
+        "store.go",
+        "storer.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/unfinished/gogitstore",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/dirwatch",
+        "//log",
+        "@com_github_edsrzf_mmap_go//:mmap-go",
+        "@com_github_go_git_go_billy_v5//:go-billy",
+        "@com_github_go_git_go_billy_v5//osfs",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/cache",
+        "@com_github_go_git_go_git_v5//plumbing/format/idxfile",
+        "@com_github_go_git_go_git_v5//plumbing/format/objfile",
+        "@com_github_go_git_go_git_v5//plumbing/format/packfile",
+        "@com_github_go_git_go_git_v5//plumbing/hash",
+        "@com_github_go_git_go_git_v5//plumbing/storer",
+        "@com_github_go_git_go_git_v5//storage/filesystem",
+        "@com_github_go_git_go_git_v5//storage/filesystem/dotgit",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gogitstore",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gogitstore_test",
+    srcs = [
+        "closeall_hang_repro_test.go",
+        "crash_subprocess_test.go",
+        "extension_test.go",
+        "gogitstore_test.go",
+        "heapinuse_test.go",
+        "mmap_adversarial_test.go",
+        "mmap_realrepo_test.go",
+        "mmap_stage2_test.go",
+        "mmap_truncation_test.go",
+        "mmapindex_test.go",
+        "open_test.go",
+        "registry_eviction_test.go",
+        "soak_test.go",
+        "trunc_fault_signal_test.go",
+    ],
+    data = [
+        ":go_sources",
+        "//:go.mod",
+        "//config/workspacepath:go_sources",
+        "//internal/dirwatch:go_sources",
+        "//log:go_sources",
+        "//session/unfinished:gogit_vcs_reader.go",
+    ],
+    embed = [":gogitstore"],
+    deps = [
+        "//executor/safeexec",
+        "//internal/dirwatch",
+        "//session/unfinished/internal/testrepo",
+        "//testutil/wait",
+        "@com_github_go_git_go_billy_v5//:go-billy",
+        "@com_github_go_git_go_billy_v5//osfs",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/cache",
+        "@com_github_go_git_go_git_v5//plumbing/format/idxfile",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+# Read by session/unfinished tests that walk the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
+)

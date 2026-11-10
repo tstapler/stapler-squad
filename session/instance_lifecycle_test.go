@@ -42,7 +42,7 @@ func TestLifecycleCallbackConcurrency(t *testing.T) {
 					panicked <- r
 				}
 			}()
-			inst.fireLifecycleEvent(EventStarted, "concurrent-test")
+			inst.FireLifecycleEvent(EventStarted, "concurrent-test")
 		}()
 	}
 
@@ -58,9 +58,9 @@ func TestLifecycleCallbackConcurrency(t *testing.T) {
 	}
 
 	// Verify listener list is not corrupted.
-	inst.lifecycleListenersMu.Lock()
-	listenerCount := len(inst.lifecycleListeners)
-	inst.lifecycleListenersMu.Unlock()
+	inst.LifecycleListenersMu.Lock()
+	listenerCount := len(inst.LifecycleListeners)
+	inst.LifecycleListenersMu.Unlock()
 	if listenerCount != 1 {
 		t.Errorf("expected 1 listener after concurrent fires, got %d", listenerCount)
 	}

@@ -1,0 +1,9 @@
+# Seeded violation for forbidden_deps_test; hand-written.
+# gazelle:ignore
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "inner",
+    importpath = "example.invalid/bad/inner",
+    visibility = ["//tools/bzl/forbidden_deps_test_data:__pkg__"],
+)

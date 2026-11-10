@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# git runs hooks by name; this dispatches to the named guards in this directory.
+exec "$(dirname "$0")/pre-commit-gazelle.sh" "$@"

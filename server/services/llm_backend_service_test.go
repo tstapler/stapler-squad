@@ -11,12 +11,13 @@ import (
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 func isolateLLMConfig(t *testing.T) {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	config.ResetLiveLLMBackendsForTest()
 	t.Cleanup(config.ResetLiveLLMBackendsForTest)
 }

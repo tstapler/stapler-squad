@@ -50,23 +50,23 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	ref := mustPRRef(t, "", "acme", "app", 12)
 
 	require.NoError(t, inst.AttachPR(ref, AttachSourceBackfill, PRInitial{State: PRStateUnknown, Terminal: true}))
-	stateRowIs(t, storage.repo, ref, PRStateUnknown, true, "seeded")
+	stateRowIs(t, storage.Repo, ref, PRStateUnknown, true, "seeded")
 	// The poll core arrives in a later wave: apply its observation directly.
-	res, err := storage.repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateOpen, prRepoT0))
+	res, err := storage.Repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateOpen, prRepoT0))
 	require.NoError(t, err)
 	require.True(t, res.Applied, "the poll must be applied for the rest of the test to mean anything")
-	stateRowIs(t, storage.repo, ref, PRStateOpen, false, "polled")
+	stateRowIs(t, storage.Repo, ref, PRStateOpen, false, "polled")
 	require.Equal(t, PRStateUnknown, inst.Snapshot().GitHub.PRs[0].State, "the snapshot is stale on purpose")
 
 	t.Run("update path", func(t *testing.T) {
 		t.Parallel()
 		require.NoError(t, storage.UpdateInstance(inst))
-		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "UpdateInstance")
+		stateRowIs(t, storage.Repo, ref, PRStateOpen, false, "UpdateInstance")
 	})
 	t.Run("save instances", func(t *testing.T) {
 		t.Parallel()
 		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
-		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "SaveInstances")
+		stateRowIs(t, storage.Repo, ref, PRStateOpen, false, "SaveInstances")
 	})
 	t.Run("prPersistPending flush", func(t *testing.T) {
 		t.Parallel()
@@ -74,12 +74,12 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 		storage.saved.reset() // an unchanged row would otherwise skip the write the flush rides on
 		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 		require.False(t, inst.PRPersistPending(), "the flush ran")
-		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "pending flush")
+		stateRowIs(t, storage.Repo, ref, PRStateOpen, false, "pending flush")
 	})
 	t.Run("create path for another session with a stale snapshot", func(t *testing.T) {
 		t.Parallel()
 		staleSession(t, storage, "stale-create", "uuid-stale-create", ref)
-		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "create")
+		stateRowIs(t, storage.Repo, ref, PRStateOpen, false, "create")
 	})
 	t.Run("archived session with a stale snapshot", func(t *testing.T) {
 		t.Parallel()
@@ -88,16 +88,16 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 		archived.SetArchivedAt(&at)
 		require.NoError(t, storage.UpdateInstance(archived))
 		require.NoError(t, storage.SaveInstances([]*Instance{archived}))
-		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "archived")
+		stateRowIs(t, storage.Repo, ref, PRStateOpen, false, "archived")
 	})
 	t.Run("suspended session with a stale snapshot", func(t *testing.T) {
 		t.Parallel()
 		suspended := staleSession(t, storage, "stale-suspended", "uuid-stale-suspended", ref)
 		require.True(t, suspended.Snapshot().Status.IsSuspended())
 		require.NoError(t, storage.SaveInstances([]*Instance{suspended}))
-		stateRowIs(t, storage.repo, ref, PRStateOpen, false, "suspended")
+		stateRowIs(t, storage.Repo, ref, PRStateOpen, false, "suspended")
 	})
-	assert.Equal(t, 1, countStates(t, storage.repo), "every save shared the one state row")
+	assert.Equal(t, 1, countStates(t, storage.Repo), "every save shared the one state row")
 }
 
 // ---- caller allow-lists (U-35) ---------------------------------------------------
@@ -113,7 +113,7 @@ type callerRule struct {
 var stateWriterRules = []callerRule{
 	{
 		method:  "UpdatePullRequestState",
-		allowed: []string{"session/pr_status_poller.go", "session/pr_state_poller.go" /* the poll core, split out of the poller */, "session/storage.go" /* the Storage wrapper's own delegation */},
+		allowed: []string{"session/prpoller/pr_status_poller.go", "session/prpoller/pr_state_poller.go" /* the poll core, split out of the poller */, "session/storage.go" /* the Storage wrapper's own delegation */},
 		why:     "invariant I1: the PR status poller is the only writer of PullRequestState state columns",
 	},
 	{
@@ -184,7 +184,7 @@ func TestStateWriterAllowList_ShouldFail_WhenNewCallerOfUpdatePullRequestState(t
 	t.Run("the repository passes", func(t *testing.T) {
 		t.Parallel()
 		offenders := disallowedCallers(nonTestGoSources(t), stateWriterRules)
-		require.Empty(t, offenders, "invariant I1: only session/pr_status_poller.go (and the Storage wrapper) may call "+
+		require.Empty(t, offenders, "invariant I1: only session/prpoller/pr_status_poller.go (and the Storage wrapper) may call "+
 			"UpdatePullRequestState, and only RunPRStartupMaintenance may call ResetVerifyCounters. "+
 			"Route the write through the poll core, or extend the rule with the reason.")
 	})
@@ -192,10 +192,10 @@ func TestStateWriterAllowList_ShouldFail_WhenNewCallerOfUpdatePullRequestState(t
 	t.Run("a new caller of either method fails", func(t *testing.T) {
 		t.Parallel()
 		sources := map[string]string{
-			"session/pr_status_poller.go":       "func a() { s.UpdatePullRequestState(ctx, ref, obs) }",
-			"session/session_pr_maintenance.go": "func b() { r.ResetVerifyCounters(ctx) }",
-			"session/ent_repository.go":         "func c() { r.ResetVerifyCounters(ctx) }",
-			"server/some_handler.go":            "func d() {\n\t// calls .UpdatePullRequestState( in a comment only\n\tstorage.UpdatePullRequestState(ctx, ref, obs)\n}",
+			"session/prpoller/pr_status_poller.go": "func a() { s.UpdatePullRequestState(ctx, ref, obs) }",
+			"session/session_pr_maintenance.go":    "func b() { r.ResetVerifyCounters(ctx) }",
+			"session/ent_repository.go":            "func c() { r.ResetVerifyCounters(ctx) }",
+			"server/some_handler.go":               "func d() {\n\t// calls .UpdatePullRequestState( in a comment only\n\tstorage.UpdatePullRequestState(ctx, ref, obs)\n}",
 		}
 		got := disallowedCallers(sources, stateWriterRules)
 		require.Len(t, got, 2)

@@ -34,6 +34,7 @@ import (
 // with: go test -tags integration ./session/tymux/...
 func TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose(t *testing.T) {
 	t.Setenv(allowSharedDaemonInTestEnv, "1")
+	skipUnlessTymuxdReachable(t)
 	dir := t.TempDir()
 	sess := NewTymuxGRPCSession(NewRealTransport(""))
 
@@ -56,6 +57,25 @@ func TestTymuxGRPCSession_LiveTymuxd_StartSendKeysCaptureClose(t *testing.T) {
 
 	require.NoError(t, sess.Close())
 	assert.False(t, sess.IsAlive())
+}
+
+// skipUnlessTymuxdReachable skips when no out-of-band tymuxd answers on its Unix socket or TCP
+// address, as on CI runners that never start one.
+func skipUnlessTymuxdReachable(t *testing.T) {
+	t.Helper()
+	addr := tymuxdAddr()
+	if sock := socketPathForAddr(addr); sock != "" {
+		if c, err := net.DialTimeout("unix", sock, time.Second); err == nil {
+			_ = c.Close()
+			return
+		}
+	}
+	hostPort := strings.TrimPrefix(strings.TrimPrefix(addr, "http://"), "https://")
+	if c, err := net.DialTimeout("tcp", hostPort, time.Second); err == nil {
+		_ = c.Close()
+		return
+	}
+	t.Skipf("no live tymuxd reachable at %s; start one or set TYMUXD_ADDR", addr)
 }
 
 // --- Task 2.5.3c: live daemon-restart drill ---

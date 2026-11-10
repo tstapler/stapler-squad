@@ -129,3 +129,10 @@ func SessionPRCountObservations(n int) int64 { return prMetrics.sessionCounts.ge
 
 // PRPinCount is ssq_pr_pin_total{action} ("pin" or "unpin") in this process.
 func PRPinCount(action string) int64 { return prMetrics.pins.get(action) }
+
+// Recorders the prpoller package calls; the counters stay here because the session
+// PR-set editors feed the same registry.
+func RecordPRPoll(state PRState)        { prMetrics.poll(state) }
+func RecordPRPollFailure(reason string) { prMetrics.failure(reason) }
+func RecordPRDiscoveryListCall()        { prMetrics.discoveryListCall() }
+func SetPRUnverified(n int)             { prMetrics.setUnverified(n) }

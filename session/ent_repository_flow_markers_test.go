@@ -194,7 +194,7 @@ func newCountingRepo(t *testing.T) (*EntRepository, *flowMarkerCountingDriver) {
 	repo, clk := newMarkerTestRepo(t)
 	_ = clk
 	drv := &flowMarkerCountingDriver{Driver: repo.driver}
-	repo.client = ent.NewClient(ent.Driver(drv))
+	repo.Client = ent.NewClient(ent.Driver(drv))
 	return repo, drv
 }
 
@@ -238,7 +238,7 @@ func TestRecordFlowMarker_should_RetryAfterFailure_When_InsertFailsOnce(t *testi
 	item := uuid.NewString()
 	t0 := clk.Now()
 
-	repo.client.BacklogFlowMarker.Use(failOnceHook())
+	repo.Client.BacklogFlowMarker.Use(failOnceHook())
 	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered, 5)
 	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered, 5)
 

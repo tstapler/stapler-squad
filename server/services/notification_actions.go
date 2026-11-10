@@ -53,7 +53,7 @@ const (
 // Backlog decision choice values (the stable part of decision_schema).
 const (
 	choiceAccept = "accept"
-	choiceRework = "rework"
+	ChoiceRework = "rework"
 	choiceMerge  = "merge"
 )
 
@@ -446,13 +446,13 @@ type DecisionChoice struct {
 // with no row here has no RPC and is emitted as OPEN only.
 var backlogChoices = map[string]DecisionChoice{
 	choiceAccept: {Value: choiceAccept, Label: "Mark done", RPC: "TransitionBacklogItemStatus"},
-	choiceRework: {Value: choiceRework, Label: "Send back", RPC: "TransitionBacklogItemStatus"},
+	ChoiceRework: {Value: ChoiceRework, Label: "Send back", RPC: "TransitionBacklogItemStatus"},
 	choiceMerge:  {Value: choiceMerge, Label: "Merge", RPC: "MergePR"},
 }
 
 // DefaultDecisionSchema is the schema of an item awaiting accept, rework or merge.
 func DefaultDecisionSchema() DecisionSchema {
-	return DecisionSchema{Choices: []DecisionChoice{backlogChoices[choiceAccept], backlogChoices[choiceRework], backlogChoices[choiceMerge]}}
+	return DecisionSchema{Choices: []DecisionChoice{backlogChoices[choiceAccept], backlogChoices[ChoiceRework], backlogChoices[choiceMerge]}}
 }
 
 // EncodeDecisionSchema is the metadata value of decision_schema.
@@ -479,7 +479,7 @@ func choicesFor(status string, schema DecisionSchema) []DecisionChoice {
 func allowedChoices(status string) map[string]bool {
 	switch status {
 	case backlogStatusReview:
-		return map[string]bool{choiceAccept: true, choiceRework: true, choiceMerge: true}
+		return map[string]bool{choiceAccept: true, ChoiceRework: true, choiceMerge: true}
 	case backlogStatusPRPending:
 		return map[string]bool{choiceMerge: true}
 	default:

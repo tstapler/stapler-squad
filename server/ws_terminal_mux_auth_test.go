@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -46,10 +47,10 @@ type muxAuthHarness struct {
 	v      *tokenValidator
 }
 
-func muxAuthOptions(srv *Server) []services.TerminalMuxOption {
-	return []services.TerminalMuxOption{
-		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
-		services.WithTerminalMuxDispatchers(srv.unaryDispatcher),
+func muxAuthOptions(srv *Server) []wsconn.TerminalMuxOption {
+	return []wsconn.TerminalMuxOption{
+		wsconn.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
+		wsconn.WithTerminalMuxDispatchers(srv.unaryDispatcher),
 	}
 }
 
@@ -65,9 +66,9 @@ func newMuxAuthHarness(t *testing.T) *muxAuthHarness {
 	svc := services.NewSessionService(storage, bus)
 	t.Cleanup(svc.Shutdown)
 	// The real StreamTerminal handler: a stream it serves answers the Connect handshake.
-	wsHandler := services.NewConnectRPCWebSocketHandler(svc, nil, nil)
-	bridge := services.NewTerminalMuxBridgeForHandler(wsHandler, 2, muxAuthOptions(srv)...)
-	srv.mux.Handle(services.TerminalMuxPath, bridge)
+	wsHandler := wsconn.NewConnectRPCWebSocketHandler(svc, nil, nil)
+	bridge := wsconn.NewTerminalMuxBridgeForHandler(wsHandler, 2, muxAuthOptions(srv)...)
+	srv.mux.Handle(wsconn.TerminalMuxPath, bridge)
 	authMW := middleware.Auth(h.v)
 	srv.setUnaryDispatcher(services.ListenerRemote, srv.remoteDispatcher(authMW, true))
 	h.ts = httptest.NewUnstartedServer(srv.remoteChain(authMW, true))
@@ -85,7 +86,7 @@ func (h *muxAuthHarness) connect(t *testing.T, token string) *websocket.Conn {
 		"Origin": {"https://" + h.ts.Listener.Addr().String()},
 		"Cookie": {"cs_auth=" + token},
 	}
-	c, _, err := h.dialer.Dial("wss"+strings.TrimPrefix(h.ts.URL, "https")+services.TerminalMuxPath, hd)
+	c, _, err := h.dialer.Dial("wss"+strings.TrimPrefix(h.ts.URL, "https")+wsconn.TerminalMuxPath, hd)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	f := readMuxFrame(t, c)

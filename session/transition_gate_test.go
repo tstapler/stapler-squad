@@ -13,86 +13,6 @@ import (
 
 // --- fixtures --------------------------------------------------------------
 
-type reportedDenial struct {
-	itemID       string
-	caller       TransitionCaller
-	from, to     BacklogStatus
-	reason       string
-	err          error
-	statusAtCall string
-}
-
-// recordingReporter records every Report and, to prove "before the write path
-// returns", the item's stored status at the instant of the call.
-type recordingReporter struct {
-	mu      sync.Mutex
-	calls   []reportedDenial
-	storage *Storage
-	panics  bool
-}
-
-func (r *recordingReporter) Report(ctx context.Context, item *BacklogItemData, caller TransitionCaller, from, to BacklogStatus, reason string, denyErr error) {
-	cur, _ := r.storage.GetBacklogItem(ctx, item.ID)
-	r.mu.Lock()
-	r.calls = append(r.calls, reportedDenial{item.ID, caller, from, to, reason, denyErr, cur.Status})
-	r.mu.Unlock()
-	if r.panics {
-		panic("reporter boom")
-	}
-}
-
-func (r *recordingReporter) snapshot() []reportedDenial {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]reportedDenial(nil), r.calls...)
-}
-
-type gateHarness struct {
-	storage *Storage
-	repo    *EntRepository
-	cfg     *ConfiguredWorkflowEngine
-	sel     *SwitchableWorkflowEngine
-	rep     *recordingReporter
-}
-
-func newGateHarness(t *testing.T, mode EngineMode) *gateHarness {
-	t.Helper()
-	repo := NewTestEntRepository(t)
-	ctx := context.Background()
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.client))
-	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), NewEntGateSatisfactionRepository(repo.client), nil)
-	require.NoError(t, err)
-	storage, err := NewStorageWithRepository(repo)
-	require.NoError(t, err)
-
-	sel := NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), cfg, allClasses(mode),
-		WithSelectorLoggers(func(string, ...any) {}, func(string, ...any) {}))
-	rep := &recordingReporter{storage: storage}
-	require.NoError(t, storage.SetTransitionGate(sel, rep))
-	return &gateHarness{storage: storage, repo: repo, cfg: cfg, sel: sel, rep: rep}
-}
-
-func (h *gateHarness) newItem(t *testing.T, status BacklogStatus) *BacklogItemData {
-	t.Helper()
-	item, err := h.storage.CreateBacklogItem(context.Background(), BacklogItemData{Title: "gate item", Status: string(status)})
-	require.NoError(t, err)
-	return item
-}
-
-func (h *gateHarness) status(t *testing.T, id string) string {
-	t.Helper()
-	item, err := h.storage.GetBacklogItem(context.Background(), id)
-	require.NoError(t, err)
-	return item.Status
-}
-
-// moveRaw changes the stored status behind the gate's back (a concurrent mover).
-func (h *gateHarness) moveRaw(t *testing.T, id string, to BacklogStatus) {
-	t.Helper()
-	_, err := h.repo.rawTransitionBacklogItemStatus(context.Background(), id, to, nil, TriggeredBySystem)
-	require.NoError(t, err)
-}
-
 func lastEvent(t *testing.T, h *gateHarness, id string) BacklogStatusEventData {
 	t.Helper()
 	item, err := h.storage.GetBacklogItem(context.Background(), id)
@@ -337,22 +257,22 @@ func denialRigs() []denialRig {
 			return h.newItem(t, BacklogStatusReady), BacklogStatusInProgress // no approved plan
 		}},
 		{DeniedOperatorGate, func(t *testing.T, h *gateHarness) (*BacklogItemData, BacklogStatus) {
-			addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, GateKindHumanApproval, nil)
+			addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, GateKindHumanApproval, nil)
 			return h.newItem(t, BacklogStatusIdea), BacklogStatusRefining
 		}},
 		{DeniedTargetStageRemoved, func(t *testing.T, h *gateHarness) (*BacklogItemData, BacklogStatus) {
 			ctx := context.Background()
-			from, err := h.repo.client.BacklogStage.Create().SetSlug("gone-from").SetName("Gone From").SetEnabled(true).Save(ctx)
+			from, err := h.repo.Client.BacklogStage.Create().SetSlug("gone-from").SetName("Gone From").SetEnabled(true).Save(ctx)
 			require.NoError(t, err)
-			to, err := h.repo.client.BacklogStage.Create().SetSlug("gone-to").SetName("Gone To").SetEnabled(true).Save(ctx)
+			to, err := h.repo.Client.BacklogStage.Create().SetSlug("gone-to").SetName("Gone To").SetEnabled(true).Save(ctx)
 			require.NoError(t, err)
-			_, err = h.repo.client.StageTransition.Create().SetFromStageID(from.ID).SetToStageID(to.ID).SetEnabled(true).Save(ctx)
+			_, err = h.repo.Client.StageTransition.Create().SetFromStageID(from.ID).SetToStageID(to.ID).SetEnabled(true).Save(ctx)
 			require.NoError(t, err)
 			require.NoError(t, h.cfg.InvalidateCache(ctx))
 
 			item := h.newItem(t, BacklogStatusIdea)
 			h.moveRaw(t, item.ID, "gone-from")
-			require.NoError(t, h.repo.client.BacklogStage.DeleteOneID(from.ID).Exec(ctx))
+			require.NoError(t, h.repo.Client.BacklogStage.DeleteOneID(from.ID).Exec(ctx))
 			require.NoError(t, h.cfg.InvalidateCache(ctx))
 			return item, "gone-to"
 		}},
@@ -408,7 +328,7 @@ func TestGatedTransition_SameEdgeDeniedForDifferentCallers_ReportsSeparately(t *
 		spec, _ := LookupTransitionCaller(caller)
 		require.Equal(t, GuardsNone, spec.Guards)
 	}
-	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusIdea, BacklogStatusReady, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusReady, GateKindHumanApproval, nil)
 	for _, caller := range []TransitionCaller{CallerAutonomousComplete, CallerMaybeTriggerTriage, CallerAutonomousComplete} {
 		_, err := h.storage.GatedTransition(context.Background(), TransitionRequest{Caller: caller, ItemID: item.ID, To: BacklogStatusReady})
 		require.ErrorIs(t, err, ErrGateNotSatisfied)
@@ -436,7 +356,7 @@ func TestGatedTransition_OverrideReason_BypassesOperatorGatesForOperatorsOnly(t 
 	ctx := context.Background()
 	run := func(t *testing.T, caller TransitionCaller, reason string) error {
 		h := newGateHarness(t, ModeEnforce)
-		addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, GateKindHumanApproval, nil)
+		addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, GateKindHumanApproval, nil)
 		item := h.newItem(t, BacklogStatusIdea)
 		_, err := h.storage.GatedTransition(ctx, TransitionRequest{Caller: caller, ItemID: item.ID, To: BacklogStatusRefining, OverrideReason: reason})
 		return err
@@ -685,7 +605,7 @@ func TestGatedSetPRAndTransition_DeniedByOperatorGate_WritesNothingAndReportsAge
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
-	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusReview, BacklogStatusPRPending, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusReview, BacklogStatusPRPending, GateKindHumanApproval, nil)
 	item := h.newItem(t, BacklogStatusReview)
 	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -742,18 +662,6 @@ func (p *countingPublisher) forItem(id string) []BacklogItemChange {
 	return append([]BacklogItemChange(nil), p.transitions[id]...)
 }
 
-// newStuckInProgressItem is an in_progress item whose only work session ended.
-func (h *gateHarness) newStuckInProgressItem(t *testing.T) *BacklogItemData {
-	t.Helper()
-	ctx := context.Background()
-	item, err := h.storage.CreateBacklogItem(ctx, BacklogItemData{Title: "stuck item", Status: string(BacklogStatusInProgress), Notes: "existing notes"})
-	require.NoError(t, err)
-	is, err := h.storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
-	require.NoError(t, err)
-	require.NoError(t, h.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now().Add(-time.Minute)))
-	return item
-}
-
 func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -761,14 +669,14 @@ func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *tes
 	pub := &countingPublisher{}
 	h.storage.SetItemChangePublisher(pub)
 
-	addGateToSeededEdge(t, h.repo.client, h.cfg, BacklogStatusInProgress, BacklogStatusReview, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusInProgress, BacklogStatusReview, GateKindHumanApproval, nil)
 	approved := h.newStuckInProgressItem(t)
 	gated := h.newStuckInProgressItem(t)
 
 	edge, ok := h.cfg.cache.Get(BacklogStatusInProgress, BacklogStatusReview)
 	require.True(t, ok)
 	require.Len(t, edge.Gates, 1)
-	_, err := RecordGateApproval(ctx, NewEntGateSatisfactionRepository(h.repo.client), uuid.MustParse(approved.ID), edge.Gates[0].ID, "operator", true)
+	_, err := RecordGateApproval(ctx, NewEntGateSatisfactionRepository(h.repo.Client), uuid.MustParse(approved.ID), edge.Gates[0].ID, "operator", true)
 	require.NoError(t, err)
 
 	moved, err := h.storage.GatedReconcileStuck(ctx)

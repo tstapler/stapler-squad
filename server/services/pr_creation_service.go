@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -35,7 +36,7 @@ type PRCreationService struct {
 	storage                  session.InstanceStore
 	eventBus                 *events.EventBus
 	headlessPool             headless.PoolClient
-	backlogLifecycleListener *session.BacklogLifecycleListener
+	backlogLifecycleListener *backlog.BacklogLifecycleListener
 	findInstance             func(string) *session.Instance
 	prCreationInFlight       sync.Map
 
@@ -56,7 +57,7 @@ func NewPRCreationService(
 	storage session.InstanceStore,
 	eventBus *events.EventBus,
 	headlessPool *headless.Pool,
-	backlogLifecycleListener *session.BacklogLifecycleListener,
+	backlogLifecycleListener *backlog.BacklogLifecycleListener,
 	findInstance func(string) *session.Instance,
 ) *PRCreationService {
 	s := &PRCreationService{
@@ -91,7 +92,7 @@ func (s *PRCreationService) SetHeadlessClient(c headless.PoolClient) {
 // SetBacklogLifecycleListener wires the listener after construction, mirroring
 // SessionService.SetBacklogLifecycleListener's field assignment — the listener is
 // nil at NewPRCreationService construction time for the same reason.
-func (s *PRCreationService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
+func (s *PRCreationService) SetBacklogLifecycleListener(l *backlog.BacklogLifecycleListener) {
 	s.backlogLifecycleListener = l
 }
 

@@ -1,0 +1,225 @@
+name: Bazel
+
+# PROVISIONAL (Story 0.14 gate not yet released). `bazel` is the non-blocking soak job;
+# `bazel-guards` has no continue-on-error. Action pins are SHAs (version in the trailing comment).
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Separate from any build job so a guard failure is never masked by that job's non-blocking
+  # setting. No continue-on-error here; a required-check candidate for Task 7.6.
+  bazel-guards:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write  # sticky dependency-change comment; skipped for fork PRs
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      # Bazelisk on PATH as `bazel` so check-bazelrc.sh validates flags against `bazel help`.
+      - name: Set up Bazelisk
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/bazelbuild/bazelisk@v1.28.1
+          ln -s "$RUNNER_TEMP/bin/bazelisk" "$RUNNER_TEMP/bin/bazel"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Guard scripts
+        run: |
+          bash tools/bzl/check-bazelignore.sh
+          bash tools/bzl/check-build-paths.sh
+          bash tools/bzl/check-bazelrc.sh
+          bash tools/bzl/check-configs.sh
+          bash tools/bzl/check-no-force-push.sh
+          bash tools/bzl/translate-errors_test.sh
+          bash tools/bzl/translate-errors_test.sh --negative
+          bash tools/bzl/check-build-fresh-cheap_test.sh
+          bash tools/bzl/doctor_test.sh
+          bash tools/bzl/check-make-help.sh
+          bash tools/bzl/check-test-tags_test.sh
+          bash tools/bzl/check-test-tags.sh
+
+      # Agent-enablement and reviewability guards (Stories 11.1-11.8). Pure shell, no Bazel build.
+      - name: Skill, docs and reviewability guards
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/bazel-contrib/buildtools/v10/buildifier@v10.1.0
+          bash tools/bzl/check-skill-proposals_test.sh
+          bash tools/bzl/check-skill-proposals.sh --docs \
+            docs/how-to/build-with-bazel.md docs/how-to/set-up-bazel-worktree-caches.md \
+            docs/how-to/first-build-in-a-fresh-worktree.md docs/how-to/troubleshoot-bazel.md docs/how-to/upgrade-bazel.md
+          bash tools/bzl/check-starlark-size.sh
+          buildifier -mode=check -lint=warn -r . 2>&1 | tee buildifier.txt
+          test ! -s buildifier.txt
+          bash tools/bzl/check-go-toolchain_test.sh
+          bash tools/bzl/check-go-toolchain.sh
+          bash tools/bzl/check-fork-age_test.sh
+          bash tools/bzl/check-fork-age.sh
+          bash tools/bzl/gen-gitattributes.sh --check
+          bash tools/bzl/check-gazelle-directives_test.sh
+          bash tools/bzl/annotate-deps_test.sh
+          bash tools/bzl/bazel-disk-alarm_test.sh
+          bash tools/ci/bazel-trend_test.sh
+          bash scripts/git-merge-bazel-lock_test.sh
+          bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases_test.sh
+
+      - name: Gazelle directive changes need owner review
+        if: github.event_name == 'pull_request'
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_REVIEWERS: ${{ join(github.event.pull_request.requested_reviewers.*.login, ',') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash tools/bzl/check-gazelle-directives.sh "$BASE_SHA" "$HEAD_SHA"
+
+      - name: Dependency changes (annotation and sticky comment)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- go.mod MODULE.bazel MODULE.bazel.lock && exit 0
+          summary=$(bash tools/bzl/annotate-deps.sh "$BASE_SHA" "$HEAD_SHA")
+          echo "::notice title=Dependency change::$(printf '%s' "$summary" | tr '\n' ';')"
+          [ "$IS_FORK" = false ] || exit 0
+          { echo "<!-- bazel-deps-annotation -->"; echo "**Dependency changes** (go.mod, MODULE.bazel, MODULE.bazel.lock)"; echo; echo '```'; echo "$summary"; echo '```'; } > "$RUNNER_TEMP/deps.md"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- bazel-deps-annotation -->")) | .id' | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$RUNNER_TEMP/deps.md" >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F body=@"$RUNNER_TEMP/deps.md" >/dev/null
+          fi
+
+      # T5 collector for P10 (Task 7.5g): every seeded failure shows a Remedy: line within 20 lines.
+      - name: First-error legibility
+        run: bash tools/bzl/check-error-legibility.sh | tee legibility.txt | tail -n 1
+
+      - name: PR title is a Conventional Commit
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bash tools/bzl/check-pr-title.sh "$PR_TITLE"
+
+  # Soak job: continue-on-error keeps a failure from blocking the PR, and it is not a required check.
+  # Holds no write credential, so BEP and the profile are safe to upload (Task 1.3b).
+  bazel:
+    name: bazel (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      # Gate logic lives in tools/ci/bazel-gates (offline-testable); each failure prints its remedy command.
+      # Run the built binary, not `bazel run`: the gazelle gate itself calls bazel and would wait on the server lock.
+      - name: Freshness gates (gazelle, mod tidy)
+        run: |
+          bazel build --config=ci //tools/ci/bazel-gates
+          bazel-bin/tools/ci/bazel-gates/bazel-gates_/bazel-gates gazelle mod-tidy
+
+      # Isolated HOME with a git identity: tests that commit must not read the runner's HOME.
+      - name: Test HOME fixture
+        run: |
+          mkdir -p "$RUNNER_TEMP/home"
+          printf '[user]\n\tname = Bazel Test\n\temail = test@example.invalid\n' > "$RUNNER_TEMP/home/.gitconfig"
+
+      # Full graph on a clean checkout: no generation step precedes it (Task 2.6a). Failures left are
+      # Epic 3/4 items listed in tools/bzl/test-exclusions.yaml.
+      - name: Build the full graph
+        run: |
+          bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false \
+            --keep_going --build_event_json_file=bep.json --profile=profile.gz //...
+
+      - name: Test the full graph
+        run: |
+          bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false \
+            --keep_going \
+            --test_env=HOME="$RUNNER_TEMP/home" --sandbox_writable_path="$RUNNER_TEMP/home" \
+            --test_env=GO_TEST_WRAP_TESTV=1 //...
+
+      # Windows is cross-compile only (ADR-005): build both goreleaser windows arches and check the
+      # PE header; the windows-only probe must be reported incompatible, not failed (Task 6.1b).
+      - name: Cross-compile Windows
+        run: |
+          bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false \
+            //tools/bzl/windows:stapler-squad_windows_amd64 //tools/bzl/windows:stapler-squad_windows_arm64 \
+            //tools/bzl/windows:ssq-mux_windows_amd64 //tools/bzl/windows:ssq-mux_windows_arm64 \
+            //tools/bzl/windows:ssq-hooks_windows_amd64 //tools/bzl/windows:ssq-hooks_windows_arm64
+          bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false //tools/bzl/windows:all
+          file -L bazel-bin/tools/bzl/windows/stapler-squad_windows_amd64.exe | grep -q 'PE32+'
+          bash tools/bzl/check-platform-targets.sh
+
+      # The woven build runs from a committed otelc overlay; this fails when go.mod, go.sum, the otelc version or the
+      # custom rule changed without `tools/bzl/otel_overlay/gen.sh` being re-run (S15b-6).
+      - name: Otel overlay drift check
+        run: |
+          go_sdk="$(bazel info output_base)/external/rules_go++go_sdk+main___download_0_linux_amd64/bin/go"
+          GO="$go_sdk" CHECK=1 bash tools/bzl/otel_overlay/gen.sh
+
+      # Informational until Story 7.6: what the graph-derived AffectedSet would select for this PR (Story 7.3).
+      - name: Affected targets (informational)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          bazel build --config=ci //tools/ci/affected-targets
+          bazel-bin/tools/ci/affected-targets/affected-targets_/affected-targets -base "$BASE_SHA" | tee affected.txt
+          echo "affected selection: $(grep -c '^//' affected.txt || true) target(s), see affected.txt"
+
+      # Driver metrics and the cache-credential counter from the BEP (Task 7.1a); a ::warning shows on auth failures.
+      - name: Build metrics (bazel-trend)
+        if: always()
+        run: |
+          [ -f bep.json ] || { echo "no bep.json, skipping trend"; exit 0; }
+          bazel build --config=ci //tools/ci/bazel-trend
+          bazel-bin/tools/ci/bazel-trend/bazel-trend_/bazel-trend -prom -run-id "$GITHUB_RUN_ID" -ref "$GITHUB_REF" \
+            -append bazel-trend.jsonl bep.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload BEP
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bazel-bep
+          path: |
+            bep.json
+            bazel-trend.jsonl
+            affected.txt
+          if-no-files-found: warn
+
+      - name: Upload profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bazel-profile
+          path: profile.gz
+          if-no-files-found: warn

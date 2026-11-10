@@ -13,6 +13,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -78,7 +79,7 @@ func newRetryTestInstance(t *testing.T, svc *SessionService, storage *session.St
 // re-spawned pipeline reaches a terminal status (Active or Failed again)
 // end to end.
 func TestRetrySessionCreation_should_TransitionFailedToCreating_When_SameInstanceRetried(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newRetryTestInstance(t, svc, storage, "retry-happy-path")
 
@@ -142,7 +143,7 @@ drain:
 // instance, and a non-Failed instance must be left untouched.
 func TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFailed(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newRetryTestInstance(t, svc, storage, "retry-not-failed")
 
@@ -158,7 +159,7 @@ func TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFa
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 
 	// Instance must be untouched: still present, still Active.
-	require.NotNil(t, svc.reviewQueuePoller.FindInstance("retry-not-failed"))
+	require.NotNil(t, svc.ReviewQueuePoller.FindInstance("retry-not-failed"))
 	status, _ = inst.StatusAndFailureReason()
 	assert.Equal(t, session.Active, status)
 }
@@ -171,7 +172,7 @@ func TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFa
 // bump-then-check shape for Cancel, backed here by TryStartRetry's own
 // Status==Failed mailbox check (Epic 1.2). Run with -race -count=50.
 func TestRetrySessionCreation_should_SpawnExactlyOnePipeline_When_CalledConcurrently(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newRetryTestInstance(t, svc, storage, "retry-race-test")
 	inst.ForceStatus(session.Failed)

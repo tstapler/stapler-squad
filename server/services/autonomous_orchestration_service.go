@@ -238,7 +238,7 @@ func (a *AutonomousOrchestrationService) buildTurnCallback(inst *session.Instanc
 		a.bus.Publish(events.NewNotificationEvent(
 			inst.UUID, inst.Title, fmt.Sprintf("autonomous-turn-%s-%d", inst.UUID, turn),
 			int32(10),                    // NotificationType_INFO
-			derivePriority(false, false), // urgent, important — per-turn progress telemetry, no action needed
+			DerivePriority(false, false), // urgent, important — per-turn progress telemetry, no action needed
 			fmt.Sprintf("Autonomous turn %d/%d", turn, maxTurns),
 			fmt.Sprintf("%s: %s", inst.Title, truncated),
 			nil,
@@ -269,7 +269,7 @@ func (a *AutonomousOrchestrationService) StartAutonomousDriverForInstance(inst *
 		return
 	}
 	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), a.withCostSink(inst))
-	driver.RegisterCompletionCallback(a.onAutonomousDriverComplete)
+	driver.RegisterCompletionCallback(a.OnAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
 	if err := driver.Start(a.driverCtx()); err != nil {
 		log.Warn("[AutonomousOrchestrationService] failed to start autonomous driver for backlog session", "session", inst.Title, "err", err)
@@ -297,7 +297,7 @@ func (a *AutonomousOrchestrationService) startDriver(inst *session.Instance, sta
 		return errors.New("headless pool unavailable")
 	}
 	driver := session.NewAutonomousDriver(inst, a.pool, inst.Prompt, config.LoadConfig().AutonomousMaxTurnsOrDefault(), session.WithStartupTimeout(startupTimeout), a.withCostSink(inst))
-	driver.RegisterCompletionCallback(a.onAutonomousDriverComplete)
+	driver.RegisterCompletionCallback(a.OnAutonomousDriverComplete)
 	driver.RegisterTurnCallback(a.buildTurnCallback(inst))
 	if err := driver.Start(a.driverCtx()); err != nil {
 		return err
@@ -317,7 +317,7 @@ var _ interface {
 
 // onAutonomousDriverComplete handles the outcome of an AutonomousDriver run.
 // Updates the linked backlog item status and fires a push notification.
-func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) {
+func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) { //nolint:gocognit,gocyclo,funlen // moved verbatim by the package split; simplification is a separate change
 	// One "stopped" line per stop, on every return path, with the final recovery.
 	rec := stopRecord{
 		Session:  instanceName,
@@ -442,7 +442,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 								"Triage stuck",
 								fmt.Sprintf("stuck-triage-%s", item.ID),
 								int32(9),                     // NotificationType_FAILURE (warning)
-								derivePriority(false, false), // urgent, important — interrupted, awaiting operator re-trigger; matches "Triage may be stuck"
+								DerivePriority(false, false), // urgent, important — interrupted, awaiting operator re-trigger; matches "Triage may be stuck"
 								"Triage did not complete",
 								fmt.Sprintf("%s: autonomous triage session got stuck", item.Title),
 								map[string]string{"item_id": item.ID},
@@ -638,7 +638,7 @@ func (a *AutonomousOrchestrationService) onAutonomousDriverComplete(instanceName
 	a.bus.Publish(events.NewNotificationEvent(
 		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
 		notifType,
-		derivePriority(urgent, important),
+		DerivePriority(urgent, important),
 		title, body, events.SessionScopedMetadata(nil, linkedItemID),
 	))
 }
@@ -792,7 +792,7 @@ func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context,
 				"Auto-rework paused",
 				fmt.Sprintf("stuck-autonomous-parked-%s", itemID),
 				int32(8),                   // NotificationType_WARNING
-				derivePriority(true, true), // urgent, important — automated retry gave up; a genuine dead end
+				DerivePriority(true, true), // urgent, important — automated retry gave up; a genuine dead end
 				"Automated retry paused",
 				fmt.Sprintf("%s — automated turn-budget respawns have been retried %d times over an extended period without finishing. It now needs manual attention; use Reset to try again automatically.", itemTitle, session.MaxRemediationAttempts),
 				nil,
@@ -862,7 +862,7 @@ func (a *AutonomousOrchestrationService) notifyStuckBookkeepingFailed(itemID, it
 	a.bus.Publish(events.NewNotificationEvent(
 		itemID, "", fmt.Sprintf("stuck-%s-bookkeeping-failed-%s", role, itemSessionID),
 		int32(9),                   // NotificationType_FAILURE
-		derivePriority(true, true), // urgent, important — the anti-silent-stranding mechanism itself is failing
+		DerivePriority(true, true), // urgent, important — the anti-silent-stranding mechanism itself is failing
 		fmt.Sprintf("Stuck-%s bookkeeping failed", role),
 		fmt.Sprintf("%s: could not mark the stalled %s session ended (%v) — it may stay invisible to automatic recovery until this is fixed manually.", itemTitle, role, endErr),
 		nil,
@@ -887,7 +887,7 @@ func (a *AutonomousOrchestrationService) notifyAutonomousRespawnAttemptFailed(it
 	a.bus.Publish(events.NewNotificationEvent(
 		itemID, "", fmt.Sprintf("stuck-autonomous-respawn-failed-%s", itemID),
 		int32(8),                     // NotificationType_WARNING
-		derivePriority(false, false), // urgent, important — no operator action needed yet, will retry automatically
+		DerivePriority(false, false), // urgent, important — no operator action needed yet, will retry automatically
 		"Automated retry failed",
 		fmt.Sprintf("%s — an automated turn-budget respawn attempt failed (%v). It will retry automatically per the standard backoff schedule.", itemTitle, respawnErr),
 		map[string]string{"item_id": itemID, pkgevents.MetadataKeyAutoRemediating: "true"},

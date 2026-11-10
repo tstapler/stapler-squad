@@ -47,9 +47,9 @@ type engineDiff struct {
 }
 
 func allStatusPairs() [][2]BacklogStatus {
-	pairs := make([][2]BacklogStatus, 0, len(builtInStageOrder)*len(builtInStageOrder))
-	for _, from := range builtInStageOrder {
-		for _, to := range builtInStageOrder {
+	pairs := make([][2]BacklogStatus, 0, len(BuiltInStageOrder)*len(BuiltInStageOrder))
+	for _, from := range BuiltInStageOrder {
+		for _, to := range BuiltInStageOrder {
 			pairs = append(pairs, [2]BacklogStatus{from, to})
 		}
 	}
@@ -83,7 +83,7 @@ func diffEngines(t *testing.T, reference, underTest WorkflowEngine, corpus []gat
 			d.Edges = append(d.Edges, fmt.Sprintf("CanTransition(%s,%s): reference=%t underTest=%t", from, to, r, u))
 		}
 	}
-	for _, from := range builtInStageOrder {
+	for _, from := range BuiltInStageOrder {
 		if r, u := reference.AllowedTransitions(from, nil), underTest.AllowedTransitions(from, nil); fmt.Sprint(r) != fmt.Sprint(u) {
 			d.Edges = append(d.Edges, fmt.Sprintf("AllowedTransitions(%s): reference=%v underTest=%v", from, r, u))
 		}
@@ -157,14 +157,14 @@ func TestRawConfiguredGateGap_ReportedAsInformation_NotFailure(t *testing.T) {
 func seededEdgeDiff(ctx context.Context, t *testing.T, repo *EntRepository) []string {
 	t.Helper()
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB.
-	stages, err := repo.client.BacklogStage.Query().All(ctx)
+	stages, err := repo.Client.BacklogStage.Query().All(ctx)
 	require.NoError(t, err)
 	slugByID := make(map[string]string, len(stages))
 	for _, s := range stages {
 		slugByID[s.ID.String()] = s.Slug
 	}
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB.
-	rows, err := repo.client.StageTransition.Query().All(ctx)
+	rows, err := repo.Client.StageTransition.Query().All(ctx)
 	require.NoError(t, err)
 	got := map[string]bool{}
 	for _, r := range rows {
@@ -195,12 +195,12 @@ func TestSeededStageConfig_ByteEquivalentToValidTransitions_WhenSeedApplied(t *t
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.client))
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.Client))
 
 	require.Empty(t, seededEdgeDiff(ctx, t, repo))
 	// Ordering-insensitive hash equality: the fingerprint of the live rows is
 	// the fingerprint of domain.ValidTransitions() and the seed tables.
-	live, err := StageConfigFingerprint(ctx, repo.client)
+	live, err := StageConfigFingerprint(ctx, repo.Client)
 	require.NoError(t, err)
 	require.Equal(t, SeedFingerprint(), live)
 }
@@ -209,13 +209,13 @@ func TestSeededStageConfig_DetectsDrift_WhenOneEdgeRemoved(t *testing.T) {
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.client))
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.Client))
 
 	//nolint:entfullscan test assertion over a test-scoped in-memory DB.
-	rows, err := repo.client.StageTransition.Query().All(ctx)
+	rows, err := repo.Client.StageTransition.Query().All(ctx)
 	require.NoError(t, err)
 	require.NotEmpty(t, rows)
-	require.NoError(t, repo.client.StageTransition.DeleteOneID(rows[0].ID).Exec(ctx))
+	require.NoError(t, repo.Client.StageTransition.DeleteOneID(rows[0].ID).Exec(ctx))
 
 	diffs := seededEdgeDiff(ctx, t, repo)
 	require.Len(t, diffs, 1)

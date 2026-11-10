@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+exports_files(["analyzer.go"])
+
+go_library(
+    name = "norawgitopen",
+    srcs = ["analyzer.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/norawgitopen",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tools/lint/internal/nolintcomment",
+        "@lint_x_tools//go/analysis",
+        "@lint_x_tools//go/analysis/passes/inspect",
+        "@lint_x_tools//go/ast/inspector",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":norawgitopen",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "norawgitopen_test",
+    srcs = ["analyzer_test.go"],
+    data = glob(["testdata/**"]) + ["@rules_go//go"],
+    deps = [
+        ":norawgitopen",
+        "//tools/lint/internal/gotool",
+        "@lint_x_tools//go/analysis/analysistest",
+    ],
+)

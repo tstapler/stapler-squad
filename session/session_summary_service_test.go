@@ -49,13 +49,13 @@ func newTestSessionSummaryGenerator(t *testing.T) (*SessionSummaryGenerator, *en
 
 	pool := &fakePoolClient{response: "A narrative."}
 	gen := NewSessionSummaryGenerator(
-		repo.client,
+		repo.Client,
 		pool,
 		&fakeNotificationDecisionLister{},
 		nil, // no token store — BuildCostSnapshot handles nil
 		&fakeReviewQueueLookup{},
 	)
-	return gen, repo.client, pool
+	return gen, repo.Client, pool
 }
 
 func getRow(t *testing.T, client *ent.Client, sessionUUID string) *ent.SessionSummary {
@@ -282,7 +282,7 @@ func TestGenerateAndPersist_should_RecoverFromPanicAndReleaseGuard_When_BuilderP
 	sessionUUID := "sess-panic"
 
 	gen := NewSessionSummaryGenerator(
-		repo.client,
+		repo.Client,
 		&fakePoolClient{response: "narrative"},
 		&fakeNotificationDecisionLister{err: nil, records: nil}, // replaced below with a panicking lister
 		nil,

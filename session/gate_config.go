@@ -80,7 +80,7 @@ func (CustomCheckConfig) isGateConfig() {}
 // this set as new pluggable checks are wired up; it is seeded here, ahead of
 // that epic, purely so this save-time validator has a concrete allowlist to
 // enforce against per Task 2.7.2g2 instead of accepting any skill name.
-var registeredCustomCheckSkills = map[string]bool{
+var RegisteredCustomCheckSkills = map[string]bool{
 	"review-feasibility": true,
 }
 
@@ -205,7 +205,7 @@ func ParseGateConfig(kind GateKind, raw json.RawMessage) (GateConfig, error) {
 		if cfg.SkillID == "" {
 			return nil, fmt.Errorf("gate_config: custom gate requires a non-empty skill")
 		}
-		if !registeredCustomCheckSkills[cfg.SkillID] {
+		if !RegisteredCustomCheckSkills[cfg.SkillID] {
 			return nil, fmt.Errorf("gate_config: skill %q is not in the pre-registered allowlist", cfg.SkillID)
 		}
 		return cfg, nil

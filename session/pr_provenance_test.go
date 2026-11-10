@@ -7,10 +7,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 func TestPRProvenance_should_RoundTripItemAndHost_When_FormattedThenParsed(t *testing.T) {
-	id, err := NewHostID()
+	id, err := hostclaim.NewHostID()
 	require.NoError(t, err)
 	link := "ssq://laptop/backlog/v1/bl_01J7QK0000000000000000000A"
 
@@ -23,7 +24,7 @@ func TestPRProvenance_should_RoundTripItemAndHost_When_FormattedThenParsed(t *te
 }
 
 func TestParsePRProvenanceComment_should_Reject_When_MarkerOrPartsMissing(t *testing.T) {
-	id, err := NewHostID()
+	id, err := hostclaim.NewHostID()
 	require.NoError(t, err)
 	for name, body := range map[string]string{
 		"empty":         "",
@@ -37,11 +38,11 @@ func TestParsePRProvenanceComment_should_Reject_When_MarkerOrPartsMissing(t *tes
 }
 
 func TestClaimIndexRecorder_PRProvenanceComment_should_NameHostByOpaqueIDAndLinkOnly(t *testing.T) {
-	identity, err := LoadOrCreateHostIdentity(t.TempDir())
+	identity, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
-	registry, err := NewHostRegistry(t.TempDir(), DefaultHostRegistryTTL)
+	registry, err := hostclaim.NewHostRegistry(t.TempDir(), hostclaim.DefaultHostRegistryTTL)
 	require.NoError(t, err)
-	index, err := NewClaimIndex(t.TempDir(), registry)
+	index, err := hostclaim.NewClaimIndex(t.TempDir(), registry)
 	require.NoError(t, err)
 	recorder, err := NewClaimIndexRecorder(identity, index, nil, "laptop", nil)
 	require.NoError(t, err)

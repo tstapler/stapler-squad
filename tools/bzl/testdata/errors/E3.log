@@ -1,0 +1,3 @@
+session/instance.go:12:2: cannot find package "github.com/tstapler/stapler-squad/gen/proto/go/session/v1" in any of:
+	/usr/lib/go/src/github.com/tstapler/stapler-squad/gen/proto/go/session/v1 (from $GOROOT)
+	/home/u/go/src/github.com/tstapler/stapler-squad/gen/proto/go/session/v1 (from $GOPATH)

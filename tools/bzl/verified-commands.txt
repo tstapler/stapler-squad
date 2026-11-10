@@ -1,0 +1,3 @@
+# Commands that have actually been run, one per line, with the run log after "#".
+# tools/bzl/check-skill-proposals.sh treats a bazel/make command as verified only if it is listed here verbatim;
+# any other command in the skill or docs must sit on a <!-- proposal --> line. Append a line in the PR that ran it.

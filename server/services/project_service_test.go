@@ -7,13 +7,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 func newProjectService(t *testing.T) *ProjectService {
 	t.Helper()
-	return NewProjectService(createTestStorage(t))
+	return NewProjectService(svctest.CreateTestStorage(t))
 }
 
 func newProjectServiceNilStorage() *ProjectService {

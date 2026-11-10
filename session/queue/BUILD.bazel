@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "queue",
+    srcs = ["queue.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/queue",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/detection",
+        "//session/git",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":queue",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "queue_test",
+    srcs = ["queue_bench_test.go"],
+    deps = [":queue"],
+)

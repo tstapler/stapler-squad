@@ -495,7 +495,7 @@ export function BacklogItemForm({
               className={descriptionTab === "write" ? styles.descriptionTabActive : styles.descriptionTab}
               onClick={() => setDescriptionTab("write")}
               data-testid="backlog-description-tab-write"
-            >
+            >{/* analytics-exempt */}
               Write
             </button>
             <button
@@ -505,7 +505,7 @@ export function BacklogItemForm({
               className={descriptionTab === "preview" ? styles.descriptionTabActive : styles.descriptionTab}
               onClick={() => setDescriptionTab("preview")}
               data-testid="backlog-description-tab-preview"
-            >
+            >{/* analytics-exempt */}
               Preview
             </button>
             <button
@@ -514,7 +514,7 @@ export function BacklogItemForm({
               onClick={() => fileInputRef.current?.click()}
               disabled={busy || uploading}
               data-testid="backlog-attach-image"
-            >
+            >{/* analytics-exempt */}
               {uploading ? "Uploading…" : "📎 Attach image"}
             </button>
             <input
@@ -591,7 +591,7 @@ export function BacklogItemForm({
                   setRepoPath("");
                   document.getElementById("backlog-repo-path")?.focus();
                 }}
-              >
+              >{/* analytics-exempt */}
                 <span aria-hidden="true">✕</span>
               </button>
             </span>
@@ -807,7 +807,7 @@ export function BacklogItemForm({
             disabled={busy}
             aria-label="Add acceptance criterion"
             data-testid="backlog-add-criterion"
-          >
+          >{/* analytics-exempt */}
             + Add criterion
           </button>
         </div>
@@ -847,7 +847,7 @@ export function BacklogItemForm({
                   disabled={busy}
                   aria-label={`Remove criterion ${i + 1}`}
                   data-testid={`backlog-remove-criterion-${i}`}
-                >
+                >{/* analytics-exempt */}
                   ×
                 </button>
               </div>
@@ -864,7 +864,7 @@ export function BacklogItemForm({
           onClick={onCancel}
           disabled={busy}
           data-testid="backlog-form-cancel"
-        >
+        >{/* analytics-exempt */}
           Cancel
         </button>
         <button

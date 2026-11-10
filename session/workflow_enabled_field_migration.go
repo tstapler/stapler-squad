@@ -89,7 +89,7 @@ func workflowEnabledColumnPreexisted(db *sql.DB) bool {
 // failure is logged and does not abort the rest.
 func runWorkflowEnabledFieldBackfill(ctx context.Context, er *EntRepository) {
 	//nolint:entfullscan one-time backfill fixing the enabled default on legacy Workflow rows; gated by enabledColumnPreexisted so it only ever runs once.
-	wfs, err := er.client.Workflow.Query().All(ctx)
+	wfs, err := er.Client.Workflow.Query().All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
 		// mirroring this file's sibling migrations' defensive posture.
@@ -101,7 +101,7 @@ func runWorkflowEnabledFieldBackfill(ctx context.Context, er *EntRepository) {
 		if !wf.Enabled || wf.CronEnabled {
 			continue
 		}
-		if _, saveErr := er.client.Workflow.UpdateOneID(wf.ID).
+		if _, saveErr := er.Client.Workflow.UpdateOneID(wf.ID).
 			SetEnabled(false).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] workflow enabled backfill: workflow=%s: %v", wf.ID, saveErr)

@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "soak-check_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/soak/soak-check",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/bzl/soak"],
+)
+
+go_binary(
+    name = "soak-check",
+    embed = [":soak-check_lib"],
+    visibility = ["//visibility:public"],
+)

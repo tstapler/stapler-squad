@@ -1,0 +1,184 @@
+# Task 0.1g: improvement targets and economic-gate factors.
+# Values are computed ONLY from tools/bzl/baseline/measured.json, baseline-worktree.json, hermeticity-make.json,
+# tools/bzl/scoping/baseline.json and the cached Task 0.1i job data, using the proposal formulas the owner
+# accepted (owner-attestations.yaml, key `targets`). Never estimated: a row whose input is not measured yet has
+# target_value null, status PENDING_INPUT and `pending_input` naming the missing key.
+# Owner confirmed 2026-11-06 (owner-attestations.yaml targets_confirmed) with two amendments: T9c 0.385, T6 0.2.
+# Readers: tools/bzl/parity/improvement (yaml: id + target_value of the `targets:` list) and
+# tools/bzl/economic-gate.py (line scanner over `economic_gate_factors`: target_value, second_value). Keep one
+# `key: value` per line; extra keys are ignored by both.
+status: confirmed-2026-11-06
+targets:
+  - id: T1
+    status: COMPUTED
+    formula: "at most min(0.30, 1.5 x measured median reverse-dependency fan-out of the 30 partial-change PRs)"
+    baseline_value: 0.2587  # ra1_median_fanout
+    target_value: 0.30  # min(0.30, 1.5 x 0.2587 = 0.388)
+    source: "measured.json ra1_median_fanout (baselines.md RA1)"
+    note: "ADR-010 amends T1 to the Bazel target model (library and test edges separate); not applied here. The 0.30 cap binds, so the target is 1.16 x the make-model fan-out, not 1.5 x"
+  - id: T2-partial-runner-min
+    status: COMPUTED
+    formula: "partial class runner-minutes p50 <= 0.70 x baseline"
+    baseline_value: 183.63  # partial_class.runner_min_p50
+    target_value: 128.54  # 0.70 x 183.633
+    source: "measured.json partial_class.runner_min_p50 (ci-billed-minutes.sh, n=30)"
+  - id: T2-partial-ttg
+    status: COMPUTED
+    formula: "partial class time-to-green p50 <= 0.90 x baseline"
+    baseline_value: 2704  # seconds, partial_class.ttg_p50_s (n_ttg=27)
+    target_value: 2433.6  # 0.90 x 2704
+    source: "measured.json partial_class.ttg_p50_s"
+  - id: T2-all-ttg
+    status: COMPUTED
+    formula: "whole population time-to-green p50 <= 1.00 x baseline"
+    baseline_value: 3629  # seconds, all_class.ttg_p50_s (n_ttg=84)
+    target_value: 3629
+    source: "measured.json all_class.ttg_p50_s"
+  - id: T2-all-runner-min
+    status: COMPUTED
+    formula: "whole population runner-minutes p50 <= 0.90 x baseline"
+    baseline_value: 279.3  # all_class.runner_min_p50
+    target_value: 251.37  # 0.90 x 279.3
+    source: "measured.json all_class.runner_min_p50 (n=99 with runs)"
+    note: "global class has n=2, so the whole-population row is the meaningful check (baselines.md)"
+  - id: T2b
+    status: ABSOLUTE
+    formula: "median warm-main hit_spawns / total_spawns >= 0.60 (absolute; make has no remote cache, so no baseline ratio exists)"
+    baseline_value: null  # not applicable by definition
+    target_value: 0.60
+    source: "plan.md T2b (P10 floor); measured later by bazel-trend.sh"
+  - id: T3-second-cold
+    status: PENDING_INPUT
+    formula: "second-worktree cold build median <= min(0.25 x first Bazel cold build (S6), 0.30 x make cold median)"
+    baseline_value: 56.04  # seconds, baseline-worktree.json wall_s.median (make cold worktree, 5 runs)
+    target_value: null  # = min(0.25 x s6_first_cold_s, 16.812)
+    make_bound_s: 16.812  # 0.30 x 56.04, known now
+    pending_input: "s6_first_cold_s (spike S6, being measured by another agent)"
+    source: "baseline-worktree.json wall_s.median; S6 first Bazel cold build"
+    note: "the make bound binds whenever S6 > 67.2 s (0.25 x S6 > 16.812); EG3 tolerates S6 up to 168.1 s, so the two can disagree"
+  - id: T3-disk
+    status: COMPUTED
+    formula: "per-worktree output_base_disk_kb <= 1.0 x baseline disk_kb_worktree"
+    baseline_value: 516316  # KB, baseline-worktree.json disk_kb_worktree.median (excludes shared node_modules 525388 and go build cache 1969488)
+    target_value: 516316
+    source: "baseline-worktree.json disk_kb_worktree.median"
+    note: "make baseline excludes the 1.97 GB shared Go build cache and node_modules, a Bazel output base includes compiled outputs, so 1.0 x is probably not comparable like for like; the waivable P10 ceiling stays 1.25 x = 645395 KB"
+  - id: T3-disk-aggregate
+    status: COMPUTED
+    formula: "5-worktree aggregate (all output bases + shared disk/repository caches once) <= 0.80 x 5 x baseline disk_kb_worktree"
+    baseline_value: 2581580  # KB, 5 x 516316
+    target_value: 2065264  # KB, 0.80 x 5 x 516316
+    source: "baseline-worktree.json disk_kb_worktree.median; measured by Task 0.10a"
+  - id: T4
+    status: COMPUTED
+    formula: "at most max(1.25 x baseline warm one-package go test, baseline + 5 s)"
+    baseline_value: 2.687  # seconds, measured.json warm_one_pkg_test_s
+    target_value: 7.687  # max(3.359, 7.687)
+    source: "measured.json warm_one_pkg_test_s (pain-numbers.sh)"
+    note: "baseline is a no-edit `go test -short -count=1 ./config`; the T4 metric edits a comment first, so the baseline excludes the recompile. The +5 s term dominates (7.687 s = 2.9 x baseline)"
+  - id: T5
+    status: COMPUTED
+    formula: "100% of the 9 fixtures print a Remedy: line within 20 lines, at most 60 lines total"
+    baseline_value: 0.25  # 1 of 4 make-applicable fixtures names a correct remedy; 5 are N/A-make
+    target_value: 1.0
+    source: "measured.json fixtures (fixtures/make-path-results.json)"
+  - id: T6
+    status: COMPUTED
+    formula: "at most 10% of the build-active p90 regen steps per session after the flip"
+    baseline_value: 0  # median over the literal 30-session cohort; build-active cohort (n=16) median 0, p90 2
+    target_value: 0.2  # 0.10 x build-active p90 (2); owner-amended 2026-11-06 (median basis was 0 and could not detect improvement)
+    source: "measured.json regen_steps_per_session_median"
+    note: "baseline median is 0, so the formula yields 0 and cannot detect improvement; owner may want the build-active p90 (2, so 0.2) as the basis"
+  - id: T7
+    status: COMPUTED
+    formula: "H1 host executables <= 0.50 x make baseline; 0 network destinations in build actions; H2 true; H3 = 0; H4 = owner-accepted downgrades"
+    baseline_value: 38  # measured.json hermeticity_make.h1_host_executables
+    target_value: 19  # H1 limit = 0.50 x 38
+    h1_network_destinations_max: 0  # make baseline 1 (34.95.71.106:443)
+    h2_path_scrubbed_build_ok: true  # make baseline false (exit 2, go/buf/bun not found)
+    h3_max: 0  # N/A for make
+    h4_downgrades: "= row count of tools/bzl/hermetic-downgrades.txt (file does not exist yet; make baseline 0)"
+    source: "measured.json hermeticity_make (hermeticity-make.json)"
+    note: "the 38 includes build-generated executables (ent, entc and shared-node-modules temp binaries under go-build) that are not host tools; the plan excludes allow-listed Bazel prerequisites but no allow-list exists yet, so 19 is provisional"
+  - id: T8
+    status: COMPUTED
+    formula: "at most 0.50 x baseline median e2e runner-minutes of the 30 sampled partial-change PRs; e2e_escapes = 0"
+    baseline_value: 122.57  # runner-min, nearest-rank p50 (mean-of-middle-two 123.21)
+    target_value: 61.285  # 0.50 x 122.57
+    e2e_escapes_max: 0
+    source: "pr-sample.json partial[] x cached runs-sha/jobs-<run> data (bzl-baseline-cache); sum of 'e2e (Bun build) shard N' job durations over every completed pull_request run of the PR head sha, Linux x1"
+    note: "4 of 30 PRs ran no Bun e2e shard (0; one ran 10.1) and PRs with a rerun show about 220 vs about 118, so the median sits between the one-run and two-run clusters; ci-billed-minutes.sh does not emit this figure yet (no committed collector). The Next-build shards are excluded"
+  - id: T9a
+    status: COMPUTED
+    formula: "mean affected test-LOC share (last 500 commits) <= 0.46 after Story 13.2, <= 0.45 at close"
+    baseline_value: 0.5536  # scoping/baseline.json t9a_test_loc_share_500
+    target_value: 0.45
+    after_story_13_2: 0.46
+    source: "plan.md T9 + tools/bzl/scoping/baseline.json t9a_test_loc_share_500; DefaultT9Targets in tools/bzl/scoping/t9.go"
+  - id: T9b
+    status: COMPUTED
+    formula: "share of Go production commits touching an assumed-universal package <= 0.64 (last 100) and <= 0.61 (last 500) at close"
+    baseline_value: 0.7097  # t9b_universal_touch_500 (last 100: 0.7073)
+    target_value: 0.61
+    last_100_max: 0.64
+    source: "scoping/baseline.json t9b_universal_touch_500, t9b_universal_touch_100"
+  - id: T9c
+    status: COMPUTED
+    formula: "mean affected library-LOC share <= 0.395 and share of changes affecting less than baseline >= 0.12"
+    baseline_value: 0.3945  # t9c_mean_lib_loc_share (plan text says 40.5%)
+    target_value: 0.385  # owner-amended 2026-11-06: ADR-010 predicted 38.5%; the 0.395 proposal was already met at baseline 0.3945
+    lower_lib_share_min: 0.12  # baseline t9c_changes_with_lower_lib_loc = 0
+    source: "scoping/baseline.json t9c_mean_lib_loc_share, t9c_changes_with_lower_lib_loc"
+    note: "CONFLICT: the measured baseline 0.3945 is already below the 0.395 proposal, so the first clause cannot detect improvement (plan assumed 0.405); only the 0.12 clause constrains. Owner may want a lower bound, e.g. 0.385 (ADR-010's predicted 38.5%)"
+  - id: T9d
+    status: COMPUTED
+    formula: "each of the two largest packages <= 72,000 LOC (90,000 without Tier B) and 0 test-only layering inversions"
+    baseline_value: 93019  # t9d_services_loc; session 92060; inversions 12
+    target_value: 72000
+    without_tier_b_max: 90000
+    inversions_max: 0
+    source: "scoping/baseline.json t9d_services_loc, t9d_session_loc, t9d_test_inversions"
+    note: "plan text quotes 93,118 and 92,248 LOC; baseline.json (commit 145bce76) has 93,019 and 92,060"
+  - id: T9e
+    status: COMPUTED
+    formula: "T1 recomputed on the Bazel target model <= 0.30 at every story (guard)"
+    baseline_value: 0.0443  # t9e_target_model_share (plan text says 0.053)
+    target_value: 0.30
+    source: "scoping/baseline.json t9e_target_model_share"
+  - id: T9f
+    status: N/A
+    formula: "median e2e slice size per spec <= baseline - 0.8 x harness-predicted reduction"
+    baseline_value: null
+    target_value: null
+    source: "owner decision 2026-11-05 (ADR-009): e2e stays a full run, so no slice size"
+economic_gate_factors:
+  # Proposal values from plan.md Task 0.14e, accepted by the owner. Read by tools/bzl/economic-gate.py.
+  - id: EG1
+    formula: "projected PR time-to-green p50 > factor x baseline p50"
+    target_value: 1.10
+    computed_limit: 2572.9  # seconds, 1.10 x baseline ci_p50_s 2339
+    source: "plan.md Task 0.14e"
+  - id: EG2
+    formula: "cold CI (S10, empty cache) > factor x baseline p50"
+    target_value: 1.5
+    computed_limit: 3508.5  # seconds, 1.5 x baseline ci_p50_s 2339
+    source: "plan.md Task 0.14e"
+  - id: EG3
+    formula: "first-worktree Bazel cold (S6) > target_value x make median, or second-worktree cold > second_value x the S6 bound (60% of make)"
+    target_value: 3.0
+    second_value: 2.0
+    computed_limit_first: 168.12  # seconds, 3.0 x make cold median 56.04
+    computed_limit_second: 67.248  # seconds, 2.0 x (0.60 x 56.04)
+    source: "plan.md Task 0.14e"
+  - id: EG4
+    formula: "re-costed CU total > factor x verified total (38.36M, plan.md header after x1.75; owner-updated 2026-11-06 from 30.50M)"
+    target_value: 1.25
+    computed_limit: 47.95  # M CU, 1.25 x 38.36
+    source: "plan.md Task 0.14e"
+  - id: EG5
+    formula: "RA1 median fan-out > limit, or RA2 (post-selection projection) > limit"
+    target_value: 0.60
+    ra2_projected_limit: 0.90  # constant RA2_PROJECTED_LIMIT in economic-gate.py (plan Task 0.14e)
+    baseline_ra1: 0.2587  # measured.json ra1_median_fanout
+    baseline_ra2_residual: 0.1661  # 432 / 2601, measured.json ra2_median_components_s
+    source: "plan.md Task 0.14e"

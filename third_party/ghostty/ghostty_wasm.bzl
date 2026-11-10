@@ -54,6 +54,7 @@ def _impl(ctx):
         ],
         env = {"LC_ALL": "C", "TZ": "UTC", "PATH": "/usr/bin:/bin"},
         use_default_shell_env = False,
+        # tag-reason: the Zig build fetches its package deps, which are hash-pinned by the Ghostty build.zig.zon; no per-issue tracker yet, placeholder (#1423)
         execution_requirements = {"requires-network": "1"},
     )
     return [DefaultInfo(files = depset([out]))]

@@ -81,7 +81,7 @@ func TestEntFlowReader_should_ReturnBuiltInStagesInPipelineOrder_When_DefaultEng
 	t.Parallel()
 	got, err := NewEntFlowReader(nil).Stages(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, builtInStageOrder, got)
+	require.Equal(t, BuiltInStageOrder, got)
 	require.Contains(t, got, BacklogStatusRefining)
 }
 

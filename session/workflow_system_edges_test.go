@@ -14,7 +14,7 @@ func TestSystemRequiredEdges_IsSubsetOfValidTransitionsPlusArchiveEdges_AndConta
 	t.Parallel()
 	valid := domain.ValidTransitions()
 	archiveGroup := map[string]bool{edgeKey(BacklogStatusArchived, BacklogStatusArchived): true}
-	for _, s := range builtInStageOrder {
+	for _, s := range BuiltInStageOrder {
 		archiveGroup[edgeKey(s, BacklogStatusArchived)] = true
 	}
 	for _, e := range systemRequiredOffGraph {
@@ -50,8 +50,8 @@ func TestSystemRequiredEdges_IsSubsetOfValidTransitionsPlusArchiveEdges_AndConta
 
 func TestSystemRequiredTargets_ExcludesArchiveGroup(t *testing.T) {
 	t.Parallel()
-	for _, from := range builtInStageOrder {
-		require.NotContains(t, systemRequiredTargets(from), BacklogStatusArchived, from)
+	for _, from := range BuiltInStageOrder {
+		require.NotContains(t, SystemRequiredTargets(from), BacklogStatusArchived, from)
 	}
-	require.ElementsMatch(t, []BacklogStatus{BacklogStatusReview, BacklogStatusReady}, systemRequiredTargets(BacklogStatusInProgress))
+	require.ElementsMatch(t, []BacklogStatus{BacklogStatusReview, BacklogStatusReady}, SystemRequiredTargets(BacklogStatusInProgress))
 }

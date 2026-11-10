@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // EngineMode is how the selector uses the enforce composition.
@@ -142,17 +143,17 @@ func (discardRecorder) RecordDivergence(EngineMethod, DivergenceClass, string, C
 func (discardRecorder) RecordNotCompared(NotComparedReason)                              {}
 
 // counterSet is a fixed-key set of atomic counters: no lock, no allocation.
-type counterSet[K comparable] struct {
-	keys []K
+type CounterSet[K comparable] struct {
+	Keys []K
 	vals []atomic.Int64
 }
 
-func newCounterSet[K comparable](keys ...K) *counterSet[K] {
-	return &counterSet[K]{keys: keys, vals: make([]atomic.Int64, len(keys))}
+func NewCounterSet[K comparable](keys ...K) *CounterSet[K] {
+	return &CounterSet[K]{Keys: keys, vals: make([]atomic.Int64, len(keys))}
 }
 
-func (c *counterSet[K]) inc(k K) {
-	for i, key := range c.keys {
+func (c *CounterSet[K]) Inc(k K) {
+	for i, key := range c.Keys {
 		if key == k {
 			c.vals[i].Add(1)
 			return
@@ -160,8 +161,8 @@ func (c *counterSet[K]) inc(k K) {
 	}
 }
 
-func (c *counterSet[K]) get(k K) int64 {
-	for i, key := range c.keys {
+func (c *CounterSet[K]) Get(k K) int64 {
+	for i, key := range c.Keys {
 		if key == k {
 			return c.vals[i].Load()
 		}
@@ -174,10 +175,10 @@ func (c *counterSet[K]) get(k K) int64 {
 // EngineModeSource. Off and Shadow always return the Default answer.
 type SwitchableWorkflowEngine struct {
 	def      *DefaultWorkflowEngine
-	enf      enforceAnswer
-	modes    EngineModeSource
+	Enf      EnforceAnswer
+	Modes    EngineModeSource
 	recorder ShadowRecorder
-	clock    Clock
+	clock    hostclaim.Clock
 
 	configLabel func() string
 	sampleRead  func() bool
@@ -187,8 +188,8 @@ type SwitchableWorkflowEngine struct {
 	readTicks        atomic.Uint64
 	lastFallbackWarn atomic.Int64
 
-	fallbacks    *counterSet[FallbackReason]
-	denials      *counterSet[DenialSource]
+	fallbacks    *CounterSet[FallbackReason]
+	denials      *CounterSet[DenialSource]
 	shadowErrors atomic.Int64
 }
 
@@ -207,7 +208,7 @@ func WithShadowRecorder(r ShadowRecorder) SelectorOption {
 }
 
 // WithSelectorClock sets the clock used for the fallback WARN rate limit.
-func WithSelectorClock(c Clock) SelectorOption {
+func WithSelectorClock(c hostclaim.Clock) SelectorOption {
 	return func(s *SwitchableWorkflowEngine) { s.clock = c }
 }
 
@@ -233,15 +234,15 @@ func WithSelectorLoggers(warnf, infof func(format string, args ...any)) Selector
 func NewSwitchableWorkflowEngine(def *DefaultWorkflowEngine, cfg *ConfiguredWorkflowEngine, modes EngineModeSource, opts ...SelectorOption) *SwitchableWorkflowEngine {
 	s := &SwitchableWorkflowEngine{
 		def:         def,
-		enf:         enforceAnswer{def: def, cfg: cfg},
-		modes:       modes,
+		Enf:         EnforceAnswer{def: def, cfg: cfg},
+		Modes:       modes,
 		recorder:    discardRecorder{},
-		clock:       realClock{},
+		clock:       hostclaim.RealClock{},
 		configLabel: func() string { return "unlabeled" },
 		warnf:       func(f string, a ...any) { log.WarningLog().Printf(f, a...) },
 		infof:       func(f string, a ...any) { log.InfoLog().Printf(f, a...) },
-		fallbacks:   newCounterSet(FallbackCfgNil, FallbackCacheEmpty, FallbackLoadError),
-		denials:     newCounterSet(DenialConfigGraph, DenialDefaultGuard, DenialOperatorGate),
+		fallbacks:   NewCounterSet(FallbackCfgNil, FallbackCacheEmpty, FallbackLoadError),
+		denials:     NewCounterSet(DenialConfigGraph, DenialDefaultGuard, DenialOperatorGate),
 	}
 	s.sampleRead = func() bool { return s.readTicks.Add(1)%readSampleEvery == 0 }
 	for _, o := range opts {
@@ -251,11 +252,11 @@ func NewSwitchableWorkflowEngine(def *DefaultWorkflowEngine, cfg *ConfiguredWork
 }
 
 // FallbackTotal returns workflow_engine_fallback_total{reason}.
-func (s *SwitchableWorkflowEngine) FallbackTotal(r FallbackReason) int64 { return s.fallbacks.get(r) }
+func (s *SwitchableWorkflowEngine) FallbackTotal(r FallbackReason) int64 { return s.fallbacks.Get(r) }
 
 // EnforceDeniedTotal returns workflow_engine_enforce_denied_total{source}.
 func (s *SwitchableWorkflowEngine) EnforceDeniedTotal(src DenialSource) int64 {
-	return s.denials.get(src)
+	return s.denials.Get(src)
 }
 
 // ShadowErrorsTotal returns workflow_engine_shadow_errors_total.
@@ -286,13 +287,13 @@ func (s *SwitchableWorkflowEngine) ValidateGates(item BacklogItemTransitionInput
 // ClassModeSource only knows the operator mode; every other class is then
 // capped at Shadow, since no enforce flag can exist for it yet.
 func (s *SwitchableWorkflowEngine) ModeFor(class CallerClass) EngineMode {
-	if s.modes == nil {
+	if s.Modes == nil {
 		return ModeOff
 	}
-	if cm, ok := s.modes.(ClassModeSource); ok {
+	if cm, ok := s.Modes.(ClassModeSource); ok {
 		return cm.ModeFor(class)
 	}
-	m := s.modes.Mode()
+	m := s.Modes.Mode()
 	if class != ClassOperator && m == ModeEnforce {
 		return ModeShadow
 	}
@@ -381,7 +382,7 @@ func (v engineView) CanTransition(from, to BacklogStatus, snap *StageConfigSnaps
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
-		allowed, reason := s.enf.canTransitionFor(v.pol, from, to, snap)
+		allowed, reason := s.Enf.canTransitionFor(v.pol, from, to, snap)
 		s.noteFallback(reason)
 		if !allowed && !v.quiet {
 			s.noteDenied(from, to, DenialConfigGraph)
@@ -390,7 +391,7 @@ func (v engineView) CanTransition(from, to BacklogStatus, snap *StageConfigSnaps
 	case ModeShadow:
 		legacy := v.legacyCan(from, to, snap)
 		v.shadow(MethodCanTransition, PathTransition, from, to, "", func() shadowResult {
-			enf, _ := s.enf.canTransitionFor(v.pol, from, to, snap)
+			enf, _ := s.Enf.canTransitionFor(v.pol, from, to, snap)
 			r := shadowResult{Default: allowText(legacy), Enforce: allowText(enf)}
 			if enf != legacy {
 				r.Class = ClassGraph
@@ -409,7 +410,7 @@ func (v engineView) CanTransition(from, to BacklogStatus, snap *StageConfigSnaps
 // transition RPC qualifies: other operator writers (OverrideVerdict) always
 // carry a reason for a different purpose and must still honor a disabled edge.
 func (v engineView) OverridesGraph(overrideReason string, to BacklogStatus) bool {
-	if v.caller != CallerOperatorTransitionRPC || v.mode() != ModeEnforce || !v.s.enf.bypassesGraph(v.pol, overrideReason, to) {
+	if v.caller != CallerOperatorTransitionRPC || v.mode() != ModeEnforce || !v.s.Enf.bypassesGraph(v.pol, overrideReason, to) {
 		return false
 	}
 	v.s.infof("[SwitchableWorkflowEngine] operator override bypassed the graph to=%s", to)
@@ -422,13 +423,13 @@ func (v engineView) AllowedTransitions(from BacklogStatus, snap *StageConfigSnap
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
-		out, reason := s.enf.allowedTransitionsFor(v.pol, from, snap)
+		out, reason := s.Enf.allowedTransitionsFor(v.pol, from, snap)
 		s.noteFallback(reason)
 		return out
 	case ModeShadow:
 		def := s.def.AllowedTransitions(from, snap)
 		v.shadow(MethodAllowedTransitions, PathRead, from, "", "", func() shadowResult {
-			enf, _ := s.enf.allowedTransitionsFor(v.pol, from, snap)
+			enf, _ := s.Enf.allowedTransitionsFor(v.pol, from, snap)
 			r := shadowResult{Default: fmt.Sprint(def), Enforce: fmt.Sprint(enf)}
 			if r.Default != r.Enforce {
 				r.Class = ClassGraph
@@ -446,13 +447,13 @@ func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStat
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
-		statuses, _, reason, err := s.enf.pendingGatesFor(v.pol, item, to, snap, evalAllGates)
+		statuses, _, reason, err := s.Enf.pendingGatesFor(v.pol, item, to, snap, evalAllGates)
 		s.noteFallback(reason)
 		return statuses, err
 	case ModeShadow:
 		legacy, legacyErr := v.legacyGates(item, to, snap)
 		v.shadow(MethodPendingGates, PathRead, item.Status, to, item.ItemID, func() shadowResult {
-			enf, skipped, _, _ := s.enf.pendingGatesFor(v.pol, item, to, snap, evalStructuralOnly)
+			enf, skipped, _, _ := s.Enf.pendingGatesFor(v.pol, item, to, snap, evalStructuralOnly)
 			v.noteSkipped(skipped)
 			return shadowResult{
 				Class:   v.compareGateStatuses(legacy, enf),
@@ -470,7 +471,7 @@ func (v engineView) ValidateGates(item BacklogItemTransitionInput, to BacklogSta
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
-		ans := s.enf.validateGatesFor(v.pol, item, to, snap, evalAllGates)
+		ans := s.Enf.validateGatesFor(v.pol, item, to, snap, evalAllGates)
 		s.noteFallback(ans.Fallback)
 		if ans.Err != nil && !v.quiet {
 			s.noteDenied(item.Status, to, ans.Source)
@@ -479,7 +480,7 @@ func (v engineView) ValidateGates(item BacklogItemTransitionInput, to BacklogSta
 	case ModeShadow:
 		legacyErr := v.legacyValidate(item, to, snap)
 		v.shadow(MethodValidateGates, PathTransition, item.Status, to, item.ItemID, func() shadowResult {
-			ans := s.enf.validateGatesFor(v.pol, item, to, snap, evalStructuralOnly)
+			ans := s.Enf.validateGatesFor(v.pol, item, to, snap, evalStructuralOnly)
 			v.noteSkipped(ans.SkippedStateful)
 			return shadowResult{
 				Class:   v.compareGateErrors(legacyErr, ans),
@@ -499,7 +500,7 @@ func (v engineView) compareGateErrors(legacy error, ans gateAnswer) DivergenceCl
 	if v.unchecked && legacy == nil && ans.Err != nil && ans.Source == DenialDefaultGuard {
 		return ClassGuardNew
 	}
-	return compareGateErrors(legacy, ans.Err)
+	return CompareGateErrors(legacy, ans.Err)
 }
 
 func (v engineView) compareGateStatuses(legacy, enf []GateStatus) DivergenceClass {
@@ -657,7 +658,7 @@ type FlagClassModeSource struct {
 var _ ClassModeSource = (*FlagClassModeSource)(nil)
 
 // NewFlagClassModeSource reads load() at most once per ttl per class.
-func NewFlagClassModeSource(load func() *config.Config, ttl time.Duration, clock Clock) *FlagClassModeSource {
+func NewFlagClassModeSource(load func() *config.Config, ttl time.Duration, clock hostclaim.Clock) *FlagClassModeSource {
 	f := &FlagClassModeSource{byClass: map[CallerClass]*CachedModeSource{}}
 	for _, c := range []CallerClass{ClassOperator, ClassAgent, ClassSystem} {
 		f.byClass[c] = NewCachedModeSource(func() EngineMode { return ModeForClassFlags(c, load()) }, ttl, clock)
@@ -677,7 +678,7 @@ func (f *FlagClassModeSource) ModeFor(class CallerClass) EngineMode {
 }
 
 func (s *SwitchableWorkflowEngine) noteDenied(from, to BacklogStatus, src DenialSource) {
-	s.denials.inc(src)
+	s.denials.Inc(src)
 	s.infof("[SwitchableWorkflowEngine] enforce denied from=%s to=%s reason=%s", from, to, src)
 }
 
@@ -686,7 +687,7 @@ func (s *SwitchableWorkflowEngine) noteFallback(r FallbackReason) {
 	if r == "" {
 		return
 	}
-	s.fallbacks.inc(r)
+	s.fallbacks.Inc(r)
 	now := s.clock.Now().UnixNano()
 	last := s.lastFallbackWarn.Load()
 	if last != 0 && now-last < int64(fallbackWarnGap) {
@@ -697,7 +698,7 @@ func (s *SwitchableWorkflowEngine) noteFallback(r FallbackReason) {
 	}
 }
 
-func compareGateErrors(def, enf error) DivergenceClass {
+func CompareGateErrors(def, enf error) DivergenceClass {
 	switch {
 	case def != nil && enf == nil:
 		return ClassGateMissing
@@ -740,7 +741,7 @@ func compareGateStatuses(def, enf []GateStatus) DivergenceClass {
 type CachedModeSource struct {
 	load  func() EngineMode
 	ttl   time.Duration
-	clock Clock
+	clock hostclaim.Clock
 	cur   atomic.Pointer[modeEntry]
 	group singleflight.Group
 }
@@ -751,9 +752,9 @@ type modeEntry struct {
 }
 
 // NewCachedModeSource wraps load with a ttl cache; a nil clock uses real time.
-func NewCachedModeSource(load func() EngineMode, ttl time.Duration, clock Clock) *CachedModeSource {
+func NewCachedModeSource(load func() EngineMode, ttl time.Duration, clock hostclaim.Clock) *CachedModeSource {
 	if clock == nil {
-		clock = realClock{}
+		clock = hostclaim.RealClock{}
 	}
 	return &CachedModeSource{load: load, ttl: ttl, clock: clock}
 }

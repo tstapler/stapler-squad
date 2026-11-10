@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "shared-node-modules_lib",
+    srcs = [
+        "main.go",
+        "run.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/shared-node-modules",
+    visibility = ["//visibility:private"],
+    deps = ["//executor/safeexec"],
+)
+
+go_binary(
+    name = "shared-node-modules",
+    embed = [":shared-node-modules_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "shared-node-modules_test",
+    srcs = [
+        "main_test.go",
+        "run_test.go",
+    ],
+    embed = [":shared-node-modules_lib"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

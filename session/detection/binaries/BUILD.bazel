@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "binaries",
+    srcs = [
+        "agy.go",
+        "aider.go",
+        "claude.go",
+        "gemini.go",
+        "opencode.go",
+        "opencode_question.go",
+        "pi.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/detection/binaries",
+    visibility = ["//visibility:public"],
+    deps = ["//session/detection/dtypes"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":binaries",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "binaries_test",
+    srcs = [
+        "agy_test.go",
+        "aider_test.go",
+        "claude_test.go",
+        "gemini_test.go",
+        "opencode_question_test.go",
+        "opencode_test.go",
+        "pi_test.go",
+    ],
+    data = ["//session/testdata:panes"],
+    embed = [":binaries"],
+    deps = [
+        "//session/detection/dtypes",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

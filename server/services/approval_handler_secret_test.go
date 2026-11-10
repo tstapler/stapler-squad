@@ -12,13 +12,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // newTestHandlerWithAnalytics creates an ApprovalHandler with an in-memory AnalyticsStore.
 func newTestHandlerWithAnalytics(t *testing.T) (*ApprovalHandler, *AnalyticsStore) {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
 	t.Cleanup(analyticsStore.Stop)

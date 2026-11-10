@@ -1,0 +1,22 @@
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_test(
+    name = "inttest_test",
+    srcs = [
+        "crash_matrix_test.go",
+        "matrix_helpers_test.go",
+        "matrix_test.go",
+    ],
+    deps = [
+        "//pkg/classifier",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//server/deliverygate",
+        "//server/notifications",
+        "//server/push",
+        "//server/services",
+        "//session",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

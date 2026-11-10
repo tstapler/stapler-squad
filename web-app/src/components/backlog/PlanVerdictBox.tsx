@@ -171,7 +171,7 @@ export function PlanVerdictBox({
             disabled={regeneratePending}
             aria-busy={regeneratePending}
             data-testid="backlog-action-regenerate-plan"
-          >
+          >{/* analytics-exempt */}
             {regeneratePending ? "Regenerating…" : "Regenerate Plan with This Feedback"}
           </button>
         </div>
@@ -202,7 +202,7 @@ export function PlanVerdictBox({
             aria-expanded={showReject}
             onClick={() => setShowReject((prev) => !prev)}
             data-testid="backlog-action-reject-plan"
-          >
+          >{/* analytics-exempt */}
             Request Changes
           </button>
 
@@ -223,7 +223,7 @@ export function PlanVerdictBox({
                 className={styles.formTextarea}
               />
               <div className={styles.formActions}>
-                <button className={styles.secondaryButton} onClick={handleCancel}>
+                <button className={styles.secondaryButton} onClick={handleCancel}>{/* analytics-exempt */}
                   Cancel
                 </button>
                 <button
@@ -233,7 +233,7 @@ export function PlanVerdictBox({
                   aria-busy={isPending}
                   onClick={() => void handleSubmit()}
                   data-testid="backlog-action-reject-plan-submit"
-                >
+                >{/* analytics-exempt */}
                   {isPending ? "Requesting…" : "Submit"}
                 </button>
               </div>

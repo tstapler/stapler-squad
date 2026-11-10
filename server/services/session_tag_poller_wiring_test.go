@@ -12,6 +12,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -49,7 +50,7 @@ func (f *fakeSessionTagPoolClient) callCount() int {
 // the poller (already Start()ed, exactly as it is at real server boot) both tracks the new
 // session AND actually classifies it on its next tick, and DeleteSession removes it again.
 func TestSessionService_should_RegisterNewSessionWithTagPoller_When_SessionCreatedAfterServerStartup(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	engine := classifier.NewTaggingEngine()

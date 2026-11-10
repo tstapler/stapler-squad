@@ -107,3 +107,20 @@ func TestWorkspaceModeEnabled_ExactStringMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestIsTestMode_ShouldDetectBazelTest_WhenArgvHasNoDotTest(t *testing.T) {
+	saved := os.Args
+	t.Cleanup(func() { os.Args = saved })
+	os.Args = []string{"/runfiles/config_test"}
+
+	t.Setenv("TEST_TMPDIR", "")
+	t.Setenv("TEST_SRCDIR", "")
+	if IsTestMode() {
+		t.Fatal("IsTestMode() = true for a plain binary without Bazel test env")
+	}
+	t.Setenv("TEST_TMPDIR", "/tmp/x")
+	t.Setenv("TEST_SRCDIR", "/tmp/y")
+	if !IsTestMode() {
+		t.Fatal("IsTestMode() = false under Bazel's TEST_TMPDIR/TEST_SRCDIR")
+	}
+}

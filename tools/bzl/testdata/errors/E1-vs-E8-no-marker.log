@@ -1,0 +1,2 @@
+ERROR: /w/config/BUILD.bazel:3:11: GoCompilePkg config/config.a failed: no such file or directory: config/deleted.go
+ERROR: Build did NOT complete successfully

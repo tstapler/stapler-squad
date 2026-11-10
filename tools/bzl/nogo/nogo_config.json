@@ -1,0 +1,12 @@
+{
+  "_base": {
+    "description": "applies to every analyzer; the analyzers scope themselves by package path and file name",
+    "exclude_files": {
+      "external/.*": "third-party code is not ours to lint",
+      "bazel-out/.*": "generated code (proto, ent, tools) is not hand-written",
+      "tools/lint/.*": "the analyzers themselves are a separate module that make lint-custom does not lint either",
+      "tools/ci/.*": "CI/build helper programs shell out to git, bazel and gh by design; they are not product code",
+      "tools/bzl/(codesign|codesigndiff|e2eavoided|e2ecapture|e2eguard|e2erun|e2eslice|manual-instance|merge-bazel-regen|nogoseed|nogotwins|parity|soak|spike|spike-tags|testsummary|verifybin|wfcachecheck)/.*": "Bazel/build helper programs shell out to git, bazel and go by design; they are not product code (tools/bzl/nogo/testdata seeds stay linted so the seed checks can fail)"
+    }
+  }
+}

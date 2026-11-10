@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/triggerfireevent"
@@ -446,7 +447,7 @@ func TestHandlePRFixEvent_should_Return200WithNoAuditRow_When_FeatureFlagDisable
 func TestHandlePRFixEvent_should_LogPrEventWebhooksOffWarningOnce_When_MultipleDeliveriesReceived(t *testing.T) {
 	// captureLogs holds slogDefaultMu for the test's duration (see the comment on
 	// slogDefaultMu in autonomous_orchestration_service_test.go) — not t.Parallel().
-	buf := captureLogs(t)
+	buf := svctest.CaptureLogs(t)
 	infra := newWebhookTestInfra(t)
 	// pr_event_webhooks left unset (default false); webhook_triggers is on so Handle
 	// reaches handlePRFixEvent's early return.
@@ -593,7 +594,7 @@ func TestHandlePRFixEvent_should_Return401AndRecordRejected_When_WorkflowSecretE
 		GitHubBranch:           "main",
 		WebhookSecretEncrypted: "", // empty — decryptWorkflowSecret must early-return
 		PromptTemplate:         "x",
-		Enabled:                boolPtr(true),
+		Enabled:                svctest.BoolPtr(true),
 	})
 	require.NoError(t, err)
 	router := &fakePRFixEventRouter{matched: true}

@@ -1,0 +1,82 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "tokens",
+    srcs = [
+        "activity.go",
+        "association.go",
+        "checkpoint.go",
+        "context_health.go",
+        "doc.go",
+        "finding_types.go",
+        "findings.go",
+        "jsonl_types.go",
+        "parse_state.go",
+        "parser.go",
+        "pricing.go",
+        "proto_mapping.go",
+        "skill_detector.go",
+        "spend_rate.go",
+        "store.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/tokens",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//session/pricing",
+        "//session/scanbuf",
+        "//session/scanqueue",
+        "//session/scanstate",
+        "@com_github_spaolacci_murmur3//:murmur3",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tokens",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "tokens_test",
+    srcs = [
+        "activity_test.go",
+        "association_test.go",
+        "checkpoint_test.go",
+        "context_health_test.go",
+        "findings_context_growth_test.go",
+        "findings_test.go",
+        "parser_compact_test.go",
+        "parser_test.go",
+        "pricing_test.go",
+        "proto_mapping_test.go",
+        "skill_detector_test.go",
+        "spend_rate_test.go",
+        "store_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":tokens"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//session/pricing",
+        "//session/scanstate",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

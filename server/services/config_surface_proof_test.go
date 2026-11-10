@@ -458,7 +458,7 @@ func TestConfigSurfaceProofs_EveryRegisteredSurfaceHasEntry_WhenFieldsEnumerated
 	if got := len(pendingSurfaces); got != pendingCeiling {
 		t.Errorf("pendingSurfaces has %d entries, pendingCeiling is %d: delete pending lines and lower the ceiling together; never add", got, pendingCeiling)
 	}
-	errs := validateConfigSurfaces(allConfigSurfaces(), configSurfaceProofs, pendingSurfaces, testFuncBodies(t, "."))
+	errs := validateConfigSurfaces(allConfigSurfaces(), configSurfaceProofs, pendingSurfaces, testFuncBodies(t, ".", "backlogsvc", "wsconn"))
 	if len(errs) > 0 {
 		t.Fatalf("config surface proof violations:\n%s", strings.Join(errs, "\n"))
 	}

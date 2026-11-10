@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -74,7 +75,7 @@ func TestCreateCheckpoint_SessionNotStarted(t *testing.T) {
 		Status:  session.Stopped,
 		Program: "claude",
 	}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 
 	_, err := fix.svc.CreateCheckpoint(context.Background(), connect.NewRequest(&sessionv1.CreateCheckpointRequest{
 		SessionId: "not-started-session",
@@ -123,7 +124,7 @@ func TestListCheckpoints_ReturnsExistingCheckpoints(t *testing.T) {
 	t.Cleanup(fix.cleanup)
 
 	inst, cpID := makeInstanceWithCheckpoint("checkpoint-session")
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 
 	resp, err := fix.svc.ListCheckpoints(context.Background(), connect.NewRequest(&sessionv1.ListCheckpointsRequest{
 		SessionId: "checkpoint-session",
@@ -145,7 +146,7 @@ func TestListCheckpoints_EmptyWhenNoCheckpoints(t *testing.T) {
 		Status:  session.Active,
 		Program: "claude",
 	}
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 
 	resp, err := fix.svc.ListCheckpoints(context.Background(), connect.NewRequest(&sessionv1.ListCheckpointsRequest{
 		SessionId: "no-checkpoints-session",

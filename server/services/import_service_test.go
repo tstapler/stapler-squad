@@ -18,7 +18,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/interceptors"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/importer"
 )
 
 // fakeProcessFileInspector is a minimal test double for
@@ -305,13 +307,13 @@ func TestImportService_CommitImportExternalSession_ReturnsFailedStatus_When_Path
 // deterministic AlreadyGone branch and asserting the persisted
 // SuspendedProcessRecord is cleaned up as a result.
 func TestImportService_ConfirmKillExternalSession_ReturnsAlreadyGone_When_AliveCheckerReportsProcessGone(t *testing.T) {
-	withIsolatedStateDir(t)
-	suspended, err := session.NewSuspendedProcessStore()
+	svctest.WithIsolatedStateDir(t)
+	suspended, err := importer.NewSuspendedProcessStore()
 	require.NoError(t, err)
-	require.NoError(t, suspended.Add(session.SuspendedProcessRecord{
+	require.NoError(t, suspended.Add(importer.SuspendedProcessRecord{
 		PID:        4242,
 		InstanceID: "inst-1",
-		Candidate:  session.ExternalSessionCandidate{TmuxSession: "sess-1"},
+		Candidate:  importer.ExternalSessionCandidate{TmuxSession: "sess-1"},
 	}))
 
 	svc := &ImportService{aliveChecker: &fakeAliveChecker{alive: false}, suspended: suspended}
@@ -339,15 +341,15 @@ func TestImportService_ConfirmKillExternalSession_ReturnsAlreadyGone_When_AliveC
 // regressed and the client-supplied PID were used instead,
 // ResumeOriginalProcess would fail (ESRCH) and resumed would be false.
 func TestImportService_CancelPendingKill_PrefersPersistedRecordPID_When_RecordExists(t *testing.T) {
-	withIsolatedStateDir(t)
-	suspended, err := session.NewSuspendedProcessStore()
+	svctest.WithIsolatedStateDir(t)
+	suspended, err := importer.NewSuspendedProcessStore()
 	require.NoError(t, err)
 
 	cmd := spawnSleeperForTest(t)
 	pid := int32(cmd.Process.Pid)
 	require.NoError(t, session.SuspendOriginalProcess(pid))
 
-	require.NoError(t, suspended.Add(session.SuspendedProcessRecord{
+	require.NoError(t, suspended.Add(importer.SuspendedProcessRecord{
 		PID:        pid,
 		InstanceID: "inst-1",
 	}))

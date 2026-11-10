@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "scanner-workload_lib",
+    srcs = [
+        "cadence.go",
+        "corpus.go",
+        "driver.go",
+        "main.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/scanner-workload",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//session/git/native",
+        "//session/unfinished",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+    ],
+)
+
+go_binary(
+    name = "scanner-workload",
+    embed = [":scanner-workload_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "scanner-workload_test",
+    srcs = [
+        "corpus_test.go",
+        "driver_test.go",
+    ],
+    embed = [":scanner-workload_lib"],
+    deps = [
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+    ],
+)

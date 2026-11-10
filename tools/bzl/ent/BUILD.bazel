@@ -1,0 +1,59 @@
+# Managed by hand, not Gazelle (listed in tools/bzl/hand-build-files.txt).
+# gazelle:ignore
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//tools/bzl:ent.bzl", "ent_packages")
+load("//tools/bzl/ent:packages.bzl", "ENT_PACKAGES")
+
+exports_files([
+    "ent_flags.txt",
+    "packages.bzl",
+])
+
+# The schema package is hand-written and Gazelle-managed; the alias lets one resolve_regexp
+# line map every session/ent/<pkg> import to //tools/bzl/ent:<pkg>.
+alias(
+    name = "schema",
+    actual = "//session/ent/schema",
+    visibility = ["//visibility:public"],
+)
+
+ent_packages(
+    name = "ent_gen",
+    entc = "//tools/bzl/ent/entc",
+    flags = "ent_flags.txt",
+    packages = ENT_PACKAGES,
+    packages_file = "packages.bzl",
+    schema_srcs = ["//session/ent/schema:schema_srcs"],
+    visibility = [
+        "//:__pkg__",
+        "//tools/bzl:__pkg__",
+    ],
+)
+
+# ent_gen's -expect check fails the build with `Run: bazel run //tools/bzl/ent:update_packages` when
+# packages.bzl no longer matches a fresh generation, so building it is the freshness test.
+build_test(
+    name = "packages_fresh_test",
+    targets = [":ent_gen"],
+)
+
+# sql/upsert evidence (no UpsertRule symbol exists): ent emits OnConflict* builders only with the flag.
+sh_test(
+    name = "upsert_test",
+    srcs = ["upsert_test.sh"],
+    args = [
+        "$(rootpath :ent_flags.txt)",
+        "$(rootpaths :ent_gen)",
+    ],
+    data = [
+        ":ent_flags.txt",
+        ":ent_gen",
+    ],
+)
+
+# bazel run //tools/bzl/ent:update_packages after a schema change (ent_gen fails and says so).
+alias(
+    name = "update_packages",
+    actual = "//tools/bzl/ent/entc:update_packages",
+)

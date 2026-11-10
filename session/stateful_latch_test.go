@@ -29,11 +29,11 @@ func TestShadow_SkipsStatefulStructuralGateWithoutIo_WhenFieldSet(t *testing.T) 
 		wantSkipped int
 	}{{true, 1}, {false, 0}} {
 		repo := NewTestEntRepository(t)
-		require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.client))
+		require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
 		gateRepo := &failIfCalledGateRepo{t: t}
-		cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), gateRepo, nil)
+		cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 		require.NoError(t, err)
-		from, to := newCustomTransitionWithGates(t, repo.client, cfg, []GateKind{GateKindStructural}, []bool{tc.stateful})
+		from, to := newCustomTransitionWithGates(t, repo.Client, cfg, []GateKind{GateKindStructural}, []bool{tc.stateful})
 		h := newSelectorHarness(t, ModeShadow, cfg)
 
 		_ = h.sel.ValidateGates(BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString(), AcCriteria: latchACDone}, to, nil)
@@ -47,10 +47,10 @@ func TestLatch_StatefulStructuralGateStaysSatisfied_AfterRegression(t *testing.T
 	t.Parallel()
 	for _, stateful := range []bool{true, false} {
 		repo := NewTestEntRepository(t)
-		require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.client))
-		cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.client), NewEntGateSatisfactionRepository(repo.client), nil)
+		require.NoError(t, EnsureBuiltInWorkflowStages(context.Background(), repo.Client))
+		cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), NewEntGateSatisfactionRepository(repo.Client), nil)
 		require.NoError(t, err)
-		from, to := newCustomTransitionWithGates(t, repo.client, cfg, []GateKind{GateKindStructural}, []bool{stateful})
+		from, to := newCustomTransitionWithGates(t, repo.Client, cfg, []GateKind{GateKindStructural}, []bool{stateful})
 		itemID := uuid.NewString()
 		satisfied := BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACDone}
 		regressed := BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACPending}
@@ -74,7 +74,7 @@ func TestRollback_ClearsStatefulLatchOfUndoneEdge(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
-	from, to := newCustomTransitionWithGates(t, h.repo.client, h.cfg, []GateKind{GateKindStructural}, []bool{true})
+	from, to := newCustomTransitionWithGates(t, h.repo.Client, h.cfg, []GateKind{GateKindStructural}, []bool{true})
 	item := h.newItem(t, from)
 	satisfied := BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACDone}
 	regressed := BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACPending}

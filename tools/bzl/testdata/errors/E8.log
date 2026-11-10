@@ -1,0 +1,3 @@
+FAIL: //session:session_test (see /w/bazel-testlogs/session/session_test/test.log)
+ERROR: /w/session/BUILD.bazel:9:13: Testing //session:session_test failed: (Exit 1): linux-sandbox failed
+open /home/u/.stapler-squad/config.json: permission denied

@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+exports_files(["analyzer.go"])
+
+go_library(
+    name = "silenttransition",
+    srcs = ["analyzer.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/silenttransition",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tools/lint/internal/nolintcomment",
+        "@lint_x_tools//go/analysis",
+        "@lint_x_tools//go/analysis/passes/inspect",
+        "@lint_x_tools//go/ast/inspector",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":silenttransition",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "silenttransition_test",
+    srcs = ["analyzer_test.go"],
+    data = glob(["testdata/**"]) + [
+        "//session:transition_callers.go",
+        "@rules_go//go",
+    ],
+    deps = [
+        ":silenttransition",
+        "//tools/lint/internal/gotool",
+        "@lint_x_tools//go/analysis/analysistest",
+    ],
+)

@@ -1,0 +1,55 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "auth",
+    srcs = [
+        "claim_advertisement.go",
+        "handlers.go",
+        "host_advertisement.go",
+        "hostname_guard.go",
+        "invite.go",
+        "localtoken.go",
+        "qrcode.go",
+        "session.go",
+        "setup.go",
+        "store.go",
+        "user.go",
+        "webauthn.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/auth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//session/hostclaim",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@com_github_go_webauthn_webauthn//webauthn",
+        "@com_github_gofrs_flock//:flock",
+        "@com_github_skip2_go_qrcode//:go-qrcode",
+        "@org_golang_x_time//rate",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":auth",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "auth_test",
+    srcs = [
+        "claim_advertisement_test.go",
+        "host_advertisement_test.go",
+        "localtoken_test.go",
+        "webauthn_test.go",
+    ],
+    embed = [":auth"],
+    deps = [
+        "//envtest",
+        "//session/hostclaim",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -22,6 +22,18 @@
 
 set -euo pipefail
 
+for tool in ffmpeg ffprobe rsvg-convert bc; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "SKIP: $tool not installed; demo-post-process tests need ffmpeg, ffprobe, rsvg-convert and bc"
+    exit 0
+  fi
+done
+
+if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libvpx-vp9; then
+  echo "SKIP: ffmpeg has no libvpx-vp9 encoder"
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 POSTPROCESS="$SCRIPT_DIR/demo-post-process.sh"
 

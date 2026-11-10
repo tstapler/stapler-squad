@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "storage",
+    srcs = ["sqlite.go"],
+    importpath = "github.com/tstapler/stapler-squad/internal/storage",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/history",
+        "//internal/sqlitedsn",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":storage",
+    visibility = ["//:__subpackages__"],
+)

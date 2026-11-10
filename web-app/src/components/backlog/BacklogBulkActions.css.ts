@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme-contract.css";
+import { vars, zIndex } from "@/styles/theme-contract.css";
 
 export const overlay = style({
   position: "fixed",
@@ -8,7 +8,7 @@ export const overlay = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 1000,
+  zIndex: zIndex.modal,
 });
 
 export const dialog = style({

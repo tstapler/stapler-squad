@@ -1,0 +1,1 @@
+bazel-hint: a Go dependency is not wired into MODULE.bazel. Remedy: run 'go get <module> && go mod tidy && make gazelle && bazel mod tidy'.

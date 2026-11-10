@@ -9,12 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
-
-// scheduleWakeupToken is the client-side wake tool agents must not use. It is
-// spelled in two parts so this file, and every test that needs the word, does
-// not count as a reference itself.
-const scheduleWakeupToken = "Schedule" + "Wakeup"
 
 // pollingReferences is the number of lines per Go file that mention the
 // client-side wake tool (counts verified 2026-10-17). Every one is a prompt
@@ -23,22 +19,23 @@ const scheduleWakeupToken = "Schedule" + "Wakeup"
 // file or raise a count: add durable waits with schedule_wake instead, and
 // reach for this map only when a new prompt must forbid the tool.
 var pollingReferences = map[string]int{
-	"server/mcp/tools_backlog.go":                          6,
-	"server/mcp/tools_backlog_test.go":                     2,
-	"server/mcp/tools_backlog_wait_cap_test.go":            3,
-	"server/services/backlog_service_verdict_steer.go":     2,
-	"server/services/backlog_stuck_rpc_test.go":            1,
-	"server/services/guidance_ack_wiring.go":               4, // PostToolUse receipt counter, not a prompt
-	"server/services/notification_quality_metrics.go":      7, // agent_schedule_wakeup_calls_total
-	"server/services/notification_quality_metrics_test.go": 6,
-	"session/backlog_post_review_prompt_test.go":           1,
-	"session/domain/backlog.go":                            1,
-	"session/prompt_sections.go":                           1, // the one shared ban, used by every work prompt
+	"server/mcp/tools_backlog.go":                                 6,
+	"server/mcp/tools_backlog_test.go":                            2,
+	"server/mcp/tools_backlog_wait_cap_test.go":                   3,
+	"server/services/backlogsvc/backlog_service_verdict_steer.go": 2,
+	"server/services/backlogsvc/backlog_stuck_rpc_bsvc_test.go":   1,
+	"server/services/guidance_ack_wiring.go":                      4, // PostToolUse receipt counter, not a prompt
+	"server/services/notification_quality_metrics.go":             7, // agent_schedule_wakeup_calls_total
+	"server/services/notification_quality_metrics_test.go":        6,
+	"session/backlog/backlog_post_review_prompt_test.go":          1,
+	"session/domain/backlog.go":                                   1,
+	"session/prompt_sections.go":                                  1, // the one shared ban, used by every work prompt
 }
 
 func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.T) {
 	root := moduleRoot(t)
 	got := map[string]int{}
+	seenDirs := map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -53,7 +50,8 @@ func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		n, countErr := countLinesWith(path, scheduleWakeupToken)
+		seenDirs[filepath.ToSlash(filepath.Dir(mustRel(t, root, path)))] = true
+		n, countErr := countLinesWith(path, sessiontest.ClientWakeToolToken)
 		if countErr != nil {
 			return countErr
 		}
@@ -64,8 +62,31 @@ func TestPollingToolReferencesInGo_should_MatchTheExplicitPerFileMap(t *testing.
 		return nil
 	})
 	require.NoError(t, err)
-	require.Equal(t, pollingReferences, got,
+	require.Equal(t, expectedWithin(pollingReferences, seenDirs), got,
 		"a Go file mentions the client-side wake tool that the map does not allow; prompts should point agents at schedule_wake instead")
+}
+
+// expectedWithin narrows the map to packages whose sources were visible. Under go test
+// that is every package. A Bazel sandbox holds only the packages named in `data`, which
+// cover each entry of the map, so any unlisted reference in them still fails.
+func expectedWithin(want map[string]int, seenDirs map[string]bool) map[string]int {
+	if os.Getenv("TEST_TMPDIR") == "" {
+		return want
+	}
+	out := map[string]int{}
+	for file, n := range want {
+		if seenDirs[filepath.ToSlash(filepath.Dir(file))] {
+			out[file] = n
+		}
+	}
+	return out
+}
+
+func mustRel(t *testing.T, root, path string) string {
+	t.Helper()
+	rel, err := filepath.Rel(root, path)
+	require.NoError(t, err)
+	return rel
 }
 
 // moduleRoot is the directory holding go.mod, found by walking up from the package.

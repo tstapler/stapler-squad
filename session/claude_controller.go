@@ -14,10 +14,12 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
+	"github.com/tstapler/stapler-squad/session/cmdexec"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/ptyio"
 )
 
 // StatusChangeListener is called when the controller detects a terminal status transition.
@@ -134,7 +136,7 @@ type ClaudeController struct {
 	// lifecycle guards Start/Stop transitions. Write lock is held only for the
 	// brief check-and-set at the beginning of each transition; all slow cleanup
 	// in Stop() (goroutine joins, disk I/O) runs outside the lock.
-	lifecycle Locked[controllerLifecycle]
+	lifecycle ptyio.Locked[controllerLifecycle]
 	_         [64]byte // cache-line padding: prevents lifecycle.mu invalidating adjacent atomic slots (Go #67764)
 
 	// Sub-components initialized atomically in Start(), cleared atomically in Stop().
@@ -142,19 +144,19 @@ type ClaudeController struct {
 	// Using atomic.Pointer lets read-only operations (GetCurrentStatus, GetRecentOutput,
 	// Subscribe, GetIdleState, …) proceed without holding any lifecycle lock, so they
 	// are never blocked when Stop() runs its slow cleanup.
-	ptyAccess        atomic.Pointer[PTYAccess]
-	responseStream   atomic.Pointer[ResponseStream]
+	ptyAccess        atomic.Pointer[ptyio.PTYAccess]
+	responseStream   atomic.Pointer[ptyio.ResponseStream]
 	rateLimitHandler atomic.Pointer[ratelimit.PTYConsumer]
 	statusDetector   atomic.Pointer[detection.StatusDetector]
 	idleDetector     atomic.Pointer[detection.IdleDetector]
-	queue            atomic.Pointer[CommandQueue]
-	executor         atomic.Pointer[CommandExecutor]
-	history          atomic.Pointer[CommandHistory]
+	queue            atomic.Pointer[cmdexec.CommandQueue]
+	executor         atomic.Pointer[cmdexec.CommandExecutor]
+	history          atomic.Pointer[cmdexec.CommandHistory]
 
 	_ [64]byte // cache-line padding: separates hot atomic slots from Locked fields below (Go #67764)
 
 	// listeners is the fan-out set of status-change callbacks.
-	listeners Locked[[]StatusChangeListener]
+	listeners ptyio.Locked[[]StatusChangeListener]
 
 	// lastEmittedStatus tracks the status most recently broadcast to listeners.
 	// Written only by the single runStatusChangeLoop goroutine; atomic so no lock needed.
@@ -235,15 +237,15 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		}
 
 		// Create circular buffer for PTY output
-		buffer := NewCircularBuffer(256 * 1024) // 256KB: detection needs ≤4KB; scrollback owns long-term history
-		pa := NewPTYAccess(cc.sessionName, ptyReader, buffer)
+		buffer := ptyio.NewCircularBuffer(256 * 1024) // 256KB: detection needs ≤4KB; scrollback owns long-term history
+		pa := ptyio.NewPTYAccess(cc.sessionName, ptyReader, buffer)
 
 		// Create rate limit detection handler
 		rateLimitManager := ratelimit.NewManager(cc.sessionName, leasedSessionAccessor{cc.instance})
 		rlh := ratelimit.NewPTYConsumer(pa, rateLimitManager)
 
 		// Create response stream
-		rs := NewResponseStream(cc.sessionName, pa)
+		rs := ptyio.NewResponseStream(cc.sessionName, pa)
 		// Tag escape analytics with the stable session UUID (not the mutable tmux
 		// name) so escape_event rows can be correlated with the session identifier
 		// used everywhere else in the app (session selectors, RPCs, etc.).
@@ -316,25 +318,25 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		}
 
 		// Create command queue with persistence
-		q, err := NewCommandQueueWithPersistence(cc.sessionName, getQueuePersistDir())
+		q, err := cmdexec.NewCommandQueueWithPersistence(cc.sessionName, getQueuePersistDir())
 		if err != nil {
 			startErr = fmt.Errorf("failed to create command queue: %w", err)
 			return
 		}
 
 		// Create command history with persistence
-		h, err := NewCommandHistoryWithPersistence(cc.sessionName, getHistoryPersistDir())
+		h, err := cmdexec.NewCommandHistoryWithPersistence(cc.sessionName, getHistoryPersistDir())
 		if err != nil {
 			startErr = fmt.Errorf("failed to create command history: %w", err)
 			return
 		}
 
 		// Create command executor
-		exec := NewCommandExecutor(cc.sessionName, pa, rs, sd, q)
+		exec := cmdexec.NewCommandExecutor(cc.sessionName, pa, rs, sd, q)
 
 		// Set up result callback to automatically add to history.
 		// Captures h directly — safe since h is never replaced after Start().
-		exec.SetResultCallback(func(result *ExecutionResult) {
+		exec.SetResultCallback(func(result *cmdexec.ExecutionResult) {
 			if err := h.AddFromResult(result); err != nil {
 				log.Error("failed to add execution result to history", "err", err)
 			}
@@ -515,12 +517,12 @@ func (cc *ClaudeController) SendCommand(text string, priority int) (string, erro
 		return "", fmt.Errorf("controller not started")
 	}
 
-	cmd := &Command{
+	cmd := &cmdexec.Command{
 		ID:        generateCommandID(),
 		Text:      text,
 		Priority:  priority,
 		Timestamp: time.Now(),
-		Status:    CommandPending,
+		Status:    cmdexec.CommandPending,
 	}
 
 	if err := q.Enqueue(cmd); err != nil {
@@ -533,7 +535,7 @@ func (cc *ClaudeController) SendCommand(text string, priority int) (string, erro
 }
 
 // SendCommandImmediate sends a command for immediate execution (bypasses queue).
-func (cc *ClaudeController) SendCommandImmediate(text string) (*ExecutionResult, error) {
+func (cc *ClaudeController) SendCommandImmediate(text string) (*cmdexec.ExecutionResult, error) {
 	if !cc.started.Load() {
 		return nil, fmt.Errorf("controller not started")
 	}
@@ -543,12 +545,12 @@ func (cc *ClaudeController) SendCommandImmediate(text string) (*ExecutionResult,
 		return nil, fmt.Errorf("controller not started")
 	}
 
-	cmd := &Command{
+	cmd := &cmdexec.Command{
 		ID:        generateCommandID(),
 		Text:      text,
 		Priority:  100, // High priority for immediate commands
 		Timestamp: time.Now(),
-		Status:    CommandPending,
+		Status:    cmdexec.CommandPending,
 	}
 
 	result, err := exec.ExecuteImmediate(cmd)
@@ -568,7 +570,7 @@ func (cc *ClaudeController) SendCommandImmediate(text string) (*ExecutionResult,
 }
 
 // GetCommandStatus retrieves the current status of a command.
-func (cc *ClaudeController) GetCommandStatus(commandID string) (*Command, error) {
+func (cc *ClaudeController) GetCommandStatus(commandID string) (*cmdexec.Command, error) {
 	if exec := cc.executor.Load(); exec != nil {
 		if currentCmd := exec.GetCurrentCommand(); currentCmd != nil && currentCmd.ID == commandID {
 			return currentCmd, nil
@@ -600,7 +602,7 @@ func (cc *ClaudeController) CancelCommand(commandID string) error {
 }
 
 // GetCurrentCommand returns the currently executing command, if any.
-func (cc *ClaudeController) GetCurrentCommand() *Command {
+func (cc *ClaudeController) GetCurrentCommand() *cmdexec.Command {
 	if exec := cc.executor.Load(); exec != nil {
 		return exec.GetCurrentCommand()
 	}
@@ -608,7 +610,7 @@ func (cc *ClaudeController) GetCurrentCommand() *Command {
 }
 
 // GetQueuedCommands returns all commands currently in the queue.
-func (cc *ClaudeController) GetQueuedCommands() []*Command {
+func (cc *ClaudeController) GetQueuedCommands() []*cmdexec.Command {
 	if q := cc.queue.Load(); q != nil {
 		return q.List()
 	}
@@ -625,7 +627,7 @@ func (cc *ClaudeController) GetQueuedCommandsCount() int {
 }
 
 // GetCommandHistory returns recent command history.
-func (cc *ClaudeController) GetCommandHistory(limit int) []*HistoryEntry {
+func (cc *ClaudeController) GetCommandHistory(limit int) []*cmdexec.HistoryEntry {
 	h := cc.history.Load()
 	if h == nil {
 		return nil
@@ -637,7 +639,7 @@ func (cc *ClaudeController) GetCommandHistory(limit int) []*HistoryEntry {
 }
 
 // SearchHistory searches command history by text.
-func (cc *ClaudeController) SearchHistory(query string) []*HistoryEntry {
+func (cc *ClaudeController) SearchHistory(query string) []*cmdexec.HistoryEntry {
 	if h := cc.history.Load(); h != nil {
 		return h.Search(query)
 	}
@@ -645,15 +647,15 @@ func (cc *ClaudeController) SearchHistory(query string) []*HistoryEntry {
 }
 
 // GetHistoryStatistics returns statistics about command execution.
-func (cc *ClaudeController) GetHistoryStatistics() HistoryStatistics {
+func (cc *ClaudeController) GetHistoryStatistics() cmdexec.HistoryStatistics {
 	if h := cc.history.Load(); h != nil {
 		return h.GetStatistics()
 	}
-	return HistoryStatistics{}
+	return cmdexec.HistoryStatistics{}
 }
 
 // Subscribe creates a new subscription to the response stream.
-func (cc *ClaudeController) Subscribe(subscriberID string) (<-chan ResponseChunk, error) {
+func (cc *ClaudeController) Subscribe(subscriberID string) (<-chan ptyio.ResponseChunk, error) {
 	rs := cc.responseStream.Load()
 	if rs == nil {
 		return nil, fmt.Errorf("response stream not initialized")
@@ -947,18 +949,18 @@ func (cc *ClaudeController) GetInstance() InstanceContext {
 }
 
 // SetExecutionOptions updates command execution options.
-func (cc *ClaudeController) SetExecutionOptions(options ExecutionOptions) {
+func (cc *ClaudeController) SetExecutionOptions(options cmdexec.ExecutionOptions) {
 	if exec := cc.executor.Load(); exec != nil {
 		exec.SetOptions(options)
 	}
 }
 
 // GetExecutionOptions returns current execution options.
-func (cc *ClaudeController) GetExecutionOptions() ExecutionOptions {
+func (cc *ClaudeController) GetExecutionOptions() cmdexec.ExecutionOptions {
 	if exec := cc.executor.Load(); exec != nil {
 		return exec.GetOptions()
 	}
-	return DefaultExecutionOptions()
+	return cmdexec.DefaultExecutionOptions()
 }
 
 // ClearHistory removes all command history entries.

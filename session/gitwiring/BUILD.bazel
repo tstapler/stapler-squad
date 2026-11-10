@@ -1,0 +1,76 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "gitwiring",
+    srcs = [
+        "capability.go",
+        "git_runner.go",
+        "git_wrapper_bypass.go",
+        "parse.go",
+        "shared.go",
+        "soak.go",
+        "soak_meter.go",
+        "soak_sample.go",
+        "systemconfig.go",
+        "wiring.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/gitwiring",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//log",
+        "//session/git/backend",
+        "//session/git/backend/cli",
+        "//session/git/backend/gogit",
+        "//session/git/native/capability",
+        "//session/gitprovider",
+        "//session/tmux",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_metric//noop",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gitwiring",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gitwiring_test",
+    srcs = [
+        "capability_test.go",
+        "git_runner_test.go",
+        "git_wrapper_bypass_test.go",
+        "parse_test.go",
+        "soak_test.go",
+        "spawn_gate_test.go",
+        "systemconfig_oracle_test.go",
+        "systemconfig_test.go",
+        "wiring_test.go",
+    ],
+    embed = [":gitwiring"],
+    deps = [
+        "//config",
+        "//executor/safeexec",
+        "//log",
+        "//session/git/backend",
+        "//session/git/backend/cli",
+        "//session/git/backend/gogit",
+        "//session/tmux",
+        "//testutil/gitoracle",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ],
+)

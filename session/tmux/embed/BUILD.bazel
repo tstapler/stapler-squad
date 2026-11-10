@@ -1,0 +1,15 @@
+# gazelle:ignore
+load("@bazel_lib//lib:copy_file.bzl", "copy_file")
+
+# ADR-007: stage the Bazel-built tmux at the path binary_embedded.go's //go:embed names.
+# Only referenced from //session/tmux under --config=embed_tmux (select in that BUILD file).
+copy_file(
+    name = "tmux_staged",
+    src = "//tools/bzl/tmux:tmux_bin",
+    out = "tmux",
+    is_executable = True,
+    visibility = [
+        "//:__pkg__",  # the otel weave stages it
+        "//session/tmux:__pkg__",
+    ],
+)

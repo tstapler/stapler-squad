@@ -121,7 +121,7 @@ export function ChatRefinementPanel({ clarifyingQuestions, onSend }: ChatRefinem
           onClick={() => void handleSend()}
           disabled={sending || !input.trim()}
           data-testid="chat-refinement-send"
-        >
+        >{/* analytics-exempt */}
           {sending ? "Sending…" : "Send"}
         </button>
       </div>

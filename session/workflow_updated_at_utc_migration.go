@@ -28,7 +28,7 @@ import (
 // abort the rest.
 func runWorkflowUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) error {
 	//nolint:entfullscan one-time backfill normalizing every Workflow's updated_at to UTC; idempotent, safe to re-run.
-	wfs, err := er.client.Workflow.Query().All(ctx)
+	wfs, err := er.Client.Workflow.Query().All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
 		// mirroring runBacklogItemUpdatedAtUTCBackfill's same defensive posture.
@@ -40,7 +40,7 @@ func runWorkflowUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) err
 		if wf.UpdatedAt.Location() == time.UTC {
 			continue
 		}
-		if _, saveErr := er.client.Workflow.UpdateOneID(wf.ID).
+		if _, saveErr := er.Client.Workflow.UpdateOneID(wf.ID).
 			SetUpdatedAt(wf.UpdatedAt.UTC()).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] workflow updated_at UTC backfill: workflow=%s: %v", wf.ID, saveErr)

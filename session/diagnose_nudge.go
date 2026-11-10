@@ -113,7 +113,7 @@ func (s *Storage) claimDiagnoseNudgeSlot(ctx context.Context, itemID string, rea
 	if limit <= 0 {
 		return ClaimResult{}, nil
 	}
-	claimed, err := s.repo.ClaimDiagnoseNudgeSlotIfEligible(ctx, itemID, reason, limit, time.Now(), cooldown)
+	claimed, err := s.Repo.ClaimDiagnoseNudgeSlotIfEligible(ctx, itemID, reason, limit, time.Now(), cooldown)
 	if err != nil {
 		return ClaimResult{}, fmt.Errorf("claim diagnose nudge slot %s/%s: %w", itemID, reason, err)
 	}
@@ -157,7 +157,7 @@ func (s *Storage) RecordDiagnoseNudgeAttempt(ctx context.Context, itemID string,
 	maxAttempts := int32(config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault())
 	nextEligible := time.Now().Add(diagnoseNudgeCooldown)
 
-	incremented, err := s.repo.RecordDiagnoseNudgeAttemptIfBelowCap(ctx, itemID, reason, maxAttempts, nextEligible)
+	incremented, err := s.Repo.RecordDiagnoseNudgeAttemptIfBelowCap(ctx, itemID, reason, maxAttempts, nextEligible)
 	if err != nil {
 		return false, fmt.Errorf("record diagnose nudge attempt %s/%s: %w", itemID, reason, err)
 	}

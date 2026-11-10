@@ -1,0 +1,5 @@
+# Hand-written: exposes docs read by tests (Gazelle ignores BUILD files without Go sources).
+exports_files(
+    ["inbox-pr-watch.md"],
+    visibility = ["//visibility:public"],
+)

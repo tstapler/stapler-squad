@@ -136,8 +136,8 @@ func TestScanAndLinkPRURL_ShouldUseCanonicalIdentity_WhenURLCasingDiffers(t *tes
 	inst.SetPRPersister(storage)
 
 	scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, "remote: https://github.com/Acme/App/pull/12\n")
-	assert.Equal(t, 1, countStates(t, storage.repo))
-	assert.Equal(t, 1, countLinks(t, storage.repo))
+	assert.Equal(t, 1, countStates(t, storage.Repo))
+	assert.Equal(t, 1, countLinks(t, storage.Repo))
 	require.Equal(t, []int{12}, attachNumbers(t, inst))
 	assert.Equal(t, "acme", inst.Snapshot().GitHub.PRs[0].Ref.Owner())
 }
@@ -148,15 +148,15 @@ func TestScanAndLinkPRURL_ShouldSkipTombstonedRef_WhenOwnerDetachedItBefore(t *t
 	inst.SetPRPersister(storage)
 	ctx := context.Background()
 	owner := SessionPROwner(inst.UUID)
-	_, err := storage.repo.UpsertSessionPR(ctx, owner, mustPRRef(t, "", "acme", "app", 12), PRLink{Source: AttachSourceManual})
+	_, err := storage.Repo.UpsertSessionPR(ctx, owner, mustPRRef(t, "", "acme", "app", 12), PRLink{Source: AttachSourceManual})
 	require.NoError(t, err)
-	_, err = storage.repo.DeleteSessionPR(ctx, owner, mustPRRef(t, "", "Acme", "App", 12))
+	_, err = storage.Repo.DeleteSessionPR(ctx, owner, mustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
-	require.Equal(t, 0, countLinks(t, storage.repo))
+	require.Equal(t, 0, countLinks(t, storage.Repo))
 
 	scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, "remote: https://github.com/Acme/App/pull/12\n")
 
-	assert.Equal(t, 0, countLinks(t, storage.repo), "a tombstone for Acme/App#12 suppresses the scan")
+	assert.Equal(t, 0, countLinks(t, storage.Repo), "a tombstone for Acme/App#12 suppresses the scan")
 	assert.Empty(t, inst.Snapshot().GitHub.PRs)
 }
 
@@ -187,7 +187,7 @@ func TestScanAndLinkPRURL_ShouldReloadTerminalFalse_WhenSessionHasNoLink(t *test
 			storage, cleanup := createTestStorage(t)
 			t.Cleanup(cleanup)
 			prLoadFixture(t, storage, "legacy-scan", "", "acme", "app", 11)
-			require.NoError(t, storage.repo.UpdateGitHubPRStatusTerminal(context.Background(), "legacy-scan", true))
+			require.NoError(t, storage.Repo.UpdateGitHubPRStatusTerminal(context.Background(), "legacy-scan", true))
 			loaded, err := storage.LoadInstances()
 			require.NoError(t, err)
 			require.Len(t, loaded, 1)

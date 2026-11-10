@@ -1,0 +1,57 @@
+# gazelle:ignore
+# gazelle:exclude cmd
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+# Spike S7 only. Fake embed payloads, staged at the exact path the //go:embed directives name.
+# testonly: nothing production-facing may depend on them.
+write_file(
+    name = "fake_tmux",
+    testonly = True,
+    out = "embed/tmux",
+    content = ["FAKE-TMUX"],
+    newline = "unix",
+)
+
+write_file(
+    name = "fake_tymuxd",
+    testonly = True,
+    out = "embed/tymuxd",
+    content = ["FAKE-TYMUXD"],
+    newline = "unix",
+)
+
+go_library(
+    name = "tags",
+    testonly = True,
+    srcs = [
+        "t_embed_tmux.go",
+        "t_embed_tymux.go",
+        "t_gitoracle.go",
+        "t_harness.go",
+        "t_integration.go",
+        "t_live_github.go",
+        "t_norace.go",
+        "t_race.go",
+        "t_sinkguard.go",
+        "t_tymux_requires_tmux.go",
+        "tags.go",
+    ],
+    embedsrcs = select({
+        "//tools/bzl/flags:embed_tmux_on": [":embed/tmux"],
+        "//conditions:default": [],
+    }) + select({
+        "//tools/bzl/flags:embed_tymux_on": [":embed/tymuxd"],
+        "//conditions:default": [],
+    }),
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/spike-tags",
+    visibility = ["//visibility:public"],
+)
+
+go_binary(
+    name = "tagdump",
+    testonly = True,
+    srcs = ["cmd/main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/spike-tags/cmd",
+    deps = [":tags"],
+)

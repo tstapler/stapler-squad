@@ -9,7 +9,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -24,27 +26,27 @@ type WorkflowEngineWiring struct {
 	// Modes resolves each caller class's mode from live config.
 	Modes *session.FlagClassModeSource
 	// Recorder persists the shadow ledger; its Run is started with the server.
-	Recorder *session.ShadowLedgerRecorder
+	Recorder *backlog.ShadowLedgerRecorder
 	// Soak backs /actuator/workflow-engine.
 	Soak *WorkflowEngineSoakSource
 	// Status backs GetWorkflowEngineStatus; GateWired is filled by InjectTransitionGate.
-	Status *services.WorkflowEngineStatusSource
+	Status *backlogsvc.WorkflowEngineStatusSource
 }
 
 // newWorkflowEngineWiring builds the selector over def and cfgEngine (nil
 // when stage-config construction failed; the selector then answers from Default)
 // with the shadow recorder in place before any engine call can happen.
 func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *session.ConfiguredWorkflowEngine, entClient *ent.Client, loadConfig func() *config.Config) *WorkflowEngineWiring {
-	dir, err := session.ShadowLedgerDir()
+	dir, err := backlog.ShadowLedgerDir()
 	if err != nil {
 		log.Warn("workflow engine shadow ledger directory unavailable; the soak window will not persist", "err", err)
 		dir = ""
 	}
-	recorder := session.NewShadowLedgerRecorder(dir)
+	recorder := backlog.NewShadowLedgerRecorder(dir)
 	modes := services.NewWorkflowEngineClassModeSource(loadConfig, nil)
 	engine := session.NewSwitchableWorkflowEngine(def, cfgEngine, modes,
 		session.WithShadowRecorder(recorder),
-		session.WithConfigLabeler(session.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
+		session.WithConfigLabeler(backlog.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
 	)
 
 	soak := &WorkflowEngineSoakSource{
@@ -55,13 +57,13 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 		},
 	}
 	if dir != "" {
-		soak.ReproPath = session.ShadowLedgerPath(dir)
+		soak.ReproPath = backlog.ShadowLedgerPath(dir)
 	}
 	if entClient != nil && cfgEngine != nil {
 		soak.ConfigDiff = NewWorkflowEngineConfigDiff(entClient, cfgEngine)
 	}
 
-	status := &services.WorkflowEngineStatusSource{
+	status := &backlogsvc.WorkflowEngineStatusSource{
 		ModeFor:          modes.ModeFor,
 		Ledger:           soak.Ledger,
 		ConfigDiff:       soak.ConfigDiff,

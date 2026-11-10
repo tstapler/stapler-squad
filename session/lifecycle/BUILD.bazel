@@ -1,0 +1,45 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "lifecycle",
+    srcs = [
+        "await.go",
+        "observability.go",
+        "reason.go",
+        "timeout.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/lifecycle",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":lifecycle",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "lifecycle_test",
+    srcs = [
+        "await_test.go",
+        "observability_test.go",
+        "reason_test.go",
+        "timeout_test.go",
+    ],
+    deps = [
+        ":lifecycle",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ],
+)

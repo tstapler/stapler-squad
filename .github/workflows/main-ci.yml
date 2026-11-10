@@ -348,6 +348,9 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact-name }}
 
+      - name: Install otelc (the shipped binary is otelc-woven)
+        run: go install go.opentelemetry.io/otelc/tool/cmd/otelc@v1.0.1
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -360,7 +363,7 @@ jobs:
             BINARY_NAME=$BINARY_NAME.exe
           fi
           VERSION=$(git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || git rev-parse --short HEAD)
-          go build -v -ldflags "-X main.version=${VERSION}" -o build/${{ matrix.goos }}_${{ matrix.goarch }}/$BINARY_NAME .
+          ./scripts/otel-auto-build.sh go build -v -ldflags "-X main.version=${VERSION}" -o build/${{ matrix.goos }}_${{ matrix.goarch }}/$BINARY_NAME .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

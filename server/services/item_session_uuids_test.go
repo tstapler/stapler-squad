@@ -9,7 +9,7 @@ import (
 )
 
 func TestNonEmptySessionUUIDs(t *testing.T) {
-	got := nonEmptySessionUUIDs([]session.ItemSessionSummary{{SessionUUID: "a"}, {SessionUUID: ""}, {SessionUUID: "b"}})
+	got := NonEmptySessionUUIDs([]session.ItemSessionSummary{{SessionUUID: "a"}, {SessionUUID: ""}, {SessionUUID: "b"}})
 	require.Equal(t, []string{"a", "b"}, got)
-	require.Empty(t, nonEmptySessionUUIDs(nil))
+	require.Empty(t, NonEmptySessionUUIDs(nil))
 }

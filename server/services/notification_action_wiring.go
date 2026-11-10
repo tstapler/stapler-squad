@@ -9,7 +9,9 @@ import (
 type NotificationActionWiring struct {
 	Storage  *session.Storage
 	Guidance *GuidanceRequestService
-	Backlog  *BacklogService
+	// Backlog is the TransitionBacklogItemStatus delegate; leave it a nil interface (not a boxed nil
+	// pointer) to disable backlog actions.
+	Backlog BacklogTransitioner
 	// Cancels backs CANCEL_WAKE and CANCEL_PEER_HELP (optional).
 	Cancels CancelDelegate
 	// Mirror re-registers an expired hook question from its durable row (optional).
@@ -43,7 +45,6 @@ func (s *SessionService) WireNotificationActions(w NotificationActionWiring) {
 		delegates.Guidance = NewGuidanceAnswerer(w.Guidance)
 		w.Guidance.SetDeliveryProbes(s.deliveryProbes(acks))
 	}
-	// A nil *BacklogService boxed into the interface would defeat the nil check.
 	if w.Backlog != nil && w.Storage != nil {
 		delegates.Backlog = NewBacklogDecider(BacklogDeciderDeps{
 			Status:      NewItemStatusReader(w.Storage),

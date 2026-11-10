@@ -1,0 +1,51 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "backend",
+    srcs = [
+        "backend.go",
+        "callinfo.go",
+        "callstate.go",
+        "capability.go",
+        "cohort.go",
+        "doc.go",
+        "errors.go",
+        "fallback.go",
+        "locate.go",
+        "location.go",
+        "metrics.go",
+        "operation.go",
+        "routed.go",
+        "routed_methods.go",
+        "shadow.go",
+        "spawn.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/git/backend",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/git/redact",
+        "//telemetry",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_metric//noop",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backend",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "backend_test",
+    srcs = [
+        "cohort_test.go",
+        "locate_test.go",
+    ],
+    embed = [":backend"],
+    deps = ["@com_github_stretchr_testify//assert"],
+)

@@ -20,45 +20,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --- fixtures ----------------------------------------------------------------
 
-func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller TransitionCaller, from, to BacklogStatus, reason string) {
-	t.Helper()
-	applied, err := h.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonTransitionDenied, from,
-		domain.FormatTransitionDeniedContext(domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: reason}, "test"))
-	require.NoError(t, err)
-	require.True(t, applied, "the item must be at %s for the denial to anchor", from)
-}
-
 // denLiftGates removes every operator gate, as an approval or a config edit would.
 func denLiftGates(t *testing.T, h *gateHarness) {
 	t.Helper()
 	ctx := context.Background()
-	_, err := h.repo.client.TransitionGate.Delete().Exec(ctx)
+	_, err := h.repo.Client.TransitionGate.Delete().Exec(ctx)
 	require.NoError(t, err)
 	require.NoError(t, h.cfg.InvalidateCache(ctx))
-}
-
-func denBlock(t *testing.T, h *gateHarness, from, to BacklogStatus) {
-	t.Helper()
-	addGateToSeededEdge(t, h.repo.client, h.cfg, from, to, GateKindHumanApproval, nil)
-}
-
-func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []OpenStuckStateData {
-	t.Helper()
-	rows, err := h.storage.FindOpenStuckStates(context.Background())
-	require.NoError(t, err)
-	var out []OpenStuckStateData
-	for _, r := range rows {
-		if r.ItemID == itemID && r.Reason == reason {
-			out = append(out, r)
-		}
-	}
-	return out
 }
 
 // --- predicate ---------------------------------------------------------------
@@ -137,7 +110,7 @@ func TestTransitionDenialHolds_should_Release_When_TheClassIsNoLongerEnforced(t 
 	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
 	require.True(t, h.storage.TransitionDenialHolds(ctx, item))
 
-	h.sel.modes = allClasses(ModeShadow)
+	h.sel.Modes = allClasses(ModeShadow)
 
 	assert.False(t, h.storage.TransitionDenialHolds(ctx, item), "rolling the flag back to Shadow frees the item")
 }
@@ -195,136 +168,7 @@ func TestRedriveTransitionDenials_should_ReReportWithTheNewReason_When_TheTarget
 	assert.Equal(t, to, calls[0].to)
 }
 
-func TestSelfHealStuck_should_ResolveATransitionDeniedRowOnlyOnceTheItemLeftItsFromStatus(t *testing.T) {
-	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
-	ctx := context.Background()
-	item := h.newItem(t, BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
-	l := NewBacklogLifecycleListener(h.storage)
-
-	l.selfHealStuck(ctx, h.repo)
-	assert.Len(t, denOpenRows(t, h, item.ID, domain.StuckReasonTransitionDenied), 1, "still anchored at idea")
-
-	h.moveRaw(t, item.ID, BacklogStatusReady)
-	l.selfHealStuck(ctx, h.repo)
-	assert.Empty(t, denOpenRows(t, h, item.ID, domain.StuckReasonTransitionDenied), "the item moved on")
-}
-
 // --- detector-local guards (kind D) -----------------------------------------------
-
-func TestReconcileOrphanedTriageItems_should_NotMarkOrphaned_When_IdeaHasAnOpenDenial(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name    string
-		denied  bool
-		wantRow int
-	}{{"open denial", true, 0}, {"no denial", false, 1}} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			h := newGateHarness(t, ModeEnforce)
-			ctx := context.Background()
-			denBlock(t, h, BacklogStatusIdea, BacklogStatusReady)
-			item := newEndedTriageTestItem(t, h.storage, h.repo)
-			if tc.denied {
-				denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
-			}
-
-			NewBacklogLifecycleListener(h.storage).reconcileOrphanedTriageItems(ctx, h.repo)
-
-			assert.Len(t, denOpenRows(t, h, item.ID, domain.StuckReasonOrphanedTriage), tc.wantRow)
-		})
-	}
-}
-
-func TestReconcileOrphanedTriageRemediation_should_SpendNoAttempt_When_IdeaHasAnOpenDenial(t *testing.T) {
-	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
-	ctx := context.Background()
-	denBlock(t, h, BacklogStatusIdea, BacklogStatusReady)
-	item := newEndedTriageTestItem(t, h.storage, h.repo)
-	_, err := h.storage.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "pre-existing orphan row")
-	require.NoError(t, err)
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
-
-	NewBacklogLifecycleListener(h.storage).reconcileOrphanedTriageRemediation(ctx, h.repo)
-
-	rows := denOpenRows(t, h, item.ID, domain.StuckReasonOrphanedTriage)
-	require.Len(t, rows, 1)
-	assert.Zero(t, rows[0].RemediationAttempts)
-}
-
-func TestReconcileOrphanedAgentPRs_should_SkipTheGitHubLookup_When_ReviewHasAnOpenDenial(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name      string
-		denied    bool
-		wantCalls int
-	}{{"open denial", true, 0}, {"no denial", false, 1}} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			h := newGateHarness(t, ModeEnforce)
-			denBlock(t, h, BacklogStatusReview, BacklogStatusPRPending)
-			item := newOrphanedAgentPRTestItem(t, h.storage, "backlog/den-orphan")
-			if tc.denied {
-				denOpenDenial(t, h, item.ID, CallerOrphanedAgentPR, BacklogStatusReview, BacklogStatusPRPending, DeniedOperatorGate)
-			}
-			lookups := 0
-			l := NewBacklogLifecycleListener(h.storage)
-			l.SetOrphanedPRFinder(func(context.Context, string, string) (*github.PRInfo, error) {
-				lookups++
-				return nil, github.ErrNoPR
-			})
-
-			l.reconcileOrphanedAgentPRs(context.Background(), h.repo)
-
-			assert.Equal(t, tc.wantCalls, lookups)
-		})
-	}
-}
-
-func TestReconcilePushFailedItems_should_SpendNoAttempt_When_ReviewHasAnOpenDenial(t *testing.T) {
-	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
-	ctx := context.Background()
-	denBlock(t, h, BacklogStatusReview, BacklogStatusPRPending)
-	item := h.newItem(t, BacklogStatusReview)
-	_, err := h.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, BacklogStatusReview, "push rejected")
-	require.NoError(t, err)
-	denOpenDenial(t, h, item.ID, CallerPushCreatePRFallback, BacklogStatusReview, BacklogStatusPRPending, DeniedOperatorGate)
-
-	NewBacklogLifecycleListener(h.storage).reconcilePushFailedItems(ctx, h.repo)
-
-	rows := denOpenRows(t, h, item.ID, domain.StuckReasonPushFailed)
-	require.Len(t, rows, 1)
-	assert.Zero(t, rows[0].RemediationAttempts, "a held item spends no backoff attempt")
-}
-
-func TestReconcileUnprocessedReviewVerdicts_should_NotApplyTheVerdict_When_ReviewHasAnOpenDenial(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name       string
-		denied     bool
-		wantStatus BacklogStatus
-	}{{"open denial", true, BacklogStatusReview}, {"no denial", false, BacklogStatusDone}} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			h := newGateHarness(t, ModeEnforce)
-			ctx := context.Background()
-			item := newStuckReviewTestItem(t, h.storage, ReviewVerdictPass, false, true)
-			if tc.denied {
-				denBlock(t, h, BacklogStatusReview, BacklogStatusDone)
-				denOpenDenial(t, h, item.ID, CallerPushCreatePRFallback, BacklogStatusReview, BacklogStatusDone, DeniedOperatorGate)
-			}
-			l := NewBacklogLifecycleListener(h.storage)
-			l.SetSessionLivenessChecker(func(sessionUUID string) bool { return !strings.HasPrefix(sessionUUID, "headless-review-") })
-
-			l.reconcileUnprocessedReviewVerdicts(ctx, h.repo)
-
-			assert.Equal(t, string(tc.wantStatus), h.status(t, item.ID))
-		})
-	}
-}
 
 // --- completeness -----------------------------------------------------------------
 
@@ -372,6 +216,9 @@ var denDetectorKinds = map[string]denKind{
 	"trigger_chain_reconcile":     denNA,    // fires a chained session; writes no status (chain_firer.go)
 }
 
+// denScanDirs are the directories the guard scans: the session core and the backlog lifecycle package.
+var denScanDirs = []string{".", "backlog"}
+
 func denSourceFile(t *testing.T, rel string) string {
 	t.Helper()
 	b, err := os.ReadFile(rel)
@@ -382,7 +229,7 @@ func denSourceFile(t *testing.T, rel string) string {
 func TestEveryStuckDetectorIsClassified(t *testing.T) {
 	t.Parallel()
 	re := regexp.MustCompile(`l\.runStuckDetector\("([^"]+)"`)
-	matches := re.FindAllStringSubmatch(denSourceFile(t, "backlog_lifecycle.go"), -1)
+	matches := re.FindAllStringSubmatch(denSourceFile(t, "backlog/backlog_lifecycle.go"), -1)
 	names := make([]string, 0, len(matches))
 	for _, m := range matches {
 		names = append(names, m[1])
@@ -398,16 +245,20 @@ func TestEveryStuckDetectorIsClassified(t *testing.T) {
 	assert.Equal(t, classified, names, "every runStuckDetector name needs a kind in denDetectorKinds, and no entry may be stale")
 }
 
-// denCallsTo lists the functions (as Name or Recv.Name) in dir's non-test files
+// denCallsTo lists the functions (as Name or Recv.Name) in the dirs' non-test files
 // that call a method named one of calls.
-func denCallsTo(t *testing.T, dir string, calls ...string) map[string]bool {
+func denCallsTo(t *testing.T, dirs []string, calls ...string) map[string]bool {
 	t.Helper()
 	want := map[string]bool{}
 	for _, c := range calls {
 		want[c] = true
 	}
-	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
-	require.NoError(t, err)
+	var files []string
+	for _, dir := range dirs {
+		matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		files = append(files, matches...)
+	}
 	found := map[string]bool{}
 	fset := token.NewFileSet()
 	for _, f := range files {
@@ -451,7 +302,7 @@ func denFuncName(fn *ast.FuncDecl) string {
 // predicate is reached through exactly the guard helpers, never copied per detector.
 func TestDeniedGuards_should_AllShareOnePredicate(t *testing.T) {
 	t.Parallel()
-	got := denCallsTo(t, ".", "HasOpenTransitionDenied", "OpenTransitionDenial", "TransitionDenialHolds")
+	got := denCallsTo(t, denScanDirs, "HasOpenTransitionDenied", "OpenTransitionDenial", "TransitionDenialHolds")
 	assert.Equal(t, map[string]bool{
 		"Storage.HasOpenTransitionDenied->OpenTransitionDenial":                  true,
 		"Storage.TransitionDenialHolds->OpenTransitionDenial":                    true,
@@ -461,7 +312,7 @@ func TestDeniedGuards_should_AllShareOnePredicate(t *testing.T) {
 
 func TestDetectorLocalGuards_should_CallTheSharedHelper(t *testing.T) {
 	t.Parallel()
-	got := denCallsTo(t, ".", "heldByTransitionDenial")
+	got := denCallsTo(t, denScanDirs, "heldByTransitionDenial")
 	for _, fn := range []string{
 		"BacklogLifecycleListener.respawnReviewGatesWithoutGate",
 		"BacklogLifecycleListener.reconcileUnprocessedReviewVerdicts",
@@ -472,17 +323,4 @@ func TestDetectorLocalGuards_should_CallTheSharedHelper(t *testing.T) {
 	} {
 		assert.Truef(t, got[fn+"->heldByTransitionDenial"], "%s must call the open-denial guard", fn)
 	}
-}
-
-func TestReconcileMultiReasonEscalation_should_TreatALoneTransitionDeniedRowAsNonEscalating(t *testing.T) {
-	t.Parallel()
-	h := newGateHarness(t, ModeEnforce)
-	ctx := context.Background()
-	denBlock(t, h, BacklogStatusIdea, BacklogStatusReady)
-	item := h.newItem(t, BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
-
-	NewBacklogLifecycleListener(h.storage).reconcileMultiReasonEscalation(ctx, h.repo)
-
-	assert.Empty(t, denOpenRows(t, h, item.ID, domain.StuckReasonMultipleReasons))
 }

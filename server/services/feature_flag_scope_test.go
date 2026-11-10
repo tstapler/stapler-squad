@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 const gateFlag = config.HiddenSessionGateFeatureFlag
@@ -50,7 +51,7 @@ func (c *fakeCache) OnFlagMutation(name, scope, mutation string) {
 
 // T-FL-02 / T-FL-16 / T-FL-22: validation of scope and mutation.
 func TestFlagMutation_ShouldRejectMalformedScopeAndMutationCombinations_AndPersistNothing(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(gateFlag, true))
 
@@ -62,12 +63,12 @@ func TestFlagMutation_ShouldRejectMalformedScopeAndMutationCombinations_AndPersi
 	}{
 		{"bogus kind", gateFlag, setOn, "kind:bogus"},
 		{"triage is not reachable", gateFlag, setOn, "kind:triage"},
-		{"scope on non-scopable flag", sddDefaultPipelineFlagName, setOn, "kind:review"},
+		{"scope on non-scopable flag", SddDefaultPipelineFlagName, setOn, "kind:review"},
 		{"set with empty scope", gateFlag, setOn, ""},
 		{"set disabled with empty scope", gateFlag, setOff, ""},
 		{"clear with empty scope", gateFlag, clearScope, ""},
 		{"clear with global literal", gateFlag, clearScope, "global"},
-		{"clear on non-scopable flag", sddDefaultPipelineFlagName, clearScope, "kind:review"},
+		{"clear on non-scopable flag", SddDefaultPipelineFlagName, clearScope, "kind:review"},
 		{"reset with a scope", gateFlag, resetGlob, "kind:review"},
 		{"reset with the global literal", gateFlag, resetGlob, "global"},
 		{"unspecified with a scope", gateFlag, sessionv1.FlagMutation_FLAG_MUTATION_UNSPECIFIED, "kind:review"},
@@ -89,7 +90,7 @@ func TestFlagMutation_ShouldRejectMalformedScopeAndMutationCombinations_AndPersi
 
 // T-FL-03 / T-FL-13: scoped set, clear and global reset with read-back.
 func TestUpdateFeatureFlag_ShouldReadBackScopesFromPersistedConfig_WhenScopedOverrideSetClearedAndGlobalReset(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 
 	f, err := mutateFlag(svc, gateFlag, setOn, "kind:review")
@@ -132,7 +133,7 @@ func TestUpdateFeatureFlag_ShouldReadBackScopesFromPersistedConfig_WhenScopedOve
 
 // An old client (no scope, no mutation) never deletes a persisted scope.
 func TestUpdateFeatureFlag_ShouldKeepEveryScopeKey_WhenLegacyRequestOmitsScope(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	require.NoError(t, config.LoadConfig().SetFeatureFlagScope(gateFlag, "kind:review", true))
 
@@ -149,7 +150,7 @@ func TestUpdateFeatureFlag_ShouldKeepEveryScopeKey_WhenLegacyRequestOmitsScope(t
 
 // T-FL-04: every persisted change reaches the cache with its scope and mutation.
 func TestUpdateFeatureFlag_ShouldTellTheCacheTheScopeAndMutation_WhenFlagIsMutated(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	cache := &fakeCache{}
 	svc.SetFlagObserver(cache)
@@ -184,7 +185,7 @@ func (c *scopedController) ApplyScope(scope string, enabled bool) error {
 // T-FL-15 (scoped half): a failed scoped apply of a key that was absent deletes
 // it instead of writing false; a key that existed is restored.
 func TestUpdateFeatureFlag_ShouldRollBackByDeleteNotExplicitFalse_WhenScopedControllerFailsAndTheKeyWasAbsent(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	ctrl := &scopedController{failScope: errors.New("boom")}
 	svc.SetFeatureController(gateFlag, ctrl)
@@ -204,7 +205,7 @@ func TestUpdateFeatureFlag_ShouldRollBackByDeleteNotExplicitFalse_WhenScopedCont
 
 // T-FL-23: only enabling is refused by the precondition.
 func TestUpdateFeatureFlag_ShouldNeverRefuseDisablingClearScopeOrResetGlobal_WhenStatsWriterNotRunning(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	svc.SetEnableGuard(gateFlag, func() string { return statsWriterNotRunning })
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(gateFlag, true))
@@ -227,7 +228,7 @@ func TestUpdateFeatureFlag_ShouldNeverRefuseDisablingClearScopeOrResetGlobal_Whe
 // that kind on, so it is held to the enable guard; a clear that changes nothing
 // about the effective value is not.
 func TestUpdateFeatureFlag_ShouldRefuseClearScope_WhenItTurnsAKindOnAndTheGuardReports(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	svc.SetEnableGuard(gateFlag, func() string { return statsWriterNotRunning })
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(gateFlag, true))

@@ -141,7 +141,7 @@ function GateRow({
               aria-label={`Approve human-approval gate for transition ${transitionLabel}`}
               onClick={onApprove}
               type="button"
-            >
+            >{/* analytics-exempt */}
               Approve
             </button>
             <button
@@ -150,7 +150,7 @@ function GateRow({
               aria-label={`Reject human-approval gate for transition ${transitionLabel}`}
               onClick={onReject}
               type="button"
-            >
+            >{/* analytics-exempt */}
               Reject
             </button>
           </div>

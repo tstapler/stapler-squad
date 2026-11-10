@@ -12,34 +12,31 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
 // countingStore counts GetAll calls, i.e. real aggregate computations.
 type countingStore struct {
-	fakeTokenStore
+	svctest.FakeTokenStore
 	getAllCalls atomic.Int32
 }
 
 func (c *countingStore) GetAll() []*tokens.ParseResult {
 	c.getAllCalls.Add(1)
-	return c.results
+	return c.Results
 }
 
 func newCachedFixture(t *testing.T) (*InsightsService, *countingStore, *fakeClock) {
 	t.Helper()
-	store := &countingStore{fakeTokenStore: fakeTokenStore{results: []*tokens.ParseResult{
-		newResult("u1", "claude-sonnet-4-5", "/proj", 1000, 500, 0, time.Now().UTC()),
+	store := &countingStore{FakeTokenStore: svctest.FakeTokenStore{Results: []*tokens.ParseResult{
+		svctest.NewResult("u1", "claude-sonnet-4-5", "/proj", 1000, 500, 0, time.Now().UTC()),
 	}}}
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, nil)
 	clk := &fakeClock{t: time.Unix(1_700_000_000, 0)} // pi_extension_health_test.go
 	svc.summaries.now = clk.Now
 	return svc, store, clk
-}
-
-func summaryReq(orphans bool) *connect.Request[sessionv1.GetInsightsSummaryRequest] {
-	return connect.NewRequest(&sessionv1.GetInsightsSummaryRequest{IncludeOrphans: orphans})
 }
 
 func notLoading() bool { return false }
@@ -48,10 +45,10 @@ func TestGetInsightsSummary_WhenCalledWithinTTL_ExpectCacheHit(t *testing.T) {
 	t.Parallel()
 	svc, store, clk := newCachedFixture(t)
 
-	first, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	first, err := svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 	clk.Advance(insightsSummaryTTL - time.Millisecond)
-	second, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	second, err := svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 1, store.getAllCalls.Load())
@@ -62,9 +59,9 @@ func TestGetInsightsSummary_WhenRequestDiffers_ExpectSeparateComputation(t *test
 	t.Parallel()
 	svc, store, _ := newCachedFixture(t)
 
-	_, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err := svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
-	_, err = svc.GetInsightsSummary(context.Background(), summaryReq(false))
+	_, err = svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(false))
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
@@ -74,10 +71,10 @@ func TestGetInsightsSummary_WhenTTLExpired_ExpectRecompute(t *testing.T) {
 	t.Parallel()
 	svc, store, clk := newCachedFixture(t)
 
-	_, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err := svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 	clk.Advance(insightsSummaryTTL)
-	_, err = svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err = svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
@@ -86,11 +83,11 @@ func TestGetInsightsSummary_WhenTTLExpired_ExpectRecompute(t *testing.T) {
 func TestGetInsightsSummary_WhenStoreStillLoading_ExpectNotCached(t *testing.T) {
 	t.Parallel()
 	svc, store, _ := newCachedFixture(t)
-	store.isLoading = true
+	store.Loading = true
 
-	_, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err := svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
-	_, err = svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err = svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
@@ -100,10 +97,10 @@ func TestSummaryCache_WhenInvalidated_ExpectRecompute(t *testing.T) {
 	t.Parallel()
 	svc, store, _ := newCachedFixture(t)
 
-	_, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err := svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 	svc.summaries.invalidate()
-	_, err = svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err = svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
@@ -246,11 +243,11 @@ func TestDismissFinding_WhenSummaryCached_ExpectNextSummaryRecomputed(t *testing
 	svc, store, _ := newCachedFixture(t)
 	svc.SetDismissedFindingsStore(&fakeDismissedFindingsStore{})
 
-	_, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err := svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 	_, err = svc.DismissFinding(context.Background(), connect.NewRequest(&sessionv1.DismissFindingRequest{FindingId: "f1"}))
 	require.NoError(t, err)
-	_, err = svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err = svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
@@ -260,12 +257,12 @@ func TestWatchInsights_WhenTokenStoreNotifies_ExpectSummaryCacheInvalidated(t *t
 	t.Parallel()
 	svc, store, _ := newCachedFixture(t)
 	ch := make(chan *tokens.ParseResult, 1)
-	store.subscribeCh = ch
+	store.SubscribeCh = ch
 
-	_, err := svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err := svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 
-	sender := &fakeInsightsEventSender{}
+	sender := &svctest.FakeInsightsEventSender{}
 	runCtx, runCancel := context.WithCancel(context.Background())
 	t.Cleanup(runCancel)
 	done := runWatchInsights(runCtx, svc, sender)
@@ -273,10 +270,10 @@ func TestWatchInsights_WhenTokenStoreNotifies_ExpectSummaryCacheInvalidated(t *t
 	ch <- nil
 	wait.RequireEventually(t, func() bool { return len(sender.Sent()) >= 2 }, 2*time.Second, 10*time.Millisecond)
 
-	_, err = svc.GetInsightsSummary(context.Background(), summaryReq(true))
+	_, err = svc.GetInsightsSummary(context.Background(), svctest.SummaryReq(true))
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, store.getAllCalls.Load())
-	requireCleanReturn(t, runCancel, done)
+	svctest.RequireCleanReturn(t, runCancel, done)
 }
 
 func TestSummaryCache_WhenCallerArrivesAfterInvalidation_ExpectFreshComputeNotOldFlight(t *testing.T) {

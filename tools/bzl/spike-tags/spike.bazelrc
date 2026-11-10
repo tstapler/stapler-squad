@@ -1,0 +1,14 @@
+# S7 spike configs; used via: bazel --bazelrc=tools/bzl/spike-tags/spike.bazelrc build --config=...
+# NOTE: rules_go's tags flag is last-wins, not additive: each config that sets tags must list the full set.
+build:linux --@rules_go//go/config:pure
+build:race --@rules_go//go/config:pure=false
+build:race --@rules_go//go/config:race
+build:embed_tmux --@rules_go//go/config:tags=embed_tmux
+build:embed_tmux --//tools/bzl/flags:embed_tmux=true
+build:embed_tymux --@rules_go//go/config:tags=embed_tmux,embed_tymux
+build:embed_tymux --//tools/bzl/flags:embed_tmux=true
+build:embed_tymux --//tools/bzl/flags:embed_tymux=true
+build:sinkguard --@rules_go//go/config:tags=sinkguard
+build:gitoracle --@rules_go//go/config:tags=gitoracle
+build:integration --@rules_go//go/config:tags=integration
+build:release --config=embed_tymux

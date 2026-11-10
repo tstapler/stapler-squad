@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gittest",
+    srcs = ["gittest.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/git/internal/gittest",
+    visibility = ["//session/git:__subpackages__"],
+    deps = [
+        "//executor/safeexec",
+        "//testutil/gitfixture",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gittest",
+    visibility = ["//session/git:__subpackages__"],
+)

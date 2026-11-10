@@ -456,7 +456,7 @@ func buildLocalHookCommand(url, sessionTitle string) string {
 // references url but differs from desired, so an entry written by an older
 // build gains the proof and token branches without a duplicate. It reports
 // whether any entry is present and whether any was rewritten.
-func replaceStaleHookCommand(groups []hookMatcherGroup, url, desired string) (present, changed bool) {
+func replaceStaleHookCommand(groups []HookMatcherGroup, url, desired string) (present, changed bool) {
 	for gi := range groups {
 		for hi := range groups[gi].Hooks {
 			h := &groups[gi].Hooks[hi]
@@ -478,7 +478,7 @@ func reconcileLocalHook(existingRaw json.RawMessage, url, desired string) (merge
 	if existingRaw == nil {
 		return existingRaw, false, false
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(existingRaw, &groups); err != nil {
 		return existingRaw, false, false
 	}
@@ -500,7 +500,7 @@ func hookAlreadyPresent(existingRaw json.RawMessage, remoteTargeted bool, remote
 	if existingRaw == nil {
 		return false
 	}
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	if err := json.Unmarshal(existingRaw, &groups); err != nil {
 		return false
 	}
@@ -527,13 +527,13 @@ func hookAlreadyPresent(existingRaw json.RawMessage, remoteTargeted bool, remote
 // existingRaw's groups (if any), returning the re-marshaled hookMatcherGroup list.
 func prependHookEntry(existingRaw json.RawMessage, curlCmd string) (json.RawMessage, error) {
 	entry := hookEntry{Type: "command", Command: curlCmd, Timeout: hookTimeout}
-	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
+	group := HookMatcherGroup{Hooks: []hookEntry{entry}}
 
-	var existing []hookMatcherGroup
+	var existing []HookMatcherGroup
 	if existingRaw != nil {
 		_ = json.Unmarshal(existingRaw, &existing)
 	}
-	merged := append([]hookMatcherGroup{group}, existing...)
+	merged := append([]HookMatcherGroup{group}, existing...)
 	mergedJSON, err := json.Marshal(merged)
 	if err != nil {
 		return nil, err
@@ -613,12 +613,12 @@ func RemoveHooksConfig(rootDir string, hooks []HookName) error {
 		if !ok {
 			continue
 		}
-		var groups []hookMatcherGroup
+		var groups []HookMatcherGroup
 		if err := json.Unmarshal(existingRaw, &groups); err != nil {
 			continue
 		}
 
-		filtered := make([]hookMatcherGroup, 0, len(groups))
+		filtered := make([]HookMatcherGroup, 0, len(groups))
 		for _, g := range groups {
 			keptHooks := make([]hookEntry, 0, len(g.Hooks))
 			for _, h := range g.Hooks {

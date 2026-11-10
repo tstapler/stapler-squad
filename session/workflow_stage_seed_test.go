@@ -43,18 +43,18 @@ func TestSeedFingerprint_MatchesFreshlySeededDatabase_WhenInMemoryEntSeeded(t *t
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.client))
+	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.Client))
 
-	live, err := StageConfigFingerprint(ctx, repo.client)
+	live, err := StageConfigFingerprint(ctx, repo.Client)
 	require.NoError(t, err)
 	require.Equal(t, SeedFingerprint(), live)
 
 	// An edit that touches no edge still reads as edited.
 	//nolint:entfullscan test-scoped in-memory DB.
-	stage, err := repo.client.BacklogStage.Query().First(ctx)
+	stage, err := repo.Client.BacklogStage.Query().First(ctx)
 	require.NoError(t, err)
-	require.NoError(t, repo.client.BacklogStage.UpdateOneID(stage.ID).SetEnabled(false).Exec(ctx))
-	edited, err := StageConfigFingerprint(ctx, repo.client)
+	require.NoError(t, repo.Client.BacklogStage.UpdateOneID(stage.ID).SetEnabled(false).Exec(ctx))
+	edited, err := StageConfigFingerprint(ctx, repo.Client)
 	require.NoError(t, err)
 	require.NotEqual(t, SeedFingerprint(), edited)
 }

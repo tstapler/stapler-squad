@@ -28,6 +28,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./tools/ci/duration-trend.sh
 
+      # Advisory: prints bazel_disk_alarm and the cache-size gauges; a breach becomes a ::warning:: annotation.
+      - name: Record Bazel disk gauges
+        run: ./tools/ci/bazel-trend.sh
+
       - name: Commit updated history
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"

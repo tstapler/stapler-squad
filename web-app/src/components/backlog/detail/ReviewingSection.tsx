@@ -101,7 +101,7 @@ export function ReviewingSection({
               className={styles.viewChangesButton}
               onClick={onViewChanges}
               data-testid="backlog-review-view-changes"
-            >
+            >{/* analytics-exempt */}
               View Changes ↗
             </button>
           )}

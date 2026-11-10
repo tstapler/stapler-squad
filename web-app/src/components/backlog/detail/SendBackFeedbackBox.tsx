@@ -112,7 +112,7 @@ export function SendBackFeedbackBox({
           disabled={disabled || isPending}
           onClick={() => setShowForm((prev) => !prev)}
           data-testid="backlog-action-send-back-feedback"
-        >
+        >{/* analytics-exempt */}
           ↩ Send back for re-planning
         </button>
       )}
@@ -158,7 +158,7 @@ export function SendBackFeedbackBox({
               onClick={handleCancel}
               disabled={isPending}
               aria-disabled={isPending}
-            >
+            >{/* analytics-exempt */}
               Cancel
             </button>
             <button
@@ -168,7 +168,7 @@ export function SendBackFeedbackBox({
               aria-busy={isPending}
               onClick={() => void handleSubmit()}
               data-testid="backlog-action-send-back-feedback-submit"
-            >
+            >{/* analytics-exempt */}
               {isPending ? "Sending…" : "Submit"}
             </button>
           </div>

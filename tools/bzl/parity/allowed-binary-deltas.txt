@@ -1,0 +1,16 @@
+# Modules whose version in the Bazel-built binary may differ from the `go build` binary (compare-binary.sh).
+# One module path per line; each entry needs a reason comment above it.
+
+# go-git: go.mod pins the module path github.com/go-git/go-git/v5 with `replace` to the tstapler fork. cmd/go prints the
+# original path with a `=>` line; rules_go prints the replacement's version on the original path. Same code, different label.
+github.com/go-git/go-git/v5
+
+# golang.org/x/*: go_deps resolves MVS over go.mod plus the go.mod files of Bazel modules in the graph, so it picks newer
+# x/ releases than go.mod (e.g. crypto v0.57.0 vs v0.56.0). Real behaviour delta, tracked as a Story 2.x/3.4 follow-up:
+# pin them with go_deps.module_override or raise go.mod to the Bazel-selected versions.
+golang.org/x/crypto
+golang.org/x/mod
+golang.org/x/net
+golang.org/x/sync
+golang.org/x/sys
+golang.org/x/text

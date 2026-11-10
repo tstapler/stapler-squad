@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // surfaceID names one user-settable config surface, e.g. "quota.enabled",
@@ -33,17 +34,6 @@ type proofEntry struct {
 // does not exist in code yet and is allowed to be absent until its story lands.
 type pendingSurface struct {
 	planned bool
-}
-
-// assertConfigChangesBehavior is the shared proof helper: it runs observe with
-// each setting value and fails unless the observable differs. Every proof test
-// named in the registry must call it.
-func assertConfigChangesBehavior(t testing.TB, observe func(setting any) any, before, after any) {
-	t.Helper()
-	b, a := observe(before), observe(after)
-	if reflect.DeepEqual(b, a) {
-		t.Fatalf("setting %v -> %v did not change the observable (%v): config has no runtime effect", before, after, b)
-	}
 }
 
 func quotaSurfaces() []surfaceID {
@@ -96,12 +86,16 @@ func allConfigSurfaces() []surfaceID {
 	return out
 }
 
-// testFuncBodies parses every _test.go file in dir and maps func name to its body.
-func testFuncBodies(t testing.TB, dir string) map[string]*ast.BlockStmt {
+// testFuncBodies parses every _test.go file in the dirs and maps func name to its body.
+func testFuncBodies(t testing.TB, dirs ...string) map[string]*ast.BlockStmt {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
-	if err != nil {
-		t.Fatalf("glob: %v", err)
+	var files []string
+	for _, dir := range dirs {
+		matches, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
+		if err != nil {
+			t.Fatalf("glob: %v", err)
+		}
+		files = append(files, matches...)
 	}
 	fset := token.NewFileSet()
 	out := map[string]*ast.BlockStmt{}
@@ -123,8 +117,11 @@ func callsHelper(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if c, ok := n.(*ast.CallExpr); ok {
-			if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "assertConfigChangesBehavior" {
-				found = true
+			switch fn := c.Fun.(type) {
+			case *ast.Ident:
+				found = found || fn.Name == "assertConfigChangesBehavior"
+			case *ast.SelectorExpr: // svctest.AssertConfigChangesBehavior, the shared copy
+				found = found || fn.Sel.Name == "AssertConfigChangesBehavior"
 			}
 		}
 		return !found
@@ -180,6 +177,7 @@ func TestConfigSurfaceProofMeta_FailsOnMissingEntryUnknownTestNoAssertCallAndEmp
 	t.Parallel()
 	src := `package x
 func TestGood(t *testing.T) { assertConfigChangesBehavior(t, nil, 1, 2) }
+func TestQualified(t *testing.T) { svctest.AssertConfigChangesBehavior(t, nil, 1, 2) }
 func TestNoCall(t *testing.T) {}`
 	f, err := parser.ParseFile(token.NewFileSet(), "x_test.go", src, 0)
 	if err != nil {
@@ -211,8 +209,8 @@ func TestNoCall(t *testing.T) {}`
 			t.Errorf("%s: want error containing %q, got %q", tc.name, tc.want, got)
 		}
 	}
-	ok := validateConfigSurfaces([]surfaceID{"a", "b"},
-		map[surfaceID]proofEntry{"a": {testName: "TestGood", entrypoint: "E"}, "b": {exempt: "display only"}},
+	ok := validateConfigSurfaces([]surfaceID{"a", "b", "c"},
+		map[surfaceID]proofEntry{"a": {testName: "TestGood", entrypoint: "E"}, "b": {exempt: "display only"}, "c": {testName: "TestQualified", entrypoint: "E"}},
 		map[surfaceID]pendingSurface{"future": {planned: true}}, tests)
 	if len(ok) != 0 {
 		t.Errorf("valid registry reported errors: %v", ok)
@@ -221,5 +219,5 @@ func TestNoCall(t *testing.T) {}`
 
 func TestAssertConfigChangesBehavior_PassesWhenObservableDiffers(t *testing.T) {
 	t.Parallel()
-	assertConfigChangesBehavior(t, func(v any) any { return v.(int) > 5 }, 1, 10)
+	svctest.AssertConfigChangesBehavior(t, func(v any) any { return v.(int) > 5 }, 1, 10)
 }

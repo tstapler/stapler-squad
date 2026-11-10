@@ -24,7 +24,7 @@ func TestStageTransitionRepository_should_RejectDuplicate_When_FromStageAndToSta
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	idea, err := client.BacklogStage.Create().
 		SetSlug("idea").
@@ -59,7 +59,7 @@ func TestStageTransitionRepository_should_Allow_When_SameFromStageDifferentToSta
 	t.Parallel()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
-	client := repo.client
+	client := repo.Client
 
 	idea, err := client.BacklogStage.Create().SetSlug("idea").SetName("Idea").Save(ctx)
 	require.NoError(t, err)

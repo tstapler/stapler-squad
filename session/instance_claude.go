@@ -202,7 +202,7 @@ func (i *Instance) handleClaudeSessionReattachment() error {
 		log.Info("successfully re-attached to claude code session", "session_id", session.ID)
 	} else {
 		// No specific session ID stored, try to find matching sessions by project
-		if i.gitManager.HasWorktree() {
+		if i.GitManager.HasWorktree() {
 			return i.findAndAttachToProjectSession(sessionManager)
 		}
 	}
@@ -332,7 +332,7 @@ func (i *Instance) HasClaudeSession() bool {
 // SupportsTranscript reports whether this instance's program ever gets a
 // Claude conversation transcript linked (only the claude binary does).
 func (i *Instance) SupportsTranscript() bool {
-	return isClaude(i.Snapshot().Program)
+	return IsClaude(i.Snapshot().Program)
 }
 
 // ClearConversationState removes the stored Claude conversation UUID and history

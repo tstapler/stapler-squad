@@ -5,10 +5,12 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
+	"github.com/tstapler/stapler-squad/tools/lint/internal/gotool"
 	"github.com/tstapler/stapler-squad/tools/lint/norawgitcli"
 )
 
 func TestAnalyzer(t *testing.T) {
+	gotool.Setup(t)
 	testdata := analysistest.TestData()
 	// a: violations, suppressions, stale directives, and the _test.go exemption;
 	// session/git and clix are non-sanctioned look-alikes that must be flagged; the other packages are sanctioned and must produce no diagnostics.

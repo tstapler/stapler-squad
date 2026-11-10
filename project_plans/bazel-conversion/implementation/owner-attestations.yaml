@@ -1,0 +1,131 @@
+# Owner decisions captured by interview (AskUserQuestion) on 2026-11-03.
+# Source of truth for gate decisions; scripts read this file, they never write it.
+# status: recorded = owner answered; pending = owner action or measurement still needed.
+interview_date: 2026-11-03
+economic_gate:
+  decision: continue
+  date: 2026-11-03
+  reason: >-
+    EG5 trips (RA2 0.987 > 0.60: e2e is ~1974 of 2601 s of the critical path). Owner chose to
+    continue; Epic 12 (selective e2e, ADR-009, spike S14) is the answer to RA2 and S14 will measure it.
+    2026-11-06: owner also waived EG3 for now (first cold build 223 s > 168 s limit, measured at load 26-48);
+    rerun on a quiet host before trusting or acting on it.
+  criteria: EG3 EG5
+  status: recorded
+lockfile_policy:
+  decision: commit MODULE.bazel.lock + bazel-lockfile-merge driver + automatic regeneration
+  status: recorded
+  pending: >-
+    S13 stays Fail until the GitHub-side merge-driver experiment runs on a scratch repo chosen by the
+    owner (no repo named yet; the agent must not create one without being told which).
+s4_verdict:
+  decision: keep Pass
+  status: recorded
+  note: >-
+    Pass relies on pinned Bun 1.4.3 / Node 24.13.1 / BUN_INSTALL_GLOBAL_STORE=0; the default
+    `make web-build` is nondeterministic against that reference (174 of 380 files differ). Owner accepted.
+nogo_story_8_4:
+  decision: build per-analyzer twin libraries for all analyzers in Epic 8
+  status: recorded
+oom_policy:
+  decision: OOMPolicy=continue plus the Task 0.2i protect drop-in (zz-oom-protect.conf)
+  status: recorded
+  pending: owner runs the drop-in and daemon-reload/restart (agents do not touch the live unit)
+adr_004_failure_policy:
+  decision: confirm timeout + retries + circuit breaker (fallback flag is a no-op for a cache-only setup)
+  status: recorded
+proto_and_lint:
+  decision: pin buf plugins locally and fix all 72 buf lint findings now
+  status: recorded
+  pending: >-
+    fix work not yet done; the ratchet baseline tools/bzl/proto/buf-lint-baseline.txt lists the 72 and
+    must shrink to 0 as they are fixed
+test_exclusion_issues:
+  decision: one GitHub issue per SandboxClass
+  status: recorded
+  issues:
+    cwd: https://github.com/tstapler/stapler-squad/issues/1421
+    none: https://github.com/tstapler/stapler-squad/issues/1422
+    exec-host-binary: https://github.com/tstapler/stapler-squad/issues/1423
+    runtime-caller: https://github.com/tstapler/stapler-squad/issues/1424
+    tmpdir-socket: https://github.com/tstapler/stapler-squad/issues/1425
+  note: filed 2026-11-03; entries in tools/bzl/test-exclusions.yaml now link to them
+targets:
+  decision: accept the plan's proposal formulas for T1-T9 and EG1-EG5
+  status: recorded
+  targets_confirmed: true
+  confirmed: 2026-11-06
+  amendments: T9c target 0.385 (ADR-010 predicted share); T6 target 0.2 (10% of the build-active p90 of 2)
+remote_cache_s10:
+  decision: start with disk cache only; defer the onyx remote cache
+  status: recorded
+  pending: S10 and S10-redaction have no verdict; EG1/EG2 are measured against the local disk cache until the remote tier exists
+# Waiver for the deferred remote cache, same policy as Task 7.5f (reason >= 20 chars, <= 90 days from granted).
+# Not a pass: S10 and S10-redaction stay unmeasured. Written by an agent from the recorded remote_cache_s10 answer
+# above; owner reconfirmed both waivers in-session on 2026-11-06 (Task 7.5c environment approval still not applied).
+spike_waivers:
+  - spike: S6
+    reason: 'owner decision 2026-11-06 (in-session): "Waive S6 and EG3 for now" because the host never reached load <= 2.0 (measured at load 15-48)'
+    granted: 2026-11-06
+    expires: 2027-02-04
+    status: owner-decided 2026-11-06
+    not_covered: no S6 verdict exists; the concurrent-RSS, queued-invocation and E1-E8 checks are unmeasured (tools exist in tools/bzl/s6measure); the one number taken, second-worktree median 35.3 s at load 15-48 vs 16.8 s limit, is indicative only; rerun on a quiet host before Epic 7.6 flips
+  - spike: S10
+    reason: 'owner decision 2026-11-03 (remote_cache_s10): "start with disk cache only; defer the onyx remote cache"'
+    granted: 2026-11-06
+    expires: 2027-02-04
+    status: owner-reconfirmed 2026-11-06
+    not_covered: EG1/EG2 are measured against the local disk cache only; the remote tier needs its own S10 spike before it is enabled
+  - spike: S10-redaction
+    reason: 'owner decision 2026-11-03 (remote_cache_s10): "start with disk cache only; defer the onyx remote cache"'
+    granted: 2026-11-06
+    expires: 2027-02-04
+    status: owner-reconfirmed 2026-11-06
+    not_covered: EG1/EG2 are measured against the local disk cache only; the remote tier needs its own S10-redaction spike before it is enabled
+adr_010_policy:
+  decision: >-
+    all tiers may be executed by agents; agents merge when CI passes, making sure there is proper test
+    coverage at all layers
+  status: recorded
+  note: >-
+    Applies to Epic 13 refactors. Tier B/C refactors still need characterization tests before the move;
+    this is the owner's stated condition. No freeze windows.
+defaults:
+  decision: accept as proposed
+  status: recorded
+  values:
+    soak_runs_N: 30
+    soak_consecutive_green_K: 10
+    queue_timeout_seconds: 900
+    waiver_expiry_days: 90
+    waiver_reason_min_chars: 20
+    cache_write_policy: bazel-cache-write only for main push and protected branches (D-PROTECT-WRITE)
+    go_mod_bump_to_bazel_resolved_versions: allowed
+adr_009_e2e:
+  decision: Full e2e run
+  date: 2026-11-05
+  status: recorded
+  spikes: [S14]
+  note: >-
+    Owner choice via AskUserQuestion after spike S14 returned Fail: keep e2e as a full run in CI; no e2e
+    selection. ADR-009 is Accepted with this outcome; S14 stays Fail; T9f is N/A.
+adr_010_lower_package_criteria:
+  decision: >-
+    SC1 counts declarations relocated into the core (not callers' uses) and SC3 does not count a lower
+    package's natural callers as importers, for lower packages (packages the core session imports)
+  date: 2026-11-05
+  status: recorded
+  note: >-
+    Owner choice via AskUserQuestion; the option label was relayed as this description, not verbatim.
+    Amends ADR-010 Decision 2 (SC1, SC3) for lower packages only; upper clusters are unchanged.
+# Waivers for economic-gate criteria that need the deferred remote-cache spike S10 (same policy as spike_waivers: reason >= 20 chars, <= 90 days).
+# Not a pass: EG1/EG2 stay unmeasured against the remote tier; today's numbers would be disk-cache only.
+economic_gate_waivers:
+  - criterion: EG1
+    reason: 'owner decision 2026-11-06 (in-session): waive EG1/EG2 because S10 (remote cache) is deferred, disk cache first (remote_cache_s10)'
+    granted: 2026-11-06
+    expires: 2027-02-04
+  - criterion: EG2
+    reason: 'owner decision 2026-11-06 (in-session): waive EG1/EG2 because S10 (remote cache) is deferred, disk cache first (remote_cache_s10)'
+    granted: 2026-11-06
+    expires: 2027-02-04

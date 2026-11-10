@@ -1,0 +1,54 @@
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# Task 0.7a: tmux 3.8 from the release tarball (ships `configure`), libevent and ncurses from BCR.
+configure_make(
+    name = "tmux_build",
+    configure_options = [
+        "--disable-utf8proc",
+        "--disable-static",
+    ],
+    env = {
+        "LIBEVENT_CORE_CFLAGS": "-I$$EXT_BUILD_DEPS$$/include",
+        "LIBEVENT_CORE_LIBS": "-L$$EXT_BUILD_DEPS$$/lib -Wl,-Bstatic -levent_core -Wl,-Bdynamic",
+        "LIBTINFOW_CFLAGS": "-I$$EXT_BUILD_DEPS$$/include",
+        "LIBTINFOW_LIBS": "-L$$EXT_BUILD_DEPS$$/lib -Wl,-Bstatic -lncurses -Wl,-Bdynamic",
+    },
+    lib_source = "@tmux_src//:all_srcs",
+    out_binaries = ["tmux"],
+    deps = [
+        "@libevent//:event_core",
+        "@ncurses",
+    ],
+)
+
+filegroup(
+    name = "tmux_build_dir",
+    srcs = [":tmux_build"],
+    output_group = "tmux",
+)
+
+genrule(
+    name = "tmux_bin",
+    srcs = [":tmux_build_dir"],
+    outs = ["tmux"],
+    cmd = "cp $(execpath :tmux_build_dir) $@",
+    executable = True,
+    visibility = ["//session/tmux/embed:__pkg__"],
+)
+
+sh_test(
+    name = "hermetic_test",
+    srcs = ["hermetic_test.sh"],
+    args = [
+        "$(rootpath :tmux_bin)",
+        "$(rootpath :PIN)",
+    ],
+    data = [
+        ":PIN",
+        ":tmux_bin",
+    ],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+exports_files(["PIN"])

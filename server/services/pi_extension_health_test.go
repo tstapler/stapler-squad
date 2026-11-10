@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // newTestPiExtensionHealthTracker returns a tracker with an injectable clock
@@ -147,7 +148,7 @@ func TestPiExtensionHealth_String(t *testing.T) {
 // ── HandlePiExtensionLoaded HTTP handler tests ──────────────────────────────
 
 func TestHandlePiExtensionLoaded_RecordsPing_ViaSessionIDHeader(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
 
 	bus := events.NewEventBus(1)
@@ -167,7 +168,7 @@ func TestHandlePiExtensionLoaded_RecordsPing_ViaSessionIDHeader(t *testing.T) {
 }
 
 func TestHandlePiExtensionLoaded_NoTracker_StillReturns200(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
 
 	bus := events.NewEventBus(1)
@@ -183,7 +184,7 @@ func TestHandlePiExtensionLoaded_NoTracker_StillReturns200(t *testing.T) {
 }
 
 func TestHandlePiExtensionLoaded_RejectsNonPost(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
 
 	bus := events.NewEventBus(1)
@@ -200,7 +201,7 @@ func TestHandlePiExtensionLoaded_RejectsNonPost(t *testing.T) {
 }
 
 func TestHandlePiExtensionLoaded_MalformedBody_StillReturns200(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(config.FeaturePiSupport, true))
 
 	bus := events.NewEventBus(1)
@@ -222,7 +223,7 @@ func TestHandlePiExtensionLoaded_MalformedBody_StillReturns200(t *testing.T) {
 // Control section). The isolated STAPLER_SQUAD_TEST_DIR config starts with all
 // flags off by default, so this test deliberately does not call SetFeatureFlag.
 func TestHandlePiExtensionLoaded_ShouldNotRecord_WhenPiSupportFlagIsOff(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.False(t, config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport))
 
 	bus := events.NewEventBus(1)

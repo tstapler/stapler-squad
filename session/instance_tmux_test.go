@@ -235,7 +235,7 @@ func TestIsClaude(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
 			t.Parallel()
-			got := isClaude(tc.program)
+			got := IsClaude(tc.program)
 			if got != tc.want {
 				t.Errorf("isClaude(%q) = %v, want %v", tc.program, got, tc.want)
 			}
@@ -851,7 +851,9 @@ func TestBuildClaudeCommand_LargePromptTempFileContentIsExactExcludingTrailingNe
 	// change that silently starts corrupting more than trailing whitespace
 	// (the actual bug class this whole fix targets) fails this test.
 	prompt := strings.Repeat("w", maxInlinePromptBytes+1) + "\n\n"
-	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt, promptFileCleanupDelayOverride: shortPromptFileCleanupDelay}
+	// No cleanup-delay override: a 10ms one races the os.ReadFile below on a loaded runner
+	// (see TestBuildClaudeCommand_LargePromptRoutedThroughTempFile...); t.Cleanup removes the file.
+	inst := &Instance{Program: "claude", OneShot: true, Prompt: prompt}
 	got := inst.buildLaunchCommand("")
 
 	m := promptFileRefRegex.FindStringSubmatch(got)

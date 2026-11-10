@@ -16,40 +16,40 @@ import (
 
 // CreateGuidanceRequest forwards to EntRepository.CreateGuidanceRequest.
 func (s *Storage) CreateGuidanceRequest(ctx context.Context, in CreateGuidanceRequestInput) (*GuidanceRequestData, error) {
-	return s.repo.CreateGuidanceRequest(ctx, in)
+	return s.Repo.CreateGuidanceRequest(ctx, in)
 }
 
 // AnswerGuidanceRequest forwards to EntRepository.AnswerGuidanceRequest.
 func (s *Storage) AnswerGuidanceRequest(ctx context.Context, id uuid.UUID, answer string) (bool, error) {
-	return s.repo.AnswerGuidanceRequest(ctx, id, answer)
+	return s.Repo.AnswerGuidanceRequest(ctx, id, answer)
 }
 
 // MarkGuidanceRequestNotified forwards to EntRepository.MarkGuidanceRequestNotified.
 func (s *Storage) MarkGuidanceRequestNotified(ctx context.Context, id uuid.UUID) (bool, error) {
-	return s.repo.MarkGuidanceRequestNotified(ctx, id)
+	return s.Repo.MarkGuidanceRequestNotified(ctx, id)
 }
 
 // CancelGuidanceRequest forwards to EntRepository.CancelGuidanceRequest.
 func (s *Storage) CancelGuidanceRequest(ctx context.Context, id uuid.UUID, reason string) (bool, error) {
-	return s.repo.CancelGuidanceRequest(ctx, id, reason)
+	return s.Repo.CancelGuidanceRequest(ctx, id, reason)
 }
 
 // GetGuidanceRequest forwards to EntRepository.GetGuidanceRequest.
 func (s *Storage) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*GuidanceRequestData, error) {
-	return s.repo.GetGuidanceRequest(ctx, id)
+	return s.Repo.GetGuidanceRequest(ctx, id)
 }
 
 // ListPendingGuidanceRequests forwards to EntRepository.ListPendingGuidanceRequests.
 func (s *Storage) ListPendingGuidanceRequests(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
-	return s.repo.ListPendingGuidanceRequests(ctx, scope, scopeKey, cap)
+	return s.Repo.ListPendingGuidanceRequests(ctx, scope, scopeKey, cap)
 }
 
 // ListGuidanceRequestsForScope forwards to EntRepository.ListGuidanceRequestsForScope.
 func (s *Storage) ListGuidanceRequestsForScope(ctx context.Context, scope domain.RequestScope, scopeKey string, cap int) ([]*GuidanceRequestData, int, int, error) {
-	return s.repo.ListGuidanceRequestsForScope(ctx, scope, scopeKey, cap)
+	return s.Repo.ListGuidanceRequestsForScope(ctx, scope, scopeKey, cap)
 }
 
 // ListAllPendingGuidanceRequests forwards to EntRepository.ListAllPendingGuidanceRequests.
 func (s *Storage) ListAllPendingGuidanceRequests(ctx context.Context) ([]*GuidanceRequestData, error) {
-	return s.repo.ListAllPendingGuidanceRequests(ctx)
+	return s.Repo.ListAllPendingGuidanceRequests(ctx)
 }

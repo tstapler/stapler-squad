@@ -24,7 +24,7 @@ type legacySession struct {
 
 func addLegacySession(t *testing.T, repo *EntRepository, s legacySession) {
 	t.Helper()
-	b := repo.client.Session.Create().
+	b := repo.Client.Session.Create().
 		SetTitle(s.title).SetPath("/tmp/" + s.title).SetProgram("claude").SetStatus(0).
 		SetUUID(s.uuid).SetGithubPrNumber(s.number).SetGithubOwner(s.owner).SetGithubRepo(s.repo).
 		SetGithubHost(s.host).SetGithubPrStatusTerminal(s.terminal)
@@ -33,7 +33,7 @@ func addLegacySession(t *testing.T, repo *EntRepository, s legacySession) {
 
 func addLegacyItem(t *testing.T, repo *EntRepository, title, status string, number int, prURL string) string {
 	t.Helper()
-	it, err := repo.client.BacklogItem.Create().SetTitle(title).SetPriority(3).SetStatus(status).
+	it, err := repo.Client.BacklogItem.Create().SetTitle(title).SetPriority(3).SetStatus(status).
 		SetPrNumber(number).SetPrURL(prURL).Save(context.Background())
 	require.NoError(t, err)
 	return it.ID.String()
@@ -173,7 +173,7 @@ func TestBackfill_ShouldNotResurrectOrDuplicate_WhenDetachedOrAlreadyLinked(t *t
 	assert.Empty(t, detached["u-detached"])
 	_ = ref11
 
-	primaries, err := repo.client.SessionPR.Query().Where(sessionpr.SessionUUID("u-linked"), sessionpr.Role("primary")).Count(ctx)
+	primaries, err := repo.Client.SessionPR.Query().Where(sessionpr.SessionUUID("u-linked"), sessionpr.Role("primary")).Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, primaries)
 }
@@ -342,12 +342,12 @@ func TestBackfill_ShouldReadOnlyCandidateRows_WhenFewSessionsHaveAPR(t *testing.
 	builders := make([]*ent.SessionCreate, 0, 500)
 	flush := func() {
 		if len(builders) > 0 {
-			require.NoError(t, repo.client.Session.CreateBulk(builders...).Exec(ctx))
+			require.NoError(t, repo.Client.Session.CreateBulk(builders...).Exec(ctx))
 			builders = builders[:0]
 		}
 	}
 	for i := 0; i < 10000; i++ {
-		b := repo.client.Session.Create().SetTitle(fmt.Sprintf("bulk-%05d", i)).SetPath("/tmp/x").SetProgram("claude").SetStatus(0).SetUUID(fmt.Sprintf("bulk-u-%05d", i))
+		b := repo.Client.Session.Create().SetTitle(fmt.Sprintf("bulk-%05d", i)).SetPath("/tmp/x").SetProgram("claude").SetStatus(0).SetUUID(fmt.Sprintf("bulk-u-%05d", i))
 		if i%250 == 0 { // 40 sessions with a legacy PR
 			b = b.SetGithubPrNumber(i/250 + 1).SetGithubOwner("acme").SetGithubRepo("app")
 		}
@@ -377,9 +377,9 @@ func TestBackfill_ShouldStayBounded_WhenManyItemsAreAlreadyRepresented(t *testin
 	for start := 0; start < n; start += 500 {
 		b := make([]*ent.PullRequestStateCreate, 0, 500)
 		for i := start; i < start+500; i++ {
-			b = append(b, repo.client.PullRequestState.Create().SetHost("github.com").SetOwner("acme").SetRepo("app").SetNumber(i+1))
+			b = append(b, repo.Client.PullRequestState.Create().SetHost("github.com").SetOwner("acme").SetRepo("app").SetNumber(i+1))
 		}
-		rows, err := repo.client.PullRequestState.CreateBulk(b...).Save(ctx)
+		rows, err := repo.Client.PullRequestState.CreateBulk(b...).Save(ctx)
 		require.NoError(t, err)
 		for _, r := range rows {
 			stateIDs = append(stateIDs, r.ID)
@@ -388,17 +388,17 @@ func TestBackfill_ShouldStayBounded_WhenManyItemsAreAlreadyRepresented(t *testin
 	for start := 0; start < n; start += 500 {
 		items := make([]*ent.BacklogItemCreate, 0, 500)
 		for i := start; i < start+500; i++ {
-			items = append(items, repo.client.BacklogItem.Create().SetTitle(fmt.Sprintf("it-%d", i)).SetPriority(3).SetStatus("done").
+			items = append(items, repo.Client.BacklogItem.Create().SetTitle(fmt.Sprintf("it-%d", i)).SetPriority(3).SetStatus("done").
 				SetPrNumber(i+1).SetPrURL(fmt.Sprintf("https://github.com/acme/app/pull/%d", i+1)))
 		}
-		rows, err := repo.client.BacklogItem.CreateBulk(items...).Save(ctx)
+		rows, err := repo.Client.BacklogItem.CreateBulk(items...).Save(ctx)
 		require.NoError(t, err)
 		links := make([]*ent.SessionPRCreate, 0, 500)
 		for j, row := range rows {
-			links = append(links, repo.client.SessionPR.Create().SetPullRequestStateID(stateIDs[start+j]).
+			links = append(links, repo.Client.SessionPR.Create().SetPullRequestStateID(stateIDs[start+j]).
 				SetBacklogItemID(row.ID.String()).SetAttachSource("manual"))
 		}
-		require.NoError(t, repo.client.SessionPR.CreateBulk(links...).Exec(ctx))
+		require.NoError(t, repo.Client.SessionPR.CreateBulk(links...).Exec(ctx))
 	}
 
 	var rep PRBackfillReport
@@ -420,10 +420,10 @@ func TestBackfill_ShouldCapWritesPerBoot_AndDeferTheRest(t *testing.T) {
 	for start := 0; start < total; start += 500 {
 		items := make([]*ent.BacklogItemCreate, 0, 500)
 		for i := start; i < min(start+500, total); i++ {
-			items = append(items, repo.client.BacklogItem.Create().SetTitle(fmt.Sprintf("cap-%d", i)).SetPriority(3).SetStatus("pr_pending").
+			items = append(items, repo.Client.BacklogItem.Create().SetTitle(fmt.Sprintf("cap-%d", i)).SetPriority(3).SetStatus("pr_pending").
 				SetPrNumber(i+1).SetPrURL(fmt.Sprintf("https://github.com/acme/app/pull/%d", i+1)))
 		}
-		require.NoError(t, repo.client.BacklogItem.CreateBulk(items...).Exec(ctx))
+		require.NoError(t, repo.Client.BacklogItem.CreateBulk(items...).Exec(ctx))
 	}
 
 	first := runBackfill(t, repo)
@@ -568,7 +568,7 @@ func TestNewEntRepository_ShouldNotRunPRMaintenance(t *testing.T) {
 	addLegacySession(t, repo, legacySession{title: "s", uuid: "u1", owner: "acme", repo: "app", number: 12})
 
 	// A second process (ssq-hooks, a CLI subcommand) opening the same database.
-	second, err := NewEntRepository(WithDatabasePath(repo.dbPath))
+	second, err := NewEntRepository(WithDatabasePath(repo.DbPath))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = second.Close() })
 
@@ -580,7 +580,7 @@ func TestNewEntRepository_ShouldNotRunPRMaintenance(t *testing.T) {
 // the legacy columns only and creates no link.
 func oldBinaryWritesLegacyNumber(t *testing.T, s *Storage, title string, n int) {
 	t.Helper()
-	require.NoError(t, s.repo.client.Session.Update().Where(entsession.Title(title)).
+	require.NoError(t, s.Repo.Client.Session.Update().Where(entsession.Title(title)).
 		SetGithubPrNumber(n).SetGithubPrURL(fmt.Sprintf("https://github.com/acme/app/pull/%d", n)).Exec(context.Background()))
 }
 
@@ -603,7 +603,7 @@ func TestRollbackRedeploy_ShouldImportBeforeProjection_WhenOldBinaryWroteLegacyO
 
 	inst := rollbackSequence(t, storage, "rolled-back")
 
-	links, err := storage.repo.ListBySessionUUIDs(context.Background(), []string{"u-rb"})
+	links, err := storage.Repo.ListBySessionUUIDs(context.Background(), []string{"u-rb"})
 	require.NoError(t, err)
 	byNumber := map[int]PRView{}
 	for _, v := range links["u-rb"] {
@@ -635,7 +635,7 @@ func TestRollbackRedeploy_ShouldNotImportTombstonedValue_AndOverwriteItWithThePr
 	defer cleanup()
 	prLoadFixture(t, storage, "detached", "u-dt", "acme", "app", 0)
 	linkPR(t, storage, "u-dt", 11, PRRolePrimary, time.Now())
-	_, err := storage.repo.DeleteSessionPR(context.Background(), SessionPROwner("u-dt"), mustPRRef(t, "", "acme", "app", 12))
+	_, err := storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner("u-dt"), mustPRRef(t, "", "acme", "app", 12))
 	require.NoError(t, err)
 	oldBinaryWritesLegacyNumber(t, storage, "detached", 12)
 	t.Cleanup(storage.StopPRMaintenance)

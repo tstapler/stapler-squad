@@ -9,96 +9,15 @@ import (
 	"time"
 
 	connect "connectrpc.com/connect"
-	gogit "github.com/go-git/go-git/v5"
-	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
-
-// newTestJulesRepoWithRemote creates a real (empty) git repository at a
-// fresh temp directory with an "origin" remote pointing at remoteURL, so
-// resolveJulesOwnerRepo(dir) resolves exactly as it would against a real
-// worktree — mirroring session.newTestRepoWithRemote
-// (session/backlog_lifecycle_pr_trigger_test.go), which this package cannot
-// import directly (unexported, different package).
-func newTestJulesRepoWithRemote(t *testing.T, remoteURL string) string {
-	t.Helper()
-	dir := t.TempDir()
-	repo, err := gogit.PlainInit(dir, false)
-	require.NoError(t, err)
-	_, err = repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{remoteURL}})
-	require.NoError(t, err)
-	return dir
-}
-
-// fakeSourceLister is a fake jules.sourceLister (unexported in package
-// jules, satisfied structurally) so jules.NewJulesSourceRegistry can be
-// exercised without a real HTTP round trip.
-type fakeSourceLister struct {
-	sources []jules.JulesSource
-	err     error
-}
-
-func (f *fakeSourceLister) ListSources(_ context.Context) ([]jules.JulesSource, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.sources, nil
-}
-
-// newTestJulesSourceRegistry returns a *jules.JulesSourceRegistry that
-// resolves "tstapler/stapler-squad" to "sources/github-tstapler-stapler-squad" —
-// matching newTestJulesRepoWithRemote's default remote below.
-func newTestJulesSourceRegistry() *jules.JulesSourceRegistry {
-	return jules.NewJulesSourceRegistry(&fakeSourceLister{
-		sources: []jules.JulesSource{{Name: "sources/github-tstapler-stapler-squad", ID: "src-1"}},
-	})
-}
-
-// fakeJulesSessionCreator is a fake julesSessionCreator with a call counter
-// and injectable error/delay/result, plus an optional beforeCreate hook so a
-// test can inspect storage state mid-call (e.g. the reservation row's
-// pending SessionUUID prefix, before CreateSession returns and
-// DispatchToJules swaps it for the real name).
-type fakeJulesSessionCreator struct {
-	mu           sync.Mutex
-	calls        int
-	delay        time.Duration
-	err          error
-	resultName   jules.JulesSessionName
-	beforeCreate func()
-}
-
-func (f *fakeJulesSessionCreator) CreateSession(_ context.Context, _ jules.CreateSessionRequest) (*jules.JulesSession, error) {
-	f.mu.Lock()
-	f.calls++
-	f.mu.Unlock()
-	if f.beforeCreate != nil {
-		f.beforeCreate()
-	}
-	if f.delay > 0 {
-		time.Sleep(f.delay) //nolint:notimesleeptest simulates a slow Jules API call whose wall-clock duration is under test
-	}
-	if f.err != nil {
-		return nil, f.err
-	}
-	name := f.resultName
-	if name == "" {
-		name = "sessions/xyz"
-	}
-	return &jules.JulesSession{Name: name, State: jules.JulesStateQueued}, nil
-}
-
-func (f *fakeJulesSessionCreator) callCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.calls
-}
 
 // fakeJulesTransitionCall records one transitionWithGuard invocation for
 // assertion.
@@ -120,11 +39,11 @@ type fakeJulesTransitionGuard struct {
 	transitionCalls []fakeJulesTransitionCall
 }
 
-func (f *fakeJulesTransitionGuard) hasUnresolvedBlockers(_ context.Context, _ string) (bool, error) {
+func (f *fakeJulesTransitionGuard) HasUnresolvedBlockers(_ context.Context, _ string) (bool, error) {
 	return f.hasBlockers, f.hasBlockersErr
 }
 
-func (f *fakeJulesTransitionGuard) transitionWithGuard(_ context.Context, item *session.BacklogItemData, to session.BacklogStatus, _ *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
+func (f *fakeJulesTransitionGuard) TransitionWithGuard(_ context.Context, item *session.BacklogItemData, to session.BacklogStatus, _ *session.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*session.BacklogItemData, error) {
 	f.mu.Lock()
 	f.transitionCalls = append(f.transitionCalls, fakeJulesTransitionCall{
 		itemID: item.ID, to: to, triggeredBy: triggeredBy, hasUnresolvedBlockers: hasUnresolvedBlockers,
@@ -143,46 +62,16 @@ func (f *fakeJulesTransitionGuard) callCount() int {
 	return len(f.transitionCalls)
 }
 
-// newTestJulesConfig returns a *config.Config with Jules enabled,
-// repoPath pre-acknowledged, and generous (but non-default) spend caps —
-// the "everything else is satisfied" baseline most guard tests start from.
-func newTestJulesConfig(repoPath string) *config.Config {
-	return &config.Config{
-		Jules: config.JulesConfig{
-			Enabled:                    true,
-			EgressAcknowledgedRepos:    []string{repoPath},
-			MaxConcurrentJulesSessions: 2,
-			MaxJulesSessionsPerDay:     15,
-		},
-	}
-}
-
-// createTestJulesReadyItem creates a ready backlog item backed by a real git
-// repo (remote "https://github.com/tstapler/stapler-squad.git") so
-// resolveJulesOwnerRepo resolves it to tstapler/stapler-squad, matching
-// newTestJulesSourceRegistry's registered source.
-func createTestJulesReadyItem(t *testing.T, ctx context.Context, storage *session.Storage, title string) *session.BacklogItemData {
-	t.Helper()
-	repoPath := newTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:    title,
-		Status:   string(session.BacklogStatusReady),
-		RepoPath: repoPath,
-	})
-	require.NoError(t, err)
-	return item
-}
-
 func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTransition_When_ClientSucceeds(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "dispatch success item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "dispatch success item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	guard := &fakeJulesTransitionGuard{hasBlockers: false}
-	client := &fakeJulesSessionCreator{}
-	client.beforeCreate = func() {
+	client := &svctest.FakeJulesSessionCreator{}
+	client.BeforeCreate = func() {
 		sessions, err := storage.ListItemSessions(ctx, item.ID)
 		require.NoError(t, err)
 		require.Len(t, sessions, 1, "reservation row must exist before the billed CreateSession call")
@@ -190,7 +79,7 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 		assert.True(t, strings.HasPrefix(sessions[0].SessionUUID, julesPendingUUIDPrefix),
 			"reservation SessionUUID must carry the pending prefix before CreateSession returns, got %q", sessions[0].SessionUUID)
 	}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Fix the flaky poller test")
 	require.NoError(t, err)
@@ -198,7 +87,7 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 	name, err := svc.DispatchToJules(ctx, item, req)
 	require.NoError(t, err)
 	assert.Equal(t, jules.JulesSessionName("sessions/xyz"), name)
-	assert.Equal(t, 1, client.callCount(), "CreateSession must be called exactly once")
+	assert.Equal(t, 1, client.CallCount(), "CreateSession must be called exactly once")
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
@@ -216,15 +105,15 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 
 func TestJulesDispatchService_DispatchToJules_should_ReturnErrJulesDispatchInFlight_When_PersistedOpenSessionFoundAfterFirstCallReturned(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "persisted duplicate guard item")
-	cfg := newTestJulesConfig(item.RepoPath)
-	registry := newTestJulesSourceRegistry()
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "persisted duplicate guard item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
+	registry := svctest.NewTestJulesSourceRegistry()
 	guard := &fakeJulesTransitionGuard{}
 
-	client1 := &fakeJulesSessionCreator{}
+	client1 := &svctest.FakeJulesSessionCreator{}
 	svc1 := NewJulesDispatchService(storage, guard, client1, registry, func() *config.Config { return cfg })
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "First dispatch")
 	require.NoError(t, err)
@@ -234,25 +123,25 @@ func TestJulesDispatchService_DispatchToJules_should_ReturnErrJulesDispatchInFli
 
 	// A second, independently-constructed service instance — proves the
 	// guard is the persisted row, not svc1's in-process mutex.
-	client2 := &fakeJulesSessionCreator{}
+	client2 := &svctest.FakeJulesSessionCreator{}
 	svc2 := NewJulesDispatchService(storage, guard, client2, registry, func() *config.Config { return cfg })
 
 	_, err = svc2.DispatchToJules(ctx, item, req)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrJulesDispatchInFlight)
-	assert.Equal(t, 0, client2.callCount(), "the second call must never reach CreateSession")
+	assert.Equal(t, 0, client2.CallCount(), "the second call must never reach CreateSession")
 }
 
 func TestJulesDispatchService_DispatchToJules_should_CollapseConcurrentDoubleClicksToOneCreateViaMutex_When_TwoGoroutinesRaceBeforePersistedRowExists(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "mutex race item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "mutex race item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{delay: 50 * time.Millisecond}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{Delay: 50 * time.Millisecond}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Racing dispatch")
 	require.NoError(t, err)
@@ -280,19 +169,19 @@ func TestJulesDispatchService_DispatchToJules_should_CollapseConcurrentDoubleCli
 	}
 	assert.Equal(t, 1, successCount, "exactly one goroutine must succeed")
 	assert.Equal(t, 1, inFlightCount, "the other must be rejected by the mutex, not silently swallowed")
-	assert.Equal(t, 1, client.callCount(), "CreateSession must be called exactly once")
+	assert.Equal(t, 1, client.CallCount(), "CreateSession must be called exactly once")
 }
 
 func TestJulesDispatchService_DispatchToJules_should_RejectWithErrUnresolvedBlockers_When_ItemHasUnresolvedBlocker(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "blocker gate item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "blocker gate item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	guard := &fakeJulesTransitionGuard{hasBlockers: true}
-	client := &fakeJulesSessionCreator{}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Blocked dispatch")
 	require.NoError(t, err)
@@ -300,7 +189,7 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithErrUnresolvedBloc
 	_, err = svc.DispatchToJules(ctx, item, req)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, session.ErrUnresolvedBlockers)
-	assert.Equal(t, 0, client.callCount())
+	assert.Equal(t, 0, client.CallCount())
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
@@ -309,14 +198,14 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithErrUnresolvedBloc
 
 func TestJulesDispatchService_DispatchToJules_should_EndReservationWithDispatchFailedReason_When_CreateSessionFails(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "create failure item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "create failure item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{err: jules.ErrJulesTransient}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{Err: jules.ErrJulesTransient}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Failing dispatch")
 	require.NoError(t, err)
@@ -343,7 +232,7 @@ func TestJulesDispatchService_DispatchToJules_should_EndReservationWithDispatchF
 
 func TestJulesDispatchService_DispatchToJules_should_RejectWithConcurrencyCapMessage_When_OpenSessionsAtCeiling(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
 	// Two open jules_work sessions on other items, at the (default) ceiling.
@@ -361,12 +250,12 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithConcurrencyCapMes
 		require.NoError(t, err)
 	}
 
-	item := createTestJulesReadyItem(t, ctx, storage, "concurrency cap item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "concurrency cap item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	cfg.Jules.MaxConcurrentJulesSessions = 2
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Over the cap")
 	require.NoError(t, err)
@@ -375,7 +264,7 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithConcurrencyCapMes
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "2 Jules sessions are already running (limit 2)")
-	assert.Equal(t, 0, client.callCount())
+	assert.Equal(t, 0, client.CallCount())
 }
 
 // TestJulesDispatchService_DispatchToJules_should_AllowExactlyOneSuccess_When_TwoDifferentItemsRaceAtConcurrencyCeiling
@@ -391,17 +280,17 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithConcurrencyCapMes
 // dispatched twice.
 func TestJulesDispatchService_DispatchToJules_should_AllowExactlyOneSuccess_When_TwoDifferentItemsRaceAtConcurrencyCeiling(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item1 := createTestJulesReadyItem(t, ctx, storage, "cross-item race item 1")
-	item2 := createTestJulesReadyItem(t, ctx, storage, "cross-item race item 2")
-	cfg := newTestJulesConfig(item1.RepoPath)
+	item1 := svctest.CreateTestJulesReadyItem(t, ctx, storage, "cross-item race item 1")
+	item2 := svctest.CreateTestJulesReadyItem(t, ctx, storage, "cross-item race item 2")
+	cfg := svctest.NewTestJulesConfig(item1.RepoPath)
 	cfg.Jules.EgressAcknowledgedRepos = append(cfg.Jules.EgressAcknowledgedRepos, item2.RepoPath)
 	cfg.Jules.MaxConcurrentJulesSessions = 1
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{delay: 50 * time.Millisecond}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{Delay: 50 * time.Millisecond}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req1, err := NewJulesDispatchRequest(item1.ID, "backlog/item-1", "Racing dispatch for item 1")
 	require.NoError(t, err)
@@ -434,12 +323,12 @@ func TestJulesDispatchService_DispatchToJules_should_AllowExactlyOneSuccess_When
 	}
 	assert.Equal(t, 1, successCount, "exactly one of the two different items must succeed")
 	assert.Equal(t, 1, capRejectedCount, "the other must be rejected by the concurrency cap, not silently allowed through")
-	assert.Equal(t, 1, client.callCount(), "CreateSession must be called exactly once — the ceiling must never be overshot")
+	assert.Equal(t, 1, client.CallCount(), "CreateSession must be called exactly once — the ceiling must never be overshot")
 }
 
 func TestJulesDispatchService_DispatchToJules_should_RejectWithDailyCapMessage_When_TwentyFourHourCountAtLimit(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
 	// 15 confirmed, ended jules_work sessions created (and completed) in the
@@ -460,12 +349,12 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithDailyCapMessage_W
 		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
 	}
 
-	item := createTestJulesReadyItem(t, ctx, storage, "daily cap item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "daily cap item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	cfg.Jules.MaxJulesSessionsPerDay = dailyLimit
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Over the daily cap")
 	require.NoError(t, err)
@@ -474,19 +363,19 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithDailyCapMessage_W
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "limit 15")
-	assert.Equal(t, 0, client.callCount())
+	assert.Equal(t, 0, client.CallCount())
 }
 
 func TestJulesDispatchService_DispatchToJules_should_RejectNamingRepo_When_EgressNotAcknowledged(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "unacknowledged repo item")
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "unacknowledged repo item")
 	cfg := &config.Config{Jules: config.JulesConfig{Enabled: true}} // EgressAcknowledgedRepos left empty
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Needs consent")
 	require.NoError(t, err)
@@ -497,41 +386,41 @@ func TestJulesDispatchService_DispatchToJules_should_RejectNamingRepo_When_Egres
 	assert.Contains(t, err.Error(), "Google's cloud VM")
 	assert.ErrorIs(t, err, ErrJulesEgressNotAcknowledged,
 		"classifyJulesDispatchError (backlog_service_jules.go) keys off this sentinel, not the message text")
-	assert.Equal(t, 0, client.callCount())
+	assert.Equal(t, 0, client.CallCount())
 }
 
 func TestJulesDispatchService_DispatchToJules_should_ProceedWithoutReconfirmation_When_RepoAlreadyAcknowledged(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "already acknowledged item")
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "already acknowledged item")
 	// EgressAcknowledgedRepos pre-populated exactly as ConfirmEgressConsent
 	// (Story 2.4.2) would have written it — never via the request itself.
-	cfg := newTestJulesConfig(item.RepoPath)
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Already consented")
 	require.NoError(t, err)
 
 	_, err = svc.DispatchToJules(ctx, item, req)
 	require.NoError(t, err)
-	assert.Equal(t, 1, client.callCount())
+	assert.Equal(t, 1, client.CallCount())
 }
 
 func TestJulesDispatchService_DispatchToJules_should_ReturnErrJulesNotConfigured_When_EnabledFalse(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "disabled feature item")
-	cfg := newTestJulesConfig(item.RepoPath)
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "disabled feature item")
+	cfg := svctest.NewTestJulesConfig(item.RepoPath)
 	cfg.Jules.Enabled = false // valid key (assumed resolvable) and acknowledged repo, but disabled
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Disabled")
 	require.NoError(t, err)
@@ -539,19 +428,19 @@ func TestJulesDispatchService_DispatchToJules_should_ReturnErrJulesNotConfigured
 	_, err = svc.DispatchToJules(ctx, item, req)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, jules.ErrJulesNotConfigured)
-	assert.Equal(t, 0, client.callCount())
+	assert.Equal(t, 0, client.CallCount())
 }
 
 func TestJulesDispatchService_DispatchToJules_should_LeaveEgressAcknowledgedReposUnchanged_When_CalledTwentyTimesForUnacknowledgedRepo(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "no self-grant item")
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "no self-grant item")
 	cfg := &config.Config{Jules: config.JulesConfig{Enabled: true}} // EgressAcknowledgedRepos left empty
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{}
-	svc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), func() *config.Config { return cfg })
+	client := &svctest.FakeJulesSessionCreator{}
+	svc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), func() *config.Config { return cfg })
 
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Repeated unacknowledged attempts")
 	require.NoError(t, err)
@@ -561,7 +450,7 @@ func TestJulesDispatchService_DispatchToJules_should_LeaveEgressAcknowledgedRepo
 		require.Error(t, err)
 		assert.Empty(t, cfg.Jules.EgressAcknowledgedRepos, "call %d must not have written to EgressAcknowledgedRepos", i)
 	}
-	assert.Equal(t, 0, client.callCount())
+	assert.Equal(t, 0, client.CallCount())
 }
 
 // TestJulesDispatchService_DispatchToJules_should_ObserveConfigWriteOnVeryNextCall_When_ConfirmEgressConsentRunsBetweenDispatches
@@ -574,11 +463,11 @@ func TestJulesDispatchService_DispatchToJules_should_LeaveEgressAcknowledgedRepo
 // construction time, so this second dispatch would still fail with
 // ErrJulesEgressNotAcknowledged even after ConfirmEgressConsent succeeded.
 func TestJulesDispatchService_DispatchToJules_should_ObserveConfigWriteOnVeryNextCall_When_ConfirmEgressConsentRunsBetweenDispatches(t *testing.T) {
-	withIsolatedStateDir(t)
-	storage := createTestStorage(t)
+	svctest.WithIsolatedStateDir(t)
+	storage := svctest.CreateTestStorage(t)
 	ctx := t.Context()
 
-	item := createTestJulesReadyItem(t, ctx, storage, "live config reload item")
+	item := svctest.CreateTestJulesReadyItem(t, ctx, storage, "live config reload item")
 	require.NoError(t, config.SaveConfig(&config.Config{Jules: config.JulesConfig{
 		Enabled:                    true,
 		MaxConcurrentJulesSessions: 2,
@@ -588,19 +477,19 @@ func TestJulesDispatchService_DispatchToJules_should_ObserveConfigWriteOnVeryNex
 	}}))
 
 	guard := &fakeJulesTransitionGuard{}
-	client := &fakeJulesSessionCreator{}
+	client := &svctest.FakeJulesSessionCreator{}
 	// cfgFn is config.LoadConfig itself — the exact production wiring
 	// (server/dependencies.go) — not a closure over a fixed *config.Config,
 	// so this test cannot pass by accident the way a fake in-memory cfgFn
 	// could.
-	dispatchSvc := NewJulesDispatchService(storage, guard, client, newTestJulesSourceRegistry(), config.LoadConfig)
+	dispatchSvc := NewJulesDispatchService(storage, guard, client, svctest.NewTestJulesSourceRegistry(), config.LoadConfig)
 	req, err := NewJulesDispatchRequest(item.ID, "backlog/item-1", "Needs consent")
 	require.NoError(t, err)
 
 	_, err = dispatchSvc.DispatchToJules(ctx, item, req)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrJulesEgressNotAcknowledged, "repo must not be acknowledged yet")
-	assert.Equal(t, 0, client.callCount())
+	assert.Equal(t, 0, client.CallCount())
 
 	configSvc := NewJulesConfigService(nil, nil, nil)
 	_, err = configSvc.ConfirmEgressConsent(ctx, connect.NewRequest(&sessionv1.ConfirmEgressConsentRequest{RepoPath: item.RepoPath}))
@@ -609,7 +498,7 @@ func TestJulesDispatchService_DispatchToJules_should_ObserveConfigWriteOnVeryNex
 	name, err := dispatchSvc.DispatchToJules(ctx, item, req)
 	require.NoError(t, err, "the very next dispatch call, in the same process, must see ConfirmEgressConsent's write with no restart")
 	assert.Equal(t, jules.JulesSessionName("sessions/xyz"), name)
-	assert.Equal(t, 1, client.callCount())
+	assert.Equal(t, 1, client.CallCount())
 }
 
 // TestJulesDispatchService_checkEgressConsent_should_HaveNoConsentParameter_When_SignatureInspected
@@ -631,154 +520,6 @@ func TestJulesDispatchService_checkEgressConsent_should_HaveNoConsentParameter_W
 }
 
 // --- Epic 2.4.3: BacklogService.DispatchToJules RPC-level tests ---
-
-// createTestJulesReadyItemForRPC is createTestJulesReadyItem plus
-// SkipPlanning: true — the RPC-level tests below exercise the real
-// *BacklogService.transitionWithGuard (not fakeJulesTransitionGuard), which
-// additionally enforces "plan approved or skip_planning" before allowing the
-// in_progress transition; that gate is orthogonal to what Epic 2.4.3 tests,
-// so it's satisfied here rather than exercised.
-func createTestJulesReadyItemForRPC(t *testing.T, ctx context.Context, storage *session.Storage, title string) *session.BacklogItemData {
-	t.Helper()
-	repoPath := newTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
-		Title:        title,
-		Status:       string(session.BacklogStatusReady),
-		RepoPath:     repoPath,
-		SkipPlanning: true,
-	})
-	require.NoError(t, err)
-	return item
-}
-
-// newTestBacklogServiceWithJules builds a *BacklogService wired exactly like
-// production (server/dependencies.go, Task 2.4.4a): the service itself is
-// passed as JulesDispatchService's transitionGuard, since *BacklogService
-// satisfies julesTransitionGuard structurally.
-func newTestBacklogServiceWithJules(storage *session.Storage, cfg *config.Config, client julesSessionCreator, sources *jules.JulesSourceRegistry) *BacklogService {
-	svc := NewBacklogService(storage, nil, cfg, nil, nil, nil)
-	dispatchSvc := NewJulesDispatchService(storage, svc, client, sources, func() *config.Config { return cfg })
-	svc.SetJulesDispatcher(dispatchSvc)
-	return svc
-}
-
-func TestBacklogService_DispatchToJules_should_ReturnItemSessionWithJulesWorkRole_When_RequestValid(t *testing.T) {
-	t.Parallel()
-	storage := createTestStorage(t)
-	ctx := t.Context()
-
-	item := createTestJulesReadyItemForRPC(t, ctx, storage, "rpc dispatch success item")
-	cfg := newTestJulesConfig(item.RepoPath)
-	svc := newTestBacklogServiceWithJules(storage, cfg, &fakeJulesSessionCreator{}, newTestJulesSourceRegistry())
-
-	resp, err := svc.DispatchToJules(ctx, connect.NewRequest(&sessionv1.DispatchToJulesRequest{
-		ItemId: item.ID,
-		Branch: "backlog/item-1",
-		Prompt: "Fix the flaky poller test",
-	}))
-	require.NoError(t, err)
-	require.NotNil(t, resp.Msg.ItemSession)
-	assert.Equal(t, string(session.SessionRoleJulesWork), resp.Msg.ItemSession.SessionRole)
-	assert.True(t, strings.HasPrefix(resp.Msg.ItemSession.SessionUuid, "jules-sessions/"),
-		"session_uuid must start with jules-sessions/, got %q", resp.Msg.ItemSession.SessionUuid)
-
-	refreshed, err := storage.GetBacklogItem(ctx, item.ID)
-	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), refreshed.Status)
-}
-
-func TestBacklogService_DispatchToJules_should_ReturnInvalidArgument_When_BranchEmpty(t *testing.T) {
-	t.Parallel()
-	storage := createTestStorage(t)
-	ctx := t.Context()
-
-	item := createTestJulesReadyItem(t, ctx, storage, "rpc missing branch item")
-	cfg := newTestJulesConfig(item.RepoPath)
-	svc := newTestBacklogServiceWithJules(storage, cfg, &fakeJulesSessionCreator{}, newTestJulesSourceRegistry())
-
-	_, err := svc.DispatchToJules(ctx, connect.NewRequest(&sessionv1.DispatchToJulesRequest{
-		ItemId: item.ID,
-		Branch: "",
-		Prompt: "Fix the flaky poller test",
-	}))
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
-	assert.Contains(t, err.Error(), "pushed to GitHub")
-}
-
-func TestBacklogService_DispatchToJules_should_ReturnFailedPrecondition_When_ConcurrencyCeilingReached(t *testing.T) {
-	t.Parallel()
-	storage := createTestStorage(t)
-	ctx := t.Context()
-
-	item1 := createTestJulesReadyItemForRPC(t, ctx, storage, "rpc concurrency cap item 1")
-	item2 := createTestJulesReadyItemForRPC(t, ctx, storage, "rpc concurrency cap item 2")
-	cfg := newTestJulesConfig(item1.RepoPath)
-	cfg.Jules.EgressAcknowledgedRepos = append(cfg.Jules.EgressAcknowledgedRepos, item2.RepoPath)
-	cfg.Jules.MaxConcurrentJulesSessions = 1
-	svc := newTestBacklogServiceWithJules(storage, cfg, &fakeJulesSessionCreator{}, newTestJulesSourceRegistry())
-
-	_, err := svc.DispatchToJules(ctx, connect.NewRequest(&sessionv1.DispatchToJulesRequest{
-		ItemId: item1.ID,
-		Branch: "backlog/item-1",
-		Prompt: "First dispatch fills the one slot",
-	}))
-	require.NoError(t, err, "first dispatch must succeed and consume the only slot")
-
-	_, err = svc.DispatchToJules(ctx, connect.NewRequest(&sessionv1.DispatchToJulesRequest{
-		ItemId: item2.ID,
-		Branch: "backlog/item-2",
-		Prompt: "Second dispatch must be rejected by the cap",
-	}))
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-}
-
-func TestBacklogService_DispatchToJules_should_ReturnFailedPreconditionPointingAtSettings_When_JulesDisabled(t *testing.T) {
-	t.Parallel()
-	storage := createTestStorage(t)
-	ctx := t.Context()
-
-	item := createTestJulesReadyItem(t, ctx, storage, "rpc disabled item")
-	cfg := newTestJulesConfig(item.RepoPath)
-	cfg.Jules.Enabled = false
-	svc := newTestBacklogServiceWithJules(storage, cfg, &fakeJulesSessionCreator{}, newTestJulesSourceRegistry())
-
-	_, err := svc.DispatchToJules(ctx, connect.NewRequest(&sessionv1.DispatchToJulesRequest{
-		ItemId: item.ID,
-		Branch: "backlog/item-1",
-		Prompt: "Should be rejected because Jules is disabled",
-	}))
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-	assert.Contains(t, err.Error(), "Settings")
-	assert.Contains(t, err.Error(), "Jules")
-}
-
-func TestBacklogService_DispatchToJules_should_ReturnFailedPreconditionDirectingToDispatchDialog_When_RepoNotAcknowledged(t *testing.T) {
-	t.Parallel()
-	storage := createTestStorage(t)
-	ctx := t.Context()
-
-	item := createTestJulesReadyItem(t, ctx, storage, "rpc unacknowledged repo item")
-	cfg := &config.Config{Jules: config.JulesConfig{
-		Enabled:                    true,
-		MaxConcurrentJulesSessions: 2,
-		MaxJulesSessionsPerDay:     15,
-		// EgressAcknowledgedRepos deliberately left empty — item.RepoPath was
-		// never confirmed via ConfirmEgressConsent.
-	}}
-	svc := newTestBacklogServiceWithJules(storage, cfg, &fakeJulesSessionCreator{}, newTestJulesSourceRegistry())
-
-	_, err := svc.DispatchToJules(ctx, connect.NewRequest(&sessionv1.DispatchToJulesRequest{
-		ItemId: item.ID,
-		Branch: "backlog/item-1",
-		Prompt: "Should be rejected — repo not acknowledged for cloud egress",
-	}))
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-	assert.Contains(t, err.Error(), "dispatch dialog")
-}
 
 func TestResolveJulesOwnerRepo_GitHubURL(t *testing.T) {
 	ref, err := resolveJulesOwnerRepo("https://github.com/tstapler/stapler-squad")

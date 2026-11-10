@@ -20,7 +20,7 @@ import (
 // list can never again drift from what actually exists on disk.
 func TestMethodToIDCompleteness(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
-	repoRoot := filepath.Join(filepath.Dir(file), "..", "..", "..")
+	repoRoot := filepath.Join(callerDir(file), "..", "..", "..")
 	protoDir := filepath.Join(repoRoot, "proto", "session", "v1")
 
 	protoFiles, err := filepath.Glob(filepath.Join(protoDir, "*.proto"))

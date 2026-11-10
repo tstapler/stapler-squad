@@ -187,7 +187,7 @@ export function TriageDiffSection({ currentCriteria, suggestedSuggestions, onAns
                         className={styles.answerToggle}
                         onClick={() => setOpenIndex(isOpen ? null : i)}
                         hidden={isOpen}
-                      >
+                      >{/* analytics-exempt */}
                         Answer ▸
                       </button>
 
@@ -239,7 +239,7 @@ export function TriageDiffSection({ currentCriteria, suggestedSuggestions, onAns
                                 if (!draft.trim() || isSubmitting) return;
                                 void handleSubmit(i, q.text);
                               }}
-                            >
+                            >{/* analytics-exempt */}
                               {isSubmitting ? "Submitting…" : "Submit"}
                             </button>
                             <button
@@ -248,7 +248,7 @@ export function TriageDiffSection({ currentCriteria, suggestedSuggestions, onAns
                               data-testid={`triage-question-answer-cancel-${i}`}
                               disabled={isSubmitting}
                               onClick={() => handleCancel(i)}
-                            >
+                            >{/* analytics-exempt */}
                               Cancel
                             </button>
                           </div>

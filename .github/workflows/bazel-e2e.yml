@@ -1,0 +1,218 @@
+name: Bazel e2e (selective, shadow)
+
+# PROVISIONAL shadow of the full Playwright suite in build.yml (ADR-009, Tasks 12.4c/12.5b). Every job is
+# non-blocking until Task 12.6a (blocked on the Story 7.6 soak and e2e_escapes = 0). It never writes the Bazel
+# cache: Story 7.4's write credential does not exist yet; when it does, only the `main` job may hold it
+# (tools/bzl/check-workflow-cache-writes enforces that). Not run end to end from a workstation; see
+# docs/reference/bazel-slow-suites.md for what stays unverified. Action pins are SHAs.
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'proto/**'
+      - 'web-app/**'
+      - 'tests/e2e/**'
+      - 'tools/bzl/e2e*/**'
+      - '.github/workflows/bazel-e2e.yml'
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bazel-e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  E2E_SHARDS: 5
+
+jobs:
+  # Maps the diff onto the observed-dependency manifest (tests/e2e/slice-manifest.json) and splits the selected
+  # targets over the runners by recorded duration. `main` and workflow_dispatch select every target.
+  plan:
+    name: plan (affected e2e targets)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      selected: ${{ steps.plan.outputs.selected }}
+      total: ${{ steps.plan.outputs.total }}
+      playwright-version: ${{ steps.pw.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Read pinned Playwright version
+        id: pw
+        run: |
+          v=$(grep -oE '"@playwright/test@[0-9]+\.[0-9]+\.[0-9]+"' tests/e2e/bun.lock | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          [ -n "$v" ] || { echo "::error::could not read @playwright/test version from tests/e2e/bun.lock" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # Deleted files stay in the list: the manifest is keyed by path, so a deletion selects the specs that
+      # observed the file, which is the base-side query of ADR-009 without a second checkout.
+      - name: Select targets and plan shards
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # The manifest comes from the Epic 12 capture (Task 12.1a); until it is committed this shadow has nothing to select.
+          if [ ! -f tests/e2e/slice-manifest.json ]; then
+            echo "::warning::tests/e2e/slice-manifest.json is absent (Task 12.1a capture not run); skipping the shadow e2e shards"
+            { echo 'matrix={"include":[]}'; echo "selected=0"; echo "total=0"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          go build -o "$RUNNER_TEMP/e2eslice" ./tools/bzl/e2eslice
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only "$BASE_SHA"...HEAD > changed.txt
+          else
+            echo tests/e2e/helpers/wait.ts > changed.txt   # a global input: select everything
+          fi
+          "$RUNNER_TEMP/e2eslice" select -closure none < changed.txt > selected.txt
+          grep -v '^__ALL__$' selected.txt > targets.txt || true
+          "$RUNNER_TEMP/e2eslice" plan-shards -shards "$E2E_SHARDS" -durations tests/e2e/durations.json < targets.txt > matrix.json
+          {
+            echo "matrix=$(jq -c . matrix.json)"
+            echo "selected=$(wc -l < targets.txt)"
+            echo "total=$("$RUNNER_TEMP/e2eslice" list-groups | wc -l)"
+          } >> "$GITHUB_OUTPUT"
+          cat selected.txt
+
+  # One build of the server (the out-of-band binary of ADR-009 decision 2), shared by every shard.
+  bin:
+    name: bin (server binary and seed tools)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: plan
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: bazel-e2e  # not github.workflow: its comma is an invalid cache-key character
+          repository-cache: true
+
+      - name: Build the binary
+        run: |
+          # Stamping embeds the git revision that the revision guard below checks.
+          bazel build --config=ci --stamp --workspace_status_command=tools/bzl/workspace_status.sh --lockfile_mode=error --remote_upload_local_results=false //:stapler-squad
+          mkdir -p out
+          cp -L bazel-bin/stapler-squad_/stapler-squad out/stapler-squad 2>/dev/null || cp -L "$(bazel cquery --config=ci --output=files //:stapler-squad)" out/stapler-squad
+
+      # The seed tools are plain `go build`s: they need the gitignored proto and ent output that Bazel does not use.
+      - name: Generate protos and ent for the seed tools
+        uses: ./.github/actions/prepare-stub
+
+      - name: Build the seed tools
+        run: |
+          go build -o out/seed-demo ./tests/demo/seed
+          go build -o out/seed-hidden ./tests/e2e/seed-hidden
+
+      - name: Revision guard (binary must come from HEAD)
+        run: |
+          go build -o "$RUNNER_TEMP/e2eguard" ./tools/bzl/e2eguard
+          "$RUNNER_TEMP/e2eguard" out/stapler-squad
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bazel-e2e-bin
+          path: out/
+          if-no-files-found: error
+          retention-days: 1
+
+  shard:
+    name: shard ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: [plan, bin]
+    if: needs.plan.outputs.selected != '0'
+    timeout-minutes: 50
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.plan.outputs.playwright-version }}-noble
+      options: --init --ipc=host
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bazel-e2e-bin
+          path: out
+
+      - name: Make binaries executable
+        run: chmod +x out/stapler-squad out/seed-demo out/seed-hidden
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Install test dependencies
+        run: cd tests/e2e && bun install --frozen-lockfile
+
+      # The verdict is the comparator over the Playwright JSON report (e2erun), not Playwright's exit code.
+      # Targets run directly through the runner here; the Bazel-cached form (`bazel test --config=e2e`) needs
+      # the generated tests/e2e/BUILD.bazel and arrives with the manifest (Task 12.2a).
+      - name: Run the shard's targets
+        env:
+          TARGETS: ${{ toJSON(matrix.targets) }}
+          TEST_SERVER_BINARY: ${{ github.workspace }}/out/stapler-squad
+          TEST_SEED_DEMO: ${{ github.workspace }}/out/seed-demo
+          TEST_SEED_HIDDEN: ${{ github.workspace }}/out/seed-hidden
+          E2E_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          go build -o "$RUNNER_TEMP/e2erun" ./tools/bzl/e2erun
+          go build -o "$RUNNER_TEMP/e2eslice" ./tools/bzl/e2eslice
+          rc=0
+          for t in $(echo "$TARGETS" | jq -r '.[]' | sed 's|^//tests/e2e:||'); do
+            specs=$("$RUNNER_TEMP/e2eslice" specs-of -group "$t" | sed 's/^/-spec=/')
+            # shellcheck disable=SC2086
+            "$RUNNER_TEMP/e2erun" -target "$t" $specs || rc=1
+          done
+          exit $rc
+
+  report:
+    name: report (selected vs total)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: [plan, shard]
+    if: always() && github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Comment selected / total
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTED: ${{ needs.plan.outputs.selected }}
+          TOTAL: ${{ needs.plan.outputs.total }}
+          SHARD_RESULT: ${{ needs.shard.result }}
+        run: |
+          body="Selective e2e (shadow, non-blocking): ${SELECTED} of ${TOTAL} targets selected; shard jobs: ${SHARD_RESULT}. The full suite in build.yml stays authoritative."
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body "$body" || echo "::warning::no comment (fork PR or missing permission)"

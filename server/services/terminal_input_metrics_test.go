@@ -109,7 +109,7 @@ func TestRecordTerminalInput_ShouldBoundListenerLabel_When_UnknownValue(t *testi
 
 func TestRecordTerminalInput_ShouldUseOnlyKindListenerPathStageLabels_When_Recorded(t *testing.T) {
 	t.Parallel()
-	recordTerminalInput(newInputSource(PathCapture, ListenerRemote, "labels-check"), []byte("x"), StageForwarded)
+	RecordTerminalInput(NewInputSource(PathCapture, ListenerRemote, "labels-check"), []byte("x"), StageForwarded)
 	for _, name := range []string{"terminal_input_frames_total", "terminal_input_bytes_total"} {
 		m := collectMetric(t, name)
 		require.NotNil(t, m, name)
@@ -222,5 +222,5 @@ func TestInputLogging_ShouldContainNoPayload_When_FirstInputAndSummaryEmitted(t 
 
 func TestRecordTerminalInput_ShouldRecordNothing_When_SourceIsNil(t *testing.T) {
 	t.Parallel()
-	assert.NotPanics(t, func() { recordTerminalInput(nil, []byte("x"), StageReceived) })
+	assert.NotPanics(t, func() { RecordTerminalInput(nil, []byte("x"), StageReceived) })
 }

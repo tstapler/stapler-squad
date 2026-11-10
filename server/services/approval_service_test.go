@@ -19,6 +19,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -95,7 +96,7 @@ func newApprovalService() *ApprovalService {
 // and a fresh in-memory classifier.
 func newRulesService(t *testing.T) *RulesService {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
@@ -386,7 +387,7 @@ func TestGetApprovalAnalytics_CustomWindowDays(t *testing.T) {
 // chain -- not just the pure ComputeSummary unit test in isolation.
 func TestGetApprovalAnalytics_IncludesEscalationReasonCounts(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
@@ -532,7 +533,7 @@ func failingCIInstance(sessionID string) *session.Instance {
 }
 
 func TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -556,7 +557,7 @@ func TestResolveApproval_BlocksOnFailingCI_WhenFlagEnabled(t *testing.T) {
 }
 
 func TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	// Flag intentionally left unset (defaults false).
 
 	store := NewApprovalStore("")
@@ -574,7 +575,7 @@ func TestResolveApproval_AllowsOnFailingCI_WhenFlagDisabled(t *testing.T) {
 }
 
 func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -603,7 +604,7 @@ func TestResolveApproval_UnaffectedWhenNoPR(t *testing.T) {
 // actually uses (see plan.md's Implementation Deviations) rather than a *session.Storage
 // lookup error, since GitHubCheckConclusion is not persisted.
 func TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -625,7 +626,7 @@ func TestResolveApproval_FailsOpen_WhenLiveInstanceNotFound(t *testing.T) {
 // TestResolveApproval_NilLiveFinder_FailsOpen covers the nil-liveFinder case (feature
 // never wired, e.g. an older deployment) — must behave exactly as if the flag were off.
 func TestResolveApproval_NilLiveFinder_FailsOpen(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -642,7 +643,7 @@ func TestResolveApproval_NilLiveFinder_FailsOpen(t *testing.T) {
 }
 
 func TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -668,7 +669,7 @@ func TestResolveApproval_OverrideCiBlock_SkipsGuard_AndLogsDistinctly(t *testing
 // preconditions) when the block would not have fired anyway — it is a no-op flag in
 // this case, not a second code path (Story 2.2.4's second Given/When/Then).
 func TestResolveApproval_OverrideCiBlock_NoOp_WhenBlockWouldNotHaveFired(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	// Flag off — block would never have fired regardless of OverrideCiBlock.
 
 	store := NewApprovalStore("")
@@ -977,7 +978,7 @@ func prViewFor(t *testing.T, number int, state session.PRState, conclusion strin
 }
 
 func TestApprovalGate_ShouldReadActivePRConclusion_WhenMergedAndOpenWithFailure(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	// The stale scalar says "success" (left by merged #11); the active PR #12 is red.
@@ -998,7 +999,7 @@ func TestApprovalGate_ShouldReadActivePRConclusion_WhenMergedAndOpenWithFailure(
 }
 
 func TestApprovalGate_ShouldNotBlock_WhenOnlyANonActivePRIsFailing(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	// The scalar still says "failure" from merged #11, but the active PR #12 is green.

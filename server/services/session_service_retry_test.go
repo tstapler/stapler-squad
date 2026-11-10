@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -18,7 +19,7 @@ import (
 // mirrors TestRestartSession_EmptyID's shape for the new RetrySession RPC.
 func TestSessionService_RetrySession_should_ReturnInvalidArgument_When_IDEmpty(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -34,7 +35,7 @@ func TestSessionService_RetrySession_should_ReturnInvalidArgument_When_IDEmpty(t
 // mirrors TestRestartSession_SessionNotFound's shape.
 func TestSessionService_RetrySession_should_ReturnNotFound_When_SessionDoesNotExist(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -52,7 +53,7 @@ func TestSessionService_RetrySession_should_ReturnNotFound_When_SessionDoesNotEx
 // generic internal error (design/ux.md Surface 4).
 func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_RetryAlreadyInFlight(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -85,7 +86,7 @@ func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_RetryA
 
 func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_SessionIsArchived(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -122,7 +123,7 @@ func TestSessionService_RetrySession_should_ReturnFailedPrecondition_When_Sessio
 // of which exercise the happy path that actually restarts a session.
 func TestSessionService_RetrySession_should_RestartImmediately_When_SessionIsPermanentlyFailed(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })

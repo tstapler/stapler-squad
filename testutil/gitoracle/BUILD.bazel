@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "gitoracle",
+    srcs = [
+        "fixtures.go",
+        "ops.go",
+        "oracle.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/testutil/gitoracle",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor/safeexec",
+        "//session/git/backend",
+        "//session/git/backend/cli",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gitoracle",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gitoracle_test",
+    srcs = ["oracle_test.go"],
+    embed = [":gitoracle"],
+    deps = [
+        "//session/git/backend",
+        "//session/git/backend/cli",
+    ],
+)

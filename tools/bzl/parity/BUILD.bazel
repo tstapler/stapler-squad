@@ -1,0 +1,6 @@
+# Fixtures for the Go parity tools (run-all reads them in its tests).
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/*"]),
+    visibility = ["//tools/bzl/parity:__subpackages__"],
+)

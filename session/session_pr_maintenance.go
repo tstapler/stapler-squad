@@ -127,13 +127,13 @@ func (s *Storage) runPRMaintenancePassWithRetries(ctx context.Context, cfg prMai
 }
 
 func (s *Storage) runPRMaintenancePass(ctx context.Context, cfg prMaintenanceConfig) error {
-	if _, err := s.repo.runPRBackfill(ctx, cfg.hook); err != nil {
+	if _, err := s.Repo.runPRBackfill(ctx, cfg.hook); err != nil {
 		return err
 	}
-	if _, err := s.repo.ResetVerifyCounters(ctx); err != nil {
+	if _, err := s.Repo.ResetVerifyCounters(ctx); err != nil {
 		return err
 	}
-	s.repo.MarkPRMaintenanceSucceeded()
+	s.Repo.MarkPRMaintenanceSucceeded()
 	return nil
 }
 

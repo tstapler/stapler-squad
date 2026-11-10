@@ -10,12 +10,13 @@ import (
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // newGitHubService creates a GitHubService backed by a fresh in-memory test storage.
 func newGitHubService(t *testing.T) *GitHubService {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	return NewGitHubService(storage)
 }
 

@@ -26,10 +26,17 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/devtools"
+	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
+	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/server/web"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/memory"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -61,32 +68,32 @@ type Server struct {
 	addr                       atomic.Pointer[string]
 	httpServer                 *http.Server
 	mux                        *http.ServeMux
-	wsUnaryBridge              atomic.Pointer[services.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
-	terminalMuxBridge          atomic.Pointer[services.TerminalMuxBridge] // serves /actuator/terminal-mux
-	unfinishedScanner          *unfinished.Scanner                        // serves /actuator/unfinished-scanner; nil without deps
-	prLinkGC                   *session.SessionPRLinkGC                   // orphan session-PR link collector; nil without storage
-	tlsConfig                  *tls.Config                                // non-nil when TLS is enabled
-	authMiddleware             func(http.Handler) http.Handler            // nil when auth is disabled
-	requiresAuth               bool                                       // explicit: a real validator is wired
-	dispatchersMu              sync.RWMutex                               // guards dispatchers
-	dispatchers                map[string]http.Handler                    // listener name -> dispatcher the unary WS bridge re-enters
-	httpsURL                   atomic.Pointer[string]                     // set when remote access is enabled
-	hostnames                  atomic.Pointer[[]string]                   // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
-	verifiedHostnames          atomic.Pointer[[]string]                   // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
-	origins                    []string                                   // allowed CORS origins
-	shutdownHooks              []func()                                   // called before HTTP server stops
-	closeAfterJoin             []func()                                   // run after background tasks join (databases whose writers those tasks drive)
-	connCtxCancel              context.CancelFunc                         // cancels BaseContext → closes active streams on shutdown
-	availablePrograms          []string                                   // cached once at startup; programs change only on system changes
-	startedAt                  time.Time                                  // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
-	approvalHandler            *services.ApprovalHandler                  // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
-	slackInteractiveDisabled   bool                                       // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
-	finalStatsFlush            func()                                     // delivery-gate stats flush; deferred at the top of Shutdown
-	backgroundTasksWG          sync.WaitGroup                             // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
-	backgroundTasksJoinTimeout time.Duration                              // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
-	selfAuthMu                 sync.RWMutex                               // guards selfAuthPaths
-	selfAuthPaths              []func(path string) bool                   // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
-	hookIPC                    *hookIPCState                              // resident instance-scoped PreToolUse classifier; started with the HTTP server
+	wsUnaryBridge              atomic.Pointer[wsconn.UnaryWsBridge]     // serves /actuator/ws-unary; set when the bridge is built
+	terminalMuxBridge          atomic.Pointer[wsconn.TerminalMuxBridge] // serves /actuator/terminal-mux
+	unfinishedScanner          *unfinished.Scanner                      // serves /actuator/unfinished-scanner; nil without deps
+	prLinkGC                   *session.SessionPRLinkGC                 // orphan session-PR link collector; nil without storage
+	tlsConfig                  *tls.Config                              // non-nil when TLS is enabled
+	authMiddleware             func(http.Handler) http.Handler          // nil when auth is disabled
+	requiresAuth               bool                                     // explicit: a real validator is wired
+	dispatchersMu              sync.RWMutex                             // guards dispatchers
+	dispatchers                map[string]http.Handler                  // listener name -> dispatcher the unary WS bridge re-enters
+	httpsURL                   atomic.Pointer[string]                   // set when remote access is enabled
+	hostnames                  atomic.Pointer[[]string]                 // detected LAN hostnames; published add-only via SetHostnames, read lock-free via GetHostnames
+	verifiedHostnames          atomic.Pointer[[]string]                 // forward-verified subset; replaced wholesale via ReplaceVerifiedHostnames, read lock-free via GetVerifiedHostnames
+	origins                    []string                                 // allowed CORS origins
+	shutdownHooks              []func()                                 // called before HTTP server stops
+	closeAfterJoin             []func()                                 // run after background tasks join (databases whose writers those tasks drive)
+	connCtxCancel              context.CancelFunc                       // cancels BaseContext → closes active streams on shutdown
+	availablePrograms          []string                                 // cached once at startup; programs change only on system changes
+	startedAt                  time.Time                                // set once in newServerBase; used to gate orphan notification pruning until instance data has had time to load
+	approvalHandler            *services.ApprovalHandler                // set in wireDepsIntoServer; exposed only for wiring regression tests (same-package field access, e.g. TestWireDepsIntoServer_SharesSingleSlackNotifierInstance...)
+	slackInteractiveDisabled   bool                                     // set in wireDepsIntoServer; see ServeHTTP's doc comment for why this can't be expressed as an s.mux registration
+	finalStatsFlush            func()                                   // delivery-gate stats flush; deferred at the top of Shutdown
+	backgroundTasksWG          sync.WaitGroup                           // joined by Shutdown() — every goroutine wireDepsIntoServer starts (sweepers, pollers, watchers, tickers)
+	backgroundTasksJoinTimeout time.Duration                            // bounds Shutdown's join of backgroundTasksWG; defaults to defaultBackgroundTasksJoinTimeout, overridable in tests
+	selfAuthMu                 sync.RWMutex                             // guards selfAuthPaths
+	selfAuthPaths              []func(path string) bool                 // routes that authenticate every request themselves; the remote listener's passkey middleware steps aside for them (see SelfAuthenticatedPath)
+	hookIPC                    *hookIPCState                            // resident instance-scoped PreToolUse classifier; started with the HTTP server
 
 	// workflowEngineSoak is what /actuator/workflow-engine reads; set via SetWorkflowEngineSoakSource.
 	workflowEngineSoak atomic.Pointer[WorkflowEngineSoakSource]
@@ -538,7 +545,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	deps.SessionService.SetTmuxStreamerManager(deps.TmuxStreamerManager)
 
 	// Register ConnectRPC WebSocket handler (must come before unary handler)
-	wsHandler := services.NewConnectRPCWebSocketHandler(
+	wsHandler := wsconn.NewConnectRPCWebSocketHandler(
 		deps.SessionService, deps.ScrollbackManager, deps.TmuxStreamerManager,
 	)
 	wsPath := "/api" + sessionv1connect.SessionServiceStreamTerminalProcedure
@@ -546,28 +553,28 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.Info("Registered ConnectRPC WebSocket handler", "path", wsPath)
 
 	// Shared terminal sockets (ADR-033). Clients use it only behind the terminal_ws_pool flag.
-	muxPool := services.TerminalMuxPoolSizeFromEnv()
-	muxBridge := services.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
-		services.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
-		services.WithTerminalMuxDispatchers(srv.unaryDispatcher))
+	muxPool := wsconn.TerminalMuxPoolSizeFromEnv()
+	muxBridge := wsconn.NewTerminalMuxBridgeForHandler(wsHandler, muxPool,
+		wsconn.WithTerminalMuxOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()),
+		wsconn.WithTerminalMuxDispatchers(srv.unaryDispatcher))
 	srv.terminalMuxBridge.Store(muxBridge)
-	srv.mux.Handle(services.TerminalMuxPath, muxBridge)
-	log.Info("Registered terminal mux", "path", services.TerminalMuxPath, "poolSize", muxPool)
+	srv.mux.Handle(wsconn.TerminalMuxPath, muxBridge)
+	log.Info("Registered terminal mux", "path", wsconn.TerminalMuxPath, "poolSize", muxPool)
 
 	// Register VNC browser-passthrough WebSocket proxy.
 	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
-	vncProxy := services.NewVNCProxyHandler(deps.ReviewQueuePoller)
+	vncProxy := devtools.NewVNCProxyHandler(deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("/api/sessions/{id}/vnc", vncProxy.HandleWebSocket)
 	log.Info("Registered VNC WebSocket proxy at /api/sessions/{id}/vnc")
 
 	// Register CDP browser-streaming WebSocket handler.
 	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
-	cdpStream := services.NewCDPStreamHandler(deps.ReviewQueuePoller)
+	cdpStream := devtools.NewCDPStreamHandler(deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("/api/sessions/{id}/cdp-stream", cdpStream.HandleWebSocket)
 	log.Info("Registered CDP stream WebSocket handler at /api/sessions/{id}/cdp-stream")
 
 	// Register one-shot element inspection for Browser Passthrough (CDP).
-	inspectElement := services.NewInspectElementHandler(deps.ReviewQueuePoller)
+	inspectElement := devtools.NewInspectElementHandler(deps.ReviewQueuePoller)
 	srv.mux.HandleFunc("POST /api/sessions/{id}/inspect-element", inspectElement.ServeHTTP)
 	log.Info("Registered element inspect handler at POST /api/sessions/{id}/inspect-element")
 
@@ -590,7 +597,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register StreamingWSBridge for server-streaming Watch* RPCs so browsers use
 	// WebSocket instead of HTTP long-polling, avoiding the 6-connection-per-origin limit.
 	// Exact-path registration takes priority over the prefix-registered general handler.
-	wsBridge := services.NewStreamingWSBridge(handler)
+	wsBridge := wsconn.NewStreamingWSBridge(handler)
 	watchSessionsPath := "/api" + sessionv1connect.SessionServiceWatchSessionsProcedure
 	watchReviewQueuePath := "/api" + sessionv1connect.SessionServiceWatchReviewQueueProcedure
 	watchWorkflowsPath := "/api" + sessionv1connect.SessionServiceWatchWorkflowsProcedure
@@ -602,12 +609,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Unary multiplex over one socket (Epic 5). Calls re-enter the listener's
 	// dispatcher (published by Start/StartRemote); the remote listener upgrades only
 	// with an authenticated session and an allow-listed Origin.
-	unaryBridge := services.NewUnaryWsBridge(srv.unaryDispatcher,
-		services.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
+	unaryBridge := wsconn.NewUnaryWsBridge(srv.unaryDispatcher,
+		wsconn.WithUnaryOriginPolicy(services.ListenerRemote, srv.wsUnaryRemoteOriginPolicy()))
 	srv.wsUnaryBridge.Store(unaryBridge)
-	srv.mux.Handle(services.UnaryWsPath, unaryBridge)
+	srv.mux.Handle(wsconn.UnaryWsPath, unaryBridge)
 	// HTTP request batching (flag batch_unary): same per-call re-entry as the bridge.
-	srv.mux.Handle(services.UnaryBatchPath, services.NewUnaryBatchHandler(srv.unaryDispatcher))
+	srv.mux.Handle(wsconn.UnaryBatchPath, wsconn.NewUnaryBatchHandler(srv.unaryDispatcher))
 
 	srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
 
@@ -622,7 +629,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// doc comment) — otherwise it's one more long-lived HTTP/1.1 connection
 		// competing with WatchSessions/WatchReviewQueue/etc. for the browser's
 		// 6-connections-per-origin budget.
-		uwWsBridge := services.NewStreamingWSBridge(uwHandler)
+		uwWsBridge := wsconn.NewStreamingWSBridge(uwHandler)
 		watchUnfinishedWorkPath := "/api" + sessionv1connect.UnfinishedWorkServiceWatchUnfinishedWorkProcedure
 		srv.mux.Handle(watchUnfinishedWorkPath, uwWsBridge.Handler("/api"))
 		log.Info("Registered StreamingWSBridge", "watchUnfinishedWork", watchUnfinishedWorkPath)
@@ -655,7 +662,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 		// Bridge WatchInsights over WebSocket too — see StreamingWSBridge's doc
 		// comment (avoids the browser's 6-connections-per-origin HTTP/1.1 limit).
-		insightsWsBridge := services.NewStreamingWSBridge(insightsHandler)
+		insightsWsBridge := wsconn.NewStreamingWSBridge(insightsHandler)
 		watchInsightsPath := "/api" + sessionv1connect.InsightsServiceWatchInsightsProcedure
 		srv.mux.Handle(watchInsightsPath, insightsWsBridge.Handler("/api"))
 		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
@@ -680,7 +687,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// call through the WS transport (see createSessionWatchTransport), so an
 		// unbridged one fails to connect.
 		watchUserPRsPath := "/api" + sessionv1connect.GitHubUserServiceWatchUserPRsProcedure
-		srv.mux.Handle(watchUserPRsPath, services.NewStreamingWSBridge(ghHandler).Handler("/api"))
+		srv.mux.Handle(watchUserPRsPath, wsconn.NewStreamingWSBridge(ghHandler).Handler("/api"))
 		log.Info("Registered StreamingWSBridge", "watchUserPRs", watchUserPRsPath)
 	}
 
@@ -719,8 +726,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		}
 		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
 		if deps.SessionService != nil {
+			var backlogTransitions services.BacklogTransitioner // stays nil unless set: a boxed nil *BacklogService would defeat the nil check
+			if deps.BacklogService != nil {
+				backlogTransitions = deps.BacklogService
+			}
 			deps.SessionService.WireNotificationActions(services.NotificationActionWiring{
-				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: deps.BacklogService, Cancels: wakeTriggerSvc,
+				Storage: deps.Storage, Guidance: guidanceRequestSvc, Backlog: backlogTransitions, Cancels: wakeTriggerSvc,
 			})
 		}
 		guidanceRequestPath, guidanceRequestHandler := sessionv1connect.NewGuidanceRequestServiceHandler(guidanceRequestSvc, ConnectOptions(deps.ErrorRegistry)...)
@@ -757,15 +768,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// Wrap concrete pointers in their interface types here so a nil concrete
 		// pointer becomes a nil interface value — not a non-nil interface holding
 		// a nil pointer, which would bypass the nil guards inside SessionBundleService.
-		var bundleCtxHistory services.ContextHistoryReader
+		var bundleCtxHistory sessionbundle.ContextHistoryReader
 		if deps.CtxHistoryStore != nil {
 			bundleCtxHistory = deps.CtxHistoryStore
 		}
-		var bundleScrollback services.ScrollbackReader
+		var bundleScrollback sessionbundle.ScrollbackReader
 		if deps.ScrollbackManager != nil {
 			bundleScrollback = deps.ScrollbackManager
 		}
-		bundleSvc := services.NewSessionBundleService(analytics.NewBundleStorage(deps.Storage, deps.AnalyticsEntClient), bundleCtxHistory, bundleScrollback)
+		bundleSvc := sessionbundle.NewSessionBundleService(analytics.NewBundleStorage(deps.Storage, deps.AnalyticsEntClient), bundleCtxHistory, bundleScrollback)
 		bundleSvc.SetPoller(deps.ReviewQueuePoller)
 		bundleSvc.SetExternalDiscovery(deps.ExternalDiscovery)
 		bundlePath, bundleHandler := sessionv1connect.NewSessionBundleServiceHandler(bundleSvc, ConnectOptions(deps.ErrorRegistry)...)
@@ -852,7 +863,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		// limit). Wraps blHandler directly so the feature-flag interceptor
 		// above still applies (StreamingWSBridge calls handler.ServeHTTP for
 		// both transports).
-		blWsBridge := services.NewStreamingWSBridge(blHandler)
+		blWsBridge := wsconn.NewStreamingWSBridge(blHandler)
 		watchBacklogItemsPath := "/api" + sessionv1connect.BacklogServiceWatchBacklogItemsProcedure
 		srv.mux.Handle(watchBacklogItemsPath, blWsBridge.Handler("/api"))
 		log.InfoLog().Printf("Registered StreamingWSBridge for watchBacklogItems at %s", watchBacklogItemsPath)
@@ -927,10 +938,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// CodeUnimplemented rather than the CodeNotFound used by the
 	// config-persisted "backlog" flag, since this is an unshipped/opt-in
 	// capability rather than a togglable UI feature.
-	suspendedStore, err := session.NewSuspendedProcessStore()
+	suspendedStore, err := importer.NewSuspendedProcessStore()
 	if err != nil {
 		log.Error("failed to create suspended process store, import-external-session disabled", "error", err)
-	} else if err := session.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
+	} else if err := importer.ReconcileSuspendedProcesses(serverCtx, suspendedStore, deps.Storage); err != nil {
 		log.Error("failed to reconcile suspended processes from a prior server incarnation", "error", err)
 	}
 	importSvc := services.NewImportServiceWithRealInspector(deps.Storage, deps.Registry, deps.HistoryLinker, suspendedStore)
@@ -1184,7 +1195,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			// alongside the existing prFixRouter dispatch. deps.WorktreePRPoller may
 			// be nil (not constructed when no GitHub token is available at startup);
 			// the adapter itself nil-guards it.
-			pollerInvalidator := session.NewPollerInvalidationAdapter(deps.PRStatusPoller, deps.WorktreePRPoller)
+			pollerInvalidator := prpoller.NewPollerInvalidationAdapter(deps.PRStatusPoller, deps.WorktreePRPoller)
 			githubWebhookHandler := services.NewGitHubWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg, prFixRouter, pollerInvalidator)
 			githubWebhookHandler.RegisterRoutes(srv.mux)
 			genericWebhookHandler := services.NewGenericWebhookHandler(deps.WorkflowRepo, deps.WorkflowScheduler, deps.TriggerFireEventRepo, webhookCfg)
@@ -1228,7 +1239,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// `h.autoReopener != nil` guard would then read true, and calling
 	// AutoReopenAfterFailedReview would panic on the nil receiver instead of
 	// being skipped.
-	var autoReopener session.AutoReopenSpawner
+	var autoReopener backlog.AutoReopenSpawner
 	if deps.BacklogService != nil {
 		autoReopener = deps.BacklogService
 	}
@@ -1285,7 +1296,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.Storage != nil {
 		var hostResolver services.HostResolver
 		if configErr == nil {
-			hostResolver = services.NewRegistryHostResolver(configDir, session.DefaultHostRegistryTTL)
+			hostResolver = services.NewRegistryHostResolver(configDir, hostclaim.DefaultHostRegistryTTL)
 		} else {
 			log.Warn("Deep-link resolver falling back to unimplemented host resolver: config dir unavailable", "err", configErr)
 		}

@@ -20,16 +20,21 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -63,7 +68,7 @@ type ServerDependencies struct {
 	StatusManager     *session.InstanceStatusManager
 	ReviewQueue       *session.ReviewQueue
 	ReviewQueuePoller *session.ReviewQueuePoller
-	PRStatusPoller    *session.PRStatusPoller
+	PRStatusPoller    *prpoller.PRStatusPoller
 
 	// StopPRMaintenance stops the PR startup-maintenance retry ticker (see
 	// BuildOptions.RunPRMaintenance); nil when maintenance did not run.
@@ -73,7 +78,7 @@ type ServerDependencies struct {
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
 	ExternalDiscovery       *session.ExternalSessionDiscovery
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
-	HistoryLinker           *session.HistoryLinker
+	HistoryLinker           *importer.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
 	// ClaudeSettingsWatcher watches ~/.claude/settings.json (and project-level
@@ -91,7 +96,7 @@ type ServerDependencies struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
-	WorktreePRPoller      *session.WorktreePRPoller
+	WorktreePRPoller      *prpoller.WorktreePRPoller
 
 	// UnfinishedWatchDirWatcher discovers repos under the user-configured
 	// watch directories (Settings → Unfinished Work Sources) and registers
@@ -114,7 +119,7 @@ type ServerDependencies struct {
 	// Token usage analytics.
 	InsightsService *services.InsightsService
 
-	BacklogService *services.BacklogService
+	BacklogService *backlogsvc.BacklogService
 	// BacklogFlowService is the single flow-observability service; the RPC handler and
 	// the HTTP MCP core both use it so they share one aggregator cache.
 	BacklogFlowService *services.BacklogFlowService
@@ -199,7 +204,7 @@ type ServerDependencies struct {
 	// TriggerPRFixForEvent method, satisfies services.PRFixEventRouter for the
 	// pr-event-webhooks feature (immediate PR-fix reconciliation on a GitHub
 	// webhook delivery, instead of waiting for PRStatusPoller's next tick).
-	BacklogLifecycleListener *session.BacklogLifecycleListener
+	BacklogLifecycleListener *backlog.BacklogLifecycleListener
 
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
@@ -512,7 +517,7 @@ type ServiceDeps struct {
 	*CoreDeps
 	StatusManager     *session.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
-	PRStatusPoller    *session.PRStatusPoller
+	PRStatusPoller    *prpoller.PRStatusPoller
 	Registry          *session.Registry
 }
 
@@ -532,7 +537,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 		core.ReviewQueue, statusManager, core.Storage,
 	)
 	reviewQueuePoller.SetOptionsSource(attentionOptionsSource)
-	prStatusPoller := session.NewPRStatusPoller(core.Storage)
+	prStatusPoller := prpoller.NewPRStatusPoller(core.Storage)
 
 	registry := session.NewRegistry(core.Storage, core.SessionService.WireInstanceCallbacks)
 	core.SessionService.SetRegistry(registry)
@@ -575,8 +580,8 @@ type RuntimeDeps struct {
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
 	ExternalDiscovery       *session.ExternalSessionDiscovery
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
-	PRStatusPoller          *session.PRStatusPoller
-	HistoryLinker           *session.HistoryLinker
+	PRStatusPoller          *prpoller.PRStatusPoller
+	HistoryLinker           *importer.HistoryLinker
 	ErrorRegistry           *services.ErrorRegistry
 
 	// ClaudeSettingsWatcher (see the identically-named field on ServerDependencies for
@@ -591,7 +596,7 @@ type RuntimeDeps struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
-	WorktreePRPoller      *session.WorktreePRPoller
+	WorktreePRPoller      *prpoller.WorktreePRPoller
 
 	// UnfinishedWatchDirWatcher (see the identically-named field on
 	// ServerDependencies for its full doc comment).
@@ -608,7 +613,7 @@ type RuntimeDeps struct {
 	// Token usage analytics.
 	InsightsService *services.InsightsService
 
-	BacklogService *services.BacklogService
+	BacklogService *backlogsvc.BacklogService
 	// BacklogFlowService is the single flow-observability service; the RPC handler and
 	// the HTTP MCP core both use it so they share one aggregator cache.
 	BacklogFlowService *services.BacklogFlowService
@@ -684,7 +689,7 @@ type RuntimeDeps struct {
 	// BacklogLifecycleListener satisfies services.PRFixEventRouter for the
 	// pr-event-webhooks feature — see the identical field's doc comment on
 	// ServerDependencies above.
-	BacklogLifecycleListener *session.BacklogLifecycleListener
+	BacklogLifecycleListener *backlog.BacklogLifecycleListener
 
 	// SessionTagClassificationPoller drives the Phase 4 LLM fallback tag classification
 	// (session-classifier-pipeline). Nil when HeadlessPool is nil (no claude binary found).
@@ -857,7 +862,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// the entClient-available branch below) because services.NewBacklogService
 	// (Epic 2.2) needs the same repository instance to back its PipelineMode CRUD
 	// RPCs, independent of whether pipelineEngine construction itself succeeded.
-	var pipelineEngine session.PipelineEngine
+	var pipelineEngine backlog.PipelineEngine
 	var pipelineModeRepo session.PipelineModeRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
 		// Seed the built-in 9-stage/edge workflow graph (backlog_stages +
@@ -882,7 +887,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		if seedErr := session.EnsureDefaultSDDPipelineMode(context.Background(), pipelineModeRepo); seedErr != nil {
 			log.Warn("failed to seed default sdd pipeline mode, continuing without it", "err", seedErr)
 		}
-		if cachingPipelineEngine, err := session.NewPipelineEngine(pipelineModeRepo); err != nil {
+		if cachingPipelineEngine, err := backlog.NewPipelineEngine(pipelineModeRepo); err != nil {
 			log.Warn("pipelineEngine construction failed; continuing with the default pipeline for all backlog items", "err", err)
 		} else {
 			pipelineEngine = cachingPipelineEngine
@@ -903,11 +908,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// NewBacklogService constructor parameter, to avoid touching every
 	// existing NewBacklogService test call site for a dependency this epic
 	// introduces.
-	var livenessRepo session.LivenessRepository
-	var livenessEngine session.LivenessEngine
+	var livenessRepo backlog.LivenessRepository
+	var livenessEngine backlog.LivenessEngine
 	if entClient := storage.GetEntClient(); entClient != nil {
-		livenessRepo = session.NewEntLivenessRepository(entClient)
-		if cachingLivenessEngine, err := session.NewCachingLivenessEngine(livenessRepo); err != nil {
+		livenessRepo = backlog.NewEntLivenessRepository(entClient)
+		if cachingLivenessEngine, err := backlog.NewCachingLivenessEngine(livenessRepo); err != nil {
 			log.Warn("livenessEngine construction failed; continuing with DefaultLivenessEngine's built-in thresholds", "err", err)
 		} else {
 			livenessEngine = cachingLivenessEngine
@@ -1039,7 +1044,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Backlog lifecycle listener — always created, enabled state set from config below.
 	// The pool is passed at construction time to close the race window that existed when
 	// SetHeadlessPool was called hundreds of lines after instance wiring.
-	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine, livenessEngine)
+	backlogLifecycleListener := backlog.NewBacklogLifecycleListenerWithPool(storage, headlessPool, pipelineEngine, livenessEngine)
 	backlogLifecycleListener.SetNotifier(&services.EventBusNotifier{Bus: eventBus})
 	if llmClient != nil {
 		backlogLifecycleListener.SetHeadlessClient(llmClient)
@@ -1304,7 +1309,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
-	historyLinker := session.NewHistoryLinkerFromRealInspector()
+	historyLinker := importer.NewHistoryLinkerFromRealInspector()
 	log.Info("HistoryLinker initialized", "instances", len(instances))
 
 	// Step 9: ScrollbackManager (independent of above)
@@ -1429,7 +1434,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		unfinishedStateStore      *unfinished.StateStore
 		unfinishedWorkSvc         *services.UnfinishedWorkService
 		unfinishedWatchDirWatcher *unfinished.WatchDirWatcher
-		worktreePRPoller          *session.WorktreePRPoller
+		worktreePRPoller          *prpoller.WorktreePRPoller
 		userPRCache               *githubpkg.UserPRCache
 	)
 	if configDir, configErr := config.GetConfigDir(); configErr == nil {
@@ -1457,7 +1462,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			// The scannerSource adapter bridges session/unfinished → session without a cycle.
 			// Shares svc.PRStatusPoller's ETagCache instead of constructing its own — per
 			// ADR-022, a separate cache would double API call volume for repos both pollers hit.
-			worktreePRPoller = session.NewWorktreePRPoller(
+			worktreePRPoller = prpoller.NewWorktreePRPoller(
 				svc.PRStatusPoller.ETagCache(),
 				svc.PRStatusPoller,
 			)
@@ -1522,7 +1527,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	if retentionConfigDir, retentionConfigErr := config.GetConfigDir(); retentionConfigErr == nil {
 		diagnosticsDir := filepath.Join(retentionConfigDir, "diagnostics")
 		go func() {
-			if err := services.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
+			if err := sessionbundle.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
 				log.Warn("diagnostics retention startup sweep failed", "error", err)
 			}
 		}()
@@ -1530,7 +1535,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
 			for range ticker.C {
-				if err := services.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
+				if err := sessionbundle.RunDiagnosticsRetention(diagnosticsDir, 30*24*time.Hour); err != nil {
 					log.Warn("diagnostics retention daily sweep failed", "error", err)
 				}
 			}
@@ -1670,14 +1675,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Per-item /backlog/* commands live in session worktrees only; a user-scope copy is stale
 	// scaffolding from an old build and shadows the real ones with a wrong item ID.
 	if home, hErr := os.UserHomeDir(); hErr == nil {
-		if removed, rmErr := session.RemoveStaleUserLevelBacklogCommands(home); rmErr != nil {
+		if removed, rmErr := backlog.RemoveStaleUserLevelBacklogCommands(home); rmErr != nil {
 			log.WarningLog().Printf("failed to remove stale user-level backlog commands: %v", rmErr)
 		} else if removed {
 			log.InfoLog().Printf("removed stale user-level ~/.claude/commands/backlog (per-item commands belong in session worktrees)")
 		}
 	}
 
-	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
+	backlogSvc := backlogsvc.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
 	// One flow reader, aggregator and service for both the RPC handler and the HTTP MCP core.
 	backlogFlowSvc := services.NewFlowServiceFromStorage(storage, flow.WithObserver(services.NewFlowObserver()))
 	backlogFlowSvc.SetEnabledCheck(backlogCtrl.IsEnabled)
@@ -1688,7 +1693,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc.SetRepoSettingsLookup(githubpkg.RepoSettings)
 	backlogSvc.SetRepoSettingsNonBlockingLookup(githubpkg.RepoSettingsNonBlocking)
 	backlogSvc.SetWorkflowEngineStatusSource(workflowEngine.Status)
-	backlogLifecycleListener.SetRepoSettingsSeam(session.RepoSettingsSeam{Cached: githubpkg.RepoSettingsCached, Fetch: githubpkg.RepoSettings})
+	backlogLifecycleListener.SetRepoSettingsSeam(backlog.RepoSettingsSeam{Cached: githubpkg.RepoSettingsCached, Fetch: githubpkg.RepoSettings})
 	backlogSvc.SetLivenessEngine(livenessEngine)
 	backlogSvc.SetStageCRUDRepository(stageCRUDRepo)
 	backlogSvc.SetGateSatisfactionRepository(gateSatisfactionRepo)
@@ -2059,8 +2064,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// "done" transition commits — AC9) and BacklogLifecycleListener (the
 		// restart-recovery reconciler, running on the existing 60s tick).
 		if triggerFireEventRepo != nil {
-			if chainFirer := storage.WireChainFirer(workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
-				backlogLifecycleListener.SetChainReconciler(session.NewTriggerChainReconciler(chainFirer))
+			if chainFirer := backlog.WireChainFirer(storage, workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
+				backlogLifecycleListener.SetChainReconciler(backlog.NewTriggerChainReconciler(chainFirer))
 				log.Info("ChainFirer and TriggerChainReconciler initialized")
 			}
 		}
@@ -2258,11 +2263,11 @@ func (a *scannerSource) ScanDone() <-chan time.Time {
 	return a.s.ScanDone()
 }
 
-func (a *scannerSource) GetWorktrees() []session.WorktreeScanItem {
+func (a *scannerSource) GetWorktrees() []prpoller.WorktreeScanItem {
 	results := a.s.GetAllResults()
-	items := make([]session.WorktreeScanItem, 0, len(results))
+	items := make([]prpoller.WorktreeScanItem, 0, len(results))
 	for _, r := range results {
-		items = append(items, session.WorktreeScanItem{
+		items = append(items, prpoller.WorktreeScanItem{
 			RepoPath:     r.RepoPath,
 			Branch:       r.Branch,
 			WorktreePath: r.WorktreePath,

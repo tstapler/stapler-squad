@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Build and Run
 
 ```bash
-go build .                  # Build the application
+go build .                  # Plain, uninstrumented build (quick local compile check only)
+make build                  # The real binary: otelc auto-instrumented ./stapler-squad (installs otelc if missing)
 ./stapler-squad             # Run (web server on localhost:8543)
 
 make install-service        # Build web UI + Go binary + install/restart system service (ALWAYS use this)
@@ -23,6 +24,17 @@ STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad   # Disable tmux control mo
 ```
 
 **Note:** `make install-service` restarts the running service, but this does not kill live tmux sessions — `scripts/install-service.sh` has deployed the unit with `--tmux-keep-server` on both platforms since #180, so the tmux server and every session (including the one you're working in) survive the restart. See `docs/explanation/tmux-keep-server-on-restart.md` for the historical bug this fixed and how to re-verify the deployed unit if you ever suspect regression.
+
+### Bazel (build of record)
+
+Bazel is the build of record (provisional until cutover); native `go build`/`go vet`/`go test` and gopls stay supported after `make sync` for editor tooling and quick loops, but a native result is not authoritative.
+
+- Invoke Bazel only through `tools/bazel` (Bazelisk runs it; it queues host-wide slots and caps memory). Skill: `bazel-stapler-squad`.
+- `make gazelle` after any import or file add/remove; never hand-edit Gazelle-managed `BUILD.bazel` (rule: `.claude/rules/bazel-build-files.md`).
+- `make sync` generates `gen/` and `session/ent` for plain go/gopls; Bazel needs no generated code.
+- `make bazel-doctor` first when something looks wrong; error states: `docs/how-to/troubleshoot-bazel.md`.
+- Never `bazel run //:stapler-squad` against `:8543`; use the manual-instance recipe below.
+- Docs: `docs/how-to/build-with-bazel.md`, `docs/how-to/set-up-bazel-worktree-caches.md`, `docs/how-to/first-build-in-a-fresh-worktree.md`, `docs/reference/bazel-targets-and-configs.md`, `docs/explanation/why-bazel.md`.
 
 ### Profiling
 
@@ -332,7 +344,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
 | Find and reduce blocking/locking: triage CPU starvation vs mutex vs channel vs exec vs network HOL, deadlock playbook, fix catalog | `profile-blocking-and-locking` skill |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
-| Compile-time auto-instrumentation (opt-in `stapler-squad-otel` build) | `docs/how-to/enable-otel-auto-instrumentation.md` |
+| Compile-time auto-instrumentation (otelc weave: always on in the one `stapler-squad` binary; install/smoke/test recipes) | `docs/how-to/enable-otel-auto-instrumentation.md` |
 | Enabling pi coding-agent support (flag, extension install, health badge) | `docs/how-to/enable-pi-support.md` |
 | Build the web UI (Bun): `WEB_MINIFY`, `WEB_DEV_HMR`, ports, debug build, patch runbook | `docs/how-to/build-web-app.md` |
 | Rebuild ghostty-web's WASM with native DECSTR (unbuilt patch, Zig 0.15.2, rollback); ghostty-vs-xterm differential harness lives in `web-app/src/lib/terminal/__tests__/differential/` | `docs/how-to/rebuild-ghostty-web-wasm.md` |
@@ -404,6 +416,13 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Flip workflow engine enforcement per caller class (soak criteria, ack file, replay, `transition_denied`, rollback) | `docs/how-to/flip-workflow-engine-enforcement.md` |
 | Filesystem watchers: FSEvents-backed `internal/dirwatch`, `STAPLER_SQUAD_DIRWATCH=fsnotify` rollback, `fs.watches`/`fs.streams` gauges, stream cap, decision record | `docs/how-to/tune-fs-watchers.md` |
 | Per-worker e2e backend server seam (deferred N-server design) | docs/explanation/e2e-per-worker-server-seam.md |
+| Bazel build of record: build, test, add a dependency, regenerate BUILD files | `docs/how-to/build-with-bazel.md`, `bazel-stapler-squad` skill |
+| Bazel shared caches, `user.bazelrc`, idle shutdown, orphan output-base timer | `docs/how-to/set-up-bazel-worktree-caches.md` |
+| First Bazel build in a fresh worktree (cold time, queue, where state lands) | `docs/how-to/first-build-in-a-fresh-worktree.md` |
+| Bazel error states and remedies (11 states, same text as the wrapper hints) | `docs/how-to/troubleshoot-bazel.md` |
+| Protect the live service from a Bazel memory spike (owner-run) | `docs/how-to/protect-live-service-from-bazel.md` |
+| Bazel configs, TagConfigs, make-to-bazel map, PermanentExceptions | `docs/reference/bazel-targets-and-configs.md` |
+| Why Bazel (drivers, supersession of the ci-speed ADR) | `docs/explanation/why-bazel.md` |
 | Phone keyboard input layer: seam contract, flags, `?mobile_input=0\|1`, input-site table, `cm.input`/`cm.ime_anomaly` metrics, `/actuator/terminal-input` (debug procedure in `docs/how-to/debug-phone-typing.md`) | `docs/reference/mobile-input-layer.md` |
 | Session multi-PR model: SessionPR/PullRequestState/tombstone, ActivePR, legacy mirror, flags and scopes, RPCs, metrics | `docs/reference/session-pull-requests.md` |
 | Roll out session multi-PR tracking: backup, first deploy with scopes off, enabling order, rollback | `docs/how-to/roll-out-session-multi-pr.md` |

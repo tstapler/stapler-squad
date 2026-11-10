@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+exports_files(["analyzer.go"])
+
+go_library(
+    name = "hotpolllog",
+    srcs = ["analyzer.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/hotpolllog",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@lint_x_tools//go/analysis",
+        "@lint_x_tools//go/analysis/passes/inspect",
+        "@lint_x_tools//go/ast/inspector",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":hotpolllog",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "hotpolllog_test",
+    srcs = [
+        "analyzer_test.go",
+        "integration_test.go",
+    ],
+    data = glob(["testdata/**"]) + ["@rules_go//go"],
+    deps = [
+        ":hotpolllog",
+        "//tools/lint/internal/gotool",
+        "@lint_x_tools//go/analysis/analysistest",
+    ],
+)

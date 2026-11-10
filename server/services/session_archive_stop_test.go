@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil"
 )
@@ -109,7 +110,7 @@ func addLivePausedInstance(t *testing.T, fix *forkTestFixture, uuid, title strin
 		}
 	}
 	require.NotNil(t, liveInst)
-	addInstanceToPoller(fix.poller, liveInst)
+	svctest.AddInstanceToPoller(fix.poller, liveInst)
 	return liveInst
 }
 
@@ -212,7 +213,7 @@ func TestArchiveSessionByUUID_should_returnNilWithoutPanicking_When_ConcStorageI
 	// constructor's unrelated wiring (sub-services that assume a fully-formed service).
 	svc := &SessionService{
 		storage:           &fakeInstanceStore{},
-		reviewQueuePoller: poller,
+		ReviewQueuePoller: poller,
 	}
 
 	err := svc.ArchiveSessionByUUID(context.Background(), "not-tracked-anywhere")

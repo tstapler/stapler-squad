@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "compare-affected_lib",
+    srcs = [
+        "compare.go",
+        "main.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/ci/compare-affected",
+    visibility = ["//visibility:private"],
+    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+)
+
+go_binary(
+    name = "compare-affected",
+    embed = [":compare-affected_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "compare-affected_test",
+    srcs = ["compare_test.go"],
+    embed = [":compare-affected_lib"],
+)

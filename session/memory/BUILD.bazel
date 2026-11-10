@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "memory",
+    srcs = ["reader.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/memory",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor/safeexec",
+        "//session/tmux",
+        "@com_github_shirou_gopsutil_v4//mem",
+        "@com_github_shirou_gopsutil_v4//process",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":memory",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "memory_test",
+    srcs = ["reader_test.go"],
+    deps = [
+        "//session/memory/memorytest",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

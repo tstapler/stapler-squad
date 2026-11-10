@@ -5,11 +5,11 @@
   "method": "CancelTriage",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_trigger_triage.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_trigger_triage.go",
   "tested": true,
   "testIds": [
     "TestCancelTriage_should_EndRunningSessionAndReportCancelled_When_TriageIsActive",
     "TestCancelTriage_should_ReportNotCancelled_When_NoTriageSessionRunning"
   ],
-  "lastModified": "2026-09-12T10:44:50.199271328-07:00"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

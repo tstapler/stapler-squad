@@ -1,0 +1,4 @@
+# Go versions the Bazel build is known to work with (rules_go SDK resolution, Task 11.8a). One `go` directive value
+# or `toolchain` value per line. tools/bzl/check-go-toolchain.sh fails when go.mod's `go` or `toolchain` line is not
+# listed here. Edit it only through the bazel-version-upgrades skill, after the upgrade canary passed on that version.
+1.26.6

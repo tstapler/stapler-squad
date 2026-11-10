@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -30,8 +31,8 @@ type crashEnv struct {
 
 func newCrashEnv(t *testing.T, gated bool) *crashEnv {
 	t.Helper()
-	withIsolatedStateDir(t)
-	storage := createTestStorage(t)
+	svctest.WithIsolatedStateDir(t)
+	storage := svctest.CreateTestStorage(t)
 	var svc *SessionService
 	if gated {
 		svc = newGatedSessionService(storage)
@@ -118,7 +119,7 @@ func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_When
 	assert.Equal(t, "Session crashed", f.NotificationTitle)
 	assert.Contains(t, f.NotificationMessage, "crashy")
 	assert.Contains(t, f.NotificationMessage, "pane exited 137")
-	assert.Equal(t, derivePriority(true, true), f.NotificationPriority)
+	assert.Equal(t, DerivePriority(true, true), f.NotificationPriority)
 	assert.Equal(t, "true", f.NotificationMetadata["session_scoped"])
 	updated := 0
 	for _, ev := range seen {

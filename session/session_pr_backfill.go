@@ -293,7 +293,7 @@ type sessionPRRow struct {
 }
 
 func (r *EntRepository) collectSessionPRCandidates(ctx context.Context, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
-	rows, err := r.client.Session.Query().
+	rows, err := r.Client.Session.Query().
 		Where(entsession.GithubPrNumberGT(0)).
 		Select(entsession.FieldUUID, entsession.FieldTitle, entsession.FieldGithubPrNumber, entsession.FieldGithubOwner,
 			entsession.FieldGithubRepo, entsession.FieldGithubHost, entsession.FieldGithubPrStatusTerminal,
@@ -402,7 +402,7 @@ func scanLinkRefs(rows *entsql.Rows, out map[string][]PRRef) error {
 // ---- item candidates -------------------------------------------------------------
 
 func (r *EntRepository) collectItemPRCandidates(ctx context.Context, rep *PRBackfillReport) ([]prBackfillCandidate, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(backlogitem.PrNumberGT(0)).
 		Select(backlogitem.FieldID, backlogitem.FieldTitle, backlogitem.FieldPrURL, backlogitem.FieldPrNumber, backlogitem.FieldStatus).
 		All(ctx)
@@ -492,7 +492,7 @@ func (r *EntRepository) sessionsOfItems(ctx context.Context, itemIDs []uuid.UUID
 	seen := map[string]struct{}{}
 	var all []string
 	for _, chunk := range chunkSlice(itemIDs, itemSessionBatchChunk) {
-		rows, err := r.client.ItemSession.Query().
+		rows, err := r.Client.ItemSession.Query().
 			Where(itemsession.HasBacklogItemWith(backlogitem.IDIn(chunk...)), itemsession.SessionUUIDNEQ("")).
 			WithBacklogItem(func(q *ent.BacklogItemQuery) { q.Select(backlogitem.FieldID) }).
 			All(ctx)

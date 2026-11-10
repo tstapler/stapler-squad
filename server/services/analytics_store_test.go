@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"go.uber.org/goleak"
 )
@@ -392,7 +393,7 @@ func TestAnalyticsStore_Stop_JoinsFlushGoroutine(t *testing.T) {
 	// test. See the identical rationale on
 	// TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil in
 	// session_service_test.go.
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	store := NewAnalyticsStore(storage)
 
 	baseline := goleak.IgnoreCurrent()
@@ -406,7 +407,7 @@ func TestAnalyticsStore_Stop_JoinsFlushGoroutine(t *testing.T) {
 // (e.g. once via t.Cleanup and once explicitly) without panicking.
 func TestAnalyticsStore_Stop_Idempotent(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	store := NewAnalyticsStore(storage)
 	store.Start(context.Background())
 
@@ -427,7 +428,7 @@ func TestAnalyticsStore_Stop_BeforeStart_NoPanic(t *testing.T) {
 // on a send to a goroutine that is no longer draining the channel.
 func TestAnalyticsStore_Record_AfterStop_NoPanic(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	store := NewAnalyticsStore(storage)
 	store.Start(context.Background())
 	store.Stop()
@@ -525,7 +526,7 @@ func TestAnalyticsStoreFullQueueDropsWithoutBlocking(t *testing.T) {
 // doc comment), so the assertion polls via require.Eventually rather than sleeping.
 func TestAnalyticsStore_RecordTaggingRuleFire_should_PersistFire_When_Called(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	store := NewAnalyticsStore(storage)
 
 	store.RecordTaggingRuleFire("seed-bugfix")
@@ -541,7 +542,7 @@ func TestAnalyticsStore_RecordTaggingRuleFire_should_PersistFire_When_Called(t *
 // fire 10 days ago must yield a count of 2, not 3.
 func TestAnalyticsStore_GetTaggingRuleFireCounts_should_ExcludeFiresOlderThanWindow_When_TwoRecentAndOneStale(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 
 	now := time.Now()
 	require.NoError(t, storage.RecordTaggingRuleFire(context.Background(), "seed-bugfix", now.Add(-1*time.Hour)))

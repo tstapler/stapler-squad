@@ -38,14 +38,14 @@ func upsertLink(t *testing.T, repo *EntRepository, owner PROwner, ref PRRef, src
 
 func countStates(t *testing.T, repo *EntRepository) int {
 	t.Helper()
-	n, err := repo.client.PullRequestState.Query().Where(pullrequeststate.NumberGT(0)).Count(context.Background())
+	n, err := repo.Client.PullRequestState.Query().Where(pullrequeststate.NumberGT(0)).Count(context.Background())
 	require.NoError(t, err)
 	return n
 }
 
 func countLinks(t *testing.T, repo *EntRepository) int {
 	t.Helper()
-	n, err := repo.client.SessionPR.Query().Where().Count(context.Background())
+	n, err := repo.Client.SessionPR.Query().Where().Count(context.Background())
 	require.NoError(t, err)
 	return n
 }
@@ -108,9 +108,9 @@ func countStatements(t *testing.T, repo *EntRepository, fn func()) int64 {
 func countStatementsMatching(t *testing.T, repo *EntRepository, match func(string) bool, fn func()) int64 {
 	t.Helper()
 	var n atomic.Int64
-	orig := repo.client
-	repo.client = ent.NewClient(ent.Driver(countingDriver{Driver: repo.driver, n: &n, match: match}))
-	defer func() { repo.client = orig }()
+	orig := repo.Client
+	repo.Client = ent.NewClient(ent.Driver(countingDriver{Driver: repo.driver, n: &n, match: match}))
+	defer func() { repo.Client = orig }()
 	fn()
 	return n.Load()
 }
@@ -289,13 +289,13 @@ func TestOwnerRules_ShouldRejectBadOwnersAndUpperCaseIdentity(t *testing.T) {
 
 	// Database backstops for callers that bypass the repository.
 	stateID := upsertLink(t, repo, SessionPROwner("u1"), ref, AttachSourceManual).StateID
-	err = repo.client.SessionPR.Create().SetPullRequestStateID(stateID).SetAttachSource("manual").Exec(ctx)
+	err = repo.Client.SessionPR.Create().SetPullRequestStateID(stateID).SetAttachSource("manual").Exec(ctx)
 	assert.True(t, ent.IsConstraintError(err), "both owners empty must violate the CHECK, got %v", err)
-	err = repo.client.SessionPR.Create().SetPullRequestStateID(stateID).SetSessionUUID("a").SetBacklogItemID("b").SetAttachSource("manual").Exec(ctx)
+	err = repo.Client.SessionPR.Create().SetPullRequestStateID(stateID).SetSessionUUID("a").SetBacklogItemID("b").SetAttachSource("manual").Exec(ctx)
 	assert.True(t, ent.IsConstraintError(err), "both owners set must violate the CHECK, got %v", err)
-	err = repo.client.PullRequestState.Create().SetHost("github.com").SetOwner("Acme").SetRepo("app").SetNumber(3).Exec(ctx)
+	err = repo.Client.PullRequestState.Create().SetHost("github.com").SetOwner("Acme").SetRepo("app").SetNumber(3).Exec(ctx)
 	assert.True(t, ent.IsValidationError(err), "upper-case owner must fail the column validator, got %v", err)
-	err = repo.client.SessionPRTombstone.Create().SetSessionUUID("u").SetHost("github.com").SetOwner("acme").SetRepo("App").SetNumber(3).Exec(ctx)
+	err = repo.Client.SessionPRTombstone.Create().SetSessionUUID("u").SetHost("github.com").SetOwner("acme").SetRepo("App").SetNumber(3).Exec(ctx)
 	assert.True(t, ent.IsValidationError(err), "upper-case tombstone repo must fail the column validator, got %v", err)
 }
 
@@ -377,7 +377,7 @@ func seedState(t *testing.T, repo *EntRepository, ref PRRef, state PRState, term
 
 func reload(t *testing.T, repo *EntRepository, ref PRRef) *ent.PullRequestState {
 	t.Helper()
-	row, err := repo.client.PullRequestState.Query().Where(refPredicate(ref)).Only(context.Background())
+	row, err := repo.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(context.Background())
 	require.NoError(t, err)
 	return row
 }
@@ -385,7 +385,7 @@ func reload(t *testing.T, repo *EntRepository, ref PRRef) *ent.PullRequestState 
 // setPolled stamps last_polled_at directly so a test can start from a known clock.
 func setPolled(t *testing.T, repo *EntRepository, ref PRRef, at time.Time) {
 	t.Helper()
-	require.NoError(t, repo.client.PullRequestState.Update().Where(refPredicate(ref)).SetLastPolledAt(at).Exec(context.Background()))
+	require.NoError(t, repo.Client.PullRequestState.Update().Where(refPredicate(ref)).SetLastPolledAt(at).Exec(context.Background()))
 }
 
 func TestUpdatePullRequestState_ShouldFollowTransitionTable(t *testing.T) {
@@ -698,7 +698,7 @@ func persistedPRSession(t *testing.T) (*Storage, *Instance) {
 
 func sessionMirror(t *testing.T, storage *Storage, title string) InstanceData {
 	t.Helper()
-	data, err := storage.repo.Get(context.Background(), title)
+	data, err := storage.Repo.Get(context.Background(), title)
 	require.NoError(t, err)
 	return *data
 }
@@ -726,21 +726,21 @@ func TestAttachSessionPR_ShouldKeepOneStateAndLink_WhenRefCasingDiffers(t *testi
 		_, err := storage.AttachSessionPR(ctx, inst.UUID, ref, PRLink{Source: AttachSourceManual}, PRMirror{Number: 12})
 		require.NoError(t, err)
 	}
-	assert.Equal(t, 1, countStates(t, storage.repo))
-	assert.Equal(t, 1, countLinks(t, storage.repo))
+	assert.Equal(t, 1, countStates(t, storage.Repo))
+	assert.Equal(t, 1, countLinks(t, storage.Repo))
 }
 
 func TestAttachSessionPR_ShouldBeAllOrNothing_WhenFailureBeforeMirrorUpdate(t *testing.T) {
 	t.Parallel()
 	storage, inst := persistedPRSession(t)
-	storage.repo.afterPRLinkHook = func() error { return errors.New("injected failure before mirror update") }
+	storage.Repo.afterPRLinkHook = func() error { return errors.New("injected failure before mirror update") }
 
 	_, err := storage.AttachSessionPR(context.Background(), inst.UUID, mustPRRef(t, "", "acme", "app", 12),
 		PRLink{Source: AttachSourceManual, Initial: PRInitial{State: PRStateOpen}}, PRMirror{Number: 12, URL: "https://github.com/acme/app/pull/12"})
 	require.Error(t, err)
 
-	assert.Equal(t, 0, countLinks(t, storage.repo), "link must roll back")
-	assert.Equal(t, 0, countStates(t, storage.repo), "state row must roll back")
+	assert.Equal(t, 0, countLinks(t, storage.Repo), "link must roll back")
+	assert.Equal(t, 0, countStates(t, storage.Repo), "state row must roll back")
 	got := sessionMirror(t, storage, "pr-session")
 	assert.Zero(t, got.GitHubPRNumber)
 	assert.Empty(t, got.GitHubPRURL)
@@ -755,7 +755,7 @@ func TestPersistPRMirror_ShouldClearLegacyNumber_WhenLastLinkDetached(t *testing
 	require.NoError(t, err)
 	require.Equal(t, 12, sessionMirror(t, storage, "pr-session").GitHubPRNumber)
 
-	_, err = storage.repo.DeleteSessionPR(context.Background(), SessionPROwner(inst.UUID), ref)
+	_, err = storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner(inst.UUID), ref)
 	require.NoError(t, err)
 	require.NoError(t, storage.PersistPRMirror(inst.UUID, "", 0, false))
 
@@ -794,11 +794,11 @@ func TestAttachPR_ShouldDeferPersist_WhenSessionRowNotYetCreated(t *testing.T) {
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceCreatedFromURL, PRInitial{State: PRStateOpen}))
 	assert.True(t, inst.PRPersistPending(), "no session row yet: the write is deferred")
 	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber, "the in-memory snapshot already holds the PR")
-	assert.Equal(t, 0, countLinks(t, storage.repo))
+	assert.Equal(t, 0, countLinks(t, storage.Repo))
 
 	require.NoError(t, storage.AddInstance(inst)) // first full save: state + link + mirror together
-	assert.Equal(t, 1, countLinks(t, storage.repo))
-	assert.Equal(t, 1, countStates(t, storage.repo))
+	assert.Equal(t, 1, countLinks(t, storage.Repo))
+	assert.Equal(t, 1, countStates(t, storage.Repo))
 	assert.Equal(t, 12, sessionMirror(t, storage, "deferred-pr").GitHubPRNumber)
 }
 
@@ -807,7 +807,7 @@ func TestAttachPR_ShouldRetryOnNextSave_WhenPersistFails(t *testing.T) {
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
 	failOnce := true
-	storage.repo.afterPRLinkHook = func() error {
+	storage.Repo.afterPRLinkHook = func() error {
 		if failOnce {
 			failOnce = false
 			return errors.New("transient")
@@ -816,10 +816,10 @@ func TestAttachPR_ShouldRetryOnNextSave_WhenPersistFails(t *testing.T) {
 	}
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
 	require.True(t, inst.PRPersistPending())
-	require.Equal(t, 0, countLinks(t, storage.repo))
+	require.Equal(t, 0, countLinks(t, storage.Repo))
 
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
-	assert.Equal(t, 1, countLinks(t, storage.repo), "the next save retried the link")
+	assert.Equal(t, 1, countLinks(t, storage.Repo), "the next save retried the link")
 	assert.False(t, inst.PRPersistPending())
 }
 
@@ -831,12 +831,12 @@ func TestAttachPR_ShouldAllowLinkOnlyChange_WhenMirrorUnchanged(t *testing.T) {
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
 	// A second link that does not change the mirror still defeats the unchanged-row skip.
-	storage.repo.afterPRLinkHook = func() error { return errors.New("down") }
+	storage.Repo.afterPRLinkHook = func() error { return errors.New("down") }
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), AttachSourceBranchDiscovery, PRInitial{State: PRStateMerged, Terminal: true, HeadBranch: "x"}))
-	storage.repo.afterPRLinkHook = nil
-	require.Equal(t, 1, countLinks(t, storage.repo))
+	storage.Repo.afterPRLinkHook = nil
+	require.Equal(t, 1, countLinks(t, storage.Repo))
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
-	assert.Equal(t, 2, countLinks(t, storage.repo))
+	assert.Equal(t, 2, countLinks(t, storage.Repo))
 }
 
 // ---- full-save mirror semantics (T2.3.3) -----------------------------------------
@@ -861,7 +861,7 @@ func TestFullSave_ShouldClearTerminalFlag_WhenOpenPRAttachedToTerminalSession(t 
 	require.Len(t, rows, 1)
 	assert.False(t, rows[0].GitHubPRStatusTerminal, "the update path must clear a stale true")
 	assert.Equal(t, 12, rows[0].GitHubPRNumber)
-	assert.Equal(t, 2, countLinks(t, storage.repo))
+	assert.Equal(t, 2, countLinks(t, storage.Repo))
 
 	// Create path: a brand-new row built from the same set carries the cleared flag.
 	fresh, cleanup := createTestStorage(t)
@@ -913,7 +913,7 @@ func TestHookProcess_ShouldNotChangeLegacyColumns_WhenLinklessSessionSavedViaSsq
 	owner := open()
 	prLoadFixture(t, owner, "hook-session", "uuid-hook", "acme", "app", 41)
 	want := sessionMirror(t, owner, "hook-session")
-	require.NoError(t, owner.repo.UpdateGitHubPRStatusTerminal(context.Background(), "hook-session", true))
+	require.NoError(t, owner.Repo.UpdateGitHubPRStatusTerminal(context.Background(), "hook-session", true))
 	want.GitHubPRStatusTerminal = true
 	owner.Close()
 

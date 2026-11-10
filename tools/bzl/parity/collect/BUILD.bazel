@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "collect",
+    srcs = [
+        "baseline.go",
+        "cache.go",
+        "doc.go",
+        "gate.go",
+        "timed.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/parity/collect",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "collect_test",
+    srcs = ["collect_test.go"],
+    embed = [":collect"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":collect",
+    visibility = ["//visibility:public"],
+)

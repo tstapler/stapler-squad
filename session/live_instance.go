@@ -62,8 +62,8 @@ func newLiveInstance(data InstanceData, storage *Storage) (*LiveInstance, error)
 		return nil, err
 	}
 	// Inject shell repository so shell operations can persist to the DB.
-	inst.SetShellRepository(storage.repo)
-	inst.SetInitialPromptRepository(storage.repo)
+	inst.SetShellRepository(storage.Repo)
+	inst.SetInitialPromptRepository(storage.Repo)
 	inst.SetPRPersister(storage)
 	return NewLiveInstance(inst), nil
 }

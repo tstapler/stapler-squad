@@ -81,3 +81,6 @@ func SetRuleLUnsettledItems(n int) {
 
 // RuleLUnsettledItems reads ssq_rule_l_unsettled_items back.
 func RuleLUnsettledItems() int { return int(liveWorkMetrics.ruleLItems.Load()) }
+
+// CountLiveWorkResult records one live-work probe result for the backlog listener.
+func CountLiveWorkResult(result string) { liveWorkMetrics.count(result) }

@@ -1,0 +1,3 @@
+INFO: Analyzed target //config:all (0 packages loaded).
+ERROR: /w/config/BUILD.bazel:3:11: GoCompilePkg config/config.a failed: I/O exception during sandboxed execution: /home/u/.cache/bazel/_bazel_u/abc/sandbox/linux-sandbox/1/execroot/_main/bazel-out/k8-fastbuild/bin/config/config.a (No space left on device)
+ERROR: Build did NOT complete successfully

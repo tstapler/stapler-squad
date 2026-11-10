@@ -173,8 +173,8 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
 	}
-	if s.reviewQueuePoller != nil {
-		s.reviewQueuePoller.AddInstance(instance)
+	if s.ReviewQueuePoller != nil {
+		s.ReviewQueuePoller.AddInstance(instance)
 	}
 	if s.sessionTagPoller != nil {
 		s.sessionTagPoller.AddInstance(instance)
@@ -240,8 +240,8 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateWorktreeSession save: %w", err)
 	}
-	if s.reviewQueuePoller != nil {
-		s.reviewQueuePoller.AddInstance(instance)
+	if s.ReviewQueuePoller != nil {
+		s.ReviewQueuePoller.AddInstance(instance)
 	}
 	if s.sessionTagPoller != nil {
 		s.sessionTagPoller.AddInstance(instance)

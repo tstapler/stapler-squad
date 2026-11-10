@@ -58,7 +58,7 @@ var ErrTransitionNotAllowed = domain.ErrTransitionNotAllowed
 // so no other call site needs its own dual-ID branch.
 func (r *EntRepository) resolveBacklogItemLookup(ctx context.Context, id string) (uuid.UUID, error) {
 	if IsBacklogItemIDShape(id) {
-		item, err := r.client.BacklogItem.Query().
+		item, err := r.Client.BacklogItem.Query().
 			Where(backlogitem.PublicID(id)).
 			Only(ctx)
 		if err != nil {
@@ -91,10 +91,10 @@ const backlogItemPublicIDBackfillLockTimeout = 5 * time.Second
 func (r *EntRepository) backfillLockFilePath(name string) string {
 	// A bare ":memory:" DSN has no directory; filepath.Dir would resolve it to the
 	// process cwd and litter the working tree with a lock file.
-	if r.dbPath == "" || r.dbPath == ":memory:" || strings.HasPrefix(r.dbPath, "file:") {
+	if r.DbPath == "" || r.DbPath == ":memory:" || strings.HasPrefix(r.DbPath, "file:") {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(r.dbPath), name)
+	return filepath.Join(filepath.Dir(r.DbPath), name)
 }
 
 // BackfillBacklogItemPublicIDs assigns a freshly minted BacklogItemID to
@@ -135,7 +135,7 @@ func (r *EntRepository) BackfillBacklogItemPublicIDs(ctx context.Context) error 
 // with (or, when no real lock path exists, skip) the flock guard without
 // duplicating the query/save logic.
 func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) error {
-	rows, err := r.client.BacklogItem.Query().
+	rows, err := r.Client.BacklogItem.Query().
 		Where(backlogitem.PublicIDIsNil()).
 		All(ctx)
 	if err != nil {
@@ -160,7 +160,7 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 		if err != nil {
 			return fmt.Errorf("failed to mint backlog item public id for row %s: %w", row.ID, err)
 		}
-		if _, saveErr := r.client.BacklogItem.UpdateOneID(row.ID).
+		if _, saveErr := r.Client.BacklogItem.UpdateOneID(row.ID).
 			SetPublicID(newID.String()).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] backlog item public id backfill: item=%s: %v", row.ID, saveErr)
@@ -182,7 +182,7 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 // a returned error as best-effort: log it and skip the publish call rather
 // than failing the mutation that already succeeded.
 func (r *EntRepository) backlogItemForItemSession(ctx context.Context, itemSessionID uuid.UUID) (*BacklogItemData, error) {
-	ownerID, err := r.client.ItemSession.Query().
+	ownerID, err := r.Client.ItemSession.Query().
 		Where(itemsession.ID(itemSessionID)).
 		QueryBacklogItem().
 		OnlyID(ctx)
@@ -267,7 +267,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", data.ItemID, err)
 	}
 
-	q := r.client.ItemSession.Create().
+	q := r.Client.ItemSession.Create().
 		SetSessionUUID(data.SessionUUID).
 		SetSessionRole(data.SessionRole).
 		SetConversationUUID(data.ConversationUUID).
@@ -296,7 +296,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		return ItemSessionSummary{}, fmt.Errorf("failed to create item session: %w", err)
 	}
 	// BacklogItemID is not loaded via edge on create; set it directly from the input.
-	summary := itemSessionToSummary(is)
+	summary := ItemSessionToSummary(is)
 	summary.BacklogItemID = data.ItemID
 
 	// Best-effort publish: never blocks or fails session creation itself.
@@ -320,7 +320,7 @@ func (r *EntRepository) GetItemSession(ctx context.Context, id string) (ItemSess
 		return ItemSessionSummary{}, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
 
-	is, err := r.client.ItemSession.Query().
+	is, err := r.Client.ItemSession.Query().
 		Where(itemsession.ID(parsedID)).
 		WithBacklogItem().
 		Only(ctx)
@@ -330,7 +330,7 @@ func (r *EntRepository) GetItemSession(ctx context.Context, id string) (ItemSess
 		}
 		return ItemSessionSummary{}, fmt.Errorf("failed to get item session %s: %w", id, err)
 	}
-	return itemSessionToSummary(is), nil
+	return ItemSessionToSummary(is), nil
 }
 
 // ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
@@ -340,7 +340,7 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	sessions, err := r.client.ItemSession.Query().
+	sessions, err := r.Client.ItemSession.Query().
 		Where(itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID))).
 		WithReviewVerdict().
 		Order(ent.Asc(itemsession.FieldCreatedAt)).
@@ -350,7 +350,7 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 	}
 	result := make([]ItemSessionSummary, len(sessions))
 	for i, is := range sessions {
-		s := itemSessionToSummary(is)
+		s := ItemSessionToSummary(is)
 		s.BacklogItemID = itemID
 		result[i] = s
 	}
@@ -377,7 +377,7 @@ func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []
 	// another spelling must look up with uuid.Parse(id).String().
 	for start := 0; start < len(uuids); start += itemSessionBatchChunk {
 		chunk := uuids[start:min(start+itemSessionBatchChunk, len(uuids))]
-		rows, err := r.client.ItemSession.Query().
+		rows, err := r.Client.ItemSession.Query().
 			Where(itemsession.HasBacklogItemWith(backlogitem.IDIn(chunk...))).
 			WithReviewVerdict().
 			WithBacklogItem(func(q *ent.BacklogItemQuery) { q.Select(backlogitem.FieldID) }).
@@ -391,7 +391,7 @@ func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []
 				continue
 			}
 			key := is.Edges.BacklogItem.ID.String()
-			summary := itemSessionToSummary(is)
+			summary := ItemSessionToSummary(is)
 			summary.BacklogItemID = key
 			result[key] = append(result[key], summary)
 		}
@@ -410,7 +410,7 @@ func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []
 // must NOT be extended to rows that have a base_commit_sha, since last_commit_sha
 // is now live-refreshed to the session's tip and would give a moving diff base.
 func (r *EntRepository) GetBaseCommitSHAsForSessions(ctx context.Context, sessionUUIDs []string) (map[string]string, error) {
-	rows, err := r.client.ItemSession.Query().
+	rows, err := r.Client.ItemSession.Query().
 		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
 		Select(itemsession.FieldSessionUUID, itemsession.FieldBaseCommitSha, itemsession.FieldLastCommitSha).
 		All(ctx)
@@ -434,7 +434,7 @@ func (r *EntRepository) GetBaseCommitSHAsForSessions(ctx context.Context, sessio
 // created_at descending and take the first match. Returns ErrNotFound if no record exists.
 // Loads the BacklogItem edge so BacklogItemID is populated in the returned summary.
 func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
-	is, err := r.client.ItemSession.Query().
+	is, err := r.Client.ItemSession.Query().
 		Where(itemsession.SessionUUID(sessionUUID)).
 		WithBacklogItem().
 		Order(ent.Desc(itemsession.FieldCreatedAt)).
@@ -445,7 +445,7 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 		}
 		return ItemSessionSummary{}, fmt.Errorf("failed to get item session by session uuid: %w", err)
 	}
-	return itemSessionToSummary(is), nil
+	return ItemSessionToSummary(is), nil
 }
 
 // ListItemSessionsBySessionUUIDs returns the most recent ItemSession for each
@@ -455,7 +455,7 @@ func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sess
 	if len(sessionUUIDs) == 0 {
 		return map[string]ItemSessionSummary{}, nil
 	}
-	rows, err := r.client.ItemSession.Query().
+	rows, err := r.Client.ItemSession.Query().
 		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
 		WithReviewVerdict().
 		Order(ent.Desc(itemsession.FieldCreatedAt)).
@@ -466,7 +466,7 @@ func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sess
 	result := make(map[string]ItemSessionSummary, len(rows))
 	for _, row := range rows {
 		if _, seen := result[row.SessionUUID]; !seen { // newest first
-			result[row.SessionUUID] = itemSessionToSummary(row)
+			result[row.SessionUUID] = ItemSessionToSummary(row)
 		}
 	}
 	return result, nil
@@ -482,7 +482,7 @@ func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sess
 // the write in either case. See session/diagnose_nudge.go for why this is a
 // separate concept from the item-level diagnose_nudge_count cap.
 func (r *EntRepository) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID string) (claimed bool, err error) {
-	n, err := r.client.ItemSession.Update().
+	n, err := r.Client.ItemSession.Update().
 		Where(
 			itemsession.SessionUUID(sessionUUID),
 			itemsession.SessionRoleEQ(SessionRoleDiagnose),
@@ -503,7 +503,7 @@ func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sess
 		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	is, err := r.client.ItemSession.Query().
+	is, err := r.Client.ItemSession.Query().
 		Where(
 			itemsession.SessionUUID(sessionUUID),
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
@@ -516,7 +516,7 @@ func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sess
 		}
 		return ItemSessionSummary{}, fmt.Errorf("failed to get item session: %w", err)
 	}
-	summary := itemSessionToSummary(is)
+	summary := ItemSessionToSummary(is)
 	summary.BacklogItemID = itemID
 	return summary, nil
 }
@@ -528,7 +528,7 @@ func (r *EntRepository) UpdateItemSessionStarted(ctx context.Context, id string,
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetStartedAt(startedAt).
 		Save(ctx)
 	if err != nil {
@@ -557,7 +557,7 @@ func (r *EntRepository) UpdateItemSessionSessionUUID(ctx context.Context, id str
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetSessionUUID(sessionUUID).
 		Save(ctx)
 	if err != nil {
@@ -592,7 +592,7 @@ func (r *EntRepository) UpdateItemSessionEndedWithReason(ctx context.Context, id
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetEndedAt(endedAt).
 		SetEndReason(reason).
 		Save(ctx)
@@ -612,7 +612,7 @@ func (r *EntRepository) UpdateItemSessionEndedWithDetail(ctx context.Context, id
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetEndedAt(endedAt).
 		SetEndReason(reason).
 		SetErrorDetail(detail).
@@ -635,7 +635,7 @@ func (r *EntRepository) UpdateItemSessionFailureCapture(ctx context.Context, id 
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetFailureCapturePath(path).
 		Save(ctx)
 	if err != nil {
@@ -652,7 +652,7 @@ func (r *EntRepository) UpdateItemSessionConversationUUID(ctx context.Context, i
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
-	if err := r.client.ItemSession.UpdateOneID(parsedID).SetConversationUUID(conversationUUID).Exec(ctx); err != nil {
+	if err := r.Client.ItemSession.UpdateOneID(parsedID).SetConversationUUID(conversationUUID).Exec(ctx); err != nil {
 		return fmt.Errorf("failed to set conversation_uuid on item session %s: %w", id, err)
 	}
 	return nil
@@ -675,7 +675,7 @@ func (r *EntRepository) UpdateItemSessionCost(ctx context.Context, id string, us
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	q := r.client.ItemSession.UpdateOneID(parsedID)
+	q := r.Client.ItemSession.UpdateOneID(parsedID)
 	if priced {
 		q = q.AddEstimatedCostUsd(usd)
 	} else {
@@ -723,7 +723,7 @@ func (r *EntRepository) SetItemSessionBaseCommit(ctx context.Context, id, sha st
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	if _, err := r.client.ItemSession.UpdateOneID(parsedID).
+	if _, err := r.Client.ItemSession.UpdateOneID(parsedID).
 		SetBaseCommitSha(sha).
 		Save(ctx); err != nil {
 		return fmt.Errorf("failed to set base commit sha on item session %s: %w", id, err)
@@ -752,7 +752,7 @@ func (r *EntRepository) UpdateItemSessionGitActivity(ctx context.Context, id str
 	// session as stale_work — triggering automated remediation against a session
 	// that is working fine. Observing a new commit right now IS progress now.
 	// last_commit_at keeps the true author time for display.
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetLastCommitSha(sha).
 		SetLastCommitMessage(msg).
 		SetLastCommitAt(commitAt).
@@ -785,7 +785,7 @@ func (r *EntRepository) UpdateItemSessionFileTouch(ctx context.Context, id strin
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetLastFileTouchAt(touchAt).
 		SetLastProgressAt(touchAt).
 		Save(ctx)
@@ -815,7 +815,7 @@ func (r *EntRepository) UpdateItemSessionTriageResult(ctx context.Context, id st
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetTriageResult(triageResult).
 		Save(ctx)
 	if err != nil {
@@ -846,7 +846,7 @@ func (r *EntRepository) UpdateItemSessionVerificationNotes(ctx context.Context, 
 		return fmt.Errorf("invalid id %q: %w", id, err)
 	}
 
-	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+	_, err = r.Client.ItemSession.UpdateOneID(parsedID).
 		SetVerificationNotes(verificationNotes).
 		Save(ctx)
 	if err != nil {
@@ -880,7 +880,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 		return fmt.Errorf("invalid item session id %q: %w", itemSessionID, err)
 	}
 
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -962,7 +962,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", isData.ItemID, err)
 	}
 
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return ItemSessionSummary{}, fmt.Errorf("begin transaction: %w", err)
 	}
@@ -1017,7 +1017,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 
 	// Build summary with the verdict embedded.
 	is.Edges.ReviewVerdict = rv
-	summary := itemSessionToSummary(is)
+	summary := ItemSessionToSummary(is)
 	summary.BacklogItemID = isData.ItemID
 
 	// Best-effort publish: never blocks or fails the create+verdict itself.
@@ -1042,7 +1042,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 // item session and none still running. It only reads; Storage.GatedReconcileStuck
 // moves each one to review through the transition gate.
 func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]BacklogItemData, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusInProgress)),
 			backlogitem.HasItemSessions(),
@@ -1056,7 +1056,7 @@ func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]Ba
 	}
 	out := make([]BacklogItemData, 0, len(items))
 	for _, item := range items {
-		out = append(out, backlogItemToData(item))
+		out = append(out, BacklogItemToData(item))
 	}
 	return out, nil
 }
@@ -1066,7 +1066,7 @@ func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]Ba
 // (e.g. the headless pool was unavailable at the time of the work session exit).
 // Each returned item has its ItemSessions edge loaded (work sessions only).
 func (r *EntRepository) FindReviewItemsWithoutGate(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusReview)),
 			backlogitem.SkipReviewGate(false),
@@ -1101,7 +1101,7 @@ func (r *EntRepository) FindReviewItemsWithoutGate(ctx context.Context) ([]*ent.
 // stuck in review for 24+ hours with three UNVERIFIABLE re-review verdicts and
 // only ever one work session on record.
 func (r *EntRepository) FindStuckReviewItems(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(itemsession.SessionRole(SessionRoleReview)),
@@ -1120,7 +1120,7 @@ func (r *EntRepository) FindStuckReviewItems(ctx context.Context) ([]*ent.Backlo
 // FindPRPendingItems returns backlog items in "pr_pending" status that have a
 // PR number set. Used by ReconcilePRPending to poll for merged PRs.
 func (r *EntRepository) FindPRPendingItems(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusPRPending)),
 			backlogitem.PrNumberGT(0),
@@ -1156,7 +1156,7 @@ func (r *EntRepository) FindPRPendingItems(ctx context.Context) ([]*ent.BacklogI
 // genuinely active session will naturally reappear in this query once that
 // session ends without making further progress.
 func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.PrNumberGT(0),
 			backlogitem.PrURLNEQ(""),
@@ -1189,7 +1189,7 @@ var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 // ever have surfaced. Best-effort: a URL that doesn't match is left as-is and
 // logged, not treated as fatal.
 func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusPRPending)),
 			backlogitem.PrNumberEQ(0),
@@ -1211,7 +1211,7 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 		if convErr != nil || num <= 0 {
 			continue
 		}
-		updated, updateErr := r.client.BacklogItem.UpdateOneID(item.ID).SetPrNumber(num).Save(ctx)
+		updated, updateErr := r.Client.BacklogItem.UpdateOneID(item.ID).SetPrNumber(num).Save(ctx)
 		if updateErr != nil {
 			return backfilled, fmt.Errorf("failed to backfill pr_number for item %s: %w", item.ID, updateErr)
 		}
@@ -1220,7 +1220,7 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 		// Best-effort publish: never blocks or fails the backfill itself. Found
 		// missing by the Phase 5 spec-compliance sweep's follow-up pass over the
 		// remaining publish-hook bypasses (docs/tasks/backlog-feature-improvement.md).
-		result := backlogItemToData(updated)
+		result := BacklogItemToData(updated)
 		r.publishItemChanged(ctx, &result, BacklogItemChange{
 			Kind:          ChangeItemUpdated,
 			UpdatedFields: []string{"prNumber"},
@@ -1264,7 +1264,7 @@ type OpenStuckStateData struct {
 // second round trip.
 func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData, error) {
 	now := time.Now()
-	rows, err := r.client.BacklogStuckState.Query().
+	rows, err := r.Client.BacklogStuckState.Query().
 		Where(
 			backlogstuckstate.ResolvedAtIsNil(),
 			backlogstuckstate.Or(
@@ -1310,7 +1310,7 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 // now. FindOpenStuckStates hides those rows, so a gate that must outlive a snooze reads
 // them here.
 func (r *EntRepository) FindSnoozedStuckItemIDs(ctx context.Context, reason domain.StuckReason) ([]string, error) {
-	rows, err := r.client.BacklogStuckState.Query().
+	rows, err := r.Client.BacklogStuckState.Query().
 		Where(
 			backlogstuckstate.ResolvedAtIsNil(),
 			backlogstuckstate.Reason(string(reason)),
@@ -1353,7 +1353,7 @@ func (r *EntRepository) ListStuckStatesForItem(ctx context.Context, itemID strin
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id: %w", err)
 	}
-	rows, err := r.client.BacklogStuckState.Query().
+	rows, err := r.Client.BacklogStuckState.Query().
 		Where(backlogstuckstate.ItemIDEQ(id)).
 		Order(ent.Asc(backlogstuckstate.FieldFirstDetectedAt)).
 		All(ctx)
@@ -1388,7 +1388,7 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 	}
 
 	// Find the most recent ItemSession for this item that has a review verdict.
-	is, err := r.client.ItemSession.Query().
+	is, err := r.Client.ItemSession.Query().
 		Where(
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
 			itemsession.HasReviewVerdict(),
@@ -1420,7 +1420,7 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	sessions, err := r.client.ItemSession.Query().
+	sessions, err := r.Client.ItemSession.Query().
 		Where(
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
 			itemsession.HasReviewVerdict(),
@@ -1520,7 +1520,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin AC update transaction: %w", err)
 	}
@@ -1587,7 +1587,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	}
 
 	// Best-effort publish so live viewers see AC progress without a full refresh.
-	result := backlogItemToData(updated)
+	result := BacklogItemToData(updated)
 	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:          ChangeItemUpdated,
 		UpdatedFields: []string{"acceptanceCriteria"},
@@ -1608,7 +1608,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 // process is gone). Not every returned item is a zombie — the caller must
 // still check liveness per active session.
 func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(
@@ -1640,7 +1640,7 @@ func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.Backl
 // its review-role sessions (most recent first) with their ReviewVerdict, so the
 // caller can act on the newest one without a second round-trip.
 func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Context) ([]*ent.BacklogItem, error) {
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(
@@ -1672,7 +1672,7 @@ func (r *EntRepository) GetMostRecentStatusEventAt(ctx context.Context, itemID s
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	ev, err := r.client.BacklogStatusEvent.Query().
+	ev, err := r.Client.BacklogStatusEvent.Query().
 		Where(
 			backlogstatusevent.ItemID(parsedID),
 			backlogstatusevent.ToStatus(string(toStatus)),
@@ -1698,7 +1698,7 @@ func (r *EntRepository) CountReviewCyclesSince(ctx context.Context, itemID strin
 	if err != nil {
 		return 0, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	n, err := r.client.BacklogStatusEvent.Query().
+	n, err := r.Client.BacklogStatusEvent.Query().
 		Where(
 			backlogstatusevent.ItemID(parsedID),
 			backlogstatusevent.FromStatus(string(BacklogStatusInProgress)),

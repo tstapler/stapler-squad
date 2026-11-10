@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // ClaimRecorder is the port Storage.CreateBacklogItem calls to record that
@@ -19,7 +20,7 @@ import (
 // BacklogItemDeepLinkPath) and ClaimedAt. The implementation owns the local
 // identity, so it stamps ClaimingHostID and signs.
 type ClaimRecorder interface {
-	RecordClaim(ctx context.Context, record ClaimRecord) error
+	RecordClaim(ctx context.Context, record hostclaim.ClaimRecord) error
 }
 
 // localHostIDProvider is optionally implemented by a ClaimRecorder that knows
@@ -36,11 +37,11 @@ func (r *ClaimIndexRecorder) LocalHostID() string { return r.identity.ID.String(
 // creating an item: it reports a claim held by a host other than this one, and
 // never touches the network. Injected via Storage.SetForeignClaimLookup.
 type ForeignClaimLookup interface {
-	ForeignClaim(externalURL string) (ClaimRecord, bool)
+	ForeignClaim(externalURL string) (hostclaim.ClaimRecord, bool)
 }
 
 // ForeignClaim implements ForeignClaimLookup against the local ClaimIndex.
-func (r *ClaimIndexRecorder) ForeignClaim(externalURL string) (ClaimRecord, bool) {
+func (r *ClaimIndexRecorder) ForeignClaim(externalURL string) (hostclaim.ClaimRecord, bool) {
 	return r.index.ForeignClaim(externalURL, r.identity.ID)
 }
 
@@ -62,28 +63,28 @@ const claimGossipTimeout = 30 * time.Second
 // the local HostIdentity, stores it in the ClaimIndex, then best-effort gossips
 // it to peers in the background so item creation never waits on the network.
 type ClaimIndexRecorder struct {
-	identity     HostIdentity
-	index        *ClaimIndex
-	gossiper     *ClaimGossiper // may be nil: record locally only
+	identity     hostclaim.HostIdentity
+	index        *hostclaim.ClaimIndex
+	gossiper     *hostclaim.ClaimGossiper // may be nil: record locally only
 	deepLinkHost string
-	clock        Clock
+	clock        hostclaim.Clock
 }
 
 // NewClaimIndexRecorder builds a ClaimIndexRecorder. deepLinkHost is the
 // hostname other hosts can use to reach this one (the "<hostname>" of
 // ssq://<hostname>/...). gossiper may be nil. A nil clock means wall time.
-func NewClaimIndexRecorder(identity HostIdentity, index *ClaimIndex, gossiper *ClaimGossiper, deepLinkHost string, clock Clock) (*ClaimIndexRecorder, error) {
+func NewClaimIndexRecorder(identity hostclaim.HostIdentity, index *hostclaim.ClaimIndex, gossiper *hostclaim.ClaimGossiper, deepLinkHost string, clock hostclaim.Clock) (*ClaimIndexRecorder, error) {
 	if !identity.ID.IsValid() || index == nil {
 		return nil, fmt.Errorf("claim recorder requires a valid host identity and a claim index")
 	}
 	if clock == nil {
-		clock = realClock{}
+		clock = hostclaim.RealClock{}
 	}
 	return &ClaimIndexRecorder{identity: identity, index: index, gossiper: gossiper, deepLinkHost: deepLinkHost, clock: clock}, nil
 }
 
 // RecordClaim implements ClaimRecorder.
-func (r *ClaimIndexRecorder) RecordClaim(ctx context.Context, record ClaimRecord) error {
+func (r *ClaimIndexRecorder) RecordClaim(ctx context.Context, record hostclaim.ClaimRecord) error {
 	claimedAt := record.ClaimedAt
 	if claimedAt.IsZero() {
 		claimedAt = r.clock.Now()
@@ -98,9 +99,9 @@ func (r *ClaimIndexRecorder) RecordClaim(ctx context.Context, record ClaimRecord
 		}
 		deepLink = "ssq://" + host + deepLink
 	}
-	signed := NewSignedClaimRecord(r.identity, NormalizeClaimURL(record.ExternalURL), deepLink, claimedAt)
+	signed := hostclaim.NewSignedClaimRecord(r.identity, hostclaim.NormalizeClaimURL(record.ExternalURL), deepLink, claimedAt)
 
-	outcome, err := r.index.recordOwn(signed)
+	outcome, err := r.index.RecordOwn(signed)
 	if err != nil {
 		return fmt.Errorf("record claim for %s: %w", record.ExternalURL, err)
 	}

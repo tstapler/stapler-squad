@@ -35,7 +35,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/klauspost/compress v1.20.3
 	github.com/linkdata/deadlock v0.5.5
-	github.com/mattn/go-sqlite3 v1.14.40
+	github.com/mattn/go-sqlite3 v1.14.40 // indirect
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/puzpuzpuz/xsync/v4 v4.5.0
