@@ -32,14 +32,48 @@ const (
 	StageBookkeepFlush  = "bookkeep_flush" // deferred bookkeeping flush; includes the i.mu wait it used to impose on typing
 	StageOutputSend     = "output_send"    // one batch handed to the transport -> write returned
 	StageOutputQueue    = "output_queue_depth"
-	StageEchoServer     = "echo_server"      // server: keystroke received -> next output write to the socket
-	StageWSWriteWait    = "ws_write_wait"    // server: waiting for the per-stream socket write lock
-	StageWSWrite        = "ws_write"         // server: one socket write (mux queue or TCP) returning
-	StageEchoArrive     = "echo_arrive"      // browser: keystroke sent -> next output frame reaches the component
-	StageEchoPaint      = "echo_paint"       // browser: keystroke sent -> next frame painted (input-to-paint)
-	StageTTFPConnect    = "ttfp_connect"     // browser: terminal mounted -> stream open
-	StageTTFPFirstData  = "ttfp_first_data"  // browser: terminal mounted -> first output frame
-	StageTTFPFirstPaint = "ttfp_first_paint" // browser: terminal mounted -> first frame painted
+	StageEchoServer     = "echo_server"        // server: keystroke received -> next output write to the socket
+	StageWSWriteWait    = "ws_write_wait"      // server: waiting for the per-stream socket write lock
+	StageWSWrite        = "ws_write"           // server: one socket write (mux queue or TCP) returning
+	StageEchoArrive     = "echo_arrive"        // browser: keystroke sent -> next output frame reaches the component
+	StageEchoPaint      = "echo_paint"         // browser: keystroke sent -> next frame painted (input-to-paint)
+	StageResyncQueue    = "resync_queue_depth" // browser: resyncs waiting for one of the client-wide in-flight slots (a count)
+	StageTTFPConnect    = "ttfp_connect"       // browser: terminal mounted -> stream open
+	StageTTFPFirstData  = "ttfp_first_data"    // browser: terminal mounted -> first output frame
+	StageTTFPFirstPaint = "ttfp_first_paint"   // browser: terminal mounted -> first frame painted
+	StageAttachQueue    = "attach_queue"       // server: waiting for an attach slot (reload thundering herd)
+	StageAttachOpen     = "attach_open"        // server: backend alive/adopt/restore for one terminal attach
+	// attach_open decomposed: prepare + alive_check + restore cover its body (backend = the stream's).
+	StageAttachPrepare    = "attach_prepare"     // server: PrepareRetainedTerminalView (read-only adopt of an inactive session)
+	StageAttachAliveCheck = "attach_alive_check" // server: IsBackendProcessAlive, an uncached daemon/tmux liveness probe
+	StageAttachRestore    = "attach_restore"     // server: RestoreProcess, only when the backend was not alive
+	// restore_* split attach_restore on tymux (backend="tymux").
+	StageRestoreList   = "restore_list"   // tymux: ListSessions while claiming the owner's session
+	StageRestoreRevive = "restore_revive" // tymux: lifecycle probe + ReviveSession of a DEAD-listed session
+	StageRestoreAdopt  = "restore_adopt"  // tymux: cacheFromSession after claim/revive (stream attach)
+	StageRestoreStart  = "restore_start"  // tymux: no session to adopt, so Start created one
+)
+
+// Decomposition stages: where one slow capture_pane / send / frame spent its time. Backend is
+// tymux for the tymux_* and stream_* stages; the rest are labelled by the stream's backend.
+const (
+	StageOutputQueueWait = "output_queue_wait" // hub subscriber queue: enqueued -> writer picked it up
+	StageFanoutWait      = "tymux_fanout_wait" // tymux ClientFanout queue: broadcast -> adapter read it
+	StageFanoutDepth     = "tymux_fanout_depth"
+	StageFrameHandle     = "tymux_frame_handle" // daemon frame received -> fanout broadcast done
+	StagePTYWrite        = "tymux_pty_write"    // adapter write of one frame into the PTY socketpair
+	StageCaptureRender   = "capture_render"     // CellsToSGR / RenderSnapshotRedraw after the RPC returned
+	StageCaptureRevive   = "capture_revive"     // dead-pane revive plus the retried capture
+	StageStreamLockWait  = "stream_lock_wait"   // waiting for the Attach stream's input/frame lock
+	StageStreamSend      = "stream_send"        // one Attach stream Send (gRPC flow control shows here)
+	StagePMLockWait      = "pm_lock_wait"       // contended wait for Instance.pmMu (uncontended calls record nothing)
+	StageEchoDaemon      = "echo_daemon"        // tymux: keystroke send began -> daemon stamped the first output frame after it (pty write + app echo + daemon send queue)
+	StageOutputTransit   = "output_transit"     // tymux: daemon stamped an output frame -> squad received it (gRPC transit/queue)
+	// Browser-measured.
+	StageInputQueue    = "input_queue"     // keystroke enqueued -> handed to the socket
+	StageEchoRender    = "echo_render"     // echo frame arrived -> painted
+	StageWSBufferedKiB = "ws_buffered_kib" // WebSocket bufferedAmount (KiB) when a keystroke was sent
+	StageEventLoopLag  = "eventloop_lag"   // worst timer drift in a 5 s window
 )
 
 const unknown = "unknown"
@@ -48,8 +82,14 @@ const unknown = "unknown"
 func NormalizeStage(s string) string {
 	switch s {
 	case StageInputTotal, StageInputSend, StageInputBookkeep, StageBookkeepFlush, StageOutputSend,
-		StageOutputQueue, StageEchoServer, StageWSWriteWait, StageWSWrite, StageEchoArrive, StageEchoPaint,
-		StageTTFPConnect, StageTTFPFirstData, StageTTFPFirstPaint:
+		StageOutputQueue, StageEchoServer, StageWSWriteWait, StageWSWrite, StageEchoArrive, StageEchoPaint, StageResyncQueue,
+		StageTTFPConnect, StageTTFPFirstData, StageTTFPFirstPaint, StageAttachQueue, StageAttachOpen,
+		StageAttachPrepare, StageAttachAliveCheck, StageAttachRestore,
+		StageRestoreList, StageRestoreRevive, StageRestoreAdopt, StageRestoreStart,
+		StageOutputQueueWait, StageFanoutWait, StageFanoutDepth, StageFrameHandle, StagePTYWrite,
+		StageCaptureRender, StageCaptureRevive, StageStreamLockWait, StageStreamSend, StagePMLockWait,
+		StageInputQueue, StageEchoRender, StageWSBufferedKiB, StageEventLoopLag,
+		StageEchoDaemon, StageOutputTransit:
 		return s
 	}
 	return unknown
@@ -88,6 +128,7 @@ type sample struct {
 }
 
 type window struct {
+	attrs metric.MeasurementOption // built once: the key's three labels never change
 	mu    sync.Mutex
 	buf   [windowSize]sample
 	next  int
@@ -159,6 +200,8 @@ type Recorder struct {
 	windows map[key]*window
 	hist    metric.Float64Histogram
 	alerts  alerter
+	resync  pairCounter
+	drops   pairCounter
 }
 
 // New returns a Recorder reading time from now (time.Now when nil).
@@ -200,8 +243,7 @@ func (r *Recorder) RecordValue(stage string, l Labels, v float64) {
 	w := r.window(k)
 	w.add(v, r.now())
 	if r.hist != nil {
-		r.hist.Record(context.Background(), v, metric.WithAttributes(
-			attribute.String("stage", k.stage), attribute.String("backend", k.backend), attribute.String("listener", k.listener)))
+		r.hist.Record(context.Background(), v, w.attrs)
 	}
 	r.alerts.observe(k, w)
 }
@@ -216,7 +258,8 @@ func (r *Recorder) window(k key) *window {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if w = r.windows[k]; w == nil {
-		w = &window{}
+		w = &window{attrs: metric.WithAttributeSet(attribute.NewSet(
+			attribute.String("stage", k.stage), attribute.String("backend", k.backend), attribute.String("listener", k.listener)))}
 		r.windows[k] = w
 	}
 	return w
@@ -332,4 +375,18 @@ func (r *Recorder) Alerting() []Stats {
 		}
 	}
 	return out
+}
+
+type keystrokeKey struct{}
+
+// WithKeystroke marks ctx as carrying a browser keystroke, so a backend can start its echo
+// clock for user typing only (not agent prompts or scroll forwarding).
+func WithKeystroke(ctx context.Context) context.Context {
+	return context.WithValue(ctx, keystrokeKey{}, true)
+}
+
+// IsKeystroke reports whether ctx was marked by WithKeystroke.
+func IsKeystroke(ctx context.Context) bool {
+	v, _ := ctx.Value(keystrokeKey{}).(bool)
+	return v
 }

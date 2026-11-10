@@ -539,6 +539,11 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
+	// A manual spawn means the operator is retrying: forget any dequeue spawn backoff.
+	if triggeredBy == session.TriggeredByUser {
+		s.clearDequeueSpawnFailure(ctx, item.ID)
+	}
+
 	// 1a. Repo path required. spawnSessionAfterGates (step 5 below) already rejects a
 	// missing repo_path on the direct-spawn path, but the WIP-cap gate (step 4) can
 	// queue this item via queueBacklogItem without ever reaching spawnSessionAfterGates
@@ -837,6 +842,7 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return fmt.Errorf("check unresolved blockers: %w", err)
 	}
 
+	spawnBlocked := s.dequeueBlockedSet(ctx)
 	spawned := 0
 	for _, item := range candidates {
 		if spawned >= freeSlots {
@@ -851,7 +857,7 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 			continue
 		}
 		// Sit out an earlier spawn failure's backoff instead of re-claiming every sweep.
-		if s.dequeueSpawnBackoffBlocks(ctx, item.ID) {
+		if s.dequeueSpawnBlocks(item.ID, spawnBlocked) {
 			continue
 		}
 		if s.claimAndSpawnCandidate(ctx, item, unresolvedBlockers[item.ID]) {
@@ -898,7 +904,7 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 		}
 		return false
 	}
-	s.clearDequeueSpawnFailure(ctx, item.ID)
+	s.onDequeueSpawnSucceeded(ctx, item.ID)
 	log.Info("[DequeueNextQueuedItems] dequeued and spawned", "item", item.ID, "was", fromStatus, "priority", item.Priority, "session", resp.Msg.SessionUuid)
 	return true
 }
@@ -2158,6 +2164,16 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	escalateRetryReason, park := s.evaluateReviewFailureBreakers(ctx, item, sessions, recentVerdicts, verdictErr)
 	if park {
 		return nil
+	}
+
+	// A verdict the reviewer classed as unfixable by rework (unattainable, unrelated failure,
+	// environmental, wrong branch, or a proposed waiver) goes to the owner, not another round.
+	if verdictErr == nil && len(recentVerdicts) > 0 {
+		if criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria); parseErr == nil {
+			if flagged := flaggedForOwner(recentVerdicts[0].PerCriterion, criteria); len(flagged) > 0 && s.escalateVerdictToOwner(ctx, item, flagged) {
+				return nil
+			}
+		}
 	}
 
 	workCount := 0
@@ -3494,7 +3510,7 @@ Do not modify the code. Only write the review verdict.
 
 		overall, perCriterion, reviewSummary := session.ParseHeadlessVerdictResult(reviewResult)
 		toolReads := session.ParseHeadlessToolReads(reviewResult)
-		overall, perCriterion, reviewSummary, reviewPath = session.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir)
+		overall, perCriterion, reviewSummary, reviewPath = session.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir, item.PlanArtifactsPath)
 		// reviewPath now carries the final path label ("diff", "codebase-read-verified",
 		// or "codebase-read-degraded"), logged below via Epic 2.5's path=/duration_ms=
 		// observability fields.
@@ -3973,6 +3989,14 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 	// the base SHA into LastCommitSha and nothing ever refreshed it (BUG-047).
 	if diffBaseSHA == "" && workSession.BaseCommitSha != "" {
 		diffBaseSHA = workSession.BaseCommitSha
+	}
+	// No branch means no head: a directory-mode session (no worktree row) would diff
+	// repoPath's ambient HEAD~1..HEAD, i.e. whatever commit last landed on the shared
+	// checkout, and present it as this item's work. Return empty so the caller's
+	// codebase-read/degraded path refuses instead of reviewing an unrelated diff.
+	if diffHeadRef == "" {
+		log.Warn("[TriggerReReview] work session has no resolvable branch; refusing to diff the shared checkout", "session", workSession.SessionUUID)
+		return "", false
 	}
 	diff, truncated, diffErr := session.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
 	if diffErr == nil {

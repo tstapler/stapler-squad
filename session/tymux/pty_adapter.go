@@ -8,9 +8,11 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"time"
 
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -49,7 +51,7 @@ func newTymuxPTYAdapter(fanout *ClientFanout, send func(*v1.AttachRequest) error
 	internal := os.NewFile(uintptr(fds[0]), "tymux-pty-internal")
 	external := os.NewFile(uintptr(fds[1]), "tymux-pty")
 
-	subID, outCh := fanout.Subscribe()
+	subID, outCh := fanout.SubscribeTimed()
 
 	a := &tymuxPTYAdapter{external: external, internal: internal, fanout: fanout, subID: subID, closed: make(chan struct{})}
 
@@ -63,7 +65,11 @@ func newTymuxPTYAdapter(fanout *ClientFanout, send func(*v1.AttachRequest) error
 // outCh closes (Unsubscribe) or the external half is closed by the caller.
 func (a *tymuxPTYAdapter) pumpOutput(outCh chan []byte) {
 	for data := range outCh {
-		if _, err := a.internal.Write(data); err != nil {
+		a.fanout.Dequeued(a.subID)
+		writeStart := time.Now()
+		_, err := a.internal.Write(data)
+		termlat.Default.Record(termlat.StagePTYWrite, tymuxLabels, time.Since(writeStart))
+		if err != nil {
 			return
 		}
 	}

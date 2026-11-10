@@ -10,6 +10,8 @@
  */
 
 import React from "react";
+import fs from "fs";
+import path from "path";
 import { render, fireEvent } from "@testing-library/react";
 import { PaneSplitRenderer } from "../PaneSplitRenderer";
 import { SessionViewModeProvider } from "@/lib/contexts/SessionViewModeContext";
@@ -190,5 +192,19 @@ describe("SessionListPaneBody — scroll wrapper", () => {
 
     view.rerender(tree("list"));
     expect(view.getByTestId("session-list-scroll").scrollTop).toBe(300);
+  });
+
+  it.each([
+    "styles/pane/paneSplit.css.ts",
+    "app/backlog/backlog.css.ts",
+    "app/notifications/NotificationsPage.css.ts",
+    "app/unfinished/UnfinishedTab.css.ts",
+    "app/review-queue/page.css.ts",
+  ])("%s_should_pad_right_by_tray_handle_width_so_rows_clear_the_fixed_bell", (rel) => {
+    // jest does not compute vanilla-extract styles, so assert the source contract that
+    // useTrayClearance's --tray-clearance (see useTrayClearance.test.tsx) is consumed.
+    const css = fs.readFileSync(path.join(__dirname, "../../../", rel), "utf8");
+    expect(css).toMatch(/paddingRight:[^\n]*var\(--tray-clearance, 0px\)/);
+    expect(css).toMatch(/paddingLeft:[^\n]*var\(--tray-clearance-left, 0px\)/);
   });
 });

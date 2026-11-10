@@ -1,5 +1,6 @@
 "use client";
 
+import { decideVisibilityResync, type SyncStamp, type VisibilityResyncDecision } from "@/lib/terminal/resyncPolicy";
 import { useRef, useCallback, useEffect } from "react";
 import type { TerminalData} from "@/gen/session/v1/events_pb";
 import { TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema } from "@/gen/session/v1/events_pb";
@@ -68,6 +69,8 @@ export interface UseTerminalFlowControlResult {
    * terminal:resync-correlation-id is off or the request could not be sent.
    */
   requestFullResync: (urgent?: boolean, isVisibilityTriggered?: boolean) => string | undefined;
+  /** Whether a focus/visibility event needs a full resync; see decideVisibilityResync. */
+  visibilityResyncDecision: () => VisibilityResyncDecision;
   markResyncComplete: () => void;
   markPaneResponseReceived: () => void;
   getIsResyncingRef: () => React.MutableRefObject<string | null>;
@@ -119,6 +122,8 @@ export function useTerminalFlowControl({
   // (pre-mortem P1 risk — must not reintroduce the corruption bug an
   // always-true stale_dimensions would cause).
   const lastSyncedDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
+  // Size and time of the last sync (a resize+pane request sent, or a resync reply applied).
+  const lastSyncStampRef = useRef<SyncStamp | null>(null);
 
   // Cancel any pending deferred resize/pane-request timers when the component
   // unmounts to prevent the timer callback from firing against a torn-down
@@ -335,6 +340,7 @@ export function useTerminalFlowControl({
   // value as the last one actually sent.
   const sendSettledResize = useCallback((cols: number, rows: number): boolean => {
     if (!pushMessageRef.current || !isConnectedRef.current) return false;
+    lastSyncStampRef.current = { cols, rows, at: Date.now() };
     if (!readOnlyRef.current) {
       try {
         console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
@@ -454,8 +460,14 @@ export function useTerminalFlowControl({
         cols: dimensionSyncRef.current.cols,
         rows: dimensionSyncRef.current.rows,
       };
+      lastSyncStampRef.current = { ...lastSyncedDimensionsRef.current, at: Date.now() };
     }
   }, []);
+
+  const visibilityResyncDecision = useCallback((): VisibilityResyncDecision => {
+    const t = getTerminal();
+    return decideVisibilityResync(t ? { cols: t.cols, rows: t.rows } : null, lastSyncStampRef.current, Date.now());
+  }, [getTerminal]);
 
   const getIsResyncingRef = useCallback(() => isResyncingRef, []);
   const getWaitingForPaneResponseRef = useCallback(() => waitingForPaneResponseRef, []);
@@ -467,6 +479,7 @@ export function useTerminalFlowControl({
     requestScrollback,
     sendFlowControl,
     requestFullResync,
+    visibilityResyncDecision,
     markResyncComplete,
     markPaneResponseReceived,
     getIsResyncingRef,

@@ -14,7 +14,9 @@ import (
 
 	"connectrpc.com/connect"
 	v1 "github.com/tstapler/tymux/clients/go/gen/tymux/v1"
+	"golang.org/x/sync/singleflight"
 
+	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -39,6 +41,7 @@ const (
 // tymuxd daemon over gRPC via rpcTransport.
 type tymuxGRPCSession struct {
 	transport    rpcTransport
+	echo         echoProbe // splits echo_server with the daemon's send stamp (echo_probe.go)
 	bannerFilter *tmux.BannerFilter
 
 	// mu guards every field below — Start/Close/RestoreWithWorkDir write
@@ -110,6 +113,12 @@ type tymuxGRPCSession struct {
 	captureReviveGen atomic.Uint64
 	// lifecycleCap caches whether the daemon advertises pane.lifecycle (capUnknown/Supported/Unsupported).
 	lifecycleCap atomic.Int32
+	// adoptFlight coalesces concurrent AdoptForViewing calls; viewRPCBudget overrides
+	// defaultViewRPCBudget (tests).
+	adoptFlight   singleflight.Group
+	viewRPCBudget time.Duration
+	// activity caches the pane.activity_hint capability and sender (pane_activity.go).
+	activity activityHintState
 
 	// killFailedID is the session a Close could not kill (daemon unreachable): it is still
 	// running, so PersistedSessionID keeps reporting it instead of dropping ownership.
@@ -164,8 +173,12 @@ type tymuxGRPCSession struct {
 	// tymux_attach_stream_reconnects_total{output_gap} metric.
 	outputGapCount atomic.Int64
 
-	// dropRepaintPending is true while a repaint for frames the fanout dropped is running.
+	// dropRepaintPending is true while a repaint for frames the fanout dropped is running
+	// (unsequenced streams only; sequenced ones go through resync).
 	dropRepaintPending atomic.Bool
+
+	// resync dedupes captures and drives gap/drop repair; see resync_seq.go.
+	resync resyncCoordinator
 
 	// lastEventUnixNano is when the standing stream last delivered any
 	// AttachEvent (heartbeats included); feeds tymux_attach_heartbeat_age_seconds.
@@ -349,6 +362,7 @@ func (s *tymuxGRPCSession) cacheFromSession(sess *v1.Session) error {
 	s.liveness = v1.Liveness_LIVENESS_LIVE
 	s.restartIsPending = false
 	s.closed = false
+	s.resetPaneActivityAsync()
 	// Fresh generation: reset Story 2.5.1/2.5.3's per-generation state so
 	// a reused session object (e.g. Start() after an earlier Close(), or
 	// a second RestoreWithWorkDir()) doesn't carry a stale closing flag,
@@ -812,13 +826,18 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 		return err
 	}
 	ctx := context.Background()
+	listStart := time.Now()
 	listResp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	termlat.Default.Record(termlat.StageRestoreList, tymuxLabels, time.Since(listStart))
 	if err != nil {
 		return classifyRPCError("RestoreWithWorkDir", err)
 	}
 	found, viaStoredID := s.claimOwnSession(workDir, listResp.Msg.GetSessions())
 	if found == nil {
-		return s.Start(workDir)
+		startAt := time.Now()
+		err := s.Start(workDir)
+		termlat.Default.Record(termlat.StageRestoreStart, tymuxLabels, time.Since(startAt))
+		return err
 	}
 	return s.adopt(ctx, found, viaStoredID)
 }
@@ -826,8 +845,43 @@ func (s *tymuxGRPCSession) RestoreWithWorkDir(workDir string) error {
 // AdoptForViewing makes the persisted pane readable without creating or reviving it.
 // Name lookup is deliberately excluded: a retained screen must belong to this exact record.
 func (s *tymuxGRPCSession) AdoptForViewing(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, lifecycleRPCTimeout)
-	defer cancel()
+	// Concurrent callers (a reload reconnects the same terminal repeatedly) share one attach,
+	// which is detached from any single caller so the first one leaving does not fail the rest.
+	ch := s.adoptFlight.DoChan("adopt", func() (any, error) {
+		return nil, s.adoptForViewingWithRetry(context.WithoutCancel(ctx))
+	})
+	select {
+	case r := <-ch:
+		return r.Err
+	case <-ctx.Done():
+		return classifyRPCError("AdoptForViewing", ctx.Err())
+	}
+}
+
+// defaultViewRPCBudget bounds each RPC of a viewing attach. It is per RPC, not shared: the old
+// single 3s budget covered ListSessions and the stream open together, so one slow daemon reply
+// timed the whole attach out and the client reconnected into the same wait.
+const defaultViewRPCBudget = 10 * time.Second
+
+func (s *tymuxGRPCSession) viewRPCTimeout() time.Duration {
+	if s.viewRPCBudget > 0 {
+		return s.viewRPCBudget
+	}
+	return defaultViewRPCBudget
+}
+
+// adoptForViewingWithRetry retries once when an RPC ran out of budget (a busy daemon, not a
+// missing pane). Any other failure, including not-found, is final.
+func (s *tymuxGRPCSession) adoptForViewingWithRetry(ctx context.Context) error {
+	err := s.adoptForViewingOnce(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) && connect.CodeOf(err) != connect.CodeDeadlineExceeded {
+		return err
+	}
+	log.Warn("tymux: viewing attach timed out, retrying once", "error", err)
+	return s.adoptForViewingOnce(ctx)
+}
+
+func (s *tymuxGRPCSession) adoptForViewingOnce(ctx context.Context) error {
 	s.mu.RLock()
 	id, closed, ready := s.storedID, s.closed, s.paneID != ""
 	s.mu.RUnlock()
@@ -844,7 +898,9 @@ func (s *tymuxGRPCSession) AdoptForViewing(ctx context.Context) error {
 		}
 		return nil
 	}
-	resp, err := s.transport.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{}))
+	listCtx, cancelList := context.WithTimeout(ctx, s.viewRPCTimeout())
+	defer cancelList()
+	resp, err := s.transport.ListSessions(listCtx, connect.NewRequest(&v1.ListSessionsRequest{}))
 	if err != nil {
 		return classifyRPCError("AdoptForViewing", err)
 	}
@@ -895,7 +951,9 @@ func (s *tymuxGRPCSession) cacheForViewing(ctx context.Context, id string, found
 // adopt attaches to a session this owner has claimed, reviving it when tymuxd lists it dead.
 func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStoredID bool) error {
 	if found.GetLiveness() == v1.Liveness_LIVENESS_DEAD {
+		reviveStart := time.Now()
 		revived, err := s.reviveForRestore(ctx, found)
+		termlat.Default.Record(termlat.StageRestoreRevive, tymuxLabels, time.Since(reviveStart))
 		if err != nil {
 			claimedSessions.CompareAndDelete(found.GetId(), any(s))
 			return err
@@ -906,7 +964,10 @@ func (s *tymuxGRPCSession) adopt(ctx context.Context, found *v1.Session, viaStor
 	s.recordOwned = viaStoredID
 	s.adoptedPreexisting = true
 	s.mu.Unlock()
-	return s.cacheFromSession(found)
+	adoptStart := time.Now()
+	err := s.cacheFromSession(found)
+	termlat.Default.Record(termlat.StageRestoreAdopt, tymuxLabels, time.Since(adoptStart))
+	return err
 }
 
 // reviveForRestore returns the session record to adopt in place of a DEAD-listed one. A pane
@@ -1264,9 +1325,18 @@ func (s *tymuxGRPCSession) SendInputViaControlMode(ctx context.Context, data []b
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Only a ctx marked by the browser keystroke path starts the echo clock: SendKeys is agent
+	// automation and scroll forwarding also lands here.
+	var inputNs int64
+	if termlat.IsKeystroke(ctx) {
+		inputNs = s.echo.noteInput(time.Now())
+	}
 	_, err := s.sendOnStreamCtx(ctx, &v1.AttachRequest{
 		Payload: &v1.AttachRequest_Input{Input: data},
 	})
+	if err != nil && inputNs != 0 {
+		s.echo.forget(inputNs)
+	}
 	return err
 }
 
@@ -1296,8 +1366,12 @@ func (s *tymuxGRPCSession) capturePaneWith(ctx context.Context, scrollbackOffset
 	callStart := time.Now()
 	resp, err := s.transport.CapturePane(ctx, connect.NewRequest(req))
 	observeCapturePaneRPC(callStart)
-	if revive && connect.CodeOf(err) == connect.CodeFailedPrecondition && s.reviveDeadPaneForCapture(ctx, paneID, reviveGen) {
-		resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
+	if revive && connect.CodeOf(err) == connect.CodeFailedPrecondition {
+		reviveStart := time.Now()
+		if s.reviveDeadPaneForCapture(ctx, paneID, reviveGen) {
+			resp, err = s.transport.CapturePane(ctx, connect.NewRequest(req))
+		}
+		termlat.Default.Record(termlat.StageCaptureRevive, tymuxLabels, time.Since(reviveStart))
 	}
 	if connect.CodeOf(err) == connect.CodeFailedPrecondition {
 		return nil, fmt.Errorf("%w: %w", ErrPaneNotRunning, classifyRPCError("CapturePane", err))
@@ -1374,6 +1448,7 @@ func (s *tymuxGRPCSession) CapturePaneContent() (string, error) {
 		exited.RestartPending = s.restartPending(context.Background(), paneID)
 		return "", exited
 	}
+	defer observeCaptureRender(time.Now())
 	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
@@ -1386,6 +1461,7 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer observeCaptureRender(time.Now())
 	return CellsToSGR(snap.GetGrid(), snap.GetHyperlinks())
 }
 
@@ -1393,20 +1469,16 @@ func (s *tymuxGRPCSession) CapturePaneContentRaw() (string, error) {
 // restores input/mouse modes, title, scroll region, charsets and the cursor, so keys, paste and
 // mouse work in a freshly attached client before the app re-sets any of them.
 func (s *tymuxGRPCSession) CapturePaneRedraw(ctx context.Context) (data string, altScreen, ok bool, err error) {
-	snap, err := s.capturePane(ctx, 0)
+	snap, err := s.redrawFor(ctx)
 	if err != nil {
 		return "", false, false, err
 	}
 	// A daemon older than v1.9.0 sends no Modes; its redraw would be a bare grid paint with no
 	// state reset, which the legacy text path (prefix + cursor sync) does better.
-	if snap.GetModes() == nil {
+	if snap.snap.GetModes() == nil {
 		return "", false, false, nil
 	}
-	data, err = RenderSnapshotRedraw(snap)
-	if err != nil {
-		return "", false, false, err
-	}
-	return data, snap.GetAltScreen(), true, nil
+	return string(snap.redraw), snap.snap.GetAltScreen(), true, nil
 }
 
 // parseScrollbackOffset adapts a tmux capture-pane -S/-E style line argument

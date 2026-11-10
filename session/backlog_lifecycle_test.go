@@ -5343,7 +5343,9 @@ func TestRemediatePRFixWithBackoffGate_AlwaysFailingSpawn_ExhaustsAndNotifiesOnc
 	assert.Equal(t, attempts, spawner.callCount, "no spawn after exhaustion")
 	exhausted := 0
 	for _, c := range n.calls {
-		if strings.Contains(c.Message, "survived") && strings.Contains(c.Message, "needs manual attention") {
+		// Every spawn failed, so no fix session ran: the notice says the attempts could not be
+		// started, not that the conflict "survived" sessions.
+		if strings.Contains(c.Message, "could not be started") && strings.Contains(c.Message, "needs manual attention") {
 			exhausted++
 		}
 	}

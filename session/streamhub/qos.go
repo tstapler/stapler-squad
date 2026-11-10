@@ -30,6 +30,7 @@ func (h *StreamHub) NoteInteractive(id SubscriberID) {
 	prev, was := h.interactive.lastAt[id]
 	h.interactive.lastAt[id] = now
 	h.interactive.mu.Unlock()
+	h.noteTypingForQoS()
 	if was && now.Sub(prev) <= interactiveWindow {
 		return
 	}

@@ -72,35 +72,6 @@ export const helpButton = style({
   },
 });
 
-export const tabBar = style({
-  display: "flex",
-  gap: 0,
-  borderBottom: `1px solid ${vars.color.borderColor}`,
-  padding: `0 ${vars.space["6"]}`,
-  flexShrink: 0,
-});
-
-export const tab = style({
-  padding: `${vars.space["2"]} ${vars.space["4"]}`,
-  fontSize: vars.fontSize.sm,
-  fontWeight: vars.fontWeight.medium,
-  color: vars.color.textMuted,
-  textDecoration: "none",
-  transition: "color 0.1s ease, border-color 0.1s ease",
-  cursor: "pointer",
-  background: "none",
-  border: "none",
-  borderBottom: "2px solid transparent",
-  ":hover": {
-    color: vars.color.textPrimary,
-  },
-});
-
-export const tabActive = style({
-  color: vars.color.primary,
-  borderBottom: `2px solid ${vars.color.primary}`,
-});
-
 export const contentArea = style({
   display: "flex",
   flex: 1,
@@ -111,6 +82,8 @@ export const listPane = style({
   flex: 1,
   overflow: "auto",
   padding: vars.space["4"],
+  paddingRight: `calc(var(--tray-clearance, 0px) + ${vars.space["4"]})`,
+  paddingLeft: `calc(var(--tray-clearance-left, 0px) + ${vars.space["4"]})`,
 });
 
 // width is set via inline style (resizable) on top of the shared base.

@@ -82,10 +82,12 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
+          scope: lint
+          save: 'true'
+          golangci-cache: 'true'
 
       # Generated code is gitignored (see #445): generated inline here (was a separate
       # lint-prepare job + artifact hand-off, i.e. two more checks per run).
@@ -162,7 +164,7 @@ jobs:
         with:
           version: v2.11.4
           args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
-          skip-cache: false
+          skip-cache: true  # cached by setup-go-cached (main-written, daily key), not the action
           only-new-issues: false
 
       # keep this marker prefix in sync with ciBudgetExceededMarker in server/services/github_webhook_pr_fix.go
@@ -204,7 +206,7 @@ jobs:
         with:
           version: v2.11.4
           args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0 --enable=gocyclo,gocognit,funlen,revive,dupl --new-from-rev=origin/main
-          skip-cache: false
+          skip-cache: true  # cached by setup-go-cached (main-written, daily key), not the action
           only-new-issues: false
 
       # Project-specific go/analysis passes in tools/lint (norawexec, notimesleeptest, ...).

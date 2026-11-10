@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --- Session UUID context injection ---
@@ -2015,6 +2016,8 @@ type verdictInput struct {
 	CriterionIndex int    `json:"criterion_index"`
 	Outcome        string `json:"outcome"`
 	Evidence       string `json:"evidence"`
+	FailureClass   string `json:"failure_class"`
+	ProposedWaiver bool   `json:"proposed_waiver"`
 }
 
 func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -2072,6 +2075,10 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	// Build CriterionVerdicts, auto-downgrading to PARTIAL if evidence is empty.
 	cvs := make([]session.CriterionVerdict, len(inputs))
 	for i, vi := range inputs {
+		class := domain.FailureClass(strings.ToUpper(strings.TrimSpace(vi.FailureClass)))
+		if !class.IsValid() {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("verdict[%d]: unknown failure_class %q", i, vi.FailureClass), "Use NOT_DONE, CANNOT_VERIFY, UNRELATED_FAILURE, ENVIRONMENTAL, WRONG_BRANCH or UNATTAINABLE."), nil
+		}
 		outcome := session.ReviewOutcome(strings.ToUpper(vi.Outcome))
 		evidence := vi.Evidence
 		if evidence == "" {
@@ -2082,6 +2089,8 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 			CriterionIndex: vi.CriterionIndex,
 			Outcome:        outcome,
 			Evidence:       evidence,
+			FailureClass:   class,
+			ProposedWaiver: vi.ProposedWaiver,
 		}
 	}
 
@@ -3134,6 +3143,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 						"criterion_index": map[string]any{"type": "number"},
 						"outcome":         map[string]any{"type": "string", "enum": []string{"PASS", "FAIL", "PARTIAL", "UNVERIFIABLE"}},
 						"evidence":        map[string]any{"type": "string"},
+						"failure_class": map[string]any{"type": "string", "description": "Optional, for a non-PASS criterion: why it did not pass. NOT_DONE (default, the worker has more to do), CANNOT_VERIFY, UNRELATED_FAILURE, ENVIRONMENTAL, WRONG_BRANCH, UNATTAINABLE. Anything but NOT_DONE goes to the owner instead of another rework round.",
+							"enum": []string{"NOT_DONE", "CANNOT_VERIFY", "UNRELATED_FAILURE", "ENVIRONMENTAL", "WRONG_BRANCH", "UNATTAINABLE"}},
+						"proposed_waiver": map[string]any{"type": "boolean", "description": "Optional: recommend that the owner waive this criterion (it cannot be met as written)."},
 					},
 					"required": []string{"criterion_index", "outcome", "evidence"},
 				}),

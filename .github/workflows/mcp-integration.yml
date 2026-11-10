@@ -42,10 +42,9 @@ jobs:
         uses: ./.github/actions/runner-utilization
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: ./.github/actions/setup-go-cached
         with:
           go-version-file: 'go.mod'
-          cache: true
 
       # server/mcp and server/services tests don't assert on rendered UI content, only on
       # compiling against the go:embed directive in server/web/embed.go, so a stub dist is enough.

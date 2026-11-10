@@ -12,6 +12,8 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAnalytics } from "@/lib/analytics";
 import { useCurrentWorkSession } from "@/lib/backlog/currentWorkSession";
 import { useStuckBacklogItems } from "@/lib/hooks/useStuckBacklogItems";
+import { useDiagnoseAction } from "@/lib/hooks/useDiagnoseAction";
+import { StuckReason } from "@/gen/session/v1/backlog_pb";
 import { summarizeStuckItemGroup } from "@/components/backlog-stuck/stuckReason";
 import { classifySessionKind } from "@/lib/backlog/sessionKind";
 import { resolvePipelineModeDisplay } from "@/lib/backlog/pipelineModeDisplay";
@@ -277,6 +279,15 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
   const stuckItemGroup = item ? stuckItems.filter((i) => i.itemId === item.id) : [];
   const stuckSummary = summarizeStuckItemGroup(stuckItemGroup);
   const stuckItem = stuckSummary?.primary;
+  // Diagnose & Nudge from this screen. A stuck item carries its primary StuckReason so the
+  // agent gets the nudge action space; a healthy one is diagnose-only (UNSPECIFIED).
+  const { dispatchDiagnose } = useDiagnoseAction();
+  const diagnoseItemId = item?.id;
+  const handleDiagnose = useCallback(async (): Promise<string> => {
+    if (!diagnoseItemId) throw new Error("No item loaded.");
+    const resp = await dispatchDiagnose(diagnoseItemId, stuckItem?.reason ?? StuckReason.UNSPECIFIED);
+    return resp.diagnosticSessionUuid;
+  }, [dispatchDiagnose, diagnoseItemId, stuckItem?.reason]);
 
   // Version control state for the most recent work session's worktree.
   const latestWorkSession = useCurrentWorkSession(item);
@@ -1623,14 +1634,16 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
           item={item}
           actionLoading={actionLoading}
           latestWorkSession={latestWorkSession}
-          showManualReview={showManualReview}
-          manualReviewOutcome={manualReviewOutcome}
-          manualReviewSummary={manualReviewSummary}
+          manualReview={{
+            show: showManualReview,
+            outcome: manualReviewOutcome,
+            summary: manualReviewSummary,
+            onOutcomeChange: setManualReviewOutcome,
+            onSummaryChange: setManualReviewSummary,
+            onSubmit: () => { void handleManualReviewSubmit(); },
+            onCancel: () => { setShowManualReview(false); setManualReviewSummary(""); },
+          }}
           onAction={handleAction}
-          onManualReviewOutcomeChange={setManualReviewOutcome}
-          onManualReviewSummaryChange={setManualReviewSummary}
-          onManualReviewSubmit={() => { void handleManualReviewSubmit(); }}
-          onManualReviewCancel={() => { setShowManualReview(false); setManualReviewSummary(""); }}
           terminalState={terminalState}
           julesDispatchGate={julesDispatchGate}
           onDispatchToJulesClick={(event) => {
@@ -1639,6 +1652,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
           }}
           activeWorkSessionCount={activeWorkSessionCount}
           onSendBackWithFeedback={handleSendBackWithFeedback}
+          diagnose={{ run: handleDiagnose, reasonLabel: stuckItem ? String(stuckItem.reason) : "none" }}
         />
 
         {/* ADR-005: "what's blocking this transition" gate checklist —

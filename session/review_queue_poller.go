@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -402,6 +403,10 @@ func (rqp *ReviewQueuePoller) pollLoop() {
 			}
 
 		case <-timer.C:
+			if qos.Default.Defer("review_queue_poller", qos.BackgroundMaxDeferral) {
+				timer.Reset(interval)
+				continue
+			}
 			rqp.tickCount.Add(1)
 
 			if err := rqp.checkSessionsSafe(); err != nil {

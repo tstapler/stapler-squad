@@ -1,0 +1,78 @@
+name: Ghostty WASM
+
+# Builds our own ghostty-vt.wasm with Bazel (//third_party/ghostty:ghostty_vt_wasm) and runs the Zig
+# unit test for our Ghostty fork patches. Workflow-level `paths:` (not a job `if:`) so a PR that does not
+# touch the pin or Bazel files creates no check at all (docs/reference/ci-job-budget.md).
+# One job, no matrix: Linux x86_64 is the reference build; the recorded sha256 is for that host.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'MODULE.bazel'
+      - 'MODULE.bazel.lock'
+      - '.bazelrc'
+      - '.bazelversion'
+      - 'third_party/ghostty/**'
+      - 'scripts/build-ghostty-wasm.sh'
+      - 'scripts/ghostty-wasm.sha256'
+      - '.github/workflows/ghostty-wasm.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'MODULE.bazel'
+      - 'MODULE.bazel.lock'
+      - '.bazelrc'
+      - '.bazelversion'
+      - 'third_party/ghostty/**'
+      - 'scripts/build-ghostty-wasm.sh'
+      - 'scripts/ghostty-wasm.sha256'
+      - '.github/workflows/ghostty-wasm.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ghostty-wasm-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: bazel build ghostty-vt.wasm + patch tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Bazelisk
+        uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3.0.0
+
+      - name: Bazel disk and repository cache
+        uses: ./.github/actions/bazel-cache
+
+      - name: Build (and verify against the recorded sha256 once one is recorded)
+        run: |
+          set -o pipefail  # without it `| tee` hid a failed build behind tee's exit status
+          flags=(--test)
+          if grep -qv '^#' scripts/ghostty-wasm.sha256; then flags+=(--verify); fi
+          ./scripts/build-ghostty-wasm.sh "${flags[@]}" 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Job summary (wasm size + sha256, Zig test count)
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo '### ghostty-vt.wasm'
+            echo '```'
+            grep -E "sha256=|recorded|Matches|tests, all passed|ran no tests|error:" "$RUNNER_TEMP/build.log" || echo "no wasm/test lines: the build did not get that far"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload wasm
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ghostty-vt-wasm
+          path: web-app/build/ghostty-own/ghostty-vt.wasm
+          if-no-files-found: error
+          retention-days: 14

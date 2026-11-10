@@ -351,6 +351,9 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Go concurrency patterns | `docs/explanation/concurrency-patterns.md` |
 | Bundling tmux (single-binary) | `docs/how-to/bundle-tmux.md` |
 | Bundling tymuxd (single-binary, supervised) | `docs/reference/bundling-tymuxd.md` |
+| Own ghostty-vt.wasm: why, layout, pins, patches, serving, rollback (ADR-039) | `docs/explanation/own-ghostty-wasm-build.md`, `docs/adr/ADR-039-own-ghostty-wasm-build.md` |
+| Build/verify the wasm (`make build-ghostty-wasm`), record its sha256, bump the pin | `docs/how-to/build-own-ghostty-wasm.md` |
+| `tstapler/ghostty` fork: seed `ssq/main`, upstream sync, contribute patches upstream | `docs/how-to/ghostty-fork-workflow.md` |
 | CSS architecture (vanilla-extract) | `docs/reference/css-architecture.md` |
 | Feature registry rules | `docs/reference/feature-registry.md` |
 | Omnibar feature testing registry | `docs/reference/feature-testing-registry.md` |
@@ -391,6 +394,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
 | Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |
 | Terminal input/output latency per stage, backend and listener: `/actuator/terminal-latency`, `terminal_latency.stage_duration`, echo p95 alert | `docs/reference/terminal-latency-telemetry.md` |
+| Find where terminal input lag sits with the `ssq-terminal-experience` dashboard (echo split, capture decomposition, HOL per hop, drops) | `docs/how-to/find-terminal-input-lag.md` |
 | Notification-actions metrics, queries, alerts, wake cost baseline (Task 5.1f) | `docs/reference/notification-actions-observability.md` |
 | Why AskUserQuestion answers route hook_reply / live keystroke / stored (ADR-005) | `docs/explanation/askuserquestion-answer-routing.md` |
 | Wake triggers, peer help, MCP session credential, wake limits | `docs/reference/wake-triggers-and-agent-messaging.md` |

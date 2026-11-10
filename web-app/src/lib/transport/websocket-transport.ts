@@ -1,5 +1,6 @@
 "use client";
 
+import { terminalInputTimer } from "@/lib/telemetry/terminalInputTiming";
 import type {
   DescMessage,
   DescMethodUnary,
@@ -357,6 +358,9 @@ export function createWebsocketBasedTransport(
                 }
                 const msgBytes = encodeEnvelope(0, serialized);
                 stream.socket.send(msgBytes);
+                if ((msg as { data?: { case?: string } }).data?.case === "input") {
+                  terminalInputTimer.markSent((msg as { sessionId?: string }).sessionId ?? "", (stream.socket as unknown as WebSocket).bufferedAmount ?? 0);
+                }
               }
               if (isDebugEnabled()) {
                 console.log("[WebSocket] Message iterator completed, sending EndStream");

@@ -341,20 +341,22 @@ func TestFirstPaint_should_DeliverFrameBroadcastDuringPaintAfterPaint(t *testing
 type seqTransport struct {
 	mu     sync.Mutex
 	events []string
+	// lastSeq is the highest numeric frame delivered; frames arrive in order, so it bounds how
+	// many frames a producer has outstanding in the hub's queue.
+	lastSeq atomic.Int64
 }
 
 func (s *seqTransport) Send(d []byte) error {
 	s.mu.Lock()
 	s.events = append(s.events, string(d))
 	s.mu.Unlock()
+	if n, err := strconv.ParseInt(string(d), 10, 64); err == nil {
+		for cur := s.lastSeq.Load(); n > cur && !s.lastSeq.CompareAndSwap(cur, n); cur = s.lastSeq.Load() {
+		}
+	}
 	return nil
 }
 func (s *seqTransport) Close() error { return nil }
-func (s *seqTransport) count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.events)
-}
 func (s *seqTransport) snapshot() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -442,8 +444,8 @@ func runFirstPaintRace(t *testing.T, it int) {
 	defer hub.DetachSubscriber(id)
 
 	var seq atomic.Int64
-	var painted atomic.Bool
-	var paintSeq atomic.Int64 // frames up to this are in the capture, never delivered after the paint
+	var captured atomic.Bool    // set once the capture has read its sequence number
+	var captureSeq atomic.Int64 // frames up to this are in the capture; some were dropped, never delivered
 	stop := make(chan struct{})
 	prodDone := make(chan struct{})
 	go func() {
@@ -457,11 +459,13 @@ func runFirstPaintRace(t *testing.T, it int) {
 			n := seq.Add(1)
 			hub.Broadcast([]byte(strconv.FormatInt(n, 10)))
 			runtime.Gosched()
-			for !painted.Load() && seq.Load() >= 1500 { // stay under the paint-backlog limit while the capture runs
+			for !captured.Load() && seq.Load() >= 1500 { // stay under the paint-backlog limit until the capture is taken
 				runtime.Gosched()
 			}
-			// Once painting is over, stay within the 100-deep queue so the stress cannot trip slow eviction.
-			for painted.Load() && seq.Load()-paintSeq.Load()-int64(tr.count()) > 60 {
+			// Keep frames outstanding well inside the 100-deep queue: a full queue legitimately drops
+			// (and repaints), which is not the gap this test hunts. Bounding on delivery, not on a flag the
+			// test goroutine sets after FirstPaint returns, leaves no window for a starved writer to be outrun.
+			for captured.Load() && seq.Load()-max(captureSeq.Load(), tr.lastSeq.Load()) > 60 {
 				runtime.Gosched()
 			}
 		}
@@ -473,14 +477,14 @@ func runFirstPaintRace(t *testing.T, it int) {
 	var snapSeq int64
 	require.NoError(t, hub.FirstPaint(id, func() error {
 		snapSeq = seq.Load()
+		captureSeq.Store(snapSeq)
+		captured.Store(true)
 		for i := 0; i < it%7*50; i++ { // capture/write latency
 			runtime.Gosched()
 		}
 		_ = tr.Send([]byte("paint"))
 		return nil
 	}))
-	paintSeq.Store(snapSeq)
-	painted.Store(true)
 	for seq.Load() < snapSeq+20 { // let the producer run past the capture
 		runtime.Gosched()
 	}

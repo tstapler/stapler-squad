@@ -1,0 +1,46 @@
+name: Cache cleanup
+
+# Keeps the Actions cache well under the 10 GB repo limit (above it GitHub evicts oldest-first, which
+# thrashes the big shared caches). Policy and rationale: tools/ci/prune-actions-caches.py and
+# docs/reference/ci-job-budget.md ("Cache policy"). Never PR-triggered, so it adds no PR checks.
+# Scheduled/post-main runs delete; a manual run is a dry run unless apply=true.
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_run:
+    workflows: ['Main CI']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Delete the entries the policy marks stale (false = dry run, only print)'
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cache-cleanup
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune stale Actions caches
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/ci
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLY: ${{ github.event_name == 'workflow_dispatch' && inputs.apply || github.event_name != 'workflow_dispatch' }}
+        run: |
+          flag=""
+          if [ "$APPLY" = "true" ]; then flag="--apply"; fi
+          python3 tools/ci/prune-actions-caches.py --repo "$GITHUB_REPOSITORY" $flag | tee -a "$GITHUB_STEP_SUMMARY"

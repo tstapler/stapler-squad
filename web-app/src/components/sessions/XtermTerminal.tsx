@@ -33,6 +33,7 @@ import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
 import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
 import { isMouseTracking } from "@/lib/terminal/mouseTracking";
+import { createScrollbarUpdater, type ScrollbarUpdater } from "@/lib/terminal/scrollbarUpdater";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
 import { isTouchPrimary as isTouchPrimaryDevice } from "@/lib/terminal/mobileInput/platform";
 import type { SendResult } from "@/lib/terminal/mobileInput/types";
@@ -368,6 +369,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   // Custom left-side scrollbar track and thumb
   const scrollTrackRef = useRef<HTMLDivElement>(null);
   const scrollThumbRef = useRef<HTMLDivElement>(null);
+  const scrollbarUpdaterRef = useRef<ScrollbarUpdater | null>(null);
+  scrollbarUpdaterRef.current ??= createScrollbarUpdater({
+    getTrack: () => scrollTrackRef.current,
+    getThumb: () => scrollThumbRef.current,
+  });
 
   // Context menu uses useState (shown at most once per right-click — not a hot path)
   const [contextMenuState, setContextMenuState] = useState<{ x: number; y: number } | null>(null);
@@ -579,29 +585,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     setLinkMenuState(null);
   }, []);
 
-  // Sync the custom left-side scrollbar with the terminal's current viewport.
-  // Called from onScroll, onResize, and after the initial fit — all via direct
-  // DOM mutation so there's no React re-render overhead on every scroll event.
+  // Sync the custom left-side scrollbar with the terminal's current viewport. Called from
+  // onScroll, onResize and onWriteParsed (every output chunk), so it only schedules: the updater
+  // applies once per frame, skips unchanged style writes and avoids reading layout.
   const updateScrollbar = useCallback((term: Terminal) => {
-    const track = scrollTrackRef.current;
-    const thumb = scrollThumbRef.current;
-    if (!track || !thumb) return;
-    const buf = term.buffer.active;
-    const totalLines = buf.length;
-    const visibleLines = term.rows;
-    if (totalLines <= visibleLines) {
-      track.style.display = 'none';
-      return;
-    }
-    track.style.display = 'block';
-    const trackHeight = track.clientHeight;
-    if (trackHeight === 0) return;
-    const thumbHeight = Math.max(20, trackHeight * (visibleLines / totalLines));
-    const maxScrollLines = totalLines - visibleLines;
-    const progress = maxScrollLines > 0 ? buf.viewportY / maxScrollLines : 0;
-    const thumbTop = progress * (trackHeight - thumbHeight);
-    thumb.style.height = `${thumbHeight}px`;
-    thumb.style.transform = `translateY(${thumbTop}px)`;
+    scrollbarUpdaterRef.current?.schedule(term);
   }, []);
 
   // Initialize terminal on mount
@@ -1018,6 +1006,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           lastSizeRef.current = { cols, rows };
           onResizeRef.current?.(cols, rows);
         }
+        scrollbarUpdaterRef.current?.invalidateTrackHeight();
         updateScrollbar(terminal);
       });
 
@@ -1530,7 +1519,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       };
 
       const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
+        // The track spans the container, so any container resize (even one that leaves rows and
+        // cols unchanged and never fires onResize) invalidates the cached track height.
+        scrollbarUpdaterRef.current?.invalidateTrackHeight();
         if (!fitAddonRef.current || !terminalRef.current) return;
+        updateScrollbar(terminalRef.current);
         if (!windowActiveRef.current) {
           fitDeferredRef.current = true;
           return;
@@ -1641,6 +1634,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         selectionDisposable?.dispose();
         resizeDisposable?.dispose();
         scrollDisposable?.dispose();
+        scrollbarUpdaterRef.current?.dispose();
         writeParsedDisposable?.dispose();
         bufferChangeDisposable?.dispose();
         handleCleanupFns.forEach(fn => fn());

@@ -3,11 +3,13 @@
 import type { MouseEvent } from "react";
 import type { BacklogItem, LinkedSession } from "@/lib/hooks/useBacklogService";
 import { InlineNotice } from "@/components/common/InlineNotice";
+import { useAnalytics } from "@/lib/analytics";
 import { getAvailableActions } from "@/lib/backlog/itemActions";
 import { derivePlanReviewStatus } from "@/lib/backlog/planReviewStatus";
 import type { JulesDispatchGate } from "@/lib/backlog/julesDispatchGate";
 import * as styles from "../BacklogItemDetail.css";
 import { ActionButtonLabel } from "./ActionButtonLabel";
+import { DiagnoseButton } from "./DiagnoseButton";
 import { SendBackFeedbackBox } from "./SendBackFeedbackBox";
 
 // Story 3.2.2's Jules gating result type — resolved by
@@ -17,18 +19,30 @@ import { SendBackFeedbackBox } from "./SendBackFeedbackBox";
 // `./ActionsSection` don't need to know the type moved.
 export type { JulesDispatchGate };
 
+/** The inline "Manual review" form: visibility, field values, and the callbacks it drives. */
+export interface ManualReviewControls {
+  show: boolean;
+  outcome: string;
+  summary: string;
+  onOutcomeChange: (value: string) => void;
+  onSummaryChange: (value: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}
+
+/** Dispatches a Diagnose & Nudge agent for the item; resolves with the diagnostic session UUID. */
+export interface DiagnoseControls {
+  run: () => Promise<string>;
+  /** Analytics label: the item's primary stuck reason, or "none" when it is not stuck. */
+  reasonLabel: string;
+}
+
 export interface ActionsSectionProps {
   item: BacklogItem;
   actionLoading: string | null;
   latestWorkSession: LinkedSession | undefined;
-  showManualReview: boolean;
-  manualReviewOutcome: string;
-  manualReviewSummary: string;
+  manualReview: ManualReviewControls;
   onAction: (action: string) => void;
-  onManualReviewOutcomeChange: (value: string) => void;
-  onManualReviewSummaryChange: (value: string) => void;
-  onManualReviewSubmit: () => void;
-  onManualReviewCancel: () => void;
   /**
    * Task 5.3.1c (backlog-event-driven-updates): set once an
    * ArchivedEvent/RemovedEvent arrives for this item via BacklogItemDetail's
@@ -47,6 +61,8 @@ export interface ActionsSectionProps {
   onDispatchToJulesClick?: (event: MouseEvent<HTMLButtonElement>) => void;
   activeWorkSessionCount: number;
   onSendBackWithFeedback: (feedback: string) => Promise<void>;
+  /** Omitted (e.g. by tests unrelated to diagnose) means no Diagnose button. */
+  diagnose?: DiagnoseControls;
 }
 
 /**
@@ -64,20 +80,22 @@ export function ActionsSection({
   item,
   actionLoading,
   latestWorkSession,
-  showManualReview,
-  manualReviewOutcome,
-  manualReviewSummary,
+  manualReview,
   onAction,
-  onManualReviewOutcomeChange,
-  onManualReviewSummaryChange,
-  onManualReviewSubmit,
-  onManualReviewCancel,
   terminalState,
   julesDispatchGate,
   onDispatchToJulesClick,
   activeWorkSessionCount,
   onSendBackWithFeedback,
+  diagnose,
 }: ActionsSectionProps) {
+  const { track } = useAnalytics();
+  // One tracked entry point for every item action button, so each click is counted once
+  // under the same event (the parent's handleAction does not track).
+  const runAction = (action: string) => {
+    track({ name: "backlog_item_action", category: "user_action", component: "ActionsSection", labels: { action } });
+    onAction(action);
+  };
   // getAvailableActions (web-app/src/lib/backlog/itemActions.ts) is the single
   // source of truth for which actions this item's current status + gate flags
   // expose — see its doc comment for why this replaced a scattered set of
@@ -128,7 +146,7 @@ export function ActionsSection({
             {terminalState === "archived" && (
               <button
                 className={styles.actionButton}
-                onClick={() => onAction("unarchive")}
+                onClick={() => runAction("unarchive")}
                 disabled={actionLoading !== null}
                 aria-busy={actionLoading === "unarchive"}
                 title="Restores the item to the Idea column. Its git worktree, if any, was deleted at archive time and cannot be recreated."
@@ -143,7 +161,7 @@ export function ActionsSection({
         {actions.has("mark_ready") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("mark_ready")}
+            onClick={() => runAction("mark_ready")}
             disabled={actionLoading !== null || item.acCriteria.length === 0}
             aria-disabled={item.acCriteria.length === 0}
             aria-busy={actionLoading === "mark_ready"}
@@ -157,7 +175,7 @@ export function ActionsSection({
         {actions.has("trigger_triage") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("trigger_triage")}
+            onClick={() => runAction("trigger_triage")}
             disabled={actionLoading !== null || !item.repoPath}
             aria-disabled={!item.repoPath}
             aria-busy={actionLoading === "trigger_triage"}
@@ -171,7 +189,7 @@ export function ActionsSection({
         {actions.has("spawn_session") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("spawn_session")}
+            onClick={() => runAction("spawn_session")}
             disabled={actionLoading !== null || !canSpawnSession}
             aria-disabled={!canSpawnSession}
             aria-busy={actionLoading === "spawn_session"}
@@ -189,7 +207,7 @@ export function ActionsSection({
         {actions.has("spawn_session_autonomous") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("spawn_session_autonomous")}
+            onClick={() => runAction("spawn_session_autonomous")}
             disabled={actionLoading !== null || !canRunAutonomously}
             aria-disabled={!canRunAutonomously}
             aria-busy={actionLoading === "spawn_session_autonomous"}
@@ -239,7 +257,7 @@ export function ActionsSection({
         {actions.has("approve_plan") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("approve_plan")}
+            onClick={() => runAction("approve_plan")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "approve_plan"}
             title={
@@ -255,7 +273,7 @@ export function ActionsSection({
         {actions.has("retry_triage") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("retry_triage")}
+            onClick={() => runAction("retry_triage")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "retry_triage"}
             title="This item's most recent triage session ended without producing a usable plan — retry to generate one."
@@ -278,7 +296,7 @@ export function ActionsSection({
         {actions.has("ship_pr") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("ship_pr")}
+            onClick={() => runAction("ship_pr")}
             disabled={actionLoading !== null || !acAllComplete}
             aria-disabled={!acAllComplete}
             aria-busy={actionLoading === "ship_pr"}
@@ -296,7 +314,7 @@ export function ActionsSection({
         {actions.has("override_done") && (
           <button
             className={`${styles.actionButton} ${styles.actionButtonDanger}`}
-            onClick={() => onAction("override_done")}
+            onClick={() => runAction("override_done")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "override_done"}
             data-testid="backlog-action-override-done"
@@ -308,7 +326,7 @@ export function ActionsSection({
         {actions.has("re_review") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("re_review")}
+            onClick={() => runAction("re_review")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "re_review"}
             data-testid="backlog-action-re-review"
@@ -320,7 +338,7 @@ export function ActionsSection({
         {actions.has("manual_review") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("manual_review")}
+            onClick={() => runAction("manual_review")}
             disabled={actionLoading !== null}
             data-testid="backlog-action-manual-review"
           >
@@ -331,7 +349,7 @@ export function ActionsSection({
         {actions.has("restart_session") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("restart_session")}
+            onClick={() => runAction("restart_session")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "restart_session"}
             title={
@@ -345,15 +363,15 @@ export function ActionsSection({
           </button>
         )}
 
-        {showManualReview && item.status === "review" && (
+        {manualReview.show && item.status === "review" && (
           <div className={styles.manualReviewForm} data-testid="manual-review-form">
             <h4 className={styles.manualReviewTitle}>Submit Review</h4>
             <div className={styles.manualReviewRow}>
               <label className={styles.manualReviewLabel}>Verdict</label>
               <select
                 className={styles.manualReviewSelect}
-                value={manualReviewOutcome}
-                onChange={(e) => onManualReviewOutcomeChange(e.target.value)}
+                value={manualReview.outcome}
+                onChange={(e) => manualReview.onOutcomeChange(e.target.value)}
                 data-testid="manual-review-outcome"
               >
                 <option value="PASS">PASS — meets all criteria</option>
@@ -367,8 +385,8 @@ export function ActionsSection({
               <textarea
                 className={styles.manualReviewTextarea}
                 placeholder="Describe your findings…"
-                value={manualReviewSummary}
-                onChange={(e) => onManualReviewSummaryChange(e.target.value)}
+                value={manualReview.summary}
+                onChange={(e) => manualReview.onSummaryChange(e.target.value)}
                 rows={4}
                 data-testid="manual-review-summary"
               />
@@ -376,16 +394,16 @@ export function ActionsSection({
             <div className={styles.manualReviewActions}>
               <button
                 className={styles.actionButton}
-                disabled={!manualReviewSummary.trim() || actionLoading !== null}
+                disabled={!manualReview.summary.trim() || actionLoading !== null}
                 aria-busy={actionLoading === "manual_review_submit"}
-                onClick={onManualReviewSubmit}
+                onClick={manualReview.onSubmit}
                 data-testid="manual-review-submit"
               >
                 <ActionButtonLabel pending={actionLoading === "manual_review_submit"} label="Submit" />
               </button>
               <button
                 className={styles.actionButtonSecondary}
-                onClick={onManualReviewCancel}
+                onClick={manualReview.onCancel}
                 data-testid="manual-review-cancel"
               >
                 Cancel
@@ -397,7 +415,7 @@ export function ActionsSection({
         {actions.has("archive") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("archive")}
+            onClick={() => runAction("archive")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "archive"}
             data-testid="backlog-action-archive"
@@ -408,7 +426,7 @@ export function ActionsSection({
         {actions.has("reopen") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("reopen")}
+            onClick={() => runAction("reopen")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "reopen"}
             data-testid="backlog-action-reopen"
@@ -419,7 +437,7 @@ export function ActionsSection({
         {actions.has("unarchive") && (
           <button
             className={styles.actionButton}
-            onClick={() => onAction("unarchive")}
+            onClick={() => runAction("unarchive")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "unarchive"}
             title="Restores the item to the Idea column. Its git worktree, if any, was deleted at archive time and cannot be recreated."
@@ -433,7 +451,7 @@ export function ActionsSection({
         {actions.has("send_back_idea") && (
           <button
             className={`${styles.actionButton} ${styles.actionButtonSecondary}`}
-            onClick={() => onAction("send_back_idea")}
+            onClick={() => runAction("send_back_idea")}
             disabled={actionLoading !== null}
             aria-busy={actionLoading === "send_back_idea"}
             title="Reset to Idea and clear plan approval so triage can re-run"
@@ -450,9 +468,13 @@ export function ActionsSection({
           onSubmit={onSendBackWithFeedback}
         />
 
+        {diagnose && item.status !== "done" && (
+          <DiagnoseButton onDiagnose={diagnose.run} reasonLabel={diagnose.reasonLabel} />
+        )}
+
         <button
           className={styles.actionButtonDanger}
-          onClick={() => onAction("delete")}
+          onClick={() => runAction("delete")}
           disabled={actionLoading !== null}
           aria-busy={actionLoading === "delete"}
           data-testid="backlog-action-delete"

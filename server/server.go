@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/buildinfo"
+	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
@@ -32,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/telemetry"
 
@@ -206,6 +208,33 @@ func (s *Server) joinAfterCancel(ctx context.Context, join func()) {
 // consecutive misses, a dead pane surfaces within ~2x this interval.
 const sessionHealthCheckInterval = 15 * time.Second
 
+// liveSessionCount reports how many sessions own goroutines (Active or Creating; hibernated,
+// paused, stopped and failed ones hold none) and whether the review-queue poller has been given its
+// instances yet. Until it first holds one the count is unknown, so the leak watch does not judge the
+// process against an empty budget during startup; once seen, an empty poller is a real zero.
+func liveSessionCount(deps *ServerDependencies) func() (int, bool) {
+	var populated atomic.Bool
+	return func() (int, bool) {
+		if deps.ReviewQueuePoller == nil {
+			return 0, false
+		}
+		all := deps.ReviewQueuePoller.GetInstances()
+		if len(all) > 0 {
+			populated.Store(true)
+		}
+		if !populated.Load() {
+			return 0, false
+		}
+		n := 0
+		for _, inst := range all {
+			if inst.IsActive() || inst.IsCreating() {
+				n++
+			}
+		}
+		return n, true
+	}
+}
+
 // wireDepsIntoServer wires pre-built ServerDependencies into srv: starts background
 // components, registers shutdown hooks, and mounts all ConnectRPC/HTTP handlers.
 // serverCtx (== connCtx from newServerBase) is cancelled by Shutdown() to signal
@@ -214,6 +243,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.hookIPC = newHookIPCState(deps)
 	srv.unfinishedScanner = deps.UnfinishedScanner
 	srv.shutdownHooks = append(srv.shutdownHooks, srv.hookIPC.Close)
+
+	// Always-on goroutine leak watch; /actuator/health reads its verdict.
+	srv.goBackground(func() {
+		profiling.RunGoroutineWatch(serverCtx, profiling.DefaultGoroutineWatch, profiling.GoroutineSampleInterval, liveSessionCount(deps))
+	})
 
 	// Start background components
 	srv.goBackground(func() {
@@ -627,6 +661,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered StreamingWSBridge", "watchInsights", watchInsightsPath)
 	}
 
+	// Register BacklogFlowService handler (backlog flow observability).
+	if deps.BacklogFlowService != nil {
+		flowPath, flowHandler := sessionv1connect.NewBacklogFlowServiceHandler(deps.BacklogFlowService, ConnectOptions(deps.ErrorRegistry)...)
+		flowAPIPath := "/api" + flowPath
+		srv.RegisterConnectHandler(flowAPIPath, http.StripPrefix("/api", flowHandler))
+		log.Info("Registered BacklogFlowService handler", "path", flowAPIPath)
+	}
+
 	// Register GitHubUserService handler (GitHub Work Continuity feature).
 	if deps.GitHubUserService != nil {
 		ghPath, ghHandler := sessionv1connect.NewGitHubUserServiceHandler(deps.GitHubUserService, ConnectOptions(deps.ErrorRegistry)...)
@@ -672,6 +714,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			triageRespawner = deps.BacklogService
 		}
 		guidanceRequestSvc = services.NewGuidanceRequestService(deps.Storage, deps.EventBus, triageRespawner)
+		if deps.BacklogService != nil {
+			guidanceRequestSvc.SetWaiverResumer(deps.BacklogService.ResumeAfterOwnerWaiver)
+		}
 		wakeTriggerSvc = registerWakeTriggerService(srv, deps, guidanceRequestSvc)
 		if deps.SessionService != nil {
 			deps.SessionService.WireNotificationActions(services.NotificationActionWiring{
@@ -1195,7 +1240,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	if deps.Registry != nil {
 		mcpLiveCheck = newSessionLivenessChecker(deps.SessionService.FindLiveInstance, deps.Registry)
 	}
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage, deps.EventBus, deps.UserPRCache, deps.BacklogEnabledCheck, autoReopener, deps.BacklogService, mcpLiveCheck, flowMCPOptions(deps)...)
 	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
 	mcpWithUUID := newMCPIdentityMiddleware(mcpHTTPHandler, deps.SessionService)
 	srv.mux.Handle("/mcp", mcpWithUUID)
@@ -1762,6 +1807,13 @@ func (s *Server) Shutdown() error {
 	if s.finalStatsFlush != nil {
 		defer s.finalStatsFlush()
 	}
+	// Return every pane the QoS hints boosted or demoted to Normal: tymuxd keeps hints until it
+	// restarts, so a stopped squad must not leave one behind.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		tymux.ResetPaneActivities(ctx)
+	}()
 	// Cancel the server's BaseContext first so active streaming connections
 	// (ConnectRPC terminal streams) see a done context and close themselves,
 	// preventing context deadline exceeded on the graceful shutdown below.

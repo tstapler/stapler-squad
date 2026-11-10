@@ -170,7 +170,10 @@ var (
 				// create_backlog_item/import_github_issue skip auto-triage, and
 				// link_session_to_item degrades to UNAVAILABLE; see RunServer's doc
 				// comment and ADR-001.
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil)
+				// The flow service is built from storage alone and keeps its own
+				// aggregator cache; its as_of makes that visible to the agent.
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil,
+					mcpserver.WithFlowService(services.NewFlowServiceFromStorage(storage)))
 			}
 
 			// Enable test mode if flag is set
@@ -260,13 +263,6 @@ var (
 					return fmt.Errorf("failed to start profiling: %w", err)
 				}
 				defer cleanup()
-
-				// Monitor goroutines periodically
-				if profileFlag {
-					ctx, cancel := context.WithCancel(context.Background())
-					defer cancel()
-					go profiling.MonitorGoroutines(ctx, 10*time.Second)
-				}
 			}
 
 			// Load user-defined detector plugins from the config dir's detectors/

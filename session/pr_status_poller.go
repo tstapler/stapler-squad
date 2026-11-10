@@ -11,6 +11,7 @@ import (
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -338,6 +339,9 @@ func (p *PRStatusPoller) pollLoop() {
 		case <-p.ctx.Done():
 			return
 		case <-ticker.C:
+			if qos.Default.Defer("pr_status_poller", qos.BackgroundMaxDeferral) {
+				continue
+			}
 			p.checkAllSessions()
 		}
 	}
