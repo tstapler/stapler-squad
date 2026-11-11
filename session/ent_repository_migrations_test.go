@@ -11,8 +11,9 @@ import (
 
 func TestDefaultStartupMigrations_OrderPinned(t *testing.T) {
 	t.Parallel()
-	var names []string
-	for _, m := range DefaultStartupMigrations() {
+	migrations := DefaultStartupMigrations()
+	names := make([]string, 0, len(migrations))
+	for _, m := range migrations {
 		names = append(names, m.Name())
 	}
 	assert.Equal(t, []string{
