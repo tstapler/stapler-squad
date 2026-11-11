@@ -61,7 +61,7 @@ const minShiftEligibleStatus = int(Restoring)
 // (status % 100 outside [5,8]) is logged and left alone rather than guessed
 // at.
 func runStatusCorruptionRepair(ctx context.Context, er *EntRepository) error {
-	rows, err := er.client.Session.Query().
+	rows, err := er.Client.Session.Query().
 		Where(session.StatusGT(maxValidPersistedStatus)).
 		All(ctx)
 	if err != nil {
@@ -78,7 +78,7 @@ func runStatusCorruptionRepair(ctx context.Context, er *EntRepository) error {
 			unrecoverable++
 			continue
 		}
-		if _, saveErr := er.client.Session.UpdateOneID(row.ID).
+		if _, saveErr := er.Client.Session.UpdateOneID(row.ID).
 			SetStatus(recovered).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] status corruption repair: session=%d: %v", row.ID, saveErr)

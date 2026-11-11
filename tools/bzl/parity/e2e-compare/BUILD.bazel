@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "e2e-compare_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/parity/e2e-compare",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "e2e-compare",
+    embed = [":e2e-compare_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "e2e-compare_test",
+    srcs = ["main_test.go"],
+    embed = [":e2e-compare_lib"],
+)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func smprMutate(svc *FeatureFlagService, scope string, mutation sessionv1.FlagMutation) error {
@@ -29,7 +30,7 @@ func smprSet(t *testing.T, svc *FeatureFlagService, scope string, on bool) {
 }
 
 func TestSessionMultiPRFlag_ShouldRoundTripThroughUpdateFeatureFlag(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	require.False(t, config.SessionMultiPR(config.SessionMultiPRScopePoller))
 
@@ -40,7 +41,7 @@ func TestSessionMultiPRFlag_ShouldRoundTripThroughUpdateFeatureFlag(t *testing.T
 }
 
 func TestSessionMultiPRFlag_ShouldStoreOutOfOrderScopeButResolveInOrder(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 
 	smprSet(t, svc, config.SessionMultiPRScopeUI, true)
@@ -62,7 +63,7 @@ func TestSessionMultiPRFlag_ShouldStoreOutOfOrderScopeButResolveInOrder(t *testi
 }
 
 func TestSessionMultiPRFlag_RefresherOffKillSwitch(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	require.True(t, config.SessionMultiPRRefresher(), "refresher runs by default")
 
@@ -81,7 +82,7 @@ func TestSessionMultiPRFlag_RefresherOffKillSwitch(t *testing.T) {
 }
 
 func TestSessionMultiPRFlag_ShouldRejectUnknownScope(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	err := smprMutate(svc, "reader:nope", sessionv1.FlagMutation_FLAG_MUTATION_SET_ENABLED)
 	require.Error(t, err)
@@ -89,9 +90,9 @@ func TestSessionMultiPRFlag_ShouldRejectUnknownScope(t *testing.T) {
 }
 
 func TestArtifactScanV2Flag_ShouldRegisterGlobalOnlyDefaultOff(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
-	assert.False(t, featureFlagDefault(config.ArtifactScanV2Flag))
+	assert.False(t, FeatureFlagDefault(config.ArtifactScanV2Flag))
 	assert.False(t, config.LoadConfig().ArtifactScanV2Enabled())
 	require.NoError(t, flagUpdate(svc, config.ArtifactScanV2Flag, true))
 	assert.True(t, config.LoadConfig().ArtifactScanV2Enabled())

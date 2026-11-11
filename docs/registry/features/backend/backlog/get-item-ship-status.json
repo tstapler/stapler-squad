@@ -5,7 +5,7 @@
   "method": "GetBacklogItemShipStatus",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_ship_status.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_ship_status.go",
   "tested": true,
   "testIds": [
     "TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNoPrURL",
@@ -17,5 +17,5 @@
     "TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstRealEntStorage",
     "TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBaseShaIsRecorded"
   ],
-  "lastModified": "2026-08-05T00:00:00Z"
+  "lastModified": "2026-11-04T19:49:24.282436485-08:00"
 }

@@ -81,14 +81,19 @@ type nudgeDeps struct {
 	tokens   PRTokenResolver
 	snapshot PRSnapshotSource
 	tracker  PRNudgeTracker
-	clock    nudgeClock
-	logf     func(msg string, args ...any)
+	// nudges records a delivered user nudge as a manual-nudge flow marker; nil is a no-op.
+	nudges NudgeRecorder
+	clock  nudgeClock
+	logf   func(msg string, args ...any)
 	// rateLimitResume reports when GitHub access resumes; nil uses the process-wide limiter.
 	rateLimitResume func() (limited bool, resumeAt time.Time)
 }
 
 // SetPRNudger sets the session-side port. Call before serving requests.
 func (s *GitHubUserService) SetPRNudger(n PRNudger) { s.nudge.nudger = n }
+
+// SetNudgeRecorder sets the manual-nudge flow-marker recorder.
+func (s *GitHubUserService) SetNudgeRecorder(n NudgeRecorder) { s.nudge.nudges = n }
 
 // SetPRDetailFetcher sets the fresh-PR-state reader.
 func (s *GitHubUserService) SetPRDetailFetcher(f githubpkg.PRDetailFetcher) { s.nudge.fetcher = f }
@@ -401,9 +406,12 @@ func (s *GitHubUserService) deliver(ctx context.Context, call *nudgeCall, inst *
 	if err := ctxDoneError(ctx); err != nil {
 		return nil, err
 	}
-	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, nudgeSignature(key, reasons), prompt)
+	outcome, err := s.nudge.nudger.SteerInstanceGuarded(ctx, inst, NudgeSignature(key, reasons), prompt)
 	if no, detail, ok := nudgeFromSteer(outcome); ok {
 		if outcome == SteerDelivered {
+			if s.nudge.nudges != nil {
+				s.nudge.nudges.RecordManualNudgeForSession(ctx, inst.GetStableID(), session.ManualNudgeWrite)
+			}
 			if t := s.nudgeTracker(); t != nil {
 				t.RecordNudge(key, nudgeReasonKinds(reasons), s.nudgeClock().Now())
 			}
@@ -479,23 +487,18 @@ func linkedStrictly(pr githubpkg.UserPR, sessionID string) bool {
 
 // Canonical reason names shared with PR-fix auto-steer's duplicate key.
 const (
-	reasonNameFailingChecks     = "FAILING_CHECKS"
-	reasonNameUnresolvedThreads = "UNRESOLVED_THREADS"
-	reasonNameMergeConflict     = "MERGE_CONFLICT"
-	// reasonNameChangesRequested has no manual-nudge counterpart, so a
-	// changes-requested-only steer never suppresses a thread nudge.
-	reasonNameChangesRequested = "CHANGES_REQUESTED"
+	ReasonNameMergeConflict = "MERGE_CONFLICT"
 )
 
 // nudgeSignature keys the duplicate window by PR and canonical reason set, the
 // same key PR-fix auto-steer derives for the same PR, so the two paths dedupe
 // each other without conflating two PRs linked to one session.
-func nudgeSignature(pr githubpkg.PRKey, reasons []sessionv1.NudgeReason) string {
+func NudgeSignature(pr githubpkg.PRKey, reasons []sessionv1.NudgeReason) string {
 	names := make([]string, 0, len(reasons))
 	for _, r := range reasons {
 		names = append(names, strings.TrimPrefix(r.String(), "NUDGE_REASON_"))
 	}
-	return guardSignature(pr.Key(), reasonSetSignature(names...))
+	return GuardSignature(pr.Key(), ReasonSetSignature(names...))
 }
 
 func nudgeReasonNames(reasons []sessionv1.NudgeReason) string {

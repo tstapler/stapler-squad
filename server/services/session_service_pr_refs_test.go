@@ -12,6 +12,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -40,7 +41,7 @@ func addLivePRSession(t *testing.T, fix *forkTestFixture, title, uuid string, pr
 	require.NoError(t, err)
 	for _, li := range loaded {
 		if li.UUID == uuid {
-			addInstanceToPoller(fix.poller, li)
+			svctest.AddInstanceToPoller(fix.poller, li)
 			return li
 		}
 	}

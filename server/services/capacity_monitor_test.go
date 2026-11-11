@@ -11,18 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
-
-type mockInstancePoller struct {
-	instances []*session.Instance
-}
-
-func (m *mockInstancePoller) GetInstances() []*session.Instance {
-	return m.instances
-}
 
 type mockSessionSwitcher struct {
 	mu     sync.Mutex
@@ -67,8 +60,8 @@ func (m *mockLimitsClient) ModelContextWindow(model string) int {
 func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 	t.Parallel()
 	eventBus := events.NewEventBus(10)
-	poller := &mockInstancePoller{
-		instances: []*session.Instance{
+	poller := &svctest.MockInstancePoller{
+		Instances: []*session.Instance{
 			{
 				Title:   "test-session",
 				UUID:    "session-uuid-1",
@@ -78,10 +71,10 @@ func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 		},
 	}
 	// set mock conversation uuid
-	poller.instances[0].SetClaudeConversationUUID("session-uuid-1")
+	poller.Instances[0].SetClaudeConversationUUID("session-uuid-1")
 
-	fakeStore := &fakeTokenStore{
-		results: []*tokens.ParseResult{
+	fakeStore := &svctest.FakeTokenStore{
+		Results: []*tokens.ParseResult{
 			{
 				SessionUUID: "session-uuid-1",
 				TotalInput:  10000,
@@ -167,8 +160,8 @@ func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 func TestCapacityMonitor_AutoTransition(t *testing.T) {
 	t.Parallel()
 	eventBus := events.NewEventBus(10)
-	poller := &mockInstancePoller{
-		instances: []*session.Instance{
+	poller := &svctest.MockInstancePoller{
+		Instances: []*session.Instance{
 			{
 				Title:   "test-session-auto",
 				UUID:    "session-uuid-auto",
@@ -177,10 +170,10 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 			},
 		},
 	}
-	poller.instances[0].SetClaudeConversationUUID("session-uuid-auto")
+	poller.Instances[0].SetClaudeConversationUUID("session-uuid-auto")
 
-	fakeStore := &fakeTokenStore{
-		results: []*tokens.ParseResult{
+	fakeStore := &svctest.FakeTokenStore{
+		Results: []*tokens.ParseResult{
 			{
 				SessionUUID: "session-uuid-auto",
 				TotalInput:  10000,
@@ -239,8 +232,8 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
 	t.Parallel()
 	eventBus := events.NewEventBus(10)
-	poller := &mockInstancePoller{
-		instances: []*session.Instance{
+	poller := &svctest.MockInstancePoller{
+		Instances: []*session.Instance{
 			{
 				Title:   "test-session-rl",
 				UUID:    "session-uuid-rl",
@@ -249,10 +242,10 @@ func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
 			},
 		},
 	}
-	poller.instances[0].SetClaudeConversationUUID("session-uuid-rl")
+	poller.Instances[0].SetClaudeConversationUUID("session-uuid-rl")
 
-	fakeStore := &fakeTokenStore{
-		results: []*tokens.ParseResult{
+	fakeStore := &svctest.FakeTokenStore{
+		Results: []*tokens.ParseResult{
 			{
 				SessionUUID: "session-uuid-rl",
 			},
@@ -411,15 +404,15 @@ func idleTimeline(count int, startAt time.Time) []tokens.TurnStats {
 	return timeline
 }
 
-func newIdleWaitTestMonitor(t *testing.T, ceiling int, parseRes *tokens.ParseResult, compactor *fakeCompactor) (*CapacityMonitor, *events.EventBus, *mockInstancePoller) {
+func newIdleWaitTestMonitor(t *testing.T, ceiling int, parseRes *tokens.ParseResult, compactor *fakeCompactor) (*CapacityMonitor, *events.EventBus, *svctest.MockInstancePoller) {
 	t.Helper()
 	eventBus := events.NewEventBus(10)
-	poller := &mockInstancePoller{
-		instances: []*session.Instance{
+	poller := &svctest.MockInstancePoller{
+		Instances: []*session.Instance{
 			{Title: "idle-wait-session", UUID: "sess-uuid-1", Program: "claude", Status: session.Active},
 		},
 	}
-	poller.instances[0].SetClaudeConversationUUID("conv-uuid-1")
+	poller.Instances[0].SetClaudeConversationUUID("conv-uuid-1")
 	parseRes.SessionUUID = "conv-uuid-1"
 
 	monitor := NewCapacityMonitor(CapacityMonitorParams{
@@ -430,7 +423,7 @@ func newIdleWaitTestMonitor(t *testing.T, ceiling int, parseRes *tokens.ParseRes
 		},
 		EventBus:   eventBus,
 		Poller:     poller,
-		TokenStore: &fakeTokenStore{results: []*tokens.ParseResult{parseRes}},
+		TokenStore: &svctest.FakeTokenStore{Results: []*tokens.ParseResult{parseRes}},
 		Compactor:  compactor.compact,
 	})
 	// Clock tracks the newest turn so fixed-date fixtures count as live runs.

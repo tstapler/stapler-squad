@@ -1,0 +1,18 @@
+---
+// Starlight PageTitle override: tour pages get breadcrumb + h1 + meta row;
+// every other page renders Starlight's default title unchanged.
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+import TourHeader from '../TourHeader.astro';
+
+const tour = Astro.locals.starlightRoute.entry.data.tour;
+---
+
+{
+	tour ? (
+		<TourHeader tour={tour}>
+			<Default {...Astro.props}><slot /></Default>
+		</TourHeader>
+	) : (
+		<Default {...Astro.props}><slot /></Default>
+	)
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/hookipc"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -37,7 +38,7 @@ type hookReplyEnv struct {
 
 func newHookReplyEnv(t *testing.T) *hookReplyEnv {
 	t.Helper()
-	e := &hookReplyEnv{storage: createTestStorage(t), acks: &recordingAcks{}, flags: &fakeActionFlags{off: map[string]bool{}}}
+	e := &hookReplyEnv{storage: svctest.CreateTestStorage(t), acks: &recordingAcks{}, flags: &fakeActionFlags{off: map[string]bool{}}}
 	e.resolver = &hookReplyResolver{rows: e.storage, flags: e.flags, acks: e.acks}
 	return e
 }
@@ -169,7 +170,7 @@ func TestHookReply_PreAnswer_ShouldRefuseASecondAnswer(t *testing.T) {
 // All stages are configured open, but the compiled S1 evidence is false, so the
 // production flag composition keeps the rung closed.
 func TestHookReply_ShouldStayClosedUnderProductionFlags_WhileS1IsNotRecorded(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	cfg := config.LoadConfig()
 	for _, sc := range []string{scopeStageRender, scopeStageAnswer, scopeStageHookReply} {
 		require.NoError(t, cfg.SetFeatureFlagScope(askUserQuestionStructuredFlagName, sc, true))
@@ -195,7 +196,7 @@ func TestHookReply_ShouldServeThroughTheRealFlagChain_WhenS1IsRecorded(t *testin
 	if !spikeS1HookReplyPassed {
 		t.Skip(skipUntilS1Reviewed)
 	}
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	cfg := config.LoadConfig()
 	for _, sc := range []string{scopeStageRender, scopeStageAnswer, scopeStageHookReply} {
 		require.NoError(t, cfg.SetFeatureFlagScope(askUserQuestionStructuredFlagName, sc, true))

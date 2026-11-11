@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -50,7 +51,7 @@ type testConvSession struct {
 // the constructed *session.ClaudeSessionHistory for direct use.
 func seedClaudeHome(t *testing.T, sessions map[string]testConvSession) *session.ClaudeSessionHistory {
 	t.Helper()
-	home := withFakeHome(t)
+	home := svctest.WithFakeHome(t)
 
 	claudeDir := filepath.Join(home, ".claude")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))

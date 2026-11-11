@@ -1,0 +1,150 @@
+{
+  "id": "gboard-backspace-run",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Held Backspace in idle after commits: repeated deleteContentBackward on the reset textarea, one DEL each. Source: https://lists.w3.org/Archives/Public/public-editing-tf/2017Jun/0007.html",
+  "events": [
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 10
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "a",
+      "value": "a",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 20
+    },
+    {
+      "kind": "input",
+      "value": "a",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 30
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 40
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "b",
+      "value": "b",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 50
+    },
+    {
+      "kind": "input",
+      "value": "b",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 60
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 70
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "c",
+      "value": "c",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 80
+    },
+    {
+      "kind": "input",
+      "value": "c",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 90
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 100
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "d",
+      "value": "d",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 110
+    },
+    {
+      "kind": "input",
+      "value": "d",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 120
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "deleteContentBackward",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 130
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 140
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "deleteContentBackward",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 150
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 160
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "deleteContentBackward",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 170
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 180
+    }
+  ],
+  "expectedBytes": "abcd",
+  "finalText": "a"
+}

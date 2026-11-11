@@ -1,0 +1,1 @@
+bazel-hint: a BUILD file is out of date with the Go sources. Remedy: run 'make gazelle', then commit the BUILD diff.

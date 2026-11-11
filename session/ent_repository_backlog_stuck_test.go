@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // createStuckTestItem creates a bare backlog item in the given status, for use
@@ -40,7 +41,7 @@ func TestMarkStuck_should_insertOpenRowWithNullNotified_When_NoExistingRow(t *te
 	require.NoError(t, err)
 	assert.True(t, applied)
 
-	row, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	row, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, itemID, row.ItemID.String())
 	assert.Equal(t, string(domain.StuckReasonPRReadyUnmerged), row.Reason)
@@ -67,22 +68,22 @@ func TestMarkStuck_should_updateLastCheckedOnly_When_OpenRowExists(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	first, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	first, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	firstDetected := first.FirstDetectedAt
 
 	// Force a measurable delta.
-	waitForClockDelta(t, 10*time.Millisecond)
+	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "second pass")
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	count, err := repo.client.BacklogStuckState.Query().Count(ctx)
+	count, err := repo.Client.BacklogStuckState.Query().Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "no duplicate row should be created")
 
-	second, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	second, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, second.ID)
 	assert.True(t, second.FirstDetectedAt.Equal(firstDetected), "first_detected_at must not change on refresh")
@@ -114,23 +115,23 @@ func TestMarkStuck_should_reopenRowInPlace_When_ExistingRowResolved(t *testing.T
 	require.NoError(t, err)
 	require.True(t, resolved)
 
-	resolvedRow, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	resolvedRow, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	originalID := resolvedRow.ID
 	require.NotNil(t, resolvedRow.ResolvedAt)
 	require.NotNil(t, resolvedRow.NotifiedAt)
 
-	waitForClockDelta(t, 10*time.Millisecond)
+	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing again")
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	count, err := repo.client.BacklogStuckState.Query().Count(ctx)
+	count, err := repo.Client.BacklogStuckState.Query().Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "exactly one row per (item_id, reason) at all times")
 
-	reopened, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	reopened, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, originalID, reopened.ID, "the same row must be reopened, not a new one")
 	assert.Nil(t, reopened.ResolvedAt)
@@ -159,7 +160,7 @@ func TestMarkStuck_should_keepExactlyOneRow_When_ResolvedThenRecurs(t *testing.T
 		require.True(t, resolved)
 	}
 
-	count, err := repo.client.BacklogStuckState.Query().Count(ctx)
+	count, err := repo.Client.BacklogStuckState.Query().Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 }
@@ -179,7 +180,7 @@ func TestMarkStuck_should_returnAppliedFalse_When_StatusPreconditionMismatch(t *
 	require.NoError(t, err)
 	assert.False(t, applied)
 
-	count, err := repo.client.BacklogStuckState.Query().Count(ctx)
+	count, err := repo.Client.BacklogStuckState.Query().Count(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "no row should be written on precondition mismatch")
 }
@@ -201,7 +202,7 @@ func TestResolveStuck_should_setResolvedAtOnce_When_RowOpen(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, resolved)
 
-	row, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	row, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, row.ResolvedAt)
 
@@ -227,7 +228,7 @@ func TestResolveStuck_should_beNoOpAndNotOverwrite_When_AlreadyResolved(t *testi
 	require.NoError(t, err)
 	require.True(t, resolved)
 
-	first, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	first, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	firstResolvedAt := *first.ResolvedAt
 
@@ -235,7 +236,7 @@ func TestResolveStuck_should_beNoOpAndNotOverwrite_When_AlreadyResolved(t *testi
 	require.NoError(t, err)
 	assert.False(t, resolvedAgain, "second resolve should affect 0 rows")
 
-	second, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	second, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, second.ResolvedAt)
 	assert.True(t, second.ResolvedAt.Equal(firstResolvedAt), "resolved_at must not be overwritten")
@@ -284,7 +285,7 @@ func TestFindOpenStuckStates_should_excludeResolvedAndSnoozed_When_Queried(t *te
 	require.True(t, applied)
 	snoozedUUID, err := uuid.Parse(snoozedItemID)
 	require.NoError(t, err)
-	_, err = repo.client.BacklogStuckState.Update().
+	_, err = repo.Client.BacklogStuckState.Update().
 		Where(backlogstuckstate.ItemIDEQ(snoozedUUID)).
 		SetSnoozedUntil(time.Now().Add(24 * time.Hour)).
 		Save(ctx)
@@ -327,7 +328,7 @@ func TestMarkStuckNotified_should_setNotifiedAt_When_Null(t *testing.T) {
 	_, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "ready")
 	require.NoError(t, err)
 
-	row, err := repo.client.BacklogStuckState.Query().Only(ctx)
+	row, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	require.Nil(t, row.NotifiedAt)
 
@@ -335,7 +336,7 @@ func TestMarkStuckNotified_should_setNotifiedAt_When_Null(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, applied)
 
-	row, err = repo.client.BacklogStuckState.Query().Only(ctx)
+	row, err = repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, row.NotifiedAt)
 	first := *row.NotifiedAt
@@ -345,7 +346,7 @@ func TestMarkStuckNotified_should_setNotifiedAt_When_Null(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, applied)
 
-	row, err = repo.client.BacklogStuckState.Query().Only(ctx)
+	row, err = repo.Client.BacklogStuckState.Query().Only(ctx)
 	require.NoError(t, err)
 	assert.True(t, row.NotifiedAt.Equal(first))
 }
@@ -372,7 +373,7 @@ func TestFindOpenStuckStates_should_returnRowsAfterDBReopen_When_ProcessRestarts
 		require.NoError(t, err)
 		require.True(t, applied)
 
-		row, err := repo.client.BacklogStuckState.Query().Only(ctx)
+		row, err := repo.Client.BacklogStuckState.Query().Only(ctx)
 		require.NoError(t, err)
 		firstDetected = row.FirstDetectedAt
 	}()

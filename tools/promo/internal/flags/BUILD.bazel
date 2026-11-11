@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "flags",
+    srcs = ["flags.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/promo/internal/flags",
+    visibility = ["//tools/promo:__subpackages__"],
+    deps = ["//tools/promolib/gitbase"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":flags",
+    visibility = ["//tools/promo:__subpackages__"],
+)
+
+go_test(
+    name = "flags_test",
+    srcs = ["flags_test.go"],
+    data = ["//.github:promo-flags.json"],
+    deps = [
+        ":flags",
+        "//tools/promolib/gitbase",
+        "//tools/promolib/gitbase/gitbasetest",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

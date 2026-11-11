@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "mediatool_lib",
+    srcs = [
+        "fresh.go",
+        "lkg.go",
+        "main.go",
+        "refresh.go",
+        "shardplan.go",
+        "summary.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/promo/cmd/mediatool",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//executor/safeexec",
+        "//tools/promo/internal/flags",
+        "//tools/promo/internal/manifest",
+    ],
+)
+
+go_binary(
+    name = "mediatool",
+    embed = [":mediatool_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "mediatool_test",
+    srcs = [
+        "fresh_test.go",
+        "hermetic_test.go",
+        "lkg_test.go",
+        "shardplan_test.go",
+    ],
+    data = [
+        "//scripts:record-website-demos.sh",
+        "//tests/e2e:playwright.website-demos.config.ts",
+        "//tools/promo:budgets.json",
+    ],
+    embed = [":mediatool_lib"],
+    deps = [
+        "//tools/promo/internal/manifest",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	contractDir    = "../../../contracts/webhook-management/v1"
+	contractSrc    = "../../../contracts/webhook-management/v1"
 	goldenManifest = "../../../contracts/webhook-management/bundle/v1/MANIFEST.json"
 )
 
@@ -47,6 +47,8 @@ func extractMembers(t *testing.T, archive []byte) []member {
 	}
 }
 
+// copyDir copies the pinned files into a temp dir as regular files: Bazel runfiles are symlinks,
+// which Build rejects.
 func copyDir(t *testing.T, src string) string {
 	t.Helper()
 	dst := t.TempDir()
@@ -61,7 +63,7 @@ func copyDir(t *testing.T, src string) string {
 }
 
 func TestBuild_should_ProduceTheCanonicalLayout_When_BuiltFromTheCheckedInContract(t *testing.T) {
-	archive, err := Build(contractDir)
+	archive, err := Build(copyDir(t, contractSrc))
 	require.NoError(t, err)
 
 	members := extractMembers(t, archive)
@@ -86,8 +88,8 @@ func TestBuild_should_ProduceTheCanonicalLayout_When_BuiltFromTheCheckedInContra
 }
 
 func TestBuild_should_BeByteIdentical_When_SourceFilesHaveDifferentModTimesAndLocations(t *testing.T) {
-	first := copyDir(t, contractDir)
-	second := copyDir(t, contractDir)
+	first := copyDir(t, contractSrc)
+	second := copyDir(t, contractSrc)
 	require.NoError(t, os.Chtimes(filepath.Join(second, PinnedFiles()[0]), time.Now(), time.Now().Add(-48*time.Hour)))
 
 	a, err := Build(first)
@@ -99,7 +101,7 @@ func TestBuild_should_BeByteIdentical_When_SourceFilesHaveDifferentModTimesAndLo
 }
 
 func TestBuild_should_MatchTheGoldenManifest_When_BuiltFromTheCheckedInContract(t *testing.T) {
-	archive, err := Build(contractDir)
+	archive, err := Build(copyDir(t, contractSrc))
 	require.NoError(t, err)
 	got := extractMembers(t, archive)[0].data
 	if *updateGolden {
@@ -130,7 +132,7 @@ func TestBuild_should_RefuseTheDirectory_When_ItDoesNotMatchThePinnedSet(t *test
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			dir := copyDir(t, contractDir)
+			dir := copyDir(t, contractSrc)
 			mutate(t, dir)
 
 			_, err := Build(dir)
@@ -212,7 +214,7 @@ func TestVerify_should_Accept_When_ArchiveFollowsTheV1Rules(t *testing.T) {
 }
 
 func TestVerify_should_AcceptTheProducersOutput_When_BuiltFromTheCheckedInContract(t *testing.T) {
-	archive, err := Build(contractDir)
+	archive, err := Build(copyDir(t, contractSrc))
 	require.NoError(t, err)
 
 	m, err := Verify(archive)

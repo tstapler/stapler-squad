@@ -597,7 +597,7 @@ func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 // enterpriseHostsForRemoteParsing returns the statically-configured GitHub
 // Enterprise hostnames so parseGitHubRemoteURL can recognize a GHE remote
 // (e.g. git@github.netflix.net:owner/repo.git), not just github.com.
-func enterpriseHostsForRemoteParsing() []string {
+func EnterpriseHostsForRemoteParsing() []string {
 	configured := config.LoadConfig().GetGitHubEnterpriseHosts()
 	hosts := make([]string, 0, len(configured))
 	for _, h := range configured {
@@ -626,7 +626,7 @@ func OriginGitHubRepo(repoPath string) (owner, repo, host string, ok bool) {
 //   - https://github.netflix.net/owner/repo
 //   - git@github.netflix.net:owner/repo.git
 func parseGitHubRemoteURL(remoteURL string) (owner, repo, host string) {
-	ref, err := github.ParseGitHubRefWithHosts(remoteURL, enterpriseHostsForRemoteParsing())
+	ref, err := github.ParseGitHubRefWithHosts(remoteURL, EnterpriseHostsForRemoteParsing())
 	if err != nil {
 		return "", "", ""
 	}
@@ -767,4 +767,11 @@ func (d InstanceData) ActiveDir() string {
 		return d.Worktree.WorktreePath
 	}
 	return d.Path
+}
+
+// ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref
+// store, so repoPath may be any checkout of the repo. An absent branch is an error.
+func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, error) {
+	sha, err := gitprovider.Backend().ResolveRef(ctx, backend.Local{Root: backend.RepoRoot(repoPath)}, backend.RefName(branch))
+	return string(sha), err
 }

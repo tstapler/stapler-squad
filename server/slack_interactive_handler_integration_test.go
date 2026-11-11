@@ -34,7 +34,7 @@ func computeTestSlackInteractiveSignature(secret, timestamp, body string) string
 }
 
 // setSlackInteractiveTestConfig isolates config state to a fresh temp dir
-// (mirrors server/review_queue_manager_test.go's setTestSlackConfig) and
+// (mirrors server/reviewqueue/review_queue_manager_test.go's setTestSlackConfig) and
 // persists Slack.ApprovalEnabled so NewServerWithDeps' route-registration
 // gate (server.go, Story 2.1.3) reads the value this test intends.
 func setSlackInteractiveTestConfig(t *testing.T, approvalEnabled bool) {

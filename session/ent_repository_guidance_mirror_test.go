@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -82,7 +83,7 @@ func TestGuidanceRequest_should_ReadLegacyRowWithDefaults_When_NewColumnsAreMigr
 	require.NoError(t, repo.Close())
 
 	// Rebuild the pre-feature shape: drop the new index and columns on a raw connection.
-	raw, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_timeout=5000&_fk=1")
+	raw, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithWAL().WithBusyTimeout(5*time.Second).WithForeignKeys().Build())
 	require.NoError(t, err)
 	_, err = raw.Exec(`DROP INDEX IF EXISTS guidancerequest_asker_session_uuid_hook_call_id`)
 	require.NoError(t, err)

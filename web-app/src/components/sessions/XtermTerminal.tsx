@@ -32,9 +32,16 @@ import { safeFit, safeProposeDimensions } from "@/lib/terminal/safeFit";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 import { cursorCellRect, registerTerminalCursorSource } from "@/lib/terminal/cursorRect";
 import { pointToCell, rafThrottlePoint, getTerminalRowText, computeMagnifierPosition, type CellGeometry } from "@/lib/terminal/touchDrag";
-import { isMouseTracking } from "@/lib/terminal/mouseTracking";
+import { copyToClipboard } from "@/lib/clipboard";
+import { browserClipboardEnv } from "@/lib/terminal/clipboardEnv";
+import { createClipboardActions } from "@/lib/terminal/terminalClipboard";
+import { xtermClipboardSurface } from "@/lib/terminal/xtermClipboardSurface";
 import { createScrollbarUpdater, type ScrollbarUpdater } from "@/lib/terminal/scrollbarUpdater";
 import { mobileDebug } from "@/lib/terminal/mobileDebug";
+import { isTouchPrimary as isTouchPrimaryDevice } from "@/lib/terminal/mobileInput/platform";
+import type { SendResult } from "@/lib/terminal/mobileInput/types";
+import type { MobileInputHandle, MobileInputRendererProps } from "@/lib/terminal/mobileInput/useMobileInput";
+import { useRendererMobileInput } from "@/lib/terminal/mobileInput/useRendererMobileInput";
 import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
 import {
   postFitRepaint,
@@ -214,7 +221,7 @@ export interface XtermTerminalProps {
   /**
    * Callback when user types in terminal
    */
-  onData?: (data: string) => void;
+  onData?: (data: string) => SendResult | void;
 
   /**
    * Callback when terminal is resized
@@ -256,6 +263,8 @@ export interface XtermTerminalProps {
    * keeps writing to xterm either way.
    */
   windowActive?: boolean;
+  /** Set by the pool only when the mobile input layer is active for this terminal. */
+  mobileInput?: MobileInputRendererProps;
 }
 
 export interface XtermTerminalHandle {
@@ -311,6 +320,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   isAltScreenActive,
   onAltScreenScrollUp,
   windowActive = true,
+  mobileInput,
 }, ref) => {
   const windowActiveRef = useRef(windowActive);
   windowActiveRef.current = windowActive;
@@ -393,6 +403,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   const gestureScrollEnabled = scrollGesture?.gestureScrollEnabled ?? true;
 
+  // The mobile input layer (Android class only): its handle routes focus; absent, the terminal focuses itself.
+  const layerRef = useRef<MobileInputHandle | null>(null);
+  const focusTerminal = useCallback(() => {
+    if (!layerRef.current?.focus()) terminalRef.current?.focus();
+  }, []);
+  const blurInput = useCallback(() => layerRef.current?.blur() ?? false, []);
+
   // Unified mobile gesture state machine (R4.3).
   // Replaces the conflicting useTouchScroll + useMobileTerminalGestures hooks:
   // having both register touchmove caused double-scroll and prevented selection.
@@ -414,16 +431,18 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     onPageKeysSent: scrollGesture?.onPageKeysSent,
     onGestureActiveChange: scrollGesture?.onGestureActiveChange,
     isInputBusy: scrollGesture?.isInputBusy,
+    focusTerminal,
+    blurInput,
     mouseModeOverride: scrollGesture?.mouseModeOverride,
     isSgrMouseEncoding: () => sgrMouseEncodingRef.current,
   });
 
   // Show the "Copied/Copy failed" toast via DOM mutation (no re-render).
   // Defined as useCallback with empty deps — only reads stable refs.
-  const showToast = useCallback((status: 'copied' | 'failed') => {
+  const showToast = useCallback((status: 'copied' | 'failed' | 'paste-blocked') => {
     const toast = toastRef.current;
     if (!toast) return;
-    toast.textContent = status === 'copied' ? 'Copied' : 'Copy failed';
+    toast.textContent = status === 'copied' ? 'Copied' : status === 'failed' ? 'Copy failed' : 'Clipboard blocked: press Ctrl+V to paste';
     // Remove animation class first to allow restart; force reflow before re-adding.
     toast.classList.remove(styles.copiedToastVisible);
     toast.style.display = 'block';
@@ -437,90 +456,38 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     }, 1500);
   }, []);
 
-  // execCommand fallback for browsers that deny clipboard API
-  const execCommandCopy = useCallback((text: string): boolean => {
-    const el = document.createElement('textarea');
-    el.value = text;
-    document.body.appendChild(el);
-    el.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(el);
-    return ok;
-  }, []);
+  // Copy/paste behavior is defined once for both renderers (lib/terminal/terminalClipboard.ts).
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+  const [clipboard] = useState(() =>
+    createClipboardActions(
+      () => (terminalRef.current ? xtermClipboardSurface(terminalRef.current) : null),
+      browserClipboardEnv((ok) => showToastRef.current(ok ? 'copied' : 'failed')),
+    ),
+  );
 
   // "Copy all" scrollback handler — extracts plain text from xterm buffer (no ANSI codes).
   // Uses onPointerDown (not onClick) to stay in a synchronous user-gesture context for
   // iOS Safari, which only allows clipboard writes inside unbroken gesture handlers.
   const handleCopyScrollbackPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-
-    const buffer = terminal.buffer.active;
-    const lineStrings: string[] = [];
-    for (let i = 0; i < buffer.length; i++) {
-      const line = buffer.getLine(i);
-      if (line) {
-        // translateToString(true) trims trailing whitespace — gives clean plain text
-        lineStrings.push(line.translateToString(true));
-      }
-    }
-    const text = lineStrings.join('\n').trimEnd();
-    if (!text) return;
-
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text)
-        .then(() => showToast('copied'))
-        .catch(() => showToast(execCommandCopy(text) ? 'copied' : 'failed'));
-    } else {
-      showToast(execCommandCopy(text) ? 'copied' : 'failed');
-    }
-  }, [showToast, execCommandCopy]);
+    clipboard.copyAll();
+  }, [clipboard]);
 
   // Floating Copy button pointer-down handler — synchronous user gesture path (iOS safe)
   const handleCopyButtonPointerDown = useCallback((e: React.PointerEvent) => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    const text = terminal.getSelection();
-    if (!text) return;
-
     if (copyButtonRef.current) {
       copyButtonRef.current.style.display = 'none';
     }
-
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(() => {
-        showToast('copied');
-      }).catch(() => {
-        const ok = execCommandCopy(text);
-        showToast(ok ? 'copied' : 'failed');
-      });
-    } else {
-      const ok = execCommandCopy(text);
-      showToast(ok ? 'copied' : 'failed');
-    }
+    clipboard.copySelection();
     e.preventDefault();
-  }, [showToast, execCommandCopy]);
+  }, [clipboard]);
 
   // Context menu action handlers
   const handleMenuCopy = useCallback(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    const text = terminal.getSelection();
-    if (!text) return;
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text)
-        .then(() => showToast('copied'))
-        .catch(() => {
-          const ok = execCommandCopy(text);
-          showToast(ok ? 'copied' : 'failed');
-        });
-    } else {
-      const ok = execCommandCopy(text);
-      showToast(ok ? 'copied' : 'failed');
-    }
+    clipboard.copySelection();
     setContextMenuState(null);
-  }, [showToast, execCommandCopy]);
+  }, [clipboard]);
 
   const handleMenuSelectAll = useCallback(() => {
     terminalRef.current?.selectAll();
@@ -528,13 +495,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   }, []);
 
   const handleMenuPaste = useCallback(() => {
-    navigator.clipboard.readText().then((text) => {
-      onDataRef.current?.(text);
-    }).catch(() => {
-      // Clipboard read permission denied — silently ignore
-    });
+    void clipboard.paste().then((result) => result === 'blocked' && showToast('paste-blocked'));
     setContextMenuState(null);
-  }, []);
+  }, [clipboard, showToast]);
 
   const handleContextMenuDismiss = useCallback(() => {
     setContextMenuState(null);
@@ -542,14 +505,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   // Link tap menu action handlers (touch devices only)
   const handleLinkMenuCopy = useCallback((uri: string) => {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(uri)
-        .then(() => showToast('copied'))
-        .catch(() => showToast(execCommandCopy(uri) ? 'copied' : 'failed'));
-    } else {
-      showToast(execCommandCopy(uri) ? 'copied' : 'failed');
-    }
-  }, [showToast, execCommandCopy]);
+    void copyToClipboard(uri).then((ok) => showToast(ok ? 'copied' : 'failed'));
+  }, [showToast]);
 
   const handleLinkMenuOpen = useCallback((uri: string) => {
     // Mirrors @xterm/addon-web-links' own default handler (window.open + null opener)
@@ -733,7 +690,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     // true once on mount — pointer:coarse means a touch-primary device. Hoisted here
     // (rather than only at its other use-site below) so the WebLinksAddon handler can
     // read it too.
-    const isTouchPrimary = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+    const isTouchPrimary = isTouchPrimaryDevice();
 
     // Create and load addons
     const fitAddon = new FitAddon();
@@ -810,7 +767,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       const termElement = terminal.element;
       const handleContextMenu = (e: MouseEvent) => {
         e.preventDefault(); // always suppress browser native menu
-        if (isMouseTracking(terminal)) return; // let PTY handle right-click via VT sequences
+        if (!clipboard.canOpenMenu()) return; // let PTY handle right-click via VT sequences
         setContextMenuState({ x: e.clientX, y: e.clientY });
       };
       if (termElement) {
@@ -825,49 +782,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminal.attachCustomKeyEventHandler?.((event: KeyboardEvent): boolean => {
         if (event.type !== 'keydown') return true;
 
-        const isCopyShortcut = (event.ctrlKey || event.metaKey) && event.key === 'c';
         const isSelectAllShortcut = (event.ctrlKey || event.metaKey) && event.key === 'a';
 
-        if (isCopyShortcut && terminal.getSelection().length > 0) {
-          const text = terminal.getSelection();
-          const toast = toastRef.current;
-          const showToastInHandler = (status: 'copied' | 'failed') => {
-            if (!toast) return;
-            toast.textContent = status === 'copied' ? 'Copied' : 'Copy failed';
-            toast.classList.remove(styles.copiedToastVisible);
-            toast.style.display = 'block';
-            void toast.offsetHeight;
-            toast.classList.add(styles.copiedToastVisible);
-            setTimeout(() => {
-              if (toastRef.current) {
-                toastRef.current.style.display = 'none';
-                toastRef.current.classList.remove(styles.copiedToastVisible);
-              }
-            }, 1500);
-          };
-          const execFallback = (t: string): boolean => {
-            const el = document.createElement('textarea');
-            el.value = t;
-            document.body.appendChild(el);
-            el.select();
-            const ok = document.execCommand('copy');
-            document.body.removeChild(el);
-            return ok;
-          };
-          if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(text)
-              .then(() => showToastInHandler('copied'))
-              .catch(() => {
-                const ok = execFallback(text);
-                showToastInHandler(ok ? 'copied' : 'failed');
-              });
-          } else {
-            const ok = execFallback(text);
-            showToastInHandler(ok ? 'copied' : 'failed');
-          }
-          terminal.clearSelection();
-          return false;
-        }
+        if (clipboard.interceptCopyKey(event)) return false;
 
         if (isSelectAllShortcut) {
           terminal.selectAll();
@@ -1731,7 +1648,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current?.clear();
     },
     focus: () => {
-      terminalRef.current?.focus();
+      if (!layerRef.current?.focus()) terminalRef.current?.focus();
     },
     fit: () => {
       requestFitRef.current({ forceRepaint: true, reason: "manual-resize" });
@@ -1756,9 +1673,20 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     },
   }), []);
 
+  const layer = useRendererMobileInput({
+    renderer: "xterm",
+    mobileInput,
+    onDataRef,
+    containerRef,
+    getHelperTextarea: () => terminalRef.current?.textarea,
+    bracketedPasteEnabled: () => terminalRef.current?.modes.bracketedPasteMode ?? false,
+  });
+  layerRef.current = layer.handle;
+
   return (
     <div className={styles.container} data-context="terminal">
       <div ref={containerRef} className={styles.terminal} data-gesture-scroll={gestureScrollEnabled ? "on" : "off"} />
+      {layer.layerActive && <div ref={layer.layerContainerRef} data-mobile-input-host />}
       {/* Custom left-side scrollbar — stays out of the right-side window-scrollbar zone.
           Only visible when scrollback content exists (controlled via updateScrollbar). */}
       <div ref={scrollTrackRef} className={styles.scrollTrack} style={{ display: 'none' }}>

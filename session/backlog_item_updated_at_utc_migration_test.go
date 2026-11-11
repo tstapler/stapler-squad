@@ -28,7 +28,7 @@ func TestRunBacklogItemUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows
 	localTime := time.Date(2026, 1, 15, 10, 30, 0, 123456789, time.FixedZone("PDT", -7*60*60))
 	require.NotEqual(t, time.UTC, localTime.Location())
 
-	created, err := repo.client.BacklogItem.Create().
+	created, err := repo.Client.BacklogItem.Create().
 		SetTitle("pre-fix item with Local updated_at").
 		SetStatus("review").
 		SetUpdatedAt(localTime).
@@ -38,7 +38,7 @@ func TestRunBacklogItemUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows
 
 	require.NoError(t, runBacklogItemUpdatedAtUTCBackfill(ctx, repo))
 
-	migrated, err := repo.client.BacklogItem.Get(ctx, created.ID)
+	migrated, err := repo.Client.BacklogItem.Get(ctx, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, time.UTC, migrated.UpdatedAt.Location(), "backfill must normalize the row to UTC")
 	assert.True(t, migrated.UpdatedAt.Equal(localTime), "backfill must preserve the exact same instant, not just reformat arbitrarily")

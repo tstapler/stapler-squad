@@ -47,7 +47,7 @@ specific *kind of record*, not general documentation:
 | `docs/architecture/decisions/` | Also ADRs — pre-existing overlap with `docs/adr/`, not reconciled as part of the 2026-08 migration; out of scope for that change |
 | `docs/architecture/` | Architecture audits and design docs outside `decisions/` |
 | `docs/bugs/open/`, `docs/bugs/fixed/` | Point-in-time bug tracking records |
-| `docs/registry/` | Generated feature-registry JSON + its own schema/README |
+| `docs/registry/` | Generated feature-registry JSON + its own schema/README; `docs/registry/docs-coverage/` holds the hand-written per-feature docs sidecars (how-to: `docs/how-to/add-docs-coverage-for-a-feature.md`) |
 | `docs/tasks/` | Point-in-time task/investigation docs |
 | `docs/testing/` | Testing-strategy docs |
 | `docs/api/` | API-surface docs |
@@ -55,7 +55,6 @@ specific *kind of record*, not general documentation:
 | `docs/reviews/` | Point-in-time review writeups |
 | `docs/project_plans/` (and top-level `project_plans/`) | SDD workflow artifacts (requirements/research/plan/validation docs per project) |
 | `docs/archive/` | Retired docs kept for history |
-| `docs/tui-test-project/` | A specific test project's own docs |
 | Flat top-level `docs/*.md` files (e.g. `docs/gap-analysis.md`, `docs/PROFILING.md`) | Historical, point-in-time documents predating this hierarchy — not retroactively migrated |
 
 None of these are touched by the Diataxis hierarchy above, and historical

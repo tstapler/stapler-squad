@@ -111,7 +111,7 @@ func TestGetBacklogItem_should_ResolveByEitherLegacyUUIDOrPublicId_When_BothForm
 // (including public_id) is left at its default/unset value.
 func seedBacklogItemWithNoPublicID(t *testing.T, repo *EntRepository, title string) uuid.UUID {
 	t.Helper()
-	row, err := repo.client.BacklogItem.Create().SetTitle(title).Save(context.Background())
+	row, err := repo.Client.BacklogItem.Create().SetTitle(title).Save(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, row.PublicID, "seeded row must start with no public_id")
 	return row.ID
@@ -137,7 +137,7 @@ func TestBackfillBacklogItemPublicIDs_should_PopulateAllRows_When_RunOnUnbackfil
 
 	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		row, err := repo.client.BacklogItem.Get(ctx, id)
+		row, err := repo.Client.BacklogItem.Get(ctx, id)
 		require.NoError(t, err)
 		require.True(t, IsBacklogItemIDShape(row.PublicID), "row %s must have a bl_-prefixed public id after backfill, got %q", id, row.PublicID)
 		_, err = ParseBacklogItemID(row.PublicID)
@@ -161,17 +161,17 @@ func TestBackfillBacklogItemPublicIDs_should_BeNoOp_When_RunTwiceOnAlreadyBackfi
 	id := seedBacklogItemWithNoPublicID(t, repo, "backfill idempotency target")
 	require.NoError(t, repo.BackfillBacklogItemPublicIDs(ctx))
 
-	before, err := repo.client.BacklogItem.Get(ctx, id)
+	before, err := repo.Client.BacklogItem.Get(ctx, id)
 	require.NoError(t, err)
 	require.True(t, IsBacklogItemIDShape(before.PublicID), "precondition: first backfill run must have populated a public id")
 
 	require.NoError(t, repo.BackfillBacklogItemPublicIDs(ctx))
 
-	after, err := repo.client.BacklogItem.Get(ctx, id)
+	after, err := repo.Client.BacklogItem.Get(ctx, id)
 	require.NoError(t, err)
 	assert.Equal(t, before.PublicID, after.PublicID, "re-running the backfill on an already-backfilled row must not change its public id")
 
-	count, err := repo.client.BacklogItem.Query().Where(backlogitem.PublicIDIsNil()).Count(ctx)
+	count, err := repo.Client.BacklogItem.Query().Where(backlogitem.PublicIDIsNil()).Count(ctx)
 	require.NoError(t, err)
 	assert.Zero(t, count, "no row should be reported unbackfilled after the backfill has already run")
 }
@@ -212,7 +212,7 @@ func TestBackfillBacklogItemPublicIDs_should_NotDoubleAssign_When_TwoInstancesRa
 
 	seen := make(map[string]bool, rowCount)
 	for _, id := range ids {
-		row, err := repo1.client.BacklogItem.Get(ctx, id)
+		row, err := repo1.Client.BacklogItem.Get(ctx, id)
 		require.NoError(t, err)
 		require.True(t, IsBacklogItemIDShape(row.PublicID), "row %s must have exactly one valid public id after the race, got %q", id, row.PublicID)
 		assert.False(t, seen[row.PublicID], "public id %q assigned to more than one row after the race", row.PublicID)

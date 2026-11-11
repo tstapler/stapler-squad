@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "e2eavoided_lib",
+    srcs = [
+        "main.go",
+        "time.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/e2eavoided",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "e2eavoided",
+    embed = [":e2eavoided_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "e2eavoided_test",
+    srcs = ["main_test.go"],
+    data = glob(["testdata/**"]),  # keep
+    embed = [":e2eavoided_lib"],
+)

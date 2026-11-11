@@ -1,0 +1,68 @@
+{
+  "id": "gboard-longpress-accent-replace",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Long-press e then pick the accented letter: the composing region e is replaced by e-acute. Source: https://lists.w3.org/Archives/Public/public-editing-tf/2017Jun/0007.html",
+  "events": [
+    {
+      "kind": "compositionstart",
+      "t": 10
+    },
+    {
+      "kind": "compositionupdate",
+      "data": "e",
+      "t": 20
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "e",
+      "value": "e",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 30
+    },
+    {
+      "kind": "input",
+      "value": "e",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 40
+    },
+    {
+      "kind": "compositionupdate",
+      "data": "é",
+      "t": 50
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertCompositionText",
+      "data": "é",
+      "value": "é",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 60
+    },
+    {
+      "kind": "input",
+      "value": "é",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 70
+    },
+    {
+      "kind": "compositionend",
+      "data": "é",
+      "t": 80
+    },
+    {
+      "kind": "input",
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 90
+    }
+  ],
+  "expectedBytes": "eé",
+  "finalText": "é"
+}

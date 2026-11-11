@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gotool",
+    srcs = ["gotool.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/internal/gotool",
+    visibility = ["//tools/lint:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gotool",
+    visibility = ["//tools/lint:__subpackages__"],
+)

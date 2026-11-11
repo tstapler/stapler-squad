@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gitprovider",
+    srcs = ["gitprovider.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/gitprovider",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session/git/backend",
+        "//session/git/backend/cli",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gitprovider",
+    visibility = ["//visibility:public"],
+)

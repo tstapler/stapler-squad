@@ -49,7 +49,7 @@ func TestBroadcastApprovalNotification_ShouldStampUnrenderable_OnlyWhenTheInputC
 			ch, _ := bus.Subscribe(ctx)
 			h := NewApprovalHandler(NewApprovalStore(""), nil, bus)
 
-			h.broadcastApprovalNotification("sess-1", &PendingApproval{ID: "appr-1", SessionID: "sess-1", ToolName: "Bash", ToolInput: tt.input})
+			h.BroadcastApprovalNotification("sess-1", &PendingApproval{ID: "appr-1", SessionID: "sess-1", ToolName: "Bash", ToolInput: tt.input})
 
 			ev := <-ch
 			if tt.want {

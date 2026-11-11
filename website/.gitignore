@@ -22,3 +22,6 @@ pnpm-debug.log*
 
 # macOS-specific files
 .DS_Store
+
+# tour-fixture test scratch sites (tests/helpers/tour-fixture.ts)
+.tour-fixtures/

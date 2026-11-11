@@ -77,12 +77,23 @@ linters:
             - "**/session/**"
             - "**/config/**"
             - "**/log/**"
-            - "!**/*_test.go"
+            - "!**/*_test.go" # test files are covered by `make ready-test-inversions` (tools/bzl/scoping), not here
           deny:
             - pkg: "github.com/tstapler/stapler-squad/server"
               desc: "core packages (session/config/log) must not import the server layer"
             - pkg: "github.com/tstapler/stapler-squad/server/**"
               desc: "core packages must not import server subpackages"
+        # Packages split out by ADR-010 (Epic 13) stay off the ent ORM: persistence reaches them through the core's
+        # interfaces. Transitive reach is checked by `scoping boundaries` (tools/bzl/scoping/boundaries.txt).
+        scoped_packages_off_ent:
+          files:
+            - "**/session/prpoller/**"
+            - "**/services/sessionbundle/**"
+            - "**/services/devtools/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session/ent"
+              desc: "ADR-010 scoped packages must not import the ent ORM directly"
         # Allow-list rather than a deny-list: depguard's `/**` deny globs did not match
         # subpackages (e.g. server/web) in a probe, so a deny rule here would silently pass.
         isolate_threatscan_stdlib_only:
@@ -255,27 +266,27 @@ linters:
             - "!**/server/services/analytics_escape_service_test.go"
             - "!**/server/services/workflow_service_test.go"
             - "!**/server/services/workflow_service.go"
-            - "!**/server/services/backlog_service_query.go"
-            - "!**/server/services/backlog_service_lifecycle.go"
-            - "!**/server/services/backlog_service_triage.go"
+            - "!**/server/services/backlogsvc/backlog_service_query.go"
+            - "!**/server/services/backlogsvc/backlog_service_lifecycle.go"
+            - "!**/server/services/backlogsvc/backlog_service_triage.go"
             # TriggerTriage's ent.IsNotFound check moved here from
             # backlog_service_triage.go above (2026-09-12 hotspot split) — same
             # pre-existing usage, not newly introduced.
-            - "!**/server/services/backlog_service_trigger_triage.go"
+            - "!**/server/services/backlogsvc/backlog_service_trigger_triage.go"
             - "!**/server/services/session_service.go"
             # Newly surfaced (2026-08-23) by fixing the files: glob bug above — this rule was
             # silently matching 0 files in server/services/ before the fix, so these pre-existing
             # session/ent imports were never actually checked despite not being on the exclusion
             # list. Same family as the backlog_service_*.go / session_summary_service.go splits
             # already grandfathered above; not newly introduced.
-            - "!**/server/services/backlog_service_pipeline_mode.go"
-            - "!**/server/services/backlog_service_ship.go"
-            - "!**/server/services/backlog_service_ship_status.go"
+            - "!**/server/services/backlogsvc/backlog_service_pipeline_mode.go"
+            - "!**/server/services/backlogsvc/backlog_service_ship.go"
+            - "!**/server/services/backlogsvc/backlog_service_ship_status.go"
             - "!**/server/services/session_summary_service_test.go"
-            - "!**/server/services/backlog_service_sync.go"
+            - "!**/server/services/backlogsvc/backlog_service_sync.go"
             - "!**/server/services/github_webhook_handler.go"
             - "!**/server/services/session_summary_service.go"
-            - "!**/server/services/backlog_service_pipeline_mode_test.go"
+            - "!**/server/services/backlogsvc/backlog_service_pipeline_mode_test.go"
             - "!**/server/services/webhook_trigger_common.go"
             - "!**/server/services/github_webhook_handler_test.go"
             - "!**/server/services/generic_webhook_handler_test.go"
@@ -309,7 +320,7 @@ linters:
       forbid:
         - pattern: ^fmt\.Print(f|ln)?$
           msg: "use the log package instead of fmt.Print* in production code"
-        - pattern: '(?m)exec\.Command$'
+        - pattern: '(?m)\bexec\.Command$'
           msg: "use exec.CommandContext with context.WithTimeout; raw exec.Command can hang indefinitely"
         - pattern: 'log\.(InfoLog|WarningLog|ErrorLog|DebugLog)\.Printf'
           msg: "use slog.InfoContext(ctx, ...) in new code; legacy log.XxxLog.Printf is being migrated"
@@ -344,6 +355,10 @@ linters:
         linters: [gocyclo, gocognit, funlen, revive, dupl]
       - path: "session/ent/"
         linters: [gocyclo, gocognit, funlen, revive, dupl]
+      # tools/bzl and tools/ci are standalone Bazel/CI developer CLIs (never linked into the product
+      # binary): run-once main packages with flag-style globals, shell-outs and long run() functions.
+      - path: "^tools/(bzl|ci)/"
+        linters: [forbidigo, gochecknoglobals, gocyclo, gocognit, funlen, revive, dupl, prealloc]
       # exhaustive enforces DetectedStatus switch coverage in session/detection/
       # and Reason switch coverage in session/lifecycle/ only. All other
       # packages use iota types with intentional default: clauses.
@@ -430,7 +445,7 @@ linters:
         linters: [forbidigo]
         text: "LoadInstances"
       # Remaining services with intentional LoadInstances uses (health, backlog, etc.)
-      - path: "server/services/(approval_handler|review_queue_service|notification_service|backlog_service|backlog_service_sync|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
+      - path: "server/services/([a-z]+/)?(approval_handler|review_queue_service|notification_service|backlog_service|backlog_service_sync|unfinished_work_service|terminal_websocket|github_service|session_image_upload_handler)\\.go"
         linters: [forbidigo]
         text: "LoadInstances"
       - path: "session/health\\.go"
@@ -505,12 +520,12 @@ linters:
         text: "log\\."
       # ──────────────────────────────────────────────────────────────────────────
       # forbidigo: ent.IsNotFound boundary guard
-      # server/services/backlog_service*.go still calls ent.IsNotFound directly —
+      # server/services/backlogsvc/backlog_service*.go still calls ent.IsNotFound directly —
       # excluded until the storage-interface cleanup refactor (P6). The glob covers
       # the base file AND all split files created in Phase 3 (P1):
       # backlog_service_query.go, backlog_service_lifecycle.go, backlog_service_triage.go
       # removed-in: refactor/storage-interface-cleanup (P6)
-      - path: "server/services/backlog_service.*\\.go"
+      - path: "server/services/backlogsvc/backlog_service.*\\.go"
         linters: [forbidigo]
         text: "ent\\.IsNotFound"
       # session/ is the legitimate ent-wrapping layer; allowed to reference ent.IsNotFound

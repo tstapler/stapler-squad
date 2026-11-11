@@ -52,7 +52,7 @@ func TestInjectHooksConfig_ShouldNotRestrictPostToolUseToATool_SoAskUserQuestion
 
 	var hooks map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(readSettings(t, dir)["hooks"], &hooks))
-	var groups []hookMatcherGroup
+	var groups []HookMatcherGroup
 	require.NoError(t, json.Unmarshal(hooks["PostToolUse"], &groups))
 
 	require.NotEmpty(t, groups)

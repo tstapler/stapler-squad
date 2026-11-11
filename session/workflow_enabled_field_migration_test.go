@@ -5,16 +5,16 @@ import (
 	"database/sql"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 func boolPtr(v bool) *bool { return &v }
 
 func TestWorkflowEnabledColumnPreexisted_should_ReturnFalse_When_TableDoesNotExist(t *testing.T) {
 	t.Parallel()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -23,7 +23,7 @@ func TestWorkflowEnabledColumnPreexisted_should_ReturnFalse_When_TableDoesNotExi
 
 func TestWorkflowEnabledColumnPreexisted_should_ReturnFalse_When_TableExistsWithoutEnabledColumn(t *testing.T) {
 	t.Parallel()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	defer db.Close()
 	_, err = db.Exec(`CREATE TABLE workflows (id TEXT PRIMARY KEY, slug TEXT, cron_enabled BOOLEAN)`)
@@ -34,7 +34,7 @@ func TestWorkflowEnabledColumnPreexisted_should_ReturnFalse_When_TableExistsWith
 
 func TestWorkflowEnabledColumnPreexisted_should_ReturnTrue_When_EnabledColumnAlreadyExists(t *testing.T) {
 	t.Parallel()
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	defer db.Close()
 	_, err = db.Exec(`CREATE TABLE workflows (id TEXT PRIMARY KEY, slug TEXT, cron_enabled BOOLEAN, enabled BOOLEAN)`)
@@ -110,14 +110,14 @@ func TestNewEntRepository_should_NotReDisableLegitimatelyEnabledTrigger_When_Reo
 	})
 	require.NoError(t, err)
 	require.True(t, created.Enabled)
-	require.NoError(t, first.client.Close())
+	require.NoError(t, first.Client.Close())
 
 	// Second "boot": reopen the SAME database file, simulating a server restart. The
 	// enabled column now already exists, so workflowEnabledColumnPreexisted must return
 	// true and the backfill must be skipped entirely.
 	second, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
-	defer second.client.Close()
+	defer second.Client.Close()
 
 	reloaded, err := NewEntWorkflowRepository(second.GetEntClient()).GetByID(context.Background(), created.ID)
 	require.NoError(t, err)

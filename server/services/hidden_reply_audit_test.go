@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 const (
@@ -39,7 +40,7 @@ type auditEnv struct {
 
 func newAuditEnv(t *testing.T) *auditEnv {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	e := &auditEnv{mfs: newMemFS(), clk: newGateTestClock(), timeout: make(chan time.Time, 1), degraded: map[string]int{}}
 	lg, warns := newLogCapture()
 	e.warns = warns
@@ -286,7 +287,7 @@ func TestFlagChangeAudit_ShouldGiveEachFlipItsOwnChangeIDAndIncreasingSeq_WhenFl
 }
 
 func TestUpdateFeatureFlag_ShouldRollBackADefaultOnFlagByDeletion_WhenNoAuditIsConfigured(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	svc.SetFeatureController(flagLoosening, &fakeFeatureController{enabled: true, failDisable: assert.AnError})
 	_, err := svc.UpdateFeatureFlag(context.Background(),

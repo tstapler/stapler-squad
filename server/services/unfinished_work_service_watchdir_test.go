@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -29,7 +30,7 @@ func setupUWSFixtureWithWatchDirWatcher(t *testing.T) (svc *UnfinishedWorkServic
 	scanner = unfinished.NewScanner(bus, stateStore)
 	watchDirWatcher := unfinished.NewWatchDirWatcher(scanner, stateStore)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc = NewUnfinishedWorkService(scanner, stateStore, bus, storage, watchDirWatcher)
 
 	cleanup = func() {

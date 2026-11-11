@@ -68,16 +68,7 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 		backend = BackendTmux
 	}
 
-	switch backend {
-	case BackendTmux:
-		return newTmuxBackendFromOpts(opts), nil
-	case BackendNative:
-		return NewNativeProcessManager(opts), nil
-	case BackendTymux:
-		return newTymuxBackendFromOpts(opts), nil
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backend)
-	}
+	return buildBackend(backend, opts)
 }
 
 // newTymuxBackendFromOpts constructs a TymuxBackend wired to a real, live

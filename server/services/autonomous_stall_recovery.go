@@ -329,7 +329,7 @@ func (a *AutonomousOrchestrationService) publishNudged(sessionUUID, title, itemI
 	a.bus.Publish(events.NewNotificationEvent(
 		sessionUUID, title, "autonomous-nudged-"+sessionUUID,
 		int32(10), // NotificationType_INFO
-		derivePriority(false, false),
+		DerivePriority(false, false),
 		stopTitle(rec.Recovery),
 		fmt.Sprintf("Session '%s': %s", title, plainSummary(rec.reason(), rec.State, rec.Recovery)),
 		events.SessionScopedMetadata(nil, itemID),

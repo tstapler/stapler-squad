@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 type rejectAllValidator struct{}
@@ -61,15 +61,15 @@ func TestAuth_should_ExemptOnlyPreLoginAssetPaths_When_NoSession(t *testing.T) {
 }
 
 func TestAuth_should_ExemptClaimGossipEndpoints_When_PeerHasNoPasskeySession(t *testing.T) {
-	code, reached := serveThroughAuth(http.MethodPost, session.ClaimAdvertisementEndpointPath)
+	code, reached := serveThroughAuth(http.MethodPost, hostclaim.ClaimAdvertisementEndpointPath)
 	assert.True(t, reached)
 	assert.Equal(t, http.StatusOK, code)
 
-	code, reached = serveThroughAuth(http.MethodGet, session.ClaimLookupEndpointPath+"?url=https://github.com/o/r/issues/1")
+	code, reached = serveThroughAuth(http.MethodGet, hostclaim.ClaimLookupEndpointPath+"?url=https://github.com/o/r/issues/1")
 	assert.True(t, reached)
 	assert.Equal(t, http.StatusOK, code)
 
-	code, reached = serveThroughAuth(http.MethodGet, session.SessionFederationEndpointPath)
+	code, reached = serveThroughAuth(http.MethodGet, hostclaim.SessionFederationEndpointPath)
 	assert.True(t, reached)
 	assert.Equal(t, http.StatusOK, code)
 }

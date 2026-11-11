@@ -18,7 +18,7 @@ import { baseUrl } from './helpers/base-url';
 const BASE_URL = baseUrl();
 const OUT = process.env.MC1_OUT || '/tmp/mc1-contrast';
 const MODES = ['brightfill', 'whitebg', 'brightwhitebg', 'yellowbg', 'syntax'] as const;
-const THEMES = (process.env.MC1_THEMES || 'light,dark,clean,matrix,cyberpunk77,wh40k').split(',');
+const THEMES = (process.env.MC1_THEMES || 'light,dark,clean,matrix,cyberpunk77,grimdark').split(',');
 const ROOT_SELECTORS = [
   '[data-testid="toast-stack"]',
   '[data-testid="notification-tray"]',

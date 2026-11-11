@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/conditional"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // piSupportFlagName mirrors config.FeaturePiSupport so knownFeatureFlags below
@@ -26,7 +27,7 @@ const piSupportFlagName = config.FeaturePiSupport
 // CreateBacklogItem's default-resolution branch (backlog_service_lifecycle.go)
 // so the flag name can't drift between where it's declared and where it's
 // read.
-const sddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
+const SddDefaultPipelineFlagName = "backlog:sdd-default-pipeline"
 
 // blockApprovalOnCIFailureFlagName is shared between knownFeatureFlags below and
 // ApprovalService.ResolveApproval's CI-red guard (approval_service.go) so the flag
@@ -36,14 +37,14 @@ const blockApprovalOnCIFailureFlagName = "review:block-approval-on-ci-failure"
 // workspacePeersNudgeFlagName is shared between knownFeatureFlags below and
 // workspacePeersBlockFor below so the flag name can't drift between where it's declared and
 // where it's read.
-const workspacePeersNudgeFlagName = "session:workspace-peers-nudge"
+const WorkspacePeersNudgeFlagName = "session:workspace-peers-nudge"
 
 // backlogFlagName gates every BacklogService RPC (server.go's feature-flag interceptor).
-const backlogFlagName = "backlog"
+const BacklogFlagName = "backlog"
 
 // BacklogFlagEnabled reports the live state of the backlog flag, read per request.
 func BacklogFlagEnabled() bool {
-	return config.LoadConfig().GetFeatureFlag(backlogFlagName)
+	return config.LoadConfig().GetFeatureFlag(BacklogFlagName)
 }
 
 // programCLIFlagProbeFlagName is the kill switch for the ProbeProgram RPC.
@@ -54,7 +55,7 @@ const programCLIFlagProbeFlagName = "programs:cli-flag-probe"
 // config on every call so a Settings toggle applies with no restart.
 func ProgramCLIFlagProbeEnabled() bool {
 	return config.LoadConfig().GetFeatureFlagWithDefault(
-		programCLIFlagProbeFlagName, featureFlagDefault(programCLIFlagProbeFlagName))
+		programCLIFlagProbeFlagName, FeatureFlagDefault(programCLIFlagProbeFlagName))
 }
 
 // ProgramCLIFlagProbeGatedMethod is the SessionService method the kill switch gates.
@@ -120,12 +121,12 @@ func (HandoffSummaryFeatureController) IsEnabled() bool {
 // terminalResyncCorrelationIDFlagName is shared between knownFeatureFlags below and
 // handleCurrentPaneRequest's resync_id echo (connectrpc_websocket.go) so the flag name
 // can't drift between where it's declared and where it's read.
-const terminalResyncCorrelationIDFlagName = "terminal:resync-correlation-id"
+const TerminalResyncCorrelationIDFlagName = "terminal:resync-correlation-id"
 
 // terminalResyncSkipStaleDimensionSlowpathFlagName is shared between knownFeatureFlags
 // below and handleCurrentPaneRequest's stale-dimension skip branch (connectrpc_websocket.go)
 // so the flag name can't drift between where it's declared and where it's read.
-const terminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-stale-dimension-slowpath"
+const TerminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-stale-dimension-slowpath"
 
 // terminalResyncExecGateFastLaneFlagName is shared between knownFeatureFlags below and
 // currentResyncOptions' UseFastLane field (connectrpc_websocket.go) so the flag name can't
@@ -133,12 +134,12 @@ const terminalResyncSkipStaleDimensionSlowpathFlagName = "terminal:resync-skip-s
 // this literal (as terminalResyncExecGateFastLaneFlagName there too) rather than importing it,
 // since session cannot import server/services without creating an import cycle — keep both
 // in sync if this flag is ever renamed.
-const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-lane"
+const TerminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-lane"
 
 // terminalResyncCompressionFlagName is shared between knownFeatureFlags below and
 // writeCurrentPaneResponse's envelope-compression branch (connectrpc_websocket.go) so the
 // flag name can't drift between where it's declared and where it's read.
-const terminalResyncCompressionFlagName = "terminal:resync-compression"
+const TerminalResyncCompressionFlagName = "terminal:resync-compression"
 
 // terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName, and
 // terminalResyncBatchingFlagName are pure client-side concerns (see
@@ -147,9 +148,9 @@ const terminalResyncCompressionFlagName = "terminal:resync-compression"
 // consistency with the other four terminal:resync-* flags above, and so
 // knownFeatureFlags/allTerminalResyncFlagNames reference one declaration instead of a
 // raw string literal.
-const terminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
-const terminalResyncStaggerFlagName = "terminal:resync-stagger"
-const terminalResyncBatchingFlagName = "terminal:resync-batching"
+const TerminalResyncVisibilityScopeFlagName = "terminal:resync-visibility-scope"
+const TerminalResyncStaggerFlagName = "terminal:resync-stagger"
+const TerminalResyncBatchingFlagName = "terminal:resync-batching"
 
 const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 
@@ -158,15 +159,15 @@ const worktreeChangeDetectionFlagName = "vcs:worktree-change-detection"
 // duplicate the literal -- see config/config.go for the flag's full
 // documentation and
 // project_plans/app-scrollback-forwarding/implementation/plan.md, Epic 1.5.
-const terminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
+const TerminalAppScrollForwardingClaudeFlagName = config.FeatureAppScrollForwardingClaude
 
 // workspacePeersBlockFor is the single feature-flag gate for the workspace-peers nudge,
 // called by both SessionService.workspacePeersBlockFor (session_service.go) and
 // BacklogService.workspacePeersBlockFor (backlog_service_triage.go) so the two callers can't
 // drift on the gate itself, the same way session.WorkspacePeersBlockForPath already keeps
 // them from drifting on how the nudge is rendered.
-func workspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
-	if !config.LoadConfig().GetFeatureFlag(workspacePeersNudgeFlagName) {
+func WorkspacePeersBlockFor(ctx context.Context, storage *session.Storage, repoPath string) string {
+	if !config.LoadConfig().GetFeatureFlag(WorkspacePeersNudgeFlagName) {
 		return ""
 	}
 	return session.WorkspacePeersBlockForPath(ctx, storage, repoPath)
@@ -184,7 +185,7 @@ const (
 )
 
 func filesFlagEnabled(name string) bool {
-	return config.LoadConfig().GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+	return config.LoadConfig().GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
 }
 
 // FilesEditingEnabled reports whether file editing (WriteFile) is allowed. Default: off.
@@ -254,7 +255,7 @@ var knownFeatureFlags = []struct {
 		description: "Use the mmap-backed pack-index loader for the /unfinished scanner's git storage (session/unfinished/gogitstore) instead of the copy-based loader. See session/unfinished/design/mmap-activation-runbook.md before enabling.",
 	},
 	{
-		name:        sddDefaultPipelineFlagName,
+		name:        SddDefaultPipelineFlagName,
 		description: "New backlog items with no explicitly chosen pipeline mode default to the 'sdd' pipeline mode (research, plan, validate, implement, and an adversarial verify pass before review) instead of the flat default pipeline. Never affects existing items or an item with any explicit pipeline_mode value, including an explicit empty one.",
 	},
 	{
@@ -270,7 +271,7 @@ var knownFeatureFlags = []struct {
 		description: "Block manual Approve when the session's branch has failing GitHub CI. Shows a visible inline explanation instead of a silent no-op; a reviewer can still bypass it per-approval via 'Approve anyway' (audited). Sessions with no associated PR are unaffected. Default: off.",
 	},
 	{
-		name:        workspacePeersNudgeFlagName,
+		name:        WorkspacePeersNudgeFlagName,
 		description: "Auto-inject an 'Other Active Sessions In This Workspace' nudge into every new session's initial prompt. Off by default — use the list_workspace_peers MCP tool on demand instead. Default: off.",
 	},
 	{
@@ -278,7 +279,7 @@ var knownFeatureFlags = []struct {
 		description: "Background completion reviewer: when a backlog item reaches done, run a tool-less one-shot model call that distills learnings for future triage/work/review sessions and appends them to a per-repo memory file under the config dir. Failures are logged, never surfaced. Default: off.",
 	},
 	{
-		name:        crossHostClaimDedupFlagName,
+		name:        CrossHostClaimDedupFlagName,
 		description: "Cross-host duplicate-work prevention: before importing a GitHub issue or creating an item with an external URL, and before dequeuing a queued item, check whether another stapler-squad host already claimed that URL. A blocked import offers 'Import anyway' with an audited reason; a blocked dequeue shows up as a stuck item with an override. Claims are always recorded regardless. Default: off.",
 	},
 	{
@@ -286,32 +287,32 @@ var knownFeatureFlags = []struct {
 		description: "Restart-with-summary: generate an AI handoff summary and restart into a fresh session. Read-only here -- the real toggle is config.json's handoff_summary.enabled key. Default: on.",
 	},
 	{
-		name:        terminalResyncVisibilityScopeFlagName,
+		name:        TerminalResyncVisibilityScopeFlagName,
 		description: "Scope terminal resync-on-visibility-change to only the terminal instance actually in the foreground, instead of every mounted terminal. Applies to newly-focused terminals only — already-open tabs need a reload to pick up the change. Default: off.",
 	},
 	{
-		name:        terminalResyncCorrelationIDFlagName,
+		name:        TerminalResyncCorrelationIDFlagName,
 		description: "Tag each terminal resync request/reply pair with a correlation ID so a stale reply from an earlier resync can't be misapplied to a later one. Not live-updated on already-open tabs. Default: off.",
 	},
 	{
-		name:        terminalResyncSkipStaleDimensionSlowpathFlagName,
+		name:        TerminalResyncSkipStaleDimensionSlowpathFlagName,
 		description: "Skip the stale-dimension slow path for backgrounded terminals during resync, avoiding unnecessary pane-size recalculation for terminals not currently visible. Not live-updated on already-open tabs. Default: off.",
 	},
 	{
-		name:         terminalResyncExecGateFastLaneFlagName,
+		name:         TerminalResyncExecGateFastLaneFlagName,
 		description:  "Route resync's tmux subprocess calls through a dedicated fast-lane slot pool (see TmuxExecGateConfig.ResyncFastLaneSlots) instead of contending with other tmux exec traffic for the shared gate. Default: on (2026-08-25) — without it, a resync-triggered resize's sequential subprocess calls can exceed the client's 4s stall watchdog under exec-gate contention, forcing an unnecessary disconnect+reconnect. Persist an explicit false to opt back out.",
 		defaultValue: true,
 	},
 	{
-		name:        terminalResyncStaggerFlagName,
+		name:        TerminalResyncStaggerFlagName,
 		description: "Stagger resync bursts across multiple terminals instead of firing them all simultaneously, reducing thundering-herd load on the tmux server. Default: off.",
 	},
 	{
-		name:        terminalResyncCompressionFlagName,
+		name:        TerminalResyncCompressionFlagName,
 		description: "Compress terminal resync payloads on the wire to reduce bandwidth for large scrollback resyncs. Default: off.",
 	},
 	{
-		name:        terminalResyncBatchingFlagName,
+		name:        TerminalResyncBatchingFlagName,
 		description: "Batch multiple terminals' resync requests into a single round trip instead of issuing one request per terminal. Default: off.",
 	},
 	{
@@ -332,7 +333,7 @@ var knownFeatureFlags = []struct {
 		description: "Watch each session's .git dir via fsnotify and run a staggered 15s periodic cheap dirty/HEAD check to invalidate the diff-stats and VCS-status caches, letting both widen from a 15s to a 5-minute TTL. Applies to newly-created worktrees only; already-open sessions keep today's 15s pure-TTL behavior until restarted. Default: off.",
 	},
 	{
-		name:        terminalAppScrollForwardingClaudeFlagName,
+		name:        TerminalAppScrollForwardingClaudeFlagName,
 		description: "Forward Claude Code's own PageUp scroll keybinding into its fullscreen conversation view instead of tmux-native scrollback capture, for eligible sessions (AppScrollGate: adapter coverage, alt-screen active, idle status, exactly one connected viewer). Flag-off always falls through to the unchanged tmux-native scrollback path, regardless of AppScrollGate's verdict. Default: off.",
 	},
 	{
@@ -372,6 +373,29 @@ var knownFeatureFlags = []struct {
 	{
 		name:        "ghostty_renderer",
 		description: "Render terminals with ghostty-web (Ghostty's VT parser compiled to WASM, drawn on a canvas) instead of xterm.js, for better VT conformance (synchronized output, REP, DECALN, Kitty keyboard). Kill switch: turn off to fall back to xterm.js. Read by the web client; applies on next page load, no rebuild. Default: off.",
+	},
+	{
+		name: "mobile_input_layer",
+		// Task 5.1.4c (project_plans/mobile-input-layer) can flip this to false before merge if the phone gate fails;
+		// web-app MOBILE_INPUT_LAYER_DEFAULT must change with it (a jest test asserts they match).
+		defaultValue: true,
+		description:  "Phone keyboard input layer: a hidden textarea feeds the terminal so Android soft-keyboard typing, autocorrect and suggestions work. Affects only Android touch-primary devices; desktop and iOS are unchanged whatever this says. Kill switch: turn off to fall back to the plain terminal (ghostty is then not used on Android phones). Read by the web client; the off value is saved on one page load and applies on the next, or open the app with ?mobile_input=0 to apply at once. Default: on.",
+	},
+	{
+		name:        "mobile_input_queue",
+		description: "Mobile input layer sub-feature: queue phone keystrokes while the connection is down and send them on reconnect. Needs mobile_input_layer. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "mobile_input_diagnostics",
+		description: "Mobile input layer sub-feature: the full input diagnostics sheet. Needs mobile_input_layer. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "mobile_input_compose",
+		description: "Mobile input layer sub-feature: the compose box for longer phone input. Needs mobile_input_layer. Read by the web client; applies on next page load. Default: off.",
+	},
+	{
+		name:        "mobile_input_edit_context",
+		description: "Mobile input layer sub-feature: use the EditContext API instead of the hidden textarea where the browser supports it. Needs mobile_input_layer. Read by the web client; applies on next page load. Default: off.",
 	},
 	{
 		name:        "window_keep_alive",
@@ -528,21 +552,21 @@ const workflowEngineModeTTL = time.Second
 // returns false for an unset flag and would silently turn shadow off).
 func WorkflowEngineModeFromConfig(cfg *config.Config) session.EngineMode {
 	return session.ModeFromFlags(
-		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, featureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
-		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, featureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, FeatureFlagDefault(config.WorkflowEngineShadowFeatureFlag)),
+		cfg.GetFeatureFlagWithDefault(config.WorkflowEngineEnforceFeatureFlag, FeatureFlagDefault(config.WorkflowEngineEnforceFeatureFlag)),
 	)
 }
 
 // NewWorkflowEngineModeSource is the production mode reader: live config,
 // cached for workflowEngineModeTTL. A nil clock uses real time.
-func NewWorkflowEngineModeSource(load func() *config.Config, clock session.Clock) *session.CachedModeSource {
+func NewWorkflowEngineModeSource(load func() *config.Config, clock hostclaim.Clock) *session.CachedModeSource {
 	return session.NewCachedModeSource(func() session.EngineMode { return WorkflowEngineModeFromConfig(load()) }, workflowEngineModeTTL, clock)
 }
 
 // NewWorkflowEngineClassModeSource is the production per-class mode reader:
 // each class resolves its own enforce flag and the shared shadow flag from live
 // config, cached for workflowEngineModeTTL. A nil clock uses real time.
-func NewWorkflowEngineClassModeSource(load func() *config.Config, clock session.Clock) *session.FlagClassModeSource {
+func NewWorkflowEngineClassModeSource(load func() *config.Config, clock hostclaim.Clock) *session.FlagClassModeSource {
 	return session.NewFlagClassModeSource(load, workflowEngineModeTTL, clock)
 }
 
@@ -567,7 +591,7 @@ func WorkflowEngineShadowStatusDetail(snapshot func() session.ShadowLedger, now 
 // site (e.g. currentResyncOptions' UseFastLane) resolve against, so the two can never
 // drift on what "default" means for a given flag. Returns false for an unregistered
 // name, matching GetFeatureFlag's own "absent means false" convention.
-func featureFlagDefault(name string) bool {
+func FeatureFlagDefault(name string) bool {
 	for _, kf := range knownFeatureFlags {
 		if kf.name == name {
 			return kf.defaultValue
@@ -707,7 +731,7 @@ func autonomyFlagStatusDetail(name string, cfg *config.Config) []string {
 	if value, explicit := cfg.FeatureFlags[name]; explicit {
 		parts = append(parts, "Set explicitly: "+onOff(value))
 	} else {
-		parts = append(parts, "Default: "+onOff(featureFlagDefault(name))+" (not set explicitly)")
+		parts = append(parts, "Default: "+onOff(FeatureFlagDefault(name))+" (not set explicitly)")
 	}
 	return parts
 }
@@ -850,7 +874,7 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	}
 
 	cfg := config.LoadConfig()
-	enabled := cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name))
+	enabled := cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name))
 	if op.scope == "" && op.isSet() {
 		enabled = op.enabled // the controller-backed state, as before this change
 	}
@@ -879,7 +903,7 @@ func (f *FeatureFlagService) persistAndApply(ctx context.Context, op flagOp, aud
 	err := config.UpdateConfig(func(cfg *config.Config) error {
 		previous, hadKey = cfg.GetFeatureFlagOverride(name)
 		if !hadKey {
-			previous = featureFlagDefault(name)
+			previous = FeatureFlagDefault(name)
 		}
 		// In-memory mutators: UpdateConfig saves once, so the saving setters
 		// here would fsync config.json twice per flip.

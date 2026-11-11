@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
@@ -123,7 +124,7 @@ func (d *DiagnosticService) DispatchDiagnose(
 
 	nudgeAllowed, nudgeDisallowedReason := d.evaluateNudgeEligibility(ctx, item.ID, req.Msg.StuckReason, req.Msg.NudgeTargetSessionUuid)
 
-	prompt := buildDiagnosePrompt(bundle, req.Msg.NudgeTargetSessionUuid, string(fromProtoStuckReason(req.Msg.StuckReason)), nudgeAllowed, nudgeDisallowedReason)
+	prompt := buildDiagnosePrompt(bundle, req.Msg.NudgeTargetSessionUuid, string(FromProtoStuckReason(req.Msg.StuckReason)), nudgeAllowed, nudgeDisallowedReason)
 	inst, spawnErr := d.spawner.SpawnDiagnosticSession(ctx, item, prompt)
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("dispatch diagnostic session: %w", spawnErr))
@@ -158,7 +159,7 @@ func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID
 	if stuckReason == sessionv1.StuckReason_STUCK_REASON_UNSPECIFIED {
 		return false, "no stuck reason specified — nudge cap cannot be evaluated"
 	}
-	allowed, disallowedReason, err := d.storage.DiagnoseNudgeAllowed(ctx, itemID, fromProtoStuckReason(stuckReason))
+	allowed, disallowedReason, err := d.storage.DiagnoseNudgeAllowed(ctx, itemID, FromProtoStuckReason(stuckReason))
 	if err != nil {
 		return false, fmt.Sprintf("could not evaluate nudge eligibility: %v", err)
 	}
@@ -183,6 +184,7 @@ func (d *DiagnosticService) evaluateNudgeEligibility(ctx context.Context, itemID
 func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuckReason string, nudgeAllowed bool, nudgeDisallowedReason string) string {
 	var sb strings.Builder
 	sb.WriteString("You are a diagnostic agent investigating a backlog item. You have been given a context bundle below.\n\n")
+	sb.WriteString("For stuck reasons, remediation attempts and live CI state beyond this bundle, call get_backlog_stuck_report with the item id before concluding.\n\n")
 	sb.WriteString("Based on the evidence, decide ONE of:\n")
 	sb.WriteString("1. File a backlog item via create_backlog_item with concrete evidence (log lines, timestamps, session UUIDs) if you find a genuine product/infra defect.\n")
 	sb.WriteString("2. Post a diagnostic note via post_backlog_update if the situation is inconclusive or informational only.\n")
@@ -265,7 +267,7 @@ func (d *DiagnosticService) buildLinkedSessions(ctx context.Context, itemID stri
 		if wt, wtErr := d.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID); wtErr == nil {
 			ls.Branch = wt.BranchName
 			if gitDiff == "" && wt.WorktreePath != "" {
-				gitDiff, gitDiffTruncated, _ = session.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+				gitDiff, gitDiffTruncated, _ = backlog.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 				gitLog = gitLogSummary(ctx, wt.WorktreePath, wt.BaseCommitSHA, wt.BranchName)
 			}
 		}

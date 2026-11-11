@@ -185,19 +185,19 @@ func TestSwitchProgram_RoundTrip_NoStaleResume(t *testing.T) {
 // file I/O against the adapters' backing stores and is out of scope here.
 func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "antigravity"))
-	assert.True(t, isClaudeAntigravityCrossSwitch("antigravity", "claude"))
-	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "agy"))
-	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "opencode"))
-	assert.True(t, isClaudeAntigravityCrossSwitch("opencode", "agy"))
-	assert.False(t, isClaudeAntigravityCrossSwitch("claude", "aider"))
-	assert.False(t, isClaudeAntigravityCrossSwitch("opencode", "opencode"))
+	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "antigravity"))
+	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "antigravity", "claude"))
+	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "agy"))
+	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "opencode"))
+	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "opencode", "agy"))
+	assert.False(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "aider"))
+	assert.False(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "opencode", "opencode"))
 
-	assert.True(t, isClaudeAntigravityFamily("claude"))
-	assert.True(t, isClaudeAntigravityFamily("antigravity"))
-	assert.True(t, isClaudeAntigravityFamily("agy"))
-	assert.True(t, isClaudeAntigravityFamily("opencode"))
-	assert.False(t, isClaudeAntigravityFamily("aider"))
+	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "claude"))
+	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "antigravity"))
+	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "agy"))
+	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "opencode"))
+	assert.False(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "aider"))
 }
 
 // TestGeminiFamilyGate_ConsistentWithAdapterResolution verifies that gemini (the standalone Gemini CLI)
@@ -205,9 +205,9 @@ func TestSwitchProgram_WithinClaudeAntigravityFamily_PreservesUUID(t *testing.T)
 // while remaining excluded from AgyAdapter.CanHandle (session/agy_adapter.go).
 func TestGeminiFamilyGate_ConsistentWithAdapterResolution(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isClaudeAntigravityFamily("gemini"))
-	assert.True(t, isClaudeAntigravityCrossSwitch("claude", "gemini"))
-	assert.True(t, isClaudeAntigravityCrossSwitch("gemini", "claude"))
+	assert.True(t, isClaudeAntigravityFamily(DefaultHistoryAdapters(), "gemini"))
+	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "claude", "gemini"))
+	assert.True(t, isClaudeAntigravityCrossSwitch(DefaultHistoryAdapters(), "gemini", "claude"))
 	assert.False(t, NewAgyAdapter().CanHandle("gemini"))
 	assert.True(t, NewGeminiAdapter().CanHandle("gemini"))
 }

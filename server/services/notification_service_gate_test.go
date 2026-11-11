@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -55,7 +56,7 @@ type gatedNotifFixture struct {
 // holding one hidden and one visible session.
 func newGatedNotifFixture(t *testing.T, flagOn bool) *gatedNotifFixture {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(64)
 	t.Cleanup(bus.Close)
 	lg, logs := newWarnCollector()

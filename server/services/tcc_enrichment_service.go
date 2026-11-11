@@ -32,8 +32,8 @@ func (s *SessionService) GetTCCEnrichmentStatus(_ context.Context, _ *connect.Re
 	}
 	// Read live snapshots only: loading storage here can restart sessions and do I/O.
 	titles := map[string][]string{}
-	if s.reviewQueuePoller != nil {
-		for _, inst := range s.reviewQueuePoller.GetInstances() {
+	if s.ReviewQueuePoller != nil {
+		for _, inst := range s.ReviewQueuePoller.GetInstances() {
 			snap := inst.Snapshot()
 			path := inst.ActiveDir()
 			titles[path] = append(titles[path], snap.Title)

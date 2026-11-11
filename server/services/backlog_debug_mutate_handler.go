@@ -45,9 +45,9 @@ func NewBacklogDebugMutateHandler(storage *session.Storage) *BacklogDebugMutateH
 // Callers MUST only invoke this when running as the e2e-local instance.
 func (h *BacklogDebugMutateHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/debug/backlog/mutate-create", h.handleCreate)
-	mux.HandleFunc("/api/debug/backlog/mutate-transition", h.handleTransition)
+	mux.HandleFunc("/api/debug/backlog/mutate-transition", h.HandleTransition)
 	mux.HandleFunc("/api/debug/backlog/mutate-update", h.handleUpdate)
-	mux.HandleFunc("/api/debug/backlog/mutate-archive", h.handleArchive)
+	mux.HandleFunc("/api/debug/backlog/mutate-archive", h.HandleArchive)
 	mux.HandleFunc("/api/debug/backlog/mutate-delete", h.handleDelete)
 }
 
@@ -148,7 +148,7 @@ type mutateTransitionRequest struct {
 // validation.md's Happy Path Scenario. This is what a Playwright test uses
 // to simulate "a status change made via one flow" arriving live while the
 // UI has the item open in another (the browser tab under test).
-func (h *BacklogDebugMutateHandler) handleTransition(w http.ResponseWriter, r *http.Request) {
+func (h *BacklogDebugMutateHandler) HandleTransition(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -229,7 +229,7 @@ type mutateItemIDRequest struct {
 // simulate the item being archived from "another tab" while a detail
 // panel/BacklogItemPanel for it is open in the browser under test (UX AC
 // #13/#16).
-func (h *BacklogDebugMutateHandler) handleArchive(w http.ResponseWriter, r *http.Request) {
+func (h *BacklogDebugMutateHandler) HandleArchive(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

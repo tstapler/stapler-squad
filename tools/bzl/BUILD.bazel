@@ -1,0 +1,28 @@
+# Managed by hand, not Gazelle (listed in tools/bzl/hand-build-files.txt).
+# gazelle:ignore
+# Starlark helpers for the Bazel conversion (macros and rules loaded as //tools/bzl:<name>.bzl).
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//tools/bzl:ent_test.bzl", "ent_gen_action_test")
+load("//tools/bzl:go_test_test.bzl", "go_test_bzl_test_suite")
+
+exports_files([
+    "ent.bzl",
+    "go_test.bzl",
+    "go_test_test.bzl",
+    "otel_weave_hermetic.sh",
+    "sync_gen.sh",
+])
+
+ent_gen_action_test(
+    name = "ent_bzl_test",
+    target_under_test = "//tools/bzl/ent:ent_gen",
+)
+
+# `test --run_under` target (.bazelrc): private HOME with a .gitconfig, private tmux dir, host tools on PATH.
+sh_binary(
+    name = "test_wrapper",
+    srcs = ["test_wrapper.sh"],
+    visibility = ["//visibility:public"],
+)
+
+go_test_bzl_test_suite(name = "go_test_bzl_test")

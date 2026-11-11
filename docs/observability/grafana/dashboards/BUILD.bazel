@@ -1,0 +1,10 @@
+# Hand-written: exposes dashboard JSON read by tests (Gazelle ignores BUILD files without Go sources).
+filegroup(
+    name = "json",
+    srcs = glob(["*.json"]),
+    visibility = [
+        "//internal/termlat:__pkg__",
+        "//server/analytics:__pkg__",
+        "//session:__pkg__",
+    ],
+)

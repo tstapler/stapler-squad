@@ -1,0 +1,89 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "analytics",
+    srcs = [
+        "client_metrics.go",
+        "db.go",
+        "db_indexes.go",
+        "log_provider.go",
+        "provider.go",
+        "quality_metrics.go",
+        "retention.go",
+        "session_reader.go",
+        "sqlite_provider.go",
+        "subscriber.go",
+    ],
+    embedsrcs = ["client_pages.json"],
+    importpath = "github.com/tstapler/stapler-squad/server/analytics",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/termlat",
+        "//log",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/dbpool",
+        "//telemetry",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:analyticsevent",
+        "@com_github_google_uuid//:uuid",
+        "@io_entgo_ent//dialect",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_metric//noop",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//reflect/protoregistry",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":analytics",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "analytics_test",
+    srcs = [
+        "client_metrics_test.go",
+        "client_network_dashboard_test.go",
+        "db_autovacuum_test.go",
+        "db_indexes_test.go",
+        "retention_test.go",
+        "session_reader_test.go",
+        "sqlite_provider_test.go",
+        "subscriber_test.go",
+    ],
+    data = [
+        "//docs/observability/grafana/dashboards:json",
+        "//docs/reference:client-network-telemetry.md",
+    ],
+    embed = [":analytics"],
+    deps = [
+        "//internal/termlat",
+        "//pkg/events",
+        "//session",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:analyticsevent",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_metric//noop",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ],
+)
+
+# Read by web-app Jest suites that cross-check the client allow-lists (//web-app:jest repo_data).
+exports_files(
+    [
+        "client_metrics.go",
+        "client_pages.json",
+    ],
+    visibility = ["//web-app:__pkg__"],
+)

@@ -1,0 +1,1 @@
+bazel-hint: plain go and gopls need generated code; Bazel does not. Remedy: run 'make sync' (or use 'make go-build' / 'make go-test', which sync first).

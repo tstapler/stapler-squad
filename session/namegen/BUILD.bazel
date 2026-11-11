@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "namegen",
+    srcs = ["namegen.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/namegen",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":namegen",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "namegen_test",
+    srcs = ["namegen_test.go"],
+    deps = [
+        ":namegen",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -1,0 +1,253 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "tmux",
+    srcs = [
+        "banner_filter.go",
+        "binary.go",
+        "binary_embedded.go",
+        "binary_extract.go",
+        "binary_resolution.go",
+        "client_activity.go",
+        "command_runner.go",
+        "control_mode.go",
+        "control_mode_observability.go",
+        "exec_gate.go",
+        "exec_gate_observability.go",
+        "fork_metrics.go",
+        "leaked_control_mode_sweeper.go",
+        "program_kind.go",
+        "pty.go",
+        "registry_port.go",
+        "remote_env.go",
+        "server_registry.go",
+        "shell_handle.go",
+        "socket_owner_darwin.go",
+        "socket_owner_linux.go",
+        "socket_owner_other.go",
+        "ssh_pool.go",
+        "ssh_runner.go",
+        "ssh_runner_backoff.go",
+        "subreaper_linux.go",
+        "subreaper_other.go",
+        "test_helpers.go",
+        "tmux.go",
+        "tmux_ownership.go",
+        "tmux_session_start.go",
+        "tmux_unix.go",
+        "tmux_windows.go",
+        "version_check.go",
+        "zombie_detector.go",
+        "zombie_reaper.go",
+        "zombie_reaper_windows.go",
+    ],
+    cgo = True,
+    embedsrcs = select({
+        "//tools/bzl/flags:embed_tmux_on": ["//session/tmux/embed:tmux_staged"],
+        "//conditions:default": [],
+    }),  # keep: ADR-007 staging, hand-maintained (Gazelle cannot see the generated embed file)
+    importpath = "github.com/tstapler/stapler-squad/session/tmux",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//executor",
+        "//executor/safeexec",
+        "//log",
+        "//pkg/ansi",
+        "//session/launchcmd",
+        "//session/lifecycle",
+        "//telemetry",
+        "@com_github_creack_pty//:pty",
+        "@com_github_gofrs_flock//:flock",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_linkdata_deadlock//:deadlock",
+        "@com_github_shirou_gopsutil_v4//process",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@org_golang_x_crypto//ssh",
+        "@org_golang_x_crypto//ssh/knownhosts",
+        "@org_golang_x_sync//singleflight",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:android": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:js": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:osx": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:windows": [
+            "@org_golang_x_term//:term",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tmux",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "tmux_test",
+    srcs = [
+        "banner_filter_test.go",
+        "binary_extract_test.go",
+        "binary_resolution_test.go",
+        "capture_pane_session_guard_test.go",
+        "circuit_breaker_test.go",
+        "client_activity_test.go",
+        "command_runner_test.go",
+        "control_mode_decode_test.go",
+        "control_mode_dispatch_test.go",
+        "control_mode_donech_close_test.go",
+        "control_mode_interleaved_start_stop_test.go",
+        "control_mode_refcount_test.go",
+        "control_mode_remote_test.go",
+        "control_mode_server_command_test.go",
+        "control_mode_test.go",
+        "directory_restoration_test.go",
+        "exec_gate_test.go",
+        "fake_registry_test.go",
+        "fork_metrics_test.go",
+        "get_pane_dimensions_priority_test.go",
+        "kill_orphaned_control_mode_clients_test.go",
+        "leaked_control_mode_sweeper_test.go",
+        "program_kind_test.go",
+        "prompt_detection_test.go",
+        "remote_env_test.go",
+        "repo_vs_worktree_test.go",
+        "resolve_socket_env_test.go",
+        "restore_orphan_guard_test.go",
+        "restore_test.go",
+        "server_registry_integration_test.go",
+        "server_registry_test.go",
+        "session_recovery_test.go",
+        "session_resumption_test.go",
+        "set_window_size_remote_test.go",
+        "socket_owner_darwin_test.go",
+        "socket_path_len_test.go",
+        "ssh_git_env_test.go",
+        "ssh_pool_test.go",
+        "ssh_pty_factory_test.go",
+        "ssh_runner_backoff_test.go",
+        "ssh_runner_test.go",
+        "ssh_test_server_test.go",
+        "testmain_test.go",
+        "tmux_ownership_test.go",
+        "tmux_remote_test.go",
+        "tmux_test.go",
+        "zombie_detector_test.go",
+        "zombie_reaper_test.go",
+    ],
+    embed = [":tmux"],
+    deps = [
+        "//executor",
+        "//executor/safeexec",
+        "//log",
+        "//session/git/backend",
+        "//session/git/backend/cli",
+        "//session/launchcmd",
+        "//session/lifecycle",
+        "//testutil/wait",
+        "@com_github_creack_pty//:pty",
+        "@com_github_gliderlabs_ssh//:ssh",
+        "@com_github_linkdata_deadlock//:deadlock",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        "@org_golang_x_crypto//ssh",
+        "@org_golang_x_crypto//ssh/knownhosts",
+        "@org_uber_go_goleak//:goleak",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:android": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:ios": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:js": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:osx": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "//testutil/tmuxreap",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "//testutil/tmuxreap",
+        ],
+        "//conditions:default": [],
+    }),
+)

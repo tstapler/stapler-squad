@@ -140,7 +140,7 @@ func startupFlagValue(name string, def bool) bool {
 func wireNotificationActionFlags(ff *FeatureFlagService) {
 	wire := func(name string, ctrl func(liveFlagController) FeatureController, offDetail string) {
 		f := &liveFlag{}
-		f.on.Store(startupFlagValue(name, featureFlagDefault(name)))
+		f.on.Store(startupFlagValue(name, FeatureFlagDefault(name)))
 		ff.SetFeatureController(name, ctrl(liveFlagController{flag: f}))
 		ff.AddStatusDetailSource(name, func() string {
 			if f.on.Load() {
@@ -193,7 +193,7 @@ func effectiveAnswerQuestion(route answerRoute) bool {
 }
 
 func scoped(cfg *config.Config, name, scope string) bool {
-	return cfg.GetFeatureFlagScoped(name, scope, featureFlagDefault(name))
+	return cfg.GetFeatureFlagScoped(name, scope, FeatureFlagDefault(name))
 }
 
 // resolveEffectiveFlag is effectiveFlag over an injected config and evidence.
@@ -240,7 +240,7 @@ func resolveStage(cfg *config.Config, ev flagEvidence, dp string) bool {
 // dispatcherRunning: the global value, or any trigger:<type> explicitly true.
 func dispatcherRunning(cfg *config.Config) bool {
 	const name = agentWakeTriggersFlagName
-	if cfg.GetFeatureFlagWithDefault(name, featureFlagDefault(name)) {
+	if cfg.GetFeatureFlagWithDefault(name, FeatureFlagDefault(name)) {
 		return true
 	}
 	for scope, v := range cfg.FeatureFlagScopeOverrides(name) {
@@ -257,7 +257,7 @@ func resolveAnswerQuestion(cfg *config.Config, ev flagEvidence, route answerRout
 	}
 	switch route {
 	case routeLiveKeystrokeHidden:
-		return cfg.GetFeatureFlagWithDefault(hiddenSessionReplyFlagName, featureFlagDefault(hiddenSessionReplyFlagName))
+		return cfg.GetFeatureFlagWithDefault(hiddenSessionReplyFlagName, FeatureFlagDefault(hiddenSessionReplyFlagName))
 	case routeLiveKeystrokeVisible, routeDurableRecord:
 		return resolveStage(cfg, ev, scopeStageAnswer)
 	case routeHookReply:

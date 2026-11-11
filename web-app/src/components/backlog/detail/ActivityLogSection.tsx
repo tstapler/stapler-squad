@@ -64,7 +64,7 @@ export function ActivityLogSection({ item, defaultExpanded }: ActivityLogSection
             className={sectionStyles.showMoreButton}
             onClick={showAll}
             data-testid="activity-log-show-more"
-          >
+          >{/* analytics-exempt */}
             Show {remaining} more
           </button>
         )}

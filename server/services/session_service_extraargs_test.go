@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -17,7 +18,7 @@ import (
 // live instance's ExtraArgs field, mirroring the existing EnvVars threading test.
 func TestCreateSession_should_SetInstanceExtraArgs_When_RequestIncludesExtraArgs(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -47,7 +48,7 @@ func TestCreateSession_should_SetInstanceExtraArgs_When_RequestIncludesExtraArgs
 // extra_args must produce zero behavior change.
 func TestCreateSession_should_LeaveInstanceExtraArgsEmpty_When_RequestOmitsExtraArgs(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -79,7 +80,7 @@ func TestCreateSession_should_LeaveInstanceExtraArgsEmpty_When_RequestOmitsExtra
 // composition at launch time (profile flags first, preset args last) is the intended, tested
 // behavior rather than an untested emergent property.
 func TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_BothPresent(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	cfg := config.DefaultConfig()
 	cfg.SessionDefaults.Profiles = map[string]config.ProfileDefaults{
@@ -87,7 +88,7 @@ func TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_B
 	}
 	require.NoError(t, config.SaveConfig(cfg))
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
@@ -117,14 +118,14 @@ func TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_B
 // TestCreateSession_should_NotPrependCustomProgramCLIFlags_When_ProgramIsCustom guards against
 // doubling: the custom program's flags are resolved once, at launch, from the stored program ID.
 func TestCreateSession_should_NotPrependCustomProgramCLIFlags_When_ProgramIsCustom(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 
 	cfg := config.DefaultConfig()
 	cfg.SessionDefaults.Programs = append(cfg.SessionDefaults.Programs,
 		config.ProgramConfig{ID: "my-custom", Command: "ssh", CLIFlags: "--prog-flag"})
 	require.NoError(t, config.SaveConfig(cfg))
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)

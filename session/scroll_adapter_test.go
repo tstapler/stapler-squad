@@ -32,7 +32,7 @@ func TestClaudeScrollAdapter_CanHandle_should_AgreeWithIsClaude_When_EvaluatedAg
 	adapter := &ClaudeScrollAdapter{}
 
 	for _, v := range vectors {
-		want := isClaude(v)
+		want := IsClaude(v)
 		got := adapter.CanHandle(v)
 		if got != want {
 			t.Errorf("isClaude(%q) = %v, ClaudeScrollAdapter.CanHandle(%q) = %v, want agreement", v, want, v, got)
@@ -42,7 +42,7 @@ func TestClaudeScrollAdapter_CanHandle_should_AgreeWithIsClaude_When_EvaluatedAg
 	// Explicit regression guard named in the acceptance criteria: "claude-squad"
 	// must agree as false on both sides, not just agree with whatever isClaude
 	// happens to return.
-	if isClaude("claude-squad") || adapter.CanHandle("claude-squad") {
+	if IsClaude("claude-squad") || adapter.CanHandle("claude-squad") {
 		t.Error("\"claude-squad\" should be false for both isClaude and CanHandle")
 	}
 }

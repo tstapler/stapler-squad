@@ -209,7 +209,7 @@ func replayEdges(spec TransitionCallerSpec) []SystemEdge {
 			out = append(out, e)
 			continue
 		}
-		for _, from := range builtInStageOrder {
+		for _, from := range BuiltInStageOrder {
 			if from != e.To {
 				out = append(out, SystemEdge{From: from, To: e.To})
 			}

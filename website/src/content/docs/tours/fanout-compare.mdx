@@ -1,0 +1,36 @@
+---
+title: Try three approaches, keep the best
+description: Fan one prompt out to three agents, compare their diffs side by side, and merge only the winner.
+tour:
+  title: Try three approaches, keep the best
+  outcome: Compare several agents' answers to one prompt and merge only the best one.
+  clip: fanout-compare
+  features: ["session:fanout", "session:fanout-pick"]
+  helpDoc: help/getting-started
+  order: 5
+  category: Organisation
+  audience: Anyone running agents in parallel
+  durationMin: 2
+  steps:
+    - text: Open the comparison for a fan-out group to see every variant of the prompt in its own column.
+      shot: fanout-compare-1
+      alt: The Compare variants page with three columns, one per agent variant of a pricing-cache task, each with its own branch and status.
+      caption: Markers 1 to 3 show the three variants, each running in its own worktree.
+      narration: The Compare variants page opens with three columns, one for each approach to the pricing cache.
+      why: Each variant works in its own worktree, so the approaches never overwrite each other.
+      quote: Compare variants
+    - text: Scroll through the diffs to see how each variant solved the problem.
+      shot: fanout-compare-2
+      alt: The third variant's column showing its changed files and line counts below the variant title and status badge.
+      caption: Each column shows that variant's own diff.
+      narration: The view scrolls to the last variant, whose diff shows a different approach from the first two.
+      annotated: false
+    - text: Pick the variant you want. A confirmation appears and nothing merges until you accept it.
+      shot: fanout-compare-3
+      alt: One variant's column asking Confirm, merge this variant and archive the others, with the other two variants still unselected.
+      caption: Confirming merges the winner and archives the rest.
+      narration: Pick as winner is pressed on the second variant, and its button changes to a confirmation that names the merge.
+      why: The explicit confirm step keeps a stray click from merging anything.
+      quote: Pick as winner
+      annotated: false
+---

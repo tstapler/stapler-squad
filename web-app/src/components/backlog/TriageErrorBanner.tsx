@@ -23,7 +23,7 @@ export function TriageErrorBanner({ message, onReload, onSkip }: TriageErrorBann
           className={styles.reloadButton}
           onClick={onReload}
           data-testid="triage-error-reload"
-        >
+        >{/* analytics-exempt */}
           Reload item
         </button>
         <button
@@ -31,7 +31,7 @@ export function TriageErrorBanner({ message, onReload, onSkip }: TriageErrorBann
           className={styles.skipButton}
           onClick={onSkip}
           data-testid="triage-error-skip"
-        >
+        >{/* analytics-exempt */}
           Skip without applying
         </button>
       </div>

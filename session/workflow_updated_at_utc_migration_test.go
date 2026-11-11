@@ -24,7 +24,7 @@ func TestRunWorkflowUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows_Wh
 	localTime := time.Date(2026, 1, 15, 10, 30, 0, 123456789, time.FixedZone("PDT", -7*60*60))
 	require.NotEqual(t, time.UTC, localTime.Location())
 
-	created, err := repo.client.Workflow.Create().
+	created, err := repo.Client.Workflow.Create().
 		SetSlug("pre-fix-wf").
 		SetName("Pre Fix WF").
 		SetCommand("cmd").
@@ -35,7 +35,7 @@ func TestRunWorkflowUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows_Wh
 
 	require.NoError(t, runWorkflowUpdatedAtUTCBackfill(ctx, repo))
 
-	migrated, err := repo.client.Workflow.Get(ctx, created.ID)
+	migrated, err := repo.Client.Workflow.Get(ctx, created.ID)
 	require.NoError(t, err)
 	assert.Equal(t, time.UTC, migrated.UpdatedAt.Location(), "backfill must normalize the row to UTC")
 	assert.True(t, migrated.UpdatedAt.Equal(localTime), "backfill must preserve the exact same instant, not just reformat arbitrarily")
@@ -49,7 +49,7 @@ func TestRunWorkflowUpdatedAtUTCBackfill_should_BeIdempotent_When_RunTwice(t *te
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.client.Workflow.Create().
+	created, err := repo.Client.Workflow.Create().
 		SetSlug("fresh-wf").
 		SetName("Fresh WF").
 		SetCommand("cmd").
@@ -60,7 +60,7 @@ func TestRunWorkflowUpdatedAtUTCBackfill_should_BeIdempotent_When_RunTwice(t *te
 	require.NoError(t, runWorkflowUpdatedAtUTCBackfill(ctx, repo))
 	require.NoError(t, runWorkflowUpdatedAtUTCBackfill(ctx, repo))
 
-	final, err := repo.client.Workflow.Get(ctx, created.ID)
+	final, err := repo.Client.Workflow.Get(ctx, created.ID)
 	require.NoError(t, err)
 	assert.True(t, final.UpdatedAt.Equal(created.UpdatedAt), "idempotent backfill must not perturb an already-UTC row's timestamp")
 }

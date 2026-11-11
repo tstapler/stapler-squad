@@ -1,0 +1,458 @@
+{
+  "specs": 193,
+  "with_feature_id": 180,
+  "with_resolvable_id": 116,
+  "all_ids_resolve": 80,
+  "with_existing_source_file": 73,
+  "with_go_file": 55,
+  "with_web_file": 28,
+  "distinct_ids": 208,
+  "unresolved_ids": [
+    "a11y:window-switch",
+    "accessibility",
+    "alias:settings",
+    "app-scrollback-forwarding",
+    "auth:passkey-login",
+    "backlog",
+    "backlog-item-detail-pr-visibility",
+    "backlog-review-results-panel",
+    "backlog-session-steer",
+    "backlog-stage-execution-costs",
+    "backlog-triage-results-panel",
+    "backlog:board",
+    "backlog:compose-widget",
+    "backlog:connection-indicator",
+    "backlog:deep-link-resolve",
+    "backlog:inline-notice",
+    "backlog:item-budget-warning",
+    "backlog:item-detail",
+    "backlog:item-form",
+    "backlog:item-panel",
+    "backlog:list-page",
+    "backlog:sync-direction-settings",
+    "backlog:transition",
+    "connection-count-indicator",
+    "files:accessible-view",
+    "files:content-search",
+    "files:large-files",
+    "files:mobile",
+    "files:range-read",
+    "files:tabs",
+    "guidance-request:list-saved",
+    "handoff-summary",
+    "insights-sessions-table-sort",
+    "jules-settings",
+    "jules-status-badge",
+    "notification:background-activity",
+    "notification:deep-link",
+    "notification:error-exits",
+    "notification:hidden-session-gate",
+    "notification:inline-actions",
+    "notification:invoke-action",
+    "notification:peer-help",
+    "notification:push-click-handoff",
+    "notification:remind-me",
+    "notification:scheduled-prompts",
+    "parallel-fanout",
+    "pi-support",
+    "program_config:probe",
+    "review-queue-priority-tiers",
+    "session-columns-picker",
+    "session-detail",
+    "session-status-substatus",
+    "session:artifacts",
+    "session:bulk-select",
+    "session:crashed-status",
+    "session:deep-link",
+    "session:guidance-structured",
+    "session:info-tab",
+    "session:keyboard-leader",
+    "session:pause",
+    "session:resume_crashed",
+    "session:vcs-diff",
+    "settings-backlog-quota",
+    "settings-backlog-stages",
+    "settings-features",
+    "settings-programs",
+    "triage-question-answer",
+    "triggers:create",
+    "triggers:edit",
+    "triggers:toggle",
+    "ui:header-nav",
+    "ui:lazy-loading",
+    "ui:static-assets",
+    "ui:theme",
+    "ui:viewport",
+    "unfinished-github-prs",
+    "website-demos",
+    "window:close",
+    "window:create",
+    "window:keep-alive",
+    "window:rename",
+    "window:switch"
+  ],
+  "unresolved_by_spec": {
+    "tests/e2e/a11y-responsiveness-states.spec.ts": [
+      "a11y:window-switch",
+      "accessibility",
+      "window:keep-alive"
+    ],
+    "tests/e2e/a11y-route-sweep.spec.ts": [
+      "accessibility"
+    ],
+    "tests/e2e/accessibility.spec.ts": [
+      "backlog:connection-indicator",
+      "backlog:item-detail",
+      "backlog:list-page"
+    ],
+    "tests/e2e/agent-wake-triggers.spec.ts": [
+      "notification:error-exits",
+      "notification:peer-help",
+      "notification:remind-me",
+      "notification:scheduled-prompts"
+    ],
+    "tests/e2e/alias-settings.spec.ts": [
+      "alias:settings"
+    ],
+    "tests/e2e/askuserquestion-structured.spec.ts": [
+      "guidance-request:list-saved",
+      "notification:invoke-action",
+      "session:guidance-structured"
+    ],
+    "tests/e2e/background-activity.spec.ts": [
+      "notification:background-activity",
+      "session-detail"
+    ],
+    "tests/e2e/backlog-board-live-updates.spec.ts": [
+      "backlog:board"
+    ],
+    "tests/e2e/backlog-connection-indicator.spec.ts": [
+      "backlog:connection-indicator",
+      "backlog:item-detail",
+      "backlog:list-page"
+    ],
+    "tests/e2e/backlog-copy-link.spec.ts": [
+      "backlog:item-detail"
+    ],
+    "tests/e2e/backlog-cross-host-handoff.spec.ts": [
+      "backlog:deep-link-resolve"
+    ],
+    "tests/e2e/backlog-deep-link-backcompat.spec.ts": [
+      "backlog:deep-link-resolve",
+      "backlog:item-detail"
+    ],
+    "tests/e2e/backlog-deep-link-errors.spec.ts": [
+      "backlog:deep-link-resolve"
+    ],
+    "tests/e2e/backlog-deep-link-resolve.spec.ts": [
+      "backlog:deep-link-resolve",
+      "backlog:item-detail"
+    ],
+    "tests/e2e/backlog-detail-live-updates.spec.ts": [
+      "backlog:item-detail"
+    ],
+    "tests/e2e/backlog-edit-buffering.spec.ts": [
+      "backlog:inline-notice",
+      "backlog:item-detail"
+    ],
+    "tests/e2e/backlog-engine-mode.spec.ts": [
+      "settings-backlog-stages",
+      "settings-features"
+    ],
+    "tests/e2e/backlog-features-flags.spec.ts": [
+      "settings-features"
+    ],
+    "tests/e2e/backlog-github-sync-settings.spec.ts": [
+      "backlog:sync-direction-settings"
+    ],
+    "tests/e2e/backlog-item-detail-redesign.spec.ts": [
+      "backlog-item-detail-pr-visibility"
+    ],
+    "tests/e2e/backlog-item-id-deep-link.spec.ts": [
+      "backlog:item-detail"
+    ],
+    "tests/e2e/backlog-live-updates.spec.ts": [
+      "backlog:list-page"
+    ],
+    "tests/e2e/backlog-queue.spec.ts": [
+      "backlog:list-page"
+    ],
+    "tests/e2e/backlog-quota.spec.ts": [
+      "settings-backlog-quota",
+      "settings-features"
+    ],
+    "tests/e2e/backlog-result-panels-mobile.spec.ts": [
+      "backlog-review-results-panel",
+      "backlog-triage-results-panel"
+    ],
+    "tests/e2e/backlog-rich-text.spec.ts": [
+      "backlog:item-form"
+    ],
+    "tests/e2e/backlog-session-steer.spec.ts": [
+      "backlog-session-steer"
+    ],
+    "tests/e2e/backlog-settings-a11y.spec.ts": [
+      "accessibility",
+      "settings-backlog-quota",
+      "settings-backlog-stages",
+      "settings-features"
+    ],
+    "tests/e2e/backlog.dev-mode.spec.ts": [
+      "backlog"
+    ],
+    "tests/e2e/bulk-select.spec.ts": [
+      "session:bulk-select",
+      "session:pause"
+    ],
+    "tests/e2e/cli-flag-discovery.spec.ts": [
+      "program_config:probe",
+      "settings-programs"
+    ],
+    "tests/e2e/connection-count-indicator.spec.ts": [
+      "connection-count-indicator"
+    ],
+    "tests/e2e/crashed-session-ux.spec.ts": [
+      "session:crashed-status",
+      "session:resume_crashed"
+    ],
+    "tests/e2e/deep-link-trailing-slash.spec.ts": [
+      "backlog:item-detail",
+      "notification:push-click-handoff",
+      "session:deep-link"
+    ],
+    "tests/e2e/fanout-session-lifecycle.spec.ts": [
+      "parallel-fanout"
+    ],
+    "tests/e2e/files-a11y.spec.ts": [
+      "files:accessible-view",
+      "files:mobile",
+      "files:tabs"
+    ],
+    "tests/e2e/files-large.spec.ts": [
+      "files:accessible-view",
+      "files:large-files",
+      "files:range-read"
+    ],
+    "tests/e2e/files-lazydoc-spike.spec.ts": [
+      "files:tabs"
+    ],
+    "tests/e2e/files-mobile.spec.ts": [
+      "files:accessible-view",
+      "files:content-search",
+      "files:mobile"
+    ],
+    "tests/e2e/files-search.spec.ts": [
+      "files:content-search",
+      "files:tabs"
+    ],
+    "tests/e2e/files-shortcuts.spec.ts": [
+      "files:tabs"
+    ],
+    "tests/e2e/files-tabs.spec.ts": [
+      "files:tabs"
+    ],
+    "tests/e2e/files-transport-spike.spec.ts": [
+      "files:tabs"
+    ],
+    "tests/e2e/files-viewer.spec.ts": [
+      "files:content-search",
+      "files:tabs"
+    ],
+    "tests/e2e/handoff-summary.spec.ts": [
+      "handoff-summary",
+      "session:info-tab"
+    ],
+    "tests/e2e/hidden-session-quiet.spec.ts": [
+      "notification:hidden-session-gate"
+    ],
+    "tests/e2e/hidden-session-reply.spec.ts": [
+      "notification:deep-link"
+    ],
+    "tests/e2e/hidden-session-view.spec.ts": [
+      "notification:deep-link",
+      "session-detail"
+    ],
+    "tests/e2e/history-behaviour.spec.ts": [
+      "ui:header-nav"
+    ],
+    "tests/e2e/idle-session-chip.spec.ts": [
+      "session-status-substatus"
+    ],
+    "tests/e2e/insights-sessions-table-sort.spec.ts": [
+      "insights-sessions-table-sort"
+    ],
+    "tests/e2e/insights-stage-cost-chart.spec.ts": [
+      "backlog-stage-execution-costs"
+    ],
+    "tests/e2e/item-budget-warning.spec.ts": [
+      "backlog:item-budget-warning"
+    ],
+    "tests/e2e/jules-dispatch.spec.ts": [
+      "jules-settings"
+    ],
+    "tests/e2e/jules-settings.spec.ts": [
+      "jules-settings"
+    ],
+    "tests/e2e/jules-status-badge.spec.ts": [
+      "jules-status-badge"
+    ],
+    "tests/e2e/leader-command-bar.spec.ts": [
+      "session:keyboard-leader"
+    ],
+    "tests/e2e/login-static-assets.spec.ts": [
+      "auth:passkey-login",
+      "ui:static-assets"
+    ],
+    "tests/e2e/mobile-webkit.spec.ts": [
+      "ui:viewport"
+    ],
+    "tests/e2e/multi-window-cross-tab.spec.ts": [
+      "window:rename",
+      "window:switch"
+    ],
+    "tests/e2e/multi-window.spec.ts": [
+      "window:close",
+      "window:create",
+      "window:rename",
+      "window:switch"
+    ],
+    "tests/e2e/not-found.spec.ts": [
+      "ui:header-nav"
+    ],
+    "tests/e2e/notification-a11y-matrix.spec.ts": [
+      "accessibility"
+    ],
+    "tests/e2e/notification-contrast-over-xterm.spec.ts": [
+      "accessibility"
+    ],
+    "tests/e2e/notification-inline-actions.spec.ts": [
+      "backlog:transition",
+      "notification:inline-actions",
+      "notification:invoke-action"
+    ],
+    "tests/e2e/omnibar-backlog-compose.spec.ts": [
+      "backlog:compose-widget"
+    ],
+    "tests/e2e/pathname-probe.spec.ts": [
+      "ui:header-nav"
+    ],
+    "tests/e2e/pi-session.spec.ts": [
+      "pi-support"
+    ],
+    "tests/e2e/push-click-handoff.spec.ts": [
+      "notification:push-click-handoff",
+      "session:deep-link"
+    ],
+    "tests/e2e/review-queue-priority-tiers.spec.ts": [
+      "review-queue-priority-tiers",
+      "session-status-substatus"
+    ],
+    "tests/e2e/route-focus-and-announce.spec.ts": [
+      "accessibility",
+      "ui:header-nav"
+    ],
+    "tests/e2e/route-smoke.spec.ts": [
+      "accessibility",
+      "ui:header-nav"
+    ],
+    "tests/e2e/route-titles.spec.ts": [
+      "accessibility",
+      "ui:header-nav"
+    ],
+    "tests/e2e/scroll-forward-blocked-reason-copy.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-blocked-toast-keyboard.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-contrast.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-live-region-announcements.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-multi-client-recovery.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-no-dead-ends.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-outcome-signals-distinct.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-outcome-visible.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-return-to-live.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-same-user-two-tabs.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-stalled-loading-cancel.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-forward-unsupported-path-honest-copy.spec.ts": [
+      "app-scrollback-forwarding"
+    ],
+    "tests/e2e/scroll-policy.spec.ts": [
+      "ui:header-nav"
+    ],
+    "tests/e2e/session-artifacts.spec.ts": [
+      "session:artifacts"
+    ],
+    "tests/e2e/session-detail-backlog-panel.spec.ts": [
+      "backlog:item-panel"
+    ],
+    "tests/e2e/session-list-density.spec.ts": [
+      "session-columns-picker"
+    ],
+    "tests/e2e/stale-chunk-guard.spec.ts": [
+      "ui:lazy-loading"
+    ],
+    "tests/e2e/theme-fouc.spec.ts": [
+      "accessibility",
+      "ui:theme"
+    ],
+    "tests/e2e/triage-question-answer.spec.ts": [
+      "triage-question-answer"
+    ],
+    "tests/e2e/triggers-panel.spec.ts": [
+      "triggers:create",
+      "triggers:edit",
+      "triggers:toggle"
+    ],
+    "tests/e2e/up-next-tabs.spec.ts": [
+      "unfinished-github-prs"
+    ],
+    "tests/e2e/ux-error-exits.spec.ts": [
+      "notification:background-activity",
+      "notification:error-exits",
+      "notification:inline-actions",
+      "notification:invoke-action",
+      "notification:peer-help",
+      "notification:remind-me",
+      "notification:scheduled-prompts",
+      "session:guidance-structured"
+    ],
+    "tests/e2e/vcs-diff-parity.spec.ts": [
+      "session:vcs-diff"
+    ],
+    "tests/e2e/viewport-meta.spec.ts": [
+      "accessibility",
+      "ui:viewport"
+    ],
+    "tests/e2e/website-demos.spec.ts": [
+      "website-demos"
+    ],
+    "tests/e2e/window-keepalive.spec.ts": [
+      "a11y:window-switch",
+      "window:keep-alive",
+      "window:switch"
+    ],
+    "tests/e2e/window-switch-a11y.spec.ts": [
+      "a11y:window-switch",
+      "window:switch"
+    ]
+  }
+}

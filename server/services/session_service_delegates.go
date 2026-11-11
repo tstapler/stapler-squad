@@ -168,8 +168,8 @@ func (s *SessionService) RenameSession(
 	// Use the live poller list for the same reason as UpdateSession: avoid LoadInstances
 	// side-effects that can drop sessions and clobber the poller list via SetInstances.
 	var instances []*session.Instance
-	if s.reviewQueuePoller != nil {
-		instances = s.reviewQueuePoller.GetInstances()
+	if s.ReviewQueuePoller != nil {
+		instances = s.ReviewQueuePoller.GetInstances()
 	} else {
 		var loadErr error
 		instances, loadErr = s.loadInstancesWithWiring()
@@ -540,9 +540,9 @@ func (s *SessionService) ForkSession(
 	}
 	s.indexSessionForDelivery(newInst)
 
-	if s.reviewQueuePoller != nil {
-		updatedInstances := append(s.reviewQueuePoller.GetInstances(), newInst)
-		s.reviewQueuePoller.SetInstances(updatedInstances)
+	if s.ReviewQueuePoller != nil {
+		updatedInstances := append(s.ReviewQueuePoller.GetInstances(), newInst)
+		s.ReviewQueuePoller.SetInstances(updatedInstances)
 		log.Info("[ReviewQueue] updated poller instance references after ForkSession", "session", newInst.Title)
 	}
 	if s.sessionTagPoller != nil {
@@ -659,8 +659,8 @@ func (s *SessionService) ListBranches(
 
 // findInstance finds an instance by title using the live in-memory poller.
 func (s *SessionService) findInstance(id string) *session.Instance {
-	if s.reviewQueuePoller != nil {
-		if inst := s.reviewQueuePoller.FindInstance(id); inst != nil {
+	if s.ReviewQueuePoller != nil {
+		if inst := s.ReviewQueuePoller.FindInstance(id); inst != nil {
 			return inst
 		}
 	}
@@ -678,8 +678,8 @@ func (s *SessionService) findInstance(id string) *session.Instance {
 // them here would re-persist deleted external sessions during unrelated operations
 // such as CreateCheckpoint or ForkSession.
 func (s *SessionService) allInstances() []*session.Instance {
-	if s.reviewQueuePoller != nil {
-		return s.reviewQueuePoller.GetInstances()
+	if s.ReviewQueuePoller != nil {
+		return s.ReviewQueuePoller.GetInstances()
 	}
 	return nil
 }

@@ -1,0 +1,94 @@
+# Error-translation table (Story 1.6). The ONLY place hint text lives; tools/bzl/translate-errors.sh
+# reads it, the wrapper reads the E7 templates through `translate-errors.sh --text`.
+# Line format is deliberately flat (awk-parsed): "- id:" opens a row, then "  key: value" lines.
+# Values are single- or double-quoted, no escapes, no backslashes (use [.] or . in patterns).
+# when:     PATTERN [ && REQUIRED ]  - ERE tried on each input line; REQUIRED must match the same line. Repeatable (OR).
+# when_exit: STATUS && PATTERN       - PATTERN counts only when the wrapper saw that exit status.
+# priority: lowest number wins, at most one hint per failure. on_success: row may fire when the build passed.
+# status: proposal until the remedy command has been run, then verified.
+- id: E9
+  source: bazel
+  priority: 1
+  status: proposal
+  doc: state-9
+  when: 'Another command .pid=[0-9]+. is running'
+  hint: "bazel-hint: another Bazel command holds this worktree's lock; waiting is normal. Remedy: wait, or use a separate worktree."
+- id: E5
+  source: bazel
+  priority: 2
+  status: proposal
+  doc: state-7
+  when: 'No space left on device'
+  hint: "bazel-hint: the disk is full. Remedy: run 'bash .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh' first (dry run: lists orphan output bases, the disk cache size against its GC cap, and stale /tmp test directories, with sizes; removes nothing), review the list, re-run it with --apply, then retry."
+  needs_file: .claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh
+  hint_fallback: "bazel-hint: the disk is full. Remedy: free space ('df -h ~/.cache/bazel'), then retry."
+- id: E4
+  source: bazel
+  priority: 3
+  status: proposal
+  doc: state-6
+  when: 'Server terminated abruptly|java[.]lang[.]OutOfMemoryError'
+  when_exit: '137 && ^Killed'
+  hint: "bazel-hint: the Bazel server ran out of memory or was OOM-killed. Remedy: wait for other Bazel runs to finish, run 'bazel shutdown', then retry; do not raise --jobs."
+- id: E11
+  source: bazel
+  priority: 4
+  status: proposal
+  doc: state-10
+  on_success: true
+  when: 'HTTP 40[13]|HTTP/[0-9.]+ 40[13]|40[13] (Forbidden|Unauthorized)|UNAUTHENTICATED|PERMISSION_DENIED|credential-helper.*(expired|failed)'
+  hint: "!! bazel-hint: the remote cache REJECTED our credentials (HTTP 401/403 or expired), so the shared cache is not being used. Remedy: refresh the credential ('make bazel-doctor' names which one); builds stay correct but slow."
+- id: E6
+  source: bazel
+  priority: 5
+  status: proposal
+  doc: state-10
+  on_success: true
+  when: 'UNAVAILABLE|DEADLINE_EXCEEDED|Connection refused|Failed to connect|[Tt]imed out|Unable to connect && [Rr]emote [Cc]ache|remote_cache|grpc'
+  hint: "bazel-hint: remote cache unreachable, building locally (results are correct, the build is slower). Remedy: none needed; run 'make bazel-doctor' to check the cache."
+- id: E2
+  source: bazel
+  priority: 6
+  status: proposal
+  doc: state-2
+  when: "no such package '@@gazelle[+][+]go_deps|repository .* not found"
+  when: "[Rr]epository '@@gazelle[+][+]go_deps.* is not defined"
+  hint: "bazel-hint: a Go dependency is not wired into MODULE.bazel. Remedy: run 'go get <module> && go mod tidy && make gazelle && bazel mod tidy'."
+- id: E3
+  source: go
+  priority: 7
+  status: proposal
+  doc: state-3
+  when: 'cannot find package|is not in std && /gen/|session/ent'
+  hint: "bazel-hint: plain go and gopls need generated code; Bazel does not. Remedy: run 'make sync' (or use 'make go-build' / 'make go-test', which sync first)."
+- id: E10
+  source: bazel
+  priority: 8
+  status: proposal
+  doc: state-3
+  when: "no such package '//gen|no such target '//proto/session/v1:|no such target '//tools/bzl/ent:|missing input file '//tools/bzl/ent"
+  hint: "bazel-hint: a BUILD label for generated code is missing or misnamed; 'make sync' will not help because Bazel does not read gen/. Remedy: run 'make gazelle', then check //proto/session/v1 and //tools/bzl/ent (stale ent package list: 'bazel run //tools/bzl/ent:update_packages')."
+- id: E8
+  source: bazel
+  priority: 9
+  status: proposal
+  doc: state-4
+  when: 'permission denied'
+  when: 'no such file && linux-sandbox|sandbox-exec|/sandbox/|execroot'
+  hint: "bazel-hint: a test touched something outside its sandbox. Remedy: fix the test to use TEST_TMPDIR or runfiles (see docs/how-to/troubleshoot-bazel.md#state-4); never tag it no-sandbox without a reason comment and an issue."
+- id: E1
+  source: bazel
+  priority: 10
+  status: proposal
+  doc: state-1
+  when: 'missing strict dependencies|^ERROR:.*undefined: |undefined: [A-Za-z_]+$'
+  when: 'no such file && ^ERROR:'
+  hint: "bazel-hint: a BUILD file is out of date with the Go sources. Remedy: run 'make gazelle', then commit the BUILD diff."
+- id: E7
+  source: wrapper
+  priority: 99
+  status: proposal
+  doc: ''
+  hint: "bazel: waiting for a build slot (position <p> of <n>, ETA ~<s>s, gives up after <T>s). Another Bazel run is using the host; this is not a hang."
+  hint_repeat: "bazel: still waiting (position <p>, ETA ~<s>s)"
+  hint_timeout: "bazel: no build slot after <T>s. Remedy: run 'make bazel-doctor' to see the holders, or retry."

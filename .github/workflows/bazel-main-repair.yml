@@ -1,0 +1,73 @@
+name: Bazel main repair
+
+# Story 7.8 (Task 7.8a). After a push to main, regenerate BUILD files, the module lock and generated files; when
+# that changes anything, open or update one repair PR labelled generated-file-race. Never force-pushes.
+# A push made with the default GITHUB_TOKEN does not start other workflows, so unless BAZEL_REPAIR_TOKEN exists
+# (owner action: a repo-scoped token in the environment bazel-repair) CI is started with workflow_dispatch.
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: bazel-main-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.BAZEL_REPAIR_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: Regenerate
+        run: |
+          bazel run --config=ci //:gazelle
+          bazel mod tidy --lockfile_mode=update
+          make sync
+
+      - name: Open or update the repair PR
+        env:
+          GH_TOKEN: ${{ secrets.BAZEL_REPAIR_TOKEN || github.token }}
+          HAS_REPAIR_TOKEN: ${{ secrets.BAZEL_REPAIR_TOKEN != '' }}
+        run: |
+          git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ] && { echo "main is fresh"; exit 0; }
+          branch="bot/regenerate-build-files-${GITHUB_SHA::8}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -A -- '*.bazel' MODULE.bazel.lock 2>/dev/null || true
+          git add -u
+          git commit -m "chore(build): regenerate BUILD files"
+          git push origin "$branch"
+          gh label create generated-file-race --description "main drifted because two PRs raced" 2>/dev/null || true
+          open=$(gh pr list --label generated-file-race --state open --json number --jq '.[0].number')
+          if [ -z "$open" ]; then
+            gh pr create --head "$branch" --base main --label generated-file-race \
+              --title "chore(build): regenerate BUILD files" \
+              --body "Generated-file drift on main after $GITHUB_SHA. Produced by bazel-main-repair.yml."
+          else
+            gh pr comment "$open" --body "main drifted again after $GITHUB_SHA; newer repair branch: $branch"
+          fi
+          if [ "$HAS_REPAIR_TOKEN" != "true" ]; then
+            gh workflow run bazel.yml --ref "$branch"
+          fi

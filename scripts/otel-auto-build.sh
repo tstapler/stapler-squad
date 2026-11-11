@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build-time wrapper for the opt-in otelc auto-instrumentation path.
+# Build-time wrapper for the otelc auto-instrumentation path (every stapler-squad build goes through it).
 #
 # Composes the Toolexec Injection GOFLAGS (ADR-004) around a caller-supplied
 # `go build`/`go test` argv, then verifies otelc didn't silently mutate
@@ -21,7 +21,7 @@
 # (Spike E) and docs/how-to/enable-otel-auto-instrumentation.md.
 #
 # Usage:
-#   ./scripts/otel-auto-build.sh go build -ldflags "-X main.version=1.2.3" -o stapler-squad-otel .
+#   ./scripts/otel-auto-build.sh go build -ldflags "-X main.version=1.2.3" -o stapler-squad .
 #   ./scripts/otel-auto-build.sh go test ./... -timeout=20m
 set -euo pipefail
 
@@ -44,6 +44,16 @@ hash_cmd() {
     exit 1
   fi
 }
+
+# `make ensure-otelc` (go install) lands in GOBIN/GOPATH/bin, which is not always on PATH (CI).
+if ! command -v otelc >/dev/null 2>&1; then
+  go_bin_dir="$(go env GOBIN 2>/dev/null)"
+  [ -n "$go_bin_dir" ] || go_bin_dir="$(go env GOPATH 2>/dev/null)/bin"
+  if [ -x "$go_bin_dir/otelc" ]; then
+    PATH="$go_bin_dir:$PATH"
+    export PATH
+  fi
+fi
 
 if ! command -v otelc >/dev/null 2>&1; then
   echo "✗ otelc not found on PATH." >&2
@@ -125,6 +135,11 @@ for arg in "${build_target_args[@]}"; do
       ;;
   esac
 done
+# `go build -tags "a b"` (space-separated) is valid, but this value goes out through GOFLAGS, which
+# splits on whitespace: "-tags=a b,otelcauto" parses `b,otelcauto` as a non-flag. Normalize to commas.
+caller_tags="$(printf '%s' "$caller_tags" | tr -s ' \t' ',,')"
+caller_tags="${caller_tags#,}"
+caller_tags="${caller_tags%,}"
 if [ -n "$caller_tags" ]; then
   merged_tags="${caller_tags},${OTELC_AUTO_TAG}"
 else

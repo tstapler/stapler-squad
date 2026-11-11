@@ -1,0 +1,1 @@
+bazel-hint: a test touched something outside its sandbox. Remedy: fix the test to use TEST_TMPDIR or runfiles (see docs/how-to/troubleshoot-bazel.md#state-4); never tag it no-sandbox without a reason comment and an issue.

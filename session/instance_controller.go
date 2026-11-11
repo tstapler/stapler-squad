@@ -90,7 +90,7 @@ func (i *Instance) StartController() error {
 				}
 			}
 		})
-		i.fireLifecycleEvent(EventExited, "pty-eof")
+		i.FireLifecycleEvent(EventExited, "pty-eof")
 
 		if isStaleResumeExit(i.Program, exitContent) {
 			go i.recoverFromStaleResume()
@@ -148,9 +148,9 @@ func (i *Instance) StartController() error {
 // The listener is called synchronously on the goroutine that fires the event;
 // implementations must return quickly (no long blocking operations).
 func (i *Instance) RegisterLifecycleListener(l LifecycleListener) {
-	i.lifecycleListenersMu.Lock()
-	defer i.lifecycleListenersMu.Unlock()
-	i.lifecycleListeners = append(i.lifecycleListeners, l)
+	i.LifecycleListenersMu.Lock()
+	defer i.LifecycleListenersMu.Unlock()
+	i.LifecycleListeners = append(i.LifecycleListeners, l)
 }
 
 // hasLifecycleListeners reports whether any listener is currently registered
@@ -159,17 +159,17 @@ func (i *Instance) RegisterLifecycleListener(l LifecycleListener) {
 // when nothing is wired to consume it — e.g. deployments where
 // SessionSummaryGenerator is nil and no listener was ever registered.
 func (i *Instance) hasLifecycleListeners() bool {
-	i.lifecycleListenersMu.Lock()
-	defer i.lifecycleListenersMu.Unlock()
-	return len(i.lifecycleListeners) > 0
+	i.LifecycleListenersMu.Lock()
+	defer i.LifecycleListenersMu.Unlock()
+	return len(i.LifecycleListeners) > 0
 }
 
 // fireLifecycleEvent notifies all registered listeners of a lifecycle event.
-func (i *Instance) fireLifecycleEvent(event LifecycleEvent, reason string) {
-	i.lifecycleListenersMu.Lock()
-	listeners := make([]LifecycleListener, len(i.lifecycleListeners))
-	copy(listeners, i.lifecycleListeners)
-	i.lifecycleListenersMu.Unlock()
+func (i *Instance) FireLifecycleEvent(event LifecycleEvent, reason string) {
+	i.LifecycleListenersMu.Lock()
+	listeners := make([]LifecycleListener, len(i.LifecycleListeners))
+	copy(listeners, i.LifecycleListeners)
+	i.LifecycleListenersMu.Unlock()
 
 	for _, l := range listeners {
 		l.OnLifecycleEvent(event, reason)
@@ -179,7 +179,7 @@ func (i *Instance) fireLifecycleEvent(event LifecycleEvent, reason string) {
 // FireLifecycleEventForTest is the exported version of fireLifecycleEvent, used
 // exclusively in cross-package tests that need to simulate an unexpected exit.
 func (i *Instance) FireLifecycleEventForTest(event LifecycleEvent, reason string) {
-	i.fireLifecycleEvent(event, reason)
+	i.FireLifecycleEvent(event, reason)
 }
 
 // SetControllerForTest wires c as this instance's controller, bypassing

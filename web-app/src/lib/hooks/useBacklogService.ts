@@ -95,7 +95,14 @@ export interface LinkedSession {
   reviewVerdict?: {
     overallOutcome?: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "UNVERIFIABLE";
     summary?: string;
-    perCriterion?: Array<{ criterionIndex: number; outcome: string; evidence: string }>;
+    perCriterion?: Array<{
+      criterionIndex: number;
+      outcome: string;
+      evidence: string;
+      /** Why a non-PASS criterion did not pass; empty/NOT_DONE means the worker has more to do. */
+      failureClass?: string;
+      proposedWaiver?: boolean;
+    }>;
   };
   triageResult?: TriageResult;
   estimatedCostUsd: number;
@@ -570,6 +577,8 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
         criterionIndex: c.criterionIndex,
         outcome: c.outcome,
         evidence: c.evidence,
+        failureClass: c.failureClass,
+        proposedWaiver: c.proposedWaiver,
       })),
     };
   }

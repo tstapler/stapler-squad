@@ -1,0 +1,6 @@
+# gazelle:prefix github.com/tstapler/stapler-squad/tools/scanner
+
+exports_files(
+    ["list-backend-protos.sh"],
+    visibility = ["//tools/scanner/backend:__pkg__"],
+)

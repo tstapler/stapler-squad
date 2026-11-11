@@ -11,10 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
-
-func boolPtr(v bool) *bool { return &v }
 
 // --- REQ-0: wire-compat when new fields are unset ----------------------------
 
@@ -69,7 +68,7 @@ func TestSearchClaudeHistory_DedupOversamplesBeforeTruncatingToRequestedLimit(t 
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:          "dark mode toggle",
 		Limit:          5,
-		GroupBySession: boolPtr(true),
+		GroupBySession: svctest.BoolPtr(true),
 	}))
 
 	require.NoError(t, err)
@@ -103,7 +102,7 @@ func TestSearchClaudeHistory_ContextSourcedFromRawConversationFile_NotDocumentSt
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:          "dark mode toggle",
 		Limit:          20,
-		IncludeContext: boolPtr(true),
+		IncludeContext: svctest.BoolPtr(true),
 	}))
 
 	require.NoError(t, err)
@@ -136,18 +135,18 @@ func TestSearchClaudeHistory_LogsExcludedCountOnlyWhenSessionsActuallyExcluded(t
 
 	// slogDefaultMu (declared in autonomous_orchestration_service_test.go) serializes this
 	// swap against every other log.SetSlogDefaultForTest swap in this package.
-	slogDefaultMu.Lock()
-	buf := &syncLogBuffer{}
+	svctest.SlogDefaultMu.Lock()
+	buf := &svctest.SyncLogBuffer{}
 	prev := ssqlog.SetSlogDefaultForTest(slog.New(slog.NewTextHandler(buf, nil)))
 	defer func() {
 		ssqlog.SetSlogDefaultForTest(prev)
-		slogDefaultMu.Unlock()
+		svctest.SlogDefaultMu.Unlock()
 	}()
 
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:                     "dark mode toggle",
 		Limit:                     20,
-		ExcludeAutomationSessions: boolPtr(true),
+		ExcludeAutomationSessions: svctest.BoolPtr(true),
 	}))
 
 	require.NoError(t, err)
@@ -173,8 +172,8 @@ func TestSearchClaudeHistory_ProjectFilterAppliedBeforeAutomationFilterAndDedup(
 	resp, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:          "dark mode toggle",
 		Limit:          20,
-		Project:        strPtr("/repo/target"),
-		GroupBySession: boolPtr(true),
+		Project:        svctest.StrPtr("/repo/target"),
+		GroupBySession: svctest.BoolPtr(true),
 	}))
 
 	require.NoError(t, err)
@@ -201,7 +200,7 @@ func TestListClaudeHistory_ExcludesAutomationSessionsWhenRequested(t *testing.T)
 	svc.SetInstanceProvider(func() []*session.Instance { return []*session.Instance{hiddenInst} })
 
 	resp, err := svc.ListClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.ListClaudeHistoryRequest{
-		ExcludeAutomationSessions: boolPtr(true),
+		ExcludeAutomationSessions: svctest.BoolPtr(true),
 	}))
 
 	require.NoError(t, err)
@@ -221,7 +220,7 @@ func TestSearchClaudeHistory_RejectsOffsetCombinedWithPostProcessing(t *testing.
 	_, err := svc.SearchClaudeHistory(t.Context(), connect.NewRequest(&sessionv1.SearchClaudeHistoryRequest{
 		Query:          "hello",
 		Offset:         5,
-		GroupBySession: boolPtr(true),
+		GroupBySession: svctest.BoolPtr(true),
 	}))
 
 	require.Error(t, err)

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -47,7 +48,7 @@ func addHibernatedThenForceActive(t *testing.T, fix *forkTestFixture, title, pat
 	for _, li := range loaded {
 		if li.Title == title {
 			li.ForceStatus(session.Active)
-			addInstanceToPoller(fix.poller, li)
+			svctest.AddInstanceToPoller(fix.poller, li)
 			return li
 		}
 	}
@@ -129,7 +130,7 @@ func TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart(t *testing.T) {
 	require.NoError(t, err)
 	for _, li := range loaded {
 		if li.Title == "stopped-program-session" {
-			addInstanceToPoller(fix.poller, li)
+			svctest.AddInstanceToPoller(fix.poller, li)
 			break
 		}
 	}
@@ -162,7 +163,7 @@ func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault(t *testing.T) {
 	// this test uses that instead) -- t.Setenv panics if called on a parallel test, and
 	// main's t.Parallel()-only version has no isolation of its own, so combining or
 	// preferring it would reintroduce the exact flake this Setenv call fixes.
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
@@ -179,7 +180,7 @@ func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault(t *testing.T) {
 	require.NoError(t, err)
 	for _, li := range loaded {
 		if li.Title == "default-resolve-session" {
-			addInstanceToPoller(fix.poller, li)
+			svctest.AddInstanceToPoller(fix.poller, li)
 			break
 		}
 	}

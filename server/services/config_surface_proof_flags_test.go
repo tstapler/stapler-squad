@@ -13,14 +13,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 // bkfFlagWriter returns a setter that writes a flag through the production RPC
 // into a config dir private to this test.
 func bkfFlagWriter(t *testing.T) func(name string, on bool) {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	svc := NewFeatureFlagService()
 	return func(name string, on bool) {
 		t.Helper()
@@ -30,7 +31,7 @@ func bkfFlagWriter(t *testing.T) func(name string, on bool) {
 
 func TestConfigSurfaceProof_EscapeEventsDBMigrate_ChangesMigrationEnabled(t *testing.T) {
 	set := bkfFlagWriter(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(config.EscapeEventsDBMigrateFeatureFlag, setting.(bool))
 		return config.LoadConfig().EscapeEventsDBMigrateEnabled()
 	}, false, true)
@@ -47,7 +48,7 @@ func TestConfigSurfaceProof_FilesFlags_ChangeServerSideGates(t *testing.T) {
 		filesEditLargeFlagName:  FilesEditLargeEnabled,
 	} {
 		t.Run(name, func(t *testing.T) {
-			assertConfigChangesBehavior(t, func(setting any) any {
+			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 				set(name, setting.(bool))
 				return reader(t.Context())
 			}, false, true)
@@ -57,7 +58,7 @@ func TestConfigSurfaceProof_FilesFlags_ChangeServerSideGates(t *testing.T) {
 
 func TestConfigSurfaceProof_ProgramCLIFlagProbe_ChangesProbeGate(t *testing.T) {
 	set := bkfFlagWriter(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(programCLIFlagProbeFlagName, setting.(bool))
 		return ProgramCLIFlagProbeEnabled()
 	}, false, true)
@@ -65,7 +66,7 @@ func TestConfigSurfaceProof_ProgramCLIFlagProbe_ChangesProbeGate(t *testing.T) {
 
 func TestConfigSurfaceProof_GitHubIssueProgressComments_ChangesGate(t *testing.T) {
 	set := bkfFlagWriter(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(githubIssueProgressCommentsFlagName, setting.(bool))
 		return GitHubIssueProgressCommentsEnabled()
 	}, false, true)
@@ -73,15 +74,15 @@ func TestConfigSurfaceProof_GitHubIssueProgressComments_ChangesGate(t *testing.T
 
 func TestConfigSurfaceProof_SDDDefaultPipeline_ChangesNewItemDefault(t *testing.T) {
 	set := bkfFlagWriter(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
-		set(sddDefaultPipelineFlagName, setting.(bool))
-		return sddDefaultPipelineEnabled()
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
+		set(SddDefaultPipelineFlagName, setting.(bool))
+		return SddDefaultPipelineEnabled()
 	}, false, true)
 }
 
 func TestConfigSurfaceProof_CompletionReviewer_ChangesSubscriberGate(t *testing.T) {
 	set := bkfFlagWriter(t)
-	assertConfigChangesBehavior(t, func(setting any) any {
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(completionReviewerFlagName, setting.(bool))
 		return completionReviewerEnabled()
 	}, false, true)
@@ -91,15 +92,15 @@ func TestConfigSurfaceProof_CompletionReviewer_ChangesSubscriberGate(t *testing.
 // the only thing that can turn the answer off.
 type bkfForeignClaims struct{}
 
-func (bkfForeignClaims) ForeignClaim(string) (session.ClaimRecord, bool) {
-	return session.ClaimRecord{}, true
+func (bkfForeignClaims) ForeignClaim(string) (hostclaim.ClaimRecord, bool) {
+	return hostclaim.ClaimRecord{}, true
 }
 
 func TestConfigSurfaceProof_CrossHostClaimDedup_ChangesClaimLookup(t *testing.T) {
 	set := bkfFlagWriter(t)
 	lookup := NewFlagGatedForeignClaimLookup(bkfForeignClaims{})
-	assertConfigChangesBehavior(t, func(setting any) any {
-		set(crossHostClaimDedupFlagName, setting.(bool))
+	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
+		set(CrossHostClaimDedupFlagName, setting.(bool))
 		_, found := lookup.ForeignClaim("https://example.test/issues/1")
 		return found
 	}, false, true)
@@ -113,7 +114,7 @@ func TestConfigSurfaceProof_AutonomyNudgeFlags_ChangeEffectiveReaders(t *testing
 		config.AutonomousStallNudgeFeatureFlag: config.EffectiveAutonomousStallNudgeEnabled,
 	} {
 		t.Run(name, func(t *testing.T) {
-			assertConfigChangesBehavior(t, func(setting any) any {
+			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 				set(name, setting.(bool))
 				return reader(config.LoadConfig())
 			}, false, true)
@@ -132,7 +133,7 @@ func TestConfigSurfaceProof_NotificationActionFlags_ChangeEffectiveFlag(t *testi
 		agentWakeTriggersFlagName:         "dispatcher",
 	} {
 		t.Run(name, func(t *testing.T) {
-			assertConfigChangesBehavior(t, func(setting any) any {
+			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 				set(name, setting.(bool))
 				return effectiveFlag(name, decisionPoint)
 			}, false, true)
@@ -151,7 +152,7 @@ func TestConfigSurfaceProof_Should_IncludeAllSixAttentionFlags_When_Run(t *testi
 		attentionInboxConsolidationFlagName:       func(f AttentionFlags) bool { return f.InboxConsolidation },
 	} {
 		t.Run(name, func(t *testing.T) {
-			assertConfigChangesBehavior(t, func(setting any) any {
+			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 				set(name, setting.(bool))
 				return reader(LoadAttentionFlags())
 			}, false, true)

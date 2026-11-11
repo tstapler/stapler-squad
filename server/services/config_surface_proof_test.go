@@ -364,6 +364,21 @@ var configSurfaceProofs = map[surfaceID]proofEntry{
 	"flag:ghostty_renderer": {
 		exempt: "client-only: no Go reader; the web client picks the terminal renderer (xterm.js vs ghostty-web) on it (web-app/src/lib/terminal/TerminalPool.tsx via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},
+	"flag:mobile_input_layer": {
+		exempt: "client-only: no Go reader; the web client attaches the Android phone input layer and picks the terminal renderer on it (web-app/src/lib/terminal/rendererPolicy.ts) (via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:mobile_input_queue": {
+		exempt: "client-only: no Go reader; the web client gates the offline keystroke queue sub-feature on it (client reader lands with Phase 3) (via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:mobile_input_diagnostics": {
+		exempt: "client-only: no Go reader; the web client gates the full diagnostics sheet on it (client reader lands with Phase 4.1) (via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:mobile_input_compose": {
+		exempt: "client-only: no Go reader; the web client gates the compose box on it (client reader lands with Phase 4.2) (via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
+	"flag:mobile_input_edit_context": {
+		exempt: "client-only: no Go reader; the web client gates the EditContext path on it (client reader lands with Phase 6) (via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
+	},
 	"flag:window_keep_alive": {
 		exempt: "client-only: no Go reader; the web client gates window keep-alive on it (client reader lands with the window keep-alive story via flagStore), and the server only persists and echoes the value through GetFeatureFlags",
 	},
@@ -446,7 +461,7 @@ func TestConfigSurfaceProofs_EveryRegisteredSurfaceHasEntry_WhenFieldsEnumerated
 	if got := len(pendingSurfaces); got != pendingCeiling {
 		t.Errorf("pendingSurfaces has %d entries, pendingCeiling is %d: delete pending lines and lower the ceiling together; never add", got, pendingCeiling)
 	}
-	errs := validateConfigSurfaces(allConfigSurfaces(), configSurfaceProofs, pendingSurfaces, testFuncBodies(t, "."))
+	errs := validateConfigSurfaces(allConfigSurfaces(), configSurfaceProofs, pendingSurfaces, testFuncBodies(t, ".", "backlogsvc", "wsconn"))
 	if len(errs) > 0 {
 		t.Fatalf("config surface proof violations:\n%s", strings.Join(errs, "\n"))
 	}

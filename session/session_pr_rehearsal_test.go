@@ -276,7 +276,7 @@ func buildSyntheticRehearsalDB(t *testing.T, repo *EntRepository, size rehearsal
 			uuids = append(uuids, fmt.Sprintf("syn-uuid-%05d", i))
 			builders = append(builders, syntheticSession(repo, i, size.withPR))
 		}
-		require.NoError(t, repo.client.Session.CreateBulk(builders...).Exec(ctx))
+		require.NoError(t, repo.Client.Session.CreateBulk(builders...).Exec(ctx))
 	}
 	for from := 0; from < size.items; from += chunk {
 		to := min(from+chunk, size.items)
@@ -284,9 +284,9 @@ func buildSyntheticRehearsalDB(t *testing.T, repo *EntRepository, size rehearsal
 		for i := from; i < to; i++ {
 			builders = append(builders, syntheticItem(repo, i, size.itemsWithPR))
 		}
-		require.NoError(t, repo.client.BacklogItem.CreateBulk(builders...).Exec(ctx))
+		require.NoError(t, repo.Client.BacklogItem.CreateBulk(builders...).Exec(ctx))
 	}
-	items, err := repo.client.BacklogItem.Query().Where(backlogitem.PrNumberGT(0)).Limit(size.itemsWithPR).All(ctx)
+	items, err := repo.Client.BacklogItem.Query().Where(backlogitem.PrNumberGT(0)).Limit(size.itemsWithPR).All(ctx)
 	require.NoError(t, err)
 	for i, it := range items {
 		_, err := repo.CreateItemSession(ctx, ItemSessionData{ItemID: it.ID.String(), SessionUUID: uuids[i], SessionRole: SessionRoleWork})
@@ -298,7 +298,7 @@ func buildSyntheticRehearsalDB(t *testing.T, repo *EntRepository, size rehearsal
 // every 9th without a stored URL, 1 without owner/repo; the poisoned-row classes
 // (link cap, validator) only occur in real data).
 func syntheticSession(repo *EntRepository, i, withPR int) *ent.SessionCreate {
-	b := repo.client.Session.Create().
+	b := repo.Client.Session.Create().
 		SetTitle(fmt.Sprintf("syn-%05d", i)).SetUUID(fmt.Sprintf("syn-uuid-%05d", i)).
 		SetPath(fmt.Sprintf("/nonexistent/syn/%05d", i)).SetProgram("claude").SetStatus(int(Paused))
 	if i >= withPR {
@@ -321,7 +321,7 @@ func syntheticSession(repo *EntRepository, i, withPR int) *ent.SessionCreate {
 
 func syntheticItem(repo *EntRepository, i, withPR int) *ent.BacklogItemCreate {
 	statuses := []string{"done", "pr_pending", "archived", "in_progress"}
-	b := repo.client.BacklogItem.Create().SetTitle(fmt.Sprintf("syn-item-%05d", i)).SetPriority(3).SetStatus(statuses[i%len(statuses)])
+	b := repo.Client.BacklogItem.Create().SetTitle(fmt.Sprintf("syn-item-%05d", i)).SetPriority(3).SetStatus(statuses[i%len(statuses)])
 	if i < withPR {
 		b.SetPrNumber(5000 + i).SetPrURL(fmt.Sprintf("https://github.com/org%d/repo%d/pull/%d", i%12, i%7, 5000+i))
 	}

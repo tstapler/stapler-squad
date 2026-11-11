@@ -1,13 +1,19 @@
 import { Terminal } from "@xterm/xterm";
 import { attachAndroidImeInput, compositionDelta } from "../androidImeInput";
 
-// xterm's CompositionHelper chains setTimeout(0) callbacks that read the render service. With real
-// timers a CPU stall can fire the test's own wait first, so term.dispose() ran before the chained
-// callback and it threw "reading 'dimensions'". Fake timers drain them deterministically before dispose.
+// xterm's CompositionHelper chains setTimeout(0) callbacks that read the render service. Under real
+// timers a CPU stall could run term.dispose() before them ("reading 'dimensions'"). Fake timers make
+// ordering deterministic: every test drains pending callbacks, then disposes, then discards leftovers.
+const terms: Terminal[] = [];
 beforeEach(() => jest.useFakeTimers());
-afterEach(() => jest.useRealTimers());
+afterEach(async () => {
+  await jest.advanceTimersByTimeAsync(50);
+  terms.splice(0).forEach((t) => t.dispose());
+  jest.clearAllTimers();
+  jest.useRealTimers();
+});
 const flush = async () => {
-  jest.advanceTimersByTime(50);
+  await jest.advanceTimersByTimeAsync(50);
 };
 
 /** Replays the event sequence Android Gboard emits for a composing word (keydown 229, no per-key keys). */
@@ -57,6 +63,7 @@ function setup(attach: boolean, pasted: string[] = []) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const term = new Terminal();
+  terms.push(term);
   term.open(host);
   const sent: string[] = [];
   term.onData((d) => sent.push(d));
@@ -74,7 +81,6 @@ describe("stock xterm with Gboard composition (documents the bug)", () => {
     ime.compose("hi");
     await flush();
     expect(sent).toEqual([]);
-    term.dispose();
   });
 });
 
@@ -87,7 +93,6 @@ describe("attachAndroidImeInput", () => {
     await flush();
     expect(appSent.join("")).toBe("hi");
     expect(sent).toEqual([]); // xterm's own composition/diff paths are fully bypassed (no double send)
-    term.dispose();
   });
 
   it("does not resend text at compositionend", async () => {
@@ -97,7 +102,6 @@ describe("attachAndroidImeInput", () => {
     ime.commit("hi");
     await flush();
     expect(appSent.join("")).toBe("hi");
-    term.dispose();
   });
 
   it("sends the correction when autocorrect rewrites the composing word", async () => {
@@ -107,7 +111,6 @@ describe("attachAndroidImeInput", () => {
     await flush();
     // 'e','h' replaced by 'h','e': DEL x2 then "he"
     expect(appSent.join("")).toBe("teh\x7f\x7fhe");
-    term.dispose();
   });
 
   it("handles consecutive words without carrying stale state", async () => {
@@ -119,7 +122,6 @@ describe("attachAndroidImeInput", () => {
     ime.commit("cd");
     await flush();
     expect(appSent.join("")).toBe("ab cd");
-    term.dispose();
   });
 
   it("sends non-composing insertText and backspace", async () => {
@@ -130,7 +132,6 @@ describe("attachAndroidImeInput", () => {
     await flush();
     expect(appSent.join("")).toBe("x\x7f");
     expect(sent).toEqual([]);
-    term.dispose();
   });
 
   it("leaves real keys (Enter/Tab, keyCode != 229) to xterm", async () => {
@@ -139,7 +140,6 @@ describe("attachAndroidImeInput", () => {
     await flush();
     expect(sent).toEqual(["\r"]);
     expect(appSent).toEqual([]);
-    term.dispose();
   });
 
   it("stops intercepting after dispose", async () => {
@@ -148,7 +148,6 @@ describe("attachAndroidImeInput", () => {
     ime.compose("h");
     await flush();
     expect(appSent).toEqual([]);
-    term.dispose();
   });
 });
 
@@ -162,7 +161,6 @@ describe("attachAndroidImeInput re-composition over committed text", () => {
     ime.commit("word");
     await flush();
     expect(appSent.join("")).toBe("word");
-    term.dispose();
   });
 
   it("does not resend the remaining word after backspacing into it", async () => {
@@ -175,7 +173,6 @@ describe("attachAndroidImeInput re-composition over committed text", () => {
     ime.commit("worl");
     await flush();
     expect(appSent.join("")).toBe("worx\x7fl");
-    term.dispose();
   });
 
   it("still types a new word after a space as a fresh composition", async () => {
@@ -187,7 +184,6 @@ describe("attachAndroidImeInput re-composition over committed text", () => {
     ime.commit("wor");
     await flush();
     expect(appSent.join("")).toBe("wor wor");
-    term.dispose();
   });
 });
 
@@ -200,7 +196,6 @@ describe("attachAndroidImeInput paste routing", () => {
     expect(pasted).toEqual(["ls\nrm -rf x"]);
     expect(appSent).toEqual([]);
     expect(sent).toEqual([]);
-    term.dispose();
   });
 
   it("routes multi-character insertText and insertFromPaste through paste", async () => {
@@ -211,7 +206,6 @@ describe("attachAndroidImeInput paste routing", () => {
     await flush();
     expect(pasted).toEqual(["hello world", "clip"]);
     expect(appSent).toEqual([]);
-    term.dispose();
   });
 
   it("sends a single astral character (emoji) as typed text", async () => {
@@ -221,7 +215,6 @@ describe("attachAndroidImeInput paste routing", () => {
     await flush();
     expect(appSent).toEqual(["\u{1F600}"]);
     expect(pasted).toEqual([]);
-    term.dispose();
   });
 
   it("treats insertReplacementText as a correction of the current word", async () => {
@@ -231,7 +224,6 @@ describe("attachAndroidImeInput paste routing", () => {
     ime.insertText("the", "insertReplacementText");
     await flush();
     expect(appSent.join("")).toBe("teh\x7f\x7fhe");
-    term.dispose();
   });
 });
 

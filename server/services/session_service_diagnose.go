@@ -87,6 +87,7 @@ const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
 	"mcp__stapler-squad__create_backlog_item," +
 	"mcp__stapler-squad__post_backlog_update," +
 	"mcp__stapler-squad__get_backlog_item," +
+	"mcp__stapler-squad__get_backlog_stuck_report," +
 	"mcp__stapler-squad__submit_diagnosis_result," +
 	"mcp__stapler-squad__diagnose_nudge_session," +
 	"mcp__stapler-squad__diagnose_reset_remediation," +
@@ -174,8 +175,8 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
 	}
-	if s.reviewQueuePoller != nil {
-		s.reviewQueuePoller.AddInstance(instance)
+	if s.ReviewQueuePoller != nil {
+		s.ReviewQueuePoller.AddInstance(instance)
 	}
 	if s.sessionTagPoller != nil {
 		s.sessionTagPoller.AddInstance(instance)
@@ -241,8 +242,8 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateWorktreeSession save: %w", err)
 	}
-	if s.reviewQueuePoller != nil {
-		s.reviewQueuePoller.AddInstance(instance)
+	if s.ReviewQueuePoller != nil {
+		s.ReviewQueuePoller.AddInstance(instance)
 	}
 	if s.sessionTagPoller != nil {
 		s.sessionTagPoller.AddInstance(instance)

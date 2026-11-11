@@ -18,6 +18,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	gh "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // setupTestGitRepoForPreview creates a minimal git repo for PreviewWorktreePath's
@@ -45,10 +46,10 @@ func setupTestGitRepoForPreview(t *testing.T) string {
 // TestPreviewDestinationPath_GitHubURL_ReturnsExactPath verifies mode=github_url resolves
 // a shorthand/URL to the exact clone destination RepoPathManager would use.
 func TestPreviewDestinationPath_GitHubURL_ReturnsExactPath(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	withFakeHome(t)
+	svctest.WithFakeHome(t)
 
 	resp, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{
 		Input: "https://github.com/tstapler/stapler-squad",
@@ -90,11 +91,11 @@ func TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_Returns
 		}))
 	require.NoError(t, err)
 
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	svc.SetUserPRCache(cache)
 
-	withFakeHome(t)
+	svctest.WithFakeHome(t)
 
 	resp, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{
 		Input: "https://" + enterpriseHost + "/corp/some-repo",
@@ -112,7 +113,7 @@ func TestPreviewDestinationPath_GitHubURL_EnterpriseHostViaCachedAccount_Returns
 // unparseable input is a normal success response with unresolved_reason set, not an error
 // — "user hasn't finished typing" is the common case.
 func TestPreviewDestinationPath_GitHubURL_UnrecognizedInput_ReturnsUnresolvedReason(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	resp, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{
@@ -129,10 +130,10 @@ func TestPreviewDestinationPath_GitHubURL_UnrecognizedInput_ReturnsUnresolvedRea
 // returns the deterministic directory prefix (IsExact=false), never a fabricated full path.
 func TestPreviewDestinationPath_NewWorktree_ReturnsApproximatePrefix(t *testing.T) {
 	repoDir := setupTestGitRepoForPreview(t)
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
-	withFakeHome(t)
+	svctest.WithFakeHome(t)
 
 	resp, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{
 		Mode:        "new_worktree",
@@ -148,7 +149,7 @@ func TestPreviewDestinationPath_NewWorktree_ReturnsApproximatePrefix(t *testing.
 // TestPreviewDestinationPath_NewWorktree_MissingParams_ReturnsUnresolvedReason verifies
 // missing repo_path/session_name short-circuits to unresolved rather than erroring.
 func TestPreviewDestinationPath_NewWorktree_MissingParams_ReturnsUnresolvedReason(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	resp, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{
@@ -161,7 +162,7 @@ func TestPreviewDestinationPath_NewWorktree_MissingParams_ReturnsUnresolvedReaso
 // TestPreviewDestinationPath_UnknownMode_ReturnsInvalidArgument verifies an unrecognized
 // mode is a real client bug (CodeInvalidArgument), unlike ambiguous/unresolved input.
 func TestPreviewDestinationPath_UnknownMode_ReturnsInvalidArgument(t *testing.T) {
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 
 	_, err := svc.PreviewDestinationPath(context.Background(), connect.NewRequest(&sessionv1.PreviewDestinationPathRequest{

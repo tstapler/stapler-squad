@@ -246,18 +246,18 @@ func (e *ConfiguredWorkflowEngine) PendingGatesStructuralOnly(item BacklogItemTr
 
 // isStatefulGateKind reports the kinds whose truth is a persisted record, so
 // they are stateful regardless of the stored stateful flag.
-func isStatefulGateKind(k GateKind) bool {
+func IsStatefulGateKind(k GateKind) bool {
 	return k == GateKindHumanApproval || k == GateKindAutomatedReview || k == GateKindCustom
 }
 
 // IsRecordedGateKind is the exported form of isStatefulGateKind for handlers
 // that must validate the stateful flag against the kind.
-func IsRecordedGateKind(k GateKind) bool { return isStatefulGateKind(k) }
+func IsRecordedGateKind(k GateKind) bool { return IsStatefulGateKind(k) }
 
 // EffectiveGateStateful is the single definition of gate statefulness: the
 // stored flag OR a kind that is always recorded. Every reader uses it.
 func EffectiveGateStateful(kind GateKind, stored bool) bool {
-	return stored || isStatefulGateKind(kind)
+	return stored || IsStatefulGateKind(kind)
 }
 
 func (g resolvedGate) effectiveStateful() bool {

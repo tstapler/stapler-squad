@@ -1,0 +1,10 @@
+# Hand-written: exposes docs read by tests (Gazelle ignores BUILD files without Go sources).
+exports_files(
+    ["session-lifecycle.md"],
+    visibility = ["//session:__pkg__"],
+)
+
+exports_files(
+    ["client-network-telemetry.md"],
+    visibility = ["//server/analytics:__pkg__"],
+)

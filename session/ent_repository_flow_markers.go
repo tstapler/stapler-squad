@@ -62,7 +62,7 @@ func (r *EntRepository) RecordFlowMarkerForItemPR(ctx context.Context, itemID st
 		return
 	}
 	r.insertFlowMarker(ctx, id, kind, value, 0, fmt.Sprintf("%s|%s|item", kind, id), func() (int, error) {
-		return r.client.BacklogItem.Query().Where(backlogitem.ID(id)).Select(backlogitem.FieldPrNumber).Int(ctx)
+		return r.Client.BacklogItem.Query().Where(backlogitem.ID(id)).Select(backlogitem.FieldPrNumber).Int(ctx)
 	})
 }
 
@@ -82,7 +82,7 @@ func (r *EntRepository) insertFlowMarker(ctx context.Context, id uuid.UUID, kind
 		}
 		prNumber = pr
 	}
-	if _, err := r.client.BacklogFlowMarker.Create().
+	if _, err := r.Client.BacklogFlowMarker.Create().
 		SetItemID(id).
 		SetKind(string(kind)).
 		SetValue(value).
@@ -96,7 +96,7 @@ func (r *EntRepository) insertFlowMarker(ctx context.Context, id uuid.UUID, kind
 
 // ListFlowMarkers returns markers of kind with since <= created_at < until, oldest first.
 func (r *EntRepository) ListFlowMarkers(ctx context.Context, kind FlowMarkerKind, since, until time.Time) ([]FlowMarkerData, error) {
-	rows, err := r.client.BacklogFlowMarker.Query().
+	rows, err := r.Client.BacklogFlowMarker.Query().
 		Where(backlogflowmarker.Kind(string(kind)),
 			backlogflowmarker.CreatedAtGTE(since.UTC()),
 			backlogflowmarker.CreatedAtLT(until.UTC())).
@@ -114,7 +114,7 @@ func (r *EntRepository) ListFlowMarkersForItem(ctx context.Context, itemID strin
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	rows, err := r.client.BacklogFlowMarker.Query().
+	rows, err := r.Client.BacklogFlowMarker.Query().
 		Where(backlogflowmarker.ItemID(id),
 			backlogflowmarker.Kind(string(kind)),
 			backlogflowmarker.CreatedAtGTE(since.UTC()),
@@ -175,6 +175,9 @@ func (r *EntFlowReader) MarkerCapture(ctx context.Context) (flow.MarkerCapture, 
 	if c.FirstTrigger, err = r.firstMarkerAt(ctx, FlowMarkerPRFixTrigger); err != nil {
 		return flow.MarkerCapture{}, err
 	}
+	if c.FirstNudge, err = r.firstMarkerAt(ctx, FlowMarkerManualNudge); err != nil {
+		return flow.MarkerCapture{}, err
+	}
 	return c, nil
 }
 
@@ -192,8 +195,8 @@ func (r *EntFlowReader) firstMarkerAt(ctx context.Context, kind FlowMarkerKind) 
 	return first.CreatedAt.UTC(), nil
 }
 
-// CaptureSince is the earliest of the first stuck episode, first pr_fix_trigger
-// marker and first pr_fix_outcome marker; zero when none exist. It is the date
+// CaptureSince is the earliest of the first stuck episode and the first
+// pr_fix_trigger, pr_fix_outcome and manual_nudge marker; zero when none exist. It is the date
 // before which capture-dependent metrics are unavailable or lower bounds.
 func (r *EntFlowReader) CaptureSince(ctx context.Context) (time.Time, error) {
 	sc, err := r.StuckCapture(ctx)
@@ -205,10 +208,14 @@ func (r *EntFlowReader) CaptureSince(ctx context.Context) (time.Time, error) {
 		return time.Time{}, err
 	}
 	var earliest time.Time
-	for _, t := range []time.Time{sc.CaptureSince, mc.FirstTrigger, mc.FirstOutcome} {
+	for _, t := range []time.Time{sc.CaptureSince, mc.FirstTrigger, mc.FirstOutcome, mc.FirstNudge} {
 		if !t.IsZero() && (earliest.IsZero() || t.Before(earliest)) {
 			earliest = t
 		}
 	}
 	return earliest, nil
 }
+
+// SetMarkerClock overrides the clock behind flow-marker timestamps and rate limiting; call it
+// before the first marker is recorded (tests).
+func (r *EntRepository) SetMarkerClock(now func() time.Time) { r.markerClock = now }

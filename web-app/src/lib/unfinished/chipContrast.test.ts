@@ -9,7 +9,7 @@ function parseThemeColors(source: string): Record<string, Record<string, string>
   const themes: Record<string, Record<string, string>> = {};
   const starts = [...source.matchAll(/export const (\w+Theme) = createTheme\(vars, \{/g)];
   starts.forEach((m, i) => {
-    const body = source.slice(m.index!, starts[i + 1]?.index ?? source.length);
+    const body = source.slice((m.index ?? 0), starts[i + 1]?.index ?? source.length);
     const colors: Record<string, string> = {};
     for (const t of body.matchAll(/\b(\w+): "(#[0-9a-fA-F]{6})"/g)) colors[t[1]] = t[2];
     themes[m[1]] = colors;
@@ -35,7 +35,7 @@ describe("chipContrast", () => {
 
   it("parses every theme", () => {
     expect(Object.keys(themes).sort()).toEqual(
-      ["cleanTheme", "cyberpunk77Theme", "darkTheme", "lightTheme", "matrixTheme", "wh40kTheme"].sort()
+      ["cleanTheme", "cyberpunk77Theme", "darkTheme", "lightTheme", "matrixTheme", "grimdarkTheme"].sort()
     );
   });
 

@@ -19,6 +19,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"gopkg.in/yaml.v3"
@@ -56,7 +57,7 @@ func (s *spyRulesStore) Upsert(ctx context.Context, spec RuleSpec) (RuleSpec, er
 // newRulesServiceWithAI creates a RulesService wired with the given mock AI client.
 func newRulesServiceWithAI(t *testing.T, aiClient AIClient) *RulesService {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
@@ -132,7 +133,7 @@ func TestGenerateSuggestedRule_UnspecifiedSource_ReturnsError(t *testing.T) {
 func TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented(t *testing.T) {
 	t.Parallel()
 	// T-UNIT-GO-003
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
@@ -152,7 +153,7 @@ func TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented(t *testing.T) {
 func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	t.Parallel()
 	// T-UNIT-GO-004
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 
@@ -216,7 +217,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 func TestGenerateSuggestedRule_NeverCallsUpsert(t *testing.T) {
 	t.Parallel()
 	// T-UNIT-GO-007
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	baseStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 	spy := &spyRulesStore{RulesStore: baseStore}
@@ -383,7 +384,7 @@ func TestGetProgramAnalytics_ReturnsExpectedFields(t *testing.T) {
 func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testing.T) {
 	t.Parallel()
 	// T-UNIT-GO (attachConflictInfo): fixture rule at priority 500 overlaps suggestion at 100.
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 
@@ -423,7 +424,7 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 // interference cannot affect coveredSubcommands results when testProg is used as the program.
 func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 	for i, spec := range specs {
@@ -651,7 +652,7 @@ func TestCoveredSubcommands(t *testing.T) {
 // newSimpleRulesService creates a RulesService backed by an in-memory SQLite DB.
 func newSimpleRulesService(t *testing.T) *RulesService {
 	t.Helper()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	rulesStore, err := NewRulesStore(storage)
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
@@ -1628,7 +1629,7 @@ func TestReloadClaudeSettingsRules_WatcherNotConfigured_ReturnsUnimplemented(t *
 func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)","Bash(npm test*)"]}}`)
 	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
@@ -1646,7 +1647,7 @@ func TestReloadClaudeSettingsRules_ValidSettings_ReturnsSuccessAndRuleCount(t *t
 func TestReloadClaudeSettingsRules_MalformedPath_ReturnsFailureWithLastKnownGoodCount(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 	svc.SetClaudeSettingsWatcher(NewClaudeSettingsWatcher("", func(rules []classifier.Rule, origin string, notify bool) {
@@ -2119,7 +2120,7 @@ func TestReconcilePendingApprovals_HumanWinsRace(t *testing.T) {
 	}()
 	<-humanClaimed2
 
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	counts := &reconcileCounts{}
 	rulesSvc.reconcilePendingApprovals(counts)
 	assert.Equal(t, 1, counts.deferredToHuman)
@@ -2152,7 +2153,7 @@ func TestReconcilePendingApprovals_CapsAtMaxPerPass(t *testing.T) {
 	// Go through reconcilePendingApprovalsSafe (not a direct reconcilePendingApprovals call)
 	// for this assertion — the "capped" summary log is emitted by Safe's deferred summary
 	// log, not by the inner loop function itself.
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	doneCh := make(chan struct{})
 	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
 	rulesSvc.reconcilePendingApprovalsSafe()
@@ -2216,7 +2217,7 @@ func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
 	}
 	rulesSvc.approvalSvc = fake
 
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	done := make(chan struct{})
 	rulesSvc.reconcileDoneHook = func() { close(done) }
 
@@ -2238,7 +2239,7 @@ func TestReconcilePendingApprovals_PanicIsRecovered(t *testing.T) {
 // declined_by_ci_guard_count, never lost_to_concurrent_pass_count, and must leave the item
 // pending.
 func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 
 	store := NewApprovalStore("")
@@ -2251,7 +2252,7 @@ func TestReconcilePendingApprovals_CIRedGuardDecline_LoggedAndCountedSeparately(
 	a := bashApproval("appr-ci-guard", "sess-ci-guard", "git status", time.Now())
 	require.NoError(t, store.Create(a))
 
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	doneCh := make(chan struct{})
 	rulesSvc.reconcileDoneHook = func() { close(doneCh) }
 
@@ -2284,7 +2285,7 @@ func TestReconcilePendingApprovals_LostToConcurrentPass_CountedSeparatelyFromCIG
 	}
 	rulesSvc.approvalSvc = fake
 
-	logs := captureLogs(t)
+	logs := svctest.CaptureLogs(t)
 	counts := &reconcileCounts{}
 	rulesSvc.reconcilePendingApprovals(counts)
 

@@ -1,0 +1,275 @@
+// Command entc generates the session/ent code without invoking `go` or the network: it links the
+// schema package as an ordinary dependency, marshals each schema the way `ent generate` does
+// (entc/load) and runs the generator (entc/gen) with the flags in ent_flags.txt.
+//
+// It also owns the package listing (packages.bzl) the BUILD macro reads: -expect fails the action
+// when the generated tree differs from the checked-in listing, -update rewrites the listing.
+//
+// Usage: entc -pkg <import path> -schema-pkg <import path> -flags <file> -out <dir> [-expect <file> | -update <workspace-relative file>] <schema .go files...>
+package main
+
+import (
+	"flag"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+
+	"entgo.io/ent/entc/gen"
+	"entgo.io/ent/entc/load"
+	"entgo.io/ent/schema/field"
+)
+
+// schemas must list every ent.Schema type in the schema package; main verifies it against the
+// source files so a forgotten entry fails the action instead of silently dropping an entity.
+var schemas = allSchemas()
+
+func main() {
+	pkg := flag.String("pkg", "", "import path of the generated ent package")
+	schemaPkg := flag.String("schema-pkg", "", "import path of the schema package")
+	flagsFile := flag.String("flags", "", "file holding `--feature <name>` flags, as passed to `ent generate`")
+	out := flag.String("out", "", "output directory for the generated package (default: a temp dir with -update)")
+	expect := flag.String("expect", "", "packages.bzl the generated tree must match")
+	update := flag.String("update", "", "rewrite this workspace-relative packages.bzl (bazel run only)")
+	flag.Parse()
+	absolutize("GOROOT", "PATH")    // Bazel hands over execroot-relative paths; os/exec rejects a relative `go`
+	if os.Getenv("GOCACHE") == "" { // goimports runs `go env`, which wants a cache dir
+		if d, err := os.MkdirTemp("", "gocache"); err == nil {
+			defer os.RemoveAll(d)
+			os.Setenv("GOCACHE", d)
+		}
+	}
+	if *update != "" && *out == "" {
+		tmp, err := os.MkdirTemp("", "entc")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer os.RemoveAll(tmp)
+		*out = tmp
+	}
+	if *pkg == "" || *schemaPkg == "" || *flagsFile == "" || *out == "" {
+		log.Fatal("entc: -pkg, -schema-pkg, -flags and -out are required")
+	}
+	if err := checkNames(flag.Args()); err != nil {
+		log.Fatal(err)
+	}
+	features, err := readFeatures(*flagsFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var specs []*load.Schema
+	for _, s := range schemas {
+		b, err := load.MarshalSchema(s)
+		if err != nil {
+			log.Fatal(err)
+		}
+		spec, err := load.UnmarshalSchema(b)
+		if err != nil {
+			log.Fatal(err)
+		}
+		specs = append(specs, spec)
+	}
+	storage, err := gen.NewStorage("sql")
+	if err != nil {
+		log.Fatal(err)
+	}
+	cfg := &gen.Config{
+		Schema:   *schemaPkg,
+		Package:  *pkg,
+		Target:   *out,
+		Storage:  storage,
+		IDType:   &field.TypeInfo{Type: field.TypeInt},
+		Features: features,
+	}
+	g, err := gen.NewGraph(cfg, specs...)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := g.Gen(); err != nil {
+		log.Fatal(err)
+	}
+	listing, err := listTree(*out, *pkg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	switch {
+	case *update != "":
+		ws := os.Getenv("BUILD_WORKSPACE_DIRECTORY")
+		if ws == "" {
+			log.Fatal("entc: -update needs `bazel run` (BUILD_WORKSPACE_DIRECTORY unset)")
+		}
+		if err := os.WriteFile(filepath.Join(ws, *update), []byte(listing), 0o644); err != nil {
+			log.Fatal(err)
+		}
+	case *expect != "":
+		want, err := os.ReadFile(*expect)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if string(want) != listing {
+			log.Fatalf("entc: generated tree differs from %s\nRun: bazel run //tools/bzl/ent:update_packages", *expect)
+		}
+	}
+}
+
+// listTree renders ENT_PACKAGES, one (dir, files, imports) tuple per generated directory; dir is
+// relative to out ("." for the root package) and imports are the non-stdlib import paths.
+func listTree(out, pkg string) (string, error) {
+	files := map[string][]string{}
+	imps := map[string]map[string]bool{}
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(out, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") {
+			return err
+		}
+		rel, _ := filepath.Rel(out, p)
+		dir := filepath.ToSlash(filepath.Dir(rel))
+		files[dir] = append(files[dir], filepath.Base(rel))
+		af, err := parser.ParseFile(fset, p, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		if imps[dir] == nil {
+			imps[dir] = map[string]bool{}
+		}
+		for _, im := range af.Imports {
+			ip, _ := strconv.Unquote(im.Path.Value)
+			if first, _, _ := strings.Cut(ip, "/"); strings.Contains(first, ".") {
+				imps[dir][ip] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	dirs := make([]string, 0, len(files))
+	for d := range files {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	var b strings.Builder
+	b.WriteString("# Code generated by entc -update (bazel run //tools/bzl/ent:update_packages). DO NOT EDIT.\n")
+	b.WriteString("# Starlark cannot read a text file at load time, so the listing is a .bzl.\n")
+	b.WriteString("\"\"\"Generated ent package listing: (directory, srcs, deps) per package.\"\"\"\n\n")
+	b.WriteString("ENT_PACKAGES = [\n")
+	for _, d := range dirs {
+		sort.Strings(files[d])
+		var is []string
+		for i := range imps[d] {
+			is = append(is, i)
+		}
+		sort.Strings(is)
+		fmt.Fprintf(&b, "    (%q, %s, %s),\n", d, starlarkList(files[d]), starlarkList(is))
+	}
+	b.WriteString("]\n")
+	return b.String(), nil
+}
+
+func readFeatures(path string) ([]gen.Feature, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var feats []gen.Feature
+	fields := strings.Fields(string(b))
+	for i := 0; i < len(fields); i++ {
+		if fields[i] != "--feature" || i+1 == len(fields) {
+			return nil, fmt.Errorf("entc: %s: only `--feature <name>` is supported, got %q", path, fields[i])
+		}
+		i++
+		found := false
+		for _, f := range gen.AllFeatures {
+			if f.Name == fields[i] {
+				feats = append(feats, f)
+				found = true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("entc: unknown feature %q", fields[i])
+		}
+	}
+	return feats, nil
+}
+
+// checkNames compares the compiled-in schema list with the struct types in the source files that
+// embed ent.Schema (the rule entc/load uses).
+func checkNames(files []string) error {
+	want := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		af, err := parser.ParseFile(fset, f, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, d := range af.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, sp := range gd.Specs {
+				ts, ok := sp.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+				for _, fl := range st.Fields.List {
+					if sel, ok := fl.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Schema" {
+						want[ts.Name.Name] = true
+					}
+				}
+			}
+		}
+	}
+	for _, s := range schemas {
+		name := fmt.Sprintf("%T", s)[strings.LastIndex(fmt.Sprintf("%T", s), ".")+1:]
+		if !want[name] {
+			return fmt.Errorf("entc: compiled-in schema %s has no ent.Schema struct in the sources", name)
+		}
+		delete(want, name)
+	}
+	if len(want) > 0 {
+		var missing []string
+		for n := range want {
+			missing = append(missing, n)
+		}
+		sort.Strings(missing)
+		return fmt.Errorf("entc: schemas missing from allSchemas() in tools/bzl/ent/entc/schemas.go: %v", missing)
+	}
+	return nil
+}
+
+func starlarkList(s []string) string {
+	q := make([]string, len(s))
+	for i, v := range s {
+		q[i] = strconv.Quote(v)
+	}
+	return "[" + strings.Join(q, ", ") + "]"
+}
+
+func absolutize(vars ...string) {
+	for _, v := range vars {
+		parts := filepath.SplitList(os.Getenv(v))
+		for i, p := range parts {
+			if p != "" && !filepath.IsAbs(p) {
+				if abs, err := filepath.Abs(p); err == nil {
+					parts[i] = abs
+				}
+			}
+		}
+		os.Setenv(v, strings.Join(parts, string(filepath.ListSeparator)))
+	}
+}

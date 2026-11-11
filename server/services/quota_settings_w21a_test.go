@@ -8,10 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func TestUpdateQuotaConfig_UpperBounds(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	i32 := func(v int32) *int32 { return &v }
 	cases := []struct {
 		name string
@@ -42,7 +43,7 @@ func TestUpdateQuotaConfig_UpperBounds(t *testing.T) {
 }
 
 func TestUpdateQuotaConfig_NilSettings_InvalidArgument(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	_, err := NewQuotaSettingsService().UpdateQuotaConfig(context.Background(),
 		connect.NewRequest(&sessionv1.UpdateQuotaConfigRequest{}))
 	require.Error(t, err)

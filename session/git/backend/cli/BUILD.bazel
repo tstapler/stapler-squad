@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "cli",
+    srcs = [
+        "cli.go",
+        "localgit.go",
+        "mutate.go",
+        "refs.go",
+        "status.go",
+        "worktree.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/git/backend/cli",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/git/backend",
+        "//session/git/redact",
+        "//telemetry",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cli",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cli_test",
+    srcs = [
+        "cli_test.go",
+        "exitcode_test.go",
+        "export_test.go",
+        "fake_runner_test.go",
+        "localgit_test.go",
+        "realgit_test.go",
+        "review_test.go",
+    ],
+    embed = [":cli"],
+    deps = [
+        "//executor/safeexec",
+        "//session/git/backend",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_crypto//ssh",
+    ],
+)

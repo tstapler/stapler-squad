@@ -1,0 +1,110 @@
+# Hand-written (HandBuildFile). Windows is cross-compile only, never tested under Bazel (ADR-005).
+load("@rules_go//go:def.bzl", "go_cross_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//tools/bzl:otel_weave_hermetic.bzl", "otel_cross_binary")
+
+platform(
+    name = "windows_amd64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+platform(
+    name = "windows_arm64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+# Pure Go: a cross-compiling C toolchain is not available, and the production sqlite driver is
+# pure Go (ADR-006). The tmux embed does not apply on Windows, so no embed tag config is set.
+# .goreleaser.yaml builds windows/{amd64,arm64} for all three binaries, so all six are here. The
+# .exe suffix on the real target puts the artifact at bazel-bin/.../<name>.exe; the alias keeps
+# the suffix-free label that the plan and CI use.
+otel_cross_binary(
+    name = "stapler-squad_windows_amd64.exe",
+    platform = ":windows_amd64",
+    target = "//:stapler-squad",
+)
+
+alias(
+    name = "stapler-squad_windows_amd64",
+    actual = ":stapler-squad_windows_amd64.exe",
+)
+
+go_cross_binary(
+    name = "ssq-mux_windows_amd64.exe",
+    platform = ":windows_amd64",
+    target = "//cmd/ssq-mux",
+)
+
+alias(
+    name = "ssq-mux_windows_amd64",
+    actual = ":ssq-mux_windows_amd64.exe",
+)
+
+go_cross_binary(
+    name = "ssq-hooks_windows_amd64.exe",
+    platform = ":windows_amd64",
+    target = "//cmd/ssq-hooks",
+)
+
+alias(
+    name = "ssq-hooks_windows_amd64",
+    actual = ":ssq-hooks_windows_amd64.exe",
+)
+
+otel_cross_binary(
+    name = "stapler-squad_windows_arm64.exe",
+    platform = ":windows_arm64",
+    target = "//:stapler-squad",
+)
+
+alias(
+    name = "stapler-squad_windows_arm64",
+    actual = ":stapler-squad_windows_arm64.exe",
+)
+
+go_cross_binary(
+    name = "ssq-mux_windows_arm64.exe",
+    platform = ":windows_arm64",
+    target = "//cmd/ssq-mux",
+)
+
+alias(
+    name = "ssq-mux_windows_arm64",
+    actual = ":ssq-mux_windows_arm64.exe",
+)
+
+go_cross_binary(
+    name = "ssq-hooks_windows_arm64.exe",
+    platform = ":windows_arm64",
+    target = "//cmd/ssq-hooks",
+)
+
+alias(
+    name = "ssq-hooks_windows_arm64",
+    actual = ":ssq-hooks_windows_arm64.exe",
+)
+
+# Cheap structural check that runs on any host: the cross output is a PE image (MZ header, and
+# "PE\0\0" at the offset stored at 0x3c). Does not execute the binary (ADR-005).
+sh_test(
+    name = "pe_header_test",
+    srcs = ["pe_header_test.sh"],
+    args = ["$(rootpath :stapler-squad_windows_amd64.exe)"],
+    data = [":stapler-squad_windows_amd64.exe"],
+)
+
+# Pattern for any windows-only test target: target_compatible_with makes Bazel report it
+# incompatible (skipped, not failed) on Linux and macOS. This probe is the repo's canary that the
+# mechanism works (check-platform-targets.sh asserts it); real windows-only tests are out of
+# scope (ADR-005).
+sh_test(
+    name = "windows_only_probe",
+    srcs = ["windows_only_probe.sh"],
+    target_compatible_with = ["@platforms//os:windows"],
+)

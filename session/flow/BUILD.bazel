@@ -1,0 +1,102 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "flow",
+    srcs = [
+        "aggregator.go",
+        "cache.go",
+        "classify_notes.go",
+        "clock.go",
+        "collapse.go",
+        "compare.go",
+        "config.go",
+        "deadlock.go",
+        "drill.go",
+        "drilldown.go",
+        "dwell.go",
+        "funnel.go",
+        "leadtime.go",
+        "limits.go",
+        "normalize.go",
+        "percentile.go",
+        "prfix.go",
+        "prfix_dwell.go",
+        "review.go",
+        "rework.go",
+        "run.go",
+        "sources.go",
+        "span.go",
+        "stuck.go",
+        "summary.go",
+        "summary_types.go",
+        "timeline.go",
+        "trends.go",
+        "types.go",
+        "verdict.go",
+        "verdict_series.go",
+        "window.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/flow",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/domain",
+        "@org_golang_x_sync//singleflight",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":flow",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "flow_test",
+    srcs = [
+        "aggregator_helpers_test.go",
+        "aggregator_test.go",
+        "cache_routing_test.go",
+        "cache_test.go",
+        "classify_notes_test.go",
+        "collapse_test.go",
+        "compare_test.go",
+        "deadlock_test.go",
+        "drilldown_test.go",
+        "drillkeys_test.go",
+        "dwell_test.go",
+        "fixtures_test.go",
+        "funnel_test.go",
+        "gaps_test.go",
+        "helpers12_test.go",
+        "leadtime_test.go",
+        "limits_test.go",
+        "normalize_test.go",
+        "percentile_test.go",
+        "prfix_dwell_test.go",
+        "prfix_test.go",
+        "rework_test.go",
+        "stuck_test.go",
+        "timeline_test.go",
+        "types_test.go",
+        "verdict_test.go",
+    ],
+    data = glob(["testdata/**"]) + [
+        ":go_sources",
+        "//:go.mod",
+        "//session/domain:go_sources",
+    ],
+    embed = [":flow"],
+    deps = [
+        "//session/domain",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by TestFlowImports, which walks the in-module import graph with go/build.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//visibility:private"],
+)

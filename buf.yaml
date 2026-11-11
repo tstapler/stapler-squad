@@ -1,8 +1,6 @@
 version: v2
 modules:
   - path: proto
-deps:
-  - buf.build/googleapis/googleapis
 lint:
   use:
     - STANDARD
@@ -11,9 +9,22 @@ lint:
   rpc_allow_google_protobuf_empty_requests: true
   rpc_allow_google_protobuf_empty_responses: true
   service_suffix: Service
+  # Owner decision 2026-11-06: permanent exceptions. Renaming these changes JSON enum names / drops legacy wire values
+  # (events.proto scroll enums are used by session/instance_scroll_forward.go and web-app TerminalOutput.tsx;
+  # SessionStatus aliases keep wire values 1,2,3,5).
+  ignore_only:
+    ENUM_VALUE_PREFIX:
+      - proto/session/v1/events.proto
+    ENUM_NO_ALLOW_ALIAS:
+      - proto/session/v1/types.proto
 breaking:
   use:
     - FILE
+  # The Bazel proto rules need go_package set in the source; buf's managed mode already generated the same
+  # import path (go_package_prefix in buf.gen.yaml), so generated output is unchanged. Removable once main has it.
+  ignore_only:
+    FILE_SAME_GO_PACKAGE:
+      - proto/session/v1
   except:
     # First version, no breaking changes to check
     - FIELD_SAME_NAME

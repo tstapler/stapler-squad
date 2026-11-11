@@ -33,7 +33,7 @@ func (e *steerEnv) setGuards(on bool) {
 
 func TestGuardsFlag_ShouldBeRegisteredDefaultOnGlobalOnlyAndApplyEveryFlipAtOnce(t *testing.T) {
 	e := newGuardsEnv(t)
-	require.True(t, featureFlagDefault(hiddenSessionReadonlyGuardsFlagName), "default on")
+	require.True(t, FeatureFlagDefault(hiddenSessionReadonlyGuardsFlagName), "default on")
 	for _, kf := range knownFeatureFlags {
 		if kf.name == hiddenSessionReadonlyGuardsFlagName {
 			assert.Empty(t, kf.scopes, "global only")

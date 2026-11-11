@@ -50,9 +50,9 @@ var EntSchemaCreateMu sync.Mutex
 // EntRepository implements the Repository interface using Ent ORM as the storage backend.
 // It provides type-safe database operations with automatic schema migrations.
 type EntRepository struct {
-	client          *ent.Client
+	Client          *ent.Client
 	driver          dialect.Driver // instrumented writer/reader driver behind client; nil for NewEntRepositoryFromClient
-	dbPath          string
+	DbPath          string
 	pendingGuidance pendingGuidanceCache
 
 	// prVerifyCountersTrusted flips true once this process's PR startup
@@ -77,6 +77,9 @@ type EntRepository struct {
 	// NewTestEntRepository.
 	seedURI string
 
+	// migrations overrides DefaultStartupMigrations (nil = use the default); set via WithMigrations.
+	migrations []Migration
+
 	// wakeChanged is called after any WakeTrigger row change so the wake timer
 	// can re-arm (SetWakeChangeHook).
 	wakeChanged atomic.Pointer[func()]
@@ -99,18 +102,18 @@ type EntRepository struct {
 
 	// chainFirer is nil-safe — dispatchChainFire nil-checks before calling it
 	// (dispatch is best-effort and never blocks or fails the underlying
-	// mutation). Wired via SetChainFirer, typically by Storage.WireChainFirer's
+	// mutation). Wired via SetChainFirer, typically by WireChainFirer's
 	// forwarding call in server/dependencies.go. Used by
 	// TransitionBacklogItemStatus to fire the pipeline-chain continuation
 	// (webhook-triggers Phase 6, AC5/AC9) once a "done" transition commits.
-	chainFirer *ChainFirer
+	ChainFirer ChainDispatcher
 }
 
 // NewEntRepository creates a new Ent repository with the given options.
 // The database will be initialized with the schema if it doesn't exist.
 func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	repo := &EntRepository{
-		dbPath:        "~/.stapler-squad/sessions.db", // Default path
+		DbPath:        "~/.stapler-squad/sessions.db", // Default path
 		migrationMode: false,
 	}
 
@@ -122,7 +125,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	}
 
 	// Expand home directory in path if needed
-	expandedPath := repo.dbPath
+	expandedPath := repo.DbPath
 	if len(expandedPath) >= 2 && expandedPath[:2] == "~/" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -136,7 +139,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// already switched to the local expandedPath) so later code, notably
 	// BackfillBacklogItemPublicIDs's flock lock-file derivation, sees the
 	// real absolute path rather than an unexpanded "~/..." one.
-	repo.dbPath = expandedPath
+	repo.DbPath = expandedPath
 
 	// Create parent directory if it doesn't exist, unless expandedPath is a
 	// "file:" URI DSN (e.g. a shared-cache in-memory database used by tests)
@@ -257,14 +260,14 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
-	repo.client = client
+	repo.Client = client
 	repo.driver = drv
 	repo.watchGuidanceWrites(client)
 
 	// One-time-per-database correction for rows that predate the enabled field
 	// — see workflow_enabled_field_migration.go's doc comment for why this
 	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
-	// unconditionally like startupMigrations below. Doesn't implement
+	// unconditionally like the startup migrations below. Doesn't implement
 	// Migration for the same reason (see ent_repository_migrations.go): the
 	// preexisted check has to be taken before Schema.Create() runs, above.
 	if !workflowEnabledColumnAlreadyExisted {
@@ -272,10 +275,14 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	}
 
 	// Every other startup data migration is uniform-shaped (idempotent,
-	// (ctx, *EntRepository) error) and lives in startupMigrations — see
+	// (ctx, *EntRepository) error) and lives in DefaultStartupMigrations — see
 	// session/ent_repository_migrations.go for why the enabled-field backfill
 	// above this point is the documented exception that doesn't.
-	for _, m := range startupMigrations {
+	migrations := repo.migrations
+	if migrations == nil {
+		migrations = DefaultStartupMigrations()
+	}
+	for _, m := range migrations {
 		if err := m.Run(context.Background(), repo); err != nil {
 			_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 			return nil, fmt.Errorf("failed to run migration %q: %w", m.Name(), err)
@@ -292,7 +299,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 	// Not hooked: the client is shared and may already be serving writes, and
 	// appending to its hook slice then would race them. Reads stay uncached.
-	repo := &EntRepository{client: client}
+	repo := &EntRepository{Client: client}
 	repo.pendingGuidance.disabled = true
 	return repo
 }
@@ -300,7 +307,7 @@ func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
 // GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)
 // can operate on entities not managed by the Repository interface.
 func (r *EntRepository) GetEntClient() *ent.Client {
-	return r.client
+	return r.Client
 }
 
 // MaintenanceDriver returns the instrumented driver behind the ent client, for
@@ -315,7 +322,7 @@ func (r *EntRepository) MaintenanceDriver() dialect.ExecQuerier {
 // Create inserts a new session into the database
 func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	// Start transaction
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -568,7 +575,7 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 // already persisted unchanged (see savedFingerprints).
 func (r *EntRepository) updateSkipping(ctx context.Context, data InstanceData, skip updateSkip) error {
 	// Start transaction
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -1002,7 +1009,7 @@ func updateClaudeSessionRow(ctx context.Context, tx *ent.Tx, existing *ent.Claud
 // Delete removes a session from the database by title
 func (r *EntRepository) Delete(ctx context.Context, title string) error {
 	// Start transaction for atomic deletion
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -1077,7 +1084,7 @@ func (r *EntRepository) Delete(ctx context.Context, title string) error {
 // for the session whose title (tmux session name) matches sessionUUID.
 // Returns "" if the session has no associated ClaudeSession.
 func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, sessionUUID string) (string, error) {
-	sess, err := r.client.Session.Query().
+	sess, err := r.Client.Session.Query().
 		Where(session.Title(sessionUUID)).
 		WithClaudeSession().
 		Only(ctx)
@@ -1097,7 +1104,7 @@ func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Conte
 func (r *EntRepository) Get(ctx context.Context, title string) (*InstanceData, error) {
 	// Find session with all relationships eagerly loaded
 	sess, err := applyLoadOptions(
-		r.client.Session.Query().Where(session.Title(title)),
+		r.Client.Session.Query().Where(session.Title(title)),
 		LoadFull,
 	).Only(ctx)
 	if err != nil {
@@ -1150,7 +1157,7 @@ func (r *EntRepository) List(ctx context.Context) ([]InstanceData, error) {
 func (r *EntRepository) ListByStatus(ctx context.Context, status Status) ([]InstanceData, error) {
 	// Query sessions by status with relationships
 	sessions, err := applyLoadOptions(
-		r.client.Session.Query().Where(session.Status(int(status))),
+		r.Client.Session.Query().Where(session.Status(int(status))),
 		listLoadOptions,
 	).All(ctx)
 	if err != nil {
@@ -1170,7 +1177,7 @@ func (r *EntRepository) ListByStatus(ctx context.Context, status Status) ([]Inst
 func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]InstanceData, error) {
 	// Query sessions that have the specified tag
 	sessions, err := applyLoadOptions(
-		r.client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
+		r.Client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
 		listLoadOptions,
 	).All(ctx)
 	if err != nil {
@@ -1189,7 +1196,7 @@ func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]Instan
 // UpdateGitHubPRNumber persists a discovered PR number for a session.
 // Called by PRStatusPoller when it auto-discovers a PR for a branch-based session.
 func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, prNumber int) error {
-	n, err := r.client.Session.Update().
+	n, err := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetGithubPrNumber(prNumber).
 		Save(ctx)
@@ -1207,7 +1214,7 @@ func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, 
 // flag survives a restart — see SessionRetentionSweeper.baseSafeToDelete, which
 // reads it back from storage rather than the in-memory Instance.
 func (r *EntRepository) UpdateGitHubPRStatusTerminal(ctx context.Context, title string, terminal bool) error {
-	n, err := r.client.Session.Update().
+	n, err := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetGithubPrStatusTerminal(terminal).
 		Save(ctx)
@@ -1225,7 +1232,7 @@ func (r *EntRepository) UpdateGitHubPRStatusTerminal(ctx context.Context, title 
 // The per-title mutex in ArtifactExtractor (C-1) serializes calls at the application
 // layer; the transaction is belt-and-suspenders for correctness.
 func (r *EntRepository) UpdateSessionArtifacts(ctx context.Context, title string, blob string) error {
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("UpdateSessionArtifacts: begin tx: %w", err)
 	}
@@ -1247,7 +1254,7 @@ func (r *EntRepository) UpdateSessionArtifacts(ctx context.Context, title string
 // GetSessionArtifacts loads the raw JSON artifact blob for a session.
 // Returns ("", nil) if the session exists but has no artifacts stored yet.
 func (r *EntRepository) GetSessionArtifacts(ctx context.Context, title string) (string, error) {
-	sess, err := r.client.Session.Query().
+	sess, err := r.Client.Session.Query().
 		Where(session.Title(title)).
 		Select(session.FieldSessionArtifacts).
 		Only(ctx)
@@ -1261,7 +1268,7 @@ func (r *EntRepository) GetSessionArtifacts(ctx context.Context, title string) (
 // that have a non-empty session_artifacts column. Single query replaces N per-session
 // queries in LoadInstances (M-4 fix).
 func (r *EntRepository) GetAllSessionArtifacts(ctx context.Context) (map[string]string, error) {
-	rows, err := r.client.Session.Query().
+	rows, err := r.Client.Session.Query().
 		Where(session.SessionArtifactsNEQ("")).
 		Select(session.FieldTitle, session.FieldSessionArtifacts).
 		All(ctx)
@@ -1280,7 +1287,7 @@ func (r *EntRepository) GetAllSessionArtifacts(ctx context.Context) (map[string]
 // session exists but has no stored artifacts. Returns ErrNotFound when no
 // session with that UUID exists.
 func (r *EntRepository) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error) {
-	sess, err := r.client.Session.Query().
+	sess, err := r.Client.Session.Query().
 		Where(session.UUIDEQ(sessionUUID)).
 		Select(session.FieldSessionArtifacts).
 		Only(ctx)
@@ -1300,7 +1307,7 @@ func (r *EntRepository) GetSessionArtifactsByUUID(ctx context.Context, sessionUU
 // UpdateReviewQueueState efficiently updates only the review-queue interaction fields
 // for a session, avoiding the full read-modify-write cycle of updateFieldInRepo.
 func (r *EntRepository) UpdateReviewQueueState(ctx context.Context, title string, lastUserResponse, processingGraceUntil, lastPromptDetected time.Time, lastPromptSignature string) error {
-	update := r.client.Session.Update().
+	update := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetUpdatedAt(time.Now())
 
@@ -1332,7 +1339,7 @@ func (r *EntRepository) UpdateReviewQueueState(ctx context.Context, title string
 // UpdateLastUserResponse sets only last_user_response. Unlike UpdateReviewQueueState
 // it never clears processing_grace_until.
 func (r *EntRepository) UpdateLastUserResponse(ctx context.Context, title string, t time.Time) error {
-	n, err := r.client.Session.Update().
+	n, err := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetLastUserResponse(t).
 		SetUpdatedAt(time.Now()).
@@ -1351,7 +1358,7 @@ func (r *EntRepository) UpdateTimestamps(ctx context.Context, title string, last
 	// Direct UPDATE without prior SELECT — mirrors the pattern used by UpdateLastAddedToQueue.
 	// This method is called on every terminal output event; avoiding the SELECT halves the
 	// SQL round-trips on this hot path.
-	update := r.client.Session.Update().
+	update := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetUpdatedAt(time.Now())
 
@@ -1378,7 +1385,7 @@ func (r *EntRepository) UpdateTimestamps(ctx context.Context, title string, last
 // UpdateLastAddedToQueue sets only the last_added_to_queue field for a session,
 // issuing a single UPDATE WHERE title=? without a prior SELECT.
 func (r *EntRepository) UpdateLastAddedToQueue(ctx context.Context, title string, t time.Time) error {
-	n, err := r.client.Session.Update().
+	n, err := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetLastAddedToQueue(t).
 		SetUpdatedAt(time.Now()).
@@ -1396,7 +1403,7 @@ func (r *EntRepository) UpdateLastAddedToQueue(ctx context.Context, title string
 // session, via a direct UPDATE (no read round-trip) -- see Instance.InitialPromptSentAt's
 // doc comment for why this must survive a restart.
 func (r *EntRepository) UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error {
-	n, err := r.client.Session.Update().
+	n, err := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetInitialPromptSentAt(t).
 		SetUpdatedAt(time.Now()).
@@ -1413,7 +1420,7 @@ func (r *EntRepository) UpdateInitialPromptSentAt(ctx context.Context, title str
 // UpdateLastAcknowledged sets only the last_acknowledged field for a session,
 // issuing a single UPDATE WHERE title=? without a prior SELECT.
 func (r *EntRepository) UpdateLastAcknowledged(ctx context.Context, title string, t time.Time) error {
-	n, err := r.client.Session.Update().
+	n, err := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetLastAcknowledged(t).
 		SetUpdatedAt(time.Now()).
@@ -1430,7 +1437,7 @@ func (r *EntRepository) UpdateLastAcknowledged(ctx context.Context, title string
 // UpdateLastViewed sets only the last_viewed field for a session,
 // issuing a single UPDATE WHERE title=? without a prior SELECT.
 func (r *EntRepository) UpdateLastViewed(ctx context.Context, title string, t time.Time) error {
-	n, err := r.client.Session.Update().
+	n, err := r.Client.Session.Update().
 		Where(session.Title(title)).
 		SetLastViewed(t).
 		SetUpdatedAt(time.Now()).
@@ -1456,7 +1463,7 @@ func (r *EntRepository) UpdateLastViewed(ctx context.Context, title string, t ti
 // Note is set whenever non-nil (including ""), since an empty note is a meaningful cleared
 // state, not "unset" — same asymmetry as Update's unconditional SetNote(data.Note).
 func (r *EntRepository) UpdateSessionMetadata(ctx context.Context, currentTitle string, newTitle, category, note, workingDir *string) error {
-	update := r.client.Session.Update().
+	update := r.Client.Session.Update().
 		Where(session.Title(currentTitle)).
 		SetUpdatedAt(time.Now())
 
@@ -1485,8 +1492,8 @@ func (r *EntRepository) UpdateSessionMetadata(ctx context.Context, currentTitle 
 
 // Close performs cleanup and releases resources
 func (r *EntRepository) Close() error {
-	if r.client != nil {
-		return r.client.Close()
+	if r.Client != nil {
+		return r.Client.Close()
 	}
 	return nil
 }
@@ -1723,7 +1730,7 @@ func (r *EntRepository) UpdateSession(ctx context.Context, session *Session) err
 // GetWithOptions retrieves a single session with selective child data loading.
 func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options LoadOptions) (*InstanceData, error) {
 	sess, err := applyLoadOptions(
-		r.client.Session.Query().Where(session.Title(title)),
+		r.Client.Session.Query().Where(session.Title(title)),
 		options,
 	).Only(ctx)
 	if err != nil {
@@ -1745,7 +1752,7 @@ func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, opti
 		return nil, ErrInstanceDataNotFound
 	}
 	sess, err := applyLoadOptions(
-		r.client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
+		r.Client.Session.Query().Where(session.Or(session.Title(id), session.UUID(id))),
 		options,
 	).First(ctx)
 	if err != nil {
@@ -1760,7 +1767,7 @@ func (r *EntRepository) FindByIDWithOptions(ctx context.Context, id string, opti
 // ListWithOptions retrieves all sessions with selective child data loading.
 func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
 	//nolint:entfullscan the base "list all sessions" query genuinely needs every row; callers select fields via LoadOptions, not row filtering.
-	sessions, err := applyLoadOptions(r.client.Session.Query(), options).All(ctx)
+	sessions, err := applyLoadOptions(r.Client.Session.Query(), options).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sessions: %w", err)
 	}
@@ -1775,7 +1782,7 @@ func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions
 // ListByStatusWithOptions retrieves sessions filtered by status with selective loading.
 func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status Status, options LoadOptions) ([]InstanceData, error) {
 	sessions, err := applyLoadOptions(
-		r.client.Session.Query().Where(session.Status(int(status))),
+		r.Client.Session.Query().Where(session.Status(int(status))),
 		options,
 	).All(ctx)
 	if err != nil {
@@ -1792,7 +1799,7 @@ func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status Stat
 // ListByTagWithOptions retrieves sessions with a specific tag with selective loading.
 func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string, options LoadOptions) ([]InstanceData, error) {
 	sessions, err := applyLoadOptions(
-		r.client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
+		r.Client.Session.Query().Where(session.HasTagsWith(tag.Name(tagName))),
 		options,
 	).All(ctx)
 	if err != nil {
@@ -1810,7 +1817,7 @@ func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tagName string
 
 func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error) {
 	//nolint:entfullscan approval rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
-	rules, err := r.client.ApprovalRule.Query().
+	rules, err := r.Client.ApprovalRule.Query().
 		Order(ent.Asc(approvalrule.FieldPriority)).
 		All(ctx)
 	if err != nil {
@@ -1881,7 +1888,7 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 	if pythonModes == nil {
 		pythonModes = []string{}
 	}
-	return r.client.ApprovalRule.Create().
+	return r.Client.ApprovalRule.Create().
 		SetRuleID(data.ID).
 		SetName(data.Name).
 		SetToolName(data.ToolName).
@@ -1912,7 +1919,7 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 }
 
 func (r *EntRepository) DeleteRule(ctx context.Context, id string) error {
-	_, err := r.client.ApprovalRule.Delete().
+	_, err := r.Client.ApprovalRule.Delete().
 		Where(approvalrule.RuleID(id)).
 		Exec(ctx)
 	return err
@@ -1920,7 +1927,7 @@ func (r *EntRepository) DeleteRule(ctx context.Context, id string) error {
 
 func (r *EntRepository) AllTaggingRules(ctx context.Context) ([]TaggingRuleData, error) {
 	//nolint:entfullscan tagging rules are a small, admin-configured table; the whole set is needed to evaluate rule precedence.
-	rules, err := r.client.TaggingRule.Query().
+	rules, err := r.Client.TaggingRule.Query().
 		Order(ent.Asc(taggingrule.FieldPriority)).
 		All(ctx)
 	if err != nil {
@@ -1953,7 +1960,7 @@ func (r *EntRepository) UpsertTaggingRule(ctx context.Context, data TaggingRuleD
 	if requiredTags == nil {
 		requiredTags = []string{}
 	}
-	return r.client.TaggingRule.Create().
+	return r.Client.TaggingRule.Create().
 		SetRuleID(data.RuleID).
 		SetName(data.Name).
 		SetNamePattern(data.NamePattern).
@@ -1979,7 +1986,7 @@ func (r *EntRepository) DismissFinding(ctx context.Context, data DismissedFindin
 	if dismissedAt.IsZero() {
 		dismissedAt = time.Now()
 	}
-	return r.client.DismissedFinding.Create().
+	return r.Client.DismissedFinding.Create().
 		SetFindingID(data.FindingID).
 		SetSessionID(data.SessionID).
 		SetConversationID(data.ConversationID).
@@ -1991,7 +1998,7 @@ func (r *EntRepository) DismissFinding(ctx context.Context, data DismissedFindin
 }
 
 func (r *EntRepository) DeleteTaggingRule(ctx context.Context, id string) error {
-	_, err := r.client.TaggingRule.Delete().
+	_, err := r.Client.TaggingRule.Delete().
 		Where(taggingrule.RuleID(id)).
 		Exec(ctx)
 	return err
@@ -1999,7 +2006,7 @@ func (r *EntRepository) DeleteTaggingRule(ctx context.Context, id string) error 
 
 // RecordTaggingRuleFire inserts a fire record for ruleID at firedAt.
 func (r *EntRepository) RecordTaggingRuleFire(ctx context.Context, ruleID string, firedAt time.Time) error {
-	return r.client.TaggingRuleFire.Create().
+	return r.Client.TaggingRuleFire.Create().
 		SetRuleID(ruleID).
 		SetFiredAt(firedAt).
 		Exec(ctx)
@@ -2012,7 +2019,7 @@ func (r *EntRepository) GetTaggingRuleFireCounts(ctx context.Context, since time
 		Count  int    `json:"count"`
 	}
 	var rows []fireCountRow
-	err := r.client.TaggingRuleFire.Query().
+	err := r.Client.TaggingRuleFire.Query().
 		Where(taggingrulefire.FiredAtGTE(since)).
 		GroupBy(taggingrulefire.FieldRuleID).
 		Aggregate(ent.Count()).
@@ -2035,7 +2042,7 @@ func (r *EntRepository) ListDismissedFindingIDs(ctx context.Context) (map[string
 	// findingsCap-capped panel's realistic dismissal volume); the whole set is
 	// needed to filter every request's freshly computed findings, same
 	// rationale as AllRules above.
-	rows, err := r.client.DismissedFinding.Query().
+	rows, err := r.Client.DismissedFinding.Query().
 		Select(dismissedfinding.FieldFindingID).
 		All(ctx)
 	if err != nil {
@@ -2063,14 +2070,14 @@ func (r *EntRepository) RecordAnalyticsBatch(ctx context.Context, batch []Analyt
 	for _, data := range batch {
 		builders = append(builders, r.analyticsCreate(data))
 	}
-	return r.client.ClassificationAnalytics.CreateBulk(builders...).
+	return r.Client.ClassificationAnalytics.CreateBulk(builders...).
 		OnConflictColumns(classificationanalytics.FieldAnalyticsID).
 		DoNothing().
 		Exec(ctx)
 }
 
 func (r *EntRepository) analyticsCreate(data AnalyticsData) *ent.ClassificationAnalyticsCreate {
-	return r.client.ClassificationAnalytics.Create().
+	return r.Client.ClassificationAnalytics.Create().
 		SetAnalyticsID(data.ID).
 		SetSessionID(data.SessionID).
 		SetToolName(data.ToolName).
@@ -2093,7 +2100,7 @@ func (r *EntRepository) analyticsCreate(data AnalyticsData) *ent.ClassificationA
 }
 
 func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error) {
-	query := r.client.ClassificationAnalytics.Query().
+	query := r.Client.ClassificationAnalytics.Query().
 		Order(ent.Desc(classificationanalytics.FieldCreatedAt))
 
 	if limit > 0 {
@@ -2144,7 +2151,7 @@ func convertAnalyticsEntries(es []*ent.ClassificationAnalytics) []AnalyticsData 
 }
 
 func (r *EntRepository) ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]AnalyticsData, error) {
-	query := r.client.ClassificationAnalytics.Query().
+	query := r.Client.ClassificationAnalytics.Query().
 		Where(classificationanalytics.CreatedAtGTE(since)).
 		Order(ent.Desc(classificationanalytics.FieldCreatedAt))
 	if limit > 0 {
@@ -2158,7 +2165,7 @@ func (r *EntRepository) ListAnalyticsSince(ctx context.Context, since time.Time,
 }
 
 func (r *EntRepository) ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]AnalyticsData, error) {
-	query := r.client.ClassificationAnalytics.Query().
+	query := r.Client.ClassificationAnalytics.Query().
 		Where(
 			classificationanalytics.CommandProgramEQ(program),
 			classificationanalytics.CreatedAtGTE(since),
@@ -2183,7 +2190,7 @@ func (r *EntRepository) GetSubcommandBreakdown(ctx context.Context, program stri
 	var rows []breakdownRow
 	// Exclude rows where command_subcategory IS NULL to avoid sql.ScanSlice
 	// errors when scanning nullable columns into a plain string field.
-	err := r.client.ClassificationAnalytics.Query().
+	err := r.Client.ClassificationAnalytics.Query().
 		Where(
 			classificationanalytics.CommandProgramEQ(program),
 			classificationanalytics.CreatedAtGTE(since),
@@ -2218,7 +2225,7 @@ func (r *EntRepository) ListRecentCommandsByProgram(ctx context.Context, program
 	if subcommand != "" {
 		predicates = append(predicates, classificationanalytics.CommandSubcategoryEQ(subcommand))
 	}
-	entries, err := r.client.ClassificationAnalytics.Query().
+	entries, err := r.Client.ClassificationAnalytics.Query().
 		Where(predicates...).
 		Order(ent.Desc(classificationanalytics.FieldCreatedAt)).
 		Limit(n).
@@ -2244,7 +2251,7 @@ func (r *EntRepository) GetSubcommandTrend(ctx context.Context, program, subcomm
 	if subcommand != "" {
 		predicates = append(predicates, classificationanalytics.CommandSubcategoryEQ(subcommand))
 	}
-	entries, err := r.client.ClassificationAnalytics.Query().
+	entries, err := r.Client.ClassificationAnalytics.Query().
 		Where(predicates...).
 		Order(ent.Asc(classificationanalytics.FieldCreatedAt)).
 		All(ctx)
@@ -2268,7 +2275,7 @@ func projectToData(p *ent.Project) ProjectData {
 
 // CreateProject inserts a new project.
 func (r *EntRepository) CreateProject(ctx context.Context, data ProjectData) (*ProjectData, error) {
-	c := r.client.Project.Create().
+	c := r.Client.Project.Create().
 		SetName(data.Name).
 		SetCreatedAt(data.CreatedAt).
 		SetUpdatedAt(data.UpdatedAt)
@@ -2286,7 +2293,7 @@ func (r *EntRepository) CreateProject(ctx context.Context, data ProjectData) (*P
 // ListProjects returns all projects.
 func (r *EntRepository) ListProjects(ctx context.Context) ([]ProjectData, error) {
 	//nolint:entfullscan small, bounded-by-nature table (one row per configured repo), intentionally returns all.
-	projects, err := r.client.Project.Query().All(ctx)
+	projects, err := r.Client.Project.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list projects: %w", err)
 	}
@@ -2299,11 +2306,11 @@ func (r *EntRepository) ListProjects(ctx context.Context) ([]ProjectData, error)
 
 // UpdateProject modifies an existing project.
 func (r *EntRepository) UpdateProject(ctx context.Context, data ProjectData) (*ProjectData, error) {
-	p, err := r.client.Project.Query().Where(project.Name(data.Name)).Only(ctx)
+	p, err := r.Client.Project.Query().Where(project.Name(data.Name)).Only(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find project '%s': %w", data.Name, err)
 	}
-	u := r.client.Project.UpdateOne(p).SetUpdatedAt(data.UpdatedAt)
+	u := r.Client.Project.UpdateOne(p).SetUpdatedAt(data.UpdatedAt)
 	if data.Description != "" {
 		u.SetDescription(data.Description)
 	}
@@ -2317,7 +2324,7 @@ func (r *EntRepository) UpdateProject(ctx context.Context, data ProjectData) (*P
 
 // DeleteProject removes a project; sessions are unassigned (FK cleared) atomically.
 func (r *EntRepository) DeleteProject(ctx context.Context, name string) error {
-	tx, err := r.client.BeginTx(ctx, nil)
+	tx, err := r.Client.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -2349,16 +2356,16 @@ func (r *EntRepository) DeleteProject(ctx context.Context, name string) error {
 
 // AssignSessionsToProject links sessions (by title) to a project (by name).
 func (r *EntRepository) AssignSessionsToProject(ctx context.Context, projectName string, sessionTitles []string) error {
-	proj, err := r.client.Project.Query().Where(project.Name(projectName)).Only(ctx)
+	proj, err := r.Client.Project.Query().Where(project.Name(projectName)).Only(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to find project '%s': %w", projectName, err)
 	}
 	for _, title := range sessionTitles {
-		sess, err := r.client.Session.Query().Where(session.Title(title)).Only(ctx)
+		sess, err := r.Client.Session.Query().Where(session.Title(title)).Only(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to find session '%s': %w", title, err)
 		}
-		if err := r.client.Session.UpdateOne(sess).SetProjectID(proj.ID).Exec(ctx); err != nil {
+		if err := r.Client.Session.UpdateOne(sess).SetProjectID(proj.ID).Exec(ctx); err != nil {
 			return fmt.Errorf("failed to assign session '%s' to project '%s': %w", title, projectName, err)
 		}
 	}
@@ -2369,11 +2376,11 @@ func (r *EntRepository) AssignSessionsToProject(ctx context.Context, projectName
 
 // CreateShell persists a new Shell entity for the given session title.
 func (r *EntRepository) CreateShell(ctx context.Context, sessionTitle string, data ShellData) (*ent.Shell, error) {
-	sess, err := r.client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
+	sess, err := r.Client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("CreateShell: session '%s' not found: %w", sessionTitle, err)
 	}
-	sh, err := r.client.Shell.Create().
+	sh, err := r.Client.Shell.Create().
 		SetID(data.ID).
 		SetName(data.Name).
 		SetCommand(data.Command).
@@ -2391,11 +2398,11 @@ func (r *EntRepository) CreateShell(ctx context.Context, sessionTitle string, da
 
 // ListShells returns all shells for the given session title, ordered by order_index.
 func (r *EntRepository) ListShells(ctx context.Context, sessionTitle string) ([]*ent.Shell, error) {
-	sess, err := r.client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
+	sess, err := r.Client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ListShells: session '%s' not found: %w", sessionTitle, err)
 	}
-	shells, err := r.client.Shell.Query().
+	shells, err := r.Client.Shell.Query().
 		Where(entshell.HasSessionWith(session.ID(sess.ID))).
 		Order(ent.Asc(entshell.FieldOrderIndex)).
 		All(ctx)
@@ -2407,7 +2414,7 @@ func (r *EntRepository) ListShells(ctx context.Context, sessionTitle string) ([]
 
 // UpdateShellStatus updates the status (and optionally exit code + stopped_at) for a shell.
 func (r *EntRepository) UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error {
-	upd := r.client.Shell.UpdateOneID(shellID).SetStatus(status)
+	upd := r.Client.Shell.UpdateOneID(shellID).SetStatus(status)
 	if exitCode != nil {
 		upd = upd.SetExitCode(*exitCode)
 	}
@@ -2422,7 +2429,7 @@ func (r *EntRepository) UpdateShellStatus(ctx context.Context, shellID, status s
 
 // DeleteShell removes a Shell entity by ID.
 func (r *EntRepository) DeleteShell(ctx context.Context, shellID string) error {
-	if err := r.client.Shell.DeleteOneID(shellID).Exec(ctx); err != nil {
+	if err := r.Client.Shell.DeleteOneID(shellID).Exec(ctx); err != nil {
 		return fmt.Errorf("DeleteShell: %w", err)
 	}
 	return nil

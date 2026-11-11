@@ -84,7 +84,7 @@ func PipelineStages(engine WorkflowEngine) []BacklogStatus {
 		after[anchor] = append(after[anchor], c)
 	}
 	var out []BacklogStatus
-	for _, b := range builtInStageOrder {
+	for _, b := range BuiltInStageOrder {
 		if b == BacklogStatusArchived {
 			out = append(out, after[b]...)
 		}
@@ -103,7 +103,7 @@ func PipelineStages(engine WorkflowEngine) []BacklogStatus {
 func walkStageGraph(engine WorkflowEngine) (known map[BacklogStatus]bool, preds map[BacklogStatus][]BacklogStatus) {
 	known = map[BacklogStatus]bool{}
 	preds = map[BacklogStatus][]BacklogStatus{}
-	queue := append([]BacklogStatus(nil), builtInStageOrder...)
+	queue := append([]BacklogStatus(nil), BuiltInStageOrder...)
 	seen := map[BacklogStatus]bool{}
 	for len(queue) > 0 {
 		from := queue[0]
@@ -126,7 +126,7 @@ func walkStageGraph(engine WorkflowEngine) (known map[BacklogStatus]bool, preds 
 }
 
 func isBuiltInStage(s BacklogStatus) bool {
-	for _, b := range builtInStageOrder {
+	for _, b := range BuiltInStageOrder {
 		if b == s {
 			return true
 		}
@@ -135,7 +135,7 @@ func isBuiltInStage(s BacklogStatus) bool {
 }
 
 func earliestBuiltIn(candidates []BacklogStatus) (BacklogStatus, bool) {
-	for _, b := range builtInStageOrder {
+	for _, b := range BuiltInStageOrder {
 		for _, c := range candidates {
 			if c == b {
 				return b, true

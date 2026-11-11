@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
@@ -49,7 +50,7 @@ func writeHandoffConversationFixture(t *testing.T, sessionID string) {
 	t.Helper()
 
 	tempHome := t.TempDir()
-	withFakeHomePath(t, tempHome)
+	svctest.WithFakeHomePath(t, tempHome)
 
 	projectDir := filepath.Join(tempHome, ".claude", "projects", "test-project")
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
@@ -154,7 +155,7 @@ func TestGetHandoffSummary_LeavesFreshGeneratingRowUnchanged(t *testing.T) {
 
 func TestTriggerHandoffSummary_ReturnsFailedPreconditionWhenDisabled(t *testing.T) {
 	dir := t.TempDir()
-	withIsolatedStateDirPath(t, dir)
+	svctest.WithIsolatedStateDirPath(t, dir)
 	configPath := filepath.Join(dir, "config.json")
 	require.NoError(t, os.WriteFile(configPath, []byte(`{"handoff_summary": {"enabled": false}}`), 0600))
 
@@ -255,7 +256,7 @@ func TestTriggerHandoffSummary_DispatchesAsyncAndReturnsGeneratingRow(t *testing
 // race this test's own ent-client cleanup.
 func TestTriggerHandoffSummary_ReturnsGeneratingResponse_When_NoRowExistsYet(t *testing.T) {
 	tempHome := t.TempDir()
-	withFakeHomePath(t, tempHome)
+	svctest.WithFakeHomePath(t, tempHome)
 
 	entClient := newTestHandoffSummaryEntClient(t)
 	gen := session.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})

@@ -71,6 +71,17 @@ describe("CommandDetector", () => {
     expect(result?.suggestedName).toBe('Run "npm run dev" in ~/code/my-repo');
   });
 
+  it("CommandDetector_should_resolveGrimdark_When_themeCommandUsesGrimdark", () => {
+    const result = detector.detect(">theme grimdark");
+    expect(result?.metadata).toEqual({ commandType: "theme", commandArg: "grimdark" });
+  });
+
+  it("CommandDetector_should_resolveLegacyThemeId_When_themeCommandUsesLegacyId", () => {
+    const result = detector.detect(">theme wh40k");
+    expect(result?.metadata).toEqual({ commandType: "theme", commandArg: "grimdark" });
+    expect(result?.suggestedName).toBe("Switch to Grimdark theme");
+  });
+
   it("CommandDetector_should_detectTheme_When_themeCommand", () => {
     const result = detector.detect(">theme matrix");
     expect(result?.type).toBe(InputType.Command);

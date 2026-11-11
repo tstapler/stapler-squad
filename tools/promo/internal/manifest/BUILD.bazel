@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "manifest",
+    srcs = [
+        "budgets.go",
+        "fresh.go",
+        "manifest.go",
+        "refresh.go",
+        "reuse.go",
+        "summary.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/promo/internal/manifest",
+    visibility = ["//tools/promo:__subpackages__"],
+    deps = ["@com_github_bmatcuk_doublestar_v4//:doublestar"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":manifest",
+    visibility = ["//tools/promo:__subpackages__"],
+)
+
+go_test(
+    name = "manifest_test",
+    srcs = [
+        "contract_test.go",
+        "fresh_test.go",
+        "manifest_test.go",
+        "refresh_test.go",
+    ],
+    data = [
+        "//tools/promo:budgets.json",
+        "//tools/promo/schema:media-manifest.example.json",
+        "//tools/promo/schema:media-manifest.schema.json",
+    ],
+    embed = [":manifest"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@com_github_xeipuuv_gojsonschema//:gojsonschema",
+    ],
+)

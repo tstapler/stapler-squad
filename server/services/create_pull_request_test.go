@@ -18,10 +18,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -51,10 +52,10 @@ func firstCallJSONPR(t *testing.T, sessionID, result string) string {
 func newDraftPRTestRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	runGit(t, dir, "init", "-q", "-b", "main")
+	svctest.RunGit(t, dir, "init", "-q", "-b", "main")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test repo\n"), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "initial commit")
+	svctest.RunGit(t, dir, "add", ".")
+	svctest.RunGit(t, dir, "commit", "-q", "-m", "initial commit")
 	return dir
 }
 
@@ -68,31 +69,15 @@ func newDraftPRTestRepo(t *testing.T) string {
 func newDraftPRTestRepoWithOrigin(t *testing.T) string {
 	t.Helper()
 	originDir := t.TempDir()
-	runGit(t, originDir, "init", "-q", "--bare", "-b", "main")
+	svctest.RunGit(t, originDir, "init", "-q", "--bare", "-b", "main")
 
 	dir := newDraftPRTestRepo(t)
-	runGit(t, dir, "remote", "add", "origin", originDir)
-	runGit(t, dir, "push", "-q", "-u", "origin", "main")
+	svctest.RunGit(t, dir, "remote", "add", "origin", originDir)
+	svctest.RunGit(t, dir, "push", "-q", "-u", "origin", "main")
 	// "git remote set-head origin main" (non -a) writes refs/remotes/origin/HEAD
 	// purely from the local arg given — no network round-trip to the remote.
-	runGit(t, dir, "remote", "set-head", "origin", "main")
+	svctest.RunGit(t, dir, "remote", "set-head", "origin", "main")
 	return dir
-}
-
-// runGitOutput runs a git command in dir and returns its combined output, failing the
-// test on error. Used where the test needs to inspect output (runGit, defined in
-// path_completion_service_test.go, discards it).
-func runGitOutput(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
-	)
-	out, err := cmd.CombinedOutput()
-	require.NoErrorf(t, err, "git %v failed: %s", args, out)
-	return string(out)
 }
 
 // findInstanceFunc returns a PRCreationService findInstance closure serving a single
@@ -132,10 +117,10 @@ func TestDraftPullRequest_should_ReturnNotFound_When_SessionInstanceMissing(t *t
 func TestDraftPullRequest_should_PrefillTitleBodyBaseBranch_When_SessionHasCommitsAhead(t *testing.T) {
 	t.Parallel()
 	dir := newDraftPRTestRepo(t)
-	runGit(t, dir, "checkout", "-q", "-b", "feature/rate-limit-toggle")
+	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/rate-limit-toggle")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n"), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "Add rate limit toggle")
+	svctest.RunGit(t, dir, "add", ".")
+	svctest.RunGit(t, dir, "commit", "-q", "-m", "Add rate limit toggle")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-7f3a", "feature/rate-limit-toggle", "")
 	inst := &session.Instance{Title: "Add rate limit toggle"}
@@ -172,10 +157,10 @@ func TestDraftPullRequest_should_PrefillTitleBodyBaseBranch_When_SessionHasCommi
 func TestDraftPullRequest_should_StripRemotePrefix_When_OriginHEADResolvesToRemoteQualifiedRef(t *testing.T) {
 	t.Parallel()
 	dir := newDraftPRTestRepoWithOrigin(t)
-	runGit(t, dir, "checkout", "-q", "-b", "feature/strip-remote-prefix")
+	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/strip-remote-prefix")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n"), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "Add a change")
+	svctest.RunGit(t, dir, "add", ".")
+	svctest.RunGit(t, dir, "commit", "-q", "-m", "Add a change")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-strip-prefix", "feature/strip-remote-prefix", "")
 	inst := &session.Instance{Title: "Strip remote prefix session"}
@@ -195,10 +180,10 @@ func TestDraftPullRequest_should_StripRemotePrefix_When_OriginHEADResolvesToRemo
 func TestDraftPullRequest_should_ReturnExistingPR_When_SessionAlreadyHasOne(t *testing.T) {
 	t.Parallel()
 	dir := newDraftPRTestRepo(t)
-	runGit(t, dir, "checkout", "-q", "-b", "feature/already-has-pr")
+	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/already-has-pr")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "feature.go"), []byte("package main\n"), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "some work")
+	svctest.RunGit(t, dir, "add", ".")
+	svctest.RunGit(t, dir, "commit", "-q", "-m", "some work")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-existing-pr", "feature/already-has-pr", "")
 	inst := &session.Instance{Title: "Already has a PR"}
@@ -226,7 +211,7 @@ func TestDraftPullRequest_should_ReturnExistingPR_When_SessionAlreadyHasOne(t *t
 func TestDraftPullRequest_should_ReportHasCommitsAhead_False_When_BranchIsUpToDate(t *testing.T) {
 	t.Parallel()
 	dir := newDraftPRTestRepo(t)
-	runGit(t, dir, "checkout", "-q", "-b", "feature/up-to-date")
+	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/up-to-date")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-9c21", "feature/up-to-date", "")
 	inst := &session.Instance{Title: "Up to date session"}
@@ -250,11 +235,11 @@ func TestDraftPullRequest_should_ReportHasCommitsAhead_False_When_BranchIsUpToDa
 func TestDraftPullRequest_should_PreviewWorkingTreeDiff_When_UncommittedChangesPresent(t *testing.T) {
 	t.Parallel()
 	dir := newDraftPRTestRepo(t)
-	runGit(t, dir, "checkout", "-q", "-b", "feature/uncommitted-work")
+	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/uncommitted-work")
 	// Zero commits ahead of main — the only change is an uncommitted, untracked file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "uncommitted.txt"), []byte("hello from an uncommitted file"), 0o644))
 
-	beforeCount := runGitOutput(t, dir, "rev-list", "--count", "HEAD")
+	beforeCount := svctest.RunGitOutput(t, dir, "rev-list", "--count", "HEAD")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-uncommitted", "feature/uncommitted-work", "")
 	inst := &session.Instance{Title: "Uncommitted work session"}
@@ -280,19 +265,19 @@ func TestDraftPullRequest_should_PreviewWorkingTreeDiff_When_UncommittedChangesP
 	assert.False(t, resp.Msg.HasCommitsAhead, "zero commits ahead of main — only uncommitted changes")
 
 	// Critical regression guard: DraftPullRequest must never commit anything.
-	afterCount := runGitOutput(t, dir, "rev-list", "--count", "HEAD")
+	afterCount := svctest.RunGitOutput(t, dir, "rev-list", "--count", "HEAD")
 	assert.Equal(t, beforeCount, afterCount, "DraftPullRequest must make zero git-mutating calls (no CommitChanges)")
-	status := runGitOutput(t, dir, "status", "--porcelain")
+	status := svctest.RunGitOutput(t, dir, "status", "--porcelain")
 	assert.Contains(t, status, "uncommitted.txt", "the file must remain uncommitted after DraftPullRequest")
 }
 
 func TestDraftPullRequest_should_UseFallbackBody_When_HeadlessPoolNil(t *testing.T) {
 	t.Parallel()
 	dir := newDraftPRTestRepo(t)
-	runGit(t, dir, "checkout", "-q", "-b", "feature/no-pool")
+	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/no-pool")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "change.txt"), []byte("data"), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "a real commit")
+	svctest.RunGit(t, dir, "add", ".")
+	svctest.RunGit(t, dir, "commit", "-q", "-m", "a real commit")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-no-pool", "feature/no-pool", "")
 	inst := &session.Instance{Title: "No headless pool session"}
@@ -311,7 +296,7 @@ func TestDraftPullRequest_should_UseFallbackBody_When_HeadlessPoolNil(t *testing
 func TestDraftPullRequest_should_UseFallbackBody_When_DiffIsEmpty(t *testing.T) {
 	t.Parallel()
 	dir := newDraftPRTestRepo(t)
-	runGit(t, dir, "checkout", "-q", "-b", "feature/empty-diff")
+	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/empty-diff")
 	// No commits, no uncommitted changes — diff is empty.
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-empty-diff", "feature/empty-diff", "")
@@ -339,10 +324,10 @@ func TestDraftPullRequest_should_UseFallbackBody_When_DiffIsEmpty(t *testing.T) 
 func TestDraftPullRequest_should_UseFallbackBody_When_DraftPRDescriptionErrors(t *testing.T) {
 	t.Parallel()
 	dir := newDraftPRTestRepo(t)
-	runGit(t, dir, "checkout", "-q", "-b", "feature/draft-error")
+	svctest.RunGit(t, dir, "checkout", "-q", "-b", "feature/draft-error")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "change.txt"), []byte("data"), 0o644))
-	runGit(t, dir, "add", ".")
-	runGit(t, dir, "commit", "-q", "-m", "a real commit")
+	svctest.RunGit(t, dir, "add", ".")
+	svctest.RunGit(t, dir, "commit", "-q", "-m", "a real commit")
 
 	wt := git.NewGitWorktreeFromStorage(dir, dir, "sess-draft-error", "feature/draft-error", "")
 	inst := &session.Instance{Title: "Draft error session"}
@@ -641,7 +626,7 @@ func TestCreatePullRequest_should_SurfaceError_When_CommitFails(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_NAME", "")
 	t.Setenv("GIT_AUTHOR_EMAIL", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
-	withFakeHome(t)
+	svctest.WithFakeHome(t)
 
 	mock := &fakePRGitExecutor{}
 	wt := git.NewGitWorktreeFromStorageWithExecutor(dir, dir, "sess-commit-fail", "feature/commit-fail", "", git.WithCommandRunner(mock))
@@ -821,7 +806,7 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 	inst := &session.Instance{Title: "Backlog-linked session", UUID: uuid.New().String()}
 	inst.SetGitWorktree(wt)
 
-	backlogStorage := createTestStorage(t)
+	backlogStorage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 	item, err := backlogStorage.CreateBacklogItem(ctx, session.BacklogItemData{
 		Title:  "Backlog item behind this session",
@@ -835,7 +820,7 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 	})
 	require.NoError(t, err)
 
-	listener := session.NewBacklogLifecycleListener(backlogStorage)
+	listener := backlog.NewBacklogLifecycleListener(backlogStorage)
 	listener.SetEnabled(true)
 
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, listener, findInstanceFunc("sess-backlog-linked", inst))

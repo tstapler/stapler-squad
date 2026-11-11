@@ -180,12 +180,12 @@ func pruneAcAuditRefusals(ctx context.Context, client *ent.AcAuditEventClient, i
 // attempts older than cutoff go for every item, but rows recording a real change are removed only
 // once their item no longer exists, so a live item's waiver keeps its provenance.
 func (r *EntRepository) PruneAcAuditOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
-	refused, err := r.client.AcAuditEvent.Delete().
+	refused, err := r.Client.AcAuditEvent.Delete().
 		Where(acauditevent.CreatedAtLT(cutoff), acAuditRefusalPredicate()).Exec(ctx)
 	if err != nil {
 		return refused, err
 	}
-	orphaned, err := r.client.AcAuditEvent.Delete().Where(
+	orphaned, err := r.Client.AcAuditEvent.Delete().Where(
 		acauditevent.CreatedAtLT(cutoff),
 		func(s *sql.Selector) {
 			s.Where(sql.NotIn(s.C(acauditevent.FieldItemID), sql.Select(backlogitem.FieldID).From(sql.Table(backlogitem.Table))))
@@ -199,12 +199,12 @@ func (r *EntRepository) PruneAcAuditOlderThan(ctx context.Context, cutoff time.T
 func (r *EntRepository) RecordAcAudit(ctx context.Context, d AcAuditEventData) error {
 	if d.ItemPublicID == "" {
 		if id, err := uuid.Parse(d.ItemID); err == nil {
-			if it, err := r.client.BacklogItem.Get(ctx, id); err == nil {
+			if it, err := r.Client.BacklogItem.Get(ctx, id); err == nil {
 				d.ItemPublicID = it.PublicID
 			}
 		}
 	}
-	return r.createAcAuditEvent(ctx, r.client.AcAuditEvent, d)
+	return r.createAcAuditEvent(ctx, r.Client.AcAuditEvent, d)
 }
 
 // ListAcAudit returns an item's audit rows oldest first. It stays readable after the item is
@@ -219,7 +219,7 @@ func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]AcAud
 	} else {
 		return nil, fmt.Errorf("%w: invalid item id %q", ErrNotFound, itemID)
 	}
-	rows, err := r.client.AcAuditEvent.Query().Where(where).
+	rows, err := r.Client.AcAuditEvent.Query().Where(where).
 		Order(ent.Asc(acauditevent.FieldCreatedAt)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list ac audit events: %w", err)
@@ -247,5 +247,5 @@ func (r *EntRepository) backlogItemExists(ctx context.Context, itemID string) (b
 	if err != nil {
 		return false, err
 	}
-	return r.client.BacklogItem.Query().Where(backlogitem.ID(id)).Exist(ctx)
+	return r.Client.BacklogItem.Query().Where(backlogitem.ID(id)).Exist(ctx)
 }

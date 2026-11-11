@@ -34,7 +34,7 @@ schema: `analytics.db` has 47 tables, 45 empty (only `escape_events` 864,642 row
 
 A latent cross-file bug the split must make impossible: `ListAnalyticsBySessionID` (`session/ent_repository.go:2030`) queries
 `AnalyticsEvent` through the **state** client `r.client`, but the live rows are in `analytics.db`; `sessions.db.analytics_events`
-has 0 rows, so the session bundle's analytics section (`server/services/session_bundle_service.go:351`) is empty regardless of intent: the file mismatch is real even though `AnalyticsEvent` rows carry fewer fields than classification rows.
+has 0 rows, so the session bundle's analytics section (`server/services/sessionbundle/session_bundle_service.go:351`) is empty regardless of intent: the file mismatch is real even though `AnalyticsEvent` rows carry fewer fields than classification rows.
 
 ### Tables, sizes and write rates (`dbstat` on the copy; rate = rows / days between min and max timestamp)
 

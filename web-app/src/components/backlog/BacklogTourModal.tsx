@@ -92,7 +92,7 @@ export function BacklogTourModal({ isOpen, onComplete }: BacklogTourModalProps) 
 
           <StepIndicator current={step} total={LAST_STEP} />
 
-          <button className={styles.skipButton} onClick={handleSkip} aria-label="Skip tour">
+          <button className={styles.skipButton} onClick={handleSkip} aria-label="Skip tour">{/* analytics-exempt */}
             Skip
           </button>
 
@@ -154,7 +154,7 @@ export function BacklogTourModal({ isOpen, onComplete }: BacklogTourModalProps) 
           <div className={styles.footer}>
             <div>
               {step > 1 && (
-                <button className={styles.secondaryButton} onClick={handleBack}>
+                <button className={styles.secondaryButton} onClick={handleBack}>{/* analytics-exempt */}
                   Back
                 </button>
               )}
@@ -162,7 +162,7 @@ export function BacklogTourModal({ isOpen, onComplete }: BacklogTourModalProps) 
 
             <div className={styles.footerRight}>
               {step < LAST_STEP ? (
-                <button className={styles.primaryButton} onClick={handleNext}>
+                <button className={styles.primaryButton} onClick={handleNext}>{/* analytics-exempt */}
                   Next
                 </button>
               ) : (
@@ -175,7 +175,7 @@ export function BacklogTourModal({ isOpen, onComplete }: BacklogTourModalProps) 
                     />
                     <span className={styles.checkboxLabel}>Don&apos;t show this again</span>
                   </label>
-                  <button className={styles.primaryButton} onClick={handleDone}>
+                  <button className={styles.primaryButton} onClick={handleDone}>{/* analytics-exempt */}
                     Got it
                   </button>
                 </>

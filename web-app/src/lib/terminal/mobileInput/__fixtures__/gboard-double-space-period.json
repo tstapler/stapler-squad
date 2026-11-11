@@ -1,0 +1,173 @@
+{
+  "id": "gboard-double-space-period",
+  "source": "synthetic",
+  "keyboard": "gboard",
+  "notes": "Double space becomes \". \": the first space is deleted and replaced. Source: https://github.com/Ark0N/Codeman/pull/541",
+  "events": [
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 10
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "h",
+      "value": "h",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 20
+    },
+    {
+      "kind": "input",
+      "value": "h",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 30
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 40
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "e",
+      "value": "e",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 50
+    },
+    {
+      "kind": "input",
+      "value": "e",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 60
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 70
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "l",
+      "value": "l",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 80
+    },
+    {
+      "kind": "input",
+      "value": "l",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 90
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 100
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "l",
+      "value": "l",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 110
+    },
+    {
+      "kind": "input",
+      "value": "l",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 120
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 130
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": "o",
+      "value": "o",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 140
+    },
+    {
+      "kind": "input",
+      "value": "o",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 150
+    },
+    {
+      "kind": "keydown",
+      "key": "Unidentified",
+      "keyCode": 229,
+      "isComposing": false,
+      "t": 160
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": " ",
+      "value": " ",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 170
+    },
+    {
+      "kind": "input",
+      "value": " ",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 180
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "deleteContentBackward",
+      "data": null,
+      "value": "​",
+      "selStart": 1,
+      "selEnd": 1,
+      "t": 190
+    },
+    {
+      "kind": "beforeinput",
+      "inputType": "insertText",
+      "data": ". ",
+      "value": ". ",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 200
+    },
+    {
+      "kind": "input",
+      "value": ". ",
+      "selStart": 2,
+      "selEnd": 2,
+      "t": 210
+    }
+  ],
+  "expectedBytes": "hello . ",
+  "finalText": "hello. "
+}

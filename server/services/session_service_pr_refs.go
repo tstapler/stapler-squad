@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 )
 
 // UI-only RPCs for editing a session's PR set. They are never reachable from the
@@ -34,11 +35,11 @@ type prRefsSeams struct {
 	tokens PRTokenResolver
 	// itemCleaner re-runs the (gated) terminal-item cleanup after an item-scoped
 	// detach releases a hold. Nil leaves the 60 s sweep to do it.
-	itemCleaner session.WorktreeCleaner
+	itemCleaner backlog.WorktreeCleaner
 }
 
 // SetItemCleaner wires the cleanup re-run used by DetachItemPullRequest.
-func (s *SessionService) SetItemCleaner(c session.WorktreeCleaner) { s.prRefs.itemCleaner = c }
+func (s *SessionService) SetItemCleaner(c backlog.WorktreeCleaner) { s.prRefs.itemCleaner = c }
 
 func (s prRefsSeams) lookupPR(ctx context.Context, ref github.RepoRef, number int) (*github.PRInfo, error) {
 	if s.lookup != nil {
@@ -183,7 +184,7 @@ func (s *SessionService) AttachSessionPullRequest(
 	}
 	if instanceHasPR(inst, ref) {
 		return connect.NewResponse(&sessionv1.AttachSessionPullRequestResponse{
-			PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ALREADY_TRACKED, Pr: prRefToProto(ref),
+			PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ALREADY_TRACKED, Pr: PRRefToProto(ref),
 		}), nil
 	}
 	repoRef, err := github.NewRepoRefWithHost(parsed.Owner, parsed.Repo, parsed.Host)
@@ -199,7 +200,7 @@ func (s *SessionService) AttachSessionPullRequest(
 	}
 	log.Info("session PR attached by user", "session", inst.Snapshot().Title, "pr", ref.String())
 	return connect.NewResponse(&sessionv1.AttachSessionPullRequestResponse{
-		PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ATTACHED, Pr: prRefToProto(ref),
+		PullRequests: currentPRList(inst), Result: sessionv1.AttachPullRequestResult_ATTACH_PULL_REQUEST_RESULT_ATTACHED, Pr: PRRefToProto(ref),
 	}), nil
 }
 
@@ -340,7 +341,7 @@ func (s *SessionService) AskSessionToFixPullRequest(
 	if err != nil {
 		return nil, err
 	}
-	out := &sessionv1.AskSessionToFixPullRequestResponse{Pr: prRefToProto(*target)}
+	out := &sessionv1.AskSessionToFixPullRequestResponse{Pr: PRRefToProto(*target)}
 	ctx, cancel := context.WithTimeout(ctx, nudgeRPCTimeout)
 	defer cancel()
 	stop, err := s.askFixDeliver(ctx, req.Msg.GetId(), *target, out)
@@ -368,7 +369,7 @@ func (s *SessionService) askFixDeliver(ctx context.Context, id string, target se
 		return nil, err
 	}
 	key, _ := github.NewPRKey(target.Host(), target.Owner(), target.Repo(), target.Number()) // validated by askFixPrompt
-	steer, steerErr := s.SteerInstanceGuarded(ctx, live, nudgeSignature(key, reasons), prompt)
+	steer, steerErr := s.SteerInstanceGuarded(ctx, live, NudgeSignature(key, reasons), prompt)
 	no, detail, ok := nudgeFromSteer(steer)
 	if !ok {
 		log.Warn("ask_to_fix_steer_failed", "session", live.Snapshot().Title, "pr", target.String(), "outcome", steer.String(), "err", fmt.Sprint(steerErr))

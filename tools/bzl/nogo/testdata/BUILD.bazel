@@ -1,0 +1,110 @@
+# Seeded violations, one per analyzer, plus stand-ins for the packages the analyzers key on. Everything is
+# manual: it only builds when named, and `make nogo-seed-check` expects every seed to FAIL under nogo.
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+_SEED = "github.com/tstapler/stapler-squad/tools/bzl/nogo/testdata/seed/"
+
+_ROOT = "github.com/tstapler/stapler-squad/"
+
+# stub target -> (source, the import path of the real package it stands in for)
+STUBS = {
+    "stub_log": (
+        "log.go",
+        _ROOT + "log",
+    ),
+    "stub_session": (
+        "session.go",
+        _ROOT + "session",
+    ),
+    "stub_ent": (
+        "ent.go",
+        _ROOT + "session/ent",
+    ),
+    "stub_tmux": (
+        "tmux.go",
+        _ROOT + "session/tmux",
+    ),
+    "stub_gogit": ("gogit.go", "github.com/go-git/go-git/v5"),
+}
+
+# analyzer -> (seed source, import path or "" for the default, stubs it imports)
+SEEDS = {
+    "entfullscan": ("entfullscan/seed.go", "", []),
+    "hotpolllog": ("hotpolllog/seed.go", "", []),
+    "noarchivedrevival": ("noarchivedrevival/session/health.go", "", []),
+    "nocommandpattern": (
+        "nocommandpattern/pkg/classifier/seed.go",
+        _SEED + "nocommandpattern/pkg/classifier",
+        [],
+    ),
+    "nolegacylog": (
+        "nolegacylog/backlog_lifecycle.go",
+        "",
+        [":stub_log"],
+    ),
+    "noliveinstanceraw": (
+        "noliveinstanceraw/seed.go",
+        _ROOT + "server/services",
+        [],
+    ),
+    "norawdb": ("norawdb/seed.go", "", []),
+    "norawexec": ("norawexec/seed.go", "", []),
+    "norawghrequest": (
+        "norawghrequest/seed.go",
+        _ROOT + "github",
+        [],
+    ),
+    "norawgitcli": ("norawgitcli/seed.go", "", []),
+    "norawgitopen": (
+        "norawgitopen/seed.go",
+        "",
+        [":stub_gogit"],
+    ),
+    "nowrongdbentity": (
+        "nowrongdbentity/seed.go",
+        _ROOT + "session/seed_nowrongdbentity",
+        [":stub_ent"],
+    ),
+    "silenttransition": (
+        "silenttransition/seed.go",
+        "",
+        [":stub_session"],
+    ),
+    "tmuxsocketscope": (
+        "tmuxsocketscope/seed.go",
+        "",
+        [":stub_tmux"],
+    ),
+}
+
+# The analyzers that only look at _test.go files get a go_test seed.
+TEST_SEEDS = {
+    "nosessiondrivertest": [":stub_session"],
+    "notimesleeptest": [],
+    "novartestseam": [],
+}
+
+[go_library(
+    name = name,
+    srcs = ["stubs/" + src],
+    importpath = path,
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+) for name, (src, path) in STUBS.items()]
+
+[go_library(
+    name = "seed_" + name,
+    srcs = ["seed/" + src],
+    importpath = path or _SEED + name,
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+    deps = stubs,
+) for name, (src, path, stubs) in SEEDS.items()]
+
+[go_test(
+    name = "seed_" + name,
+    srcs = ["seed/%s/seed_test.go" % name],
+    importpath = _SEED + name,
+    tags = ["manual"],
+    deps = stubs,
+) for name, stubs in TEST_SEEDS.items()]

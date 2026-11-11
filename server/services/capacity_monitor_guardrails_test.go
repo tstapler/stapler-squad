@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
@@ -314,7 +315,7 @@ func TestCapacityMonitor_SpendRateAlert_RefiresAfterCooldown(t *testing.T) {
 	monitor.poll(context.Background())
 	// Past the cooldown but the burn is still in the window only if turns keep arriving; extend the timeline.
 	tl2 := cacheReadTimeline(100, 1_000_000, []string{"Edit"}, spendRateBase.Add(100*time.Minute), time.Minute)
-	monitor.tokenStore.(*fakeTokenStore).results[0].TurnTimeline = append(tl, tl2...)
+	monitor.tokenStore.(*svctest.FakeTokenStore).Results[0].TurnTimeline = append(tl, tl2...)
 	monitor.now = func() time.Time { return spendRateBase.Add(200 * time.Minute) }
 	monitor.poll(context.Background())
 
@@ -367,7 +368,7 @@ func TestCapacityMonitor_SpendRateAlert_CustomWindowAndCooldownBoundary(t *testi
 	monitor.poll(context.Background())
 	// One nanosecond before the cooldown ends: quiet. Turns older than 5 min are
 	// out of window by then, so keep a fresh turn present.
-	monitor.tokenStore.(*fakeTokenStore).results[0].TurnTimeline = append(tl,
+	monitor.tokenStore.(*svctest.FakeTokenStore).Results[0].TurnTimeline = append(tl,
 		tokens.TurnStats{Timestamp: first.Add(4 * time.Minute), Model: "claude-sonnet-4-5", Input: 1, CacheRead: 20_000_000})
 	at = first.Add(5*time.Minute - time.Nanosecond)
 	monitor.poll(context.Background())

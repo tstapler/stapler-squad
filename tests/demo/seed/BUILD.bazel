@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "seed_lib",
+    srcs = [
+        "main.go",
+        "records.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tests/demo/seed",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//session",
+        "//tests/demo",
+        "//tests/demo/scenario",
+    ],
+)
+
+go_binary(
+    name = "seed",
+    embed = [":seed_lib"],
+    visibility = ["//visibility:public"],
+)

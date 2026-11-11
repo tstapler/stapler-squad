@@ -56,7 +56,7 @@ func (r *EntRepository) fillItemGuardChunk(ctx context.Context, ids []string, ou
 
 func (r *EntRepository) directItemViews(ctx context.Context, ids []string) (map[string][]PRView, error) {
 	byItem := make(map[string][]PRView)
-	linkRows, err := r.client.SessionPR.Query().Where(sessionpr.BacklogItemIDIn(ids...)).All(ctx)
+	linkRows, err := r.Client.SessionPR.Query().Where(sessionpr.BacklogItemIDIn(ids...)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list item guard links: %w", err)
 	}
@@ -90,7 +90,7 @@ func (r *EntRepository) legacyUnrepresentedItems(ctx context.Context, ids []stri
 	if len(uuids) == 0 {
 		return out, nil
 	}
-	items, err := r.client.BacklogItem.Query().
+	items, err := r.Client.BacklogItem.Query().
 		Where(backlogitem.IDIn(uuids...), backlogitem.PrNumberGT(0)).
 		Select(backlogitem.FieldID, backlogitem.FieldPrURL, backlogitem.FieldPrNumber).
 		All(ctx)
@@ -124,7 +124,7 @@ func (r *EntRepository) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []s
 	out := make(map[string][]string)
 	seen := make(map[[2]string]struct{})
 	for _, chunk := range chunkSlice(uuids, itemSessionBatchChunk) {
-		rows, err := r.client.ItemSession.Query().
+		rows, err := r.Client.ItemSession.Query().
 			Where(itemsession.SessionUUIDIn(chunk...)).
 			WithBacklogItem(func(q *ent.BacklogItemQuery) { q.Select(backlogitem.FieldID) }).
 			All(ctx)

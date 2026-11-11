@@ -1,0 +1,10 @@
+[Unit]
+Description=Remove Bazel output bases whose worktree is gone, then check Bazel disk use
+Documentation=https://github.com/tstapler/stapler-squad/blob/main/docs/how-to/set-up-bazel-worktree-caches.md
+
+[Service]
+Type=oneshot
+# The installer symlinks %h/.local/share/stapler-squad-bazel/repo to the checkout; units cannot know the repo path.
+ExecStart=/usr/bin/nice -n 10 %h/.local/share/stapler-squad-bazel/repo/.claude/skills/worktree-disk-cleanup/bazel-orphan-outputbases.sh --apply --tmp
+# Exit 1 with "ALARM: <path> <du|df> <value>" when the cache grew past its limits; the unit then shows as failed.
+ExecStartPost=/usr/bin/bash %h/.local/share/stapler-squad-bazel/repo/tools/bzl/bazel-disk-alarm.sh

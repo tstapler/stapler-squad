@@ -53517,7 +53517,7 @@
   {
    "spec": "notification-contrast-over-xterm.spec.ts",
    "project": "chromium",
-   "title": "contrast over xterm V1-desktop > wh40k: toast deck and tray text, icons and icon controls meet AA over every terminal content mode",
+   "title": "contrast over xterm V1-desktop > grimdark: toast deck and tray text, icons and icon controls meet AA over every terminal content mode",
    "class": "pass",
    "runs": [
     {
@@ -53787,7 +53787,7 @@
   {
    "spec": "notification-contrast-over-xterm.spec.ts",
    "project": "chromium",
-   "title": "contrast over xterm V2-portrait > wh40k: toast deck and tray text, icons and icon controls meet AA over every terminal content mode",
+   "title": "contrast over xterm V2-portrait > grimdark: toast deck and tray text, icons and icon controls meet AA over every terminal content mode",
    "class": "fail",
    "runs": [
     {
@@ -54013,7 +54013,7 @@
   {
    "spec": "notification-contrast-over-xterm.spec.ts",
    "project": "chromium-dom",
-   "title": "contrast over xterm V1-desktop > wh40k: toast deck and tray text, icons and icon controls meet AA over every terminal content mode",
+   "title": "contrast over xterm V1-desktop > grimdark: toast deck and tray text, icons and icon controls meet AA over every terminal content mode",
    "class": "flaky",
    "runs": [
     {
@@ -54287,7 +54287,7 @@
   {
    "spec": "notification-contrast-over-xterm.spec.ts",
    "project": "chromium-dom",
-   "title": "contrast over xterm V2-portrait > wh40k: toast deck and tray text, icons and icon controls meet AA over every terminal content mode",
+   "title": "contrast over xterm V2-portrait > grimdark: toast deck and tray text, icons and icon controls meet AA over every terminal content mode",
    "class": "fail",
    "runs": [
     {
@@ -111136,7 +111136,7 @@
   {
    "spec": "theme-background.spec.ts",
    "project": "chromium",
-   "title": "theme-background > theme-background > /history has non-white background under wh40k theme",
+   "title": "theme-background > theme-background > /history has non-white background under grimdark theme",
    "class": "pass",
    "runs": [
     {
@@ -111352,7 +111352,7 @@
   {
    "spec": "theme-background.spec.ts",
    "project": "chromium-dom",
-   "title": "theme-background > theme-background > /history has non-white background under wh40k theme",
+   "title": "theme-background > theme-background > /history has non-white background under grimdark theme",
    "class": "pass",
    "runs": [
     {

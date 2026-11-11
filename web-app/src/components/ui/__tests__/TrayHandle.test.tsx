@@ -116,4 +116,20 @@ describe("TrayHandle", () => {
     expect(screen.getByTestId("tray-handle")).toHaveAccessibleName("Notifications, 0 unread, quiet mode on");
     expect(trayEntryLabel(3, 1, true)).toBe("Notifications, 3 unread, 1 need attention, quiet mode on");
   });
+
+  it("handle_should_publish_tray_handle_width_while_visible_and_clear_it_on_unmount", () => {
+    const root = document.documentElement.style;
+    const { unmount } = renderHandle();
+    expect(root.getPropertyValue("--tray-handle-width")).toBe("44px");
+    expect(root.getPropertyValue("--tray-handle-edge")).toBe("right");
+    unmount();
+    expect(root.getPropertyValue("--tray-handle-width")).toBe("");
+    expect(root.getPropertyValue("--tray-handle-edge")).toBe("");
+  });
+
+  it("handle_should_not_publish_tray_handle_width_when_hidden_on_phone", () => {
+    renderHandle(false);
+    expect(screen.queryByTestId("tray-handle")).toBeNull();
+    expect(document.documentElement.style.getPropertyValue("--tray-handle-width")).toBe("");
+  });
 });

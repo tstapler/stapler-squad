@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "events",
+    srcs = ["forward.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/events",
+    visibility = ["//visibility:public"],
+    deps = ["//pkg/events"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":events",
+    visibility = ["//visibility:public"],
+)

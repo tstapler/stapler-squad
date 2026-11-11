@@ -25,7 +25,7 @@ func TestResolveHistoryAdapter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.program, func(t *testing.T) {
 			t.Parallel()
-			got := resolveHistoryAdapter(tt.program)
+			got := DefaultHistoryAdapters().Resolve(tt.program)
 			if tt.wantName == "" {
 				if got != nil {
 					t.Errorf("resolveHistoryAdapter(%q) = %q, want nil", tt.program, got.Name())
@@ -34,6 +34,40 @@ func TestResolveHistoryAdapter(t *testing.T) {
 			}
 			if got == nil || got.Name() != tt.wantName {
 				t.Errorf("resolveHistoryAdapter(%q) = %v, want adapter named %q", tt.program, got, tt.wantName)
+			}
+		})
+	}
+}
+
+// TestResolveHistoryAdapter_PriorityOrder pins first-match-wins ordering for programs that
+// more than one adapter could claim (e.g. "antigravity-claude" matches both claude and agy).
+func TestResolveHistoryAdapter_PriorityOrder(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		program  string
+		wantName string
+	}{
+		{"claude", "claude"},
+		{"agy", "agy"},
+		{"opencode", "opencode"},
+		{"gemini", "gemini"},
+		{"pi", "pi"},
+		{"aider", ""},
+		{"", ""},
+		{"antigravity-claude", "claude"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.program, func(t *testing.T) {
+			t.Parallel()
+			got := DefaultHistoryAdapters().Resolve(tt.program)
+			if tt.wantName == "" {
+				if got != nil {
+					t.Fatalf("got %q, want nil", got.Name())
+				}
+				return
+			}
+			if got == nil || got.Name() != tt.wantName {
+				t.Fatalf("got %v, want %q", got, tt.wantName)
 			}
 		})
 	}

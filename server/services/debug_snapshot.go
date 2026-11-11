@@ -19,7 +19,7 @@ import (
 )
 
 // serverStartTime records when this process started, for uptime calculation.
-var serverStartTime = time.Now()
+var ServerStartTime = time.Now()
 
 // DebugSnapshot is the top-level JSON structure written to disk.
 type DebugSnapshot struct {
@@ -137,7 +137,7 @@ func CollectSnapshot(ctx context.Context, note string, instances []*session.Inst
 func collectServerInfo() ServerInfo {
 	return ServerInfo{
 		PID:           os.Getpid(),
-		UptimeSeconds: int64(time.Since(serverStartTime).Seconds()),
+		UptimeSeconds: int64(time.Since(ServerStartTime).Seconds()),
 		GoVersion:     runtime.Version(),
 		OS:            runtime.GOOS,
 		Arch:          runtime.GOARCH,

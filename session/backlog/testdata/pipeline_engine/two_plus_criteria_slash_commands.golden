@@ -1,0 +1,59 @@
+=== done-0.md ===
+Call report_progress with item_id=char-fixture-2, criteria_index=0, status=pass. Before calling this, run the command or test that proves the criterion. Include the optional note parameter with that exact command and its one-line result (for example "go test ./session -run TestX: ok"). If you only read the code, say so, and do not report pass for anything you have not executed. The note goes to this item's permanent audit trail as context for a reviewer, who weighs the proving commands and output you pass in request_review's verification_notes as the evidence.
+
+=== done-1.md ===
+Call report_progress with item_id=char-fixture-2, criteria_index=1, status=pass. Before calling this, run the command or test that proves the criterion. Include the optional note parameter with that exact command and its one-line result (for example "go test ./session -run TestX: ok"). If you only read the code, say so, and do not report pass for anything you have not executed. The note goes to this item's permanent audit trail as context for a reviewer, who weighs the proving commands and output you pass in request_review's verification_notes as the evidence.
+
+=== done-2.md ===
+Call report_progress with item_id=char-fixture-2, criteria_index=2, status=pass. Before calling this, run the command or test that proves the criterion. Include the optional note parameter with that exact command and its one-line result (for example "go test ./session -run TestX: ok"). If you only read the code, say so, and do not report pass for anything you have not executed. The note goes to this item's permanent audit trail as context for a reviewer, who weighs the proving commands and output you pass in request_review's verification_notes as the evidence.
+
+=== fail-0.md ===
+Call report_progress with item_id=char-fixture-2, criteria_index=0, status=fail. Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking this criterion. It is appended to this item's permanent audit trail and is what a reviewer or the next session reads to understand why this criterion is not done yet. If the criterion cannot be met as written, also follow the owner-action guidance in /backlog/help, because /backlog/review is rejected while any criterion is unmet.
+
+=== fail-1.md ===
+Call report_progress with item_id=char-fixture-2, criteria_index=1, status=fail. Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking this criterion. It is appended to this item's permanent audit trail and is what a reviewer or the next session reads to understand why this criterion is not done yet. If the criterion cannot be met as written, also follow the owner-action guidance in /backlog/help, because /backlog/review is rejected while any criterion is unmet.
+
+=== fail-2.md ===
+Call report_progress with item_id=char-fixture-2, criteria_index=2, status=fail. Include the optional note parameter with a 1-2 sentence explanation of specifically what is blocking this criterion. It is appended to this item's permanent audit trail and is what a reviewer or the next session reads to understand why this criterion is not done yet. If the criterion cannot be met as written, also follow the owner-action guidance in /backlog/help, because /backlog/review is rejected while any criterion is unmet.
+
+=== help.md ===
+# Available Backlog Commands
+
+- `/backlog/status` — Show current item status and checklist
+- `/backlog/done-0` — Mark criterion 0 as complete
+- `/backlog/fail-0` — Mark criterion 0 as failed
+- `/backlog/done-1` — Mark criterion 1 as complete
+- `/backlog/fail-1` — Mark criterion 1 as failed
+- `/backlog/done-2` — Mark criterion 2 as complete
+- `/backlog/fail-2` — Mark criterion 2 as failed
+- `/backlog/review` — Submit for review with a summary
+- `/backlog/ship` — Create a PR with /github:pr-ship and submit for review
+- `/backlog/block` — Report that you're stuck and hand this item back (not for bugs you can fix yourself)
+- request_owner_action (MCP tool) — ask the owner to decide, or to waive a criterion you cannot meet (waive_criterion_index=N)
+- `/backlog/duplicate` — Report this item is already covered by an existing PR, issue, or commit
+
+=== review.md ===
+Call request_review with item_id=char-fixture-2 and a 2-3 sentence summary of what was built.
+
+Then end your turn and stay idle in this session (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait: every wake re-reads your whole context. The app sends you a message with the verdict as soon as it is recorded.
+
+PASS: run `/backlog/ship` yourself to open the pull request (it drives `/github:pr-ship`, which can rebase, resolve merge conflicts, and react to failing CI checks). Do not stop here. Shipping the PR is part of this task, not a separate step someone else does.
+
+FAIL or PARTIAL: fix the noted gaps in this same session and run `/backlog/review` again. Its request_review call reports which attempt you are on out of 3 allowed in THIS session. The count is tracked server-side, so trust what it reports rather than counting your own calls. Once it says you have hit the cap, STOP looping: run `/backlog/ship` anyway to open a PR so a human can pick up the review directly, rather than retrying `/backlog/review`.
+
+=== ship.md ===
+You are ready to ship your work as a pull request — either because `/backlog/review` just returned PASS, or because review has looped without reaching a PASS and it is time to hand the work to a human instead of retrying indefinitely.
+
+Before shipping, run `/backlog/status`. Every criterion must be done or waived. If one is neither, use request_owner_action rather than shipping around it.
+
+Steps:
+1. Create the pull request: run `/github:pr-ship`. It drives the PR through local CI, code review, remote CI, and merge-conflict resolution. It will stop short of actually merging, because the final merge is left to the human reviewer.
+2. Once `/github:pr-ship` reports all gates green: if this work has NOT already received a PASS verdict (you are shipping because review looped without converging, not because it passed), request the automated review with the PR number included by running `/backlog/review` with a 2-3 sentence summary of what was built and the PR number. If review already returned PASS before you got here, skip this step. Running it again will fail because the item is no longer in_progress, and there is nothing left for it to check.
+3. Report the PR back onto this backlog item — REQUIRED, do not skip: call the report_pr_created MCP tool with item_id=char-fixture-2, pr_url=<the PR URL printed by `/github:pr-ship` or `gh pr create`>, pr_number=<the PR number>, and summary=<2-3 sentences: what changed and why>. You created each PR yourself, so nothing else will ever report it back to the item record. Skipping this step leaves the item stuck in review with a real PR that is invisible to the reviewer and the operator.
+
+If the repository has no GitHub remote, run `gh pr create` manually. Do NOT use `--fill`, which just concatenates commit messages with no test plan. Write `--title` in Conventional Commits format and a `--body` with a Summary section (why this change was made, from the backlog item), a What Changed bullet list, and a Test plan checklist of concrete verification steps. Then run `/backlog/review`, then step 3 above to report the PR.
+
+=== status.md ===
+Call the get_backlog_item MCP tool with item_id=char-fixture-2.
+Format the response as a numbered checklist.
+

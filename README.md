@@ -2,16 +2,16 @@
 
 [Stapler Squad](https://tstapler.github.io/stapler-squad/) is a web-based mission control for running multiple AI coding agents ([Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), [Aider](https://github.com/Aider-AI/aider)) simultaneously — with a real-time dashboard, automatic approval rules, and a structured review queue. Run it with `ssq`, then open `http://localhost:8543`.
 
-![Stapler Squad Demo](assets/demo.gif)
+**Jump to:** [Tours](#tours) · [Highlights](#highlights) · [Why Stapler Squad?](#why-stapler-squad) · [How It Works](#how-it-works) · [Installation](#installation) · [Configuration](#configuration) · [Usage](#usage) · [Development](#development) · [FAQs](#faqs)
 
-<details>
-<summary>Full video</summary>
-<video src="assets/demo.webm" width="100%" autoplay loop muted controls></video>
-</details>
+### Tours
 
-→ [Feature screenshots](docs/features.md)
+Short guided walkthroughs, about a minute of video each, with every step written out:
 
-**Jump to:** [Highlights](#highlights) · [Why Stapler Squad?](#why-stapler-squad) · [How It Works](#how-it-works) · [Installation](#installation) · [Configuration](#configuration) · [Usage](#usage) · [Development](#development) · [FAQs](#faqs)
+- [Dashboard lifecycle tour](https://tstapler.github.io/stapler-squad/tours/dashboard-lifecycle/): See every agent at a glance, then start, watch, review and pause one without leaving the dashboard.
+- [Approval review tour](https://tstapler.github.io/stapler-squad/tours/approval-review/): Approve what needs a human, then write rules so routine commands stop interrupting you.
+- [Organise at scale tour](https://tstapler.github.io/stapler-squad/tours/organise-at-scale/): Find any agent fast and keep the list in order as it grows.
+- [All tours](https://tstapler.github.io/stapler-squad/tours/) and [every feature, with screenshots](https://tstapler.github.io/stapler-squad/help/features/).
 
 ### Highlights
 
@@ -24,7 +24,6 @@
 **Organisation**
 - **Instant search** — filter across titles, paths, branches, and tags as you type
 - **Tag-based grouping** — view sessions across 8 grouping strategies (tag, category, status, branch, and more)
-- **Workspace switcher** — manage multiple project contexts from one UI
 - **Bulk actions** — select and act on multiple sessions simultaneously
 
 **Review & Approval**

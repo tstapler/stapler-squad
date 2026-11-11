@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+exports_files(["analyzer.go"])
+
+go_library(
+    name = "noarchivedrevival",
+    srcs = ["analyzer.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/lint/noarchivedrevival",
+    visibility = ["//visibility:public"],
+    deps = ["@lint_x_tools//go/analysis"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":noarchivedrevival",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "noarchivedrevival_test",
+    srcs = ["analyzer_test.go"],
+    data = glob(["testdata/**"]) + ["@rules_go//go"],
+    deps = [
+        ":noarchivedrevival",
+        "//tools/lint/internal/gotool",
+        "@lint_x_tools//go/analysis/analysistest",
+    ],
+)

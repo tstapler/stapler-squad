@@ -101,13 +101,13 @@ export function ClaimConflictBanner({
         <div className={styles.actions}>
           {indeterminate ? (
             onRetry && (
-              <button type="button" className={styles.actionButton} onClick={onRetry} data-testid="claim-banner-retry">
+              <button type="button" className={styles.actionButton} onClick={onRetry} data-testid="claim-banner-retry">{/* analytics-exempt */}
                 Retry check
               </button>
             )
           ) : (
             <>
-              <button type="button" className={styles.actionButton} onClick={() => void handleCopy()} data-testid="claim-banner-copy">
+              <button type="button" className={styles.actionButton} onClick={() => void handleCopy()} data-testid="claim-banner-copy">{/* analytics-exempt */}
                 {copied ? "✓ Copied" : `Copy link to "${hostname}"'s item`}
               </button>
               {submit && (
@@ -117,7 +117,7 @@ export function ClaimConflictBanner({
                   aria-expanded={formOpen}
                   onClick={() => setFormOpen((open) => !open)}
                   data-testid="claim-banner-action"
-                >
+                >{/* analytics-exempt */}
                   {actionLabel}
                 </button>
               )}

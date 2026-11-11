@@ -364,9 +364,12 @@ export function BacklogBoard({
 
   // Clear any in-flight timers on unmount.
   useEffect(() => {
+    // The refs hold Maps mutated in place, so capturing them here sees later entries.
+    const exitTimers = exitTimersRef.current;
+    const enterTimers = enterTimersRef.current;
     return () => {
-      for (const timer of exitTimersRef.current.values()) clearTimeout(timer);
-      for (const timer of enterTimersRef.current.values()) clearTimeout(timer);
+      for (const timer of exitTimers.values()) clearTimeout(timer);
+      for (const timer of enterTimers.values()) clearTimeout(timer);
     };
   }, []);
 

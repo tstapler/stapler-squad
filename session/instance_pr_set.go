@@ -81,7 +81,7 @@ func attachPRLocked(inst *Instance, ref PRRef, source AttachSource, initial PRIn
 		inst.mu.Unlock()
 		return PRView{}, false, ErrNoSessionUUID
 	}
-	if existing, ok := findPR(inst.PRs, ref); ok {
+	if existing, ok := FindPR(inst.PRs, ref); ok {
 		inst.mu.Unlock()
 		return existing, false, nil
 	}
@@ -254,7 +254,7 @@ func indexOfPR(prs []PRView, ref PRRef) int {
 	return -1
 }
 
-func findPR(prs []PRView, ref PRRef) (PRView, bool) {
+func FindPR(prs []PRView, ref PRRef) (PRView, bool) {
 	if idx := indexOfPR(prs, ref); idx >= 0 {
 		return prs[idx], true
 	}

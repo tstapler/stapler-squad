@@ -1,0 +1,141 @@
+package scenario
+
+import "time"
+
+// SessionRecord is a mock session written before boot (Paused or Active only,
+// so the review-queue poller does not reclassify it without tmux).
+type SessionRecord struct {
+	ID, Title, Path, Branch, Status, Program, Category string
+	Tags                                               []string
+	CreatedAt, UpdatedAt                               time.Time
+	Added, Removed                                     int
+}
+
+// FlagSetting turns a feature flag on or off after boot.
+type FlagSetting struct {
+	Name    string
+	Enabled bool
+}
+
+// ApprovalRule is seeded through UpsertApprovalRule.
+type ApprovalRule struct {
+	ID, Name, ToolName, CommandPattern, Decision, RiskLevel string
+	Priority                                                int
+}
+
+// BacklogItem is seeded through CreateBacklogItem then, when Status is not
+// "idea", TransitionBacklogItemStatus.
+type BacklogItem struct {
+	ID, Title, Description, Status string
+	Priority                       int
+	CreatedAt                      time.Time
+}
+
+// Notification is seeded through SendNotification; Type is a NotificationType enum name.
+type Notification struct {
+	ID, Type, Title, Message string
+}
+
+// TaggingRule is seeded through UpsertTaggingRule.
+type TaggingRule struct {
+	ID, Name, PathPattern, OutputTag string
+	Priority                         int
+}
+
+// Workflow is seeded through CreateWorkflow; a non-empty Cron makes it a scheduled trigger.
+type Workflow struct {
+	Slug, Name, Description, Command, Cron string
+}
+
+// Terminal is a session whose program prints a canned transcript.
+type Terminal struct {
+	ID, Title, Transcript string
+}
+
+// Row is one generic fixture row served from a route fixture.
+type Row struct {
+	ID, Kind, Title, Detail string
+	Value                   float64
+	Labels                  []string
+	At                      time.Time
+}
+
+// RouteFixture is data the server cannot be seeded with over RPC; the
+// recorder fulfils the named route with it (plan Task 0.1.1f, `seeded: route`).
+type RouteFixture struct {
+	ID, Route, Seeded string
+	Rows              []Row
+}
+
+// TranscriptFile is one Claude JSONL transcript, laid out as the token store
+// reads it: <historyDir>/<encoded project path>/<conversation uuid>.jsonl.
+type TranscriptFile struct {
+	ProjectDir, Name, Body string
+	ModTime                time.Time
+}
+
+// Bundle is the full data of one or more scenarios.
+type Bundle struct {
+	Sessions      []SessionRecord
+	Flags         []FlagSetting
+	ApprovalRules []ApprovalRule
+	Backlog       []BacklogItem
+	Terminals     []Terminal
+	Notifications []Notification
+	TaggingRules  []TaggingRule
+	Workflows     []Workflow
+	Routes        []RouteFixture
+	Transcripts   []TranscriptFile
+}
+
+func (b *Bundle) append(o Bundle) {
+	b.Sessions = append(b.Sessions, o.Sessions...)
+	b.Flags = append(b.Flags, o.Flags...)
+	b.ApprovalRules = append(b.ApprovalRules, o.ApprovalRules...)
+	b.Backlog = append(b.Backlog, o.Backlog...)
+	b.Terminals = append(b.Terminals, o.Terminals...)
+	b.Notifications = append(b.Notifications, o.Notifications...)
+	b.TaggingRules = append(b.TaggingRules, o.TaggingRules...)
+	b.Workflows = append(b.Workflows, o.Workflows...)
+	b.Routes = append(b.Routes, o.Routes...)
+	b.Transcripts = append(b.Transcripts, o.Transcripts...)
+}
+
+// keys returns namespaced ids used for duplicate detection.
+func (b Bundle) keys() []string {
+	ks := make([]string, 0, len(b.Sessions)+len(b.Flags)+len(b.ApprovalRules)+len(b.Backlog)+len(b.Terminals)+len(b.Notifications)+len(b.TaggingRules)+len(b.Workflows)+len(b.Routes)+len(b.Transcripts))
+	for _, s := range b.Sessions {
+		ks = append(ks, "session:"+s.ID)
+	}
+	for _, f := range b.Flags {
+		ks = append(ks, "flag:"+f.Name)
+	}
+	for _, r := range b.ApprovalRules {
+		ks = append(ks, "approval-rule:"+r.ID)
+	}
+	for _, i := range b.Backlog {
+		ks = append(ks, "backlog:"+i.ID)
+	}
+	for _, t := range b.Terminals {
+		ks = append(ks, "terminal:"+t.ID)
+	}
+	for _, n := range b.Notifications {
+		ks = append(ks, "notification:"+n.ID)
+	}
+	for _, r := range b.TaggingRules {
+		ks = append(ks, "tagging-rule:"+r.ID)
+	}
+	for _, w := range b.Workflows {
+		ks = append(ks, "workflow:"+w.Slug)
+	}
+	for _, r := range b.Routes {
+		ks = append(ks, "route:"+r.ID)
+	}
+	for _, t := range b.Transcripts {
+		ks = append(ks, "transcript:"+t.Name)
+	}
+	return ks
+}
+
+// ago is the single way scenarios derive timestamps: a fixed offset before ref.
+func ago(ref time.Time, d time.Duration) time.Time { return ref.Add(-d) }

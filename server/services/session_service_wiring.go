@@ -13,8 +13,10 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -203,7 +205,7 @@ func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
 
 // SetBacklogLifecycleListener wires the listener to all sessions created via
 // CreateDirectorySession so that backlog state transitions fire on session exit.
-func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
+func (s *SessionService) SetBacklogLifecycleListener(l *backlog.BacklogLifecycleListener) {
 	s.backlogLifecycleListener = l
 	s.prCreationSvc.SetBacklogLifecycleListener(l)
 }
@@ -212,7 +214,7 @@ func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycle
 // SetBacklogLifecycleListener was never called). Exported for the pointer-equality
 // integration test proving BacklogService and BacklogLifecycleListener share a single
 // PipelineEngine instance (Story 1.5.1) — see server/dependencies_test.go.
-func (s *SessionService) GetBacklogLifecycleListener() *session.BacklogLifecycleListener {
+func (s *SessionService) GetBacklogLifecycleListener() *backlog.BacklogLifecycleListener {
 	return s.backlogLifecycleListener
 }
 
@@ -227,35 +229,35 @@ func (s *SessionService) SetSessionSummaryGenerator(g *session.SessionSummaryGen
 // SetReviewGateTrigger wires the review gate trigger into the autonomous orchestration
 // service so that completed work sessions immediately kick off headless review.
 func (s *SessionService) SetReviewGateTrigger(t ReviewGateTrigger) {
-	s.autonomousSvc.SetReviewGateTrigger(t)
+	s.AutonomousSvc.SetReviewGateTrigger(t)
 }
 
 // StaleWorkInspector exposes the autonomous service's inspect-and-nudge step
 // for BacklogService.SetStaleWorkInspector.
-func (s *SessionService) StaleWorkInspector() StaleWorkInspector { return s.autonomousSvc }
+func (s *SessionService) StaleWorkInspector() StaleWorkInspector { return s.AutonomousSvc }
 
 // DeadPaneRecorder is the health checker's sink for dead-pane stop snapshots.
 func (s *SessionService) DeadPaneRecorder() session.DeadPaneRecorder {
-	return s.autonomousSvc.RecordDeadPane
+	return s.AutonomousSvc.RecordDeadPane
 }
 
 // SetAutonomousStuckRespawner wires the respawner into the autonomous orchestration
 // service so a turn-cap-stopped work session gets a fresh turn budget instead of
 // being forced into review.
 func (s *SessionService) SetAutonomousStuckRespawner(r AutonomousStuckRespawner) {
-	s.autonomousSvc.SetAutonomousStuckRespawner(r)
+	s.AutonomousSvc.SetAutonomousStuckRespawner(r)
 }
 
 // TriggerReviewForSession is a public passthrough to the wired ReviewGateTrigger.
 // Satisfies mcp.ReviewTrigger so request_review can spawn a review gate immediately
 // instead of waiting for the next ReconcileStuck tick.
 func (s *SessionService) TriggerReviewForSession(sessionUUID string) {
-	s.autonomousSvc.TriggerReviewForSession(sessionUUID)
+	s.AutonomousSvc.TriggerReviewForSession(sessionUUID)
 }
 
 // SetHistoryLinker wires the HistoryLinker so deleted sessions are also removed
 // from it and cannot be re-persisted by the shutdown hook.
-func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
+func (s *SessionService) SetHistoryLinker(hl *importer.HistoryLinker) {
 	s.historyLinker = hl
 }
 
@@ -270,7 +272,7 @@ func (s *SessionService) SetSessionTagPoller(poller *session.SessionTagClassific
 // SetHeadlessPool wires the headless LLM pool for use by RunOneShot and other AI features.
 func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
-	s.autonomousSvc.SetPool(pool)
+	s.AutonomousSvc.SetPool(pool)
 	s.prCreationSvc.SetHeadlessPool(pool)
 }
 
@@ -278,7 +280,7 @@ func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 // drafting, autonomous drivers) through c, normally a headless.SelectingClient.
 func (s *SessionService) SetHeadlessClient(c headless.PoolClient) {
 	s.headlessClient = c
-	s.autonomousSvc.SetClient(c)
+	s.AutonomousSvc.SetClient(c)
 	s.prCreationSvc.SetHeadlessClient(c)
 }
 
@@ -296,7 +298,7 @@ func (s *SessionService) SetLifecycleContext(ctx context.Context) {
 	if s.capacityMonitor != nil {
 		go s.capacityMonitor.Start(ctx)
 	}
-	s.autonomousSvc.SetLifecycleContext(ctx)
+	s.AutonomousSvc.SetLifecycleContext(ctx)
 }
 
 // wireCallbacks wires all per-instance lifecycle callbacks on inst.
@@ -328,7 +330,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 		return func() { s.inFlightWorktreeSpawns.Delete(cleanTarget) }, nil
 	})
 	inst.SetPreSpawnCollisionGuard(func(worktreePath string) error {
-		if s.reviewQueuePoller == nil {
+		if s.ReviewQueuePoller == nil {
 			log.Warn("SetPreSpawnCollisionGuard: reviewQueuePoller is nil, allowing spawn without a collision check", "session", inst.Title)
 			return nil
 		}
@@ -390,19 +392,19 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 // Used by MCP handlers as a belt-and-suspenders stop after task completion.
 // Satisfies mcp.ReviewCompletionSignaler.
 func (s *SessionService) StopDriverForSession(sessionTitle string) {
-	s.autonomousSvc.StopDriverForSession(sessionTitle)
+	s.AutonomousSvc.StopDriverForSession(sessionTitle)
 }
 
 // StartAutonomousDriverForInstance satisfies the AutonomousDriverStarter interface.
 // Delegates to the autonomous orchestration service.
 func (s *SessionService) StartAutonomousDriverForInstance(inst *session.Instance) {
-	s.autonomousSvc.StartAutonomousDriverForInstance(inst)
+	s.AutonomousSvc.StartAutonomousDriverForInstance(inst)
 }
 
 // StartAutonomousDriverWithTimeout is like StartAutonomousDriverForInstance but
 // uses a configurable startup timeout. Delegates to the autonomous orchestration service.
 func (s *SessionService) StartAutonomousDriverWithTimeout(inst *session.Instance, startupTimeout time.Duration) {
-	s.autonomousSvc.StartAutonomousDriverWithTimeout(inst, startupTimeout)
+	s.AutonomousSvc.StartAutonomousDriverWithTimeout(inst, startupTimeout)
 }
 
 // Compile-time assertion: SessionService must implement AutonomousDriverStarter.
@@ -412,8 +414,8 @@ var _ AutonomousDriverStarter = (*SessionService)(nil)
 // added/removed from the poller and AcknowledgeSession updates poller references.
 // Must be called during server startup before any session mutation RPCs are used.
 func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
-	s.reviewQueuePoller = poller
-	s.autonomousSvc.SetInstanceFinder(s.FindLiveInstance)
+	s.ReviewQueuePoller = poller
+	s.AutonomousSvc.SetInstanceFinder(s.FindLiveInstance)
 	s.reviewQueueSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetStorage(s.storage)

@@ -1,3 +1,5 @@
+> **Superseded 2026-11-03 (owner decision, provisional):** the "opt-in only, never changes what `make build` produces" constraint below no longer holds. The one `stapler-squad` binary is always otelc-woven; see ADR-003 (superseded) and the Bazel ADR-005 changelog.
+
 # Requirements: go-auto-instrumentation
 
 **Date**: 2026-08-21

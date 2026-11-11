@@ -22,12 +22,22 @@ func skipIfRateLimited(t *testing.T, err error) {
 	}
 }
 
+// newRealClaudePool builds a Pool on the real claude binary, skipping the test when
+// claude is not installed (CI runners without it) so these tests only run where it exists.
+func newRealClaudePool(t *testing.T, cfg PoolConfig) *Pool {
+	t.Helper()
+	pool, err := NewPool(cfg)
+	if err != nil {
+		t.Skipf("skipping real-claude integration test: claude binary not found: %v", err)
+	}
+	return pool
+}
+
 // TestPool_RealClaude_SimplePrompt calls the real claude binary with a trivial prompt.
-// Requires CLAUDE_INTEGRATION_TESTS=true and claude in PATH.
+// Requires claude in PATH (skipped otherwise).
 func TestPool_RealClaude_SimplePrompt(t *testing.T) {
 	t.Parallel()
-	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
-	require.NoError(t, err, "NewPool should succeed when claude is in PATH")
+	pool := newRealClaudePool(t, PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -43,8 +53,7 @@ func TestPool_RealClaude_SimplePrompt(t *testing.T) {
 func TestPool_RealClaude_SessionResumption(t *testing.T) {
 	t.Parallel()
 	// Wrap a real pool to inspect args.
-	realPool, err := NewPool(PoolConfig{MaxCallsPerSession: 10, MaxConcurrentSessions: 1})
-	require.NoError(t, err)
+	realPool := newRealClaudePool(t, PoolConfig{MaxCallsPerSession: 10, MaxConcurrentSessions: 1})
 
 	// Replace runner with a tracking wrapper.
 	var capturedArgs [][]string
@@ -55,7 +64,7 @@ func TestPool_RealClaude_SessionResumption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	_, err = realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{}, DiscardCost)
+	_, err := realPool.CallBlocking(ctx, "integration-test", "", "Say 'first call'", CallOptions{}, DiscardCost)
 	skipIfRateLimited(t, err)
 	require.NoError(t, err, "first call should succeed")
 
@@ -95,8 +104,7 @@ func TestPool_RealClaude_WorkDirOnly_GrantsReadAccess(t *testing.T) {
 	markerValue := "STAPLER_SQUAD_MARKER_7f3a1"
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(markerValue), 0o644))
 
-	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
-	require.NoError(t, err, "NewPool should succeed when claude is in PATH")
+	pool := newRealClaudePool(t, PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -119,8 +127,7 @@ func TestPool_RealClaude_WorkDirWithToolFlags_GrantsReadAccess(t *testing.T) {
 	markerValue := "STAPLER_SQUAD_MARKER_9c2e4"
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "marker.txt"), []byte(markerValue), 0o644))
 
-	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
-	require.NoError(t, err, "NewPool should succeed when claude is in PATH")
+	pool := newRealClaudePool(t, PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -182,8 +189,7 @@ const (
 // itself — the point is to know which one is true before trusting the feature.
 func TestPool_RealClaude_UnlistedBashCommand_BlockedOrAllowed(t *testing.T) {
 	t.Parallel()
-	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
-	require.NoError(t, err, "NewPool should succeed when claude is in PATH")
+	pool := newRealClaudePool(t, PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
 
 	t.Run("UnlistedCommand", func(t *testing.T) {
 		tempDir := t.TempDir()
@@ -267,8 +273,7 @@ func (r *argsCapturingRunner) Run(ctx context.Context, args []string, stdin io.R
 // not exist afterwards. The model may refuse or just describe the command; either is fine.
 func TestPool_RealClaude_NoTools_CannotRunBash(t *testing.T) {
 	t.Parallel()
-	pool, err := NewPool(PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
-	require.NoError(t, err)
+	pool := newRealClaudePool(t, PoolConfig{MaxCallsPerSession: 5, MaxConcurrentSessions: 2})
 
 	tempDir := t.TempDir()
 	canary := filepath.Join(tempDir, "canary_notools.txt")
@@ -276,7 +281,7 @@ func TestPool_RealClaude_NoTools_CannotRunBash(t *testing.T) {
 	defer cancel()
 
 	prompt := fmt.Sprintf("Use your Bash tool to run `whoami > %s`, then say done.", canary)
-	_, err = pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
+	_, err := pool.CallBlocking(ctx, FeatureKeyCustom, "", prompt, CallOptions{
 		WorkDir: tempDir, NoTools: true, PermissionMode: "bypassPermissions",
 	}, DiscardCost)
 	skipIfRateLimited(t, err)

@@ -10,8 +10,10 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/session/cmdexec"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
+	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -190,7 +192,7 @@ func TestClaudeController_SetExecutionOptions(t *testing.T) {
 		t.Fatalf("NewClaudeController() failed: %v", err)
 	}
 
-	newOpts := ExecutionOptions{
+	newOpts := cmdexec.ExecutionOptions{
 		Timeout:             30 * time.Second,
 		MaxOutputSize:       4096,
 		StatusCheckInterval: 500 * time.Millisecond,
@@ -672,11 +674,11 @@ func newControllerWithMock(content string) (*ClaudeController, *mockInstance) {
 	}
 	cc.statusDetector.Store(detection.NewStatusDetector())
 	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
-	buf := NewCircularBuffer(256 * 1024)
+	buf := ptyio.NewCircularBuffer(256 * 1024)
 	if content != "" {
 		_, _ = buf.Write([]byte(content))
 	}
-	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
+	cc.ptyAccess.Store(ptyio.NewPTYAccess("test", nil, buf))
 	return cc, inst
 }
 
@@ -939,8 +941,7 @@ func TestGetCurrentStatus_CacheMissOnChange(t *testing.T) {
 
 	// Update the PTY buffer directly — inst.preview is no longer read by GetCurrentStatus.
 	if pa := cc.ptyAccess.Load(); pa != nil {
-		pa.buffer.Clear()
-		_, _ = pa.buffer.Write([]byte(tmuxOutputSmall + "\n  New line that changes the tail\n"))
+		pa.ReplaceBufferForTest([]byte(tmuxOutputSmall + "\n  New line that changes the tail\n"))
 	}
 	_, _ = cc.GetCurrentStatus()
 	var secondHash uint64
@@ -1020,8 +1021,7 @@ func TestGetIdleState_CacheMissOnChange(t *testing.T) {
 
 	// Update the PTY buffer directly — inst.preview is no longer read by GetIdleState.
 	if pa := cc.ptyAccess.Load(); pa != nil {
-		pa.buffer.Clear()
-		_, _ = pa.buffer.Write([]byte(tmuxOutputSmall + "\n  changed\n"))
+		pa.ReplaceBufferForTest([]byte(tmuxOutputSmall + "\n  changed\n"))
 	}
 	_, _ = cc.GetIdleState()
 	var secondHash uint64
@@ -1117,11 +1117,11 @@ func newControllerWithMockAndChannel(preview string) (*ClaudeController, *mockIn
 	}
 	cc.statusDetector.Store(detection.NewStatusDetector())
 	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
-	buf := NewCircularBuffer(256 * 1024)
+	buf := ptyio.NewCircularBuffer(256 * 1024)
 	if preview != "" {
 		_, _ = buf.Write([]byte(preview))
 	}
-	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
+	cc.ptyAccess.Store(ptyio.NewPTYAccess("test", nil, buf))
 	// Wire the lifecycle so runStatusChangeLoop receives the correct ctx.
 	cc.lifecycle.Write(func(l *controllerLifecycle) {
 		l.ctx = ctx
@@ -1372,9 +1372,9 @@ func TestGetStatusAndIdleInfo_UninitializedStatusDetector_DoesNotApplyOSCOverrid
 	cc := &ClaudeController{sessionName: "test", instance: inst}
 	// Deliberately no cc.statusDetector.Store(...).
 	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
-	buf := NewCircularBuffer(256 * 1024)
+	buf := ptyio.NewCircularBuffer(256 * 1024)
 	_, _ = buf.Write([]byte("$ \x1b]0;⠋ working\x07"))
-	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
+	cc.ptyAccess.Store(ptyio.NewPTYAccess("test", nil, buf))
 	cc.started.Store(true)
 
 	status, desc, _, _ := cc.GetStatusAndIdleInfo()

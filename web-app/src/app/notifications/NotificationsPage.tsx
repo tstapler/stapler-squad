@@ -1,3 +1,4 @@
+/* eslint-disable analytics/require-on-click -- pre-existing handlers (filters, load more, mark read); event tracking is out of scope for the bell clearance fix */
 "use client";
 // +feature: ui:notifications-page
 
@@ -44,12 +45,14 @@ import {
   incompleteSearchNoticeButton,
 } from "@/components/ui/NotificationPanel.css";
 import { pageRoot } from "./NotificationsPage.css";
+import { useTrayClearanceRef } from "@/lib/hooks/useTrayClearance";
 
 type TypeFilter = "all" | "approval_needed" | "error" | "task_complete" | "info";
 
 const TYPE_FILTER_LABELS: Record<TypeFilter, string> = {
   all: "All",
   approval_needed: "Approval",
+  // eslint-disable-next-line no-restricted-syntax -- notification type label, not a detected status
   error: "Error",
   task_complete: "Task",
   info: "Info",
@@ -63,6 +66,7 @@ function minutesAgoLabel(sinceMs: number): string {
 }
 
 export function NotificationsPage() {
+  const trayClearanceRef = useTrayClearanceRef();
   const {
     notificationHistory,
     markAsRead,
@@ -290,7 +294,7 @@ export function NotificationsPage() {
   );
 
   return (
-    <div className={pageRoot}>
+    <div ref={trayClearanceRef} className={pageRoot}>
       <div className={header} data-testid="notifications-header">
         <h2 className={title} data-testid="notifications-title">
           Notifications

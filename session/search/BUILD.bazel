@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "search",
+    srcs = [
+        "artifact_index.go",
+        "artifact_index_metrics.go",
+        "bm25.go",
+        "document_store.go",
+        "engine.go",
+        "index_store.go",
+        "inverted_index.go",
+        "snippet.go",
+        "sync_types.go",
+        "tokenizer.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/search",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//session",
+        "//session/artifacts",
+        "//telemetry",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":search",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "search_test",
+    srcs = [
+        "artifact_index_test.go",
+        "bm25_test.go",
+        "engine_test.go",
+        "index_store_test.go",
+        "inverted_index_test.go",
+        "snippet_test.go",
+        "tokenizer_artifact_test.go",
+        "tokenizer_test.go",
+    ],
+    embed = [":search"],
+    deps = [
+        "//config",
+        "//session",
+        "//session/artifacts",
+    ],
+)

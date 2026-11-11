@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbmaint"
 	"github.com/tstapler/stapler-squad/session/dbobs"
@@ -40,13 +41,33 @@ func (s *Server) registerActuatorRoutes() {
 	s.mux.HandleFunc("/actuator/inbox-pr-watch", handleActuatorInboxPRWatch)
 	s.mux.HandleFunc("/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load))
 	s.mux.HandleFunc("/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load))
+	s.mux.HandleFunc("/actuator/terminal-input", handleActuatorTerminalInput(services.TerminalInputReport))
 	s.mux.HandleFunc("/actuator/terminal-latency", handleActuatorTerminalLatency(termlat.Default))
+}
+
+// handleActuatorTerminalInput serves the bounded per-session terminal input tally (frames,
+// bytes, class counts, last activity; never content). JSON by default; ?format=text for a terminal.
+func handleActuatorTerminalInput(report func() []services.TerminalInputSession) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		rows := report()
+		if r.URL.Query().Get("format") == "text" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte(services.RenderTerminalInputText(rows)))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(rows)
+	}
 }
 
 // handleActuatorTerminalMux reports the terminal socket pool (docs/reference/terminal-ws-pool.md).
 // POST ?poolSize=N changes the advertised size at runtime and pushes it to connected clients; it is
 // accepted only on the local (loopback) listener, never on remote access.
-func handleActuatorTerminalMux(bridge func() *services.TerminalMuxBridge) http.HandlerFunc {
+func handleActuatorTerminalMux(bridge func() *wsconn.TerminalMuxBridge) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := bridge()
 		if b == nil {
@@ -58,7 +79,7 @@ func handleActuatorTerminalMux(bridge func() *services.TerminalMuxBridge) http.H
 				http.Error(w, "local listener only", http.StatusForbidden)
 				return
 			}
-			n, valid := services.ParseTerminalMuxPoolSize(r.URL.Query().Get("poolSize"))
+			n, valid := wsconn.ParseTerminalMuxPoolSize(r.URL.Query().Get("poolSize"))
 			if !valid {
 				http.Error(w, "poolSize must be an integer 0-64", http.StatusBadRequest)
 				return
@@ -118,7 +139,7 @@ func handleActuatorNudgeOutcomes(w http.ResponseWriter, _ *http.Request) {
 
 // handleActuatorWsUnary serves the unary WebSocket bridge counters as JSON. The bridge is
 // resolved per request because it may be built after the routes are registered.
-func handleActuatorWsUnary(bridge func() *services.UnaryWsBridge) http.HandlerFunc {
+func handleActuatorWsUnary(bridge func() *wsconn.UnaryWsBridge) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(bridge().Report())

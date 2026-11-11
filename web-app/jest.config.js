@@ -146,6 +146,8 @@ module.exports = {
       testEnvironment: "node",
       roots: ["<rootDir>/../tests/e2e"],
       testMatch: ["**/?(*.)+(test).ts"],
+      // website-demos unit tests use bun:test (tests/e2e: test:website-demos-unit).
+      testPathIgnorePatterns: ["/node_modules/", "/tests/e2e/website-demos/"],
       transform: {
         "^.+\\.tsx?$": [
           "ts-jest",

@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "middleware",
+    srcs = [
+        "auth.go",
+        "bodylimit.go",
+        "callerguard.go",
+        "cors.go",
+        "gzip.go",
+        "hostguard.go",
+        "logging.go",
+        "probeguard.go",
+        "static.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/middleware",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "@com_github_klauspost_compress//gzip",
+        "@com_github_klauspost_compress//zstd",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":middleware",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "middleware_test",
+    srcs = [
+        "auth_test.go",
+        "bodylimit_test.go",
+        "built_assets_test.go",
+        "callerguard_test.go",
+        "gzip_test.go",
+        "hostguard_test.go",
+        "probeguard_test.go",
+        "static_test.go",
+    ],
+    embed = [":middleware"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//proto/session/v1:sessionv1connect_go",
+        "//session/hostclaim",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

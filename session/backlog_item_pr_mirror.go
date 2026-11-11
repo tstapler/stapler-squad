@@ -21,7 +21,7 @@ func (r *EntRepository) RecomputeItemPRMirror(ctx context.Context, itemID string
 	if err != nil {
 		return false, fmt.Errorf("recompute item pr mirror: invalid item id %q: %w", itemID, err)
 	}
-	item, err := r.client.BacklogItem.Get(ctx, id)
+	item, err := r.Client.BacklogItem.Get(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("recompute item pr mirror: load item %s: %w", itemID, err)
 	}
@@ -41,7 +41,7 @@ func (r *EntRepository) recomputeItemPRMirror(ctx context.Context, item *ent.Bac
 	if url == "" {
 		url = synthesizePRURL(active.Ref)
 	}
-	n, err := r.client.BacklogItem.Update().
+	n, err := r.Client.BacklogItem.Update().
 		Where(backlogitem.ID(item.ID), backlogitem.PrNumber(item.PrNumber)).
 		SetPrNumber(active.Ref.Number()).SetPrURL(url).
 		Save(ctx)

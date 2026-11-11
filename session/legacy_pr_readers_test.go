@@ -46,7 +46,7 @@ var legacyPRReaders = map[string]string{
 	"session/instance_serialization.go":          readsSnapshot,
 	"session/instance_snapshot.go":               readsSnapshot,
 	"session/instance_terminal.go":               readsSnapshot,
-	"session/pr_status_poller.go":                readsSnapshot,
+	"session/prpoller/pr_status_poller.go":       readsSnapshot,
 	"session/session.go":                         readsSnapshot,
 	"session/storage.go":                         readsInstanceData,
 }

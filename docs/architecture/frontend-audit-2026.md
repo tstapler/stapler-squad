@@ -331,7 +331,7 @@ Manages pagination state locally with `useState` and a `loadMore` callback. No s
 
 **`breakpoints` and `zIndex`** are intentionally exported as plain constants (not tokens) because CSS custom properties cannot be used in `@media` queries. This is documented at lines 140–161 of `theme-contract.css.ts`.
 
-**Theme implementation:** `web-app/src/styles/theme.css.ts` (619 lines) implements six themes (matrix, cyberpunk77, wh40k, clean, light, dark) via `createTheme`. Terminal tokens are hardcoded to dark values in all themes (e.g., `terminalBackground: "#1e1e1e"`) — this is intentional and not a violation.
+**Theme implementation:** `web-app/src/styles/theme.css.ts` (619 lines) implements six themes (matrix, cyberpunk77, grimdark, clean, light, dark) via `createTheme`. Terminal tokens are hardcoded to dark values in all themes (e.g., `terminalBackground: "#1e1e1e"`) — this is intentional and not a violation.
 
 #### Compliance Tiers
 

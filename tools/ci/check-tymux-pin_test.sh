@@ -93,5 +93,60 @@ run_case "unreachable remote warns and passes outside CI" \
 run_case "unreachable remote fails with CI=true" \
   "$unreachable_tree" 1 "cannot reach" "$unreachable" true
 
+# --- Task 3.3d: MODULE.bazel / PIN / checksums / gitlink cross-checks (offline: remote unreachable). ---
+repo_root="$(cd "$here/../.." && pwd)"
+# Derived from the repo so a TYMUX_VERSION bump does not stale the mutations below.
+daemon_tag="$(sed -nE 's/^TYMUX_VERSION \?= (v[^[:space:]]+).*/\1/p' "$repo_root/Makefile" | head -1)"
+first_sha_prefix="$(awk '/name = "tymuxd_/ { f = 1 } f && /sha256 = "/ { split($0, a, "\""); print substr(a[2], 1, 8); exit }' "$repo_root/MODULE.bazel")"
+
+# make_pin_tree <name>: a git repo with the real MODULE.bazel, PIN, checksums, Makefile pin line and go.mod
+# client pin, plus a third_party/tmux gitlink equal to the PIN commit. Callers then mutate one file.
+make_pin_tree() {
+  local dir="$work/$1" commit
+  mkdir -p "$dir/tools/ci" "$dir/tools/bzl/tmux" "$dir/scripts"
+  cp "$script" "$dir/tools/ci/check-tymux-pin.sh"
+  cp "$repo_root/MODULE.bazel" "$dir/MODULE.bazel"
+  cp "$repo_root/tools/bzl/tmux/PIN" "$dir/tools/bzl/tmux/PIN"
+  cp "$repo_root/scripts/tymuxd-checksums.txt" "$dir/scripts/tymuxd-checksums.txt"
+  grep -E '^TYMUX_VERSION \?=' "$repo_root/Makefile" >"$dir/Makefile"
+  printf 'module example.com/x\n\nrequire (\n\t%s %s\n)\n' "$module" \
+    "$(awk -v m="$module" '$1 == m { print $2; exit }' "$repo_root/go.mod")" >"$dir/go.mod"
+  commit="$(sed -n 's/^commit=//p' "$dir/tools/bzl/tmux/PIN")"
+  git init -q "$dir"
+  git -C "$dir" update-index --add --cacheinfo "160000,$commit,third_party/tmux"
+  git_q -C "$dir" add -- Makefile go.mod MODULE.bazel scripts tools
+  git_q -C "$dir" commit -q -m fixture
+  echo "$dir"
+}
+
+amend() { git_q -C "$1" add -- Makefile go.mod MODULE.bazel scripts tools; git_q -C "$1" commit -q --amend --no-edit; }
+
+run_case "pins consistent across MODULE.bazel, PIN, checksums and gitlink" \
+  "$(make_pin_tree pins_ok)" 0 "skipped, cannot reach" "$unreachable"
+
+t="$(make_pin_tree mod_tymuxd_sha)"
+sed -i "0,/sha256 = \"$first_sha_prefix/s//sha256 = \"00000000/" "$t/MODULE.bazel"; amend "$t"
+run_case "mutated tymuxd sha256 in MODULE.bazel fails" "$t" 1 "differs from" "$unreachable"
+
+t="$(make_pin_tree mod_tmux_sha)"
+sed -i 's/sha256 = "e79c699c/sha256 = "00000000/' "$t/MODULE.bazel"; amend "$t"
+run_case "mutated tmux_src sha256 in MODULE.bazel fails" "$t" 1 "tmux_src sha256" "$unreachable"
+
+t="$(make_pin_tree pin_sha)"
+sed -i 's/^sha256=e79c699c/sha256=00000000/' "$t/tools/bzl/tmux/PIN"; amend "$t"
+run_case "mutated PIN sha256 fails" "$t" 1 "tmux_src sha256" "$unreachable"
+
+t="$(make_pin_tree pin_commit)"
+sed -i 's/^commit=7f2a35ad/commit=00000000/' "$t/tools/bzl/tmux/PIN"; amend "$t"
+run_case "PIN commit differing from the gitlink fails" "$t" 1 "gitlink" "$unreachable"
+
+t="$(make_pin_tree checksums_line)"
+sed -i "/^$daemon_tag x86_64-unknown-linux-musl/d" "$t/scripts/tymuxd-checksums.txt"; amend "$t"
+run_case "missing checksums line for a MODULE.bazel tymuxd repo fails" "$t" 1 "has no" "$unreachable"
+
+t="$(make_pin_tree url_tag)"
+sed -i "s#download/$daemon_tag/tymux-aarch64-apple#download/v0.0.1/tymux-aarch64-apple#" "$t/MODULE.bazel"; amend "$t"
+run_case "MODULE.bazel url for a different release fails" "$t" 1 "is not release" "$unreachable"
+
 echo "$((cases - failures))/$cases passed"
 [[ "$failures" -eq 0 ]]

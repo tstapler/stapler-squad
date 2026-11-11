@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
@@ -23,7 +24,7 @@ import (
 // CodeInvalidArgument without touching storage.
 func TestRestartSession_EmptyID(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -41,7 +42,7 @@ func TestRestartSession_EmptyID(t *testing.T) {
 // returns CodeNotFound.
 func TestRestartSession_SessionNotFound(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -63,7 +64,7 @@ func TestRestartSession_SessionNotFound(t *testing.T) {
 // CodeInvalidArgument.
 func TestClearConversationState_EmptyID(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -81,7 +82,7 @@ func TestClearConversationState_EmptyID(t *testing.T) {
 // returns CodeNotFound.
 func TestClearConversationState_SessionNotFound(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -112,7 +113,7 @@ func TestClearConversationState_Success(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 	require.NoError(t, fix.storage.AddInstance(inst))
-	addInstanceToPoller(fix.poller, inst)
+	svctest.AddInstanceToPoller(fix.poller, inst)
 
 	resp, err := fix.svc.ClearConversationState(context.Background(), connect.NewRequest(&sessionv1.ClearConversationStateRequest{
 		Id: inst.Title,
@@ -129,7 +130,7 @@ func TestClearConversationState_Success(t *testing.T) {
 // CodeInvalidArgument.
 func TestListBranches_EmptyPath(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -147,7 +148,7 @@ func TestListBranches_EmptyPath(t *testing.T) {
 // home directory is rejected with CodeInvalidArgument.
 func TestListBranches_PathOutsideHome(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -166,7 +167,7 @@ func TestListBranches_PathOutsideHome(t *testing.T) {
 // (but is within the home tree) returns CodeInvalidArgument.
 func TestListBranches_NonExistentPath(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -192,7 +193,7 @@ func TestListBranches_NonExistentPath(t *testing.T) {
 // CodeInvalidArgument.
 func TestGetTerminalSnapshot_EmptyID(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })
@@ -210,7 +211,7 @@ func TestGetTerminalSnapshot_EmptyID(t *testing.T) {
 // id returns CodeNotFound (both poller and externalDiscovery are nil).
 func TestGetTerminalSnapshot_SessionNotFound(t *testing.T) {
 	t.Parallel()
-	storage := createTestStorage(t)
+	storage := svctest.CreateTestStorage(t)
 	eventBus := events.NewEventBus(100)
 	svc := NewSessionService(storage, eventBus)
 	t.Cleanup(func() { svc.Shutdown() })

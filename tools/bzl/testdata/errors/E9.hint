@@ -1,0 +1,1 @@
+bazel-hint: another Bazel command holds this worktree's lock; waiting is normal. Remedy: wait, or use a separate worktree.

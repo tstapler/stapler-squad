@@ -1,0 +1,122 @@
+# gazelle:ignore
+load("//tools/bzl/bun:bun.bzl", "bun_dist", "bun_jest_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(
+    [
+        "package.json",
+        "bun.lock",
+        "bunfig.toml",
+    ] + glob([
+        "eslint-plugin-analytics/**",
+        "eslint-plugin-rpc-lifecycle/**",
+        "patches/**",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "public_allowlist",
+    srcs = ["//server/middleware/testdata:public-allowlist.json"],
+    outs = ["public-allowlist.json"],
+    cmd = "cp $< $@",
+)
+
+filegroup(
+    name = "dist_srcs",
+    srcs = [
+        "bun.lock",
+        "bunfig.toml",
+        "index.html",
+        "package.json",
+        "scripts/verify-eval-patch.mjs",
+    ] + glob(
+        [
+            "tsconfig*.json",
+            "build/**",
+            "patches/**",
+            "src/**",
+            "public/**",
+        ],
+        exclude = [
+            "build/__tests__/**",
+            "src/gen/**",  # supplied by //proto/session/v1:session_ts
+        ],
+    ),
+)
+
+bun_dist(
+    name = "dist",
+    srcs = [":dist_srcs"],
+    allowlist = ":public_allowlist",
+    bun = "@bun_host//:bun",
+    gen = "//proto/session/v1:session_ts",
+    node = "@node_host//:node",
+    node_modules = "@web_node_modules//:node_modules",
+)
+
+# Task 0.6b probe: the same action under strace (log at bazel-bin/web-app/dist_trace.strace).
+# manual: it hardcodes a Linuxbrew strace path that CI runners lack, so //... must not build it.
+bun_dist(
+    name = "dist_trace",
+    srcs = [":dist_srcs"],
+    allowlist = ":public_allowlist",
+    bun = "@bun_host//:bun",
+    gen = "//proto/session/v1:session_ts",
+    node = "@node_host//:node",
+    node_modules = "@web_node_modules//:node_modules",
+    tags = ["manual"],
+    trace = True,
+)
+
+# Jest inputs: everything jest.config.js's web-app project reads.
+filegroup(
+    name = "jest_srcs",
+    srcs = [
+        "eslint.config.mjs",
+        "jest.config.js",
+        "jest.setup.js",
+        ":dist_srcs",
+    ] + glob([
+        "eslint-plugin-analytics/**",
+        "eslint-plugin-rpc-lifecycle/**",
+    ]),
+)
+
+# Full Jest suite (web-app project of jest.config.js), split by jest's --shard over the sorted test list.
+bun_jest_test(
+    name = "jest",
+    size = "large",
+    srcs = [":jest_srcs"],
+    bun = "@bun_host//:bun",
+    gen = "//proto/session/v1:session_ts",
+    # Suites that read docs/, project_plans/ (.bazelignore'd), tests/e2e or tests/terminal-conformance
+    # through ../ paths; those directories are not Bazel packages. Epic 4 (sandbox remediation) owns them.
+    ignore_patterns = [
+        "src/lib/__tests__/e2e_isolation_guard\\.test",
+        "src/lib/__tests__/e2e_notification_conventions\\.test",
+        "src/lib/__tests__/notification_docs_exist\\.test",
+        "src/lib/__tests__/notification_plan_docs\\.test",
+        "src/lib/files/analytics/__tests__/events\\.test",
+        "src/lib/terminal/__tests__/conformance/conformance\\.(xterm|ghostty)\\.test",
+    ],
+    node = "@node_host//:node",
+    node_modules = "@web_node_modules//:node_modules",
+    repo_data = [
+        "//server/analytics:client_metrics.go",
+        "//server/analytics:client_pages.json",
+        "//server:user_themes.go",
+        "//server/services:feature_flag_service.go",
+        "//tests/e2e:tools/parity-collect.ts",
+    ],
+    shard_count = 4,
+    # tag-reason: web build output not proven byte-reproducible (Story 7.7); placeholder tracker (#1423)
+    tags = ["no-remote-cache"],
+)
+
+filegroup(
+    name = "transport_fixtures",
+    srcs = glob(["src/lib/transport/__fixtures__/**"]),
+    visibility = ["//server/services/wsconn:__pkg__"],
+)

@@ -1,0 +1,34 @@
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_test(
+    name = "inttest_test",
+    srcs = [
+        "env_helpers_test.go",
+        "guidance_request_ownership_parity_test.go",
+        "watch_sessions_native_streaming_integration_test.go",
+    ],
+    deps = [
+        "//github",
+        "//proto/session/v1:sessionv1_go",
+        "//proto/session/v1:sessionv1connect_go",
+        "//server",
+        "//server/events",
+        "//server/mcp",
+        "//server/reviewqueue",
+        "//server/services",
+        "//session",
+        "//session/domain",
+        "//session/importer",
+        "//session/prpoller",
+        "//session/scrollback",
+        "//testutil",
+        "//testutil/wait",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_mark3labs_mcp_go//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_net//http2",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)

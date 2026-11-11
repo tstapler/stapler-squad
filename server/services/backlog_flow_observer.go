@@ -26,7 +26,7 @@ var (
 		}
 		return h
 	})
-	flowCacheCounter = counterNamed(metricFlowCacheHit, "Flow summary lookups by cache outcome (the aggregator reports computes, so only misses are observed)")
+	flowCacheCounter = CounterNamed(metricFlowCacheHit, "Flow summary lookups by cache outcome (the aggregator reports computes, so only misses are observed)")
 )
 
 // NewFlowObserver returns the flow.Observer that logs one debug line and
@@ -39,6 +39,6 @@ func NewFlowObserver() flow.Observer {
 		if h := flowDurationHist(); h != nil {
 			h.Record(context.Background(), cs.QueryMs)
 		}
-		addOne(flowCacheCounter(), attribute.String("cache", cs.Cache))
+		AddOne(flowCacheCounter(), attribute.String("cache", cs.Cache))
 	}
 }

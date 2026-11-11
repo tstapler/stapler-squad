@@ -210,11 +210,11 @@ func clsRegistryConstants(t *testing.T, root string) map[string]string {
 // clsDynamicCallers are the functions whose Caller is computed. Each is bounded
 // by a test below that proves every value it can return is registered.
 var clsDynamicCallers = map[string]string{
-	"server/services/backlog_service_lifecycle.go BacklogService.TransitionBacklogItemStatus": "resolveTransitionCaller(ctx), bounded by TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers",
-	"server/services/backlog_service_triage.go BacklogService.transitionWithGuard":            "guardedTransitionCaller(to, actor), bounded by TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers",
-	"session/backlog_remediation.go Storage.redriveOne":                                       "the recorded denial's caller, re-checked by LookupTransitionCaller in transitionStillDenied and limited to redriveByWrite",
-	"session/workflow_engine_replay.go replayAnswer":                                          "a decision only (no write): spec.Name comes from iterating the registry",
-	"session/backlog_remediation.go Storage.transitionStillDenied":                            "a decision only (no write): spec.Name is a LookupTransitionCaller result",
+	"server/services/backlogsvc/backlog_service_lifecycle.go BacklogService.TransitionBacklogItemStatus": "resolveTransitionCaller(ctx), bounded by TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers",
+	"server/services/backlogsvc/backlog_service_triage.go BacklogService.TransitionWithGuard":            "guardedTransitionCaller(to, actor), bounded by TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers",
+	"session/backlog_remediation.go Storage.redriveOne":                                                  "the recorded denial's caller, re-checked by LookupTransitionCaller in transitionStillDenied and limited to redriveByWrite",
+	"session/workflow_engine_replay.go replayAnswer":                                                     "a decision only (no write): spec.Name comes from iterating the registry",
+	"session/backlog_remediation.go Storage.transitionStillDenied":                                       "a decision only (no write): spec.Name is a LookupTransitionCaller result",
 }
 
 func clsRequestViolations(lits []clsRequestLiteral, consts map[string]string, dynamic map[string]string) []string {
@@ -275,25 +275,11 @@ func Dynamic(c string)  { _ = TransitionRequest{Caller: pick(c)} }
 func TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers(t *testing.T) {
 	for _, actor := range []string{session.TriggeredByUser, session.TriggeredByAgent, session.TriggeredBySystem, "robot", ""} {
 		ctx := WithTransitionActor(t.Context(), actor)
-		_, ok := session.LookupTransitionCaller(resolveTransitionCaller(ctx))
+		_, ok := session.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q", actor)
 		ctx = WithTransitionCaller(ctx, session.CallerOperatorNotificationAction)
-		_, ok = session.LookupTransitionCaller(resolveTransitionCaller(ctx))
+		_, ok = session.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q with the notification caller", actor)
-	}
-}
-
-func TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers(t *testing.T) {
-	statuses := []session.BacklogStatus{
-		session.BacklogStatusIdea, session.BacklogStatusRefining, session.BacklogStatusReady, session.BacklogStatusQueued,
-		session.BacklogStatusInProgress, session.BacklogStatusReview, session.BacklogStatusPRPending, session.BacklogStatusDone,
-		session.BacklogStatusArchived,
-	}
-	for _, to := range statuses {
-		for _, actor := range []string{session.TriggeredByUser, session.TriggeredByAgent, session.TriggeredBySystem, ""} {
-			_, ok := session.LookupTransitionCaller(guardedTransitionCaller(to, actor))
-			assert.True(t, ok, "to=%s actor=%q", to, actor)
-		}
 	}
 }
 
@@ -331,8 +317,8 @@ func clsCallerRefs(t *testing.T, root string, consts map[string]string) map[stri
 // clsDynamicProducerKeys are the functions that compute a caller from the
 // request, so a constant they mention is reachable (bounded by the tests above).
 var clsDynamicProducerKeys = []string{
-	"server/services/backlog_service_triage.go guardedTransitionCaller",
-	"server/services/backlog_service_lifecycle.go resolveTransitionCaller",
+	"server/services/backlogsvc/backlog_service_triage.go guardedTransitionCaller",
+	"server/services/backlog_ports.go ResolveTransitionCaller",
 }
 
 // clsUnusedCallers returns the non-forwarding registry entries with no call path:

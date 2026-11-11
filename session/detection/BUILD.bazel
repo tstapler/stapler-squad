@@ -1,0 +1,84 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "detection",
+    srcs = [
+        "approval.go",
+        "binary_detector.go",
+        "detector.go",
+        "detector_snapshot.go",
+        "event_sink.go",
+        "events.go",
+        "idle.go",
+        "normalizer.go",
+        "osc_priority.go",
+        "pattern_set.go",
+        "plugin_watcher.go",
+        "plugins.go",
+        "proto_mapping.go",
+        "question_profile.go",
+        "registry.go",
+        "terminal_detector.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/detection",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//pkg/ansi",
+        "//proto/session/v1:sessionv1_go",
+        "//session/detection/binaries",
+        "//session/detection/dtypes",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@com_github_pelletier_go_toml_v2//:go-toml",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":detection",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "detection_test",
+    srcs = [
+        "approval_test.go",
+        "asterism_test.go",
+        "bug_regression_test.go",
+        "detector_opencode_test.go",
+        "detector_snapshot_test.go",
+        "detector_test.go",
+        "event_sink_test.go",
+        "idle_test.go",
+        "input_required_test.go",
+        "normalizer_test.go",
+        "osc_priority_test.go",
+        "pattern_set_test.go",
+        "plugin_watcher_test.go",
+        "plugins_test.go",
+        "proto_mapping_test.go",
+        "registry_test.go",
+        "shared_detector_test.go",
+        "snapshot_test.go",
+        "terminal_detector_test.go",
+        "testmain_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":detection"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//session/detection/binaries",
+        "//session/detection/dtypes",
+        "//testutil/wait",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//session:__pkg__"],
+)

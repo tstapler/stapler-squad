@@ -1,33 +1,35 @@
 "use client";
 
+import type {
+  ReactNode} from "react";
 import {
   createContext,
   useContext,
   useState,
   useCallback,
   useEffect,
-  useRef,
-  ReactNode,
+  useRef
 } from "react";
 import {
   matrixTheme,
   cyberpunk77Theme,
-  wh40kTheme,
+  grimdarkTheme,
   cleanTheme,
   lightTheme,
   darkTheme,
 } from "@/styles/theme.css";
 import { vars } from "@/styles/theme-contract.css";
+import { parseThemeId } from "@/lib/theme/legacy-theme-ids";
 
 const STORAGE_KEY = "stapler-theme";
 
-export type ThemeName = "matrix" | "cyberpunk77" | "wh40k" | "clean" | "light" | "dark";
+export type ThemeName = "matrix" | "cyberpunk77" | "grimdark" | "clean" | "light" | "dark";
 
 /** Maps theme names to their vanilla-extract CSS class strings */
 export const THEME_CLASSES: Record<ThemeName, string> = {
   matrix: matrixTheme,
   cyberpunk77: cyberpunk77Theme,
-  wh40k: wh40kTheme,
+  grimdark: grimdarkTheme,
   clean: cleanTheme,
   light: lightTheme,
   dark: darkTheme,
@@ -36,8 +38,13 @@ export const THEME_CLASSES: Record<ThemeName, string> = {
 const ALL_THEME_CLASSES = Object.values(THEME_CLASSES);
 
 const CUSTOM_PREFIX = "custom:";
-/** Last applied custom theme (`{id, cls, props}`), read by the FOUC script in app/layout.tsx. */
-const CUSTOM_CACHE_KEY = "stapler-theme-custom";
+/**
+ * Last applied custom theme (`{id, cls, props}`), read by the FOUC script in app/layout.tsx.
+ * Versioned because `cls` is a hashed class name that changed with the Grimdark rename; the
+ * unversioned key from earlier builds is discarded.
+ */
+const CUSTOM_CACHE_KEY = "stapler-theme-custom-v2";
+const STALE_CUSTOM_CACHE_KEY = "stapler-theme-custom";
 
 const isBuiltin = (name: string): name is ThemeName => Object.hasOwn(THEME_CLASSES, name);
 
@@ -104,9 +111,12 @@ export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProvide
 
     let persisted: string = initialTheme;
     try {
+      localStorage.removeItem(STALE_CUSTOM_CACHE_KEY);
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored && (isBuiltin(stored) || stored.startsWith(CUSTOM_PREFIX))) {
-        persisted = stored;
+      const canonical = stored ? parseThemeId(stored) : null;
+      if (canonical && (isBuiltin(canonical) || canonical.startsWith(CUSTOM_PREFIX))) {
+        persisted = canonical;
+        if (canonical !== stored) localStorage.setItem(STORAGE_KEY, canonical);
       }
     } catch {
       // localStorage unavailable
@@ -203,7 +213,8 @@ function applyTheme(name: string, custom: UserTheme[]) {
     applyThemeClass(isBuiltin(name) ? name : "clean");
     return;
   }
-  const base = isBuiltin(user.base) ? user.base : "clean";
+  const userBase = parseThemeId(user.base);
+  const base = isBuiltin(userBase) ? userBase : "clean";
   applyThemeClass(base);
   const props: Record<string, string> = {};
   for (const [path, value] of Object.entries(user.tokens)) {

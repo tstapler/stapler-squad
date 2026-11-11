@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 // reloadSpy records every onReload callback invocation for assertions.
@@ -49,7 +50,7 @@ func (s *reloadSpy) last() reloadCall {
 
 func TestClaudeSettingsWatcher_Reload_ValidPath_UpdatesLastGoodAndReturnsRuleCount(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)","Read"]}}`)
 
@@ -69,7 +70,7 @@ func TestClaudeSettingsWatcher_Reload_ValidPath_UpdatesLastGoodAndReturnsRuleCou
 
 func TestClaudeSettingsWatcher_Reload_MalformedPath_KeepsLastKnownGood(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -97,7 +98,7 @@ func TestClaudeSettingsWatcher_Reload_MalformedPath_KeepsLastKnownGood(t *testin
 // was actually removed.
 func TestClaudeSettingsWatcher_Reload_FileDeleted_RevokesRules(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -120,7 +121,7 @@ func TestClaudeSettingsWatcher_Reload_FileDeleted_RevokesRules(t *testing.T) {
 
 func TestClaudeSettingsWatcher_Reload_OnReloadCallbackInvokedWithRuleCountAndOrigin(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -136,7 +137,7 @@ func TestClaudeSettingsWatcher_Reload_OnReloadCallbackInvokedWithRuleCountAndOri
 
 func TestClaudeSettingsWatcher_Reload_CwdEqualsHome_OriginIsGlobalNotMixed(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -151,7 +152,7 @@ func TestClaudeSettingsWatcher_Reload_CwdEqualsHome_OriginIsGlobalNotMixed(t *te
 
 func TestClaudeSettingsWatcher_Reload_TagsOriginByChangedPathLabel(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	projectDir := t.TempDir()
 	globalPath := filepath.Join(home, ".claude", "settings.json")
 	projectPath := filepath.Join(projectDir, ".claude", "settings.json")
@@ -178,7 +179,7 @@ func TestClaudeSettingsWatcher_Reload_TagsOriginByChangedPathLabel(t *testing.T)
 // "mixed" branch, which had zero test coverage (found in review).
 func TestClaudeSettingsWatcher_Reload_BothPathsChanged_OriginIsMixed(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	projectDir := t.TempDir()
 	globalPath := filepath.Join(home, ".claude", "settings.json")
 	projectPath := filepath.Join(projectDir, ".claude", "settings.json")
@@ -207,7 +208,7 @@ func TestClaudeSettingsWatcher_Reload_BothPathsChanged_OriginIsMixed(t *testing.
 // "global" — the opposite of reality.
 func TestClaudeSettingsWatcher_Reload_SameLengthPatternEdit_DetectedAsChanged(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	projectDir := t.TempDir()
 	projectPath := filepath.Join(projectDir, ".claude", "settings.json")
 	writeSettingsFile(t, projectPath, `{"permissions":{"allow":["Read"]}}`)
@@ -230,7 +231,7 @@ func TestClaudeSettingsWatcher_Reload_SameLengthPatternEdit_DetectedAsChanged(t 
 // multiple simultaneous ReloadClaudeSettingsRules RPC calls). Run with -race.
 func TestClaudeSettingsWatcher_ConcurrentReloadCalls_NoRace(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	writeSettingsFile(t, filepath.Join(home, ".claude", "settings.json"),
 		`{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -253,7 +254,7 @@ func TestClaudeSettingsWatcher_ConcurrentReloadCalls_NoRace(t *testing.T) {
 
 func TestClaudeSettingsWatcher_Start_DebouncesRapidWrites(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -288,7 +289,7 @@ func TestClaudeSettingsWatcher_Start_DebouncesRapidWrites(t *testing.T) {
 // redundant duplicate of the startup activation notification when rules do exist.
 func TestClaudeSettingsWatcher_Start_InitialPrimingReload_NeverNotifies(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	// No settings files at all — mirrors the "zero rules configured" case the reviewer
 	// flagged as producing spurious noise on every restart.
 
@@ -306,7 +307,7 @@ func TestClaudeSettingsWatcher_Start_InitialPrimingReload_NeverNotifies(t *testi
 
 func TestClaudeSettingsWatcher_Start_NoPanicWhenWatcherUnavailable(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	// No settings dir created at all — parent directories don't exist yet.
 
 	spy := &reloadSpy{}
@@ -330,7 +331,7 @@ func TestClaudeSettingsWatcher_Start_NoPanicWhenWatcherUnavailable(t *testing.T)
 
 func TestClaudeSettingsWatcher_Start_DetectsExternalFileEdit_ReloadsWithoutRestart(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -370,7 +371,7 @@ func TestClaudeSettingsWatcher_Start_DetectsExternalFileEdit_ReloadsWithoutResta
 // dir") and risked toast-spam that would undermine Requirement 5's "visible signal" framing.
 func TestClaudeSettingsWatcher_Start_IgnoresUnrelatedFileInWatchedDirectory(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -400,7 +401,7 @@ func TestClaudeSettingsWatcher_Start_IgnoresUnrelatedFileInWatchedDirectory(t *t
 // fsnotify event actually reaches it.
 func TestClaudeSettingsWatcher_Start_DetectsFileDeletion_RevokesRulesWithoutRestart(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	writeSettingsFile(t, settingsPath, `{"permissions":{"allow":["Bash(git *)"]}}`)
 
@@ -434,7 +435,7 @@ func TestClaudeSettingsWatcher_Start_DetectsFileDeletion_RevokesRulesWithoutRest
 // time) short of restarting the server.
 func TestClaudeSettingsWatcher_Start_ProjectDirCreatedAfterStart_PicksUpSettingsFile(t *testing.T) {
 	home := t.TempDir()
-	withFakeHomePath(t, home)
+	svctest.WithFakeHomePath(t, home)
 	projectDir := t.TempDir()
 	// No .claude dir under projectDir yet — Start() must fall back to watching projectDir
 	// itself rather than giving up on the project settings path permanently.

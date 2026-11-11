@@ -53,7 +53,7 @@ export function TriageLoadingIndicator({
           aria-label="Cancel triage"
           onClick={onCancel}
           className={styles.cancelButtonCompact}
-        >
+        >{/* analytics-exempt */}
           ×
         </button>
       ) : (
@@ -61,7 +61,7 @@ export function TriageLoadingIndicator({
           aria-label="Cancel triage"
           onClick={onCancel}
           className={styles.cancelButton}
-        >
+        >{/* analytics-exempt */}
           Stop
         </button>
       )}

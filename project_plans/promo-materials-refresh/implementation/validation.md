@@ -1,0 +1,94 @@
+# Validation plan: promo-materials-refresh
+
+**Phase**: SDD 4 (validate). Inputs: `requirements.md`, `implementation/plan.md` (R1-R20, Epics 0.1-5.1), `design/ux.md` (UX-1..UX-13).
+**Note**: `~/.claude/commands/sdd/validation-prompt.md` does not exist on this machine; this file maps every requirement and UX criterion to unit, error-path and integration cases directly (INFERRED template).
+**Status**: Every R and UX criterion has at least one case. Four items are weakly traced and carry NEW cases that the plan does not yet name (see "Gaps").
+
+## Test conventions to follow (VERIFIED against CLAUDE.md and the repo)
+
+| Area | Convention | Where |
+|---|---|---|
+| Go | `t.Parallel()` in every test and subtest (inject deps; no `t.Setenv`/`os.Chdir`); table-driven; `gochecknoglobals` on, so no package-level pattern vars; tools are in the root module so `make test`, `make lint`, `dupl` cover them; git via go-git fixture repos, never the git CLI | `tools/promo/**`, `tools/promolib/**`, `tools/docscoverage/**`, `tests/demo/scenario/**` |
+| Website unit | Vitest files in `website/tests/unit/*.test.ts` (existing: `workflow-yaml`, `lighthouserc`, `hero-video`, `check-internal-links`, `features-*`) | `website/tests/unit` |
+| Website e2e | Playwright in `website/tests/e2e/*.spec.ts` (existing: `landing`, `reduced-motion`, `keyboard-nav`) | `website/tests/e2e` |
+| web-app | Jest via `cd web-app && bunx jest --no-coverage`; mock `@/lib/nav` | `web-app/src/**` |
+| Main e2e (`tests/e2e`) | First line `// @feature ...`; no `waitForTimeout`; `data-testid`/ARIA locators; new helpers in `tests/e2e/pages/`; CI-enforced (`e2e-test-conventions` skill) | `tests/e2e/**` incl. `website-demos/` |
+| Flakiness | Pin `Math.random`, no wall-clock thresholds, no sleeps; fix flakes, do not defer | `deterministic-fast-tests` skill |
+
+Case id format: `T-<req>-<n>`; type U = unit, E = error/negative path, I = integration/e2e.
+
+## Requirement traceability
+
+| Req | Cases (name / file) | Types |
+|---|---|---|
+| R1 no committed media | T-R1-1 `TestMediaGuard_AddedWebmOutsideAllowlistFails` (U); T-R1-2 `TestMediaGuard_AllowlistedIconDeleteAndReadmePass` (U); T-R1-3 `TestMediaGuard_SizeCeilingFailsOversizedJSON` (E); T-R1-4 `TestMediaGuard_AllowMediaLabelOverride` (U); T-R1-5 `TestGitbase_SingleParentHeadFailsLoud` (E) and `..._TwoParentMergePasses` (U); T-R1-6 guard-job placement: `workflow-yaml.test.ts` "guard has no paths/paths-ignore, types incl. labeled, fetch-depth 2" (I). All in `tools/promo/mediaguard/*_test.go`, `tools/promolib/gitbase/diff_test.go`, `website/tests/unit/workflow-yaml.test.ts`. Integration: throwaway PR touching only `website/public/clips/x.webm` goes red, adding label `allow-media` turns it green. | U, E, I |
+| R2 every card has shot/clip; N=8 tours | T-R2-1 `TestExpectedMedia_EqualsReferencedNames` (U, `website/tests/unit/expected-media.test.ts`); T-R2-2 `TestFresh_MissingShotReportsMissing` (E, `tools/promo/cmd/mediatool/fresh_test.go`); T-R2-3 `tour-count.test.ts`: exactly 8 `tours/*.mdx`, each with a matching `tours/<id>.ts` (U); T-R2-4 `build-features.test.ts` new card without `feature-media.json` entry fails naming heading (E); I: full `deploy-website.yml` run, `media-manifest.json` has an entry per expected name (0 missing). | U, E, I |
+| R3 `/tours` section, linked | T-R3-1 `tour-schema.test.ts` (required fields, unique `order`, `clip` matches scene file); T-R3-2 UX-1/UX-2 e2e (below); T-R3-3 `readme-tours-link.test.ts` README link equals `SITE_ORIGIN`/`SITE_BASE` defaults; T-R3-4 `landing.spec.ts` "See the tours" link present. | U, I |
+| R4 registry docs coverage | `tools/docscoverage/internal/resolve/resolve_test.go`: `TestHelpSlugResolvesAgainstDocFiles`, `TestDocFilesDirectoryDrift` (E), `TestTourLinkBidirectional` (E), `TestAnchorNotFound` (E), `TestManyToOneCovered`, `TestExemptRequiresReasonAndCeiling` (E), `TestSyncGeneratedPageAttribution`; `internal/registry`: `TestLoadsArrayFileAndDuplicateLauncherPresets`, `TestSidecarEncodeDecodeRoundTripAllIds`, `TestOrphanSidecarFails` (E); `internal/changed`: `TestSemanticFieldsOnlyFireGate` (table: tested/testIds/lastModified/markerLine/handlerFile ignored), `TestGrandfatheredOnChangePasses`, `TestGrandfatheredNewIdFails` (E), `TestGrandfatheredWithDocsMustDropStatus` (E), `TestRenameSameIdNotNew`; `baseline`: `TestBaselineIdempotent`; web-app `docLoader.shape.test.ts` (E: DOC_FILES not a literal); I: `build.yml` report-only run prints count to summary; flip `docsCoverageEnforce` on a throwaway PR adding `foo-panel` and see it fail, flip back and see pass; `TestAllTourFeaturesHaveSidecars` (4.1.7). | U, E, I |
+| R5 freshness / no stale fallback | `TestFresh_CommitMismatchFails`, `TestFresh_ThemeCleanFails`, `TestFresh_MissingDistFileFails` (E); `TestFresh_ReportOnlyWhenFlagFalseExitsZero` (U); I: dispatch with a deliberately broken Scene and `freshnessEnforce:true`: `mediatool fresh` fails, `deploy` skipped, previous Pages deploy intact; `workflow-yaml.test.ts` "no `REMOVE IN 5.1.2` after 5.1.2" and "fresh step exists beside fallback before 5.1.2". Weekly cron: assert `schedule` still present in workflow YAML (U). | U, E, I |
+| R6 hermetic recording | T-R6-1 `scenario_test.go` `TestDefaultScenarioByteIdentical`, `TestScenariosComposeDuplicateIDErrors` (U, E); T-R6-2 shell/Go check that `record-website-demos.sh` sets `PORT` to a free port, `STAPLER_SQUAD_TMUX_SOCKET`, `--test-mode --test-dir` and never references `:8543` (U, `workflow-yaml.test.ts` or a script lint test); I: during a shard run `ss -ltnp` shows no connection to 8543 and the tmux socket is `ssq-*`. | U, E, I |
+| R7 size / runtime budgets | `TestFresh_PerAssetBudgets` (clip <=3 MB, image <=400 KB), `TestFresh_DistCeiling` (total `dist/` 40 MB), `TestFresh_RecordWallClockCeiling` (record job 30 min, from manifest start/end stamps) and `TestFresh_ClipOver60sFails` (clip duration cap), all values read from the single `tools/promo/budgets.json` (E); `workflow-yaml.test.ts` asserts `timeout-minutes` caps (record 45, website-ci 30, guard per 1.1.4b0); I: `tools/ci/count-pr-checks.py` before/after recorded; smoke job <=6 min record, <=20 min total (observed, not asserted by a wall-clock unit test). | U, E, I |
+| R8 existing website gates | Existing suites must stay green and are updated, not skipped: `check-asset-health.test.ts`, `check-internal-links.test.ts` (poster missing in deploy mode exits 1; PR mode passes), `lighthouserc.test.ts` (tour URLs at >=0.90), `hero-video.test.ts`, `landing.spec.ts` (intercept retargeted to `/clips/dashboard-lifecycle.webm`), `reduced-motion.spec.ts`; I: deploy-job Lighthouse and axe cover `/tours/` and `/tours/dashboard-lifecycle/`. | U, E, I |
+| R9 Grimdark applied and verified | T-R9-1 `recorder.assertions.test.ts` `assertGrimdark throws "expected theme class grimdark, got clean"` (E, `tests/e2e/website-demos/`, jest or bun test via the existing website-demos config); T-R9-2 `TestFresh_ThemeCleanFails` (E); T-R9-3 `theme-id-parity.test.ts` (grimdark and built-ins equal across `ThemeContext`, boot script, `server/user_themes.go`); I: `shot-theme.spec.ts` (`// @feature theme:grimdark`) loads a seeded app and asserts html class and body computed background token. | U, E, I |
+| R10 desktop and mobile | `shots.test.ts` mobile shot is 390x844 and `MediaEntry.formFactor==mobile` (U); `TestFresh_MobileShotsPresent` for the 4 named mobile shots (E); UX-6 e2e (I). | U, E, I |
+| R11 repo conventions | e2e convention lint over `tests/e2e/website-demos/**` (zero `waitForTimeout`, `// @feature` header, `data-testid`/ARIA locators), T-R11-1 grep test `no-wait-for-timeout.test.ts` (U); Go tools in root module covered by `make lint`/`make test`; web uses `bun`. | U, I |
+| R12 Lighthouse, lazy media, reduced-motion | WEAK, see Gaps. T-R12-1 `lighthouserc.test.ts` asserts tour URLs and >=0.90 categories (U); T-R12-2 NEW `tour-media-attrs.test.ts`: built `dist/tours/*/index.html` every `<video>` has `preload="none"`, `poster`, `controls`, no `autoplay`; every `<img>` has `loading="lazy"` unless above-fold hero, plus explicit `width`/`height` (U/I); T-R12-3 `reduced-motion.spec.ts` extended to a tour page (I, = UX-5). | U, I |
+| R13 adding a tour = one spec + one entry | T-R13-1 `tour-schema.test.ts` "every mdx has a scene file and vice versa, nothing else registered"; T-R13-2 NEW `add-tour-fixture.test.ts`: create a temp tour pair in a fixture dir, run `expected-media.mjs` and `mediatool shard-plan`, assert the new id appears in expected media and in exactly one shard with no other file edited (I). | U, I |
+| R14 public seed data | `leak_test.go` `TestAllScenariosHaveNoLeakPatterns` (E; `/home/`, `/Users/`, `/tmp/tmp.`, `ghp_`, `.internal`, email), `TestDefaultScenarioFakePathsAllowlisted`; `termcheck -mode=media-text` over DOM dumps (I); `TestLeakPatternsIsFunctionNotGlobal` via `make lint` gochecknoglobals. | U, E, I |
+| R15 Grimdark naming and migration | web-app: `legacy-theme-ids.test.ts` (`parseThemeId('wh40k')==grimdark`, unknown -> clean at app boundary only), `ThemeContext.test.tsx` (stored `wh40k` -> class + write-back `grimdark`; stale `stapler-theme-custom` discarded), `theme-boot.test.ts` (alias before paint); `tests/e2e/theme-fouc.spec.ts` legacy-id case (I); Go `user_themes_test.go` `TestLegacyBaseNormalizedFileUntouched` (U/E); Omnibar `CommandDetector` test `>theme wh40k`; `termscan` table tests for glued identifiers, `\b40k`, lockfile skip, `project_plans` path component, stale allowlist entry fails (E); `termcheck -mode=dist` banned term in `alt` fails (E); `git mv` snapshot 100% rename check (I, `git diff -M --stat`); final grep returns zero outside allowlist. | U, E, I |
+| R16 observability | WEAK, see Gaps. `TestSummary_RendersTableForRecordedFailedSkipped` (U, `tools/promo/internal/manifest/summary_test.go`: status, bytes, sha256, form factor); docscoverage report test `TestReportPrintsPerFeatureMissingFieldsAndCount` (U); NEW `notify-job.test.ts` in `workflow-yaml.test.ts` (notify `needs` includes `record`, `mediafresh`, `termcheck-dist`; flag-age step present); I: induced shard failure shows a per-clip row `failed` and opens the tracking issue. | U, I |
+| R17 staged rollout, single-switch rollback | `promo-flags.test.ts`: both keys exist, boolean, `false` at introduction; `workflow-yaml.test.ts` asserts workflows read the flag via `jq` from `.github/promo-flags.json`; I: flip PR makes the same PR fail then pass (Story 4.1.5 AC). | U, I |
+| R18 README links; demo-publish retired | `readme-tours-link.test.ts` (no `assets/demo`, `assets/screenshot`; link matches origin/base); `workflow-yaml.test.ts` "demo-publish.yml absent, no `demo-gifs-latest` anywhere" (E: grep test over `.github`); `release-asset.test.ts` reduced to `findHtmlFiles`. | U, E |
+| R19 transcript per tour (WCAG 1.2.1) | WEAK, see Gaps. T-R19-1 `recorder.transcript.test.ts` `caption(page,'Approve the push')` at 4200 ms yields `{tMs:4200,text}` in `<name>.transcript.json` (U); T-R19-2 NEW `tour-transcript.test.ts`: for each built tour page a `<details><summary>Transcript</summary>` exists and its text includes every step text and every caption from the transcript JSON, in order (U/I); T-R19-3 NEW error case: tour whose transcript JSON is missing or empty fails the build (E); UX-2 e2e asserts `details` in DOM order. | U, E, I |
+| R20 delete stale media, scenarios, waitForTimeout cleanup | `grep -r waitForTimeout tests/e2e/website-demos` returns 0 (U); Phase 5 PR check: `git grep` for each deleted path finds no references, `grep -n 'demo-video\|demo-post-process\|demo-gif\|assets/demo' Makefile` returns 0, `go build ./tests/demo/...` and `make lint` pass; `features-json.integration.test.ts` `build-features.mjs` with no recorded files equals committed `features.json` (`git diff --exit-code`) and `grep DEMO_CLIP_BY_HEADING website/scripts` returns 0. | U, E, I |
+
+## UX criterion traceability (design/ux.md s9)
+
+New file `website/tests/e2e/tours.spec.ts` (Playwright, website suite) unless noted. Pages need full media, so these run in `deploy-website.yml` (and on PRs only against the smoke subset plus `/tours/` index, per Story 2.4.1).
+
+| UX | Case | Type | Status vs plan |
+|---|---|---|---|
+| UX-1 | `tours index: h1, 3 start-here cards, 5 category h2s, every card links to a tour` | I | Not named in plan. Add to Story 3.1.1. |
+| UX-2 | `tour page DOM order: h1, video, details#transcript, ol steps, Install link, help link, prev/next, All tours` | I | Not named in plan. Add to Story 3.1.1. |
+| UX-3 | `tour with all media blocked (page.route abort for *.webm/*.webp/*.png): text, transcript, CTAs present; no broken img (naturalWidth check)` | I/E | Not named. Add. |
+| UX-4 | unit `tour-build-missing-clip.test.ts`: deploy mode -> build error; PR smoke mode -> renders, no `<video>`, no "coming soon" text | U/E | Partly in 2.4.1 (freshness) and ADR-003; PR-smoke render case not named. Add. |
+| UX-5 | `reduced-motion.spec.ts` extended: emulate `reduce` on `/tours/dashboard-lifecycle/` and `/`: no autoplay, poster, controls | I | Extends existing spec; plan 3.1.1 AC covers one tour. Add landing + loop over tours. |
+| UX-6 | `mobile-overflow` at 390x844 and 320 wide for `/tours/` and a tour: `scrollWidth<=clientWidth`, targets >=44x44, phone figures have alt | I | Plan 3.1.3a names a mobile-overflow check but not the 44px target assertion or 320 width. Add. |
+| UX-7 | `keyboard-nav.spec.ts` extended: tab sequence on tour page (breadcrumb, video, Install link after the clip, transcript, steps, Try-it links, prev/next, All tours), visible focus ring on each stop, not obscured by the sticky header | I | Not named. Add; manual pass recorded in PR. |
+| UX-8 | Lighthouse (`lighthouserc.test.ts` URL list) and axe in deploy job: zero serious/critical, >=0.90 desktop+mobile | U/I | Covered by Story 3.1.3. |
+| UX-9 | `tour-schema.test.ts` `missing alt fails build naming the field` (Zod) | E | Covered by Story 3.1.1 AC. |
+| UX-10 | Review checklist item in `6-verify` (two exits per page; fallback state documented); plus UX-1/2 assert nav and content exits | I (manual) | Review checklist, not automated by design. |
+| UX-11 | `tour-build-stamp.test.ts`: page shows "Recorded 2026-11-10 (build a1b2c3d)" with the sha in `<small>` for manifest commit `a1b2c3d`, and "Recorded from build" appears nowhere; E: manifest missing -> build fails | U/E | Covered by Story 3.1.1 AC; the missing-manifest error case is NEW. |
+| UX-12 | `readme-tours-link.test.ts` + `check-internal-links.test.ts` (README and landing link to `/tours/`; links resolve) | U | Covered by 3.3.2 and 3.1.3. |
+| UX-13 | `termcheck -mode=dist` and `-mode=media-text` over built tour pages, alt text, captions, filenames | I | Covered by 1.1.4c and 2.4.1b. |
+
+## Per-component test inventory
+
+| Component | Unit | Error path | Integration |
+|---|---|---|---|
+| `tools/promolib/gitbase` | diff of two-parent merge, index listing, base blob read | single-parent fails loudly, missing base | fixture repo built with go-git |
+| `tools/promolib/termscan` | each banned fragment, `\b40k`, skip rules, allowlist parse | stale allowlist, dist/alt hit, lockfile noise | run `termcheck` binary over fixture tree |
+| `tools/promo/mediaguard` | extension set, glob allowlist | oversize JSON, label override | CI guard job on throwaway PR |
+| `tools/promo/cmd/mediatool` | merge of shard manifests, budgets, summary, `shard-plan` round-robin determinism | missing, stale commit, wrong theme, missing dist file | `fresh` against a real `website/dist` from a smoke build |
+| `tests/demo/scenario` | each scenario seeds, compose, fixed offsets from `ref` (two `ref` values give same offsets) | duplicate ids across scenarios, leak patterns | `seed` CLI then server boot in `--test-mode` and RPC step |
+| `tests/e2e/website-demos` | `hold`, `caption`, `assertGrimdark`, `captureShot` options | flag-disabled redirect fails clip, wrong theme, dialog open | one-clip smoke record in `website-ci` |
+| `website` content/schema | tour Zod schema, `expected-media.mjs`, `build-features.mjs` determinism | missing alt, missing helpDoc target, unknown feature id | full `bun run build` plus link, asset and Lighthouse checks |
+| `tools/docscoverage` | see R4 row | see R4 row | `make docs-coverage-baseline` twice (idempotent), CI report-only step |
+| web-app theme | alias, parity, picker label | unknown id, stale custom cache | `theme-fouc.spec.ts` legacy id |
+| `server/user_themes.go` | legacy base normalization | file bytes unchanged assertion | `GET /api/themes` test |
+
+## Gaps and recommended additions
+
+**Uncovered by any named plan test (need new cases before implementation)**
+
+1. **R12 (weak)**: the plan covers Lighthouse thresholds only through the URL list assertion. Nothing asserts lazy loading (`loading="lazy"`, `preload="none"`, explicit dimensions) on built tour pages. Add T-R12-2 (`tour-media-attrs.test.ts`) to Story 3.1.1.
+2. **R16 (weak)**: summary table and gate output have ACs, but the `notify` extension has only the flag-age AC. No test asserts `notify` depends on `record`, `mediafresh` and `termcheck-dist`, or that a failed shard surfaces a `failed` row. Add a `workflow-yaml.test.ts` case and an induced-failure integration run (Story 2.4.1). Also the docs-gate output test (per-feature missing field lines) should be named in Story 4.1.1c.
+3. **R19 (weak)**: emission of `<name>.transcript.json` is tested, and the page `<details>` is tested, but nothing asserts the rendered transcript equals the step text plus the caption timeline, nor that a missing or empty transcript fails the build. Add T-R19-2 and T-R19-3 to Stories 2.3.1 and 3.1.1.
+4. **UX-1, UX-2, UX-3, UX-7**: no named test in the plan; there is no `tours.spec.ts` in Files lists. Add `website/tests/e2e/tours.spec.ts` to Story 3.1.1 (and extend `keyboard-nav.spec.ts`).
+5. **UX-4 PR-smoke branch, UX-6 target size and 320 px width, UX-11 missing-manifest error**: partially named only; add the specific cases above.
+6. **R6 hermeticity**: the plan states it but has no automated check that the recorder never touches `:8543`. Add T-R6-2.
+7. **R13**: no executable proof of "one spec + one entry"; add T-R13-2 (`add-tour-fixture.test.ts`).
+
+**Residual risks that tests cannot close (owner or manual checks)**: imagery containing trademarked names (OCR is deferred per ADR-004); tour storyline and seed-narrative review; Safari/iOS WebM playback; first CI run of the sharded matrix on GitHub runners; Pages deploy plus one workflow dispatch.
+
+**Ordering hazards for test design**: the theme-alias tests (T-R15) only pass after Task 1.1.3a lands in the same PR (alias module, id switch, snapshot `git mv` as three commits); the blocking `termcheck` guard must land after the rename or with an allowlist entry for `web-app/src/lib/theme/legacy-theme-ids.ts`.

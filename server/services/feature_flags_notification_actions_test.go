@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
 func listedFlag(t *testing.T, svc *FeatureFlagService, name string) *sessionv1.FeatureFlag {
@@ -128,7 +129,7 @@ func TestAskUserQuestionStructured_ShouldGateStagesInOrder_WhenRenderAnswerHookR
 }
 
 func TestEffectiveAnswerQuestion_ShouldBeClosed_WhenNothingConfigured(t *testing.T) {
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	for _, r := range []answerRoute{routeLiveKeystrokeHidden, routeLiveKeystrokeVisible, routeDurableRecord, routeHookReply} {
 		assert.False(t, effectiveAnswerQuestion(r), "route %d", r)
 	}

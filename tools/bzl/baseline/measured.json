@@ -1,0 +1,194 @@
+{
+  "run_date": "2026-11-04T06:34:08Z",
+  "ci_n": 30,
+  "ci_p50_s": 2339,
+  "ci_p90_s": 4298,
+  "ci_p95_s": 5001,
+  "ci_per_workflow": [
+    {
+      "workflow": "build.yml",
+      "n": 30,
+      "p50_s": 2230,
+      "p90_s": 4245
+    },
+    {
+      "workflow": "lint.yml",
+      "n": 27,
+      "p50_s": 1033,
+      "p90_s": 1102
+    },
+    {
+      "workflow": "mcp-integration.yml",
+      "n": 12,
+      "p50_s": 590,
+      "p90_s": 675
+    }
+  ],
+  "cold_worktree_wall_s": 56.04,
+  "disk_kb_worktree": 516316,
+  "disk_kb_node_modules": 525388,
+  "regen_steps_per_session_median": 0,
+  "regen_steps_per_session_p90": 0,
+  "regen_steps_detail": {
+    "all": {
+      "n": 30,
+      "median": 0,
+      "p90": 0,
+      "sessions_with_any": 1,
+      "totals": {
+        "proto_gen": 1,
+        "ent_gen": 1,
+        "sync": 0,
+        "build_errors": 0
+      }
+    },
+    "build_active": {
+      "n": 16,
+      "median": 0,
+      "p90": 2,
+      "sessions_with_any": 5,
+      "totals": {
+        "proto_gen": 4,
+        "ent_gen": 2,
+        "sync": 0,
+        "build_errors": 20
+      }
+    }
+  },
+  "warm_one_pkg_test_s": 2.687,
+  "partial_class": {
+    "n": 30,
+    "n_with_runs": 30,
+    "runner_min_p50": 183.63333333333335,
+    "runner_min_p90": 285.1333333333334,
+    "billed_style_min_p50": 194,
+    "n_ttg": 27,
+    "ttg_p50_s": 2704,
+    "ttg_p90_s": 4298
+  },
+  "global_class": {
+    "n": 2,
+    "n_with_runs": 2,
+    "runner_min_p50": 334.0833333333333,
+    "runner_min_p90": 364.0166666666667,
+    "billed_style_min_p50": 361,
+    "n_ttg": 2,
+    "ttg_p50_s": 2404,
+    "ttg_p90_s": 19745
+  },
+  "all_class": {
+    "n": 100,
+    "n_with_runs": 99,
+    "runner_min_p50": 279.29999999999995,
+    "runner_min_p90": 335.2166666666667,
+    "billed_style_min_p50": 291,
+    "n_ttg": 84,
+    "ttg_p50_s": 3629,
+    "ttg_p90_s": 17834
+  },
+  "ra1_median_fanout": 0.25874125874125875,
+  "ra1_median_fanout_go_touching": 0.26573426573426573,
+  "ra1_share_prs_le_30pct": 0.9666666666666667,
+  "ra2_non_go_share": 0.9871217409876094,
+  "ra2_median_components_s": {
+    "e2e": 1974.5,
+    "lint": 0,
+    "setup_and_queue": 398,
+    "go_or_other": 34,
+    "span": 2601
+  },
+  "fixtures": [
+    {
+      "fixture": "1-stale-build",
+      "names_remedy": "N/A-make"
+    },
+    {
+      "fixture": "2-missing-external-dep",
+      "names_remedy": true
+    },
+    {
+      "fixture": "3-missing-generated-code",
+      "names_remedy": false
+    },
+    {
+      "fixture": "4-oom",
+      "names_remedy": false
+    },
+    {
+      "fixture": "5-enospc",
+      "names_remedy": false
+    },
+    {
+      "fixture": "6-cache-unreachable",
+      "names_remedy": "N/A-make"
+    },
+    {
+      "fixture": "7-flock-queue-wait",
+      "names_remedy": "N/A-make"
+    },
+    {
+      "fixture": "8-sandbox-failure",
+      "names_remedy": "N/A-make"
+    },
+    {
+      "fixture": "9-cache-auth-rejected",
+      "names_remedy": "N/A-make"
+    }
+  ],
+  "hermeticity_make": {
+    "h1_host_executables": 38,
+    "h1_host_executable_list": [
+      "/bin/sh",
+      "/home/linuxbrew/.linuxbrew/bin/asdf",
+      "/home/linuxbrew/.linuxbrew/bin/buf",
+      "/home/linuxbrew/.linuxbrew/bin/bun",
+      "/home/linuxbrew/.linuxbrew/bin/git",
+      "/home/linuxbrew/.linuxbrew/bin/go",
+      "/home/linuxbrew/.linuxbrew/bin/make",
+      "/home/linuxbrew/.linuxbrew/bin/node",
+      "/home/linuxbrew/.linuxbrew/bin/sha256sum",
+      "/home/tstapler/.cache/go-build/2c/2c82069ba20762828121db7c8a60d499254eacab0d720e416304a4a9b54d970d-d/ent",
+      "/home/tstapler/.cache/tmp/ssq-measure/gotmp/go-build3484980003/b001/exe/entc_github.com_tstapler_stapler-squad_session_ent_schema_1793772264",
+      "/home/tstapler/.cache/tmp/ssq-measure/gotmp/go-build4169978289/b001/exe/shared-node-modules",
+      "/home/tstapler/go/bin/otelc",
+      "/home/tstapler/.local/bin/git",
+      "/home/tstapler/.local/bin/otelc",
+      "/home/tstapler/.stapler-squad/shared-node-modules/df00e12ab903d0f130c39982dcb556905cf83af45c4688ed4de26a4c3310dce3/node_modules/.bun/@esbuild+linux-x64@0.28.0/node_modules/@esbuild/linux-x64/bin/esbuild",
+      "./scripts/otel-auto-build.sh",
+      "/usr/bin/as",
+      "/usr/bin/bash",
+      "/usr/bin/cat",
+      "/usr/bin/cp",
+      "/usr/bin/find",
+      "/usr/bin/gcc",
+      "/usr/bin/grep",
+      "/usr/bin/ld",
+      "/usr/bin/mkdir",
+      "/usr/bin/mktemp",
+      "/usr/bin/readlink",
+      "/usr/bin/rm",
+      "/usr/bin/sed",
+      "/usr/bin/sh",
+      "/usr/bin/touch",
+      "/usr/bin/tr",
+      "/usr/bin/uname",
+      "/usr/bin/which",
+      "/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1",
+      "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2",
+      "web-app/node_modules/.bin/protoc-gen-es"
+    ],
+    "h1_network_destinations": 1,
+    "h1_network_destination_list": [
+      "34.95.71.106:443"
+    ],
+    "h1_make_exit": 0,
+    "h2_path_scrubbed_build_ok": false,
+    "h2_make_exit": 2,
+    "h2_last_lines": "note: gen/ is stale for plain go and gopls; Bazel is unaffected. Run 'make sync'. ❌ Error: go/buf/bun not found. Install asdf or Homebrew. make: *** [Makefile:72: .asdf-install.stamp] Error 1 ",
+    "h3": "N/A-make",
+    "h4_downgrades": 0,
+    "head": "7cfd08a69",
+    "run_date": "2026-11-04T06:06:17Z",
+    "system": "make"
+  }
+}

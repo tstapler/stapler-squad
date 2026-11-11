@@ -1,0 +1,110 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:forbidden_deps.bzl", "forbidden_deps_test")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "wakes",
+    srcs = [
+        "clock.go",
+        "cron.go",
+        "delivery.go",
+        "describe.go",
+        "dispatcher.go",
+        "escalator.go",
+        "expire.go",
+        "guards.go",
+        "kinds.go",
+        "leader.go",
+        "limits.go",
+        "metrics.go",
+        "metrics_session.go",
+        "notify.go",
+        "operator_api.go",
+        "owner_api.go",
+        "pane.go",
+        "ports.go",
+        "predicates.go",
+        "reconcile.go",
+        "revive.go",
+        "sources_guidance.go",
+        "sources_pr.go",
+        "sources_session.go",
+        "timer.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/wakes",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//pkg/events",
+        "//session",
+        "//session/domain",
+        "//session/tymux",
+        "//telemetry",
+        "@com_github_gofrs_flock//:flock",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_robfig_cron_v3//:cron",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":wakes",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "wakes_test",
+    srcs = [
+        "cron_test.go",
+        "delivery_test.go",
+        "deps_test.go",
+        "describe_test.go",
+        "dispatcher_test.go",
+        "escalator_test.go",
+        "expire_test.go",
+        "fakes_test.go",
+        "flag_carveout_test.go",
+        "guards_test.go",
+        "hold_test.go",
+        "integration_test.go",
+        "kinds_test.go",
+        "limits_test.go",
+        "missed_alert_test.go",
+        "owner_api_test.go",
+        "restart_gap_test.go",
+        "revive_test.go",
+        "sources_test.go",
+        "storm_test.go",
+        "timer_test.go",
+    ],
+    data = [
+        "//pkg/events:types.go",
+        "//session/testdata:all",
+    ],
+    embed = [":wakes"],
+    deps = [
+        "//executor/safeexec",
+        "//internal/testenv",
+        "//pkg/events",
+        "//session",
+        "//session/domain",
+        "//session/tymux",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+forbidden_deps_test(
+    name = "forbidden_deps_test",
+    forbidden = [
+        "//server/services",
+        "//server/mcp",
+    ],
+    required = ["//session"],
+    target = ":wakes",
+    why = "the ports exist so server/services can depend on server/wakes; the reverse import must never appear (replaces deps_test.go)",
+)

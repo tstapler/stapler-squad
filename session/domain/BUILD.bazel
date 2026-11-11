@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "domain",
+    srcs = [
+        "autonomous_stop.go",
+        "backlog.go",
+        "guidance_cancel_reason.go",
+        "guidance_request_source.go",
+        "wake_trigger.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/domain",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":domain",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "domain_test",
+    srcs = [
+        "autonomous_stop_test.go",
+        "backlog_test.go",
+        "guidance_request_source_test.go",
+        "wake_trigger_test.go",
+    ],
+    embed = [":domain"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session's wake-polling guard, which scans Go sources for the client-side wake tool.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//session:__pkg__",
+        "//session/flow:__pkg__",
+    ],
+)

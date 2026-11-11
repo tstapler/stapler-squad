@@ -4,6 +4,7 @@ import { EstimatedValue } from "@/components/ui/EstimatedValue";
 import type { FlowCausesSection, FlowPRSection } from "@/gen/session/v1/backlog_flow_pb";
 import { DrillButton } from "./DrillButton";
 import { durationText, formatInt, formatIsoDate } from "./flowFormatters";
+import { weekLabel } from "./FlowTrends";
 import * as styles from "./flow.css";
 
 interface FlowPRProps {
@@ -116,6 +117,42 @@ function Outcomes({ pr, estimated }: Pick<FlowPRProps, "pr" | "estimated">) {
   );
 }
 
+const NUDGE_SINCE_CAPTURE = "manual_nudge:since_capture";
+
+/** Manual nudges are forward-only: before the first one, show "not yet recording", never zeros. */
+function Nudges({ pr, estimated, onDrill }: Pick<FlowPRProps, "pr" | "estimated" | "onDrill">) {
+  const n = pr.nudges;
+  if (!n?.recording) {
+    return (
+      <p className={styles.muted} data-testid="flow-pr-nudges">
+        Manual nudge tracking not yet recording
+      </p>
+    );
+  }
+  const total = <DrillButton drillKey={n.drillKey} onDrill={onDrill}>{formatInt(n.total)}</DrillButton>;
+  return (
+    <div className={styles.block} data-testid="flow-pr-nudges">
+      <span className={styles.secondary}>
+        Manual nudges since{n.captureSince ? ` ${weekLabel(n.captureSince)}` : " capture began"}
+      </span>
+      <p>
+        total:{" "}
+        {estimated.includes(NUDGE_SINCE_CAPTURE) ? <EstimatedValue title="Nudges are counted only since capture began">{total}</EstimatedValue> : total}
+      </p>
+      <ul className={styles.row}>
+        {n.weekly.map((b) => (
+          <li key={b.weekStart?.seconds.toString()}>
+            {weekLabel(b.weekStart)}:{" "}
+            <DrillButton drillKey={b.drillKey} onDrill={onDrill}>
+              {formatInt(b.n)}
+            </DrillButton>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function TriggerDwell({ pr, estimated, onDrill }: Pick<FlowPRProps, "pr" | "estimated" | "onDrill">) {
   if (!estimated.includes(DWELL_SPLIT_SINCE_CAPTURE) || pr.triggerDwell.length === 0) return null;
   return (
@@ -142,7 +179,7 @@ function TriggerDwell({ pr, estimated, onDrill }: Pick<FlowPRProps, "pr" | "esti
 
 export function FlowPR(props: FlowPRProps) {
   const { pr, onDrill } = props;
-  const none = (pr.cycles?.value ?? 0) === 0 && (pr.fixDwell?.n ?? 0) === 0 && !pr.outcomes?.recording;
+  const none = (pr.cycles?.value ?? 0) === 0 && (pr.fixDwell?.n ?? 0) === 0 && !pr.outcomes?.recording && !pr.nudges?.recording;
   if (none) return <p>No PR fixes in this window</p>;
   return (
     <div className={styles.block} data-testid="flow-pr">
@@ -156,6 +193,7 @@ export function FlowPR(props: FlowPRProps) {
       <TriggerDwell pr={pr} estimated={props.estimated} onDrill={onDrill} />
       <CauseBucket {...props} />
       <Outcomes pr={pr} estimated={props.estimated} />
+      <Nudges pr={pr} estimated={props.estimated} onDrill={onDrill} />
     </div>
   );
 }

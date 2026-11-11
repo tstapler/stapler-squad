@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "manual-instance_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/bzl/manual-instance",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "manual-instance",
+    embed = [":manual-instance_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "manual-instance_test",
+    srcs = ["main_test.go"],
+    embed = [":manual-instance_lib"],
+)

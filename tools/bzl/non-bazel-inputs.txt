@@ -1,0 +1,14 @@
+# Inputs that are not Bazel targets and the CI jobs they select (tools/ci/affected-targets prints `job:<name>`).
+# Format: <glob> <job>[,<job>...]. Task 7.3a list; job names are the legacy workflow job keys.
+tests/e2e/** e2e
+scripts/e2e-baseline-compare.ts e2e
+web-app/playwright.config.* e2e
+docs/registry/** registry-freshness
+website/** website-ci
+.github/** workflow-lint
+web-app/.jscpd.json web-duplication
+server/middleware/testdata/** go-test
+.bun-version web-build,e2e
+.github/workflows/build.yml workflow-lint,go-test,web-build,e2e
+.github/workflows/_prepare.yml workflow-lint,go-test,web-build,e2e
+.github/workflows/mcp-integration.yml workflow-lint,mcp-integration

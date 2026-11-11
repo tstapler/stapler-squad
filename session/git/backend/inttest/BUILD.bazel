@@ -1,0 +1,28 @@
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_test(
+    name = "inttest_test",
+    srcs = [
+        "attr_test.go",
+        "backend_test.go",
+        "capability_test.go",
+        "routed_cli_test.go",
+        "routed_helpers_test.go",
+        "routed_test.go",
+        "shadow_gogit_broken_worktree_test.go",
+        "shadow_test.go",
+        "spawn_test.go",
+    ],
+    deps = [
+        "//session/git/backend",
+        "//session/git/backend/cli",
+        "//session/git/backend/gogit",
+        "//testutil/gitoracle",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ],
+)

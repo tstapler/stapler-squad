@@ -1,0 +1,29 @@
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_test(
+    name = "inttest_test",
+    srcs = [
+        "claim_gossip_convergence_test.go",
+        "claim_two_host_integration_test.go",
+        "ent_repository_backlog_events_test.go",
+        "host_advertisement_convergence_test.go",
+        "storage_backlog_events_test.go",
+    ],
+    deps = [
+        "//config",
+        "//envtest",
+        "//github",
+        "//pkg/events",
+        "//proto/session/v1:sessionv1_go",
+        "//server/auth",
+        "//server/services",
+        "//server/services/backlogsvc",
+        "//session",
+        "//session/hostclaim",
+        "//session/internal/peeraddr",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -12,7 +12,7 @@ import (
 func TestListSessionPRViewsByUUIDs_ShouldStayWithinStatementBudget_WhenManySessions(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	s := &Storage{repo: repo}
+	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	uuids := make([]string, 0, 1001)
 	for i := 0; i < 200; i++ {
@@ -42,7 +42,7 @@ func TestListSessionPRViewsByUUIDs_ShouldStayWithinStatementBudget_WhenManySessi
 func TestListItemGuardViewsByItemIDs_ShouldReturnDirectLinksWithoutTombstoned(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	s := &Storage{repo: repo}
+	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	item := addLegacyItem(t, repo, "item", "in_progress", 0, "")
 	open := mustPRRef(t, "", "acme", "app", 22)
@@ -62,7 +62,7 @@ func TestListItemGuardViewsByItemIDs_ShouldReturnDirectLinksWithoutTombstoned(t 
 func TestListItemGuardViewsByItemIDs_ShouldFlagLegacyUnrepresented_WhenNumberHasNoLink(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	s := &Storage{repo: repo}
+	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	ref := mustPRRef(t, "", "acme", "app", 5)
 	unlinked := addLegacyItem(t, repo, "unlinked", "pr_pending", 5, synthesizePRURL(ref))
@@ -87,7 +87,7 @@ func TestListItemGuardViewsByItemIDs_ShouldFlagLegacyUnrepresented_WhenNumberHas
 func TestListItemGuardViewsByItemIDs_ShouldStayWithinStatementBudget_WhenManyItems(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	s := &Storage{repo: repo}
+	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	ids := make([]string, 0, 200)
 	for i := 0; i < 200; i++ {
@@ -106,7 +106,7 @@ func TestListItemGuardViewsByItemIDs_ShouldStayWithinStatementBudget_WhenManyIte
 func TestListItemIDsBySessionUUIDs_ShouldReturnEveryItemOfASession(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	s := &Storage{repo: repo}
+	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	x := addLegacyItem(t, repo, "x", "in_progress", 0, "")
 	y := addLegacyItem(t, repo, "y", "in_progress", 0, "")

@@ -1,0 +1,86 @@
+{
+  "run_date": "2026-11-02T04:51:52Z",
+  "fixtures": [
+    {
+      "fixture": "1-stale-build",
+      "expected_key": "E1",
+      "command_exit": 0,
+      "names_remedy": "N/A-make",
+      "remedy_re": "",
+      "output_lines": 1,
+      "output_head": "N/A-make"
+    },
+    {
+      "fixture": "2-missing-external-dep",
+      "expected_key": "E2",
+      "command_exit": 1,
+      "names_remedy": true,
+      "remedy_re": "go get|go mod tidy",
+      "output_lines": 2,
+      "output_head": "config/zz_fixture.go:3:8: no required module provides package rsc.io/quote; to add it:\n\tgo get rsc.io/quote"
+    },
+    {
+      "fixture": "3-missing-generated-code",
+      "expected_key": "E3",
+      "command_exit": 1,
+      "names_remedy": false,
+      "remedy_re": "make (proto-gen|ent-gen|sync)",
+      "output_lines": 4,
+      "output_head": "session/scanstate/store.go:8:2: no required module provides package github.com/tstapler/stapler-squad/session/ent; to add it:\n\tgo get github.com/tstapler/stapler-squad/session/ent\nsession/scanstate/store.go:9:2: no required module provides package github.com/tstapler/stapler-squad/session/ent/transcriptscanstate; to add it:\n\tgo get github.com/tstapler/stapler-squad/session/ent/transcriptscanstate"
+    },
+    {
+      "fixture": "4-oom",
+      "expected_key": "E4",
+      "command_exit": 2,
+      "names_remedy": false,
+      "remedy_re": "GOMEMLIMIT|ulimit -|reduce|increase .*memory|retry",
+      "output_lines": 17,
+      "output_head": "fatal error: failed to reserve page summary memory\n\nruntime stack:\nruntime.throw({0xbfc617?, 0x20000000?})\n\truntime/panic.go:1229 +0x48 fp=0x7ffc0ac7fa80 sp=0x7ffc0ac7fa50 pc=0x489ba8\nruntime.(*pageAlloc).sysInit(0x119cfe8, 0xe0?)\n\truntime/mpagealloc_64bit.go:81 +0x112 fp=0x7ffc0ac7fae8 sp=0x7ffc0ac7fa80 pc=0x446852\nruntime.(*pageAlloc).init(0x119cfe8, 0x119cfe0, 0x11b97e0, 0x0)\n\truntime/mpagealloc.go:327 +0x85 fp=0x7ffc0ac7fb18 sp=0x7ffc0ac7fae8 pc=0x443f65\nruntime.(*mheap).init(0x119cfe0)\n\truntime/mheap.go:821 +0x225 fp=0x7ffc0ac7fb50 sp=0x7ffc0ac7fb18 pc=0x4400a5\nruntime.mallocinit()\n\truntime/malloc.go:493 +0xfd fp=0x7ffc0ac7fb98 sp=0x7ffc0ac7fb50 pc=0x42395d\nruntime.schedinit()\n\truntime/proc.go:877 +0x112 fp=0x7ffc0ac7fc30 sp=0x7ffc0ac7fb98 pc=0x4542f2\nruntime.rt0_go()\n\truntime/asm_amd64.s:373 +0x123 fp=0x7ffc0ac7fc38 sp=0x7ffc0ac7fc30 pc=0x48f9e3"
+    },
+    {
+      "fixture": "5-enospc",
+      "expected_key": "E5",
+      "command_exit": 1,
+      "names_remedy": false,
+      "remedy_re": "free|clean|df |cleanup",
+      "output_lines": 1,
+      "output_head": "github.com/tstapler/stapler-squad/fixture_enospc: go build github.com/tstapler/stapler-squad/fixture_enospc: copying /tmp/go-build4036258260/b001/exe/a.out to /dev/full: write /dev/full: no space left on device"
+    },
+    {
+      "fixture": "6-cache-unreachable",
+      "expected_key": "E6",
+      "command_exit": 0,
+      "names_remedy": "N/A-make",
+      "remedy_re": "",
+      "output_lines": 1,
+      "output_head": "N/A-make"
+    },
+    {
+      "fixture": "7-flock-queue-wait",
+      "expected_key": "E7",
+      "command_exit": 0,
+      "names_remedy": "N/A-make",
+      "remedy_re": "",
+      "output_lines": 1,
+      "output_head": "N/A-make"
+    },
+    {
+      "fixture": "8-sandbox-failure",
+      "expected_key": "E8",
+      "command_exit": 0,
+      "names_remedy": "N/A-make",
+      "remedy_re": "",
+      "output_lines": 1,
+      "output_head": "N/A-make"
+    },
+    {
+      "fixture": "9-cache-auth-rejected",
+      "expected_key": "E11",
+      "command_exit": 0,
+      "names_remedy": "N/A-make",
+      "remedy_re": "",
+      "output_lines": 1,
+      "output_head": "N/A-make"
+    }
+  ]
+}

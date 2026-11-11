@@ -5,7 +5,7 @@
   "method": "WaiveAcceptanceCriterion",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
-  "handlerFile": "server/services/backlog_service_lifecycle.go",
+  "handlerFile": "server/services/backlogsvc/backlog_service_lifecycle.go",
   "tested": true,
   "testIds": [
     "TestWaiveAcceptanceCriterion_should_RecordWaiverAndReturnItem_When_ReasonGiven",
@@ -14,5 +14,5 @@
     "TestWaiveAcceptanceCriterion_should_RecordUnverifiedCaller_When_NoIdentitySignal",
     "TestWaiveAcceptanceCriterion_should_RefuseAndAudit_When_ItemTerminalOrCriterionDoneOrReasonBlank"
   ],
-  "lastModified": "2026-11-05T17:44:19.808040022-08:00"
+  "lastModified": "2026-11-09T16:27:32.800538989-08:00"
 }

@@ -4,8 +4,11 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 )
 
 // Schema.Create (auto-migrate) is how this repo applies schema changes, so
@@ -17,7 +20,7 @@ func TestBacklogItemsSchema_should_createPriorityUpdatedAtIndex_When_FreshRepo(t
 	require.NoError(t, err)
 	defer repo.Close()
 
-	rawDB, err := sql.Open("sqlite3", dbPath+"?_timeout=5000")
+	rawDB, err := sql.Open("sqlite", sqlitedsn.New(dbPath).WithBusyTimeout(5*time.Second).Build())
 	require.NoError(t, err)
 	defer rawDB.Close()
 

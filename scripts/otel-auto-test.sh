@@ -12,7 +12,7 @@
 # clean go.mod (a chicken-and-egg import-resolution failure — hook.go's
 # unconditional `pkg/hook` import can't resolve before AutoPin adds the
 # require). A bootstrap `otelc setup .` first — the same first pass
-# build-otel-auto always runs — adds that require as a side effect of
+# the stapler-squad build always runs — adds that require as a side effect of
 # built-in rule discovery, after which a second `otelc setup` naming
 # instrumentation/otelc/safeexec directly succeeds.
 #

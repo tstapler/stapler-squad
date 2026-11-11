@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package session.v1;
 
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
 
@@ -22,6 +24,11 @@ message CriterionVerdict {
   int32 criterion_index = 1;
   string outcome = 2;
   string evidence = 3;
+  // Why a non-PASS criterion did not pass: NOT_DONE (or empty), CANNOT_VERIFY,
+  // UNRELATED_FAILURE, ENVIRONMENTAL, WRONG_BRANCH or UNATTAINABLE.
+  string failure_class = 4;
+  // The reviewer recommends the owner waive this criterion.
+  bool proposed_waiver = 5;
 }
 
 // ReviewVerdict captures the overall and per-criterion review outcome for an

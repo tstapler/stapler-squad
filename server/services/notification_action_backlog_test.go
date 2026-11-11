@@ -76,9 +76,9 @@ func TestBacklogDecider_ShouldMarkDone_WhenAcceptedFromReview(t *testing.T) {
 func TestBacklogDecider_ShouldSendBackToReady_WhenReworkFromReview(t *testing.T) {
 	t.Parallel()
 	w := &itemWorld{status: backlogStatusReview}
-	assert.Equal(t, outApplied, decide(t, w.decider(), choiceRework, false).Outcome)
+	assert.Equal(t, outApplied, decide(t, w.decider(), ChoiceRework, false).Outcome)
 	assert.Equal(t, backlogStatusReady, w.lastTarget)
-	assert.Equal(t, outResolved, decide(t, w.decider(), choiceRework, false).Outcome)
+	assert.Equal(t, outResolved, decide(t, w.decider(), ChoiceRework, false).Outcome)
 	assert.EqualValues(t, 1, w.transitions.Load())
 }
 

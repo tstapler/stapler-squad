@@ -22,7 +22,10 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --- Session UUID context injection ---
@@ -305,7 +308,7 @@ type backlogHandlers struct {
 	// AttachSessionToItem call. Concrete type per this package's existing convention
 	// (see interface-pollution-checklist.md). Optional; nil skips auto-triage and makes
 	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
-	backlogSvc *services.BacklogService
+	backlogSvc *backlogsvc.BacklogService
 
 	// fetchLinearIssue / fetchJiraIssue back import_linear_issue / import_jira_issue.
 	// Default to the real plugins' FetchIssue when nil; overridable in tests to
@@ -349,7 +352,7 @@ type backlogHandlers struct {
 	// the pre-existing session-exit/sweep paths. The same
 	// session.AutoReopenSpawner *services.BacklogService already implements
 	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
-	autoReopener session.AutoReopenSpawner
+	autoReopener backlog.AutoReopenSpawner
 
 	// verifyGitHubRef backs report_duplicate's GitHub existence check for
 	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists
@@ -431,7 +434,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	// Build human-readable text output.
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# %s\n", session.SanitizeForAgentContext(item.Title, 200))
+	fmt.Fprintf(&sb, "# %s\n", backlog.SanitizeForAgentContext(item.Title, 200))
 	fmt.Fprintf(&sb, "Priority: %d | Status: %s\n\n", item.Priority, item.Status)
 
 	// Acceptance criteria checklist.
@@ -448,14 +451,14 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			default:
 				marker = "[ ]"
 			}
-			fmt.Fprintf(&sb, "%d. %s %s\n", i+1, marker, session.SanitizeForAgentContext(c.Text, 500))
+			fmt.Fprintf(&sb, "%d. %s %s\n", i+1, marker, backlog.SanitizeForAgentContext(c.Text, 500))
 		}
 		sb.WriteString("\n")
 	}
 
 	// Description.
 	if item.Description != "" {
-		session.WriteDescriptionSection(&sb, item.Description, 2000)
+		backlog.WriteDescriptionSection(&sb, item.Description, 2000)
 	}
 
 	h.writeDependenciesSection(ctx, &sb, itemID)
@@ -467,7 +470,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("## Latest Review Verdict\n")
 		fmt.Fprintf(&sb, "Outcome: %s\n", verdict.OverallOutcome)
 		if verdict.Summary != "" {
-			fmt.Fprintf(&sb, "Reviewer summary: %s\n", session.SanitizeForAgentContext(verdict.Summary, 500))
+			fmt.Fprintf(&sb, "Reviewer summary: %s\n", backlog.SanitizeForAgentContext(verdict.Summary, 500))
 		}
 		var perCriterion []session.CriterionVerdict
 		if verdict.PerCriterion != "" {
@@ -479,7 +482,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			if v.Outcome == session.ReviewOutcomePass {
 				continue
 			}
-			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, session.SanitizeForAgentContext(v.Evidence, 300))
+			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, backlog.SanitizeForAgentContext(v.Evidence, 300))
 		}
 		sb.WriteString("\n")
 	}
@@ -526,7 +529,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			if author == "" {
 				author = manualCallerSentinel
 			}
-			fmt.Fprintf(&sb, "- note from %s at %s: %s\n", author, n.CreatedAt.Format(time.RFC3339), session.SanitizeForAgentContext(n.Message, 500))
+			fmt.Fprintf(&sb, "- note from %s at %s: %s\n", author, n.CreatedAt.Format(time.RFC3339), backlog.SanitizeForAgentContext(n.Message, 500))
 		}
 		sb.WriteString("\n")
 	}
@@ -638,7 +641,7 @@ func isStaleVerdict(item *session.BacklogItemData, verdict *session.ReviewVerdic
 // re-requested: no reviewer is live and the latest verdict is missing, stale, or
 // not a PASS. A fresh PASS is awaiting ship and must not be re-reviewed.
 func canRecoverFromReview(item *session.BacklogItemData, sessions []session.ItemSessionSummary, verdict *session.ReviewVerdictSummary) bool {
-	if services.HasActiveReviewSession(sessions) {
+	if backlogsvc.HasActiveReviewSession(sessions) {
 		return false
 	}
 	return verdict == nil || isStaleVerdict(item, verdict) || verdict.OverallOutcome != string(session.ReviewVerdictPass)
@@ -1427,7 +1430,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// matching this belt-and-suspenders check's pre-existing fail-open behavior; it's
 	// still logged so a silent failure to reject a genuinely dirty worktree is visible.
 	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
-		paths, pathsErr := session.GetWorktreeDirtyPaths(wt.WorktreePath)
+		paths, pathsErr := backlog.GetWorktreeDirtyPaths(wt.WorktreePath)
 		if pathsErr != nil {
 			log.WarningLog().Printf("[mcp:request_review] GetWorktreeDirtyPaths failed for session=%s worktree=%s: %v", callerUUID, wt.WorktreePath, pathsErr)
 		}
@@ -1465,7 +1468,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
 			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
-		if services.HasActiveReviewSession(itemSessions) {
+		if backlogsvc.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 		if canRecoverFromReview(item, itemSessions, latestVerdictFromSessions(itemSessions)) {
@@ -1488,7 +1491,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 			log.WarningLog().Printf("request_review: failed to list item sessions for %s: %v", itemID, lsErr)
 			return errResult(ErrInternalError, "could not verify active-reviewer state for this item — retry", ""), nil
 		}
-		if services.HasActiveReviewSession(itemSessions) {
+		if backlogsvc.HasActiveReviewSession(itemSessions) {
 			return errResult(ErrInvalidArgument, "an active review session already exists for this item — wait for it to finish, or check get_backlog_item if this persists", ""), nil
 		}
 	}
@@ -2015,6 +2018,8 @@ type verdictInput struct {
 	CriterionIndex int    `json:"criterion_index"`
 	Outcome        string `json:"outcome"`
 	Evidence       string `json:"evidence"`
+	FailureClass   string `json:"failure_class"`
+	ProposedWaiver bool   `json:"proposed_waiver"`
 }
 
 func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -2072,6 +2077,10 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 	// Build CriterionVerdicts, auto-downgrading to PARTIAL if evidence is empty.
 	cvs := make([]session.CriterionVerdict, len(inputs))
 	for i, vi := range inputs {
+		class := domain.FailureClass(strings.ToUpper(strings.TrimSpace(vi.FailureClass)))
+		if !class.IsValid() {
+			return errResult(ErrInvalidArgument, fmt.Sprintf("verdict[%d]: unknown failure_class %q", i, vi.FailureClass), "Use NOT_DONE, CANNOT_VERIFY, UNRELATED_FAILURE, ENVIRONMENTAL, WRONG_BRANCH or UNATTAINABLE."), nil
+		}
 		outcome := session.ReviewOutcome(strings.ToUpper(vi.Outcome))
 		evidence := vi.Evidence
 		if evidence == "" {
@@ -2082,6 +2091,8 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 			CriterionIndex: vi.CriterionIndex,
 			Outcome:        outcome,
 			Evidence:       evidence,
+			FailureClass:   class,
+			ProposedWaiver: vi.ProposedWaiver,
 		}
 	}
 
@@ -2222,7 +2233,7 @@ func (h *backlogHandlers) postBacklogUpdate(ctx context.Context, req mcpgo.CallT
 	// get_backlog_item's render-time truncation-to-500-chars for this same field. maxLen
 	// is the same 2000 already enforced above, so this call only strips tags here; it
 	// never truncates since message is already known to be <= maxPostBacklogUpdateMessageLen.
-	sanitizedMessage := session.SanitizeForAgentContext(message, maxPostBacklogUpdateMessageLen)
+	sanitizedMessage := backlog.SanitizeForAgentContext(message, maxPostBacklogUpdateMessageLen)
 
 	// Resolve the author's identity: an explicit session_id param takes precedence over
 	// the caller's own session UUID (mirrors set_session_goal's pattern), since a session
@@ -2783,7 +2794,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse suggestions.
-	var suggestions []session.TriageSuggestion
+	var suggestions []backlog.TriageSuggestion
 	if rawSuggestions, exists := args["suggestions"]; exists {
 		if arr, ok := rawSuggestions.([]interface{}); ok {
 			for i, rs := range arr {
@@ -2791,7 +2802,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var ts session.TriageSuggestion
+				var ts backlog.TriageSuggestion
 				if err := json.Unmarshal(b, &ts); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -2801,7 +2812,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse tasks (optional).
-	var tasks []session.TriageTask
+	var tasks []backlog.TriageTask
 	if rawTasks, exists := args["tasks"]; exists {
 		if arr, ok := rawTasks.([]interface{}); ok {
 			for i, rt := range arr {
@@ -2809,7 +2820,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var tt session.TriageTask
+				var tt backlog.TriageTask
 				if err := json.Unmarshal(b, &tt); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -2825,8 +2836,8 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	// Build triage result JSON payload using canonical struct (prevents schema drift).
 	type triageResultPayload struct {
 		Summary     string                     `json:"summary"`
-		Suggestions []session.TriageSuggestion `json:"suggestions"`
-		Tasks       []session.TriageTask       `json:"tasks,omitempty"`
+		Suggestions []backlog.TriageSuggestion `json:"suggestions"`
+		Tasks       []backlog.TriageTask       `json:"tasks,omitempty"`
 	}
 	triagePayload := triageResultPayload{
 		Summary:     summary,
@@ -3134,6 +3145,9 @@ func registerBacklogTools(s *mcpserver.MCPServer, h *backlogHandlers) {
 						"criterion_index": map[string]any{"type": "number"},
 						"outcome":         map[string]any{"type": "string", "enum": []string{"PASS", "FAIL", "PARTIAL", "UNVERIFIABLE"}},
 						"evidence":        map[string]any{"type": "string"},
+						"failure_class": map[string]any{"type": "string", "description": "Optional, for a non-PASS criterion: why it did not pass. NOT_DONE (default, the worker has more to do), CANNOT_VERIFY, UNRELATED_FAILURE, ENVIRONMENTAL, WRONG_BRANCH, UNATTAINABLE. Anything but NOT_DONE goes to the owner instead of another rework round.",
+							"enum": []string{"NOT_DONE", "CANNOT_VERIFY", "UNRELATED_FAILURE", "ENVIRONMENTAL", "WRONG_BRANCH", "UNATTAINABLE"}},
+						"proposed_waiver": map[string]any{"type": "boolean", "description": "Optional: recommend that the owner waive this criterion (it cannot be met as written)."},
 					},
 					"required": []string{"criterion_index", "outcome", "evidence"},
 				}),

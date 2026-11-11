@@ -3,111 +3,146 @@
 		"heading": "Dashboard",
 		"description": "See all your AI agents at a glance. Status badges, diff stats, tags, and categories give you a complete picture without opening a single terminal.",
 		"category": "Visibility",
-		"screenshot": "/features/01-dashboard.png",
-		"alt": "Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance"
+		"screenshot": "/shots/01-dashboard.webp",
+		"alt": "Dashboard showing status badges, diff stats, tags, and approvals for all agents at a glance",
+		"demoClip": {
+			"name": "session-dashboard",
+			"ext": "webm"
+		},
+		"tour": "dashboard-lifecycle"
 	},
 	{
 		"heading": "Live Terminal Streaming",
 		"description": "Full xterm.js terminal per session with real-time output streaming. Attach and reprompt any agent without leaving the browser.",
-		"category": "Visibility"
+		"category": "Visibility",
+		"screenshot": "/shots/live-terminal.webp",
+		"alt": "A session open on its live terminal tab, showing the agent output streaming in real time",
+		"tour": "dashboard-lifecycle"
 	},
 	{
 		"heading": "Browser Element Inspector",
 		"description": "While watching an agent's browser in the Browser tab, click Inspect, then click any element in the live view.",
-		"category": "Visibility"
+		"category": "Visibility",
+		"screenshot": "/shots/browser-inspector.webp",
+		"alt": "A session open on its Browser tab, where page elements can be inspected and sent to the agent"
 	},
 	{
 		"heading": "Diff Viewer",
 		"description": "Per-session git diff with VCS context. See exactly what each agent has changed before you approve or merge.",
-		"category": "Visibility"
+		"category": "Visibility",
+		"screenshot": "/shots/diff-viewer.webp",
+		"alt": "A session open on its diff tab, listing the files the agent changed with added and removed lines",
+		"tour": "dashboard-lifecycle"
 	},
 	{
 		"heading": "Notifications",
 		"description": "Real-time alerts when agents need attention — approvals pending, sessions paused, or errors detected — without polling.",
-		"category": "Visibility"
+		"category": "Visibility",
+		"screenshot": "/shots/notifications.webp",
+		"alt": "The notifications page listing alerts for agents that need attention, with an unread count",
+		"tour": "attention-notifications"
 	},
 	{
 		"heading": "Instant Search",
 		"description": "Type to filter sessions in real time across titles, paths, branches, and tags. \"payment\" narrows 6 agents down to 2 immediately.",
 		"category": "Organisation",
-		"screenshot": "/features/02-search-payment.png",
-		"alt": "Instant search narrowing the session list from 6 agents down to 2 as the query \"payment\" is typed"
+		"screenshot": "/shots/02-search-payment.webp",
+		"alt": "Instant search narrowing the session list from 6 agents down to 2 as the query \"payment\" is typed",
+		"tour": "organise-at-scale"
 	},
 	{
 		"heading": "Status Filtering",
 		"description": "Filter by status to surface agents that need your attention — spot every Needs Approval gate without scrolling through the full list.",
 		"category": "Organisation",
-		"screenshot": "/features/03-needs-approval.png",
-		"alt": "Status filter showing every session with a Needs Approval gate, with other statuses hidden"
+		"screenshot": "/shots/03-needs-approval.webp",
+		"alt": "Status filter showing every session with a Needs Approval gate, with other statuses hidden",
+		"tour": "organise-at-scale"
 	},
 	{
 		"heading": "Tag-Based Grouping",
 		"description": "Switch between 8 grouping strategies — tag, category, status, branch, path, program, session type, or flat list. A single session can appear under multiple tags simultaneously.",
 		"category": "Organisation",
-		"screenshot": "/features/04-group-by-tag.png",
-		"alt": "Sessions grouped by tag, with a single session appearing under more than one tag group"
-	},
-	{
-		"heading": "Workspace Switcher",
-		"description": "Manage multiple project contexts from one UI. Each workspace gets its own isolated session state, configuration, and approval history.",
-		"category": "Organisation"
+		"screenshot": "/shots/04-group-by-tag.webp",
+		"alt": "Sessions grouped by tag, with a single session appearing under more than one tag group",
+		"tour": "organise-at-scale"
 	},
 	{
 		"heading": "Bulk Actions",
 		"description": "Select multiple sessions and act on them together — pause, resume, delete, or tag in one operation.",
-		"category": "Organisation"
+		"category": "Organisation",
+		"screenshot": "/shots/bulk-actions.webp",
+		"alt": "Select mode on the session list with the bulk action toolbar for pausing, resuming and tagging several sessions at once"
 	},
 	{
 		"heading": "Review Queue",
 		"description": "Structured triage for every pending agent action. Review diffs and approve or reject before anything reaches your codebase.",
 		"category": "Review & Approval",
-		"screenshot": "/features/05-review-queue.png",
-		"alt": "Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase"
+		"screenshot": "/shots/05-review-queue.webp",
+		"alt": "Review Queue listing pending agent actions with diffs ready to approve or reject before they reach the codebase",
+		"tour": "approval-review"
 	},
 	{
 		"heading": "Auto-Approval Rules",
 		"description": "100+ built-in rules block dangerous operations automatically. Read-only commands, safe git operations, and common dev tasks are pre-approved out of the box.",
 		"category": "Review & Approval",
-		"screenshot": "/features/06-rules.png",
-		"alt": "List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks"
+		"screenshot": "/shots/06-rules.webp",
+		"alt": "List of 100+ built-in auto-approval rules covering read-only commands, safe git operations, and common dev tasks",
+		"demoClip": {
+			"name": "auto-approval-rules",
+			"ext": "webm"
+		},
+		"tour": "approval-review"
 	},
 	{
 		"heading": "Custom Rules",
 		"description": "Teach Stapler Squad what's always safe for your project. Add a pattern like ^git log once and never review it again.",
 		"category": "Organisation",
-		"screenshot": "/features/07-add-rule.png",
-		"alt": "Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again"
+		"screenshot": "/shots/07-add-rule.webp",
+		"alt": "Adding a custom approval-rule pattern like ^git log so it is never flagged for manual review again",
+		"tour": "approval-review"
 	},
 	{
 		"heading": "Approval Analytics",
 		"description": "Visualise decision trends and classifier performance over time. See which rules fire most, how often agents are approved vs. blocked, and where your review time is going.",
-		"category": "Review & Approval"
+		"category": "Review & Approval",
+		"screenshot": "/shots/approval-analytics.webp",
+		"alt": "The Approval Analytics section showing how automatic rules decided past approval requests",
+		"tour": "approval-review"
 	},
 	{
 		"heading": "History Search",
 		"description": "Searchable, filterable record of every agent action across all sessions. Filter by session, time range, action type, or free-text search to find exactly what happened and when.",
-		"category": "History & Debugging"
+		"category": "History & Debugging",
+		"screenshot": "/shots/history-search.webp",
+		"alt": "The history browser with full-text search across past agent conversations"
 	},
 	{
 		"heading": "Logs Viewer",
 		"description": "Live-tail application logs with time range picker, multi-select filters, export, and density controls. No need to SSH in to debug an agent.",
-		"category": "History & Debugging"
+		"category": "History & Debugging",
+		"screenshot": "/shots/logs-viewer.webp",
+		"alt": "The application logs page with time range, export and density controls"
 	},
 	{
 		"heading": "Config Viewer",
 		"description": "Inspect your current Stapler Squad configuration directly from the UI — no hunting for JSON files.",
-		"category": "History & Debugging"
+		"category": "History & Debugging",
+		"screenshot": "/shots/config-viewer.webp",
+		"alt": "The configuration page showing the current settings sections"
 	},
 	{
 		"heading": "Parallel Fan-Out",
 		"description": "Run one prompt across 2–5 isolated worktree sessions, compare their diffs side by side, and merge the best one.",
-		"category": "Review & Approval"
+		"category": "Review & Approval",
+		"screenshot": "/shots/parallel-fan-out.webp",
+		"alt": "Three variants of the same task side by side so one can be picked as the winner",
+		"tour": "fanout-compare"
 	},
 	{
 		"heading": "Isolated Git Workspaces",
 		"description": "Every agent gets its own git worktree. No branch conflicts, no dirty state bleed between sessions. Merge when you're ready.",
 		"category": "Infrastructure",
-		"screenshot": "/features/08-final.png",
+		"screenshot": "/shots/08-final.webp",
 		"alt": "Each agent session running in its own isolated git worktree with no branch conflicts between sessions"
 	}
 ]

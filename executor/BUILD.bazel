@@ -1,0 +1,65 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "executor",
+    srcs = [
+        "audit.go",
+        "circuit_breaker.go",
+        "executor.go",
+        "managed_process.go",
+        "managed_process_darwin.go",
+        "managed_process_linux.go",
+        "managed_process_other.go",
+        "managed_process_unix.go",
+        "managed_process_windows.go",
+        "registry.go",
+        "shortlived.go",
+        "shortlived_unix.go",
+        "shortlived_windows.go",
+        "timeout_executor.go",
+        "timeout_executor_unix.go",
+        "timeout_executor_windows.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/executor",
+    visibility = ["//visibility:public"],
+    deps = ["//executor/safeexec"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":executor",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "executor_test",
+    srcs = [
+        "audit_test.go",
+        "circuit_breaker_test.go",
+        "executor_test_main_test.go",
+        "managed_process_darwin_test.go",
+        "managed_process_linux_test.go",
+        "managed_process_test.go",
+        "shortlived_test.go",
+        "timeout_executor_test.go",
+        "timeout_executor_unix_test.go",
+        "timeout_executor_windows_test.go",
+    ],
+    data = [":helper"],
+    embed = [":executor"],
+    env = {"SSQ_EXECUTOR_HELPER": "$(rootpath :helper)"},
+    deps = [
+        "//executor/safeexec",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Prebuilt test helper (testdata is invisible to Gazelle, so this rule is hand-kept).
+go_binary(
+    name = "helper",
+    testonly = True,
+    srcs = ["testdata/helper/main.go"],
+    visibility = ["//visibility:private"],
+)

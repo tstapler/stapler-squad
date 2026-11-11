@@ -194,7 +194,7 @@ func newCountingRepo(t *testing.T) (*EntRepository, *flowMarkerCountingDriver) {
 	repo, clk := newMarkerTestRepo(t)
 	_ = clk
 	drv := &flowMarkerCountingDriver{Driver: repo.driver}
-	repo.client = ent.NewClient(ent.Driver(drv))
+	repo.Client = ent.NewClient(ent.Driver(drv))
 	return repo, drv
 }
 
@@ -238,7 +238,7 @@ func TestRecordFlowMarker_should_RetryAfterFailure_When_InsertFailsOnce(t *testi
 	item := uuid.NewString()
 	t0 := clk.Now()
 
-	repo.client.BacklogFlowMarker.Use(failOnceHook())
+	repo.Client.BacklogFlowMarker.Use(failOnceHook())
 	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered, 5)
 	repo.RecordFlowMarker(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered, 5)
 
@@ -259,4 +259,38 @@ func failOnceHook() ent.Hook {
 			return next.Mutate(ctx, m)
 		})
 	}
+}
+
+func TestRecordManualNudgeForSession_should_RecordOnlyForBacklogSessionsAndDedupe(t *testing.T) {
+	t.Parallel()
+	repo, clk := newMarkerTestRepo(t)
+	storage, err := NewStorageWithRepository(repo)
+	require.NoError(t, err)
+	ctx := context.Background()
+	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "nudged"})
+	require.NoError(t, err)
+	sessionUUID := uuid.NewString()
+	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+	require.NoError(t, err)
+	t0 := clk.Now()
+
+	storage.RecordManualNudgeForSession(ctx, sessionUUID, ManualNudgeWrite)
+	storage.RecordManualNudgeForSession(ctx, sessionUUID, ManualNudgeWrite)         // deduped by the limiter
+	storage.RecordManualNudgeForSession(ctx, uuid.NewString(), ManualNudgeWrite)    // not a backlog session
+	storage.RecordManualNudgeForSession(ctx, "", ManualNudgeWrite)                  // empty id
+	(*Storage)(nil).RecordManualNudgeForSession(ctx, sessionUUID, ManualNudgeWrite) // nil-safe
+
+	got, err := repo.ListFlowMarkers(ctx, FlowMarkerManualNudge, t0, t0.Add(time.Minute))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, item.ID, got[0].ItemID)
+	assert.Equal(t, ManualNudgeWrite, got[0].Value)
+
+	reader := NewEntFlowReader(repo.GetEntClient())
+	capture, err := reader.MarkerCapture(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, t0, capture.FirstNudge)
+	since, err := reader.CaptureSince(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, t0, since)
 }

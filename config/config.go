@@ -1113,6 +1113,20 @@ func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
 	return filepath.Join(configDir, BacklogAttachmentDirName), nil
 }
 
+// WorkflowAttachmentDirName is the workflow-run attachments directory's name under GetConfigDir().
+const WorkflowAttachmentDirName = "workflow-attachments"
+
+// WorkflowAttachmentDirOrDefault returns the directory holding images uploaded
+// for Workflow runs ("workflow-attachments" under GetConfigDir()). RunWorkflow
+// only accepts attachment paths that resolve inside it.
+func (c *Config) WorkflowAttachmentDirOrDefault() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve config dir: %w", err)
+	}
+	return filepath.Join(configDir, WorkflowAttachmentDirName), nil
+}
+
 // PromptCacheDirOrDefault returns the resolved directory for temp-file-backed
 // session launch prompts (see Instance.promptArg). "prompt-cache" under
 // GetConfigDir() — see HibernationCheckpointDirOrDefault's doc comment for why

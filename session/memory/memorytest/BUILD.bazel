@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "memorytest",
+    srcs = ["fake.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/memory/memorytest",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":memorytest",
+    visibility = ["//visibility:public"],
+)

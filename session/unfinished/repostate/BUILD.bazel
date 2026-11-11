@@ -1,0 +1,74 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "repostate",
+    srcs = [
+        "cache.go",
+        "cache_clock.go",
+        "flight.go",
+        "generation.go",
+        "graph.go",
+        "key.go",
+        "options.go",
+        "products.go",
+        "reach.go",
+        "segment.go",
+        "state.go",
+        "walk.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/unfinished/repostate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_puzpuzpuz_xsync_v4//:xsync",
+        "@org_golang_x_sync//singleflight",
+        "@org_golang_x_sys//cpu",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":repostate",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "repostate_test",
+    srcs = [
+        "cache_clock_test.go",
+        "cache_linearize_test.go",
+        "cache_norace_test.go",
+        "cache_test.go",
+        "ctx_test.go",
+        "fill_test.go",
+        "flight_test.go",
+        "generation_rebuild_test.go",
+        "graph_fuzz_test.go",
+        "graph_test.go",
+        "graphtest_helpers_test.go",
+        "linearize_test.go",
+        "products_norace_test.go",
+        "products_test.go",
+        "reach_test.go",
+        "state_test.go",
+        "stress_test.go",
+        "walk_test.go",
+    ],
+    embed = [":repostate"],
+    deps = [
+        "@com_github_go_git_go_git_v5//plumbing",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_sync//singleflight",
+        "@org_golang_x_sys//cpu",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+# Read by session/unfinished tests that walk the in-module import graph and scan sources.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session/unfinished:__subpackages__"],
+)

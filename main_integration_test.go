@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
 func TestMainWiring_should_StartClaimIndexAndClaimGossiperAlongsideAdvertiser_When_ServerStartsWithValidHostIdentity(t *testing.T) {
@@ -22,7 +23,7 @@ func TestMainWiring_should_StartClaimIndexAndClaimGossiperAlongsideAdvertiser_Wh
 
 	startHostGossip(ctx, mux, configDir, []string{"hosta.example"}, nil, 8444, storage, nil, nil)
 
-	for _, path := range []string{session.AdvertisementEndpointPath, session.ClaimAdvertisementEndpointPath} {
+	for _, path := range []string{hostclaim.AdvertisementEndpointPath, hostclaim.ClaimAdvertisementEndpointPath} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{not json")))
 		if rec.Code != http.StatusBadRequest {
@@ -39,15 +40,15 @@ func TestMainWiring_should_StartClaimIndexAndClaimGossiperAlongsideAdvertiser_Wh
 		t.Fatalf("CreateBacklogItem: %v", err)
 	}
 
-	identity, err := session.LoadOrCreateHostIdentity(configDir)
+	identity, err := hostclaim.LoadOrCreateHostIdentity(configDir)
 	if err != nil {
 		t.Fatalf("LoadOrCreateHostIdentity: %v", err)
 	}
-	registry, err := session.NewHostRegistry(configDir, session.DefaultHostRegistryTTL)
+	registry, err := hostclaim.NewHostRegistry(configDir, hostclaim.DefaultHostRegistryTTL)
 	if err != nil {
 		t.Fatalf("NewHostRegistry: %v", err)
 	}
-	index, err := session.NewClaimIndex(configDir, registry)
+	index, err := hostclaim.NewClaimIndex(configDir, registry)
 	if err != nil {
 		t.Fatalf("NewClaimIndex: %v", err)
 	}

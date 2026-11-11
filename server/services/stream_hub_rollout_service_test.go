@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -18,7 +19,7 @@ import (
 // between tests (same isolation pattern as newIsolatedSlackConfigService).
 func newIsolatedStreamHubRolloutService(t *testing.T) *StreamHubRolloutService {
 	t.Helper()
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	return NewStreamHubRolloutService(nil)
 }
 
@@ -93,7 +94,7 @@ func TestSetStreamHubSessionOverride_SetsAndClears(t *testing.T) {
 func TestSetStreamHubSessionOverride_HonorsCustomTmuxPrefix(t *testing.T) {
 	inst := &session.Instance{Title: "my-session", TmuxPrefix: "custom_"}
 	s := NewStreamHubRolloutService(nil)
-	withIsolatedStateDir(t)
+	svctest.WithIsolatedStateDir(t)
 	s.findInstance = func(title string) *session.Instance {
 		if title == "my-session" {
 			return inst
@@ -108,7 +109,7 @@ func TestSetStreamHubSessionOverride_HonorsCustomTmuxPrefix(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.SessionOverrides, 1)
-	assert.Equal(t, tmuxSessionNameForStreamPath(inst), resp.Msg.SessionOverrides[0].SessionName)
+	assert.Equal(t, TmuxSessionNameForStreamPath(inst), resp.Msg.SessionOverrides[0].SessionName)
 }
 
 func TestSetStreamHubGlobalOverride_SetsAndClears(t *testing.T) {

@@ -152,8 +152,8 @@ func (s *SessionService) UpdateSession(
 	// sessions) that can silently drop sessions if tmux is unavailable, which would then
 	// clobber the poller's complete list via SetInstances.
 	var instances []*session.Instance
-	if s.reviewQueuePoller != nil {
-		instances = s.reviewQueuePoller.GetInstances()
+	if s.ReviewQueuePoller != nil {
+		instances = s.ReviewQueuePoller.GetInstances()
 	} else {
 		var loadErr error
 		instances, loadErr = s.loadInstancesWithWiring()
@@ -281,8 +281,8 @@ func (s *SessionService) UpdateSession(
 	// controller) so the change takes effect immediately without a restart.
 	if req.Msg.RateLimitEnabled != nil {
 		instance.SetRateLimitEnabled(*req.Msg.RateLimitEnabled)
-		if s.reviewQueuePoller != nil {
-			if liveInst := s.reviewQueuePoller.FindInstance(req.Msg.Id); liveInst != nil {
+		if s.ReviewQueuePoller != nil {
+			if liveInst := s.ReviewQueuePoller.FindInstance(req.Msg.Id); liveInst != nil {
 				liveInst.SetRateLimitEnabled(*req.Msg.RateLimitEnabled)
 			}
 		}
@@ -301,7 +301,7 @@ func (s *SessionService) UpdateSession(
 		if instance.AutonomousMode {
 			s.StartAutonomousDriverForInstance(instance)
 		} else {
-			s.autonomousSvc.stopAndDeregisterDriver(instance.Title)
+			s.AutonomousSvc.stopAndDeregisterDriver(instance.Title)
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
 		sideEffectChanged = true
@@ -387,7 +387,7 @@ func (s *SessionService) notifySteerSent(instance *session.Instance, steerMessag
 	s.eventBus.Publish(events.NewNotificationEvent(
 		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
 		int32(10),                    // NotificationType_INFO
-		derivePriority(false, false), // urgent, important — confirms a user-initiated action, no decision needed
+		DerivePriority(false, false), // urgent, important — confirms a user-initiated action, no decision needed
 		"Steering input sent",
 		fmt.Sprintf("%s: %s", instance.Title, steerMessage),
 		nil,

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package session.v1;
 
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
 import "session/v1/github_user.proto";
@@ -4584,6 +4586,10 @@ message RunWorkflowRequest {
   string id = 1;
   // arg is injected into input_template if present (replaces {{input}}).
   string arg = 2;
+  // attachment_paths are absolute paths of images previously uploaded via
+  // POST /api/v1/upload-workflow-attachment (max 10). The run prompt lists them
+  // so the agent reads them first.
+  repeated string attachment_paths = 3;
 }
 
 message ListSlashCommandsRequest {

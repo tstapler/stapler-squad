@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/prompts"
 )
 
@@ -15,7 +16,7 @@ import (
 // backed by a temp directory so tests never share or leak state.
 func newPromptTestService(t *testing.T) *SessionService {
 	t.Helper()
-	svc := NewSessionService(createTestStorage(t), events.NewEventBus(10))
+	svc := NewSessionService(svctest.CreateTestStorage(t), events.NewEventBus(10))
 	t.Cleanup(func() { svc.Shutdown() })
 	svc.promptStore = prompts.NewPromptStore(t.TempDir() + "/prompts.json")
 	return svc

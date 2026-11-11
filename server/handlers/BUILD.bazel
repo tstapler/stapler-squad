@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "handlers",
+    srcs = [
+        "analytics_handler.go",
+        "analytics_rate_budget.go",
+        "otel_proxy_handler.go",
+        "telemetry_handler.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/handlers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//server/analytics",
+        "//telemetry",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:analyticsevent",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":handlers",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "handlers_test",
+    srcs = [
+        "analytics_handler_test.go",
+        "analytics_rate_limit_test.go",
+        "otel_proxy_handler_test.go",
+        "telemetry_handler_test.go",
+    ],
+    embed = [":handlers"],
+    deps = [
+        "//log",
+        "//server/analytics",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
