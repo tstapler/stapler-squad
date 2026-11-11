@@ -550,6 +550,7 @@ var createInventory = []createSite{
 	{"session/storage.go", "Storage.CreateBacklogItemForDebug", 1, classCreateForwarder, "forwards the debug caller's item; counted as debug_create"},
 
 	{"server/mcp/tools_backlog.go", "backlogHandlers.createBacklogItem", 1, classCreate, idleCreateReason},
+	{"server/mcp/tools_diagnose_actions.go", "diagnoseHandlers.reportHarnessGap", 1, classCreate, idleCreateReason},
 	{"server/mcp/tools_backlog.go", "backlogHandlers.importGitHubIssue", 1, classCreate, idleCreateReason},
 	{"server/mcp/tools_backlog_import_tracker.go", "backlogHandlers.importTrackerIssue", 1, classCreate, idleCreateReason},
 	{"server/services/backlogsvc/backlog_service_lifecycle.go", "BacklogService.CreateBacklogItem", 1, classCreate, idleCreateReason + " (through its data literal)"},

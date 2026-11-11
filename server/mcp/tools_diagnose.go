@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -34,12 +35,16 @@ type diagnoseHandlers struct {
 // diagnostic_service.go): a genuine defect, an inconclusive/informational
 // note, a successful nudge, or (added for completeness) no action needed at
 // all.
+const maxDiagnosisSummaryLen = 2000
+
 var diagnoseOutcomeValues = []string{"BUG_FILED", "NOTE_ONLY", "NUDGED", "REMEDIATION_RESET", "NO_ACTION"}
 
 func registerDiagnoseTools(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
 	registerSubmitDiagnosisResultTool(s, dh)
 	registerDiagnoseNudgeSessionTool(s, dh)
 	registerDiagnoseResetRemediationTool(s, dh)
+	registerSuggestWorkflowActionTool(s, dh)
+	registerReportHarnessGapTool(s, dh)
 }
 
 func registerSubmitDiagnosisResultTool(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
@@ -58,6 +63,9 @@ func registerSubmitDiagnosisResultTool(s *mcpserver.MCPServer, dh *diagnoseHandl
 			mcpgo.WithString("summary",
 				mcpgo.Description("What you found and what you did about it (max 2000 chars)"),
 				mcpgo.Required(),
+			),
+			mcpgo.WithString("filed_item_id",
+				mcpgo.Description("UUID of the backlog item you filed (BUG_FILED only; optional)"),
 			),
 		),
 		dh.submitDiagnosisResult,
@@ -205,8 +213,27 @@ func (dh *diagnoseHandlers) submitDiagnosisResult(ctx context.Context, req mcpgo
 		return errResult(ErrInvalidArgument, "summary is required", ""), nil
 	}
 
-	if _, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, itemID); errRes != nil {
+	if len(summary) > maxDiagnosisSummaryLen {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("summary must be at most %d chars", maxDiagnosisSummaryLen), ""), nil
+	}
+
+	itemSession, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, itemID)
+	if errRes != nil {
 		return errRes, nil
+	}
+	filedItemID, _ := args["filed_item_id"].(string)
+	if filedItemID != "" {
+		if err := validateUUID(filedItemID); err != nil {
+			return errResult(ErrInvalidArgument, "filed_item_id: "+err.Error(), ""), nil
+		}
+		if _, getErr := dh.storage.GetBacklogItem(ctx, filedItemID); getErr != nil {
+			return errResult(ErrItemNotFound, fmt.Sprintf("filed_item_id %s: %v", filedItemID, getErr), ""), nil
+		}
+	}
+	if resErr := dh.storage.UpdateItemSessionDiagnoseResult(ctx, itemSession.ID, session.DiagnoseResultData{
+		Outcome: outcome, Summary: summary, FiledItemID: filedItemID, DiagnosedAt: time.Now().UTC(),
+	}); resErr != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("record structured diagnosis result: %v", resErr), ""), nil
 	}
 
 	note := fmt.Sprintf("Diagnosis result: %s\n\n%s", outcome, summary)

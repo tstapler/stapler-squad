@@ -40,6 +40,7 @@ import { ConnectionIndicator } from "./ConnectionIndicator";
 import { ItemClaimBanner } from "./ItemClaimBanner";
 import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaSection } from "./detail/AcCriteriaSection";
+import { WorkflowSuggestionsSection } from "./detail/WorkflowSuggestionsSection";
 import { InlineError } from "./InlineError";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
@@ -148,6 +149,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
     archiveBacklogItem,
     unarchiveBacklogItem,
     deleteBacklogItem,
+    dismissWorkflowSuggestion,
     updateBacklogItem,
     waiveAcceptanceCriterion,
     associatePullRequest,
@@ -1826,6 +1828,7 @@ export function BacklogItemDetail({ itemId, onClose, onItemClick }: BacklogItemD
             Artifacts, so every Collapsible-wrapped section (including
             Reviewing/Pull Request, extracted in Story 3.1.2) can share one
             contiguous Radix Root. */}
+        <WorkflowSuggestionsSection item={item} onDismiss={dismissWorkflowSuggestion} />
         <CollapsibleGroup value={openSectionKeys} onValueChange={handleGroupValueChange}>
           {/* Same gates as the three Decision sections below */}
           {(item.status === "review" || item.status === "pr_pending" || !!item.gateVerdict) && (

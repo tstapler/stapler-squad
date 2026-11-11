@@ -333,7 +333,8 @@ var methodToID = map[string]string{ //nolint:gochecknoglobals
 	"GetConfigFileRules":    "rules:get-config-file",
 	"SaveRulesToConfigFile": "rules:save-to-config-file",
 	// Backlog item lifecycle RPCs
-	"DeleteBacklogItem": "backlog:delete-item",
+	"DeleteBacklogItem":         "backlog:delete-item",
+	"DismissWorkflowSuggestion": "backlog:dismiss-workflow-suggestion",
 	// Backlog real-time streaming RPC (backlog-event-driven-updates Epic 1.1/3.1)
 	"WatchBacklogItems": "backlog:watch",
 	// Import external session RPCs (ImportService in import.proto)
