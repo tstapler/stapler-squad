@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/services"
 )
 
 // DeliveryNotification is the normalized notification payload passed to Notifier.Send.
@@ -29,26 +28,18 @@ type Notifier interface {
 
 // WebPushNotifier delivers notifications via the Web Push protocol.
 type WebPushNotifier struct {
-	svc *services.PushService
+	svc *PushService
 }
 
 // NewWebPushNotifier creates a WebPushNotifier backed by the provided PushService.
-func NewWebPushNotifier(svc *services.PushService) *WebPushNotifier {
+func NewWebPushNotifier(svc *PushService) *WebPushNotifier {
 	return &WebPushNotifier{svc: svc}
 }
 
 func (n *WebPushNotifier) Name() string { return "web-push" }
 
 func (n *WebPushNotifier) Send(_ context.Context, dn DeliveryNotification) error {
-	pn := services.PushNotification{
-		Title:              dn.Title,
-		Body:               dn.Body,
-		Icon:               dn.Icon,
-		Tag:                dn.Tag,
-		Data:               dn.Data,
-		RequireInteraction: dn.RequireInteraction,
-		Renotify:           dn.Renotify,
-	}
+	pn := PushNotification(dn)
 	sent := n.svc.SendNotification(pn)
 	if sent == 0 {
 		log.Warn("WebPushNotifier no active subscriptions", "title", dn.Title)

@@ -923,3 +923,29 @@ func TestStatusDeterminerInterface_Should_BuildWithOptionsSignature_When_PollerC
 	var _ StatusDeterminer = stubDeterminer{}
 	var _ StatusDeterminer = (*optsRecordingDeterminer)(nil)
 }
+
+// TestDetermine_HiddenGateReadsSnapshot_NoRaceWithWriter guards the lock-free-read rule:
+// Determine must read Hidden through Snapshot(), not the raw field a locked setter writes.
+func TestDetermine_HiddenGateReadsSnapshot_NoRaceWithWriter(t *testing.T) {
+	t.Parallel()
+	detector := detection.NewStatusDetector()
+	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
+	inst := &Instance{Title: "review:race", UUID: "bbbb1111-2222-3333-4444-555566667777", Status: Running}
+	inst.started.Store(true)
+	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
+	inst.SyncAtomicTimestamps()
+	SetHiddenForTest(t, inst, false)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			SetHiddenForTest(t, inst, i%2 == 0)
+		}
+	}()
+	statusInfo := InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: detection.StatusSuccess}
+	for i := 0; i < 200; i++ {
+		determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
+	}
+	<-done
+}
