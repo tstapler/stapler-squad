@@ -74,7 +74,7 @@ func (w *AdminFileWriter) writeTemp(name string, content []byte) (string, error)
 func (w *AdminFileWriter) renameAndSyncDir(tmpPath, name string) error {
 	target := filepath.Join(w.dir, name)
 	if err := os.Rename(tmpPath, target); err != nil {
-		return fmt.Errorf("admin file writer: failed to rename temp file onto %q: %w", target, err)
+		return fmt.Errorf("admin file writer: failed to rename temp file onto %q: %w%s", target, err, w.renameFailureState(tmpPath))
 	}
 
 	dirFile, err := os.Open(w.dir)
@@ -88,4 +88,17 @@ func (w *AdminFileWriter) renameAndSyncDir(tmpPath, name string) error {
 	}
 
 	return nil
+}
+
+// renameFailureState reports which side of a failed rename is missing. A "no such file" rename after a successful
+// CreateTemp has been seen only on CI runners; this tells the next occurrence whether the admin dir or the temp file vanished.
+func (w *AdminFileWriter) renameFailureState(tmpPath string) string {
+	_, dirErr := os.Stat(w.dir)
+	_, tmpErr := os.Lstat(tmpPath)
+	entries, _ := os.ReadDir(w.dir)
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return fmt.Sprintf(" (state after failure: dir stat err=%v, temp lstat err=%v, dir entries=%v)", dirErr, tmpErr, names)
 }
