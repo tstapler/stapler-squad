@@ -34,7 +34,7 @@ var legacyPRReaders = map[string]string{
 	"session/pr_set_rules.go":                    readsSnapshot,     // ExistingPRForCreate reads the set; scalars only for a link-less session
 	"server/pr_annotations.go":                   readsSnapshot,
 	"server/prwatch_sessions.go":                 readsSnapshot,
-	"server/review_queue_manager.go":             readsSnapshot,
+	"server/reviewqueue/review_queue_manager.go": readsSnapshot,
 	"server/services/approval_service.go":        readsSnapshot,
 	"server/services/debug_snapshot.go":          readsInstanceData,
 	"server/services/session_service_create.go":  readsSnapshot, // writes InstanceOptions only; the instance attaches it

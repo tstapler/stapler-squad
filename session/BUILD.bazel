@@ -816,7 +816,7 @@ go_test(
         "//server:artifact_scan_complete.go",
         "//server:pr_annotations.go",
         "//server:prwatch_sessions.go",
-        "//server:review_queue_manager.go",
+        "//server/reviewqueue:review_queue_manager.go",
         "//server/adapters:instance_adapter.go",
         "//server/mcp:go_sources",
         "//server/services:go_sources",
