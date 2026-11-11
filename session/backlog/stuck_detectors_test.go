@@ -1,11 +1,9 @@
 package backlog
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 func TestDefaultStuckDetectors_Order(t *testing.T) {
@@ -35,18 +33,4 @@ func TestDefaultStuckDetectors_Order(t *testing.T) {
 	assert.Equal(t, 0, idx["transition_denied_redrive"])
 	assert.Equal(t, 1, idx["work_commit_refresh"])
 	assert.Less(t, idx["work_commit_refresh"], idx["pr_ready+merge_detection"])
-}
-
-type recordingDetector struct{}
-
-func (recordingDetector) Name() string                                { return "extra" }
-func (recordingDetector) Run(context.Context, *session.EntRepository) {}
-
-func TestAppendStuckDetectors_RunsAfterDefaults(t *testing.T) {
-	t.Parallel()
-	l := &BacklogLifecycleListener{}
-	l.AppendStuckDetectors(recordingDetector{})
-	ds := l.stuckDetectors()
-	assert.Equal(t, "extra", ds[len(ds)-1].Name())
-	assert.Len(t, ds, len(l.defaultStuckDetectors())+1)
 }

@@ -7,8 +7,7 @@ import (
 )
 
 // StuckDetector is one panic-isolated sweep of ReconcileStuck. A new stuck
-// condition is a new detector added to defaultStuckDetectors (or appended via
-// AppendStuckDetectors); the ReconcileStuck loop and runStuckDetector stay closed.
+// condition is a new detector added to defaultStuckDetectors; the ReconcileStuck loop and runStuckDetector stay closed.
 type StuckDetector interface {
 	Name() string
 	Run(ctx context.Context, er *session.EntRepository)
@@ -22,17 +21,6 @@ type funcStuckDetector struct {
 func (d funcStuckDetector) Name() string { return d.name }
 
 func (d funcStuckDetector) Run(ctx context.Context, er *session.EntRepository) { d.run(ctx, er) }
-
-// AppendStuckDetectors registers extra detectors to run after the defaults.
-// Call at the composition root before the reconcile ticker starts; not goroutine-safe.
-func (l *BacklogLifecycleListener) AppendStuckDetectors(ds ...StuckDetector) {
-	l.extraStuckDetectors = append(l.extraStuckDetectors, ds...)
-}
-
-// stuckDetectors returns the defaults followed by any appended detectors.
-func (l *BacklogLifecycleListener) stuckDetectors() []StuckDetector {
-	return append(l.defaultStuckDetectors(), l.extraStuckDetectors...)
-}
 
 // defaultStuckDetectors is the ordered detector list. Order is load-bearing and
 // pinned by TestDefaultStuckDetectors_Order.

@@ -38,9 +38,6 @@ type QueueDequeuer interface {
 type BacklogLifecycleListener struct {
 	storage *session.Storage
 
-	// extraStuckDetectors run after defaultStuckDetectors; see AppendStuckDetectors.
-	extraStuckDetectors []StuckDetector
-
 	// triageParks tracks recent orphaned-triage retry-cap parkings so a burst can
 	// escalate as one batch notification; see recordTriageParkAndMaybeEscalate.
 	triageParks parkBurstTracker
@@ -1416,7 +1413,7 @@ func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
 	// Durable stuck-reason detectors, each panic-isolated (Story 2.1.5e) so one
 	// detector's panic cannot skip the others or merge detection below.
 	var okNames, panickedNames []string
-	for _, d := range l.stuckDetectors() {
+	for _, d := range l.defaultStuckDetectors() {
 		l.runStuckDetector(d.Name(), &okNames, &panickedNames, func() { d.Run(ctx, er) })
 	}
 
