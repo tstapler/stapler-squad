@@ -104,7 +104,7 @@ func TestFireNow_AdmissionRejected_DoesNotCreateSession(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, fireErr := sched.FireNow(context.Background(), wf, "")
+	_, fireErr := sched.FireNow(context.Background(), wf, "", nil)
 	require.Error(t, fireErr)
 	assert.True(t, gate.called, "Admit should have been called")
 	assert.False(t, fakeSess.called, "CreateSession must not be called when admission is rejected")
@@ -132,7 +132,7 @@ func TestFireNow_AdmissionError_DoesNotCreateSession(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, fireErr := sched.FireNow(context.Background(), wf, "")
+	_, fireErr := sched.FireNow(context.Background(), wf, "", nil)
 	require.Error(t, fireErr)
 	assert.False(t, fakeSess.called, "CreateSession must not be called when the admission gate errors")
 }
@@ -154,7 +154,7 @@ func TestFireNow_AdmissionAllowed_CreatesSession(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, fireErr := sched.FireNow(context.Background(), wf, "")
+	_, fireErr := sched.FireNow(context.Background(), wf, "", nil)
 	require.NoError(t, fireErr)
 	assert.True(t, gate.called)
 	assert.True(t, fakeSess.called, "CreateSession should be called once admission is granted")
@@ -200,7 +200,7 @@ func TestFireNow_PRUrlArg_UsesOwnerRepoTitleAndInjectsSessionID(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, fireErr := sched.FireNow(context.Background(), wf, "https://github.com/tstapler/stapler-squad/pull/456")
+	_, fireErr := sched.FireNow(context.Background(), wf, "https://github.com/tstapler/stapler-squad/pull/456", nil)
 	require.NoError(t, fireErr)
 
 	require.NotNil(t, fakeSess.lastReq)
@@ -374,7 +374,7 @@ func TestFireNow_RateLimited_RejectsExcessFiresInTightLoop(t *testing.T) {
 	const attempts = 15
 	successCount := 0
 	for i := 0; i < attempts; i++ {
-		if _, fireErr := sched.FireNow(context.Background(), wf, ""); fireErr == nil {
+		if _, fireErr := sched.FireNow(context.Background(), wf, "", nil); fireErr == nil {
 			successCount++
 		}
 	}
@@ -664,7 +664,7 @@ func TestFireNow_FamilyAlias_ExpectResolvedToConcreteModelInProgram(t *testing.T
 	})
 	require.NoError(t, err)
 
-	_, err = sched.FireNow(context.Background(), wf, "")
+	_, err = sched.FireNow(context.Background(), wf, "", nil)
 	require.NoError(t, err)
 	require.NotNil(t, fakeSess.lastReq)
 	assert.Equal(t, "claude --model "+DefaultModelFamilies()["sonnet"], fakeSess.lastReq.Program)
@@ -679,7 +679,7 @@ func TestFireNow_ExistingLiteralModelID_ExpectUnchangedProgramString(t *testing.
 	})
 	require.NoError(t, err)
 
-	_, err = sched.FireNow(context.Background(), wf, "")
+	_, err = sched.FireNow(context.Background(), wf, "", nil)
 	require.NoError(t, err)
 	require.NotNil(t, fakeSess.lastReq)
 	assert.Equal(t, "claude --model claude-sonnet-4-6", fakeSess.lastReq.Program)
@@ -694,7 +694,7 @@ func TestFireNow_UnknownFamilyAlias_ExpectErrorAndNoSessionCreated(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	_, err = sched.FireNow(context.Background(), wf, "")
+	_, err = sched.FireNow(context.Background(), wf, "", nil)
 	require.Error(t, err)
 	assert.Nil(t, fakeSess.lastReq, "no session should be created when model resolution fails")
 }
@@ -717,7 +717,7 @@ func TestFireNow_OverrideFile_ExpectNewLatestPickedUpWithoutCodeChange(t *testin
 	})
 	require.NoError(t, err)
 
-	_, err = sched.FireNow(context.Background(), wf, "")
+	_, err = sched.FireNow(context.Background(), wf, "", nil)
 	require.NoError(t, err)
 	require.NotNil(t, fakeSess.lastReq)
 	assert.Equal(t, "claude --model claude-sonnet-9999-override", fakeSess.lastReq.Program)
@@ -769,7 +769,7 @@ func TestFireNow_ConcurrentSameMinuteRuns_AllCreated(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, errs[i] = sched.FireNow(context.Background(), wf, fmt.Sprintf("pr %d", i))
+			_, errs[i] = sched.FireNow(context.Background(), wf, fmt.Sprintf("pr %d", i), nil)
 		}(i)
 	}
 	wg.Wait()
@@ -792,7 +792,7 @@ func TestFireNow_TitleCollision_AutoDeduped(t *testing.T) {
 
 	const pr = "https://github.com/corp/repo/pull/42"
 	for i := 0; i < 3; i++ {
-		_, err := sched.FireNow(context.Background(), wf, pr)
+		_, err := sched.FireNow(context.Background(), wf, pr, nil)
 		require.NoError(t, err, "run %d", i)
 	}
 	assert.True(t, fake.titles["corp/repo#42"])
@@ -811,7 +811,49 @@ func TestFireNow_TitleDedupe_DoesNotCorruptArgInPrompt(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = sched.FireNow(context.Background(), wf, "https://github.com/foo/bar")
+	_, err = sched.FireNow(context.Background(), wf, "https://github.com/foo/bar", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "review https://github.com/foo/bar as foo/bar (2)", fake.prompts["foo/bar (2)"])
+}
+
+func TestAppendAttachmentBlock(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "do it", appendAttachmentBlock("do it", nil), "no attachments leaves the prompt untouched")
+	assert.Equal(t,
+		"do it\n\nReference images (read each with your Read tool before you start):\n- /a/1.png\n- /a/2.jpg",
+		appendAttachmentBlock("do it", []string{"/a/1.png", "/a/2.jpg"}))
+	assert.Equal(t,
+		"Reference images (read each with your Read tool before you start):\n- /a/1.png",
+		appendAttachmentBlock("", []string{"/a/1.png"}), "empty prompt has no leading blank lines")
+}
+
+func TestFireNow_Attachments_ListedInPromptAndKeptOnTitleDedupe(t *testing.T) {
+	fake := &uniqueTitleSessionService{titles: map[string]bool{"foo/bar": true}, prompts: map[string]string{}}
+	sched, wfRepo, _ := newTestScheduler(t, fake)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "attach-wf", Name: "Repo Review", Command: "review {{input}} as {{session_id}}", TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	_, err = sched.FireNow(context.Background(), wf, "https://github.com/foo/bar", []string{"/att/x.png"})
+	require.NoError(t, err)
+	assert.Equal(t,
+		"review https://github.com/foo/bar as foo/bar (2)\n\nReference images (read each with your Read tool before you start):\n- /att/x.png",
+		fake.prompts["foo/bar (2)"], "the rerendered prompt must keep the attachment block")
+}
+
+func TestFireNow_NoAttachments_PromptHasNoImageBlock(t *testing.T) {
+	fake := &uniqueTitleSessionService{prompts: map[string]string{}}
+	sched, wfRepo, _ := newTestScheduler(t, fake)
+	wf, err := wfRepo.Create(context.Background(), session.WorkflowCreateInput{
+		Slug: "noattach-wf", Name: "Plain", Command: "do {{input}}", TargetDirectory: "/tmp/test",
+	})
+	require.NoError(t, err)
+
+	_, err = sched.FireNow(context.Background(), wf, "x", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, fake.prompts)
+	for _, prompt := range fake.prompts {
+		assert.NotContains(t, prompt, "Reference images")
+	}
 }

@@ -1,7 +1,7 @@
 "use client";
 // +feature: workflows-management
 
-import { useState, useCallback } from "react";
+import { Fragment, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Link, useRouter } from "@/lib/nav";
 import { WorkflowProto } from "@/gen/session/v1/session_pb";
@@ -9,6 +9,7 @@ import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import { useWorkflows, WorkflowFormData } from "@/lib/hooks/useWorkflows";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { WorkflowForm } from "./WorkflowForm";
+import { WorkflowRunDialog, workflowTakesInput } from "./WorkflowRunDialog";
 import * as styles from "./WorkflowsPanel.css";
 
 function statusLabel(status: SessionStatus): string {
@@ -94,6 +95,7 @@ export function WorkflowsPanel() {
   const [editTarget, setEditTarget] = useState<WorkflowProto | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [runDialogTarget, setRunDialogTarget] = useState<WorkflowProto | null>(null);
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const [confirmDeleteFailedId, setConfirmDeleteFailedId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
@@ -159,14 +161,52 @@ export function WorkflowsPanel() {
     }
   }
 
-  async function handleRun(wf: WorkflowProto) {
+  // Resolves true when the run started and we navigated to the new session.
+  async function startRun(wf: WorkflowProto, arg?: string, attachmentPaths?: string[]): Promise<boolean> {
     setRunningId(wf.id);
-    const sessionId = await runWorkflow({ id: wf.id });
+    const sessionId = await runWorkflow({ id: wf.id, arg, attachmentPaths });
     setRunningId(null);
-    if (sessionId) {
-      router.push(`/?session=${sessionId}`);
-    }
+    if (!sessionId) return false;
+    router.push(`/?session=${sessionId}`);
+    return true;
   }
+
+  // Workflows with an {{input}} slot collect the input (and images) first.
+  function handleRun(wf: WorkflowProto) {
+    if (workflowTakesInput(wf)) {
+      setRunDialogTarget(wf);
+      return;
+    }
+    void startRun(wf);
+  }
+
+  async function handleRunDialogSubmit(arg: string, attachmentPaths: string[]): Promise<boolean> {
+    if (!runDialogTarget) return false;
+    const started = await startRun(runDialogTarget, arg, attachmentPaths);
+    if (started) setRunDialogTarget(null);
+    return started;
+  }
+
+  const runDialogModal = runDialogTarget
+    ? createPortal(
+        <div
+          className={styles.formOverlay}
+          data-testid="workflow-run-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRunDialogTarget(null);
+          }}
+        >
+          <div className={styles.formCard}>
+            <WorkflowRunDialog
+              workflowName={runDialogTarget.name}
+              onRun={handleRunDialogSubmit}
+              onCancel={() => setRunDialogTarget(null)}
+            />
+          </div>
+        </div>,
+        document.body
+      )
+    : null;
 
   const formModal = showForm
     ? createPortal(
@@ -220,8 +260,8 @@ export function WorkflowsPanel() {
             </thead>
             <tbody>
               {workflows.map((wf) => (
-                <>
-                  <tr key={wf.id} className={styles.row}>
+                <Fragment key={wf.id}>
+                  <tr className={styles.row}>
                     <td className={styles.td}>
                       <span className={styles.slugCell}>@{wf.slug}</span>
                     </td>
@@ -288,7 +328,7 @@ export function WorkflowsPanel() {
                           <button
                             className={styles.runButton}
                             disabled={runningId === wf.id}
-                            onClick={() => void handleRun(wf)}
+                            onClick={() => handleRun(wf)}
                           >
                             {runningId === wf.id ? "…" : "▶ Run"}
                           </button>
@@ -326,7 +366,7 @@ export function WorkflowsPanel() {
                       <RecentRuns workflowId={wf.id} />
                     </td>
                   </tr>
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -334,6 +374,7 @@ export function WorkflowsPanel() {
       )}
 
       {formModal}
+      {runDialogModal}
     </div>
   );
 }

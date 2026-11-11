@@ -1461,6 +1461,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered backlog attachment upload handler at POST /api/v1/upload-backlog-attachment", "dir", backlogAttachmentDir)
 	}
 
+	// Workflow-run image attachments: same validated uploader, own directory.
+	// RunWorkflow only accepts paths inside this directory.
+	if workflowAttachmentDir, err := cfg.WorkflowAttachmentDirOrDefault(); err != nil {
+		log.Error("[Server] cannot resolve workflow attachment dir", "err", err)
+	} else if workflowAttachmentHandler, err := services.NewWorkflowAttachmentUploadHandler(workflowAttachmentDir); err != nil {
+		log.Error("[Server] cannot create workflow attachment upload handler", "dir", workflowAttachmentDir, "err", err)
+	} else {
+		srv.mux.HandleFunc("POST /api/v1/upload-workflow-attachment", workflowAttachmentHandler.HandleWorkflowUpload)
+		log.Info("Registered workflow attachment upload handler at POST /api/v1/upload-workflow-attachment", "dir", workflowAttachmentDir)
+	}
+
 	// One-time best-effort sweep of the launch-prompt temp-file cache
 	// (session/instance_tmux.go's promptArg). Instance.Destroy() and
 	// promptFileCleanupDelay's timer both clean up individual files during

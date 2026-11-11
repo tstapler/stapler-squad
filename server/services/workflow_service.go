@@ -27,7 +27,7 @@ type WorkflowSchedulerInterface interface {
 	Reload(ctx context.Context, wf *ent.Workflow) error
 	Remove(workflowID string) error
 	// FireNow immediately fires a workflow job, returning the created session ID.
-	FireNow(ctx context.Context, wf *ent.Workflow, arg string) (string, error)
+	FireNow(ctx context.Context, wf *ent.Workflow, arg string, attachments []string) (string, error)
 }
 
 // WorkflowService implements the workflow-related RPCs on SessionService.
@@ -47,6 +47,8 @@ type WorkflowService struct {
 	// degrades gracefully: publishes become no-ops and WatchWorkflows returns
 	// CodeUnavailable, matching backlog_service_events.go's convention.
 	eventBus *events.EventBus
+	// attachmentDir bounds RunWorkflow's attachment_paths (see SetAttachmentDir).
+	attachmentDir string
 }
 
 // NewWorkflowService creates a new WorkflowService.
@@ -573,7 +575,12 @@ func (s *WorkflowService) RunWorkflow(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get workflow: %w", err))
 	}
 
-	sessionID, err := s.scheduler.FireNow(ctx, wf, req.Msg.Arg)
+	attachments, err := s.validateAttachmentPaths(req.Msg.AttachmentPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionID, err := s.scheduler.FireNow(ctx, wf, req.Msg.Arg, attachments)
 	if err != nil {
 		code := connect.CodeInternal
 		if connect.CodeOf(err) == connect.CodeAlreadyExists {
