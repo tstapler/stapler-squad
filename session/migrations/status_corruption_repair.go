@@ -1,4 +1,4 @@
-package session
+package migrations
 
 // status_corruption_repair.go — one-time idempotent migration that repairs
 // rows left behind by the now-removed runStatusRemap migration (see
@@ -30,14 +30,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/session"
 )
 
-// maxValidPersistedStatus is the highest session.Status constant ever
+// MaxValidPersistedStatus is the highest session.Status constant ever
 // legitimately written to storage (session/instance.go). Anything greater
 // is corruption, not a newer status this code doesn't know about yet — a
 // real new Status value requires a code change here anyway, at which point
 // this constant gets bumped in the same commit.
-const maxValidPersistedStatus = 8 // == int(Failed); frozen so this file needs no Status enum (pinned by TestStatusCorruptionRepair_FrozenConstantsMatchEnum)
+const MaxValidPersistedStatus = 8 // == int(Failed); frozen so this file needs no Status enum (pinned by session.TestStatusCorruptionRepair_FrozenConstantsMatchEnum)
 
-// minShiftEligibleStatus is the lowest status the removed migration could
+// MinShiftEligibleStatus is the lowest status the removed migration could
 // ever have shifted: its own "is this legacy data" check was `status > 4`,
 // so only Restoring(5)/Crashed(6)/PermanentlyFailed(7)/Failed(8) were ever
 // eligible — Creating/Active/Paused/Stopped/Hibernated (0-4) never were.
@@ -48,21 +48,21 @@ const maxValidPersistedStatus = 8 // == int(Failed); frozen so this file needs n
 // instead of surfacing as the loud, diagnosable error it currently is —
 // worse than not repairing it at all. See
 // TestStatusCorruptionRepair_ValueOutsideShiftEligibleRangeLeftUnchanged.
-const minShiftEligibleStatus = 5 // == int(Restoring); frozen, see maxValidPersistedStatus
+const MinShiftEligibleStatus = 5 // == int(Restoring); frozen, see MaxValidPersistedStatus
 
-// runStatusCorruptionRepair rewrites any Session row whose stored status is
+// StatusCorruptionRepair rewrites any Session row whose stored status is
 // outside the valid range by recovering the original value via status %
 // 100, but only when that recovered value is itself in the range the
 // removed migration could actually have shifted from (see
-// minShiftEligibleStatus) — not merely "somewhere valid". Idempotent: rows
+// MinShiftEligibleStatus) — not merely "somewhere valid". Idempotent: rows
 // already in range are excluded by the query itself, and re-running against
 // an already-repaired row is a no-op (its status is back in range). Safe on
 // a fresh/empty database. Best-effort per row: an unrecoverable value
 // (status % 100 outside [5,8]) is logged and left alone rather than guessed
 // at.
-func runStatusCorruptionRepair(ctx context.Context, er *EntRepository) error {
-	rows, err := er.Client.Session.Query().
-		Where(session.StatusGT(maxValidPersistedStatus)).
+func StatusCorruptionRepair(ctx context.Context, env Env) error {
+	rows, err := env.Client.Session.Query().
+		Where(session.StatusGT(MaxValidPersistedStatus)).
 		All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
@@ -73,12 +73,12 @@ func runStatusCorruptionRepair(ctx context.Context, er *EntRepository) error {
 	var repaired, unrecoverable int
 	for _, row := range rows {
 		recovered := row.Status % 100
-		if recovered < minShiftEligibleStatus || recovered > maxValidPersistedStatus {
-			log.WarningLog().Printf("[Migration] status corruption repair: session=%d: status=%d has no recoverable value (mod 100 = %d, outside the shift-eligible range [%d,%d]) — left unchanged", row.ID, row.Status, recovered, minShiftEligibleStatus, maxValidPersistedStatus)
+		if recovered < MinShiftEligibleStatus || recovered > MaxValidPersistedStatus {
+			log.WarningLog().Printf("[Migration] status corruption repair: session=%d: status=%d has no recoverable value (mod 100 = %d, outside the shift-eligible range [%d,%d]) — left unchanged", row.ID, row.Status, recovered, MinShiftEligibleStatus, MaxValidPersistedStatus)
 			unrecoverable++
 			continue
 		}
-		if _, saveErr := er.Client.Session.UpdateOneID(row.ID).
+		if _, saveErr := env.Client.Session.UpdateOneID(row.ID).
 			SetStatus(recovered).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] status corruption repair: session=%d: %v", row.ID, saveErr)

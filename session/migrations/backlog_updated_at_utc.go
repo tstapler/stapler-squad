@@ -1,4 +1,4 @@
-package session
+package migrations
 
 // backlog_item_updated_at_utc_migration.go — one-time idempotent migration
 // that normalizes BacklogItem.updated_at to UTC for rows written before the
@@ -35,16 +35,16 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// runBacklogItemUpdatedAtUTCBackfill re-saves every BacklogItem whose
+// BacklogItemUpdatedAtUTC re-saves every BacklogItem whose
 // stored updated_at isn't already UTC, normalizing it in place. Idempotent:
 // rows already in UTC (including freshly-created ones, and rows already
 // migrated by a prior run) are skipped — a no-op call costs one query. Safe
 // to call on a fresh/empty database. Best-effort per row: a single row's
 // save failure is logged and does not abort the rest, mirroring
 // SetBacklogItemPRAndTransition's secondary-write discipline.
-func runBacklogItemUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) error {
+func BacklogItemUpdatedAtUTC(ctx context.Context, env Env) error {
 	//nolint:entfullscan one-time backfill normalizing every BacklogItem's updated_at to UTC; idempotent, safe to re-run.
-	items, err := er.Client.BacklogItem.Query().All(ctx)
+	items, err := env.Client.BacklogItem.Query().All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
 		// mirroring runStatusRemap's same defensive posture.
@@ -56,7 +56,7 @@ func runBacklogItemUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) 
 		if item.UpdatedAt.Location() == time.UTC {
 			continue
 		}
-		if _, saveErr := er.Client.BacklogItem.UpdateOneID(item.ID).
+		if _, saveErr := env.Client.BacklogItem.UpdateOneID(item.ID).
 			SetUpdatedAt(item.UpdatedAt.UTC()).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] backlog item updated_at UTC backfill: item=%s: %v", item.ID, saveErr)
