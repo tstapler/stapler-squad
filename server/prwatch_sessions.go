@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // prwatchSessionView is the steerer subset the Sessions adapter needs;
@@ -216,7 +217,7 @@ func (l *prwatchBacklogLinks) Pending(ctx context.Context, uuids []string) (pend
 		if !seen {
 			item, gerr := l.store.GetBacklogItem(ctx, itemID)
 			switch {
-			case errors.Is(gerr, session.ErrNotFound):
+			case errors.Is(gerr, domain.ErrNotFound):
 				// Dangling link: nothing else steers it, keep watching.
 			case gerr != nil || item == nil:
 				v.failed = true

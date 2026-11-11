@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // gate_approval.go — Story 2.4.1's human-approval gate: a stateful gate
@@ -44,14 +45,14 @@ func RecordGateApproval(ctx context.Context, repo GateSatisfactionRepository, it
 
 	existing, err := repo.GetByItemAndGate(ctx, itemID, gateID)
 	if err != nil {
-		if !errors.Is(err, ErrNotFound) {
+		if !errors.Is(err, domain.ErrNotFound) {
 			return nil, fmt.Errorf("look up gate satisfaction record for item %s gate %s: %w", itemID, gateID, err)
 		}
 		return createGateApproval(ctx, repo, itemID, gateID, by, approved)
 	}
 
 	if existing.Satisfied {
-		return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s is already approved", ErrConflict, itemID, gateID)
+		return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s is already approved", domain.ErrConflict, itemID, gateID)
 	}
 
 	var satisfiedAt *time.Time

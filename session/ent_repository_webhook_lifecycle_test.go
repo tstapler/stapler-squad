@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // consistentTuple returns provenance whose digest really is the SHA-256 of its bytes, as the
@@ -153,7 +154,7 @@ func TestApplyWebhookLifecycle_should_ReturnNotFound_When_ScopeDoesNotOwnTheRegi
 
 	_, err := r.ApplyWebhookLifecycle(context.Background(), in)
 
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 	w, g, _ := countRows(t, r)
 	assert.Equal(t, []int{1, 1}, []int{w, g})
 }
@@ -172,7 +173,7 @@ func TestApplyWebhookLifecycle_should_DeleteWorkflowAndRegistrationButKeepLedger
 	w, g, l := countRows(t, r)
 	assert.Equal(t, []int{0, 0, 2}, []int{w, g, l})
 	_, err = r.InspectWebhookRegistration(context.Background(), scopeA, "inst-1")
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 
 	replay, err := r.ApplyWebhookLifecycle(context.Background(), in)
 	require.NoError(t, err)
@@ -180,7 +181,7 @@ func TestApplyWebhookLifecycle_should_DeleteWorkflowAndRegistrationButKeepLedger
 	assert.Equal(t, WebhookOutcomeDeleted, replay.Outcome)
 
 	_, err = r.ApplyWebhookLifecycle(context.Background(), consistentLifecycle("del-2", WebhookActionDelete, 1))
-	assert.ErrorIs(t, err, ErrNotFound, "a fresh delete of a missing registration is not found, not success")
+	assert.ErrorIs(t, err, domain.ErrNotFound, "a fresh delete of a missing registration is not found, not success")
 }
 
 func TestApplyWebhookLifecycle_should_CleanUpOrphanedRegistration_When_WorkflowWasDeletedOutOfBand(t *testing.T) {
@@ -262,7 +263,7 @@ func TestApplyWebhookLifecycle_should_ApplyExactlyOnce_When_DeleteRacesConcurren
 			switch {
 			case err == nil:
 				winners++
-			case errors.Is(err, ErrNotFound):
+			case errors.Is(err, domain.ErrNotFound):
 				notFound++
 			default:
 				t.Fatalf("unexpected error: %v", err)

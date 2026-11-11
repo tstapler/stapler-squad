@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --- report_pr_created ---
@@ -221,7 +222,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 
 	item, getErr := h.getBacklogItemFor(ctx, itemID)
 	if getErr != nil {
-		if errors.Is(getErr, session.ErrNotFound) {
+		if errors.Is(getErr, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", getErr), ""), nil
@@ -437,7 +438,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		if isTransitionDenied(setErr) {
 			return transitionDeniedResult(setErr, session.BacklogStatus(item.Status), session.BacklogStatusPRPending), nil
 		}
-		if errors.Is(setErr, session.ErrPreconditionFailed) {
+		if errors.Is(setErr, domain.ErrPreconditionFailed) {
 			// AC8: the item's status changed out from under this call between
 			// our read above and the atomic write (another action resolved it,
 			// or a racing report_pr_created call won first) — a friendly,

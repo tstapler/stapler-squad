@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/dbpool"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
@@ -1090,7 +1091,7 @@ func (r *EntRepository) GetClaudeConversationUUIDBySessionUUID(ctx context.Conte
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return "", ErrNotFound
+			return "", domain.ErrNotFound
 		}
 		return "", fmt.Errorf("GetClaudeConversationUUIDBySessionUUID: %w", err)
 	}

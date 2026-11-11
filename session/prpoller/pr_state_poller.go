@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // pr_state_poller.go is the PR-keyed half of PRStatusPoller: it polls
@@ -537,7 +538,7 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Ins
 // row itself. A PR with no state row is an error.
 func (p *PRStatusPoller) Refresh(ctx context.Context, ref session.PRRef, src session.PRObservationSource) error {
 	if p.storage == nil {
-		return session.ErrNotFound
+		return domain.ErrNotFound
 	}
 	v, err := p.storage.GetPullRequestState(ctx, ref)
 	if err != nil {

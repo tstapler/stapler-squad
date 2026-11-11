@@ -1,8 +1,9 @@
-package session
+package itemsources
 
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session"
 	"strings"
 	"time"
 )
@@ -21,7 +22,7 @@ const linearCommentCreateMutation = `mutation CommentCreate($issueId: String!, $
   commentCreate(input: {issueId: $issueId, body: $body}) { success }
 }`
 
-func linearForwardSyncToken(config PluginConfig) (string, error) {
+func linearForwardSyncToken(config session.PluginConfig) (string, error) {
 	cfg, disabled, err := decodeLinearFetchConfig(config)
 	if err != nil {
 		return "", err
@@ -35,7 +36,7 @@ func linearForwardSyncToken(config PluginConfig) (string, error) {
 // UpdateIssueState moves the issue (identifier like "ENG-123") to the team
 // workflow state named targetState (case-insensitive) and returns Linear's
 // post-write updatedAt. An unknown state name is an ordinary error.
-func (l *LinearPlugin) UpdateIssueState(ctx context.Context, config PluginConfig, externalID, targetState string) (time.Time, error) {
+func (l *LinearPlugin) UpdateIssueState(ctx context.Context, config session.PluginConfig, externalID, targetState string) (time.Time, error) {
 	token, err := linearForwardSyncToken(config)
 	if err != nil {
 		return time.Time{}, err
@@ -91,7 +92,7 @@ func (l *LinearPlugin) UpdateIssueState(ctx context.Context, config PluginConfig
 }
 
 // PostIssueComment adds a Markdown comment to the issue (identifier or id).
-func (l *LinearPlugin) PostIssueComment(ctx context.Context, config PluginConfig, externalID, body string) error {
+func (l *LinearPlugin) PostIssueComment(ctx context.Context, config session.PluginConfig, externalID, body string) error {
 	token, err := linearForwardSyncToken(config)
 	if err != nil {
 		return err

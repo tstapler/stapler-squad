@@ -232,7 +232,7 @@ func (h *backlogHandlers) getGuidanceRequest(ctx context.Context, req mcpgo.Call
 	}
 	data, err := h.storage.GetGuidanceRequest(ctx, id)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("guidance request %q not found", idStr), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get guidance request: %v", err), ""), nil

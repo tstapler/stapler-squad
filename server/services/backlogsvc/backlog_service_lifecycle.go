@@ -288,7 +288,7 @@ func (s *BacklogService) UpdateBacklogItem(
 	// merge into the existing UserModifiedFields raw string.
 	existing, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog item: %w", err))
@@ -459,10 +459,10 @@ func (s *BacklogService) UpdateBacklogItem(
 		clearedWaivers = updated.ClearedAcWaivers
 	}
 	if err != nil {
-		if errors.Is(err, session.ErrPreconditionFailed) {
+		if errors.Is(err, domain.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
 		}
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
@@ -514,7 +514,7 @@ func (s *BacklogService) UpdateBacklogItem(
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
 					fmt.Errorf("cannot associate PR: item %q already has PR #%d tracked (status pr_pending) — this manual override endpoint does not support reassigning an already-tracked PR to a different one (no GitHub verification is performed here); use report_pr_created from a work session instead: %w", req.Msg.ItemId, updated.PrNumber, setErr))
 			}
-			if errors.Is(setErr, session.ErrPreconditionFailed) {
+			if errors.Is(setErr, domain.ErrPreconditionFailed) {
 				current, reloadErr := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 				status := "unknown"
 				if reloadErr == nil && current != nil {
@@ -640,7 +640,7 @@ func (s *BacklogService) WaiveAcceptanceCriterion(
 
 	current, err := s.storage.GetBacklogItem(ctx, m.ItemId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) || ent.IsNotFound(err) {
+		if errors.Is(err, domain.ErrNotFound) || ent.IsNotFound(err) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item: %w", err))
@@ -664,7 +664,7 @@ func (s *BacklogService) WaiveAcceptanceCriterion(
 
 	err = s.storage.WaiveAcCriterion(ctx, m.ItemId, idx, m.Reason)
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
 	case errors.Is(err, session.ErrAcCriterionAlreadyDone), errors.Is(err, session.ErrAcCriterionAlreadyWaived):
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
@@ -726,7 +726,7 @@ func (s *BacklogService) AddBacklogItemDependency(
 		if errors.Is(err, session.ErrDependencyCycle) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("dependency would create a cycle: %w", err))
 		}
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to add backlog item dependency: %w", err))
@@ -760,7 +760,7 @@ func (s *BacklogService) RemoveBacklogItemDependency(
 		BlockedID: req.Msg.BlockedItemId,
 	}
 	if err := s.storage.RemoveBacklogItemDependency(ctx, edge); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to remove backlog item dependency: %w", err))
@@ -788,7 +788,7 @@ func (s *BacklogService) ListBacklogItemDependencies(
 	}
 	blockedBy, blocking, err := s.storage.ListBacklogItemDependencies(ctx, req.Msg.ItemId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item not found: %w", err))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list backlog item dependencies: %w", err))
@@ -990,9 +990,9 @@ func isTransitionDenial(err error) bool {
 // kibitzer:ignore primitive-obsession -- itemID and what are an id and a message fragment, not interchangeable values
 func transitionConnectError(err error, itemID, what string) error {
 	switch {
-	case ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound):
+	case ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", itemID))
-	case errors.Is(err, session.ErrPreconditionFailed):
+	case errors.Is(err, domain.ErrPreconditionFailed):
 		return connect.NewError(connect.CodeAborted, err)
 	case isFailedPreconditionGuardError(err):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
@@ -1016,7 +1016,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// Load current item to check CanTransitionBacklog.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -1326,11 +1326,11 @@ func (s *BacklogService) UpdateItemSource(
 	updated, err := s.sourceBackend.UpdateItemSource(ctx, req.Msg.SourceId, update)
 	if err != nil {
 		// EntRepository.UpdateItemSource re-wraps ent's *ent.NotFoundError as
-		// session.ErrNotFound before returning (session/ent_repository_backlog.go),
+		// domain.ErrNotFound before returning (session/ent_repository_backlog.go),
 		// so the check here must match against that sentinel — ent.IsNotFound
 		// would never match since the original *ent.NotFoundError is not preserved
 		// in the wrap chain.
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update item source: %w", err))
@@ -1384,7 +1384,7 @@ func (s *BacklogService) OverrideVerdict(
 	// 2. Load the ItemSession by entity UUID to get the linked BacklogItem ID.
 	is, err := s.storage.GetItemSession(ctx, req.Msg.ItemSessionId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound,
 				fmt.Errorf("item session %q not found", req.Msg.ItemSessionId))
 		}
@@ -1496,7 +1496,7 @@ func (s *BacklogService) SubmitManualReview(
 	// Load item to get AC criteria.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))

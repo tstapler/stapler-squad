@@ -29,8 +29,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // livenessDefinitionToProto converts a session.LivenessDefinitionRecord
@@ -151,7 +151,7 @@ func (s *BacklogService) CreateLivenessDefinition(
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("liveness definition for stage %q pipeline_mode %q already exists", req.Msg.StageSlug, mode))
 		}
-	} else if !errors.Is(err, session.ErrNotFound) {
+	} else if !errors.Is(err, domain.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("check existing liveness definition: %w", err))
 	}
 
@@ -173,7 +173,7 @@ func (s *BacklogService) CreateLivenessDefinition(
 		Enabled:      &enabled,
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("liveness definition for stage %q pipeline_mode %q already exists", req.Msg.StageSlug, mode))
 		}
@@ -230,7 +230,7 @@ func (s *BacklogService) UpdateLivenessDefinition(
 
 	row, err := s.livenessRepo.Update(ctx, id, update)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("liveness definition %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update liveness definition: %w", err))
@@ -280,7 +280,7 @@ func deleteByIDAndInvalidateCache(
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid %s id: %w", entityLabel, err))
 	}
 	if err := deleteFn(ctx, id); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return connect.NewError(connect.CodeNotFound, fmt.Errorf("%s %s not found", entityLabel, rawID))
 		}
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("delete %s: %w", entityLabel, err))
@@ -308,7 +308,7 @@ func (s *BacklogService) GetLivenessDefinition(
 
 	row, err := s.livenessRepo.GetByStageAndMode(ctx, req.Msg.StageSlug, mode)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound,
 				fmt.Errorf("liveness definition for stage %q pipeline_mode %q not found", req.Msg.StageSlug, mode))
 		}

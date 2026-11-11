@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/jira"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // UpdateIssueState transitions the issue to the workflow transition whose name
@@ -17,7 +18,7 @@ import (
 // returns JIRA's post-write `updated` time for the loop-prevention watermark.
 // JIRA transitions are workflow-specific, so an unknown name is an ordinary
 // error rather than a guess.
-func (j *JiraPlugin) UpdateIssueState(ctx context.Context, config PluginConfig, externalID, targetState string) (time.Time, error) {
+func (j *JiraPlugin) UpdateIssueState(ctx context.Context, config session.PluginConfig, externalID, targetState string) (time.Time, error) {
 	cfg, err := decodeJiraIssueConfig(config)
 	if err != nil {
 		return time.Time{}, err
@@ -71,7 +72,7 @@ func (j *JiraPlugin) UpdateIssueState(ctx context.Context, config PluginConfig, 
 }
 
 // PostIssueComment adds a comment (converted to ADF) to the issue.
-func (j *JiraPlugin) PostIssueComment(ctx context.Context, config PluginConfig, externalID, body string) error {
+func (j *JiraPlugin) PostIssueComment(ctx context.Context, config session.PluginConfig, externalID, body string) error {
 	cfg, err := decodeJiraIssueConfig(config)
 	if err != nil {
 		return err

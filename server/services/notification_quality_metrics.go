@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -137,7 +138,7 @@ func (r scheduleWakeupRoles) roleOf(ctx context.Context, sessionUUID string) str
 	}
 	row, err := r.lookup.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return roleUnlinked
 	case err != nil:
 		return roleUnknown

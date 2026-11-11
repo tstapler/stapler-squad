@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded
@@ -99,13 +100,13 @@ func TestRecordGateApproval_should_ReturnConflict_When_ItemAndGatePairAlreadySat
 
 	_, err = RecordGateApproval(ctx, repo, itemID, gateID, "second-approver", true)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, domain.ErrConflict)
 
 	// Rejecting an already-approved gate must also fail — approval is final
 	// regardless of the second call's approved value.
 	_, err = RecordGateApproval(ctx, repo, itemID, gateID, "would-be-rejector", false)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, domain.ErrConflict)
 
 	record, err := repo.GetByItemAndGate(ctx, itemID, gateID)
 	require.NoError(t, err)
@@ -135,7 +136,7 @@ func TestRecordGateApproval_should_ReverseIntoApproval_When_PreviouslyRejected(t
 	// Now locked: a further call of either kind must be rejected.
 	_, err = RecordGateApproval(ctx, repo, itemID, gateID, "late-comer", true)
 	require.Error(t, err)
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, domain.ErrConflict)
 }
 
 // TestRecordGateApproval_should_RemainRejectedIdempotently_When_RejectedTwice
@@ -227,7 +228,7 @@ func TestRecordGateApproval_should_YieldExactlyOneWinner_When_ApproveAndRejectRa
 
 	require.NoError(t, approveErr, "the racer whose write lands first must win")
 	require.Error(t, rejectErr, "the racer whose write lands second must lose, never silently clobber the winner")
-	require.ErrorIs(t, rejectErr, ErrConflict)
+	require.ErrorIs(t, rejectErr, domain.ErrConflict)
 
 	// The persisted row must reflect the winner's decision exactly — never a
 	// hybrid/corrupted state, and never silently reverted by the loser.

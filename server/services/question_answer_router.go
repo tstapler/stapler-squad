@@ -221,7 +221,7 @@ func (r *AnswerRouter) storeAnswer(ctx context.Context, route domain.DeliveryRou
 	}
 	row, err := r.rows.GetGuidanceRequest(ctx, id)
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return ActionResult{Outcome: sessionv1.ActionOutcome_ACTION_OUTCOME_STALE, StaleReason: "session_ended"}, nil
 	case err != nil:
 		return ActionResult{}, fmt.Errorf("read question %s: %w", in.QuestionID, err)

@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"testing"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestSubmitDiagnosisResult_should_PopulateItemSessionDiagnoseResult(t *testing.T) {
@@ -67,7 +69,7 @@ func TestSuggestWorkflowAction_should_PersistSuggestion_ThenDismiss(t *testing.T
 	assert.True(t, session.ParseWorkflowSuggestions(item.WorkflowSuggestions)[0].Dismissed)
 
 	err = storage.DismissWorkflowSuggestion(context.Background(), itemID, "missing")
-	require.ErrorIs(t, err, session.ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestSuggestWorkflowAction_should_RejectNonDiagnoseCaller(t *testing.T) {

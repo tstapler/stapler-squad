@@ -19,6 +19,7 @@ go_library(
         "//internal/qos",
         "//log",
         "//session",
+        "//session/domain",
         "//telemetry",
         "@com_github_linkdata_deadlock//:deadlock",
         "@io_opentelemetry_go_otel//attribute",

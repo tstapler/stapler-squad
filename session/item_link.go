@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ItemLinkErrorCode classifies why ResolveItemLink failed, so a
@@ -73,7 +74,7 @@ func ResolveItemLink(ctx context.Context, storage *Storage, callerUUID, itemID s
 	if linkErr == nil {
 		return itemSession, nil
 	}
-	if !errors.Is(linkErr, ErrNotFound) {
+	if !errors.Is(linkErr, domain.ErrNotFound) {
 		return ItemSessionSummary{}, &ItemLinkError{
 			Code:    ItemLinkInternalError,
 			Message: fmt.Sprintf("link check failed: %v", linkErr),
@@ -82,7 +83,7 @@ func ResolveItemLink(ctx context.Context, storage *Storage, callerUUID, itemID s
 
 	// Disambiguate: does the item itself exist?
 	if _, itemErr := storage.GetBacklogItem(ctx, itemID); itemErr != nil {
-		if errors.Is(itemErr, ErrNotFound) {
+		if errors.Is(itemErr, domain.ErrNotFound) {
 			return ItemSessionSummary{}, &ItemLinkError{
 				Code:        ItemLinkNotFound,
 				Message:     fmt.Sprintf("backlog item %q not found", itemID),

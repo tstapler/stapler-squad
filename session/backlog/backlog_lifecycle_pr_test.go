@@ -545,7 +545,7 @@ func TestRecordOrphanedAgentPR_ItemNoLongerInReview_IsAPreconditionSkipNotAReass
 
 	err := listener.recordOrphanedAgentPR(context.Background(), item.ID, &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/78", Number: 78}, "found")
 
-	require.ErrorIs(t, err, session.ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	assert.Equal(t, string(session.BacklogStatusInProgress), h.status(t, item.ID))
 }
 

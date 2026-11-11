@@ -273,7 +273,7 @@ func (s *BacklogService) claimBlockStillApplies(ctx context.Context, itemID stri
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
 		// Keep the row on a transient read error; drop it only when the item is gone.
-		return !errors.Is(err, session.ErrNotFound)
+		return !errors.Is(err, domain.ErrNotFound)
 	}
 	if status := session.BacklogStatus(item.Status); item.ExternalURL == "" ||
 		(status != session.BacklogStatusQueued && status != session.BacklogStatusReady) {
@@ -304,7 +304,7 @@ func (s *BacklogService) OverrideClaimBlock(ctx context.Context, req *connect.Re
 
 	item, err := s.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", itemID))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog item: %w", err))

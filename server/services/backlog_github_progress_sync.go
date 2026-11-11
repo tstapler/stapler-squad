@@ -260,5 +260,10 @@ func resolveProgressTarget(ctx context.Context, registry *session.PluginRegistry
 	if err != nil {
 		return nil, cfg, "", false
 	}
-	return &session.GitHubIssuesPlugin{}, session.PluginConfig{Raw: string(raw)}, fmt.Sprint(ref.IssueNumber), true
+	plugin, found := registry.Get(githubIssuesPluginID)
+	p, isPoster := plugin.(issueProgressCommenter)
+	if !found || !isPoster {
+		return nil, cfg, "", false
+	}
+	return p, session.PluginConfig{Raw: string(raw)}, fmt.Sprint(ref.IssueNumber), true
 }

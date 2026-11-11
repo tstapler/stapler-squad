@@ -404,7 +404,7 @@ func (s *GuidanceRequestService) AnswerGuidanceRequest(
 	}
 
 	data, applied, err := s.AnswerAs(ctx, id.String(), req.Msg.GetAnswer(), HumanAnswerer())
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
 	if err != nil {
@@ -431,7 +431,7 @@ func (s *GuidanceRequestService) GetGuidanceRequest(
 	}
 	data, err := s.storage.GetGuidanceRequest(ctx, id)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, err)
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)

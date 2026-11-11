@@ -503,7 +503,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data BacklogItemD
 func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	item, err := r.Client.BacklogItem.Query().
@@ -521,7 +521,7 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
@@ -544,7 +544,7 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx context.Context, itemID string) (repoPath, baseSHA, headSHA, workSessionUUID string, err error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return "", "", "", "", fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	item, err := r.Client.BacklogItem.Query().
@@ -552,7 +552,7 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return "", "", "", "", fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+			return "", "", "", "", fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
 		return "", "", "", "", fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
 	}
@@ -584,11 +584,11 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
 	blockerID, err := r.resolveBacklogItemLookup(ctx, edge.BlockerID)
 	if err != nil {
-		return fmt.Errorf("%w: invalid blocker id %q: %v", ErrNotFound, edge.BlockerID, err)
+		return fmt.Errorf("%w: invalid blocker id %q: %v", domain.ErrNotFound, edge.BlockerID, err)
 	}
 	blockedID, err := r.resolveBacklogItemLookup(ctx, edge.BlockedID)
 	if err != nil {
-		return fmt.Errorf("%w: invalid blocked id %q: %v", ErrNotFound, edge.BlockedID, err)
+		return fmt.Errorf("%w: invalid blocked id %q: %v", domain.ErrNotFound, edge.BlockedID, err)
 	}
 	if blockerID == blockedID {
 		return ErrDependencyCycle
@@ -617,10 +617,10 @@ func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge Backl
 		found[id] = true
 	}
 	if !found[blockerID] {
-		return fmt.Errorf("%w: blocker item %s does not exist", ErrNotFound, edge.BlockerID)
+		return fmt.Errorf("%w: blocker item %s does not exist", domain.ErrNotFound, edge.BlockerID)
 	}
 	if !found[blockedID] {
-		return fmt.Errorf("%w: blocked item %s does not exist", ErrNotFound, edge.BlockedID)
+		return fmt.Errorf("%w: blocked item %s does not exist", domain.ErrNotFound, edge.BlockedID)
 	}
 
 	wouldCycle, err := dependencyReachable(ctx, tx.BacklogItemDependency, blockedID, blockerID)
@@ -657,11 +657,11 @@ func (r *EntRepository) AddBacklogItemDependency(ctx context.Context, edge Backl
 func (r *EntRepository) RemoveBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
 	blockerID, err := r.resolveBacklogItemLookup(ctx, edge.BlockerID)
 	if err != nil {
-		return fmt.Errorf("%w: invalid blocker id %q: %v", ErrNotFound, edge.BlockerID, err)
+		return fmt.Errorf("%w: invalid blocker id %q: %v", domain.ErrNotFound, edge.BlockerID, err)
 	}
 	blockedID, err := r.resolveBacklogItemLookup(ctx, edge.BlockedID)
 	if err != nil {
-		return fmt.Errorf("%w: invalid blocked id %q: %v", ErrNotFound, edge.BlockedID, err)
+		return fmt.Errorf("%w: invalid blocked id %q: %v", domain.ErrNotFound, edge.BlockedID, err)
 	}
 	existingIDs, err := r.Client.BacklogItem.Query().
 		Where(backlogitem.IDIn(blockerID, blockedID)).
@@ -674,10 +674,10 @@ func (r *EntRepository) RemoveBacklogItemDependency(ctx context.Context, edge Ba
 		found[id] = true
 	}
 	if !found[blockerID] {
-		return fmt.Errorf("%w: blocker item %s does not exist", ErrNotFound, edge.BlockerID)
+		return fmt.Errorf("%w: blocker item %s does not exist", domain.ErrNotFound, edge.BlockerID)
 	}
 	if !found[blockedID] {
-		return fmt.Errorf("%w: blocked item %s does not exist", ErrNotFound, edge.BlockedID)
+		return fmt.Errorf("%w: blocked item %s does not exist", domain.ErrNotFound, edge.BlockedID)
 	}
 	if _, err := r.Client.BacklogItemDependency.Delete().
 		Where(
@@ -698,7 +698,7 @@ func (r *EntRepository) RemoveBacklogItemDependency(ctx context.Context, edge Ba
 func (r *EntRepository) ListBacklogItemDependencies(ctx context.Context, itemID string) (blockedBy, blocking []BacklogItemDependencyRef, err error) {
 	parsed, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return nil, nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	inbound, err := r.Client.BacklogItemDependency.Query().
@@ -746,7 +746,7 @@ func (r *EntRepository) UnresolvedBlockersForItems(ctx context.Context, itemIDs 
 	for _, id := range itemIDs {
 		u, err := r.resolveBacklogItemLookup(ctx, id)
 		if err != nil {
-			return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+			return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 		}
 		byUUID[u] = id
 		parsed = append(parsed, u)
@@ -841,7 +841,7 @@ func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []
 	for _, id := range itemIDs {
 		parsed, err := r.resolveBacklogItemLookup(ctx, id)
 		if err != nil {
-			return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+			return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 		}
 		parsedByString[parsed] = id
 		parsedIDs = append(parsedIDs, parsed)
@@ -871,7 +871,7 @@ func (r *EntRepository) UnresolvedBlockerItemIDs(ctx context.Context, itemIDs []
 func (r *EntRepository) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]string, error) {
 	parsed, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	rows, err := r.Client.BacklogItemDependency.Query().
@@ -1158,7 +1158,7 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter Bac
 func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	// One transaction: the criteria read-merge-write below must not race a concurrent waiver.
@@ -1172,17 +1172,17 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	current, err := tx.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
 
 	if precondition != nil {
 		if precondition.ExpectedStatus != "" && current.Status != precondition.ExpectedStatus {
-			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, current.Status)
+			return nil, fmt.Errorf("%w: expected status %q, got %q", domain.ErrPreconditionFailed, precondition.ExpectedStatus, current.Status)
 		}
 		if precondition.ExpectedUpdatedAt != nil && !current.UpdatedAt.Equal(*precondition.ExpectedUpdatedAt) {
-			return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+			return nil, fmt.Errorf("%w: updated_at mismatch", domain.ErrPreconditionFailed)
 		}
 	}
 
@@ -1532,13 +1532,13 @@ func updatedFieldsFromBacklogItemUpdate(update BacklogItemUpdate) []string {
 func (r *EntRepository) rawArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	current, err := r.Client.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
@@ -1569,14 +1569,14 @@ func (r *EntRepository) rawArchiveBacklogItem(ctx context.Context, id string, pr
 		latest, getErr := r.Client.BacklogItem.Get(ctx, parsedID)
 		if getErr != nil {
 			if ent.IsNotFound(getErr) {
-				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+				return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 			}
 			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
 		}
 		if precondition != nil && precondition.ExpectedStatus != "" && latest.Status != precondition.ExpectedStatus {
-			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
+			return nil, fmt.Errorf("%w: expected status %q, got %q", domain.ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
 		}
-		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+		return nil, fmt.Errorf("%w: updated_at mismatch", domain.ErrPreconditionFailed)
 	}
 
 	item, err := r.Client.BacklogItem.Get(ctx, parsedID)
@@ -1620,13 +1620,13 @@ func (r *EntRepository) rawArchiveBacklogItem(ctx context.Context, id string, pr
 func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expectedStatus string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	current, err := r.Client.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
@@ -1648,11 +1648,11 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expecte
 		latest, getErr := r.Client.BacklogItem.Get(ctx, parsedID)
 		if getErr != nil {
 			if ent.IsNotFound(getErr) {
-				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+				return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 			}
 			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
 		}
-		return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, expectedStatus, latest.Status)
+		return nil, fmt.Errorf("%w: expected status %q, got %q", domain.ErrPreconditionFailed, expectedStatus, latest.Status)
 	}
 	item, err := r.Client.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
@@ -1691,7 +1691,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	defer r.pendingGuidance.invalidate()
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	// Fetch the item before deleting so a ChangeItemRemoved event can carry a
@@ -1700,7 +1700,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	existing, err := r.Client.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			return fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
@@ -1780,7 +1780,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 	err = tx.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			return fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("delete backlog item: delete %s: %w", id, err)
 	}
@@ -1848,13 +1848,13 @@ func applyStatusPreconditionWhere(update *ent.BacklogItemUpdate, precondition *B
 func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy, appendNote string) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	current, err := r.Client.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
@@ -1903,14 +1903,14 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Conte
 		latest, getErr := r.Client.BacklogItem.Get(ctx, parsedID)
 		if getErr != nil {
 			if ent.IsNotFound(getErr) {
-				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+				return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 			}
 			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
 		}
 		if precondition != nil && precondition.ExpectedStatus != "" && latest.Status != precondition.ExpectedStatus {
-			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
+			return nil, fmt.Errorf("%w: expected status %q, got %q", domain.ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
 		}
-		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+		return nil, fmt.Errorf("%w: updated_at mismatch", domain.ErrPreconditionFailed)
 	}
 
 	item, err := r.Client.BacklogItem.Get(ctx, parsedID)
@@ -2005,7 +2005,7 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Conte
 func (r *EntRepository) ClaimChainFire(ctx context.Context, id string, expectedUpdatedAt time.Time) (claimed bool, err error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	affected, err := r.Client.BacklogItem.Update().
@@ -2039,7 +2039,7 @@ func (r *EntRepository) ClaimChainFire(ctx context.Context, id string, expectedU
 func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) error {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 	if _, err := r.Client.BacklogItem.UpdateOneID(parsedID).SetChainFired(false).Save(ctx); err != nil {
 		return fmt.Errorf("revert chain fire claim for item %s: %w", id, err)
@@ -2078,13 +2078,13 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *BacklogItemPrecondition, triggeredBy string, link *itemPRLinkWrite) (*BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	current, err := r.Client.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("failed to get backlog item %s: %w", id, err)
 	}
@@ -2126,14 +2126,14 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.C
 		latest, getErr := r.Client.BacklogItem.Get(ctx, parsedID)
 		if getErr != nil {
 			if ent.IsNotFound(getErr) {
-				return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+				return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, id)
 			}
 			return nil, fmt.Errorf("failed to get backlog item %s: %w", id, getErr)
 		}
 		if precondition != nil && precondition.ExpectedStatus != "" && latest.Status != precondition.ExpectedStatus {
-			return nil, fmt.Errorf("%w: expected status %q, got %q", ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
+			return nil, fmt.Errorf("%w: expected status %q, got %q", domain.ErrPreconditionFailed, precondition.ExpectedStatus, latest.Status)
 		}
-		return nil, fmt.Errorf("%w: updated_at mismatch", ErrPreconditionFailed)
+		return nil, fmt.Errorf("%w: updated_at mismatch", domain.ErrPreconditionFailed)
 	}
 	if err := link.writeTx(ctx, tx, parsedID.String(), r.afterPRLinkHook); err != nil {
 		return nil, err
@@ -2422,13 +2422,13 @@ func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason dom
 	}
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	current, err := r.Client.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return false, fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+			return false, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
 		return false, fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
 	}
@@ -2511,7 +2511,7 @@ func markStuckTx(ctx context.Context, tx *ent.Tx, parsedID uuid.UUID, reason dom
 func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	// Cheap pre-check so the hot no-op path opens no write transaction.
@@ -2561,7 +2561,7 @@ func (r *EntRepository) ResolveStuck(ctx context.Context, itemID string, reason 
 func (r *EntRepository) MarkStuckNotified(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	n, err := r.Client.BacklogStuckState.Update().
@@ -2588,7 +2588,7 @@ func (r *EntRepository) MarkStuckNotified(ctx context.Context, itemID string, re
 func (r *EntRepository) SnoozeStuckState(ctx context.Context, itemID string, reason domain.StuckReason, until time.Time) (bool, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	n, err := r.Client.BacklogStuckState.Update().
@@ -2618,7 +2618,7 @@ func (r *EntRepository) SnoozeStuckState(ctx context.Context, itemID string, rea
 func (r *EntRepository) RecordRemediationAttempt(ctx context.Context, itemID string, reason domain.StuckReason, attempts int32, nextAt *time.Time) (bool, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	update := r.Client.BacklogStuckState.Update().
@@ -2650,7 +2650,7 @@ func (r *EntRepository) RecordRemediationAttempt(ctx context.Context, itemID str
 func (r *EntRepository) RecordDiagnoseNudgeAttempt(ctx context.Context, itemID string, reason domain.StuckReason, count int32, nextAt *time.Time) (bool, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	update := r.Client.BacklogStuckState.Update().
@@ -2687,7 +2687,7 @@ func (r *EntRepository) RecordDiagnoseNudgeAttempt(ctx context.Context, itemID s
 func (r *EntRepository) RecordDiagnoseNudgeAttemptIfBelowCap(ctx context.Context, itemID string, reason domain.StuckReason, maxAttempts int32, nextAt time.Time) (incremented bool, err error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	n, err := r.Client.BacklogStuckState.Update().
@@ -2716,7 +2716,7 @@ func (r *EntRepository) RecordDiagnoseNudgeAttemptIfBelowCap(ctx context.Context
 func (r *EntRepository) ClaimDiagnoseNudgeSlotIfEligible(ctx context.Context, itemID string, reason domain.StuckReason, claimLimit int32, now time.Time, cooldown time.Duration) (claimed bool, err error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	update := r.Client.BacklogStuckState.Update().
@@ -2751,7 +2751,7 @@ func (r *EntRepository) ClaimDiagnoseNudgeSlotIfEligible(ctx context.Context, it
 func (r *EntRepository) RecordRemediationRestartGrace(ctx context.Context, itemID string, reason domain.StuckReason, bootTime time.Time) (bool, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	n, err := r.Client.BacklogStuckState.Update().
@@ -2778,7 +2778,7 @@ func (r *EntRepository) RecordRemediationRestartGrace(ctx context.Context, itemI
 func (r *EntRepository) ResetStuckRemediation(ctx context.Context, itemID string, reason domain.StuckReason) (bool, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return false, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, itemID, err)
+		return false, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, itemID, err)
 	}
 
 	n, err := r.Client.BacklogStuckState.Update().
@@ -2888,7 +2888,7 @@ func (r *EntRepository) ListProgressNotesForItem(ctx context.Context, itemID str
 // underlying delete-between-steps race.
 func mapAppendActivityNoteCreateError(err error, itemID string) error {
 	if ent.IsConstraintError(err) {
-		return fmt.Errorf("backlog item %s not found: %w", itemID, ErrNotFound)
+		return fmt.Errorf("backlog item %s not found: %w", itemID, domain.ErrNotFound)
 	}
 	return fmt.Errorf("failed to append activity note for item %s: %w", itemID, err)
 }
@@ -2925,7 +2925,7 @@ func (r *EntRepository) AppendActivityNote(ctx context.Context, itemID, authorSe
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("backlog item %s not found: %w", itemID, ErrNotFound)
+			return fmt.Errorf("backlog item %s not found: %w", itemID, domain.ErrNotFound)
 		}
 		return fmt.Errorf("failed to look up backlog item %s: %w", itemID, err)
 	}
@@ -3009,7 +3009,7 @@ func (r *EntRepository) ListItemSources(ctx context.Context) ([]ItemSourceData, 
 func (r *EntRepository) UpdateItemSource(ctx context.Context, id string, update ItemSourceUpdate) (*ItemSourceData, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	u := r.Client.ItemSource.UpdateOneID(parsedID)
@@ -3035,7 +3035,7 @@ func (r *EntRepository) UpdateItemSource(ctx context.Context, id string, update 
 	src, err := u.Save(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: item source %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: item source %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("failed to update item source %s: %w", id, err)
 	}
@@ -3047,13 +3047,13 @@ func (r *EntRepository) UpdateItemSource(ctx context.Context, id string, update 
 func (r *EntRepository) DeleteItemSource(ctx context.Context, id string) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
-		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	err = r.Client.ItemSource.DeleteOneID(parsedID).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: item source %s", ErrNotFound, id)
+			return fmt.Errorf("%w: item source %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("failed to delete item source %s: %w", id, err)
 	}
@@ -3066,12 +3066,12 @@ func (r *EntRepository) DeleteItemSource(ctx context.Context, id string) error {
 func (r *EntRepository) GetItemSourceByID(ctx context.Context, id string) (*ent.ItemSource, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 	src, err := r.Client.ItemSource.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: item source %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: item source %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("failed to get item source %s: %w", id, err)
 	}
@@ -3093,7 +3093,7 @@ func (r *EntRepository) GetBacklogItemByExternalURL(ctx context.Context, externa
 		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ErrNotFound
+			return nil, domain.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to query backlog item by external_url %q: %w", externalURL, err)
 	}
@@ -3108,14 +3108,14 @@ func (r *EntRepository) GetBacklogItemByExternalURL(ctx context.Context, externa
 func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, sourceID, externalID string) (*ent.BacklogItem, error) {
 	parsedSourceID, err := uuid.Parse(sourceID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid source id %q: %v", ErrNotFound, sourceID, err)
+		return nil, fmt.Errorf("%w: invalid source id %q: %v", domain.ErrNotFound, sourceID, err)
 	}
 	item, err := r.Client.BacklogItem.Query().
 		Where(backlogitem.ExternalID(externalID), backlogitem.HasSourceWith(itemsource.ID(parsedSourceID))).
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ErrNotFound
+			return nil, domain.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to query backlog item by external_id %q: %w", externalID, err)
 	}
@@ -3139,7 +3139,7 @@ func (r *EntRepository) GetBacklogItemsByExternalIDs(ctx context.Context, source
 
 	parsedSourceID, err := uuid.Parse(sourceID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid source id %q: %v", ErrNotFound, sourceID, err)
+		return nil, fmt.Errorf("%w: invalid source id %q: %v", domain.ErrNotFound, sourceID, err)
 	}
 
 	items, err := r.Client.BacklogItem.Query().
@@ -3204,7 +3204,7 @@ func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID stri
 		Where(itemsource.ID(parsedID)).
 		Only(ctx); err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: item source %s", ErrNotFound, sourceID)
+			return fmt.Errorf("%w: item source %s", domain.ErrNotFound, sourceID)
 		}
 		return fmt.Errorf("failed to verify item source %s: %w", sourceID, err)
 	}
@@ -3266,7 +3266,7 @@ func (r *EntRepository) FinishSourceSync(ctx context.Context, sourceID string, c
 	}
 	if _, err := u.Save(ctx); err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: item source %s", ErrNotFound, sourceID)
+			return fmt.Errorf("%w: item source %s", domain.ErrNotFound, sourceID)
 		}
 		return fmt.Errorf("failed to update sync state for item source %s: %w", sourceID, err)
 	}

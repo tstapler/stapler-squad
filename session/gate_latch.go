@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // gate_latch.go — a structural gate with stateful=true is one-shot: once a
@@ -128,7 +129,7 @@ func (e *ConfiguredWorkflowEngine) recordLatch(itemID, gateID uuid.UUID) error {
 	_, err := e.gateSatisfactionRepo.Create(ctx, GateSatisfactionCreateInput{
 		ItemID: itemID, GateID: gateID, Satisfied: true, SatisfiedBy: "transition", SatisfiedAt: &now,
 	})
-	if errors.Is(err, ErrConflict) {
+	if errors.Is(err, domain.ErrConflict) {
 		return nil
 	}
 	return err

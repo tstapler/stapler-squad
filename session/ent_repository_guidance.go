@@ -428,7 +428,7 @@ func (r *EntRepository) GetGuidanceRequest(ctx context.Context, id uuid.UUID) (*
 	row, err := r.Client.GuidanceRequest.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: guidance request %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: guidance request %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("get guidance request %s: %w", id, err)
 	}

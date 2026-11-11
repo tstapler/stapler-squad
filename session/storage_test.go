@@ -16,6 +16,7 @@ import (
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -1051,7 +1052,7 @@ func TestSetBacklogItemPRAndTransition_should_RejectPrecondition_When_ObservedSt
 	require.NoError(t, err)
 
 	err = storage.RawSetBacklogItemPRAndTransition(ctx, item, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Too early.", nil)
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -1085,7 +1086,7 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	require.NoError(t, err)
 
 	err = storage.RawSetBacklogItemPRAndTransition(ctx, item /* stale */, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)

@@ -742,7 +742,7 @@ func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, fai
 // lost compare-and-swap is expected and retried on the next tick (Debug); any
 // other failure is an Error.
 func logSystemTransitionFailure(where, itemID string, to session.BacklogStatus, err error) {
-	if session.IsGateDenial(err) || errors.Is(err, session.ErrPreconditionFailed) {
+	if session.IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed) {
 		log.Debug("[BacklogLifecycle] "+where+": transition skipped", "item", itemID, "to", to, "error", err)
 		return
 	}
@@ -966,7 +966,7 @@ func (l *BacklogLifecycleListener) onSessionStarted(sessionUUID string) {
 	ctx := context.Background()
 	is, err := l.storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return
 		}
 		log.Error("[BacklogLifecycle] GetItemSessionBySessionUUID error", "session", sessionUUID, "error", err)
@@ -983,7 +983,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 
 	is, err := l.storage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return
 		}
 		log.Error("[BacklogLifecycle] GetItemSessionBySessionUUID error", "session", sessionUUID, "error", err)

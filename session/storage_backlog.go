@@ -317,7 +317,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 func (r *EntRepository) GetItemSession(ctx context.Context, id string) (ItemSessionSummary, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+		return ItemSessionSummary{}, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	is, err := r.Client.ItemSession.Query().
@@ -326,7 +326,7 @@ func (r *EntRepository) GetItemSession(ctx context.Context, id string) (ItemSess
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return ItemSessionSummary{}, fmt.Errorf("%w: item session %s", ErrNotFound, id)
+			return ItemSessionSummary{}, fmt.Errorf("%w: item session %s", domain.ErrNotFound, id)
 		}
 		return ItemSessionSummary{}, fmt.Errorf("failed to get item session %s: %w", id, err)
 	}
@@ -441,7 +441,7 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return ItemSessionSummary{}, fmt.Errorf("%w: item session for session=%s", ErrNotFound, sessionUUID)
+			return ItemSessionSummary{}, fmt.Errorf("%w: item session for session=%s", domain.ErrNotFound, sessionUUID)
 		}
 		return ItemSessionSummary{}, fmt.Errorf("failed to get item session by session uuid: %w", err)
 	}
@@ -512,7 +512,7 @@ func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sess
 		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return ItemSessionSummary{}, fmt.Errorf("%w: item session for session=%s item=%s", ErrNotFound, sessionUUID, itemID)
+			return ItemSessionSummary{}, fmt.Errorf("%w: item session for session=%s item=%s", domain.ErrNotFound, sessionUUID, itemID)
 		}
 		return ItemSessionSummary{}, fmt.Errorf("failed to get item session: %w", err)
 	}
@@ -697,7 +697,7 @@ func (r *EntRepository) AddHeadlessCostBySessionUUID(ctx context.Context, sessio
 	}
 	is, err := r.GetItemSessionBySessionUUID(ctx, sessionUUID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil
 		}
 		return err
@@ -1515,7 +1515,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+			return fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
@@ -1529,7 +1529,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	item, err := tx.BacklogItem.Get(ctx, parsedID)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+			return fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
 		return fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
 	}

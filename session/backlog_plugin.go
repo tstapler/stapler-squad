@@ -60,9 +60,14 @@ type PluginRegistry struct {
 	plugins map[string]ItemSourcePlugin
 }
 
-// NewPluginRegistry creates a new empty PluginRegistry.
-func NewPluginRegistry() *PluginRegistry {
-	return &PluginRegistry{plugins: make(map[string]ItemSourcePlugin)}
+// NewPluginRegistry creates a PluginRegistry holding the given plugins. The
+// composition root owns the list of built-in plugins.
+func NewPluginRegistry(plugins ...ItemSourcePlugin) *PluginRegistry {
+	r := &PluginRegistry{plugins: make(map[string]ItemSourcePlugin, len(plugins))}
+	for _, p := range plugins {
+		r.Register(p)
+	}
+	return r
 }
 
 // Register adds a plugin to the registry.
@@ -72,18 +77,11 @@ func (r *PluginRegistry) Register(p ItemSourcePlugin) {
 
 // Get retrieves a plugin by ID.
 func (r *PluginRegistry) Get(id string) (ItemSourcePlugin, bool) {
+	if r == nil {
+		return nil, false
+	}
 	p, ok := r.plugins[id]
 	return p, ok
-}
-
-// NewDefaultRegistry returns a registry with all built-in plugins registered.
-func NewDefaultRegistry() *PluginRegistry {
-	r := NewPluginRegistry()
-	r.Register(NewGitHubIssuesPlugin())
-	r.Register(NewGitHubPRsPlugin())
-	r.Register(NewLinearPlugin())
-	r.Register(NewJiraPlugin())
-	return r
 }
 
 const (
@@ -96,25 +94,6 @@ const (
 func BoundImportedText(title, description string) (string, string) {
 	return truncateUTF8(title, maxImportedTitleBytes), truncateUTF8(description, maxImportedDescriptionBytes)
 }
-
-// mapExternalToBacklogItem is the shared ExternalItem→BacklogItemData mapping
-// used by the tracker plugins (title/description truncated to 200/2000).
-func mapExternalToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
-	title, description := BoundImportedText(item.Title, item.Description)
-	return BacklogItemData{
-		Title:       title,
-		Description: description,
-		Priority:    item.Priority,
-		Status:      string(BacklogStatusIdea),
-		ExternalID:  item.ExternalID,
-		ExternalURL: item.URL,
-		Labels:      item.Labels,
-		SourceID:    sourceID,
-	}
-}
-
-// maxTrackerResponseBytes caps any single tracker API response body.
-const maxTrackerResponseBytes = 8 << 20
 
 // truncateUTF8 cuts s to at most limit bytes without splitting a multibyte rune.
 func truncateUTF8(s string, limit int) string {

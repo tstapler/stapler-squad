@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/linear"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 const linearIssuesPerPage = 50
@@ -80,7 +81,7 @@ func (l *LinearPlugin) PluginID() string { return "linear" }
 
 // decodeLinearFetchConfig parses config; disabled is true when no API key is
 // available (source disabled, not an error).
-func decodeLinearFetchConfig(config PluginConfig) (cfg linearPluginConfig, disabled bool, err error) {
+func decodeLinearFetchConfig(config session.PluginConfig) (cfg linearPluginConfig, disabled bool, err error) {
 	if config.Raw != "" {
 		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
 			return linearPluginConfig{}, false, fmt.Errorf("linear: parse config: %w", err)
@@ -98,7 +99,7 @@ func decodeLinearFetchConfig(config PluginConfig) (cfg linearPluginConfig, disab
 
 // Fetch returns Linear issues updated after cursor (an RFC3339 updatedAt) and
 // the advanced cursor. An empty cursor fetches everything.
-func (l *LinearPlugin) Fetch(ctx context.Context, config PluginConfig, cursor string) ([]ExternalItem, string, error) {
+func (l *LinearPlugin) Fetch(ctx context.Context, config session.PluginConfig, cursor string) ([]session.ExternalItem, string, error) {
 	cfg, disabled, err := decodeLinearFetchConfig(config)
 	if err != nil {
 		return nil, cursor, err
@@ -219,11 +220,11 @@ func doLinearGraphQL(ctx context.Context, token, query string, variables map[str
 // convertLinearIssues maps raw issues to ExternalItems and returns the max
 // updatedAt seen (RFC3339 UTC strings sort lexicographically). ExternalItem.State
 // stays "" — backward status sync is out of scope for Linear.
-func convertLinearIssues(issues []linearIssue, cursor string) ([]ExternalItem, string) {
+func convertLinearIssues(issues []linearIssue, cursor string) ([]session.ExternalItem, string) {
 	if len(issues) == 0 {
 		return nil, cursor
 	}
-	items := make([]ExternalItem, 0, len(issues))
+	items := make([]session.ExternalItem, 0, len(issues))
 	newCursor := cursor
 	for _, is := range issues {
 		labels := make([]string, 0, len(is.Labels.Nodes))
@@ -231,7 +232,7 @@ func convertLinearIssues(issues []linearIssue, cursor string) ([]ExternalItem, s
 			labels = append(labels, n.Name)
 		}
 		updated, _ := time.Parse(time.RFC3339, is.UpdatedAt)
-		items = append(items, ExternalItem{
+		items = append(items, session.ExternalItem{
 			ExternalID:     is.Identifier,
 			Title:          is.Title,
 			Description:    is.Description,
@@ -258,12 +259,12 @@ func linearPriorityToBacklog(p int) int {
 	case 4:
 		return 2
 	default: // 0 (no priority) and 3 (medium)
-		return DefaultBacklogPriority
+		return session.DefaultBacklogPriority
 	}
 }
 
 // MapToBacklogItem converts a Linear ExternalItem to a BacklogItemData.
-func (l *LinearPlugin) MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
+func (l *LinearPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
 	return mapExternalToBacklogItem(item, sourceID)
 }
 
@@ -297,22 +298,22 @@ func ParseLinearIssueRef(ref string) (string, error) {
 }
 
 // FetchIssue retrieves one Linear issue by identifier for one-off import.
-func (l *LinearPlugin) FetchIssue(ctx context.Context, config PluginConfig, identifier string) (ExternalItem, error) {
+func (l *LinearPlugin) FetchIssue(ctx context.Context, config session.PluginConfig, identifier string) (session.ExternalItem, error) {
 	cfg, disabled, err := decodeLinearFetchConfig(config)
 	if err != nil {
-		return ExternalItem{}, err
+		return session.ExternalItem{}, err
 	}
 	if disabled {
-		return ExternalItem{}, fmt.Errorf("linear: API key not configured (set LINEAR_API_KEY or store it in the keychain)")
+		return session.ExternalItem{}, fmt.Errorf("linear: API key not configured (set LINEAR_API_KEY or store it in the keychain)")
 	}
 	var out struct {
 		Issue *linearIssue `json:"issue"`
 	}
 	if err := doLinearGraphQL(ctx, cfg.Token, linearIssueByIDQuery, map[string]any{"id": identifier}, &out); err != nil {
-		return ExternalItem{}, err
+		return session.ExternalItem{}, err
 	}
 	if out.Issue == nil || out.Issue.Identifier == "" {
-		return ExternalItem{}, fmt.Errorf("linear: issue %s not found", identifier)
+		return session.ExternalItem{}, fmt.Errorf("linear: issue %s not found", identifier)
 	}
 	items, _ := convertLinearIssues([]linearIssue{*out.Issue}, "")
 	return items[0], nil

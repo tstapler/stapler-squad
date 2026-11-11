@@ -12,5 +12,6 @@ session/ptyio !server
 session/hostclaim !server
 session/dialogpresence !server
 session/cmdexec !server
+session/itemsources !server
 session/migrations !github
 session/migrations !server

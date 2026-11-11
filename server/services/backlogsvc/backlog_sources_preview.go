@@ -16,7 +16,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // PreviewBackwardSyncImpact reports how many already-imported items for a
@@ -53,7 +53,7 @@ func (s *BacklogService) PreviewBackwardSyncImpact(
 
 	itemCount, sampleTitles, possiblyIncomplete, err := sl.PreviewBackwardSyncImpactByID(previewCtx, req.Msg.SourceId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("preview backward sync impact failed: %w", err))

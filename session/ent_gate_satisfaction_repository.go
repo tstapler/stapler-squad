@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/gatesatisfactionrecord"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
@@ -45,7 +46,7 @@ func (r *EntGateSatisfactionRepository) Create(ctx context.Context, in GateSatis
 	row, err := c.Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
-			return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s already exists", ErrConflict, in.ItemID, in.GateID)
+			return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s already exists", domain.ErrConflict, in.ItemID, in.GateID)
 		}
 		return nil, fmt.Errorf("create gate satisfaction record: %w", err)
 	}
@@ -59,7 +60,7 @@ func (r *EntGateSatisfactionRepository) GetByItemAndGate(ctx context.Context, it
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s", ErrNotFound, itemID, gateID)
+			return nil, fmt.Errorf("%w: gate satisfaction record for item %s gate %s", domain.ErrNotFound, itemID, gateID)
 		}
 		return nil, fmt.Errorf("get gate satisfaction record for item %s gate %s: %w", itemID, gateID, err)
 	}
@@ -127,15 +128,15 @@ func (r *EntGateSatisfactionRepository) Update(ctx context.Context, itemID, gate
 // error path, never on Update's common success path.
 func (r *EntGateSatisfactionRepository) zeroRowsUpdateError(ctx context.Context, itemID, gateID uuid.UUID, expectedSatisfied *bool) error {
 	if _, lookupErr := r.GetByItemAndGate(ctx, itemID, gateID); lookupErr != nil {
-		if errors.Is(lookupErr, ErrNotFound) {
-			return fmt.Errorf("%w: gate satisfaction record for item %s gate %s", ErrNotFound, itemID, gateID)
+		if errors.Is(lookupErr, domain.ErrNotFound) {
+			return fmt.Errorf("%w: gate satisfaction record for item %s gate %s", domain.ErrNotFound, itemID, gateID)
 		}
 		return fmt.Errorf("get gate satisfaction record for item %s gate %s: %w", itemID, gateID, lookupErr)
 	}
 	if expectedSatisfied != nil {
-		return fmt.Errorf("%w: gate satisfaction record for item %s gate %s no longer has satisfied == %v", ErrConflict, itemID, gateID, *expectedSatisfied)
+		return fmt.Errorf("%w: gate satisfaction record for item %s gate %s no longer has satisfied == %v", domain.ErrConflict, itemID, gateID, *expectedSatisfied)
 	}
-	return fmt.Errorf("%w: gate satisfaction record for item %s gate %s", ErrNotFound, itemID, gateID)
+	return fmt.Errorf("%w: gate satisfaction record for item %s gate %s", domain.ErrNotFound, itemID, gateID)
 }
 
 // ListUnsatisfied returns every row with satisfied == false — the in-flight

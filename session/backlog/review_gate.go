@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -101,7 +102,7 @@ func (r *ReviewGateRunner) recordGateSatisfaction(gateContext GateContext, itemI
 		Satisfied:     satisfied,
 		OutcomeDetail: outcomeDetail,
 	}); createErr != nil {
-		if !errors.Is(createErr, session.ErrConflict) {
+		if !errors.Is(createErr, domain.ErrConflict) {
 			log.ErrorLog().Printf("[ReviewGateRunner] recordGateSatisfaction create item=%s gate=%s: %v", itemID, gateContext.GateID, createErr)
 			return
 		}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -11,8 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
-	"sync"
-	"time"
+	"github.com/tstapler/stapler-squad/session/domain"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -451,7 +453,7 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 		itemSession, err := rqm.storage.GetItemSessionBySessionUUID(lookupCtx, resolvedID)
 		cancel()
 		if err != nil {
-			if !errors.Is(err, session.ErrNotFound) {
+			if !errors.Is(err, domain.ErrNotFound) {
 				log.Warn("OnItemAdded: ItemSession lookup failed", "session", resolvedID, "err", err)
 			}
 			// Not found (or any other lookup failure) — not a backlog-linked

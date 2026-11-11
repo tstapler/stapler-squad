@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ─── I-GO-01: TestSetGetSessionGoal_roundTrip ─────────────────────────────────
@@ -69,7 +70,7 @@ func TestGetSessionGoal_returnsErrNotFoundWhenAbsent(t *testing.T) {
 
 	_, err := storage.GetSessionGoal(context.Background(), "nonexistent-session-uuid")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrNotFound), "expected ErrNotFound, got: %v", err)
+	assert.True(t, errors.Is(err, domain.ErrNotFound), "expected ErrNotFound, got: %v", err)
 }
 
 // ─── I-GO-04: TestUpdateSessionTaskStatus_updatesCorrectTaskByID ─────────────

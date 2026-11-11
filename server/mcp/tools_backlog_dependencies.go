@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const errBacklogSvcNotWired = "backlog service not wired"
@@ -202,7 +203,7 @@ func (h *backlogHandlers) parseDependsOn(ctx context.Context, args map[string]an
 		}
 		seen[id] = true
 		if _, err := h.storage.GetBacklogItem(ctx, id); err != nil {
-			if errors.Is(err, session.ErrNotFound) {
+			if errors.Is(err, domain.ErrNotFound) {
 				return nil, errResult(ErrItemNotFound, fmt.Sprintf("depends_on: backlog item %q not found", id), itemNotFoundRemediation)
 			}
 			return nil, errResult(ErrInternalError, fmt.Sprintf("depends_on: look up %s: %v", id, err), "")

@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 const githubIssuesPerPage = 50
@@ -89,7 +90,7 @@ func (g *GitHubIssuesPlugin) PluginID() string {
 // page size (e.g. PreviewBackwardSyncImpact) must use FetchAll instead; a
 // single Fetch call silently misses older items on repos with more than one
 // page of history, since GitHub sorts by `created` descending by default.
-func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cursor string) ([]ExternalItem, string, error) {
+func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config session.PluginConfig, cursor string) ([]session.ExternalItem, string, error) {
 	cfg, disabled, err := decodeGithubIssuesFetchConfig(config)
 	if err != nil {
 		return nil, cursor, err
@@ -114,7 +115,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 // possiblyIncomplete is true if the page cap was hit while the last page
 // fetched was still full — meaning there may be more issues beyond what was
 // returned, and callers must not treat the result as exhaustive.
-func (g *GitHubIssuesPlugin) FetchAll(ctx context.Context, config PluginConfig, cursor string) (items []ExternalItem, newCursor string, possiblyIncomplete bool, err error) {
+func (g *GitHubIssuesPlugin) FetchAll(ctx context.Context, config session.PluginConfig, cursor string) (items []session.ExternalItem, newCursor string, possiblyIncomplete bool, err error) {
 	cfg, disabled, err := decodeGithubIssuesFetchConfig(config)
 	if err != nil {
 		return nil, cursor, false, err
@@ -150,7 +151,7 @@ func (g *GitHubIssuesPlugin) FetchAll(ctx context.Context, config PluginConfig, 
 // disabled is true if the token is absent (source disabled, not an error) —
 // callers must check disabled before touching cfg, which is only valid when
 // disabled is false and err is nil.
-func decodeGithubIssuesFetchConfig(config PluginConfig) (cfg githubPluginConfig, disabled bool, err error) {
+func decodeGithubIssuesFetchConfig(config session.PluginConfig) (cfg githubPluginConfig, disabled bool, err error) {
 	if config.Raw != "" {
 		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
 			return githubPluginConfig{}, false, fmt.Errorf("github_issues: parse config: %w", err)
@@ -211,12 +212,12 @@ func (g *GitHubIssuesPlugin) fetchIssuesPage(ctx context.Context, cfg githubPlug
 
 // convertGithubIssues maps raw GitHub issues to ExternalItems and computes
 // the new cursor (the most recent updated_at seen, starting from cursor).
-func convertGithubIssues(issues []githubIssue, labelPriorityMap map[string]int, cursor string) ([]ExternalItem, string) {
+func convertGithubIssues(issues []githubIssue, labelPriorityMap map[string]int, cursor string) ([]session.ExternalItem, string) {
 	if len(issues) == 0 {
 		return nil, cursor
 	}
 
-	items := make([]ExternalItem, 0, len(issues))
+	items := make([]session.ExternalItem, 0, len(issues))
 	newCursor := cursor
 
 	for _, issue := range issues {
@@ -240,7 +241,7 @@ func convertGithubIssues(issues []githubIssue, labelPriorityMap map[string]int, 
 		// unmodified for the newCursor comparison below.
 		issueUpdatedAt, _ := time.Parse(time.RFC3339, issue.UpdatedAt)
 
-		items = append(items, ExternalItem{
+		items = append(items, session.ExternalItem{
 			ExternalID:     strconv.Itoa(issue.Number),
 			Title:          issue.Title,
 			Description:    issue.Body,
@@ -269,7 +270,7 @@ func convertGithubIssues(issues []githubIssue, labelPriorityMap map[string]int, 
 // decodeGithubIssuesFetchConfig, prefers the shared keychain token for
 // cfg.Host over a per-source config token, falling back to it for sources
 // configured before the keychain migration.
-func decodeGithubIssuesConfig(config PluginConfig) (githubPluginConfig, error) {
+func decodeGithubIssuesConfig(config session.PluginConfig) (githubPluginConfig, error) {
 	var cfg githubPluginConfig
 	if config.Raw != "" {
 		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
@@ -305,7 +306,7 @@ func decodeGithubIssuesConfig(config PluginConfig) (githubPluginConfig, error) {
 // (HTTP status < 300) but the response body couldn't be decoded — the close
 // itself must not be treated as failed just because the confirmation body was
 // unparseable.
-func (g *GitHubIssuesPlugin) CloseIssue(ctx context.Context, config PluginConfig, externalID string, existingLabels []string, closeLabel string) (time.Time, error) {
+func (g *GitHubIssuesPlugin) CloseIssue(ctx context.Context, config session.PluginConfig, externalID string, existingLabels []string, closeLabel string) (time.Time, error) {
 	cfg, err := decodeGithubIssuesConfig(config)
 	if err != nil {
 		return time.Time{}, err
@@ -375,7 +376,7 @@ func mergeLabels(existing []string, add string) []string {
 // §7). Returns an error on any non-2xx response; callers treat a comment
 // failure as best-effort (the close itself already succeeded by the time this
 // is called).
-func (g *GitHubIssuesPlugin) PostIssueComment(ctx context.Context, config PluginConfig, externalID string, body string) error {
+func (g *GitHubIssuesPlugin) PostIssueComment(ctx context.Context, config session.PluginConfig, externalID string, body string) error {
 	cfg, err := decodeGithubIssuesConfig(config)
 	if err != nil {
 		return err
@@ -413,7 +414,7 @@ func (g *GitHubIssuesPlugin) PostIssueComment(ctx context.Context, config Plugin
 // past it the next backward sync would re-ingest the issue. A zero time with a
 // nil error means the comment was posted but the read-back failed; the caller
 // must then leave the watermark alone rather than guess.
-func (g *GitHubIssuesPlugin) PostProgressComment(ctx context.Context, config PluginConfig, externalID, body string) (time.Time, error) {
+func (g *GitHubIssuesPlugin) PostProgressComment(ctx context.Context, config session.PluginConfig, externalID, body string) (time.Time, error) {
 	if err := g.PostIssueComment(ctx, config, externalID, body); err != nil {
 		return time.Time{}, err
 	}
@@ -431,7 +432,7 @@ func (g *GitHubIssuesPlugin) PostProgressComment(ctx context.Context, config Plu
 
 // ReadIssueState returns the issue's current state ("open"/"closed") and
 // updated_at, so the forward-sync close can skip an already-closed issue.
-func (g *GitHubIssuesPlugin) ReadIssueState(ctx context.Context, config PluginConfig, externalID string) (state string, updatedAt time.Time, err error) {
+func (g *GitHubIssuesPlugin) ReadIssueState(ctx context.Context, config session.PluginConfig, externalID string) (state string, updatedAt time.Time, err error) {
 	cfg, err := decodeGithubIssuesConfig(config)
 	if err != nil {
 		return "", time.Time{}, err
@@ -463,7 +464,7 @@ func readIssueState(ctx context.Context, cfg githubPluginConfig, externalID stri
 }
 
 // MapToBacklogItem converts a GitHub ExternalItem to a BacklogItemData.
-func (g *GitHubIssuesPlugin) MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
+func (g *GitHubIssuesPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
 	title := item.Title
 	if len(title) > 200 {
 		title = title[:200]
@@ -474,11 +475,11 @@ func (g *GitHubIssuesPlugin) MapToBacklogItem(item ExternalItem, sourceID string
 		desc = desc[:2000]
 	}
 
-	return BacklogItemData{
+	return session.BacklogItemData{
 		Title:       title,
 		Description: desc,
 		Priority:    item.Priority,
-		Status:      string(BacklogStatusIdea),
+		Status:      string(session.BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
 		ExternalURL: item.URL,
 		Labels:      item.Labels,

@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -718,7 +719,7 @@ type reviewQueueLookupAdapter struct {
 func (a *reviewQueueLookupAdapter) ReviewQueueResolvedCount(ctx context.Context, sessionID string) (resolved, stillOpen int, err error) {
 	itemSession, err := a.storage.GetItemSessionBySessionUUID(ctx, sessionID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return 0, 0, nil // no linked backlog item (FR-6's first-class empty case)
 		}
 		return 0, 0, err
@@ -1606,7 +1607,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	// Build the BacklogController and initialize its enabled state from config.
-	syncRegistry := session.NewDefaultRegistry()
+	syncRegistry := NewItemSourceRegistry()
 	var keyFunc func() ([]byte, error)
 	if cfg != nil {
 		keyFunc = cfg.GetOrCreateEncryptionKey

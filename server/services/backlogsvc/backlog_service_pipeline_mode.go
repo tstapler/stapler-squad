@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -235,7 +236,7 @@ func (s *BacklogService) CreatePipelineMode(
 
 	pm, err := s.pipelineModeRepo.Create(ctx, input)
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("pipeline mode with slug %q already exists", req.Msg.Slug))
 		}
@@ -337,10 +338,10 @@ func (s *BacklogService) UpdatePipelineMode(
 
 	pm, err := s.pipelineModeRepo.Update(ctx, id, update)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("pipeline mode %s not found", req.Msg.Id))
 		}
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("pipeline mode slug already exists"))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update pipeline mode: %w", err))
@@ -377,7 +378,7 @@ func (s *BacklogService) DeletePipelineMode(
 	}
 
 	if err := s.pipelineModeRepo.Delete(ctx, id); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("pipeline mode %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete pipeline mode: %w", err))
@@ -400,7 +401,7 @@ func (s *BacklogService) GetPipelineMode(
 
 	pm, err := s.pipelineModeRepo.GetBySlug(ctx, req.Msg.Slug)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("pipeline mode %q not found", req.Msg.Slug))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get pipeline mode: %w", err))

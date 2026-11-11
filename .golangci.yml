@@ -94,6 +94,14 @@ linters:
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "ADR-010 scoped packages must not import the ent ORM directly"
+        # Tracker plugins are leaves: the session core consumes them only through ItemSourcePlugin.
+        session_core_off_itemsources:
+          files:
+            - "**/session/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session/itemsources"
+              desc: "session core must not import tracker plugins; the composition root injects them"
         push_no_services:
           files:
             - "**/server/push/**"

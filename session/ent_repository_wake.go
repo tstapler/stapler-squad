@@ -243,7 +243,7 @@ func validateCreateWakeTriggerInput(in CreateWakeTriggerInput) (key domain.WakeD
 func (r *EntRepository) GetWakeTrigger(ctx context.Context, id uuid.UUID) (*WakeTriggerData, error) {
 	row, err := r.Client.WakeTrigger.Get(ctx, id)
 	if ent.IsNotFound(err) {
-		return nil, fmt.Errorf("get wake trigger %s: %w", id, ErrNotFound)
+		return nil, fmt.Errorf("get wake trigger %s: %w", id, domain.ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get wake trigger %s: %w", id, err)

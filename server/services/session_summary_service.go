@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -34,7 +35,7 @@ type liveInstanceFinder interface {
 // SessionSummaryGenerator rather than issuing them here because server/services must
 // not import session/ent's query/error-handling helpers directly (.golangci.yml's
 // no_ent_in_services/forbidigo rules) — ent access stays confined to the session
-// package, translated to the session.ErrNotFound sentinel at the boundary.
+// package, translated to the domain.ErrNotFound sentinel at the boundary.
 type SessionSummaryService struct {
 	generator *session.SessionSummaryGenerator
 	instances liveInstanceFinder
@@ -63,7 +64,7 @@ func (s *SessionSummaryService) GetSessionSummary(
 ) (*connect.Response[sessionv1.GetSessionSummaryResponse], error) {
 	row, err := s.generator.FindRowBySessionID(ctx, req.Msg.SessionId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return connect.NewResponse(&sessionv1.GetSessionSummaryResponse{Summary: nil}), nil
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to query session summary: %w", err))
@@ -93,7 +94,7 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 
 	row, err := s.generator.FindRowBySessionID(ctx, sessionID)
 	if err != nil {
-		if !errors.Is(err, session.ErrNotFound) {
+		if !errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to query session summary: %w", err))
 		}
 		row = nil // no prior row — this is the first-ever generation for this session

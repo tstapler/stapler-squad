@@ -13,6 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type fakeSessionView struct {
@@ -40,10 +41,10 @@ func (noBacklog) ListItemSessionsBySessionUUIDs(context.Context, []string) (map[
 	return map[string]session.ItemSessionSummary{}, nil
 }
 func (noBacklog) GetItemSessionBySessionUUID(context.Context, string) (session.ItemSessionSummary, error) {
-	return session.ItemSessionSummary{}, session.ErrNotFound
+	return session.ItemSessionSummary{}, domain.ErrNotFound
 }
 func (noBacklog) GetBacklogItem(context.Context, string) (*session.BacklogItemData, error) {
-	return nil, session.ErrNotFound
+	return nil, domain.ErrNotFound
 }
 
 func TestPRWatchSessions_should_ReportResumedAt_When_PausedSessionBecomesActive(t *testing.T) {

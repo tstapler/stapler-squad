@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --- fixtures --------------------------------------------------------------
@@ -47,7 +48,7 @@ func TestGatedTransition_DerivesExpectedStatus_AndConcurrentMoverIsPreconditionF
 	h.moveRaw(t, stale.ID, BacklogStatusQueued)
 
 	_, err = h.storage.GatedTransition(ctx, TransitionRequest{Caller: CallerQueueBacklogItem, Observed: observed, To: BacklogStatusIdea, TriggeredBy: TriggeredBySystem})
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.NotErrorIs(t, err, ErrTransitionNotAllowed)
 	require.Equal(t, string(BacklogStatusQueued), h.status(t, stale.ID), "nothing is written")
 	require.Empty(t, h.rep.snapshot(), "a lost CAS is not a denial")
@@ -63,7 +64,7 @@ func TestGatedTransition_CallerExpectedStatusMismatch_FailsWithoutEngineCall(t *
 		Caller: CallerQueueBacklogItem, ItemID: item.ID, To: BacklogStatusQueued,
 		Precondition: &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusIdea)},
 	})
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.Equal(t, before, GateCallsTotal(ClassSystem, CallerQueueBacklogItem, ModeEnforce), "the engine was not consulted")
 	require.Equal(t, string(BacklogStatusReady), h.status(t, item.ID))
 }
@@ -79,7 +80,7 @@ func TestGatedTransition_PassesWholePreconditionThrough_AndRecordsNoteAndTrigger
 		Caller: CallerQueueBacklogItem, ItemID: item.ID, To: BacklogStatusQueued,
 		Precondition: &BacklogItemPrecondition{ExpectedUpdatedAt: &stale},
 	})
-	require.ErrorIs(t, err, ErrPreconditionFailed, "ExpectedUpdatedAt is never dropped")
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed, "ExpectedUpdatedAt is never dropped")
 	require.Equal(t, string(BacklogStatusReady), h.status(t, item.ID))
 
 	fresh, err := h.storage.GetBacklogItem(ctx, item.ID)
@@ -118,7 +119,7 @@ func TestGatedTransition_PinsUpdatedAtOnlyWhenGuardInputAndObservedSupplied(t *t
 		return err
 	}
 
-	require.ErrorIs(t, run(t, CallerOperatorTransitionRPC, true), ErrPreconditionFailed, "built-in guards plus prebuilt Guard pin updated_at")
+	require.ErrorIs(t, run(t, CallerOperatorTransitionRPC, true), domain.ErrPreconditionFailed, "built-in guards plus prebuilt Guard pin updated_at")
 	require.NoError(t, run(t, CallerOperatorTransitionRPC, false), "no Guard input: status-only CAS")
 	require.NoError(t, run(t, CallerRespawnTriage, true), "guards=None: status-only CAS even with Guard input")
 }
@@ -161,7 +162,7 @@ func TestGatedTransition_Unconditional_RedecidesOnceAndNeverWritesAStaleFrom(t *
 				return nil
 			},
 		})
-		require.ErrorIs(t, err, ErrPreconditionFailed)
+		require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 		require.Equal(t, 2, commits)
 	})
 
@@ -178,7 +179,7 @@ func TestGatedTransition_Unconditional_RedecidesOnceAndNeverWritesAStaleFrom(t *
 			Caller: CallerOperatorForceReset, Observed: observed, To: BacklogStatusIdea,
 			BeforeCommit: func(context.Context) error { commits++; return nil },
 		})
-		require.ErrorIs(t, err, ErrPreconditionFailed)
+		require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 		require.Equal(t, 1, commits)
 	})
 
@@ -464,7 +465,7 @@ func TestRollback_RequiresExpectedStatus_AndCountsBypass(t *testing.T) {
 
 	before := EngineBypassCount(CallerRollback)
 	_, err = h.storage.Rollback(ctx, item.ID, BacklogStatusReady, &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReady)}, TriggeredBySystem)
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.Equal(t, before, EngineBypassCount(CallerRollback), "a lost CAS is not a bypass write")
 
 	_, err = h.storage.Rollback(ctx, item.ID, BacklogStatusReady, &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusQueued)}, TriggeredBySystem)
@@ -746,10 +747,10 @@ func TestGatedUnarchive_StaleObservedLosesCAS_AndNeverArchivedIsRejected(t *test
 
 	h.moveRaw(t, item.ID, BacklogStatusInProgress)
 	_, err = h.storage.GatedUnarchive(ctx, TransitionRequest{Caller: CallerOperatorUnarchiveRPC, ItemID: item.ID, Observed: observed})
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID), "a stale unarchive must not reset a live item")
 
 	_, err = h.storage.GatedUnarchive(ctx, TransitionRequest{Caller: CallerOperatorUnarchiveRPC, ItemID: item.ID})
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID))
 }

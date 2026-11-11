@@ -266,7 +266,7 @@ func (h *peerHelpHandlers) answerHelp(ctx context.Context, caller string, req mc
 	switch {
 	case errors.Is(err, services.ErrAnswererForbidden):
 		return typedErrorResult(CodeForbidden, "", "this request is not addressed to your session", ""), nil
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return errResult(ErrItemNotFound, "no such help request", ""), nil
 	case err != nil:
 		return errResult(ErrInternalError, err.Error(), ""), nil

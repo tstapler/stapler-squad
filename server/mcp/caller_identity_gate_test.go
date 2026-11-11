@@ -119,7 +119,7 @@ func TestRoleLookupFrom_should_FailClosedOnTransientError_And_DefaultToWorkOnNot
 		})
 	}
 	ctx := context.Background()
-	assert.Equal(t, roleWork, lookup(fmt.Errorf("%w: no link", session.ErrNotFound), "")(ctx, "s"))
+	assert.Equal(t, roleWork, lookup(fmt.Errorf("%w: no link", domain.ErrNotFound), "")(ctx, "s"))
 	assert.Equal(t, roleReview, lookup(nil, session.SessionRoleReview)(ctx, "s"))
 	assert.Equal(t, roleUnknown, lookup(errors.New("database is locked"), "")(ctx, "s"))
 }

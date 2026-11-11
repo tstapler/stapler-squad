@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestWorkflow_EnabledField_DefaultsTrue verifies the ent schema default for the new
@@ -69,7 +70,7 @@ func TestEntWorkflowRepository_UpdateConditional_should_ReturnErrPreconditionFai
 	newName := "Updated"
 	_, err = repo.UpdateConditional(t.Context(), wf.ID, WorkflowUpdateInput{Name: &newName}, staleTimestamp)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrPreconditionFailed)
+	assert.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	// The row must be unchanged by the rejected write.
 	unchanged, err := repo.GetByID(t.Context(), wf.ID)
@@ -111,7 +112,7 @@ func TestEntWorkflowRepository_UpdateConditional_should_RejectExactlyOneConcurre
 	for _, e := range errs {
 		if e == nil {
 			successCount++
-		} else if errors.Is(e, ErrPreconditionFailed) {
+		} else if errors.Is(e, domain.ErrPreconditionFailed) {
 			conflictCount++
 		}
 	}

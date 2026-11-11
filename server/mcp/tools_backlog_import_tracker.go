@@ -12,7 +12,30 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 )
+
+// IssueFetcher is the optional plugin capability behind the one-off tracker
+// imports: fetch a single issue by identifier. Linear and JIRA plugins implement it.
+type IssueFetcher interface {
+	FetchIssue(ctx context.Context, config session.PluginConfig, id string) (session.ExternalItem, error)
+}
+
+// fetchTrackerIssue resolves pluginID from the injected registry and fetches one issue.
+func (h *backlogHandlers) fetchTrackerIssue(ctx context.Context, pluginID string, cfg session.PluginConfig, id string) (session.ExternalItem, error) {
+	if h.plugins == nil {
+		return session.ExternalItem{}, fmt.Errorf("%s plugin registry is not wired", pluginID)
+	}
+	p, ok := h.plugins.Get(pluginID)
+	if !ok {
+		return session.ExternalItem{}, fmt.Errorf("no %s plugin registered", pluginID)
+	}
+	f, ok := p.(IssueFetcher)
+	if !ok {
+		return session.ExternalItem{}, fmt.Errorf("%s plugin cannot fetch a single issue", pluginID)
+	}
+	return f.FetchIssue(ctx, cfg, id)
+}
 
 // importTrackerIssue creates a backlog item from an already-fetched Linear or
 // JIRA issue — the shared tail of import_linear_issue / import_jira_issue,
@@ -70,14 +93,14 @@ func (h *backlogHandlers) importLinearIssue(ctx context.Context, req mcpgo.CallT
 	if strings.TrimSpace(ref) == "" {
 		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
 	}
-	identifier, err := session.ParseLinearIssueRef(ref)
+	identifier, err := itemsources.ParseLinearIssueRef(ref)
 	if err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), "Pass a Linear URL like https://linear.app/org/issue/ENG-123 or an identifier like ENG-123."), nil
 	}
 	fetch := h.fetchLinearIssue
 	if fetch == nil {
 		fetch = func(ctx context.Context, id string) (session.ExternalItem, error) {
-			return session.NewLinearPlugin().FetchIssue(ctx, session.PluginConfig{}, id)
+			return h.fetchTrackerIssue(ctx, "linear", session.PluginConfig{}, id)
 		}
 	}
 	ext, err := fetch(ctx, identifier)
@@ -98,7 +121,7 @@ func (h *backlogHandlers) importJiraIssue(ctx context.Context, req mcpgo.CallToo
 	if strings.TrimSpace(ref) == "" {
 		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
 	}
-	jref, err := session.ParseJiraIssueRef(ref)
+	jref, err := itemsources.ParseJiraIssueRef(ref)
 	if err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), "Pass a JIRA URL like https://org.atlassian.net/browse/ENG-123, or a bare key plus base_url."), nil
 	}
@@ -110,9 +133,9 @@ func (h *backlogHandlers) importJiraIssue(ctx context.Context, req mcpgo.CallToo
 	}
 	fetch := h.fetchJiraIssue
 	if fetch == nil {
-		fetch = func(ctx context.Context, r session.JiraIssueRef) (session.ExternalItem, error) {
+		fetch = func(ctx context.Context, r itemsources.JiraIssueRef) (session.ExternalItem, error) {
 			raw, _ := json.Marshal(map[string]string{"base_url": r.BaseURL})
-			return session.NewJiraPlugin().FetchIssue(ctx, session.PluginConfig{Raw: string(raw)}, r.Key)
+			return h.fetchTrackerIssue(ctx, "jira", session.PluginConfig{Raw: string(raw)}, r.Key)
 		}
 	}
 	ext, err := fetch(ctx, jref)
