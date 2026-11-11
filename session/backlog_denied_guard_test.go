@@ -185,7 +185,7 @@ const (
 	denSweep   denKind = "RD" // the re-drive sweep itself
 )
 
-// denDetectorKinds has one entry per runStuckDetector name; adding a detector
+// denDetectorKinds has one entry per detector in backlog/stuck_detectors.go; adding a detector
 // without classifying it fails TestEveryStuckDetectorIsClassified.
 var denDetectorKinds = map[string]denKind{
 	"transition_denied_redrive":   denSweep,
@@ -228,8 +228,8 @@ func denSourceFile(t *testing.T, rel string) string {
 
 func TestEveryStuckDetectorIsClassified(t *testing.T) {
 	t.Parallel()
-	re := regexp.MustCompile(`l\.runStuckDetector\("([^"]+)"`)
-	matches := re.FindAllStringSubmatch(denSourceFile(t, "backlog/backlog_lifecycle.go"), -1)
+	re := regexp.MustCompile(`funcStuckDetector\{"([^"]+)"`)
+	matches := re.FindAllStringSubmatch(denSourceFile(t, "backlog/stuck_detectors.go"), -1)
 	names := make([]string, 0, len(matches))
 	for _, m := range matches {
 		names = append(names, m[1])
@@ -242,7 +242,7 @@ func TestEveryStuckDetectorIsClassified(t *testing.T) {
 		classified = append(classified, name)
 	}
 	sort.Strings(classified)
-	assert.Equal(t, classified, names, "every runStuckDetector name needs a kind in denDetectorKinds, and no entry may be stale")
+	assert.Equal(t, classified, names, "every stuck detector name needs a kind in denDetectorKinds, and no entry may be stale")
 }
 
 // denCallsTo lists the functions (as Name or Recv.Name) in the dirs' non-test files
