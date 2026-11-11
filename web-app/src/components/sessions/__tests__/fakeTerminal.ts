@@ -47,6 +47,7 @@ export const fakeTerminalSource = () => {
     hasBracketedPaste = () => false;
     hasMouseTracking = () => false;
     attachCustomWheelEventHandler = () => undefined;
+    attachCustomKeyEventHandler = () => undefined;
     getSelection = () => "";
     focus = () => this.textarea?.focus();
     refresh = () => undefined;

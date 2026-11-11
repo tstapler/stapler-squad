@@ -56,7 +56,7 @@ type Migration interface {
 // before this) was pure duplication with nothing migration-specific in it.
 // Adding a new migration is now: write `func runXBackfill(ctx
 // context.Context, er *EntRepository) error` (plus its test), and append
-// `funcMigration{"x backfill", runXBackfill}` to startupMigrations below —
+// `funcMigration{"x backfill", runXBackfill}` to DefaultStartupMigrations below —
 // no new type, no boilerplate methods.
 type funcMigration struct {
 	name string
@@ -69,20 +69,32 @@ func (m funcMigration) Run(ctx context.Context, er *EntRepository) error {
 	return m.fn(ctx, er)
 }
 
-// startupMigrations lists every Migration NewEntRepository runs, in the
-// (here, non-load-bearing — each is independent) order they were added.
-// NewEntRepository's body itself never needs to change when adding one —
-// see funcMigration's doc comment above for what adding a migration
-// actually takes.
-var startupMigrations = []Migration{ //nolint:gochecknoglobals
-	funcMigration{"drop obsolete indexes", dropObsoleteIndexes}, // first: cheap, and later migrations shell out to git per item
-	funcMigration{"backlog item updated_at UTC backfill", runBacklogItemUpdatedAtUTCBackfill},
-	funcMigration{"workflow updated_at UTC backfill", runWorkflowUpdatedAtUTCBackfill},
-	funcMigration{"github pr url backfill", runGitHubPRURLBackfill},
-	funcMigration{"backlog item public id backfill", func(ctx context.Context, er *EntRepository) error {
-		return er.BackfillBacklogItemPublicIDs(ctx)
-	}},
-	funcMigration{"backlog item repo_path canonicalization", runBacklogItemRepoPathCanonicalizationBackfill},
-	funcMigration{"status corruption repair", runStatusCorruptionRepair},
-	funcMigration{"backlog item legacy import external backfill", runBacklogItemLegacyImportExternalBackfill},
+// WithMigrations replaces the startup migrations NewEntRepository runs, in
+// order; omit it to run DefaultStartupMigrations.
+func WithMigrations(ms ...Migration) RepositoryOption {
+	return func(r interface{}) error {
+		if entRepo, ok := r.(*EntRepository); ok {
+			entRepo.migrations = append([]Migration{}, ms...)
+		}
+		return nil
+	}
+}
+
+// DefaultStartupMigrations lists every Migration NewEntRepository runs by
+// default, in the (non-load-bearing, each is independent) order they were
+// added. Adding one is a new Migration plus one line here; NewEntRepository
+// never changes.
+func DefaultStartupMigrations() []Migration {
+	return []Migration{
+		funcMigration{"drop obsolete indexes", dropObsoleteIndexes}, // first: cheap, and later migrations shell out to git per item
+		funcMigration{"backlog item updated_at UTC backfill", runBacklogItemUpdatedAtUTCBackfill},
+		funcMigration{"workflow updated_at UTC backfill", runWorkflowUpdatedAtUTCBackfill},
+		funcMigration{"github pr url backfill", runGitHubPRURLBackfill},
+		funcMigration{"backlog item public id backfill", func(ctx context.Context, er *EntRepository) error {
+			return er.BackfillBacklogItemPublicIDs(ctx)
+		}},
+		funcMigration{"backlog item repo_path canonicalization", runBacklogItemRepoPathCanonicalizationBackfill},
+		funcMigration{"status corruption repair", runStatusCorruptionRepair},
+		funcMigration{"backlog item legacy import external backfill", runBacklogItemLegacyImportExternalBackfill},
+	}
 }

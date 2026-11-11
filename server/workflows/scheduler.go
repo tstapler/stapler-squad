@@ -252,14 +252,37 @@ func (s *Scheduler) Remove(workflowID string) error {
 // prompt from wf.Command/wf.InputTemplate/arg exactly as before, then delegates all
 // admission/rate-limit/CreateSession/audit logic to FireTrigger with deliveryID=""
 // (FireNow's manual/cron callers have no webhook delivery to attribute the fire to).
-func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (string, error) {
+//
+// attachments are already-validated absolute image paths (see
+// WorkflowService.validateAttachmentPaths); they are listed at the end of the prompt.
+func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string, attachments []string) (string, error) {
 	title := deriveWorkflowSessionTitle(wf, arg)
-	prompt := buildTemplatedPrompt(wf, arg, title)
+	render := func(t string) string {
+		return appendAttachmentBlock(buildTemplatedPrompt(wf, arg, t), attachments)
+	}
 	return s.fireTrigger(ctx, wf, fireParams{
-		renderedPrompt: prompt,
+		renderedPrompt: render(title),
 		title:          title,
-		rerender:       func(t string) string { return buildTemplatedPrompt(wf, arg, t) },
+		rerender:       render,
 	})
+}
+
+// appendAttachmentBlock lists image paths at the end of prompt; a no-op without paths.
+func appendAttachmentBlock(prompt string, attachments []string) string {
+	if len(attachments) == 0 {
+		return prompt
+	}
+	var b strings.Builder
+	b.WriteString(prompt)
+	if prompt != "" {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Reference images (read each with your Read tool before you start):")
+	for _, p := range attachments {
+		b.WriteString("\n- ")
+		b.WriteString(p)
+	}
+	return b.String()
 }
 
 // defaultWorkflowSessionTitle is the timestamp-based title every workflow fire
@@ -556,7 +579,7 @@ func (s *Scheduler) addCronEntry(wf *ent.Workflow) error {
 	entryID, err := s.c.AddFunc(wf.CronExpression, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		if _, fireErr := s.FireNow(ctx, wfCopy, ""); fireErr != nil {
+		if _, fireErr := s.FireNow(ctx, wfCopy, "", nil); fireErr != nil {
 			log.Error("[WorkflowScheduler] cron job failed", "slug", wfCopy.Slug, "err", fireErr)
 		}
 	})

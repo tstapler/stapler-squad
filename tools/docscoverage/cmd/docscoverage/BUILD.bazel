@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "docscoverage_lib",
+    srcs = [
+        "baseline.go",
+        "main.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/docscoverage/cmd/docscoverage",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/docscoverage/internal/check",
+        "//tools/docscoverage/internal/model",
+        "//tools/docscoverage/internal/registry",
+        "//tools/docscoverage/internal/report",
+        "//tools/docscoverage/internal/resolve",
+        "//tools/promolib/gitbase",
+    ],
+)
+
+go_binary(
+    name = "docscoverage",
+    embed = [":docscoverage_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "docscoverage_test",
+    srcs = ["main_test.go"],
+    embed = [":docscoverage_lib"],
+    deps = [
+        "//internal/testenv",
+        "//tools/docscoverage/internal/check",
+        "//tools/docscoverage/internal/fixture",
+        "//tools/docscoverage/internal/model",
+        "//tools/promolib/gitbase/gitbasetest",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

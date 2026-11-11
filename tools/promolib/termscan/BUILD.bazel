@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "termscan",
+    srcs = [
+        "allowlist.go",
+        "leak.go",
+        "media.go",
+        "scan.go",
+        "terms.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/promolib/termscan",
+    visibility = ["//visibility:public"],
+    deps = ["//tools/promolib/gitbase"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":termscan",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "termscan_test",
+    srcs = [
+        "leak_test.go",
+        "media_test.go",
+        "ocr_test.go",
+        "scan_test.go",
+    ],
+    data = glob(["testdata/**"]) + ["//tools/promo:budgets.json"],
+    embed = [":termscan"],
+    deps = [
+        "//executor/safeexec",
+        "//tools/promolib/gitbase",
+        "//tools/promolib/gitbase/gitbasetest",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

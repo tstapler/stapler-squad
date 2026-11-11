@@ -258,3 +258,32 @@ func TestBacklogAttachmentUpload_MissingFileField(t *testing.T) {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestWorkflowAttachmentUpload_PNG_SavedToOwnDirViaWorkflowRoute(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	h, err := NewWorkflowAttachmentUploadHandler(dir)
+	if err != nil {
+		t.Fatalf("NewWorkflowAttachmentUploadHandler: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	h.HandleWorkflowUpload(rr, buildBacklogAttachmentRequest(t, "plan.png", pngMagic()))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp backlogAttachmentUploadResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if filepath.Dir(resp.Path) != dir || !strings.HasSuffix(resp.Path, ".png") {
+		t.Errorf("unexpected saved path %q (dir %q)", resp.Path, dir)
+	}
+
+	// Non-images are still rejected.
+	rr = httptest.NewRecorder()
+	h.HandleWorkflowUpload(rr, buildBacklogAttachmentRequest(t, "x.png", []byte("<svg><script/></svg>")))
+	if rr.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("expected 415 for non-image, got %d", rr.Code)
+	}
+}

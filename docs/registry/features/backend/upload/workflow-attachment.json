@@ -1,0 +1,15 @@
+{
+  "id": "upload:workflow-attachment",
+  "type": "backend",
+  "service": "HTTPHandler",
+  "method": "POST /api/v1/upload-workflow-attachment",
+  "httpMethod": "POST",
+  "httpPath": "/api/v1/upload-workflow-attachment",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_attachment_upload_handler.go",
+  "tested": true,
+  "testIds": [
+    "TestWorkflowAttachmentUpload_PNG_SavedToOwnDirViaWorkflowRoute"
+  ],
+  "lastModified": "2026-11-10T18:01:40.617015945-08:00"
+}

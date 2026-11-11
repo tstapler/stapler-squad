@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics/escapedb"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
@@ -73,7 +74,7 @@ type ServerDependencies struct {
 	// StopPRMaintenance stops the PR startup-maintenance retry ticker (see
 	// BuildOptions.RunPRMaintenance); nil when maintenance did not run.
 	StopPRMaintenance       func()
-	ReactiveQueueMgr        *ReactiveQueueManager
+	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
 	ExternalDiscovery       *session.ExternalSessionDiscovery
@@ -575,7 +576,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 type RuntimeDeps struct {
 	*ServiceDeps
 	Instances               []*session.Instance
-	ReactiveQueueMgr        *ReactiveQueueManager
+	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
 	ExternalDiscovery       *session.ExternalSessionDiscovery
@@ -1273,7 +1274,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}()
 
 	// Step 8: ReactiveQueueManager
-	reactiveQueueMgr := NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
+	reactiveQueueMgr := reviewqueue.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
 	// Wires the opt-in AutoCreatePR policy — sessionService is available this early
 	// (constructed in BuildCoreDepsWithOptions, aliased above), so no setter-injection
 	// race window like SetHeadlessPool's had.
@@ -2034,6 +2035,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
 		workflowSvc.SetEventBus(eventBus)
+		if attDir, attErr := cfg.WorkflowAttachmentDirOrDefault(); attErr != nil {
+			log.Warn("cannot resolve workflow attachment dir; workflow run attachments disabled", "err", attErr)
+		} else {
+			workflowSvc.SetAttachmentDir(attDir)
+		}
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
 		// Close the WIP-gate bypass (webhook-triggers Epic 1.3): every trigger-fired

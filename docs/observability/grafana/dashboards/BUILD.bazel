@@ -4,6 +4,7 @@ filegroup(
     srcs = glob(["*.json"]),
     visibility = [
         "//internal/termlat:__pkg__",
+        "//server/analytics:__pkg__",
         "//session:__pkg__",
     ],
 )

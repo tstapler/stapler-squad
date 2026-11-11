@@ -4,7 +4,7 @@ import * as path from 'path';
 export const THEME_FIXTURES: Record<string, string> = {
   matrix: 'matrix',
   cyberpunk77: 'cyberpunk77',
-  wh40k: 'wh40k',
+  grimdark: 'grimdark',
   clean: 'clean',
 };
 

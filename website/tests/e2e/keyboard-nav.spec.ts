@@ -6,6 +6,8 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { LandingPage } from './pages/LandingPage';
 import { DocsPage } from './pages/DocsPage';
+import { TourPage } from './pages/TourPage';
+import { loadTourExpectations } from '../helpers/tour-expectations';
 
 /** Tabs forward `count` times and returns the resulting document.activeElement's testid/role/text. */
 async function tabAndDescribeFocus(
@@ -44,8 +46,9 @@ test.describe('Keyboard navigation — UX acceptance', () => {
 
 		const docs = new DocsPage(page);
 		await docs.goto('help/getting-started/');
-		const docsFocus = await tabAndDescribeFocus(page, 12);
-		expect(docsFocus.length).toBe(12);
+		// 14 stops: the collapsed Tours sidebar group sits ahead of Troubleshooting.
+		const docsFocus = await tabAndDescribeFocus(page, 14);
+		expect(docsFocus.length).toBe(14);
 		expect(docsFocus.some((f) => f.text.includes('Search'))).toBe(true);
 		expect(docsFocus.some((f) => f.text.includes('Getting started'))).toBe(true);
 		expect(docsFocus.some((f) => f.text.includes('Troubleshooting') || f.text.includes('Add a custom theme'))).toBe(
@@ -72,6 +75,43 @@ test.describe('Keyboard navigation — UX acceptance', () => {
 			const hasOutline = style.outlineStyle !== 'none' && style.outlineWidth !== '0px';
 			const hasBoxShadow = style.boxShadow !== 'none';
 			expect(hasOutline || hasBoxShadow, `expected a visible focus ring, got ${JSON.stringify(style)}`).toBe(true);
+		}
+	});
+});
+
+// Story 3.1.1 UX-7: tab order on a tour page and a visible focus ring at each stop.
+test.describe('Keyboard navigation -- tour page', () => {
+	const exp = loadTourExpectations();
+	test.skip(exp.sources === 0, 'no tour content authored yet (Epic 3.2)');
+
+	test('tourPage_should_TabInDocumentedOrderWithVisibleFocusRing_When_TabbingThrough', async ({ page }) => {
+		const tours = new TourPage(page);
+		await tours.gotoTour(exp.built[0].slug);
+
+		const stops: Array<{ key: string; ring: boolean }> = [];
+		for (let i = 0; i < 120; i++) {
+			await page.keyboard.press('Tab');
+			const stop = await page.evaluate(() => {
+				const el = document.activeElement as HTMLElement | null;
+				if (!el || el === document.body) return null;
+				const cs = getComputedStyle(el);
+				const ring = (cs.outlineStyle !== 'none' && cs.outlineWidth !== '0px') || cs.boxShadow !== 'none';
+				const inNav = el.closest('nav.tour-breadcrumb');
+				const key =
+					el.getAttribute('data-testid') ??
+					(inNav ? 'breadcrumb' : el.tagName === 'SUMMARY' && el.closest('[data-testid="tour-transcript"]') ? 'transcript-summary' : '');
+				return { key, ring };
+			});
+			if (stop?.key) stops.push(stop);
+			if (stop?.key === 'tour-all') break;
+		}
+		const keys = stops.map((s) => s.key);
+		const order = ['breadcrumb', 'tour-video', 'tour-install-link', 'transcript-summary', 'tour-try-install', 'tour-help-link', 'tour-all'];
+		const positions = order.map((k) => keys.indexOf(k));
+		expect(positions.every((p) => p >= 0), `all stops reached: ${JSON.stringify(keys)}`).toBe(true);
+		expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+		for (const stop of stops.filter((s) => order.includes(s.key) && s.key !== 'tour-video')) {
+			expect(stop.ring, `${stop.key} focus ring`).toBe(true);
 		}
 	});
 });

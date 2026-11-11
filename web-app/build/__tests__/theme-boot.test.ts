@@ -3,7 +3,7 @@ import { buildThemeBootScript, THEME_NAMES, type ThemeMap } from "../../src/styl
 import { buildThemeMap } from "../theme-map";
 import type { VeCompiler } from "../plugins/vanilla-extract";
 
-const MAP: ThemeMap = { matrix: "m1", cyberpunk77: "c1", wh40k: "w1", clean: "cl", light: "l1", dark: "d1" };
+const MAP: ThemeMap = { matrix: "m1", cyberpunk77: "c1", grimdark: "w1", clean: "cl", light: "l1", dark: "d1" };
 
 function run(setup: () => void): DOMTokenList {
   document.documentElement.className = "cl font-x";
@@ -24,10 +24,29 @@ describe("theme boot script", () => {
   it("applies a custom theme class and its CSS variables", () => {
     const cls = run(() => {
       localStorage.setItem("stapler-theme", "custom:42");
-      localStorage.setItem("stapler-theme-custom", JSON.stringify({ id: "custom:42", cls: "cust42", props: { "--x": "red" } }));
+      localStorage.setItem("stapler-theme-custom-v2", JSON.stringify({ id: "custom:42", cls: "cust42", props: { "--x": "red" } }));
     });
     expect(cls.contains("cust42")).toBe(true);
     expect(document.documentElement.style.getPropertyValue("--x")).toBe("red");
+  });
+
+  it.each([
+    ["wh40k", "w1"],
+    ["grimdark", "w1"],
+    ["nope", "cl"],
+  ])("resolves stored %p to class %p", (stored, expected) => {
+    const cls = run(() => localStorage.setItem("stapler-theme", stored));
+    expect(cls.contains(expected)).toBe(true);
+    expect(cls.contains(expected === "cl" ? "w1" : "cl")).toBe(false);
+  });
+
+  it("ignores a custom-theme cache written under the previous key version", () => {
+    const cls = run(() => {
+      localStorage.setItem("stapler-theme", "custom:42");
+      localStorage.setItem("stapler-theme-custom", JSON.stringify({ id: "custom:42", cls: "oldHashedClass", props: {} }));
+    });
+    expect(cls.contains("oldHashedClass")).toBe(false);
+    expect(cls.contains("cl")).toBe(true);
   });
 
   it("degrades to clean for a stale stored theme", () => {

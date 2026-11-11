@@ -298,6 +298,7 @@ go_library(
         "webhook_ssrf.go",
         "webhook_trigger_common.go",
         "window_activator.go",
+        "workflow_attachments.go",
         "workflow_service.go",
         "workflow_service_events.go",
         "workspace_service.go",
@@ -782,6 +783,7 @@ go_test(
         "webhook_ssrf_test.go",
         "window_activator_test.go",
         "window_debug_test.go",
+        "workflow_attachments_test.go",
         "workflow_bypass_inventory_test.go",
         "workflow_bypass_strict_test.go",
         "workflow_service_events_test.go",
@@ -910,4 +912,10 @@ filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
     visibility = ["//session:__pkg__"],
+)
+
+# Read by web-app Jest (flagStore.test.ts cross-checks the mobile_input_layer default); //web-app:jest repo_data.
+exports_files(
+    ["feature_flag_service.go"],
+    visibility = ["//web-app:__pkg__"],
 )

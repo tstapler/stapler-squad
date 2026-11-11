@@ -197,10 +197,10 @@ export default defineConfig({
       testMatch: '**/visual-regression.spec.ts',
     },
     {
-      name: 'visual-wh40k',
+      name: 'visual-grimdark',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: themeFixturePath('wh40k', serverSlot()),
+        storageState: themeFixturePath('grimdark', serverSlot()),
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',

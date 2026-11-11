@@ -118,26 +118,6 @@ func currentAttempts(t *testing.T, repo *session.EntRepository, itemID string, r
 	return row.RemediationAttempts
 }
 
-// newSeededConfiguredWorkflowEngine seeds the built-in stage graph and
-// returns a ConfiguredWorkflowEngine loaded from it, plus the underlying
-// ent.Client (for tests that need to write additional rows directly, e.g. a
-// simulated operator-added custom transition — standing in for the
-// not-yet-implemented Epic 2.7 CRUD RPCs).
-func newSeededConfiguredWorkflowEngine(t *testing.T) (*session.ConfiguredWorkflowEngine, *ent.Client) {
-	t.Helper()
-	repo := session.NewTestEntRepository(t)
-	ctx := context.Background()
-	client := repo.Client
-
-	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
-
-	stageRepo := session.NewEntStageConfigRepository(client)
-	gateSatisfactionRepo := session.NewEntGateSatisfactionRepository(client)
-	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
-	require.NoError(t, err)
-	return engine, client
-}
-
 // createTestEntRepository is a thin wrapper around NewTestEntRepository
 // (testing.go) kept so the ~90 existing `repo, cleanup := createTestEntRepository(t)`
 // call sites in this package don't need touching. NewTestEntRepository
@@ -269,31 +249,6 @@ func (h *gateHarness) moveRaw(t *testing.T, id string, to session.BacklogStatus)
 	require.NoError(t, err)
 }
 
-type fixedMode struct{ m session.EngineMode }
-
-func (f fixedMode) Mode() session.EngineMode { return f.m }
-
-type selectorHarness struct {
-	sel    *session.SwitchableWorkflowEngine
-	cfg    *session.ConfiguredWorkflowEngine
-	client *ent.Client
-}
-
-func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, enabled bool) {
-	t.Helper()
-	ctx := context.Background()
-	n, err := client.StageTransition.Update().
-		Where(
-			stagetransition.HasFromStageWith(backlogstage.Slug(string(from))),
-			stagetransition.HasToStageWith(backlogstage.Slug(string(to))),
-		).
-		SetEnabled(enabled).
-		Save(ctx)
-	require.NoError(t, err)
-	require.Equal(t, 1, n, "edge %s->%s must exist", from, to)
-	require.NoError(t, cfg.InvalidateCache(ctx))
-}
-
 func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, kind session.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
@@ -310,10 +265,6 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.Configur
 	_, err = c.Save(ctx)
 	require.NoError(t, err)
 	require.NoError(t, cfg.InvalidateCache(ctx))
-}
-
-func passingReviewItem() session.BacklogItemTransitionInput {
-	return session.BacklogItemTransitionInput{Status: session.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
 }
 
 type classModes map[session.CallerClass]session.EngineMode

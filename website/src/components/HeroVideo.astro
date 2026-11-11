@@ -6,17 +6,35 @@
 // `prefers-reduced-motion` client-side, so a no-JS visitor or one who
 // prefers reduced motion never gets forced motion; both still get the
 // `poster` frame and visible native controls.
+// The Pause/Play button is server-rendered `hidden` and revealed by the script
+// only when the clip actually autoplays (WCAG 2.2.2), so it precedes the video
+// in tab order but never shows for reduced-motion or no-JS visitors.
 export interface Props {
 	src: string;
 	poster: string;
+	/** H.264 rendition; when set the video lists <source> webm then mp4. */
+	mp4?: string;
 }
 
-const { src, poster } = Astro.props;
+const { src, poster, mp4 } = Astro.props;
 ---
 
-<video data-testid="hero-video" loop muted controls poster={poster} src={src}>
-	Your browser doesn't support embedded video. <a href={src}>Download the demo</a>.
-</video>
+<div class="hero-video-block">
+	<button type="button" class="hero-pause" data-testid="hero-pause" aria-pressed="false" hidden>Pause</button>
+	{
+		mp4 ? (
+			<video data-testid="hero-video" loop muted controls playsinline poster={poster}>
+				<source src={src} type="video/webm" />
+				<source src={mp4} type="video/mp4" />
+				Your browser doesn't support embedded video. <a href={src}>Download the demo</a>.
+			</video>
+		) : (
+			<video data-testid="hero-video" loop muted controls poster={poster} src={src}>
+				Your browser doesn't support embedded video. <a href={src}>Download the demo</a>.
+			</video>
+		)
+	}
+</div>
 
 <script>
 	import { initHeroVideos } from '../lib/reduced-motion-video';
@@ -24,6 +42,23 @@ const { src, poster } = Astro.props;
 </script>
 
 <style>
+	.hero-pause {
+		min-height: 44px;
+		min-width: 44px;
+		padding: 0 1rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		background: var(--sl-color-gray-6);
+		color: var(--sl-color-white);
+		cursor: pointer;
+	}
+	.hero-pause[hidden] {
+		display: none;
+	}
+	.hero-pause:focus-visible {
+		outline: 3px solid var(--sl-color-accent-high);
+		outline-offset: 2px;
+	}
 	video[data-testid='hero-video'] {
 		width: 100%;
 		max-width: 100%;

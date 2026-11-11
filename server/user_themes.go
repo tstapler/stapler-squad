@@ -34,7 +34,10 @@ var (
 		"rgb": true, "rgba": true, "hsl": true, "hsla": true, "hwb": true, "lab": true, "lch": true,
 		"oklab": true, "oklch": true, "color-mix": true, "var": true, "calc": true, "min": true, "max": true, "clamp": true,
 	}
-	builtinThemeBases = map[string]bool{"matrix": true, "cyberpunk77": true, "wh40k": true, "clean": true, "light": true, "dark": true}
+	builtinThemeBases = map[string]bool{"matrix": true, "cyberpunk77": true, "grimdark": true, "clean": true, "light": true, "dark": true}
+	// legacyThemeBases maps retired built-in ids to their current id; keep in step with
+	// web-app/src/lib/theme/legacy-theme-ids.ts and remove with it (tstapler/stapler-squad#1547).
+	legacyThemeBases = map[string]string{"wh40k": "grimdark"}
 )
 
 // userTheme is a runtime-loadable theme: a built-in base plus CSS-variable token overrides.
@@ -101,6 +104,10 @@ func sanitizeUserTheme(id string, t userTheme) userTheme {
 	t.ID = id
 	if t.Label == "" {
 		t.Label = id
+	}
+	if current, ok := legacyThemeBases[t.Base]; ok {
+		log.Warn("user-themes: deprecated base id, using its replacement", "theme", id, "base", t.Base, "use", current)
+		t.Base = current
 	}
 	if !builtinThemeBases[t.Base] {
 		t.Base = defaultThemeBase

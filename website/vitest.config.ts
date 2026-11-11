@@ -8,7 +8,7 @@ export default getViteConfig({
 	test: {
 		include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
 		// Several integration-style tests (build.test.ts, not-found.test.ts,
-		// check-internal-links.integration.test.ts, check-asset-health's) each
+		// check-internal-links.integration.test.ts) each
 		// run a real `bun run build` into the one shared website/dist/ -- in
 		// parallel test files that races on the same `dist/.prerender` temp
 		// output and corrupts the build. Serializing file execution trades some

@@ -100,7 +100,7 @@ func TestSeam_NewInstancePinsResolvedBackend(t *testing.T) {
 	useSeamFake(t)
 	created, err := NewInstance(InstanceOptions{Title: "pin-new", Path: t.TempDir(), Program: "claude"})
 	require.NoError(t, err)
-	want := ProcessManagerBackend(processManagerBackendLabel(created.processManager))
+	want := processManagerBackendKey(created.processManager)
 
 	assert.Equal(t, want, created.Backend)
 	assert.Equal(t, want, created.ToInstanceData().Backend)

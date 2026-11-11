@@ -45,7 +45,6 @@ go_library(
         "prwatch_sessions.go",
         "prwatch_snapshot.go",
         "prwatch_status_provider.go",
-        "review_queue_manager.go",
         "server.go",
         "server_gatestats.go",
         "server_leasewedge.go",
@@ -94,6 +93,7 @@ go_library(
         "//server/prwatch",
         "//server/prwatch/inbox",
         "//server/push",
+        "//server/reviewqueue",
         "//server/services",
         "//server/services/backlogsvc",
         "//server/services/devtools",
@@ -105,12 +105,12 @@ go_library(
         "//session",
         "//session/artifacts",
         "//session/backlog",
+        "//session/backlog/shadowledger",
         "//session/cdp",
         "//session/contexthistory",
         "//session/dbmaint",
         "//session/dbobs",
         "//session/dbpool",
-        "//session/detection",
         "//session/domain",
         "//session/flow",
         "//session/gitwiring",
@@ -140,7 +140,6 @@ go_library(
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel_metric//:metric",
-        "@org_golang_google_protobuf//types/known/timestamppb",
         "@org_golang_x_net//idna",
     ] + select({
         "@rules_go//go/platform:aix": [
@@ -244,7 +243,6 @@ go_test(
         "quota_listener_test.go",
         "remote_listener_actions_integration_test.go",
         "review_queue_lookup_adapter_test.go",
-        "review_queue_manager_test.go",
         "server_gatestats_test.go",
         "server_hostguard_test.go",
         "server_hostnames_test.go",
@@ -254,7 +252,6 @@ go_test(
         "session_existence_lookup_test.go",
         "session_liveness_checker_test.go",
         "shutdown_join_test.go",
-        "slack_gate_test.go",
         "slack_interactive_handler_integration_test.go",
         "streaming_chain_test.go",
         "tls_test.go",
@@ -303,8 +300,8 @@ go_test(
         "//session",
         "//session/artifacts",
         "//session/backlog",
+        "//session/backlog/shadowledger",
         "//session/dbpool",
-        "//session/detection",
         "//session/domain",
         "//session/gitwiring",
         "//session/headless",
@@ -320,7 +317,6 @@ go_test(
         "@com_connectrpc_connect//:connect",
         "@com_github_go_git_go_git_v5//:go-git",
         "@com_github_go_git_go_git_v5//config",
-        "@com_github_go_git_go_git_v5//plumbing",
         "@com_github_google_uuid//:uuid",
         "@com_github_gorilla_websocket//:websocket",
         "@com_github_stretchr_testify//assert",
@@ -338,13 +334,17 @@ go_test(
     ],
 )
 
-# Read by session tests that parse or scan server sources.
+# Read by session tests that parse or scan server sources, and by web-app jest's theme-id-parity test.
 exports_files(
     [
         "artifact_scan_complete.go",
         "pr_annotations.go",
         "prwatch_sessions.go",
         "review_queue_manager.go",
+        "user_themes.go",
     ],
-    visibility = ["//session:__pkg__"],
+    visibility = [
+        "//session:__pkg__",
+        "//web-app:__pkg__",
+    ],
 )

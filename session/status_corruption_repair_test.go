@@ -33,7 +33,7 @@ func TestStatusCorruptionRepair_FixesOnceThenStaysStable(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, data))
 	require.NoError(t, repo.Close())
 
-	// "Restart" 2: NewEntRepository runs startupMigrations, including
+	// "Restart" 2: NewEntRepository runs the startup migrations, including
 	// statusCorruptionRepairMigration — the corrupted row must come back
 	// repaired to its recoverable original value (207 % 100 = 7).
 	repo, err = NewEntRepository(WithDatabasePath(dbPath))

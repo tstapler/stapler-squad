@@ -16,7 +16,7 @@ The script is an upper bound for jobs whose skip comes from `needs:` or a `detec
 | Trigger | Workflow | Notes |
 |---|---|---|
 | Every non-docs PR | `build.yml` | `detect-changes`, `prepare`, `web-checks` (smoke next+bun, built-assets, supply chain, Storybook), `test-affected`, `go-guards` (delivery gate, git oracle, install check, PTY race), the e2e jobs |
-| Every PR | `backlog-scaffolding-guard.yml` | `pr-diff-guards`: API-only diff checks; the one check a docs-only PR gets |
+| Every PR | `backlog-scaffolding-guard.yml` | Two always-run jobs, no `paths:` filter. `guard` (`pr-diff-guards`): API-only diff checks. `promo-guards`: depth-2 checkout, prebuilt `promoguard`, banned-term scan, binary-media guard (`allow-media` label override) and docs coverage, reading every gate input from the base blob. The workflow also fires on `labeled`/`unlabeled`; `guard` skips those events and `promo-guards` runs only for the `allow-media` label |
 | PR touching Go/web/proto paths | `lint.yml` | one `lint` job (Go, web, ShellCheck, buf breaking) |
 | PR touching Go files | `goreleaser-check.yml` | config check + CGO_ENABLED=0 build smoke in one job |
 | PR touching `server/mcp/**`, `server/services/**` | `mcp-integration.yml` | one job, two sequential suites |
@@ -24,7 +24,9 @@ The script is an upper bound for jobs whose skip comes from `needs:` or a `detec
 | PR labelled `run-benchmarks` | `benchmark.yml` | also runs on every push to main; a failing main run opens an issue |
 | PR labelled `record-video` | `e2e-video.yml` | non-gating feature videos |
 | Push to main only | `main-ci.yml` | full-suite coverage gate (`test-tmux`, `test-rest`, `test`), 5-platform build matrix |
-| Nightly / manual | `nightly.yml`, `css-differential.yml`, release and demo workflows | |
+| PR touching `website/**`, `tests/e2e/website-demos/**`, `tests/demo/**` or docs sources | `website-ci.yml` | one `checks` job; its smoke steps (build the server binary from the PR, record the `dashboard-lifecycle` clip, build with `TOURS_MEDIA_MODE=smoke`) are steps, not jobs, so the check count is unchanged |
+| Push to main touching website or promo paths; weekly cron; manual | `deploy-website.yml` | `decide`, `binary`, `record` (matrix: 2 shards, one check each), `build`, `mediafresh`, `termcheck-dist`, `deploy`, `publish-lkg`, `notify`. Never a PR check. A content-only push skips `binary` and `record` and ships the `promo-media-lkg` artifact |
+| Nightly / manual | `nightly.yml`, `css-differential.yml`, release workflows | `demo-publish.yml` is retired (its `demo-gifs-latest` release is no longer written) |
 
 No check is a required status check: `gh api repos/tstapler/stapler-squad/branches/main` reports `protected: false` with empty `required_status_checks`, and `gh api repos/tstapler/stapler-squad/rulesets` returns `[]`. Re-verify before relying on that.
 
@@ -37,6 +39,10 @@ No check is a required status check: `gh api repos/tstapler/stapler-squad/branch
 5. **Do not use a matrix for fan-out you do not need.** A matrix leg is a check. Cross-compile and OS/arch matrices run on main only.
 6. **Add `concurrency` with `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`** so a superseded PR run frees its jobs.
 7. Re-run `tools/ci/count-pr-checks.py` and put the before/after in the PR description.
+
+**promo-guards (promo-materials-refresh Tasks 1.1.4b0, 1.1.4b, 2.1.1b).** One job is added to the always-run guard workflow rather than steps in `guard`: `guard`'s own baseline (avg 4m, max 10.1m, per its comment) already sits at the 5-minute budget before a checkout, Go setup and build are added, so the plan's hard gate selects a separate job (numbers: `project_plans/promo-materials-refresh/implementation/spike-notes.md`). Measured with `uv run --with pyyaml python tools/ci/count-pr-checks.py` on the merged tree: 30 checks on a code PR touching every filtered path and 4 on a docs-only PR before, 31 and 5 after. The job always reports; its first step exits early (skipping the rest) only for an empty diff. Docs coverage runs here on PRs (it was a `build.yml` `test-affected` step, which made every `web-app/public/docs/**` PR run the full `build.yml`); `build.yml`'s `detect-changes` is back to `main`'s path list and the step there runs on `push` only. Until the owner sets code-owner review and requires `promo-guards` as a status check on `main`, a red guard is advisory (see ADR-003).
+
+For the promo-materials-refresh workflow change (Story 2.4.1) the PR-side count is unchanged by design: `website-ci.yml` stays one job and `demo-publish.yml` never ran on PRs. The new jobs live in `deploy-website.yml`, which has no `pull_request` trigger. Measured with `tools/ci/count-pr-checks.py`: 20 checks on a code PR touching every filtered path and 1 on a docs-only PR, before (spike notes) and after (figures predate the `origin/main` merge, which added the Bazel workflows; the current counts are in the `promo-guards` paragraph above). Put the numbers in the PR description; the matrix is 2 shards on `push` to main until the Task 0.1.1b measurement shows headroom for 4.
 
 **Ghostty double-send e2e on dependency changes (mobile-input-layer Task 5.1.1d).** `tests/e2e/mobile-input-layer.spec.ts` runs for both renderers inside the existing `e2e-bun-shard` jobs, and `detect-changes` already marks a PR touching `web-app/package.json`, `web-app/bun.lock` or `web-app/src/**` as relevant, so a ghostty-web bump runs it with no new job or check. Nothing here is a required status check (see above); if branch protection is ever added, require the `e2e-bun` aggregate job, not a per-spec job.
 

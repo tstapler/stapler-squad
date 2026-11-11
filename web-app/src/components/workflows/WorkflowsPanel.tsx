@@ -1,14 +1,16 @@
 "use client";
 // +feature: workflows-management
 
-import { useState, useCallback } from "react";
+import { Fragment, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Link, useRouter } from "@/lib/nav";
-import { WorkflowProto } from "@/gen/session/v1/session_pb";
-import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
-import { useWorkflows, WorkflowFormData } from "@/lib/hooks/useWorkflows";
+import type { WorkflowProto } from "@/gen/session/v1/session_pb";
+import { type Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import { useWorkflows, type WorkflowFormData } from "@/lib/hooks/useWorkflows";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { WorkflowForm } from "./WorkflowForm";
+import { WorkflowRunDialog, workflowTakesInput } from "./WorkflowRunDialog";
 import * as styles from "./WorkflowsPanel.css";
 
 function statusLabel(status: SessionStatus): string {
@@ -31,6 +33,7 @@ function statusColor(status: SessionStatus): string {
 }
 
 function RecentRuns({ workflowId }: { workflowId: string }) {
+  const { track } = useAnalytics();
   const [expanded, setExpanded] = useState(false);
   const [runs, setRuns] = useState<Session[]>([]);
   const [loading, setLoading] = useState(false);
@@ -51,7 +54,7 @@ function RecentRuns({ workflowId }: { workflowId: string }) {
 
   return (
     <div className={styles.runsAccordion}>
-      <button className={styles.runsToggle} onClick={toggle}>
+      <button className={styles.runsToggle} onClick={() => { track({ name: "workflow_runs_toggle", category: "user_action" }); toggle(); }}>
         {expanded ? "▾" : "▸"} Recent Runs
       </button>
       {expanded && (
@@ -87,6 +90,7 @@ function RecentRuns({ workflowId }: { workflowId: string }) {
 }
 
 export function WorkflowsPanel() {
+  const { track } = useAnalytics();
   const { workflows, loading, error, createWorkflow, updateWorkflow, deleteWorkflow, archiveWorkflowSessions, deleteWorkflowFailedSessions } = useWorkflows();
   const { runWorkflow } = useSessionService();
   const router = useRouter();
@@ -94,6 +98,7 @@ export function WorkflowsPanel() {
   const [editTarget, setEditTarget] = useState<WorkflowProto | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [runDialogTarget, setRunDialogTarget] = useState<WorkflowProto | null>(null);
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
   const [confirmDeleteFailedId, setConfirmDeleteFailedId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
@@ -159,14 +164,52 @@ export function WorkflowsPanel() {
     }
   }
 
-  async function handleRun(wf: WorkflowProto) {
+  // Resolves true when the run started and we navigated to the new session.
+  async function startRun(wf: WorkflowProto, arg?: string, attachmentPaths?: string[]): Promise<boolean> {
     setRunningId(wf.id);
-    const sessionId = await runWorkflow({ id: wf.id });
+    const sessionId = await runWorkflow({ id: wf.id, arg, attachmentPaths });
     setRunningId(null);
-    if (sessionId) {
-      router.push(`/?session=${sessionId}`);
-    }
+    if (!sessionId) return false;
+    router.push(`/?session=${sessionId}`);
+    return true;
   }
+
+  // Workflows with an {{input}} slot collect the input (and images) first.
+  function handleRun(wf: WorkflowProto) {
+    if (workflowTakesInput(wf)) {
+      setRunDialogTarget(wf);
+      return;
+    }
+    void startRun(wf);
+  }
+
+  async function handleRunDialogSubmit(arg: string, attachmentPaths: string[]): Promise<boolean> {
+    if (!runDialogTarget) return false;
+    const started = await startRun(runDialogTarget, arg, attachmentPaths);
+    if (started) setRunDialogTarget(null);
+    return started;
+  }
+
+  const runDialogModal = runDialogTarget
+    ? createPortal(
+        <div
+          className={styles.formOverlay}
+          data-testid="workflow-run-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRunDialogTarget(null);
+          }}
+        >
+          <div className={styles.formCard}>
+            <WorkflowRunDialog
+              workflowName={runDialogTarget.name}
+              onRun={handleRunDialogSubmit}
+              onCancel={() => setRunDialogTarget(null)}
+            />
+          </div>
+        </div>,
+        document.body
+      )
+    : null;
 
   const formModal = showForm
     ? createPortal(
@@ -193,7 +236,7 @@ export function WorkflowsPanel() {
             <code>@slug [optional-arg]</code>.
           </p>
         </div>
-        <button className={styles.addButton} onClick={openCreate}>
+        <button className={styles.addButton} onClick={() => { track({ name: "workflow_create_open", category: "user_action" }); openCreate(); }}>
           + New Workflow
         </button>
       </div>
@@ -220,8 +263,8 @@ export function WorkflowsPanel() {
             </thead>
             <tbody>
               {workflows.map((wf) => (
-                <>
-                  <tr key={wf.id} className={styles.row}>
+                <Fragment key={wf.id}>
+                  <tr className={styles.row}>
                     <td className={styles.td}>
                       <span className={styles.slugCell}>@{wf.slug}</span>
                     </td>
@@ -252,10 +295,10 @@ export function WorkflowsPanel() {
                           <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
                             Delete &quot;{wf.name}&quot;?
                           </span>
-                          <button className={styles.deleteButton} onClick={() => void handleDeleteConfirm()}>
+                          <button className={styles.deleteButton} onClick={() => { track({ name: "workflow_delete_confirm", category: "user_action" }); void handleDeleteConfirm(); }}>
                             Yes, delete
                           </button>
-                          <button className={styles.editButton} onClick={handleDeleteCancel}>
+                          <button className={styles.editButton} onClick={() => { track({ name: "workflow_delete_cancel", category: "user_action" }); handleDeleteCancel(); }}>
                             Cancel
                           </button>
                         </div>
@@ -264,10 +307,10 @@ export function WorkflowsPanel() {
                           <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
                             Archive all sessions for &quot;{wf.name}&quot;?
                           </span>
-                          <button className={styles.deleteButton} onClick={() => void handleArchiveConfirm()} data-testid="confirm-archive-sessions">
+                          <button className={styles.deleteButton} onClick={() => { track({ name: "workflow_archive_confirm", category: "user_action" }); void handleArchiveConfirm(); }} data-testid="confirm-archive-sessions">
                             Yes, archive
                           </button>
-                          <button className={styles.editButton} onClick={() => setConfirmArchiveId(null)}>
+                          <button className={styles.editButton} onClick={() => { track({ name: "workflow_archive_cancel", category: "user_action" }); setConfirmArchiveId(null); }}>
                             Cancel
                           </button>
                         </div>
@@ -276,10 +319,10 @@ export function WorkflowsPanel() {
                           <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
                             Delete failed sessions for &quot;{wf.name}&quot;?
                           </span>
-                          <button className={styles.deleteButton} onClick={() => void handleDeleteFailedConfirm()} data-testid="confirm-delete-failed-sessions">
+                          <button className={styles.deleteButton} onClick={() => { track({ name: "workflow_delete_failed_confirm", category: "user_action" }); void handleDeleteFailedConfirm(); }} data-testid="confirm-delete-failed-sessions">
                             Yes, delete
                           </button>
-                          <button className={styles.editButton} onClick={() => setConfirmDeleteFailedId(null)}>
+                          <button className={styles.editButton} onClick={() => { track({ name: "workflow_delete_failed_cancel", category: "user_action" }); setConfirmDeleteFailedId(null); }}>
                             Cancel
                           </button>
                         </div>
@@ -288,17 +331,17 @@ export function WorkflowsPanel() {
                           <button
                             className={styles.runButton}
                             disabled={runningId === wf.id}
-                            onClick={() => void handleRun(wf)}
+                            onClick={() => { track({ name: "workflow_run", category: "user_action" }); handleRun(wf); }}
                           >
                             {runningId === wf.id ? "…" : "▶ Run"}
                           </button>
-                          <button className={styles.editButton} onClick={() => openEdit(wf)}>
+                          <button className={styles.editButton} onClick={() => { track({ name: "workflow_edit_open", category: "user_action" }); openEdit(wf); }}>
                             Edit
                           </button>
                           <button
                             className={styles.editButton}
                             disabled={archivingId === wf.id}
-                            onClick={() => setConfirmArchiveId(wf.id)}
+                            onClick={() => { track({ name: "workflow_archive_start", category: "user_action" }); setConfirmArchiveId(wf.id); }}
                             data-testid="archive-sessions-button"
                           >
                             {archivingId === wf.id ? "…" : "Archive Sessions"}
@@ -306,14 +349,14 @@ export function WorkflowsPanel() {
                           <button
                             className={styles.editButton}
                             disabled={deletingFailedId === wf.id}
-                            onClick={() => setConfirmDeleteFailedId(wf.id)}
+                            onClick={() => { track({ name: "workflow_delete_failed_start", category: "user_action" }); setConfirmDeleteFailedId(wf.id); }}
                             data-testid="delete-failed-sessions-button"
                           >
                             {deletingFailedId === wf.id ? "…" : "Delete Failed"}
                           </button>
                           <button
                             className={styles.deleteButton}
-                            onClick={() => handleDeleteClick(wf)}
+                            onClick={() => { track({ name: "workflow_delete_start", category: "user_action" }); handleDeleteClick(wf); }}
                           >
                             Delete
                           </button>
@@ -326,7 +369,7 @@ export function WorkflowsPanel() {
                       <RecentRuns workflowId={wf.id} />
                     </td>
                   </tr>
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -334,6 +377,7 @@ export function WorkflowsPanel() {
       )}
 
       {formModal}
+      {runDialogModal}
     </div>
   );
 }

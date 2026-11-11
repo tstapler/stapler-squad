@@ -148,6 +148,12 @@ tests/e2e/website-demo-output/
 
 # demo clips recorded during the deploy; never committed
 website/public/clips/
+website/public/shots/
+website/public/media-manifest.json
+website/expected-media.json
+# promo recorder text dumps (DOM text, OCR text) scanned by termcheck/leak checks
+dom-text/
+ocr-text/
 
 # Bazel: personal overrides and root-level output symlinks only. ANCHORED on purpose:
 # an unanchored bazel-* would ignore tracked files like .github/workflows/bazel-parity.yml.
@@ -159,3 +165,8 @@ user.bazelrc
 !tools/bzl/testdata/errors/**/*.log
 # Ghostty wasm build (main's #1491) tolerates a personal .bazelrc.user
 /.bazelrc.user
+
+# Build/test output that must never be tracked
+web-app/.next/
+web-app/playwright-report/
+docs-coverage-trend.json

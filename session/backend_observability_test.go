@@ -186,9 +186,10 @@ func TestTmuxBackend_Start_RecordsSpanWithTmuxBackendLabel(t *testing.T) {
 // wrapper types, not to whatever ProcessManagerBackend string an Instance's
 // (possibly stale/empty) Backend field happens to hold.
 func TestProcessManagerBackendLabel_MatchesConcreteType(t *testing.T) {
-	assert.Equal(t, backendLabelTmux, processManagerBackendLabel(NewTmuxBackend(&mockTmuxManager{})))
-	assert.Equal(t, backendLabelTymux, processManagerBackendLabel(NewTymuxBackend(&fakeTymuxManagerForStartRestore{})))
-	assert.Equal(t, backendLabelUnknown, processManagerBackendLabel(nil))
+	assert.Equal(t, BackendTmux, processManagerBackendKey(NewTmuxBackend(&mockTmuxManager{})))
+	assert.Equal(t, BackendTymux, processManagerBackendKey(NewTymuxBackend(&fakeTymuxManagerForStartRestore{})))
+	assert.Equal(t, BackendNative, processManagerBackendKey(NewNativeProcessManager(ProcessManagerOptions{})))
+	assert.Equal(t, ProcessManagerBackend(""), processManagerBackendKey(nil))
 }
 
 func TestTymuxBackend_Start_RecordsSpanWithTymuxBackendLabel(t *testing.T) {

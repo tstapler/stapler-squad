@@ -12,7 +12,7 @@ import { baseUrl } from './helpers/base-url';
 
 const BASE_URL = baseUrl();
 
-const DARK_THEMES = ['matrix', 'dark', 'cyberpunk77', 'wh40k', 'clean'] as const;
+const DARK_THEMES = ['matrix', 'dark', 'cyberpunk77', 'grimdark', 'clean'] as const;
 
 // White in any browser-reported format
 const WHITE = 'rgb(255, 255, 255)';

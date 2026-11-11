@@ -56,6 +56,10 @@ go_test(
         "sqlite_provider_test.go",
         "subscriber_test.go",
     ],
+    data = [
+        "//docs/observability/grafana/dashboards:json",
+        "//docs/reference:client-network-telemetry.md",
+    ],
     embed = [":analytics"],
     deps = [
         "//internal/termlat",

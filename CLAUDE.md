@@ -394,6 +394,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Operate escape-event rollups: check state, metrics, backup, rollback | `docs/how-to/operate-escape-event-rollups.md` |
 | Log debugging: file locations, global/per-package log levels, reducing log volume, pattern-clustering tool | `docs/how-to/debug-with-logs.md` |
 | `gh pr merge` needs `--repo owner/repo` | `docs/how-to/merge-prs-with-gh-cli.md` |
+| Give a registry feature docs (`help` + `website` sidecar) or an `exempt` reason; `make docs-coverage`, `make docs-coverage-baseline`, many-to-one rule, sync-generated pages | `docs/how-to/add-docs-coverage-for-a-feature.md` |
 | Roll back the `tstapler/go-git` fork (`replace` directive) to stock upstream | `docs/how-to/roll-back-go-git-fork.md` |
 | `session/git` policy: complete git parity, fix the go-git fork instead of working around it, how to verify against the git CLI and ship a fork change | `session/git/AGENTS.md` |
 | Unfinished-scanner caches: `/actuator/unfinished-scanner` counters, shadow verify, per-flag rollback | `docs/how-to/tune-unfinished-scanner-caches.md` |
@@ -402,6 +403,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Capture the terminal stream (raw output, drops, resizes) to diagnose garbled terminals — records secrets | `docs/how-to/capture-terminal-stream-tap.md` |
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
 | Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
+| Attach images to a workflow run (Run dialog for `{{input}}` workflows, upload route, `attachment_paths` validation) | `docs/how-to/attach-images-to-workflow-runs.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
 | Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
 | Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |

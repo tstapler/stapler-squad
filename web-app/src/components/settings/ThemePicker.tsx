@@ -1,7 +1,8 @@
 "use client";
 // +feature: settings-theme-picker
 
-import { useTheme, ThemeName } from "@/lib/contexts/ThemeContext";
+import type { ThemeName } from "@/lib/contexts/ThemeContext";
+import { useTheme } from "@/lib/contexts/ThemeContext";
 import {
   container,
   sectionTitle,
@@ -25,8 +26,8 @@ const THEME_META: Record<ThemeName, { label: string; description: string }> = {
     label: "Cyberpunk 77",
     description: "Neon yellow + pink on navy",
   },
-  wh40k: {
-    label: "WH40K",
+  grimdark: {
+    label: "Grimdark",
     description: "Grimdark parchment + gold",
   },
   clean: {
@@ -74,6 +75,7 @@ export function ThemePicker() {
               onClick={() => setTheme(name)}
               title={meta.description}
             >
+              {/* analytics-exempt */}
               {isActive && (
                 <span className={activeCheckmark} aria-hidden="true">
                   ✓
@@ -98,6 +100,7 @@ export function ThemePicker() {
               onClick={() => setTheme(id)}
               title={custom.description}
             >
+              {/* analytics-exempt */}
               {isActive && (
                 <span className={activeCheckmark} aria-hidden="true">
                   ✓

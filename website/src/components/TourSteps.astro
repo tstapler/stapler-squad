@@ -1,0 +1,46 @@
+---
+// Transcript <details> (narration per step in order, then the caption
+// timeline) and the numbered steps with their shots.
+import type { Caption } from '../lib/tours/transcript';
+import type { Tour } from '../lib/tours/schema';
+import TourShot from './TourShot.astro';
+
+export interface Props {
+	tour: Tour;
+	captions: Caption[];
+}
+
+const { tour, captions } = Astro.props;
+const stamp = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`;
+---
+
+<details class="tour-transcript" data-testid="tour-transcript">
+	<summary>Transcript</summary>
+	<h2>What happens on screen</h2>
+	<ol data-testid="tour-narration">
+		{tour.steps.map((s) => <li>{s.narration}</li>)}
+	</ol>
+	<h2>Captions</h2>
+	<ul data-testid="tour-captions">
+		{captions.map((c) => <li><span class="tour-time">{stamp(c.tMs)}</span> {c.text}</li>)}
+	</ul>
+</details>
+
+<ol class="tour-steps" data-testid="tour-steps">
+	{
+		tour.steps.map((s) => (
+			<li>
+				<p class="tour-step-text">{s.text}</p>
+				{s.why && <p class="tour-step-why">{s.why}</p>}
+				<TourShot shot={s.shot} alt={s.alt} caption={s.caption} annotated={s.annotated} />
+				{s.quote && <blockquote>{s.quote}</blockquote>}
+			</li>
+		))
+	}
+</ol>
+
+{
+	tour.phoneFigure && (
+		<TourShot shot={tour.phoneFigure} alt={`${tour.title} on a phone`} caption="On your phone" phone />
+	)
+}

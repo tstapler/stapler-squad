@@ -6,12 +6,12 @@ const _features = [
 ] as const;
 //
 // Visual regression tests — one spec, 4 theme projects (visual-matrix,
-// visual-cyberpunk77, visual-wh40k, visual-clean).
+// visual-cyberpunk77, visual-grimdark, visual-clean).
 //
 // To capture baselines (first run or after intentional visual changes):
 //   npx playwright test visual-regression.spec.ts --update-snapshots --project=visual-matrix
 //   npx playwright test visual-regression.spec.ts --update-snapshots --project=visual-cyberpunk77
-//   npx playwright test visual-regression.spec.ts --update-snapshots --project=visual-wh40k
+//   npx playwright test visual-regression.spec.ts --update-snapshots --project=visual-grimdark
 //   npx playwright test visual-regression.spec.ts --update-snapshots --project=visual-clean
 //
 // Snapshots are stored in tests/snapshots/{projectName}/... and committed to git.

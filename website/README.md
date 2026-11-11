@@ -56,7 +56,7 @@ All commands are run from `website/`:
 | `bun run test:a11y` | axe-core accessibility scan (builds + previews first) |
 | `bun run lhci:desktop` / `bun run lhci:mobile` | Lighthouse CI against the built site |
 | `node scripts/check-internal-links.mjs` | Fail if any internal link 404s in `dist/` |
-| `node scripts/check-asset-health.mjs` | Fail if a referenced `ReleaseAssetRef` 404s or its content hash doesn't match `scripts/asset-health-manifest.json` |
+| `node scripts/check-readme-links.mjs` | Fail if a README link to the site does not resolve to a page in `dist/` |
 
 ## Further reading
 

@@ -7,14 +7,25 @@
 // second a11y-tooling choice.
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { loadTourExpectations } from './helpers/tour-expectations';
 
 // Relative, non-"/"-prefixed paths: see playwright.config.ts's baseURL
 // comment for why a leading "/" here would silently drop the
 // "/stapler-squad" base path and scan the wrong (404) page.
+//
+// Story 3.1.3: the /tours/ index plus every BUILT tour page. In a PR smoke build
+// only the hero tour is built, so this is the index plus that one page; the
+// deploy build scans all tours.
+const tours = loadTourExpectations();
+const TOUR_PAGES: Record<string, string> =
+	tours.sources === 0
+		? {}
+		: { toursIndex: 'tours/', ...Object.fromEntries(tours.built.map((t) => [`tour-${t.slug}`, `tours/${t.slug}/`])) };
 const PAGES = {
 	landing: '',
 	gettingStarted: 'help/getting-started/',
-} as const;
+	...TOUR_PAGES,
+};
 
 /** Same format tests/e2e/accessibility.spec.ts uses for its console.error dump. */
 function formatViolation(v: import('axe-core').Result): string {

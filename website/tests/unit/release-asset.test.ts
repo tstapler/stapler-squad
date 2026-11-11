@@ -1,12 +1,21 @@
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { releaseAssetUrl } from '../../src/lib/release-asset.ts';
+import { findHtmlFiles } from '../../src/lib/release-asset.ts';
 
-describe('releaseAssetUrl', () => {
-	it('releaseAssetUrl_should_ReturnExpectedUrl_When_GivenTagNameExt', () => {
-		const url = releaseAssetUrl({ tag: 'website-demo-gifs-latest', name: 'review-queue', ext: 'webm' });
+describe('findHtmlFiles', () => {
+	it('findHtmlFiles_should_ReturnNestedHtmlOnly_When_DirHasMixedFiles', async () => {
+		const dir = await mkdtemp(join(tmpdir(), 'html-files-'));
+		await mkdir(join(dir, 'tours'));
+		await writeFile(join(dir, 'index.html'), '');
+		await writeFile(join(dir, 'tours', 'a.html'), '');
+		await writeFile(join(dir, 'app.js'), '');
 
-		expect(url).toBe(
-			'https://github.com/tstapler/stapler-squad/releases/download/website-demo-gifs-latest/review-queue.webm',
-		);
+		expect((await findHtmlFiles(dir)).sort()).toEqual([join(dir, 'index.html'), join(dir, 'tours', 'a.html')]);
+	});
+
+	it('findHtmlFiles_should_ReturnEmpty_When_DirMissing', async () => {
+		expect(await findHtmlFiles(join(tmpdir(), 'no-such-dir-html-files'))).toEqual([]);
 	});
 });

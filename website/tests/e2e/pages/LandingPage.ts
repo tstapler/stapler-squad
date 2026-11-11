@@ -8,7 +8,10 @@ export class LandingPage {
 	readonly installCommandText: Locator;
 	readonly installCopyButton: Locator;
 	readonly viewOnGithubLink: Locator;
+	readonly seeTheToursLink: Locator;
+	readonly startHere: Locator;
 	readonly heroVideo: Locator;
+	readonly heroPauseButton: Locator;
 	readonly featureGrid: Locator;
 	readonly searchTrigger: Locator;
 	/** Header site-title link -- NOT a "Docs" link; it points back at this same page. */
@@ -23,7 +26,10 @@ export class LandingPage {
 		this.installCommandText = page.getByTestId('install-command-text');
 		this.installCopyButton = page.getByTestId('install-copy-button');
 		this.viewOnGithubLink = page.getByRole('link', { name: 'View on GitHub' });
+		this.seeTheToursLink = page.getByRole('link', { name: 'See the tours', exact: true });
+		this.startHere = page.getByTestId('tour-start-here');
 		this.heroVideo = page.getByTestId('hero-video');
+		this.heroPauseButton = page.getByTestId('hero-pause');
 		this.featureGrid = page.getByTestId('feature-grid');
 		this.searchTrigger = page.getByRole('button', { name: /^Search/ });
 		this.siteTitleLink = page.getByRole('link', { name: 'Stapler Squad', exact: true });

@@ -1,0 +1,6 @@
+{
+  "id": "tagging-rule:list",
+  "userFacing": true,
+  "tour": "automation-rules",
+  "website": "tours/automation-rules"
+}

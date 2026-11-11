@@ -53,12 +53,5 @@ func (i *Instance) pinResolvedBackend() {
 	if i.Backend != "" {
 		return
 	}
-	switch processManagerBackendLabel(i.processManager) {
-	case backendLabelTmux:
-		i.Backend = BackendTmux
-	case backendLabelTymux:
-		i.Backend = BackendTymux
-	case backendLabelNative:
-		i.Backend = BackendNative
-	}
+	i.Backend = processManagerBackendKey(i.processManager)
 }
