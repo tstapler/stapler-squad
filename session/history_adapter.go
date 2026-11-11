@@ -34,13 +34,16 @@ func NewHistoryAdapterRegistry(adapters ...HistoryAdapter) (*HistoryAdapterRegis
 // DefaultHistoryAdapters returns the built-in registry. A new agent is a new adapter file
 // plus one entry here.
 func DefaultHistoryAdapters() *HistoryAdapterRegistry {
-	r, _ := NewHistoryAdapterRegistry(
+	r, err := NewHistoryAdapterRegistry(
 		NewClaudeAdapter(),
 		NewAgyAdapter(),
 		NewOpencodeAdapter(),
 		NewGeminiAdapter(),
 		NewPiAdapter(),
 	)
+	if err != nil {
+		panic(err) // unreachable while the list above is non-empty
+	}
 	return r
 }
 
@@ -66,15 +69,9 @@ func (r *HistoryAdapterRegistry) CrossesAdapters(oldProgram, newProgram string) 
 	return src != nil && dst != nil && src.Name() != dst.Name()
 }
 
-// SetHistoryAdapters overrides this instance's adapter registry (composition-root wiring
-// and tests); instances without one use DefaultHistoryAdapters.
-func (i *Instance) SetHistoryAdapters(r *HistoryAdapterRegistry) {
-	i.historyAdapters.Store(r)
+func (i *Instance) historyRegistry() *HistoryAdapterRegistry {
+	return defaultHistoryRegistry
 }
 
-func (i *Instance) historyRegistry() *HistoryAdapterRegistry {
-	if r := i.historyAdapters.Load(); r != nil {
-		return r
-	}
-	return DefaultHistoryAdapters()
-}
+// defaultHistoryRegistry is shared: adapters are stateless and the registry is read-only.
+var defaultHistoryRegistry = DefaultHistoryAdapters()

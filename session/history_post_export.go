@@ -11,6 +11,9 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
+// The AfterExport methods live here, not in each adapter file, so the shared history.jsonl
+// and session-recording helpers stay next to the three callers that use them.
+
 // PostExporter is an optional HistoryAdapter hook run after a successful Export so the
 // target CLI's own post-switch bookkeeping lives with its adapter, not in PortSessionHistory.
 type PostExporter interface {

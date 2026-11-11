@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -44,9 +43,6 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 	}
 
 	// 4. Run the target adapter's post-switch bookkeeping (history.jsonl, session data)
-	if _, err := os.UserHomeDir(); err != nil {
-		return err
-	}
 	if pe, ok := dstAdapter.(PostExporter); ok {
 		if err := pe.AfterExport(ctx, i); err != nil {
 			return err
