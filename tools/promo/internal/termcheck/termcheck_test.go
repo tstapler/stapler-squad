@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/tools/promo/internal/termcheck"
 	"github.com/tstapler/stapler-squad/internal/testenv"
+	"github.com/tstapler/stapler-squad/tools/promo/internal/termcheck"
 	"github.com/tstapler/stapler-squad/tools/promolib/gitbase"
 	"github.com/tstapler/stapler-squad/tools/promolib/gitbase/gitbasetest"
 	"github.com/tstapler/stapler-squad/tools/promolib/termscan"
