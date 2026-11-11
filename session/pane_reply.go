@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,14 +31,11 @@ type QuestionDialog struct {
 const (
 	dialogTypeSomethingRow = "Type something."
 	dialogChatAboutRow     = "Chat about this"
-	dialogFooterPrefix     = "Enter to select"
 	dialogHeaderGlyph      = "☐ "
-	dialogGutter           = "│"
 	dialogSelectionGlyph   = '❯'
 )
 
 var (
-	ansiEscape  = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]`)
 	numberedRow = regexp.MustCompile(`^([0-9]+)\. (.*)$`)
 )
 
@@ -45,10 +43,10 @@ var (
 // gutter and the `❯` selection glyph in the first two cells, then collapses
 // whitespace runs.
 func normalizeDialogLine(line string) string {
-	line = ansiEscape.ReplaceAllString(line, "")
+	line = dialogpresence.ANSIEscape.ReplaceAllString(line, "")
 	line = strings.TrimRightFunc(line, unicode.IsSpace)
 	runes := []rune(line)
-	if len(runes) > 0 && string(runes[0]) == dialogGutter {
+	if len(runes) > 0 && string(runes[0]) == dialogpresence.Gutter {
 		runes = runes[1:]
 		if len(runes) > 0 && runes[0] == ' ' {
 			runes = runes[1:]
@@ -115,7 +113,7 @@ func dialogLines(capture string) []string {
 // lastFooterIndex is the last `Enter to select` line, or -1.
 func lastFooterIndex(lines []string) int {
 	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(lines[i], dialogFooterPrefix) {
+		if strings.HasPrefix(lines[i], dialogpresence.FooterPrefix) {
 			return i
 		}
 	}

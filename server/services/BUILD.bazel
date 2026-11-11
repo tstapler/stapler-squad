@@ -338,6 +338,7 @@ go_library(
         "//session/dbpool",
         "//session/deeplink",
         "//session/detection",
+        "//session/dialogpresence",
         "//session/domain",
         "//session/flow",
         "//session/git",

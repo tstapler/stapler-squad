@@ -10,5 +10,6 @@ session/importer !server
 server/services/wsconn !server/web
 session/ptyio !server
 session/hostclaim !server
+session/dialogpresence !server
 session/cmdexec !server
 session/itemsources !server

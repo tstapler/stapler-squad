@@ -37,6 +37,7 @@ go_library(
         "//log",
         "//pkg/events",
         "//session",
+        "//session/dialogpresence",
         "//session/domain",
         "//session/tymux",
         "//telemetry",

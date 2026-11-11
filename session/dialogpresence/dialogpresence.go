@@ -1,4 +1,6 @@
-package session
+// Package dialogpresence classifies a tmux pane capture as showing, lacking or
+// not revealing an interactive dialog. Stdlib-only so wakes and guidance code can use it without session.
+package dialogpresence
 
 import (
 	"regexp"
@@ -45,6 +47,16 @@ const (
 	dialogMinRuleRunes     = 10
 )
 
+const (
+	// FooterPrefix starts the footer line of a selectable dialog.
+	FooterPrefix = "Enter to select"
+	// Gutter is the box-drawing glyph that prefixes dialog lines.
+	Gutter = "│"
+)
+
+// ANSIEscape matches CSI, OSC and charset-select escape sequences in a capture.
+var ANSIEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]`)
+
 var (
 	selectedNumberedRow = regexp.MustCompile(`^❯\s+[0-9]+\.`)
 	dialogTabBar        = regexp.MustCompile(`^←\s.*[☐☒✔].*→$`)
@@ -90,8 +102,8 @@ func DialogPresenceFromCapture(capture string, err error) DialogPresence {
 func presenceLines(capture string) []string {
 	var out []string
 	for _, raw := range strings.Split(capture, "\n") {
-		l := strings.TrimRightFunc(ansiEscape.ReplaceAllString(raw, ""), unicode.IsSpace)
-		l = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), dialogGutter))
+		l := strings.TrimRightFunc(ANSIEscape.ReplaceAllString(raw, ""), unicode.IsSpace)
+		l = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), Gutter))
 		if l != "" {
 			out = append(out, l)
 		}
@@ -100,7 +112,7 @@ func presenceLines(capture string) []string {
 }
 
 func isDialogMarker(l string) bool {
-	return strings.HasPrefix(l, dialogFooterPrefix) ||
+	return strings.HasPrefix(l, FooterPrefix) ||
 		strings.HasPrefix(l, dialogFooterEsc) ||
 		selectedNumberedRow.MatchString(l) ||
 		dialogTabBar.MatchString(l)
