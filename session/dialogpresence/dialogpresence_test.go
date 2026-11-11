@@ -1,4 +1,4 @@
-package session
+package dialogpresence
 
 import (
 	"errors"
@@ -35,13 +35,13 @@ var replyDialogPresence = map[string]DialogPresence{
 
 func readPresenceFixture(t *testing.T, elem ...string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(append([]string{"testdata"}, elem...)...))
+	b, err := os.ReadFile(filepath.Join(append([]string{"..", "testdata"}, elem...)...))
 	require.NoError(t, err)
 	return string(b)
 }
 
 func TestPaneShowsDialog_ReplyDialogFixtures(t *testing.T) {
-	entries, err := os.ReadDir(filepath.Join("testdata", replyDialogsDir))
+	entries, err := os.ReadDir(filepath.Join("..", "testdata", replyDialogsDir))
 	require.NoError(t, err)
 	seen := map[string]bool{}
 	for _, e := range entries {

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"sync"
 	"time"
 
@@ -165,14 +166,14 @@ func (a *GuidanceAckDetector) Run(ctx context.Context) {
 }
 
 // presence classifies capture against the row's dialog.
-func (e *ackEntry) presence(capture string, err error) (own bool, p session.DialogPresence) {
+func (e *ackEntry) presence(capture string, err error) (own bool, p dialogpresence.DialogPresence) {
 	if err != nil {
-		return false, session.DialogIndeterminate
+		return false, dialogpresence.DialogIndeterminate
 	}
 	if e.Matches != nil {
-		return e.Matches(capture), session.PaneShowsDialog(capture)
+		return e.Matches(capture), dialogpresence.PaneShowsDialog(capture)
 	}
-	return session.DialogMatch(capture, e.Dialog), session.PaneShowsDialog(capture)
+	return session.DialogMatch(capture, e.Dialog), dialogpresence.PaneShowsDialog(capture)
 }
 
 func (a *GuidanceAckDetector) sample(ctx context.Context, e ackEntry) {

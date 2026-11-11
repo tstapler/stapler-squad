@@ -114,6 +114,14 @@ linters:
             - $gostd
             - github.com/tstapler/stapler-squad/session/domain
             - golang.org/x/sync/singleflight
+        # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
+        isolate_dialogpresence:
+          list-mode: strict
+          files:
+            - "**/session/dialogpresence/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
         no_ioutil:
           files:
             - "$all"

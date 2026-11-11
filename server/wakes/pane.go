@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"strings"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -38,7 +38,7 @@ var ErrNotWakeText = errors.New("wakes: pane text must start with " + WakeMarker
 
 // WriteIfIdle is the wake-write safety step (ADR-006 rule 8): under the write
 // lease, a fresh capture must positively show the idle composer with no dialog
-// (session.PaneShowsDialog is Absent); a showing, indeterminate or failed
+// (dialogpresence.PaneShowsDialog is Absent); a showing, indeterminate or failed
 // capture writes nothing. The cached IsReadyForSteer status is not enough on
 // its own because it is blank for 6-9 s after a keypress.
 //
@@ -60,7 +60,7 @@ func WriteIfIdle(ctx context.Context, p Pane, text string) (WriteOutcome, error)
 		}
 		return WriteNotAttempted, fmt.Errorf("wake write: capture pane: %w", err)
 	}
-	if !session.PaneShowsDialog(capture).Absent() {
+	if !dialogpresence.PaneShowsDialog(capture).Absent() {
 		lease.Release()
 		return WriteNotAttempted, nil
 	}
