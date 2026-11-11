@@ -11,21 +11,19 @@ import (
 
 // isClaudeAntigravityFamily reports whether program belongs to the Claude/Antigravity
 // family recognized by the history-porting and conversation-UUID heuristics below. Derived
-// from resolveHistoryAdapter (rather than re-declaring its own claude/agy/antigravity string
+// from the history adapter registry (rather than re-declaring its own claude/agy/antigravity string
 // match) so this can't independently drift from which programs actually have a HistoryAdapter
 // — the exact drift that caused "gemini" to be treated as portable by AgyAdapter.CanHandle
 // but not by this family check.
-func isClaudeAntigravityFamily(program string) bool {
-	return resolveHistoryAdapter(program) != nil
+func isClaudeAntigravityFamily(reg *HistoryAdapterRegistry, program string) bool {
+	return reg.Handles(program)
 }
 
 // isClaudeAntigravityCrossSwitch reports whether oldProgram and newProgram cross between two
 // distinct HistoryAdapter-backed programs (e.g. claude <-> agy <-> opencode) where conversation
 // history should be ported rather than discarded.
-func isClaudeAntigravityCrossSwitch(oldProgram, newProgram string) bool {
-	srcAdapter := resolveHistoryAdapter(oldProgram)
-	dstAdapter := resolveHistoryAdapter(newProgram)
-	return srcAdapter != nil && dstAdapter != nil && srcAdapter.Name() != dstAdapter.Name()
+func isClaudeAntigravityCrossSwitch(reg *HistoryAdapterRegistry, oldProgram, newProgram string) bool {
+	return reg.CrossesAdapters(oldProgram, newProgram)
 }
 
 // portHistoryFailureIsExpected reports whether portErr is the low-severity ErrNoHistoryAdapter
@@ -76,7 +74,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 	i.SetProgram(resolvedProgram)
 
 	switch {
-	case isClaudeAntigravityCrossSwitch(oldProgram, resolvedProgram):
+	case isClaudeAntigravityCrossSwitch(i.historyRegistry(), oldProgram, resolvedProgram):
 		if portErr := PortSessionHistory(ctx, oldProgram, resolvedProgram, i); portErr != nil {
 			if portHistoryFailureIsExpected(portErr) {
 				// Low-severity: the family-gate above and each adapter's CanHandle
@@ -86,7 +84,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 				log.Error("[SwitchProgram] failed to port session history during program switch", "session", i.Title, "old", oldProgram, "new", resolvedProgram, "err", portErr)
 			}
 		}
-	case isClaudeAntigravityFamily(oldProgram) && !isClaudeAntigravityFamily(resolvedProgram):
+	case isClaudeAntigravityFamily(i.historyRegistry(), oldProgram) && !isClaudeAntigravityFamily(i.historyRegistry(), resolvedProgram):
 		// Leaving the Claude/Antigravity family entirely: a stale --resume UUID
 		// captured under the old program would fail against the new one.
 		i.ClearConversationState()

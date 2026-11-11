@@ -130,6 +130,7 @@ go_library(
         "history_adapter.go",
         "history_detector.go",
         "history_fork.go",
+        "history_post_export.go",
         "history_transfer.go",
         "hot_restore.go",
         "idle_status_gate.go",

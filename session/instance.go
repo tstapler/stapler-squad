@@ -866,6 +866,9 @@ type Instance struct {
 	// newly discovered session_id. Used by the service layer to trigger a storage save.
 	claudeSessionIDSavedCallback func()
 
+	// historyAdapters is the injected adapter registry; nil means DefaultHistoryAdapters.
+	historyAdapters atomic.Pointer[HistoryAdapterRegistry]
+
 	// Artifacts holds structured artifacts extracted from the session's JSONL history.
 	// Populated asynchronously by ArtifactExtractor. Protected by mu.
 	Artifacts *artifacts.SessionArtifactsBlob

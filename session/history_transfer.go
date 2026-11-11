@@ -2,12 +2,9 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -21,8 +18,8 @@ var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this progr
 
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
-	srcAdapter := resolveHistoryAdapter(oldProgram)
-	dstAdapter := resolveHistoryAdapter(newProgram)
+	srcAdapter := i.historyRegistry().Resolve(oldProgram)
+	dstAdapter := i.historyRegistry().Resolve(newProgram)
 
 	if srcAdapter == nil || dstAdapter == nil {
 		return ErrNoHistoryAdapter
@@ -46,115 +43,13 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 		return fmt.Errorf("failed to export session history to %s: %w", dstAdapter.Name(), err)
 	}
 
-	// 4. Perform post-switch steps like history.jsonl mapping
-	home, err := os.UserHomeDir()
-	if err != nil {
+	// 4. Run the target adapter's post-switch bookkeeping (history.jsonl, session data)
+	if _, err := os.UserHomeDir(); err != nil {
 		return err
 	}
-
-	uuidStr := i.GetClaudeConversationUUID()
-	workspace := i.GetWorkingDirectory()
-
-	if dstAdapter.Name() == "agy" {
-		// Append history.jsonl for Antigravity
-		agyHistoryPath := filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl")
-		if err := os.MkdirAll(filepath.Dir(agyHistoryPath), 0700); err == nil {
-			historyEntry := map[string]interface{}{
-				"display":        fmt.Sprintf("Ported from Claude: %s", i.Title),
-				"timestamp":      time.Now().UnixMilli(),
-				"workspace":      workspace,
-				"conversationId": uuidStr,
-			}
-			historyData, marshalErr := json.Marshal(historyEntry)
-			if marshalErr != nil {
-				log.Warn("PortSessionHistory: failed to marshal agy history entry", "error", marshalErr)
-				return marshalErr
-			}
-			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components only
-				if _, werr := f.Write(historyData); werr != nil {
-					_ = f.Close()
-					log.Warn("PortSessionHistory: failed to write agy history data", "error", werr)
-					return werr
-				}
-				if _, werr := f.Write([]byte("\n")); werr != nil {
-					_ = f.Close()
-					log.Warn("PortSessionHistory: failed to write agy history newline", "error", werr)
-					return werr
-				}
-				if err := f.Close(); err != nil {
-					log.Warn("PortSessionHistory: failed to close agy history file", "error", err)
-				}
-			}
-		}
-	} else if dstAdapter.Name() == "claude" {
-		// Append history.jsonl for Claude
-		claudeHistoryPath := filepath.Join(home, ".claude", "history.jsonl")
-		if err := os.MkdirAll(filepath.Dir(claudeHistoryPath), 0700); err == nil {
-			historyEntry := map[string]interface{}{
-				"display":        fmt.Sprintf("Ported from Antigravity: %s", i.Title),
-				"pastedContents": map[string]interface{}{},
-				"timestamp":      time.Now().UnixMilli(),
-				"project":        workspace,
-				"sessionId":      uuidStr,
-			}
-			historyData, marshalErr := json.Marshal(historyEntry)
-			if marshalErr != nil {
-				log.Warn("PortSessionHistory: failed to marshal claude history entry", "error", marshalErr)
-				return marshalErr
-			}
-			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600); err == nil { // #nosec G304 -- claudeHistoryPath is home dir + hardcoded constant components only
-				if _, werr := hf.Write(historyData); werr != nil {
-					_ = hf.Close()
-					log.Warn("PortSessionHistory: failed to write claude history data", "error", werr)
-					return werr
-				}
-				if _, werr := hf.Write([]byte("\n")); werr != nil {
-					_ = hf.Close()
-					log.Warn("PortSessionHistory: failed to write claude history newline", "error", werr)
-					return werr
-				}
-				if err := hf.Close(); err != nil {
-					log.Warn("PortSessionHistory: failed to close claude history file", "error", err)
-				}
-			}
-		}
-
-		// Update Claude session data on the Instance
-		i.claudeSessionMu.Lock()
-		if i.claudeSession == nil {
-			i.claudeSession = &ClaudeSessionData{}
-		}
-		i.claudeSession.ConversationUUID = uuidStr
-		i.claudeSession.ProjectName = i.Title
-		i.claudeSession.LastAttached = time.Now()
-		if i.claudeSession.Metadata == nil {
-			i.claudeSession.Metadata = make(map[string]string)
-		}
-		i.claudeSession.Metadata["working_dir"] = workspace
-		cb := i.claudeSessionIDSavedCallback
-		i.claudeSessionMu.Unlock()
-
-		if cb != nil {
-			cb()
-		}
-	} else if dstAdapter.Name() == "opencode" {
-		uuidStr = i.GetClaudeConversationUUID()
-		i.claudeSessionMu.Lock()
-		if i.claudeSession == nil {
-			i.claudeSession = &ClaudeSessionData{}
-		}
-		i.claudeSession.ConversationUUID = uuidStr
-		i.claudeSession.ProjectName = i.Title
-		i.claudeSession.LastAttached = time.Now()
-		if i.claudeSession.Metadata == nil {
-			i.claudeSession.Metadata = make(map[string]string)
-		}
-		i.claudeSession.Metadata["working_dir"] = workspace
-		cb := i.claudeSessionIDSavedCallback
-		i.claudeSessionMu.Unlock()
-
-		if cb != nil {
-			cb()
+	if pe, ok := dstAdapter.(PostExporter); ok {
+		if err := pe.AfterExport(ctx, i); err != nil {
+			return err
 		}
 	}
 
