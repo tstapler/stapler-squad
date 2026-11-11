@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -194,7 +195,7 @@ func TestProgressSubscriber_FlagOffPostsNothing_FlagOnPosts(t *testing.T) {
 func TestResolveProgressTarget_SourcelessGitHubIssueURL(t *testing.T) {
 	t.Parallel()
 	storage := svctest.NewForwardSyncTestStorage(t)
-	registry := session.NewPluginRegistry(session.NewGitHubIssuesPlugin())
+	registry := session.NewPluginRegistry(itemsources.NewGitHubIssuesPlugin())
 	syncLoop := session.NewSyncLoop(storage, registry)
 
 	_, cfg, id, ok := resolveProgressTarget(context.Background(), registry, syncLoop, storage, &session.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"})

@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"bytes"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/jira"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 const jiraIssuesPerPage = 50
@@ -116,7 +117,7 @@ func (j *JiraPlugin) PluginID() string { return "jira" }
 
 // loadJiraConfig parses Raw, resolves credentials and validates base_url.
 // Credentials may still be empty; callers decide what that means.
-func loadJiraConfig(config PluginConfig) (jiraPluginConfig, error) {
+func loadJiraConfig(config session.PluginConfig) (jiraPluginConfig, error) {
 	var cfg jiraPluginConfig
 	if config.Raw != "" {
 		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
@@ -129,7 +130,7 @@ func loadJiraConfig(config PluginConfig) (jiraPluginConfig, error) {
 
 // decodeJiraFetchConfig parses config; disabled is true when credentials are
 // absent (source disabled, not an error).
-func decodeJiraFetchConfig(config PluginConfig) (cfg jiraPluginConfig, disabled bool, err error) {
+func decodeJiraFetchConfig(config session.PluginConfig) (cfg jiraPluginConfig, disabled bool, err error) {
 	cfg, err = loadJiraConfig(config)
 	if err != nil {
 		return jiraPluginConfig{}, false, err
@@ -163,7 +164,7 @@ func jiraBuildJQL(projectKey, cursor string) string {
 // Fetch returns JIRA issues updated at or after cursor ("2006-01-02 15:04")
 // and the advanced cursor, following nextPageToken across all pages so a busy
 // tick isn't silently truncated to its first page.
-func (j *JiraPlugin) Fetch(ctx context.Context, config PluginConfig, cursor string) ([]ExternalItem, string, error) {
+func (j *JiraPlugin) Fetch(ctx context.Context, config session.PluginConfig, cursor string) ([]session.ExternalItem, string, error) {
 	cfg, disabled, err := decodeJiraFetchConfig(config)
 	if err != nil {
 		return nil, cursor, err
@@ -282,11 +283,11 @@ func parseJiraTime(s string) (time.Time, bool) {
 // convertJiraIssues maps raw issues to ExternalItems and returns the max
 // `updated` seen as a JQL-ready cursor. ExternalItem.State stays "" —
 // backward status sync is out of scope for JIRA.
-func convertJiraIssues(issues []jiraIssue, baseURL, cursor string) ([]ExternalItem, string) {
+func convertJiraIssues(issues []jiraIssue, baseURL, cursor string) ([]session.ExternalItem, string) {
 	if len(issues) == 0 {
 		return nil, cursor
 	}
-	items := make([]ExternalItem, 0, len(issues))
+	items := make([]session.ExternalItem, 0, len(issues))
 	newCursor := cursor
 	for _, is := range issues {
 		updated, ok := parseJiraTime(is.Fields.Updated)
@@ -294,7 +295,7 @@ func convertJiraIssues(issues []jiraIssue, baseURL, cursor string) ([]ExternalIt
 		if is.Fields.Priority != nil {
 			prio = is.Fields.Priority.Name
 		}
-		items = append(items, ExternalItem{
+		items = append(items, session.ExternalItem{
 			ExternalID:     is.Key,
 			Title:          is.Fields.Summary,
 			Description:    jira.ADFToPlainText(is.Fields.Description),
@@ -325,12 +326,12 @@ func jiraPriorityToBacklog(name string) int {
 	case "lowest", "trivial":
 		return 1
 	default:
-		return DefaultBacklogPriority
+		return session.DefaultBacklogPriority
 	}
 }
 
 // MapToBacklogItem converts a JIRA ExternalItem to a BacklogItemData.
-func (j *JiraPlugin) MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
+func (j *JiraPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
 	return mapExternalToBacklogItem(item, sourceID)
 }
 
@@ -365,7 +366,7 @@ func ParseJiraIssueRef(ref string) (JiraIssueRef, error) {
 
 // decodeJiraIssueConfig resolves config for single-issue calls (import and
 // forward-sync): base_url and credentials are required, project_key is not.
-func decodeJiraIssueConfig(config PluginConfig) (jiraPluginConfig, error) {
+func decodeJiraIssueConfig(config session.PluginConfig) (jiraPluginConfig, error) {
 	cfg, err := loadJiraConfig(config)
 	if err != nil {
 		return cfg, err
@@ -386,26 +387,26 @@ func decodeJiraIssueConfig(config PluginConfig) (jiraPluginConfig, error) {
 // FetchIssue retrieves one JIRA issue by key for one-off import. config needs
 // base_url only (project_key is not required); credentials come from the
 // keychain (or legacy config fields) as in Fetch.
-func (j *JiraPlugin) FetchIssue(ctx context.Context, config PluginConfig, key string) (ExternalItem, error) {
+func (j *JiraPlugin) FetchIssue(ctx context.Context, config session.PluginConfig, key string) (session.ExternalItem, error) {
 	cfg, err := decodeJiraIssueConfig(config)
 	if err != nil {
-		return ExternalItem{}, err
+		return session.ExternalItem{}, err
 	}
 
 	data, err := jiraIssueRequest(ctx, cfg, http.MethodGet,
 		"/rest/api/3/issue/"+url.PathEscape(key)+"?fields=summary,description,labels,priority,updated", nil)
 	if errors.Is(err, errJiraNotFound) {
-		return ExternalItem{}, fmt.Errorf("jira: issue %s not found", key)
+		return session.ExternalItem{}, fmt.Errorf("jira: issue %s not found", key)
 	}
 	if err != nil {
-		return ExternalItem{}, err
+		return session.ExternalItem{}, err
 	}
 	var is jiraIssue
 	if err := json.Unmarshal(data, &is); err != nil {
-		return ExternalItem{}, fmt.Errorf("jira: decode response: %w", err)
+		return session.ExternalItem{}, fmt.Errorf("jira: decode response: %w", err)
 	}
 	if is.Key == "" {
-		return ExternalItem{}, fmt.Errorf("jira: issue %s: response had no key", key)
+		return session.ExternalItem{}, fmt.Errorf("jira: issue %s: response had no key", key)
 	}
 	items, _ := convertJiraIssues([]jiraIssue{is}, cfg.BaseURL, "")
 	return items[0], nil

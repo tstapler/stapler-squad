@@ -1,0 +1,50 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "itemsources",
+    srcs = [
+        "backlog_plugin_github.go",
+        "backlog_plugin_github_prs.go",
+        "backlog_plugin_jira.go",
+        "backlog_plugin_jira_forward_sync.go",
+        "backlog_plugin_linear.go",
+        "backlog_plugin_linear_forward_sync.go",
+        "common.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/itemsources",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//github",
+        "//jira",
+        "//linear",
+        "//log",
+        "//session",
+        "@org_golang_x_sync//errgroup",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":itemsources",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "itemsources_test",
+    srcs = [
+        "backlog_plugin_github_test.go",
+        "backlog_plugin_jira_forward_sync_test.go",
+        "backlog_plugin_jira_test.go",
+        "backlog_plugin_linear_forward_sync_test.go",
+        "backlog_plugin_linear_test.go",
+    ],
+    embed = [":itemsources"],
+    deps = [
+        "//github",
+        "//jira",
+        "//linear",
+        "//session",
+        "@com_github_stretchr_testify//require",
+    ],
+)

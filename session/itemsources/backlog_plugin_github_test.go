@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // These tests (both GitHubIssuesPlugin and GitHubPRsPlugin) rely on
@@ -62,7 +63,7 @@ func TestGitHubIssuesPlugin_PluginID(t *testing.T) {
 func TestGitHubIssuesPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
 	t.Parallel()
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, cursor, err := p.Fetch(context.Background(), cfg, "old-cursor")
 	require.NoError(t, err)
 	require.Empty(t, items)
@@ -72,7 +73,7 @@ func TestGitHubIssuesPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
 func TestGitHubIssuesPlugin_Fetch_ErrorsWhenOwnerOrRepoMissing(t *testing.T) {
 	t.Parallel()
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"token":"tok"}`}
 	_, _, err := p.Fetch(context.Background(), cfg, "")
 	require.Error(t, err)
 }
@@ -88,7 +89,7 @@ func TestGitHubIssuesPlugin_Fetch_ParsesIssuesAndComputesPriority(t *testing.T) 
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok","label_priority_map":{"p1":1}}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok","label_priority_map":{"p1":1}}`}
 	items, newCursor, err := p.Fetch(context.Background(), cfg, "2024-01-01")
 	require.NoError(t, err)
 	require.Len(t, items, 2)
@@ -115,7 +116,7 @@ func TestGitHubIssuesPlugin_Fetch_IssueUpdatedAtMatchesCursorValue(t *testing.T)
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	items, newCursor, err := p.Fetch(context.Background(), cfg, "")
 	require.NoError(t, err)
 	require.Len(t, items, 2)
@@ -141,7 +142,7 @@ func TestGitHubIssuesPlugin_Fetch_IncludesClosedIssues(t *testing.T) {
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	items, _, err := p.Fetch(context.Background(), cfg, "")
 	require.NoError(t, err)
 	require.Len(t, items, 2)
@@ -159,7 +160,7 @@ func TestGitHubIssuesPlugin_Fetch_RateLimited(t *testing.T) {
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	_, _, err := p.Fetch(context.Background(), cfg, "")
 	require.Error(t, err)
 }
@@ -197,7 +198,7 @@ func TestGitHubIssuesPlugin_FetchAll_AggregatesMultiplePages(t *testing.T) {
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	items, _, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"1", "2"}, pagesRequested)
@@ -226,7 +227,7 @@ func TestGitHubIssuesPlugin_FetchAll_SetsPossiblyIncompleteWhenCapHit(t *testing
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	items, _, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "")
 	require.NoError(t, err)
 	require.Equal(t, 2, requestedPages, "should stop at the cap rather than fetching indefinitely")
@@ -240,7 +241,7 @@ func TestGitHubIssuesPlugin_FetchAll_SetsPossiblyIncompleteWhenCapHit(t *testing
 func TestGitHubIssuesPlugin_FetchAll_ReturnsEmptyWhenTokenMissing(t *testing.T) {
 	t.Parallel()
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, cursor, possiblyIncomplete, err := p.FetchAll(context.Background(), cfg, "old-cursor")
 	require.NoError(t, err)
 	require.Empty(t, items)
@@ -260,7 +261,7 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 		longDesc[i] = 'b'
 	}
 
-	item := ExternalItem{
+	item := session.ExternalItem{
 		ExternalID:  "42",
 		Title:       string(longTitle),
 		Description: string(longDesc),
@@ -273,7 +274,7 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	require.Len(t, data.Description, 2000)
 	require.Equal(t, "42", data.ExternalID)
 	require.Equal(t, "src-1", data.SourceID)
-	require.Equal(t, string(BacklogStatusIdea), data.Status)
+	require.Equal(t, string(session.BacklogStatusIdea), data.Status)
 	// Epic 0.1 (Story 0.1.3): Labels and ExternalURL must pass through unchanged.
 	require.Equal(t, []string{"bug", "p1"}, data.Labels)
 	require.Equal(t, "https://github.com/acme/widgets/issues/42", data.ExternalURL)
@@ -294,7 +295,7 @@ func TestGitHubIssuesPlugin_CloseIssue_MergesLabels(t *testing.T) {
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	_, err := p.CloseIssue(context.Background(), cfg, "42", []string{"bug"}, "shipped")
 	require.NoError(t, err)
 
@@ -316,7 +317,7 @@ func TestGitHubIssuesPlugin_CloseIssue_NoLabelOmitsLabelsField(t *testing.T) {
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	_, err := p.CloseIssue(context.Background(), cfg, "42", []string{"bug"}, "")
 	require.NoError(t, err)
 
@@ -337,7 +338,7 @@ func TestGitHubIssuesPlugin_CloseIssue_RateLimitedReturnsError(t *testing.T) {
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	_, err := p.CloseIssue(context.Background(), cfg, "42", nil, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "rate limited")
@@ -354,7 +355,7 @@ func TestGitHubIssuesPlugin_CloseIssue_ReturnsResponseUpdatedAt(t *testing.T) {
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	updatedAt, err := p.CloseIssue(context.Background(), cfg, "42", nil, "")
 	require.NoError(t, err)
 
@@ -379,7 +380,7 @@ func TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody(t *testing.T) {
 	})
 
 	p := NewGitHubIssuesPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	const comment = "Closed automatically — the linked backlog item was marked done in stapler-squad."
 	err := p.PostIssueComment(context.Background(), cfg, "42", comment)
 	require.NoError(t, err)
@@ -390,7 +391,7 @@ func TestGitHubIssuesPlugin_PostIssueComment_SendsExpectedBody(t *testing.T) {
 }
 
 func TestGitHubIssuesPlugin_PostProgressComment(t *testing.T) {
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 
 	t.Run("success returns read-back updated_at", func(t *testing.T) {
 		withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -440,7 +441,7 @@ func TestGitHubPRsPlugin_PluginID(t *testing.T) {
 func TestGitHubPRsPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
 	t.Parallel()
 	p := NewGitHubPRsPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets"}`}
 	items, _, err := p.Fetch(context.Background(), cfg, "")
 	require.NoError(t, err)
 	require.Empty(t, items)
@@ -466,7 +467,7 @@ func TestGitHubPRsPlugin_Fetch_ParsesPRsWithReviewRequestedAndCILabels(t *testin
 	})
 
 	p := NewGitHubPRsPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	items, _, err := p.Fetch(context.Background(), cfg, "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
@@ -531,7 +532,7 @@ func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.
 	})
 
 	p := NewGitHubPRsPlugin()
-	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	cfg := session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
 	items, _, err := p.Fetch(context.Background(), cfg, "")
 	require.NoError(t, err)
 	require.Len(t, items, prCount)
@@ -557,7 +558,7 @@ func TestGitHubPRsPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	for i := range longTitle {
 		longTitle[i] = 'a'
 	}
-	item := ExternalItem{ExternalID: "9", Title: string(longTitle), Priority: 3}
+	item := session.ExternalItem{ExternalID: "9", Title: string(longTitle), Priority: 3}
 	data := p.MapToBacklogItem(item, "src-2")
 	require.Len(t, data.Title, 200)
 	require.Equal(t, "9", data.ExternalID)
@@ -571,7 +572,7 @@ func TestGitHubIssuesPlugin_ReadIssueState(t *testing.T) {
 				require.Equal(t, "/repos/acme/widgets/issues/42", r.URL.Path)
 				fmt.Fprintf(w, `{"number":42,"state":%q,"updated_at":"2026-11-01T00:00:00Z"}`, state)
 			})
-			got, updatedAt, err := NewGitHubIssuesPlugin().ReadIssueState(context.Background(), PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}, "42")
+			got, updatedAt, err := NewGitHubIssuesPlugin().ReadIssueState(context.Background(), session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}, "42")
 			require.NoError(t, err)
 			require.Equal(t, state, got)
 			require.Equal(t, time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), updatedAt)
@@ -581,6 +582,6 @@ func TestGitHubIssuesPlugin_ReadIssueState(t *testing.T) {
 
 func TestGitHubIssuesPlugin_ReadIssueState_NonOKReturnsError(t *testing.T) {
 	withGitHubTestServer(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
-	_, _, err := NewGitHubIssuesPlugin().ReadIssueState(context.Background(), PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}, "42")
+	_, _, err := NewGitHubIssuesPlugin().ReadIssueState(context.Background(), session.PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}, "42")
 	require.Error(t, err)
 }

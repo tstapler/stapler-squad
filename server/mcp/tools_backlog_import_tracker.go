@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
 // IssueFetcher is the optional plugin capability behind the one-off tracker
@@ -92,7 +93,7 @@ func (h *backlogHandlers) importLinearIssue(ctx context.Context, req mcpgo.CallT
 	if strings.TrimSpace(ref) == "" {
 		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
 	}
-	identifier, err := session.ParseLinearIssueRef(ref)
+	identifier, err := itemsources.ParseLinearIssueRef(ref)
 	if err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), "Pass a Linear URL like https://linear.app/org/issue/ENG-123 or an identifier like ENG-123."), nil
 	}
@@ -120,7 +121,7 @@ func (h *backlogHandlers) importJiraIssue(ctx context.Context, req mcpgo.CallToo
 	if strings.TrimSpace(ref) == "" {
 		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
 	}
-	jref, err := session.ParseJiraIssueRef(ref)
+	jref, err := itemsources.ParseJiraIssueRef(ref)
 	if err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), "Pass a JIRA URL like https://org.atlassian.net/browse/ENG-123, or a bare key plus base_url."), nil
 	}
@@ -132,7 +133,7 @@ func (h *backlogHandlers) importJiraIssue(ctx context.Context, req mcpgo.CallToo
 	}
 	fetch := h.fetchJiraIssue
 	if fetch == nil {
-		fetch = func(ctx context.Context, r session.JiraIssueRef) (session.ExternalItem, error) {
+		fetch = func(ctx context.Context, r itemsources.JiraIssueRef) (session.ExternalItem, error) {
 			raw, _ := json.Marshal(map[string]string{"base_url": r.BaseURL})
 			return h.fetchTrackerIssue(ctx, "jira", session.PluginConfig{Raw: string(raw)}, r.Key)
 		}

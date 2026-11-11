@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
 func importedItemID(t *testing.T, text string) string {
@@ -59,7 +60,7 @@ func TestImportLinearIssue_should_RejectBadInput_And_SurfaceFetchErrors(t *testi
 func TestImportJiraIssue_should_CreateItemFromURL_And_BareKeyWithBaseURL(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	var gotBase, gotKey string
-	h := &backlogHandlers{storage: storage, fetchJiraIssue: func(_ context.Context, r session.JiraIssueRef) (session.ExternalItem, error) {
+	h := &backlogHandlers{storage: storage, fetchJiraIssue: func(_ context.Context, r itemsources.JiraIssueRef) (session.ExternalItem, error) {
 		gotBase, gotKey = r.BaseURL, r.Key
 		return session.ExternalItem{ExternalID: r.Key, Title: "Crash", Description: "stack", Priority: 4, URL: r.BaseURL + "/browse/" + r.Key}, nil
 	}}
@@ -83,8 +84,8 @@ func TestImportJiraIssue_should_CreateItemFromURL_And_BareKeyWithBaseURL(t *test
 }
 
 var (
-	_ IssueFetcher = (*session.LinearPlugin)(nil)
-	_ IssueFetcher = (*session.JiraPlugin)(nil)
+	_ IssueFetcher = (*itemsources.LinearPlugin)(nil)
+	_ IssueFetcher = (*itemsources.JiraPlugin)(nil)
 )
 
 func TestFetchTrackerIssue_should_ErrorWhenRegistryMissingPluginOrNotFetcher(t *testing.T) {
@@ -98,7 +99,7 @@ func TestFetchTrackerIssue_should_ErrorWhenRegistryMissingPluginOrNotFetcher(t *
 	_, err = h.fetchTrackerIssue(ctx, "linear", session.PluginConfig{}, "X-1")
 	require.ErrorContains(t, err, "no linear plugin registered")
 
-	h = &backlogHandlers{plugins: session.NewPluginRegistry(session.NewGitHubIssuesPlugin())}
+	h = &backlogHandlers{plugins: session.NewPluginRegistry(itemsources.NewGitHubIssuesPlugin())}
 	_, err = h.fetchTrackerIssue(ctx, "github_issues", session.PluginConfig{}, "1")
 	require.ErrorContains(t, err, "cannot fetch a single issue")
 }

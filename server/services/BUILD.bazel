@@ -857,6 +857,7 @@ go_test(
         "//session/headless",
         "//session/hostclaim",
         "//session/importer",
+        "//session/itemsources",
         "//session/launchcmd",
         "//session/prompts",
         "//session/search",

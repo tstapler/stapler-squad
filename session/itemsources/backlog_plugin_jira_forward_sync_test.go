@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 func TestJiraPlugin_UpdateIssueState_should_TransitionByNameAndReturnUpdated(t *testing.T) {
@@ -46,7 +47,7 @@ func TestJiraPlugin_UpdateIssueState_should_Error_When_TransitionUnknown(t *test
 func TestJiraPlugin_UpdateIssueState_should_Error_When_CredentialsMissing(t *testing.T) {
 	clearJiraEnv(t)
 	_, err := NewJiraPlugin().UpdateIssueState(context.Background(),
-		PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net"}`}, "ENG-1", "Done")
+		session.PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net"}`}, "ENG-1", "Done")
 	require.ErrorContains(t, err, "credentials not configured")
 }
 
