@@ -16,7 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/shadowledger"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -337,17 +337,17 @@ func TestSoakStatus_ReportsPerClassVerdicts_ForOperatorAgentSystem(t *testing.T)
 func TestSoakStatusTarget_ReportsReviewLine_FromRealLedgerThroughActuator(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	rec := backlog.NewShadowLedgerRecorder(dir, backlog.WithShadowClock(fixedClock{soakTestNow.Add(-20 * 24 * time.Hour)}))
+	rec := shadowledger.NewShadowLedgerRecorder(dir, shadowledger.WithShadowClock(fixedClock{soakTestNow.Add(-20 * 24 * time.Hour)}))
 	rec.RecordShadowCall(session.MethodCanTransition, session.PathTransition)
 	if err := rec.Flush(); err != nil {
 		t.Fatal(err)
 	}
 	src := &WorkflowEngineSoakSource{
 		Ledger: func() (session.ShadowLedger, error) {
-			return backlog.ReadShadowLedgerFile(backlog.ShadowLedgerPath(dir))
+			return shadowledger.ReadShadowLedgerFile(shadowledger.ShadowLedgerPath(dir))
 		},
 		Now:       func() time.Time { return soakTestNow },
-		ReproPath: backlog.ShadowLedgerPath(dir),
+		ReproPath: shadowledger.ShadowLedgerPath(dir),
 	}
 
 	body := getSoak(t, src, "format=text&class=operator").Body.String()
@@ -503,7 +503,7 @@ func TestActuatorWorkflowEngineAndNudgeEndpoints_Return401OnRemoteChain_AndHostG
 func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNewPerClass(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	rec := backlog.NewShadowLedgerRecorder(dir, backlog.WithShadowClock(fixedClock{soakTestNow.Add(-1 * time.Hour)}))
+	rec := shadowledger.NewShadowLedgerRecorder(dir, shadowledger.WithShadowClock(fixedClock{soakTestNow.Add(-1 * time.Hour)}))
 	rec.RecordShadowCallFor(session.ClassAgent, session.MethodValidateGates, session.PathTransition)
 	rec.RecordDivergenceFor(session.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
 	rec.RecordObservation(session.ShadowObservation{
@@ -515,7 +515,7 @@ func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNew
 	}
 	src := &WorkflowEngineSoakSource{
 		Ledger: func() (session.ShadowLedger, error) {
-			return backlog.ReadShadowLedgerFile(backlog.ShadowLedgerPath(dir))
+			return shadowledger.ReadShadowLedgerFile(shadowledger.ShadowLedgerPath(dir))
 		},
 		Now: func() time.Time { return soakTestNow },
 	}

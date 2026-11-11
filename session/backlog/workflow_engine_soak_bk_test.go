@@ -14,7 +14,10 @@ import (
 // readyLedger is a ledger that satisfies every READY criterion for class
 // operator at soakNow: 8 days of history, every registry edge at 25 samples each.
 func readyLedger() session.ShadowLedger {
-	cl := newClassLedger()
+	cl := &session.ClassLedger{
+		Calls: map[string]int64{}, Divergence: map[string]int64{}, NotCompared: map[string]int64{},
+		Edges: map[string]session.EdgeStats{}, ConfigSeen: map[string]int64{},
+	}
 	cl.Calls["CanTransition|transition"] = 300
 	cl.ConfigSeen[session.ConfigSeeded] = 300
 	cl.FirstSampleAt = sessiontest.SoakNow.Add(-8 * 24 * time.Hour)
@@ -22,7 +25,7 @@ func readyLedger() session.ShadowLedger {
 		cl.Edges[session.EdgeKey(e.From, e.To)] = session.EdgeStats{TransitionSamples: 25}
 	}
 	return session.ShadowLedger{
-		Version: shadowLedgerVersion, BinaryStarts: []time.Time{sessiontest.SoakNow.Add(-8 * 24 * time.Hour)},
+		Version: 1, BinaryStarts: []time.Time{sessiontest.SoakNow.Add(-8 * 24 * time.Hour)},
 		Classes: map[string]*session.ClassLedger{string(session.ClassOperator): cl},
 	}
 }

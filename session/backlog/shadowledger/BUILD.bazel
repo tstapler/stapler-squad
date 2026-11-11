@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "shadowledger",
+    srcs = ["shadowledger.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/backlog/shadowledger",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//session",
+        "//session/hostclaim",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":shadowledger",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "shadowledger_test",
+    srcs = [
+        "fixtures_test.go",
+        "shadowledger_test.go",
+    ],
+    embed = [":shadowledger"],
+    deps = [
+        "//config",
+        "//session",
+        "//session/domain",
+        "//session/internal/sessiontest",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogstage",
+        "//tools/bzl/ent:stagetransition",
+        "@com_github_stretchr_testify//require",
+    ],
+)
