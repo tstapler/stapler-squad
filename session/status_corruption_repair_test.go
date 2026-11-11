@@ -109,3 +109,11 @@ func TestStatusCorruptionRepair_ValueOutsideShiftEligibleRangeLeftUnchanged(t *t
 	require.Equal(t, Status(103), got.Status, "a status whose recovered value was never shift-eligible must be left unchanged, not silently repaired to a plausible-but-wrong value")
 	require.NoError(t, repo.Close())
 }
+
+// The repair file freezes these two values so it can move to a leaf package
+// without the Status enum; a new top status must bump both in the same commit.
+func TestStatusCorruptionRepair_FrozenConstantsMatchEnum(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, int(Failed), maxValidPersistedStatus)
+	require.Equal(t, int(Restoring), minShiftEligibleStatus)
+}

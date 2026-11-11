@@ -35,7 +35,7 @@ import (
 // is corruption, not a newer status this code doesn't know about yet — a
 // real new Status value requires a code change here anyway, at which point
 // this constant gets bumped in the same commit.
-const maxValidPersistedStatus = int(Failed)
+const maxValidPersistedStatus = 8 // == int(Failed); frozen so this file needs no Status enum (pinned by TestStatusCorruptionRepair_FrozenConstantsMatchEnum)
 
 // minShiftEligibleStatus is the lowest status the removed migration could
 // ever have shifted: its own "is this legacy data" check was `status > 4`,
@@ -48,7 +48,7 @@ const maxValidPersistedStatus = int(Failed)
 // instead of surfacing as the loud, diagnosable error it currently is —
 // worse than not repairing it at all. See
 // TestStatusCorruptionRepair_ValueOutsideShiftEligibleRangeLeftUnchanged.
-const minShiftEligibleStatus = int(Restoring)
+const minShiftEligibleStatus = 5 // == int(Restoring); frozen, see maxValidPersistedStatus
 
 // runStatusCorruptionRepair rewrites any Session row whose stored status is
 // outside the valid range by recovering the original value via status %
