@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/internal/claudehooks"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/antigravityexport"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -180,7 +181,7 @@ func (s *SessionService) InstallHooks(
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("install agy hook: %w (%s)", err, strings.TrimSpace(string(output))))
 			}
 			if st, ok := s.storage.(*session.Storage); ok {
-				if err := ExportAntigravityRulesFromDB(ctx, st); err != nil {
+				if err := antigravityexport.ExportAntigravityRulesFromDB(ctx, st); err != nil {
 					log.Warn("[InstallHooks] failed to export rules to Antigravity", "err", err)
 				}
 			}

@@ -12,12 +12,18 @@ runs:
       shell: bash
       run: |
         # Refresh the index: runner images ship a stale one and libevent-dev 404s without it.
-        sudo apt-get update
-        if [ "${{ inputs.install-socat }}" = "true" ]; then
-          sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config socat
-        else
-          sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config
-        fi
+        # Retried: a transient DNS failure on the apt mirror (seen on runners) otherwise fails the whole job.
+        pkgs="automake libevent-dev libncurses-dev pkg-config"
+        if [ "${{ inputs.install-socat }}" = "true" ]; then pkgs="$pkgs socat"; fi
+        for attempt in 1 2 3 4; do
+          if sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y $pkgs; then
+            exit 0
+          fi
+          echo "apt attempt $attempt failed; retrying in $((attempt * 15))s"
+          sleep $((attempt * 15))
+        done
+        echo "::error::apt-get could not install the tmux build dependencies after 4 attempts"
+        exit 1
     - name: Cache pinned tmux binary
       uses: actions/cache@v4
       id: tmux-cache

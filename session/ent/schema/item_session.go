@@ -85,6 +85,9 @@ func (ItemSession) Fields() []ent.Field {
 		field.String("triage_result").
 			Optional().
 			Comment("JSON triage suggestions"),
+		field.String("diagnose_result").
+			Optional().
+			Comment("JSON {outcome,summary,filed_item_id,diagnosed_at} written by submit_diagnosis_result for a session_role=diagnose row, so the UI need not parse the activity-note text. Empty for older diagnose rows and every other role."),
 		field.String("verification_notes").
 			Optional().
 			Comment("Freeform verification evidence reported via request_review (commands run, manual checks performed) — not visible in the diff"),
