@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/server/services/antigravityexport"
 	"github.com/tstapler/stapler-squad/session"
 
 	"connectrpc.com/connect"
@@ -125,7 +126,7 @@ func (rs *RulesService) afterRebuildReadHook() {
 // configStore, promptBuilder, and aiClient may be nil; nil means that capability is unavailable.
 func NewRulesService(rulesStore *RulesStore, configStore ConfigFileRulesRepository, analyticsStore *AnalyticsStore, classifier *classifier.RuleBasedClassifier, promptBuilder RulePromptBuilder, aiClient AIClient) *RulesService {
 	return &RulesService{
-		exportAntigravity: ExportAntigravityRulesFromDB,
+		exportAntigravity: antigravityexport.ExportAntigravityRulesFromDB,
 		rulesStore:        rulesStore,
 		configStore:       configStore,
 		analyticsStore:    analyticsStore,

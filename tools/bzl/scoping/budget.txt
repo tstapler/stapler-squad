@@ -16,3 +16,4 @@ server/services/backlogsvc files=31 loc=15533 imports=21
 server/services/internal/svctest files=36 loc=1459 imports=17
 server/services/sessionbundle files=4 loc=862 imports=6
 server/services/devtools files=4 loc=501 imports=4
+server/services/antigravityexport files=2 loc=400 imports=3

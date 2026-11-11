@@ -23,7 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/antigravityexport"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -1076,7 +1076,7 @@ func installAgy() {
 	dbPath := getDefaultDBPath()
 	if repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath)); err == nil {
 		if st, err := session.NewStorageWithRepository(repo); err == nil {
-			if err := services.ExportAntigravityRulesFromDB(context.Background(), st); err != nil {
+			if err := antigravityexport.ExportAntigravityRulesFromDB(context.Background(), st); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: exporting rules to Antigravity settings: %v\n", err)
 			} else {
 				fmt.Println("Exported auto-approval rules to Antigravity permissions.allow.")
@@ -1103,7 +1103,7 @@ func handleExportRules() {
 
 	switch strings.ToLower(*target) {
 	case "agy", "antigravity":
-		if err := services.ExportAntigravityRulesFromDB(context.Background(), storage); err != nil {
+		if err := antigravityexport.ExportAntigravityRulesFromDB(context.Background(), storage); err != nil {
 			fmt.Fprintf(os.Stderr, "Error exporting rules to Antigravity: %v\n", err)
 			os.Exit(1)
 		}
