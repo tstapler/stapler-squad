@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "antigravityexport",
+    srcs = ["exporter.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/services/antigravityexport",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":antigravityexport",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "antigravityexport_test",
+    srcs = [
+        "exporter_safety_test.go",
+        "exporter_test.go",
+    ],
+    embed = [":antigravityexport"],
+    deps = [
+        "//server/services/internal/svctest",
+        "//session",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

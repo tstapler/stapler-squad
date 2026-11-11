@@ -53,7 +53,7 @@ export function ActivityLogSection({ item, defaultExpanded }: ActivityLogSection
                     </>
                   )}
                 </div>
-                {n.message && <DiagnoseResultCard message={n.message} />}
+                {n.message && <DiagnoseResultCard message={n.message} sessionUuid={n.authorSessionUuid || undefined} />}
               </div>
             );
           })}

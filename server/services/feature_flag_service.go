@@ -367,6 +367,10 @@ var knownFeatureFlags = []struct {
 		description: "Send independent cheap read RPCs issued in the same moment as one batched HTTP request (POST /api/batch/unary), freeing browser connection slots; each call still runs the full auth and guard chain, and any batch failure falls back to individual calls. Not used for calls that already travel over the unary WebSocket. Kill switch: turn off to send one request per call. Read by the web client; applies on next page load. Default: off.",
 	},
 	{
+		name:        "diagnose-session-panel",
+		description: "Show the rich Diagnose & Nudge view on the backlog item detail page: a structured result panel for each diagnose session and dismissible workflow-suggestion cards. Read by the web client. Default: off.",
+	},
+	{
 		name:        "ghostty_renderer",
 		description: "Render terminals with ghostty-web (Ghostty's VT parser compiled to WASM, drawn on a canvas) instead of xterm.js, for better VT conformance (synchronized output, REP, DECALN, Kitty keyboard). Kill switch: turn off to fall back to xterm.js. Read by the web client; applies on next page load, no rebuild. Default: off.",
 	},

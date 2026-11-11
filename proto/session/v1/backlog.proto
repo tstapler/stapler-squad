@@ -165,7 +165,38 @@ message ItemSession {
   // base. Falls back to the cached origin ref when origin was unreachable at
   // spawn. Empty for pre-existing rows and non-work sessions.
   string base_commit_sha = 28;
+  // diagnose_result is the structured outcome of a session_role=diagnose row
+  // (written by submit_diagnosis_result). Unset for older diagnose rows.
+  DiagnoseResult diagnose_result = 29;
 }
+
+// DiagnoseResult is a Diagnose & Nudge session's structured outcome.
+message DiagnoseResult {
+  // outcome is BUG_FILED | NOTE_ONLY | NUDGED | REMEDIATION_RESET | NO_ACTION.
+  string outcome = 1;
+  string summary = 2;
+  // filed_item_id is the bug item filed when outcome == BUG_FILED.
+  string filed_item_id = 3;
+  google.protobuf.Timestamp diagnosed_at = 4;
+}
+
+// WorkflowSuggestion is an operator recommendation posted by a diagnose session.
+message WorkflowSuggestion {
+  string suggestion_id = 1;
+  // action_type is transition_status | set_config | operator_note.
+  string action_type = 2;
+  string recommendation = 3;
+  string session_uuid = 4;
+  google.protobuf.Timestamp created_at = 5;
+  bool dismissed = 6;
+}
+
+message DismissWorkflowSuggestionRequest {
+  string item_id = 1;
+  string suggestion_id = 2;
+}
+
+message DismissWorkflowSuggestionResponse {}
 
 // BacklogStatusEvent records a single status transition for a backlog item.
 message BacklogStatusEvent {
@@ -333,6 +364,8 @@ message BacklogItem {
   repeated SessionPullRequest pull_requests = 47;
   // pr_holds explains cleanup holds. Detail responses only, never list responses.
   repeated PrHold pr_holds = 48;
+  // workflow_suggestions are diagnose-session recommendations (detail responses only).
+  repeated WorkflowSuggestion workflow_suggestions = 49;
 }
 
 // DependencyInfo is a lightweight reference to the other end of a dependency
@@ -1707,6 +1740,9 @@ service BacklogService {
   // history, nor recreate a deleted git worktree/session — the item simply
   // re-enters the idea column needing a fresh session.
   rpc UnarchiveBacklogItem(UnarchiveBacklogItemRequest) returns (UnarchiveBacklogItemResponse) {}
+
+  // DismissWorkflowSuggestion marks a diagnose-session recommendation dismissed.
+  rpc DismissWorkflowSuggestion(DismissWorkflowSuggestionRequest) returns (DismissWorkflowSuggestionResponse) {}
 
   // DeleteBacklogItem permanently removes an item and all its child records.
   rpc DeleteBacklogItem(DeleteBacklogItemRequest) returns (DeleteBacklogItemResponse) {}

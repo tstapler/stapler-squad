@@ -129,6 +129,9 @@ func (BacklogItem) Fields() []ent.Field {
 		field.String("github_last_progress_comment_status").
 			Optional().
 			Comment("Last item status for which a GitHub progress comment was posted; stops a re-entered status from commenting twice."),
+		field.String("workflow_suggestions").
+			Optional().
+			Comment("JSON []WorkflowSuggestion posted by a diagnose session's suggest_workflow_action; dismissed entries stay with dismissed=true."),
 		field.String("shipped_file_stats").
 			Optional().
 			Comment("JSON []ShippedFileStat{Path,Status,Additions,Deletions} — per-file diff stats captured at ship time"),

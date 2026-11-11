@@ -6,13 +6,15 @@ import type { Session } from "@/gen/session/v1/types_pb";
 import type { BacklogItem, LinkedSession, PipelineMode } from "@/lib/hooks/useBacklogService";
 import { CollapsibleSection, CollapsibleGroup } from "@/components/ui/Collapsible";
 import { useAnalytics } from "@/lib/analytics";
-import { classifySessionKind, isSteerable, type SessionKind } from "@/lib/backlog/sessionKind";
+import { classifySessionKind, isSteerable, DIAGNOSE_SESSION_PANEL_FLAG, type SessionKind } from "@/lib/backlog/sessionKind";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import { resolvePipelineModeDisplay, resolveExecutorProvenance } from "@/lib/backlog/pipelineModeDisplay";
 import { formatDate } from "@/lib/backlog/formatDate";
 import { useShowMore } from "@/lib/hooks/useShowMore";
 import { getErrorMessage } from "@/lib/utils/connectError";
 import { SessionMonitor } from "../SessionMonitor";
 import { SessionDiagnosticPanel } from "./SessionDiagnosticPanel";
+import { DiagnoseSessionPanel } from "./DiagnoseSessionPanel";
 import { JumpToSessionPanel } from "./JumpToSessionPanel";
 import { JulesStatusBadge, type JulesSessionPhase } from "../JulesStatusBadge";
 import * as styles from "../BacklogItemDetail.css";
@@ -62,6 +64,7 @@ function julesWebUrlFor(session: LinkedSession): string {
 // map up — only the 3 Synthetic Session kinds need an icon here.
 const SYNTHETIC_KIND_ICON: Partial<Record<SessionKind, string>> = {
   headless_diagnostic: "🩺",
+  diagnose: "🩺",
   blocked_guardrail: "🚫",
   manual_review_marker: "✍️",
 };
@@ -131,6 +134,7 @@ export function SessionsSection({
   onRestartWork,
 }: SessionsSectionProps) {
   const { track } = useAnalytics();
+  const diagnosePanelEnabled = useFeatureFlag(DIAGNOSE_SESSION_PANEL_FLAG);
   const { visible, hasMore, remaining, showAll } = useShowMore(
     item.id,
     "sessions",
@@ -298,7 +302,9 @@ export function SessionsSection({
               const matchedMode = pipelineModes.find((m) => m.slug === (s.pipelineModeSnapshot ?? ""));
               const provenance = resolveExecutorProvenance(s, matchedMode);
               const kind = classifySessionKind(s);
-              const isSynthetic = kind !== "work" && kind !== "review";
+              // Flag off: a diagnose row keeps its pre-flag plain-link rendering.
+              const isDiagnosePanel = kind === "diagnose" && diagnosePanelEnabled;
+              const isSynthetic = isDiagnosePanel || (kind !== "work" && kind !== "review" && kind !== "diagnose");
               // A Jules cloud session has no PTY/tmux Instance behind it --
               // never Steerable, never Instance-backed -- so it's routed to
               // its own row content (badge instead of branch chip, no
@@ -350,7 +356,11 @@ export function SessionsSection({
                             </span>
                           }
                         >
-                          <SessionDiagnosticPanel session={s} item={item} />
+                          {isDiagnosePanel ? (
+                            <DiagnoseSessionPanel session={s} item={item} />
+                          ) : (
+                            <SessionDiagnosticPanel session={s} item={item} />
+                          )}
                         </CollapsibleSection>
                       </div>
                     ) : (

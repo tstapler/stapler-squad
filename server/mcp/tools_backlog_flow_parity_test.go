@@ -65,7 +65,7 @@ func TestNewCore_should_RegisterFlowToolsOnlyInsideBacklogFlagAndStorage(t *test
 
 	var withFlow []string
 	for name := range enabled.ListTools() {
-		if strings.Contains(name, "flow") && !strings.HasSuffix(name, "_workflow") && !strings.HasSuffix(name, "_workflows") {
+		if strings.Contains(name, "flow") && !strings.Contains(name, "workflow") {
 			withFlow = append(withFlow, name)
 		}
 	}
