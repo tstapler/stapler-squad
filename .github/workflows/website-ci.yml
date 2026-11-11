@@ -84,6 +84,12 @@ jobs:
       - name: "Smoke: generate protos and build web UI"
         uses: ./.github/actions/prepare
 
+      # The prepare action pins Node 20, but Astro needs >=22.22.0 for the site build below.
+      - name: "Smoke: restore Node.js 22 for the site build"
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: "Smoke: build server binary"
         run: go build -o stapler-squad .
 
