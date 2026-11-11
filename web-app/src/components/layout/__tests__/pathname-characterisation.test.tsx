@@ -31,6 +31,7 @@ jest.mock("@/lib/nav", () =>
     }),
   }),
 );
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({ useAnalytics: () => ({ track: jest.fn() }) }));
 jest.mock("@/components/sessions/ReviewQueueNavBadge", () => ({ ReviewQueueNavBadge: () => null }));
 jest.mock("@/components/sessions/ApprovalNavBadge", () => ({ ApprovalNavBadge: () => null }));
 jest.mock("@/components/sessions/MemoryNavBadge", () => ({ MemoryNavBadge: () => null }));
