@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/webhookregistration"
 	"github.com/tstapler/stapler-squad/session/ent/webhookrequestledger"
@@ -152,7 +153,7 @@ func registrationByScope(ctx context.Context, c *ent.WebhookRegistrationClient, 
 		webhookregistration.InstanceID(instanceID),
 	).Only(ctx)
 	if ent.IsNotFound(err) {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("query webhook registration: %w", err)
@@ -195,7 +196,7 @@ func (r *EntRepository) ReconcileWebhookRegistration(ctx context.Context, in Web
 	}
 
 	reg, err := registrationByScope(ctx, tx.WebhookRegistration, in.Scope, in.InstanceID)
-	if err != nil && !errors.Is(err, ErrNotFound) {
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return nil, fmt.Errorf("lookup webhook registration: %w", err)
 	}
 	var currentVersion int64

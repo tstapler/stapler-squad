@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -108,7 +109,7 @@ func (g *HandoffSummaryGenerator) FindRowBySessionID(ctx context.Context, sessio
 	row, err := g.entClient.HandoffSummary.Query().Where(handoffsummary.SessionID(sessionID)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: handoff summary for session=%s", ErrNotFound, sessionID)
+			return nil, fmt.Errorf("%w: handoff summary for session=%s", domain.ErrNotFound, sessionID)
 		}
 		return nil, err
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -177,7 +178,7 @@ func stopGuardrailSession(ctx context.Context, st *session.Storage, inst *sessio
 	switch {
 	case err == nil:
 		endErr = st.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), reason)
-	case !errors.Is(err, session.ErrNotFound): // not-found = not backlog-linked, nothing to end
+	case !errors.Is(err, domain.ErrNotFound): // not-found = not backlog-linked, nothing to end
 		endErr = err
 	}
 	// Kill even if the end-reason write failed; both errors reach the caller.

@@ -22,6 +22,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // gateSatisfactionToProto converts a session.GateSatisfactionData to its
@@ -70,7 +71,7 @@ func (s *BacklogService) RecordGateApproval(
 
 	record, err := session.RecordGateApproval(ctx, s.gateSatisfactionRepo, itemID, gateID, req.Msg.SatisfiedBy, req.Msg.Approved)
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("gate %s for item %s cannot be updated: already approved, or changed concurrently", gateID, itemID))
 		}
@@ -115,7 +116,7 @@ func (s *BacklogService) GetPendingGates(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))

@@ -10,6 +10,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/acauditevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -217,7 +218,7 @@ func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]AcAud
 	} else if parsed, err := uuid.Parse(itemID); err == nil {
 		where = acauditevent.ItemID(parsed)
 	} else {
-		return nil, fmt.Errorf("%w: invalid item id %q", ErrNotFound, itemID)
+		return nil, fmt.Errorf("%w: invalid item id %q", domain.ErrNotFound, itemID)
 	}
 	rows, err := r.Client.AcAuditEvent.Query().Where(where).
 		Order(ent.Asc(acauditevent.FieldCreatedAt)).All(ctx)
@@ -226,7 +227,7 @@ func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]AcAud
 	}
 	if len(rows) == 0 {
 		if exists, lookupErr := r.backlogItemExists(ctx, itemID); lookupErr != nil || !exists {
-			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+			return nil, fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
 	}
 	out := make([]AcAuditEventData, len(rows))

@@ -430,7 +430,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	item, err := h.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), itemNotFoundRemediation), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
@@ -962,7 +962,7 @@ func (h *backlogHandlers) waitForBacklogEvent(ctx context.Context, req mcpgo.Cal
 
 	item, err := h.storage.GetBacklogItem(waitCtx, itemID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get backlog item: %v", err), ""), nil
@@ -1264,7 +1264,7 @@ func (h *backlogHandlers) linkSessionToItem(ctx context.Context, req mcpgo.CallT
 	// Check-then-act, no lock/transaction — two concurrent first-link calls on the same item can
 	// both pass this and both attach. Accepted, documented gap (rare in practice); see plan.md.
 	itemSessions, listErr := h.storage.ListItemSessions(ctx, itemID)
-	if listErr != nil && !errors.Is(listErr, session.ErrNotFound) {
+	if listErr != nil && !errors.Is(listErr, domain.ErrNotFound) {
 		return errResult(ErrInternalError, fmt.Sprintf("list item sessions: %v", listErr), ""), nil
 	}
 	if owner, conflict := activeWorkSessionOwner(itemSessions, callerUUID, h.liveCheck); conflict {
@@ -1363,7 +1363,7 @@ func (h *backlogHandlers) getLinkedItem(ctx context.Context, req mcpgo.CallToolR
 		is, lookupErr = h.storage.GetItemSessionBySessionUUID(ctx, callerUUID)
 	}
 	if lookupErr != nil {
-		if errors.Is(lookupErr, session.ErrNotFound) {
+		if errors.Is(lookupErr, domain.ErrNotFound) {
 			return okResult(GetLinkedItemResult{MCPResult: MCPResult{Success: true}, Linked: false, ItemID: itemID}), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("lookup item session: %v", lookupErr), ""), nil
@@ -1558,7 +1558,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 		if isTransitionDenied(transErr) {
 			return transitionDeniedResult(transErr, validStatus, targetStatus), nil
 		}
-		if errors.Is(transErr, session.ErrPreconditionFailed) {
+		if errors.Is(transErr, domain.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
@@ -1734,7 +1734,7 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 			if isTransitionDenied(transErr) {
 				return transitionDeniedResult(transErr, currentStatus, targetStatus), nil
 			}
-			if errors.Is(transErr, session.ErrPreconditionFailed) {
+			if errors.Is(transErr, domain.ErrPreconditionFailed) {
 				return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 			}
 			return errResult(ErrInternalError, fmt.Sprintf("transition to %s failed: %v", targetStatus, transErr), ""), nil
@@ -1880,7 +1880,7 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 		if isTransitionDenied(transErr) {
 			return transitionDeniedResult(transErr, session.BacklogStatusReady, session.BacklogStatusInProgress), nil
 		}
-		if errors.Is(transErr, session.ErrPreconditionFailed) {
+		if errors.Is(transErr, domain.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already transitioned it) — call get_backlog_item to see its current status", ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("transition to in_progress failed: %v", transErr), ""), nil
@@ -2260,7 +2260,7 @@ func (h *backlogHandlers) postBacklogUpdate(ctx context.Context, req mcpgo.CallT
 	}
 
 	if err := h.storage.AppendActivityNote(ctx, itemID, authorUUID, authorTitle, sanitizedMessage); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("backlog item %q not found", itemID), ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("post backlog update: %v", err), ""), nil
@@ -2596,7 +2596,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	// two racing calls' reads to land before either write (CAS-failure test).
 	item, getErr := h.getBacklogItemFor(ctx, itemID)
 	if getErr != nil {
-		if errors.Is(getErr, session.ErrNotFound) {
+		if errors.Is(getErr, domain.ErrNotFound) {
 			// Reuse the shared helper's ITEM_NOT_FOUND result so remediation
 			// text stays consistent with every other mutating tool.
 			if _, errRes := h.resolveItemLink(ctx, callerUUID, itemID); errRes != nil {
@@ -2663,7 +2663,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 		if isTransitionDenied(archErr) {
 			return transitionDeniedResult(archErr, status, session.BacklogStatusArchived), nil
 		}
-		if errors.Is(archErr, session.ErrPreconditionFailed) {
+		if errors.Is(archErr, domain.ErrPreconditionFailed) {
 			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it) — call get_backlog_item to see its current status", ""), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("archive failed: %v", archErr), ""), nil
@@ -2719,7 +2719,7 @@ func (h *backlogHandlers) verifyBacklogDuplicateTarget(ctx context.Context, item
 	}
 	target, err := h.getBacklogItemFor(ctx, targetID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrInvalidArgument, fmt.Sprintf("duplicate_ref target backlog item %q not found", targetID), "")
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("get duplicate_ref target: %v", err), "")

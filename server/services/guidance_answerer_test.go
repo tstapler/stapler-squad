@@ -99,7 +99,7 @@ func TestAnswerAs_should_ReturnNotFound_When_RequestDoesNotExist(t *testing.T) {
 	t.Parallel()
 	svc := NewGuidanceRequestService(svctest.CreateTestStorage(t), nil, nil)
 	_, _, err := svc.AnswerAs(context.Background(), "5d1c8ec3-3f6b-4c0e-9a3e-0a6b4d6b1f11", "x", HumanAnswerer())
-	assert.ErrorIs(t, err, session.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestAnswerAs_should_WaiveCriterion_Only_When_OwnerPicksWaiveResponse(t *testing.T) {

@@ -33,7 +33,7 @@ func (d *Dispatcher) loadWake(ctx context.Context, id string) (*session.WakeTrig
 		return nil, ErrWakeNotFound
 	}
 	row, err := d.cfg.Store.GetWakeTrigger(ctx, parsed)
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return nil, ErrWakeNotFound
 	}
 	if err != nil {

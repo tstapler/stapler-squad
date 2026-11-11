@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // notification_action_backlog.go delegates BACKLOG_DECISION choices to the
@@ -162,7 +163,7 @@ func NewItemStatusReader(s backlogStorage) ItemStatusReader { return storageItem
 func (r storageItemReader) ItemStatus(ctx context.Context, itemID string) (string, error) {
 	item, err := r.storage.GetBacklogItem(ctx, itemID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return "", errItemNotFound
 		}
 		return "", fmt.Errorf("load backlog item: %w", err)

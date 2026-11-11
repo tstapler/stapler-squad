@@ -4665,7 +4665,7 @@ func TestReportDuplicate_DoesNotTreatPrefixRefAsIdempotentMatch(t *testing.T) {
 // TestReportDuplicate_ReportsDistinctMessage_WhenCASPreconditionFails mirrors
 // TestRequestReview_ReportsDistinctMessage_WhenCASPreconditionFails's
 // real-concurrency structure for report_duplicate's identical
-// errors.Is(transErr, session.ErrPreconditionFailed) branch (tools_backlog.go,
+// errors.Is(transErr, domain.ErrPreconditionFailed) branch (tools_backlog.go,
 // near where TransitionBacklogItemStatus is called): when two report_duplicate
 // calls genuinely race on the same in_progress item, the DB-level atomic
 // UPDATE...WHERE guarantees exactly one winner; the loser must see the same
@@ -7278,7 +7278,7 @@ func TestReportBlocked_should_ReturnPermissionDenied_When_CallerRoleNotWork(t *t
 
 // TestBacklogHandlers_should_HaveNoRemainingRawLinkCheck_When_SourceIsScanned is a
 // structural guard (pre-mortem.md Failure #1, adversarial-review.md Concern 2):
-// asserts the pre-fix raw "errors.Is(linkErr, session.ErrNotFound) -> unconditional
+// asserts the pre-fix raw "errors.Is(linkErr, domain.ErrNotFound) -> unconditional
 // PERMISSION_DENIED" pattern is gone from every call site, so a future mutating
 // tool (or a silently-skipped story) that reintroduces it is caught even if nobody
 // remembers to add it to linkConsistencyMutatingTools above. The expected count

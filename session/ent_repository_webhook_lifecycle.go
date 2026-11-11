@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -147,7 +148,7 @@ func deleteWebhookRegistration(ctx context.Context, tx *ent.Tx, reg *ent.Webhook
 	}
 	view := registrationView(reg, wf)
 	if wf != nil {
-		if err := tx.Workflow.DeleteOneID(wf.ID).Exec(ctx); err != nil && !errors.Is(err, ErrNotFound) && !ent.IsNotFound(err) {
+		if err := tx.Workflow.DeleteOneID(wf.ID).Exec(ctx); err != nil && !errors.Is(err, domain.ErrNotFound) && !ent.IsNotFound(err) {
 			return nil, fmt.Errorf("delete webhook workflow: %w", err)
 		}
 	}

@@ -12,6 +12,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // goalHandlers implements session goal MCP tools.
@@ -202,7 +203,7 @@ func (h *goalHandlers) getSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 
 	goalData, err := h.storage.GetSessionGoal(ctx, inst.UUID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, fmt.Sprintf("no goal set for session %q", sessionID), "Use set_session_goal to create one."), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("failed to get goal: %v", err), ""), nil
@@ -249,7 +250,7 @@ func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallTool
 	// Verify the existing goal belongs to the caller session.
 	existingGoal, err := h.storage.GetSessionGoal(ctx, callerUUID)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, "no goal set for this session", "Use set_session_goal first."), nil
 		}
 		return errResult(ErrInternalError, fmt.Sprintf("failed to retrieve goal: %v", err), ""), nil
@@ -260,7 +261,7 @@ func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallTool
 
 	updatedGoal, err := h.storage.UpdateSessionTaskStatus(ctx, callerUUID, taskID, newStatus)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return errResult(ErrItemNotFound, "no goal set for this session", ""), nil
 		}
 		if strings.Contains(err.Error(), "not found") {

@@ -1444,7 +1444,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 		return s.attachAdditivePR(ctx, observed, pr)
 	}
 	if observed.Status != string(BacklogStatusReview) && observed.Status != string(BacklogStatusPRPending) {
-		return fmt.Errorf("%w: expected status %q or %q, got %q", ErrPreconditionFailed, BacklogStatusReview, BacklogStatusPRPending, observed.Status)
+		return fmt.Errorf("%w: expected status %q or %q, got %q", domain.ErrPreconditionFailed, BacklogStatusReview, BacklogStatusPRPending, observed.Status)
 	}
 	isReassignment := observed.Status == string(BacklogStatusPRPending)
 	if isReassignment {
@@ -2232,14 +2232,14 @@ func nonEmptyPtr(s string) *string {
 func (s *Storage) GetSessionGoal(ctx context.Context, sessionUUID string) (*SessionGoalData, error) {
 	client := s.GetEntClient()
 	if client == nil {
-		return nil, ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	g, err := client.SessionGoal.Query().
 		Where(sessiongoal.SessionUUID(sessionUUID)).
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ErrNotFound
+			return nil, domain.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to get session goal: %w", err)
 	}
@@ -2284,7 +2284,7 @@ func (s *Storage) UpdateSessionTaskStatus(ctx context.Context, sessionUUID strin
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, ErrNotFound
+			return nil, domain.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to get session goal: %w", err)
 	}

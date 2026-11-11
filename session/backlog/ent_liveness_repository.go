@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/stagelivenessdefinition"
 )
@@ -59,7 +59,7 @@ func (r *EntLivenessRepository) Create(ctx context.Context, in LivenessCreateInp
 			if in.PipelineMode != nil {
 				mode = *in.PipelineMode
 			}
-			return nil, fmt.Errorf("%w: liveness definition for stage %q mode %q already exists", session.ErrConflict, in.StageSlug, mode)
+			return nil, fmt.Errorf("%w: liveness definition for stage %q mode %q already exists", domain.ErrConflict, in.StageSlug, mode)
 		}
 		return nil, fmt.Errorf("create liveness definition: %w", err)
 	}
@@ -93,7 +93,7 @@ func (r *EntLivenessRepository) Update(ctx context.Context, id uuid.UUID, in Liv
 	row, err := u.Save(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: liveness definition %s", session.ErrNotFound, id)
+			return nil, fmt.Errorf("%w: liveness definition %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("update liveness definition %s: %w", id, err)
 	}
@@ -105,7 +105,7 @@ func (r *EntLivenessRepository) Delete(ctx context.Context, id uuid.UUID) error 
 	err := r.client.StageLivenessDefinition.DeleteOneID(id).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: liveness definition %s", session.ErrNotFound, id)
+			return fmt.Errorf("%w: liveness definition %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("delete liveness definition %s: %w", id, err)
 	}
@@ -128,7 +128,7 @@ func (r *EntLivenessRepository) GetByStageAndMode(ctx context.Context, stageSlug
 	row, err := q.Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: liveness definition for stage %q mode %q", session.ErrNotFound, stageSlug, mode)
+			return nil, fmt.Errorf("%w: liveness definition for stage %q mode %q", domain.ErrNotFound, stageSlug, mode)
 		}
 		return nil, fmt.Errorf("get liveness definition for stage %q mode %q: %w", stageSlug, mode, err)
 	}

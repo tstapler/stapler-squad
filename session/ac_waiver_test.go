@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func newWaiverItem(t *testing.T, repo *session.EntRepository) string {
@@ -77,5 +78,5 @@ func TestWaiveAcCriterion_should_ReturnErrNotFound_When_ItemMissing(t *testing.T
 
 	err := repo.WaiveAcCriterion(context.Background(), "bl_01HXYZABCDEFGHJKMNPQRSTVWX", 0, "why")
 
-	assert.ErrorIs(t, err, session.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 }

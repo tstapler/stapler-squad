@@ -393,7 +393,7 @@ func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName
 		if concreteStorage != nil {
 			is, err := concreteStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 			if err != nil {
-				if errors.Is(err, session.ErrNotFound) {
+				if errors.Is(err, domain.ErrNotFound) {
 					// Expected: most autonomous sessions are not backlog-linked.
 					log.Debug("[AutonomousDriver] onAutonomousDriverComplete: no linked backlog item session", "session", instanceName)
 				} else {

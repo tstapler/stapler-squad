@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const maxAuditUserAgent = 200
@@ -86,7 +87,7 @@ func (s *BacklogService) ListAcAuditEvents(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 	rows, err := s.storage.ListAcAudit(ctx, req.Msg.ItemId)
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 	}
 	if err != nil {

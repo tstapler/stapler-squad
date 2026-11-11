@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "autonomous_stop.go",
         "backlog.go",
+        "errors.go",
         "guidance_cancel_reason.go",
         "guidance_request_source.go",
         "wake_trigger.go",
@@ -26,6 +27,7 @@ go_test(
         "autonomous_stop_test.go",
         "backlog_test.go",
         "guidance_request_source_test.go",
+        "purity_test.go",
         "wake_trigger_test.go",
     ],
     embed = [":domain"],

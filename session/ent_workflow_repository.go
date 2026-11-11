@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/workflow"
 )
@@ -87,7 +88,7 @@ func (r *EntWorkflowRepository) Create(ctx context.Context, w WorkflowCreateInpu
 	wf, err := c.Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
-			return nil, fmt.Errorf("%w: workflow with slug %q already exists", ErrConflict, w.Slug)
+			return nil, fmt.Errorf("%w: workflow with slug %q already exists", domain.ErrConflict, w.Slug)
 		}
 		return nil, fmt.Errorf("create workflow: %w", err)
 	}
@@ -137,13 +138,13 @@ func (r *EntWorkflowRepository) UpdateConditional(ctx context.Context, id uuid.U
 			// check, paid only on this (rare) failure path, not on every call.
 			if !expectedUpdatedAt.IsZero() {
 				if _, getErr := r.client.Workflow.Get(ctx, id); getErr == nil {
-					return nil, fmt.Errorf("%w: workflow %s updated_at mismatch", ErrPreconditionFailed, id)
+					return nil, fmt.Errorf("%w: workflow %s updated_at mismatch", domain.ErrPreconditionFailed, id)
 				}
 			}
-			return nil, fmt.Errorf("%w: workflow %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: workflow %s", domain.ErrNotFound, id)
 		}
 		if ent.IsConstraintError(err) {
-			return nil, fmt.Errorf("%w: slug already exists", ErrConflict)
+			return nil, fmt.Errorf("%w: slug already exists", domain.ErrConflict)
 		}
 		return nil, fmt.Errorf("update workflow %s: %w", id, err)
 	}
@@ -238,7 +239,7 @@ func (r *EntWorkflowRepository) Delete(ctx context.Context, id uuid.UUID) error 
 	err := r.client.Workflow.DeleteOneID(id).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: workflow %s", ErrNotFound, id)
+			return fmt.Errorf("%w: workflow %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("delete workflow %s: %w", id, err)
 	}
@@ -250,7 +251,7 @@ func (r *EntWorkflowRepository) GetByID(ctx context.Context, id uuid.UUID) (*ent
 	wf, err := r.client.Workflow.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: workflow %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: workflow %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("get workflow %s: %w", id, err)
 	}
@@ -264,7 +265,7 @@ func (r *EntWorkflowRepository) GetBySlug(ctx context.Context, slug string) (*en
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: workflow with slug %q", ErrNotFound, slug)
+			return nil, fmt.Errorf("%w: workflow with slug %q", domain.ErrNotFound, slug)
 		}
 		return nil, fmt.Errorf("get workflow by slug %q: %w", slug, err)
 	}
@@ -278,7 +279,7 @@ func (r *EntWorkflowRepository) GetByWebhookSlug(ctx context.Context, slug strin
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: workflow with webhook_slug %q", ErrNotFound, slug)
+			return nil, fmt.Errorf("%w: workflow with webhook_slug %q", domain.ErrNotFound, slug)
 		}
 		return nil, fmt.Errorf("get workflow by webhook_slug %q: %w", slug, err)
 	}

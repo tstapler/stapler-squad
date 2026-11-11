@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -208,7 +209,7 @@ func (s *SessionService) rateLimitLinkedItemID(inst *session.Instance) string {
 	defer cancel()
 	itemSession, err := s.concStorage.GetItemSessionBySessionUUID(lookupCtx, inst.UUID)
 	if err != nil {
-		if !errors.Is(err, session.ErrNotFound) {
+		if !errors.Is(err, domain.ErrNotFound) {
 			log.Warn("wireRateLimitCallbacks: ItemSession lookup failed", "session", inst.UUID, "err", err)
 		}
 		return ""

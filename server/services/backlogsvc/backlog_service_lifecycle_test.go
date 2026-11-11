@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ─── pipeline_mode presence gating (Story 1.4.4) ───────────────────────────────
@@ -1354,7 +1355,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 		switch {
 		case err == nil:
 			successes++
-		case connect.CodeOf(err) == connect.CodeAborted, errors.Is(err, session.ErrPreconditionFailed):
+		case connect.CodeOf(err) == connect.CodeAborted, errors.Is(err, domain.ErrPreconditionFailed):
 			failures++
 		default:
 			t.Fatalf("unexpected error: %v", err)
@@ -1627,7 +1628,7 @@ func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_EdgeWouldClo
 }
 
 // TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing
-// covers the handler's translation of session.ErrNotFound into
+// covers the handler's translation of domain.ErrNotFound into
 // connect.CodeNotFound for a blocker id that does not exist.
 func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerItemMissing(t *testing.T) {
 	t.Parallel()

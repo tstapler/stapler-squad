@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func ownerCtx() context.Context {
@@ -85,7 +86,7 @@ func TestListAcAudit_should_ReturnErrNotFound_When_ItemMissing(t *testing.T) {
 	t.Parallel()
 	repo := session.NewTestEntRepository(t)
 	_, err := repo.ListAcAudit(context.Background(), "bl_01HXYZABCDEFGHJKMNPQRSTVWX")
-	assert.ErrorIs(t, err, session.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func createACItem(t *testing.T, repo *session.EntRepository, texts ...string) string {
@@ -221,7 +222,7 @@ func TestAcAudit_should_StayReadableAfterItemDelete_And_PruneByAge(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	_, err = repo.ListAcAudit(context.Background(), id)
-	assert.ErrorIs(t, err, session.ErrNotFound, "item gone and no rows left")
+	assert.ErrorIs(t, err, domain.ErrNotFound, "item gone and no rows left")
 }
 
 func TestAcAudit_should_KeepWaiverRow_When_DeniedFloodExceedsRefusalCap(t *testing.T) {

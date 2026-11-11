@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Adapters from the server/wakes ports onto the services they stand in for.
@@ -145,7 +146,7 @@ type wakeBacklogState struct{ storage *session.Storage }
 
 func (b wakeBacklogState) ItemState(ctx context.Context, itemID string) (wakes.ItemState, error) {
 	item, err := b.storage.GetBacklogItem(ctx, itemID)
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return wakes.ItemState{}, nil
 	}
 	if err != nil {

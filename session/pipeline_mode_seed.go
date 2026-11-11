@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // DefaultSDDPipelineModeSlug is the slug of the seeded pipeline mode that
@@ -39,7 +40,7 @@ func EnsureDefaultSDDPipelineMode(ctx context.Context, repo PipelineModeReposito
 
 	if _, err := repo.GetBySlug(ctx, DefaultSDDPipelineModeSlug); err == nil {
 		return nil
-	} else if !errors.Is(err, ErrNotFound) {
+	} else if !errors.Is(err, domain.ErrNotFound) {
 		return fmt.Errorf("EnsureDefaultSDDPipelineMode: GetBySlug: %w", err)
 	}
 
@@ -69,7 +70,7 @@ func EnsureDefaultSDDPipelineMode(ctx context.Context, repo PipelineModeReposito
 	}
 
 	if _, err := repo.Create(ctx, input); err != nil {
-		if errors.Is(err, ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			// Lost a create race (another boot, or a concurrent caller) —
 			// the row exists now either way, which is the only thing this
 			// function promises.

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Adapters for the wake sources that read sessions, guidance requests and the
@@ -61,7 +62,7 @@ func (w wakeGuidance) Guidance(ctx context.Context, id string) (wakes.GuidanceFa
 		return wakes.GuidanceFacts{}, nil
 	}
 	data, err := w.storage.GetGuidanceRequest(ctx, parsed)
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return wakes.GuidanceFacts{}, nil
 	}
 	if err != nil {

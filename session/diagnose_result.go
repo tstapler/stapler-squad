@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // DiagnoseResultData is the JSON stored in item_sessions.diagnose_result.
@@ -120,7 +121,7 @@ func (r *EntRepository) DismissWorkflowSuggestion(ctx context.Context, itemID, s
 				return list, nil
 			}
 		}
-		return nil, fmt.Errorf("workflow suggestion %s not found on item %s: %w", suggestionID, itemID, ErrNotFound)
+		return nil, fmt.Errorf("workflow suggestion %s not found on item %s: %w", suggestionID, itemID, domain.ErrNotFound)
 	})
 }
 
@@ -137,7 +138,7 @@ func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID st
 	item, err := tx.BacklogItem.Get(ctx, parsedItemID)
 	if err != nil {
 		_ = tx.Rollback()
-		return fmt.Errorf("backlog item %s not found: %w", itemID, ErrNotFound)
+		return fmt.Errorf("backlog item %s not found: %w", itemID, domain.ErrNotFound)
 	}
 	updated, err := mutate(ParseWorkflowSuggestions(item.WorkflowSuggestions))
 	if err != nil {

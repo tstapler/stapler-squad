@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // The tests below read the process-wide ManualReader, so they stay serial: Go
@@ -162,7 +163,7 @@ func (f fakeRoleLookup) GetItemSessionBySessionUUID(context.Context, string) (se
 func TestScheduleWakeupRole_ShouldNameTheBacklogRole_WhenSessionIsLinked(t *testing.T) {
 	ctx := context.Background()
 	assert.Equal(t, "work", scheduleWakeupRoles{lookup: fakeRoleLookup{row: session.ItemSessionSummary{Role: "work"}}}.roleOf(ctx, "s"))
-	assert.Equal(t, roleUnlinked, scheduleWakeupRoles{lookup: fakeRoleLookup{err: session.ErrNotFound}}.roleOf(ctx, "s"))
+	assert.Equal(t, roleUnlinked, scheduleWakeupRoles{lookup: fakeRoleLookup{err: domain.ErrNotFound}}.roleOf(ctx, "s"))
 	assert.Equal(t, roleUnknown, scheduleWakeupRoles{lookup: fakeRoleLookup{err: assert.AnError}}.roleOf(ctx, "s"))
 }
 

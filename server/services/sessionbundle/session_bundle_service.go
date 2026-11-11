@@ -32,7 +32,7 @@ type BundleStorage interface {
 	// given session UUID, ordered by created_at DESC.
 	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]session.AnalyticsData, error)
 	// GetItemSessionBySessionUUID returns the most-recent backlog item session
-	// linked to this session, or session.ErrNotFound when none exists.
+	// linked to this session, or domain.ErrNotFound when none exists.
 	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)
 	// GetSessionArtifactsByUUID returns the artifact blob, or (nil, nil) when none.
 	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)

@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -271,7 +272,7 @@ func (s *Storage) GatedUnarchive(ctx context.Context, req TransitionRequest) (*B
 func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *BacklogItemData) (*BacklogItemData, error) {
 	pre := gatePrecondition(req, spec, item)
 	if pre.ExpectedStatus != string(BacklogStatusArchived) {
-		return nil, fmt.Errorf("%w: item is %q, not archived", ErrPreconditionFailed, pre.ExpectedStatus)
+		return nil, fmt.Errorf("%w: item is %q, not archived", domain.ErrPreconditionFailed, pre.ExpectedStatus)
 	}
 	return s.Repo.rawUnarchiveBacklogItem(ctx, req.ItemID, pre.ExpectedStatus)
 }
@@ -326,7 +327,7 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 		switch {
 		case err == nil:
 			moved++
-		case errors.Is(err, ErrPreconditionFailed):
+		case errors.Is(err, domain.ErrPreconditionFailed):
 			log.Debug("[GatedReconcileStuck] item moved concurrently, skipped", "item", c.ID)
 		default:
 			log.Warn("[GatedReconcileStuck] item not moved to review", "item", c.ID, "error", err)
@@ -413,7 +414,7 @@ func (s *Storage) observeForGate(ctx context.Context, req TransitionRequest) (*B
 func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *BacklogItemData) (updated *BacklogItemData, casLost bool, err error) {
 	req := c.req
 	if req.Precondition != nil && req.Precondition.ExpectedStatus != "" && req.Precondition.ExpectedStatus != item.Status {
-		return nil, false, fmt.Errorf("%w: expected status %q, observed %q", ErrPreconditionFailed, req.Precondition.ExpectedStatus, item.Status)
+		return nil, false, fmt.Errorf("%w: expected status %q, observed %q", domain.ErrPreconditionFailed, req.Precondition.ExpectedStatus, item.Status)
 	}
 
 	noteGateCall(c.spec.Class, c.spec.Name, c.engine.ModeFor(c.spec.Class))
@@ -431,7 +432,7 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *BacklogIt
 	if err == nil {
 		notifyTransitionCommitted(view, guardInputFor(req, item, BacklogStatus(item.Status)), req.To)
 	}
-	return updated, errors.Is(err, ErrPreconditionFailed), err
+	return updated, errors.Is(err, domain.ErrPreconditionFailed), err
 }
 
 func (c *gateCall) reportDenial(ctx context.Context, item *BacklogItemData, v gateVerdict) {

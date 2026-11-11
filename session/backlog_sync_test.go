@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -517,7 +518,7 @@ func TestSyncByID_ReturnsErrNotFoundForMissingSource(t *testing.T) {
 
 	err := sl.SyncByID(context.Background(), "00000000-0000-0000-0000-000000000000")
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrNotFound))
+	require.True(t, errors.Is(err, domain.ErrNotFound))
 }
 
 // TestMergeUserModifiedFields pins the exact merge semantics MergeUserModifiedFields
@@ -1452,7 +1453,7 @@ func TestSyncOne_should_SkipCreateBacklogItemAndLogBlockedByClaim_When_LocalClai
 	require.NoError(t, sl.SyncOne(ctx, src))
 
 	_, err = storage.Repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-claimed")
-	require.ErrorIs(t, err, ErrNotFound, "claimed-elsewhere item must not be created")
+	require.ErrorIs(t, err, domain.ErrNotFound, "claimed-elsewhere item must not be created")
 	_, err = storage.Repo.GetBacklogItemByExternalID(ctx, sourceID, "ext-free")
 	require.NoError(t, err)
 
