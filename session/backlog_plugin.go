@@ -77,6 +77,9 @@ func (r *PluginRegistry) Register(p ItemSourcePlugin) {
 
 // Get retrieves a plugin by ID.
 func (r *PluginRegistry) Get(id string) (ItemSourcePlugin, bool) {
+	if r == nil {
+		return nil, false
+	}
 	p, ok := r.plugins[id]
 	return p, ok
 }

@@ -265,3 +265,16 @@ func TestProgressSync_ShouldKeepSinglePRWording(t *testing.T) {
 	assert.Equal(t, progressReviewComment("https://github.com/acme/app/pull/21"),
 		progressReviewComments([]progressPR{{URL: "https://github.com/acme/app/pull/21", State: session.PRStateOpen}}))
 }
+
+func TestResolveProgressTarget_SourcelessSkipsWhenPluginMissingOrRegistryNil(t *testing.T) {
+	t.Parallel()
+	storage := svctest.NewForwardSyncTestStorage(t)
+	item := &session.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"}
+
+	empty := session.NewPluginRegistry()
+	_, _, _, ok := resolveProgressTarget(context.Background(), empty, session.NewSyncLoop(storage, empty), storage, item)
+	require.False(t, ok)
+
+	_, _, _, ok = resolveProgressTarget(context.Background(), nil, session.NewSyncLoop(storage, empty), storage, item)
+	require.False(t, ok)
+}

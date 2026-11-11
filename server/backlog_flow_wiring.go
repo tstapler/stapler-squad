@@ -10,8 +10,11 @@ func flowMCPOptions(deps *ServerDependencies) []servermcp.CoreOption {
 	if deps.BacklogFlowService != nil {
 		opts = append(opts, servermcp.WithFlowService(deps.BacklogFlowService))
 	}
+	// Without a backlog service the tracker import tools still need their plugins.
+	registry := NewItemSourceRegistry()
 	if deps.BacklogService != nil {
-		opts = append(opts, servermcp.WithPluginRegistry(deps.BacklogService.Registry()))
+		registry = deps.BacklogService.Registry()
 	}
+	opts = append(opts, servermcp.WithPluginRegistry(registry))
 	return opts
 }

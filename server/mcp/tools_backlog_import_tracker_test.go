@@ -81,3 +81,24 @@ func TestImportJiraIssue_should_CreateItemFromURL_And_BareKeyWithBaseURL(t *test
 	require.NoError(t, err)
 	assert.False(t, parseResult(t, res)["success"].(bool), "bare key without base_url must be rejected")
 }
+
+var (
+	_ IssueFetcher = (*session.LinearPlugin)(nil)
+	_ IssueFetcher = (*session.JiraPlugin)(nil)
+)
+
+func TestFetchTrackerIssue_should_ErrorWhenRegistryMissingPluginOrNotFetcher(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	_, err := (&backlogHandlers{}).fetchTrackerIssue(ctx, "linear", session.PluginConfig{}, "X-1")
+	require.ErrorContains(t, err, "not wired")
+
+	h := &backlogHandlers{plugins: session.NewPluginRegistry()}
+	_, err = h.fetchTrackerIssue(ctx, "linear", session.PluginConfig{}, "X-1")
+	require.ErrorContains(t, err, "no linear plugin registered")
+
+	h = &backlogHandlers{plugins: session.NewPluginRegistry(session.NewGitHubIssuesPlugin())}
+	_, err = h.fetchTrackerIssue(ctx, "github_issues", session.PluginConfig{}, "1")
+	require.ErrorContains(t, err, "cannot fetch a single issue")
+}
