@@ -6,3 +6,8 @@ exports_files(
     ],
     visibility = ["//server/services:__pkg__"],
 )
+
+exports_files(
+    ["record-website-demos.sh"],
+    visibility = ["//tools/promo:__subpackages__"],
+)

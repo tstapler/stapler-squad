@@ -27,6 +27,7 @@ go_test(
     srcs = ["termcheck_test.go"],
     deps = [
         ":termcheck",
+        "//internal/testenv",
         "//tools/promolib/gitbase",
         "//tools/promolib/gitbase/gitbasetest",
         "//tools/promolib/termscan",

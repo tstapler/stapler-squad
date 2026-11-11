@@ -1,0 +1,8 @@
+# Hand-written: exposes files read by tests (Gazelle ignores BUILD files without Go sources).
+exports_files(
+    [
+        "media-manifest.example.json",
+        "media-manifest.schema.json",
+    ],
+    visibility = ["//tools/promo:__subpackages__"],
+)

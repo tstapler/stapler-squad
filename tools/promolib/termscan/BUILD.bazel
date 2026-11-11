@@ -29,6 +29,7 @@ go_test(
         "ocr_test.go",
         "scan_test.go",
     ],
+    data = glob(["testdata/**"]) + ["//tools/promo:budgets.json"],
     embed = [":termscan"],
     deps = [
         "//executor/safeexec",

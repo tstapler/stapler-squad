@@ -34,6 +34,11 @@ go_test(
         "lkg_test.go",
         "shardplan_test.go",
     ],
+    data = [
+        "//scripts:record-website-demos.sh",
+        "//tests/e2e:playwright.website-demos.config.ts",
+        "//tools/promo:budgets.json",
+    ],
     embed = [":mediatool_lib"],
     deps = [
         "//tools/promo/internal/manifest",

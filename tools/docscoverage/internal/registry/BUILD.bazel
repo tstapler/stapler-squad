@@ -21,6 +21,7 @@ alias(
 go_test(
     name = "registry_test",
     srcs = ["registry_test.go"],
+    data = ["//docs/registry:features"],
     deps = [
         ":registry",
         "//tools/docscoverage/internal/model",

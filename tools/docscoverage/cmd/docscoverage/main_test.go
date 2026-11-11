@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/internal/testenv"
 	"github.com/tstapler/stapler-squad/tools/docscoverage/internal/check"
 	"github.com/tstapler/stapler-squad/tools/docscoverage/internal/fixture"
 	"github.com/tstapler/stapler-squad/tools/docscoverage/internal/model"
@@ -176,6 +177,7 @@ func TestStepSummaryWritten(t *testing.T) {
 
 func TestCommittedBaselineHasNoViolations(t *testing.T) {
 	t.Parallel()
+	testenv.SkipUnderBazel(t, "reads website/ and web-app/public/docs")
 	res, _, err := assess(checkOpts{repo: "../../../..", base: noBase, enforce: "false"})
 	require.NoError(t, err)
 	assert.Empty(t, res.Violations)
@@ -188,6 +190,7 @@ func TestCommittedBaselineHasNoViolations(t *testing.T) {
 // the tours list is covered through a tour link, with no mismatch warning.
 func TestAllTourFeaturesHaveSidecars(t *testing.T) {
 	t.Parallel()
+	testenv.SkipUnderBazel(t, "reads website/ and web-app/public/docs")
 	in, err := loadInput(filepath.Join("..", "..", "..", ".."))
 	require.NoError(t, err)
 	tours := in.Resolver.TourIDs()

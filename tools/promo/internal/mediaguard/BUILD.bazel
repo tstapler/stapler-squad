@@ -26,6 +26,10 @@ alias(
 go_test(
     name = "mediaguard_test",
     srcs = ["mediaguard_test.go"],
+    data = [
+        "//.github:CODEOWNERS",
+        "//tools/promo/mediaguard:allowlist.txt",
+    ],
     deps = [
         ":mediaguard",
         "//tools/promo/internal/codeowners",

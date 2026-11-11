@@ -30,6 +30,11 @@ go_test(
         "manifest_test.go",
         "refresh_test.go",
     ],
+    data = [
+        "//tools/promo:budgets.json",
+        "//tools/promo/schema:media-manifest.example.json",
+        "//tools/promo/schema:media-manifest.schema.json",
+    ],
     embed = [":manifest"],
     deps = [
         "@com_github_stretchr_testify//assert",

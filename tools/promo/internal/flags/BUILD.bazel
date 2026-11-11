@@ -18,6 +18,7 @@ alias(
 go_test(
     name = "flags_test",
     srcs = ["flags_test.go"],
+    data = ["//.github:promo-flags.json"],
     deps = [
         ":flags",
         "//tools/promolib/gitbase",

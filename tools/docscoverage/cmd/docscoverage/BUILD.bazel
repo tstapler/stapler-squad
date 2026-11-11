@@ -30,6 +30,7 @@ go_test(
     srcs = ["main_test.go"],
     embed = [":docscoverage_lib"],
     deps = [
+        "//internal/testenv",
         "//tools/docscoverage/internal/check",
         "//tools/docscoverage/internal/fixture",
         "//tools/docscoverage/internal/model",

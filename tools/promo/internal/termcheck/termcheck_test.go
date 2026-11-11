@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/tools/promo/internal/termcheck"
+	"github.com/tstapler/stapler-squad/internal/testenv"
 	"github.com/tstapler/stapler-squad/tools/promolib/gitbase"
 	"github.com/tstapler/stapler-squad/tools/promolib/gitbase/gitbasetest"
 	"github.com/tstapler/stapler-squad/tools/promolib/termscan"
@@ -177,6 +178,7 @@ func repoRoot(t *testing.T) string {
 // missing entry (a leak) and no extra one (a stale exemption).
 func TestAllowlistEqualsLegacyIdFileSet(t *testing.T) {
 	t.Parallel()
+	testenv.SkipUnderBazel(t, "scans the real git checkout")
 	root := repoRoot(t)
 	r, err := gitbase.Open(root)
 	require.NoError(t, err)
