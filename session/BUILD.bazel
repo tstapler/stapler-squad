@@ -543,6 +543,7 @@ go_test(
         "ent_repository_guidance_purge_test.go",
         "ent_repository_guidance_test.go",
         "ent_repository_indexes_test.go",
+        "ent_repository_migrations_test.go",
         "ent_repository_readpool_test.go",
         "ent_repository_session_pr_refresh_test.go",
         "ent_repository_session_pr_test.go",
