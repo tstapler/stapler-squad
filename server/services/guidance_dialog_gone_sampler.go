@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"sort"
 	"time"
 
@@ -43,7 +44,7 @@ func judgeRow(row *session.GuidanceRequestData, capture string, err error) dialo
 	if err != nil {
 		return verdictIndeterminate
 	}
-	presence := session.PaneShowsDialog(capture)
+	presence := dialogpresence.PaneShowsDialog(capture)
 	if qs, tabbed := tabbedFromRow(row); tabbed {
 		return judgeTabbed(tabbedHeadersMatch(qs), capture, presence)
 	}
@@ -54,7 +55,7 @@ func judgeRow(row *session.GuidanceRequestData, capture string, err error) dialo
 	switch {
 	case presence.Absent():
 		return verdictGone
-	case presence == session.DialogShowing && known:
+	case presence == dialogpresence.DialogShowing && known:
 		return verdictReplaced
 	}
 	return verdictIndeterminate
@@ -62,13 +63,13 @@ func judgeRow(row *session.GuidanceRequestData, capture string, err error) dialo
 
 // judgeTabbed is judgeRow for a tabbed row: its own frame is a match, any
 // other dialog on screen replaced it, and an unrecognised layout is not judged.
-func judgeTabbed(own func(string) bool, capture string, presence session.DialogPresence) dialogVerdict {
+func judgeTabbed(own func(string) bool, capture string, presence dialogpresence.DialogPresence) dialogVerdict {
 	switch {
 	case own(capture):
 		return verdictMatch
 	case presence.Absent():
 		return verdictGone
-	case presence == session.DialogShowing:
+	case presence == dialogpresence.DialogShowing:
 		return verdictReplaced
 	}
 	return verdictIndeterminate
