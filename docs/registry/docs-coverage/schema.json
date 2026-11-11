@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Docs-coverage sidecar",
+  "description": "One file per registry feature, named by the percent-encoded id (only %, : and / are encoded): alias:invoke -> alias%3Ainvoke.json. See ADR-005.",
+  "type": "object",
+  "required": ["id"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "description": "The registry feature id; must encode to this file's name." },
+    "userFacing": { "type": "boolean", "description": "Set true to bring a backend feature into scope. Cannot take a frontend or root feature out of scope." },
+    "help": { "type": "string", "description": "<DOC_FILES slug>[#anchor], from web-app/src/lib/docs/docLoader.ts." },
+    "website": { "type": "string", "description": "<website docs collection id>[#anchor], for example help/getting-started#install." },
+    "tour": { "type": "string", "description": "Tour id (tours/<id>.mdx); that tour's tour.features must list this id." },
+    "exempt": { "type": "string", "minLength": 1, "description": "Reason this feature needs no docs. Excludes help, website and tour; needs approver." },
+    "approver": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$", "description": "GitHub login that approved the exemption." },
+    "status": { "type": "string", "enum": ["grandfathered"], "description": "Pre-existing gap recorded by make docs-coverage-baseline. Only valid for ids on the base branch; drop it once help and website exist." }
+  }
+}

@@ -31,12 +31,12 @@ describe('features.mdx', () => {
 		}
 	});
 
-	it('featuresMdxPage_should_RenderTextOnlyCard_When_ScreenshotFieldAbsent', () => {
-		const textOnlyFeatures = features.filter((feature) => !('screenshot' in feature));
-		const screenshotFeatures = features.filter((feature) => 'screenshot' in feature);
-
-		// research/features.md §4: most entries are text-only; every entry is one or the other.
-		expect(textOnlyFeatures.length).toBeGreaterThan(0);
-		expect(textOnlyFeatures.length + screenshotFeatures.length).toBe(features.length);
+	it('featuresMdxPage_should_DeriveCountFromFeaturesJson_And_EveryCardHasAScreenshot', async () => {
+		const source = await readFile(FEATURES_MDX_PATH, ENCODING);
+		// Story 3.3.1: the count is {features.length}, never a typed number that can go stale.
+		expect(source).toContain('{features.length}');
+		expect(source).not.toMatch(/All \d+ features/);
+		// Story 3.2.5: every card carries a shot.
+		expect(features.filter((feature) => !('screenshot' in feature))).toEqual([]);
 	});
 });

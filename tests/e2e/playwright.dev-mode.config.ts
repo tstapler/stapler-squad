@@ -101,10 +101,10 @@ export default defineConfig({
       testMatch: '**/visual-regression.spec.ts',
     },
     {
-      name: 'visual-wh40k',
+      name: 'visual-grimdark',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: 'tests/e2e/fixtures/wh40k-theme.json',
+        storageState: 'tests/e2e/fixtures/grimdark-theme.json',
         viewport: { width: 1280, height: 800 },
       },
       testMatch: '**/visual-regression.spec.ts',

@@ -1,0 +1,6 @@
+{
+  "id": "session:fanout",
+  "userFacing": true,
+  "tour": "fanout-compare",
+  "website": "tours/fanout-compare"
+}

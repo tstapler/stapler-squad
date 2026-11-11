@@ -1,0 +1,14 @@
+---
+// Build stamp (Cross-cutting 8g) plus the sample-data disclosure. Used by tour
+// pages and the /tours/ index footer.
+import { stampParts } from '../lib/tours/manifest';
+import { tourContext } from '../lib/tours/site';
+
+const { manifest } = tourContext();
+const stamp = manifest.commit && manifest.recordedAt ? stampParts(manifest) : undefined;
+---
+
+<div class="tour-stamp" data-testid="build-stamp">
+	{stamp && <p>Recorded {stamp.date} (build <small>{stamp.sha}</small>)</p>}
+	<p>Recorded with sample data, not a real team's work.</p>
+</div>

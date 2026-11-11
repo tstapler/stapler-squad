@@ -5,7 +5,7 @@ export const lightTheme = createTheme(vars, { color: { bg: "#fff" } });
 export const darkTheme = createTheme(vars, { color: { bg: "#000" } });
 export const matrixTheme = createTheme(vars, { color: { bg: "#010" } });
 export const cyberpunk77Theme = createTheme(vars, { color: { bg: "#220" } });
-export const wh40kTheme = createTheme(vars, { color: { bg: "#200" } });
+export const grimdarkTheme = createTheme(vars, { color: { bg: "#200" } });
 export const cleanTheme = createTheme(vars, { color: { bg: "#eee" } });
 
 const spin = keyframes({ from: { opacity: 0 }, to: { opacity: 1 } });

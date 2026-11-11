@@ -11,7 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/shadowledger"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -26,7 +26,7 @@ type WorkflowEngineWiring struct {
 	// Modes resolves each caller class's mode from live config.
 	Modes *session.FlagClassModeSource
 	// Recorder persists the shadow ledger; its Run is started with the server.
-	Recorder *backlog.ShadowLedgerRecorder
+	Recorder *shadowledger.ShadowLedgerRecorder
 	// Soak backs /actuator/workflow-engine.
 	Soak *WorkflowEngineSoakSource
 	// Status backs GetWorkflowEngineStatus; GateWired is filled by InjectTransitionGate.
@@ -37,16 +37,16 @@ type WorkflowEngineWiring struct {
 // when stage-config construction failed; the selector then answers from Default)
 // with the shadow recorder in place before any engine call can happen.
 func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *session.ConfiguredWorkflowEngine, entClient *ent.Client, loadConfig func() *config.Config) *WorkflowEngineWiring {
-	dir, err := backlog.ShadowLedgerDir()
+	dir, err := shadowledger.ShadowLedgerDir()
 	if err != nil {
 		log.Warn("workflow engine shadow ledger directory unavailable; the soak window will not persist", "err", err)
 		dir = ""
 	}
-	recorder := backlog.NewShadowLedgerRecorder(dir)
+	recorder := shadowledger.NewShadowLedgerRecorder(dir)
 	modes := services.NewWorkflowEngineClassModeSource(loadConfig, nil)
 	engine := session.NewSwitchableWorkflowEngine(def, cfgEngine, modes,
 		session.WithShadowRecorder(recorder),
-		session.WithConfigLabeler(backlog.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
+		session.WithConfigLabeler(shadowledger.NewConfigLabeler(stageFingerprintFunc(entClient), nil)),
 	)
 
 	soak := &WorkflowEngineSoakSource{
@@ -57,7 +57,7 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 		},
 	}
 	if dir != "" {
-		soak.ReproPath = backlog.ShadowLedgerPath(dir)
+		soak.ReproPath = shadowledger.ShadowLedgerPath(dir)
 	}
 	if entClient != nil && cfgEngine != nil {
 		soak.ConfigDiff = NewWorkflowEngineConfigDiff(entClient, cfgEngine)

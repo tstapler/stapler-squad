@@ -4,7 +4,7 @@ import { injectFontPreload, injectThemeBoot } from "../html";
 import { runInBun } from "./helpers/run-in-bun";
 
 const WEB_APP = path.resolve(__dirname, "../..");
-const MAP = { matrix: "m1", cyberpunk77: "c1", wh40k: "w1", clean: "cl", light: "l1", dark: "d1" };
+const MAP = { matrix: "m1", cyberpunk77: "c1", grimdark: "w1", clean: "cl", light: "l1", dark: "d1" };
 const fontsCss = readFileSync(path.join(WEB_APP, "src/app/fonts.css"), "utf8");
 const indexHtml = readFileSync(path.join(WEB_APP, "index.html"), "utf8");
 const built = (runInBun("build.bun.ts", ["ok"]).json as { html: string; css: string }).html;

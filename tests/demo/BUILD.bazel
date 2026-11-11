@@ -24,3 +24,5 @@ go_test(
     embed = [":demo"],
     deps = ["//executor/safeexec"],
 )
+
+exports_files(["helpers.go"])

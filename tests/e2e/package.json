@@ -8,6 +8,7 @@
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
     "test:ui": "playwright test --ui",
+    "test:website-demos-unit": "bun test ./website-demos/__tests__",
     "test:review-queue": "playwright test review-queue.spec.ts",
     "report": "playwright show-report ../playwright-report",
     "allure:generate": "allure generate allure-results --clean -o allure-report",

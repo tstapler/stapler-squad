@@ -1,0 +1,38 @@
+---
+// The tour video and the Install link that follows it. WebM first, then MP4;
+// poster, controls, preload="none" and no autoplay (reduced motion is the
+// default: nothing here ever plays on its own).
+import { clipUrls, hasClip } from '../lib/tours/manifest';
+import { basePath, tourContext } from '../lib/tours/site';
+
+export interface Props {
+	clip: string;
+	title: string;
+}
+
+const { clip, title } = Astro.props;
+const { mode, manifest } = tourContext();
+if (!hasClip(manifest, clip) && mode === 'deploy') {
+	throw new Error(`tour clip "${clip}" is absent from media-manifest.json`);
+}
+const base = basePath();
+const urls = clipUrls(base, clip);
+---
+
+<div class="tour-clip">
+	<video
+		data-testid="tour-video"
+		controls
+		playsinline
+		preload="none"
+		poster={urls.poster}
+		width="1280"
+		height="720"
+		aria-label={`${title} walkthrough video`}
+	>
+		<source src={urls.webm} type="video/webm" />
+		<source src={urls.mp4} type="video/mp4" />
+		Your browser doesn't support embedded video. See the transcript below.
+	</video>
+	<a class="tour-cta" data-testid="tour-install-link" href={`${base}/help/getting-started/`}>Install Stapler Squad</a>
+</div>

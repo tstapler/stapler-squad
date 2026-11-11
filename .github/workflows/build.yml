@@ -11,6 +11,11 @@ on:
       - 'install.sh'
       - 'proto/**'
       - 'web-app/src/**'
+      - 'web-app/public/docs/**'
+      - 'website/src/content/**'
+      - 'docs/registry/**'
+      - 'tools/docscoverage/**'
+      - '.github/promo-flags.json'
       - 'web-app/package.json'
       - 'web-app/bun.lock'
       - 'web-app/build/**'
@@ -998,6 +1003,37 @@ jobs:
           done
           # Also validate the typed catalog
           cd web-app && bun install --frozen-lockfile --silent && bun run validate-catalog
+
+      # Docs coverage (ADR-005): report-only while docsCoverageEnforce is false in
+      # .github/promo-flags.json. Separate from the gate above, which is untouched.
+      # Push-only: base is github.event.before; other events report only.
+      - name: Docs coverage (report-only)
+        # PRs run this in backlog-scaffolding-guard.yml's always-run promo-guards job instead, so a
+        # content-only PR (web-app/public/docs/**, website/src/content/**) does not pay for this workflow.
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            push) BASE="$EVENT_BEFORE" ;;
+            *) BASE=none ;;
+          esac
+          # docsCoverageEnforce comes from the base blob, never the PR tree; absent means false.
+          ENFORCE=$(go run ./tools/docscoverage/cmd/docscoverage enforce -base "$BASE")
+          go run ./tools/docscoverage/cmd/docscoverage -base "$BASE" -trend-out docs-coverage-trend.json || {
+            rc=$?
+            if [ "$ENFORCE" = "true" ]; then exit "$rc"; fi
+            echo "::warning::docscoverage exited $rc; report-only because docsCoverageEnforce is false"
+          }
+
+      # One trend row per main push; the weekly notify job reads the last 8 (Task 4.1.4b).
+      - name: Upload docs-coverage trend
+        if: ${{ github.event_name == 'push' && hashFiles('docs-coverage-trend.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-coverage-trend
+          path: docs-coverage-trend.json
+          retention-days: 90
 
       # registry-validation.yml's other unique signal (advisory, not blocking):
       # what fraction of registered features declare testIds at all. Ported

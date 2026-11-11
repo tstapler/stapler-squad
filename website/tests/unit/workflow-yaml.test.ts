@@ -3,7 +3,7 @@
 // deploy must record clips without committing anything. Parsed with js-yaml.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import yaml from 'js-yaml';
@@ -38,34 +38,174 @@ function extractOnTriggerKeys(yamlText: string): string[] {
     .map((line) => line.trim().replace(/:.*$/, ''));
 }
 
-// Clips are recorded inside the deploy and ship in the Pages artifact, so the
-// build must fetch them (tolerating a failed recording) and regenerate
-// features.json before building; nothing may be committed back by CI.
-test('deployWorkflow_should_RecordAndShipClipsWithoutCommitting_When_YamlParsed', () => {
-  const text = readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8);
-  const doc = yaml.load(text) as CiWorkflow & { jobs: Record<string, { needs?: unknown; steps: WorkflowStep[] }> };
+type Step = WorkflowStep & {
+  id?: string;
+  if?: string;
+  env?: Record<string, string>;
+  with?: Record<string, unknown>;
+  'continue-on-error'?: boolean | string;
+};
+type Job = {
+  needs?: string | string[];
+  if?: string;
+  steps: Step[];
+  permissions?: Record<string, string>;
+  'timeout-minutes'?: number;
+  strategy?: { matrix?: unknown };
+};
+type Workflow = { on: Record<string, unknown>; jobs: Record<string, Job> };
 
-  assert.ok(doc.jobs['record-clips'], 'deploy must have a record-clips job');
-  assert.ok(doc.jobs['record-clips'].steps.some((step) => step.run?.includes('scripts/record-website-demos.sh')));
-  assert.equal(doc.jobs.build.needs, 'record-clips');
-  assert.ok((doc.jobs.notify.needs as string[]).includes('record-clips'), 'a failed recording must reach notify');
+const loadDeploy = (): Workflow => yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as Workflow;
+const needsOf = (job: Job): string[] => (Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : []);
+const stepNamed = (job: Job, name: string): Step => {
+  const step = job.steps.find((candidate) => candidate.name === name);
+  assert.ok(step, `missing step "${name}"`);
+  return step;
+};
+
+// Media is recorded in a shard matrix and ships in the Pages artifact; nothing
+// may be committed back by CI. Shards merge in the build job.
+test('deployWorkflow_should_RecordShardsAndShipMediaWithoutCommitting_When_YamlParsed', () => {
+  const text = readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8);
+  const doc = loadDeploy();
+
+  const record = doc.jobs.record;
+  assert.ok(record, 'deploy must have a record job');
+  assert.ok(record.steps.some((step) => step.run?.includes('scripts/record-website-demos.sh')));
+  assert.ok(record.steps.some((step) => step.run?.includes('--only')), 'each shard records only its tours');
+  assert.match(String(record.strategy?.matrix), /fromJSON\(needs\.decide\.outputs\.matrix\)/, 'matrix comes from mediatool shard-plan');
+  assert.ok(doc.jobs.decide.steps.some((step) => step.run?.includes('mediatool" shard-plan')), 'decide runs shard-plan');
+  assert.ok(needsOf(record).includes('binary'), 'the binary is built once and passed to the shards');
+  assert.ok(doc.jobs.build.steps.some((step) => step.uses?.includes('download-artifact') && step.with?.pattern === 'media-shard-*' && step.with?.['merge-multiple'] === true));
+  assert.ok(needsOf(doc.jobs.build).includes('record'));
+
+  const checkout = record.steps.find((step) => step.uses?.includes('actions/checkout'));
+  assert.ok(checkout && !('lfs' in (checkout.with ?? {})), 'no lfs in the record checkout (it would mask the media guard)');
 
   const steps = doc.jobs.build.steps;
-  const download = steps.findIndex((step) => step.name === 'Download demo clips');
+  const download = steps.findIndex((step) => step.name === 'Download media shards');
   const regenerate = steps.findIndex((step) => step.name === 'Regenerate features.json with the clips');
   const build = steps.findIndex((step) => step.name === 'Build site');
   assert.ok(download !== -1 && download < regenerate && regenerate < build, 'download -> regenerate -> build order');
-  assert.equal((steps[download] as { 'continue-on-error'?: boolean })['continue-on-error'], true, 'a failed recording must not block the deploy');
+  assert.equal(steps[download]['continue-on-error'], true, 'a failed shard must not stop the build while freshness is report-only');
 
   assert.ok(!/git (commit|push)/.test(text), 'deploy must not commit anything back');
-  assert.ok(!/gh release (upload|create)/.test(text), 'clips ship in the Pages artifact, not a release');
+  assert.ok(!/gh release (upload|create)/.test(text), 'media ships in the Pages artifact, not a release');
+});
+
+// freshnessEnforce lives in .github/promo-flags.json and is read by mediatool;
+// the old warn-and-fallback step stays beside it until Task 5.1.2a.
+test('deployWorkflow_should_RunFreshnessBesideLegacyFallback_When_YamlParsed', () => {
+  const text = readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8);
+  const doc = loadDeploy();
+  const labels = doc.jobs.build.steps.map((step) => step.name ?? '');
+
+  assert.ok(labels.indexOf('Freshness precheck (mediatool fresh)') !== -1);
+  assert.ok(labels.indexOf('Freshness precheck (mediatool fresh)') < labels.indexOf('Warn when no clips were shipped'));
+  assert.match(text, /# REMOVE IN 5\.1\.2/, 'legacy fallback is marked for removal by Task 5.1.2a');
+
+  assert.ok(doc.jobs.mediafresh.steps.some((step) => step.run?.includes('mediatool" fresh')), 'mediafresh job holds the dist-level check');
+  assert.ok(doc.jobs['termcheck-dist'].steps.some((step) => step.run?.includes('-mode=dist')));
+  assert.ok(doc.jobs.record.steps.some((step) => step.run?.includes('-mode=media-text')), 'media-text blocks before upload');
+  const upload = doc.jobs.record.steps.findIndex((step) => step.name === 'Upload shard media');
+  const domScan = doc.jobs.record.steps.findIndex((step) => step.name === 'Scan DOM text for banned terms');
+  assert.ok(domScan !== -1 && domScan < upload, 'DOM-text scan runs before the shard upload');
+  assert.equal(doc.jobs.record.steps[domScan]['continue-on-error'], undefined, 'DOM-text hits block');
+
+  // Deploy waits for both post-build gates; flag-driven enforcement makes them fail the job.
+  assert.deepEqual(needsOf(doc.jobs.deploy).sort(), ['build', 'mediafresh', 'termcheck-dist']);
+  assert.ok(!/PROMO_FRESHNESS_ENFORCE/.test(text), 'flags live in git, not repo variables');
+});
+
+// Task 2.4.1h: the OCR step is blocking (no continue-on-error), emits Tesseract TSV for the
+// confidence rule, and runs before the shard upload.
+test('OCR step blocks the upload and feeds the confidence rule', () => {
+  const steps = loadDeploy().jobs.record.steps;
+  const ocr = steps.findIndex((step) => step.name === 'OCR the shots and scan for banned terms');
+  const upload = steps.findIndex((step) => step.name === 'Upload shard media');
+  assert.ok(ocr !== -1 && ocr < upload, 'OCR scan runs before the shard upload');
+  assert.equal(steps[ocr]['continue-on-error'], undefined, 'OCR hits block, independent of freshnessEnforce');
+  assert.match(steps[ocr].run ?? '', /tesseract .* tsv/, 'TSV output carries word confidence');
+  assert.match(steps[ocr].run ?? '', /-mode=media-text -dir "\$RUNNER_TEMP\/media-out\/ocr-text"/);
+});
+
+// Validation R16: notify covers every failure source and the flag-age reminder.
+test('deployWorkflow_should_NotifyOnEveryFailureSource_When_YamlParsed', () => {
+  const doc = loadDeploy();
+  const needs = needsOf(doc.jobs.notify);
+  for (const job of ['record', 'mediafresh', 'termcheck-dist', 'build', 'deploy']) {
+    assert.ok(needs.includes(job), `notify must need ${job}`);
+  }
+  const flagAge = doc.jobs.notify.steps.find((step) => step.name?.startsWith('Remind about flags still false'));
+  assert.ok(flagAge, 'notify has a flag-age step');
+  assert.match(flagAge.run ?? '', /promo-flags\.json/);
+  assert.match(flagAge.run ?? '', /\bjq\b/, 'flags are read with jq');
+  assert.match(flagAge.run ?? '', /-ge 14/);
+  assert.match(flagAge.if ?? '', /schedule/);
+});
+
+// G4: last-known-good is a named, retained, looked-up artifact, never a silent skip.
+test('deployWorkflow_should_KeepLastKnownGoodAsNamedArtifact_When_YamlParsed', () => {
+  const text = readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8);
+  const doc = loadDeploy();
+
+  const upload = doc.jobs['publish-lkg'].steps.find((step) => step.with?.name === 'promo-media-lkg');
+  assert.ok(upload?.uses?.includes('upload-artifact'));
+  assert.ok(Number(upload.with?.['retention-days']) >= 35, 'retention covers the 28-day age bound');
+  assert.match(doc.jobs['publish-lkg'].if ?? '', /mode == 'record'/, 'a reuse run uploads no new LKG');
+  assert.match(doc.jobs['publish-lkg'].if ?? '', /lkg_used != 'true'/);
+  assert.match(doc.jobs['publish-lkg'].if ?? '', /clean == 'true'/, 'only a fully fresh run becomes LKG');
+  assert.ok(needsOf(doc.jobs['publish-lkg']).includes('deploy'));
+
+  for (const jobName of ['decide', 'build']) {
+    assert.equal(doc.jobs[jobName].permissions?.actions, 'read', `${jobName} looks the artifact up with gh`);
+  }
+  const reuse = stepNamed(doc.jobs.build, 'Download last-known-good media (reuse)');
+  const fallback = stepNamed(doc.jobs.build, 'Use last-known-good media (scheduled fallback)');
+  for (const step of [reuse, fallback]) {
+    assert.equal(step['continue-on-error'], undefined, `${step.name} must hard-fail when the artifact is missing`);
+    assert.match(step.run ?? '', /mediatool" lkg/);
+  }
+  assert.match(fallback.if ?? '', /github\.event_name == 'schedule'/, 'push and dispatch never use last-known-good');
+  assert.match(fallback.run ?? '', /-max-age-days 28/);
+  assert.ok(!/uses:\s*actions\/cache(\/restore)?@/.test(text), 'LKG does not rely on actions/cache (7-day idle eviction)');
+});
+
+// Content-only pushes reuse the LKG media; schedule and dispatch always record.
+test('deployWorkflow_should_DecideReuseOnlyForPushes_When_YamlParsed', () => {
+  const doc = loadDeploy();
+  const decide = stepNamed(doc.jobs.decide, 'Decide record or reuse');
+  assert.match(decide.run ?? '', /GITHUB_EVENT_NAME" = push/);
+  assert.match(decide.run ?? '', /fresh -decide-reuse/);
+  assert.match(doc.jobs.record.if ?? '', /mode == 'record'/);
+  assert.match(doc.jobs.binary.if ?? '', /mode == 'record'/);
+  assert.match(stepNamed(doc.jobs.mediafresh, 'Freshness and budgets (mediatool fresh)').env?.MODE ?? '', /decide\.outputs\.mode/);
+});
+
+// The record ceiling is 30 min (budgets.json); the job timeout adds cold-cache setup only.
+test('deployWorkflow_should_BoundJobRuntimes_When_YamlParsed', () => {
+  const doc = loadDeploy();
+  assert.ok((doc.jobs.record['timeout-minutes'] ?? 0) > 30 && (doc.jobs.record['timeout-minutes'] ?? 0) <= 45);
+  for (const [name, job] of Object.entries(doc.jobs)) {
+    if (name !== 'deploy') assert.ok(job['timeout-minutes'], `${name} needs a timeout-minutes cap`);
+  }
+});
+
+// Legacy publishing is retired: no demo-publish workflow and no demo-gifs-latest release reference.
+test('workflows_should_NotReferenceRetiredDemoPublish_When_Scanned', () => {
+  const dir = path.join(repoRoot, '.github/workflows');
+  assert.ok(!existsSync(path.join(dir, 'demo-publish.yml')), 'demo-publish.yml must be deleted');
+  for (const file of readdirSync(dir)) {
+    const text = readFileSync(path.join(dir, file), UTF8);
+    assert.ok(!/(?<!website-)demo-gifs-latest/.test(text), `${file} references the retired demo-gifs-latest release`);
+  }
 });
 
 // Phase 6, Story 6.3.1: deploy-website.yml's build job must run its
 // blocking checks in the exact dependency order plan.md specifies --
 // sync-content verify (before anything reads the CuratedDocs it checks) ->
 // build (before any check needs dist/) -> check-internal-links ->
-// check-asset-health -> Lighthouse CI -> upload the artifact only once every
+// check-readme-links -> Lighthouse CI -> upload the artifact only once every
 // earlier gate has passed. Uses js-yaml (unlike the raw-text block
 // extraction above) because this job has many more steps in a deeper,
 // list-of-maps structure than the simple top-level on:/env: blocks those
@@ -103,7 +243,7 @@ const REQUIRED_BUILD_STEP_ORDER = [
   'Verify content sync',
   'Build site',
   'Check internal links',
-  'Check demo-asset health',
+  'Check README links',
   'Lighthouse CI (desktop)',
   'Lighthouse CI (mobile)',
   'Upload Pages artifact',
@@ -119,14 +259,14 @@ test('deployWorkflow_should_RunChecksInDependencyOrder_When_YamlParsed', () => {
   );
 });
 
-test('deployWorkflow_should_FlagMissingStep_When_AssetHealthCheckStepRemoved', () => {
+test('deployWorkflow_should_FlagMissingStep_When_ReadmeLinkCheckStepRemoved', () => {
   const stepLabels = extractBuildStepLabels(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8));
-  const tampered = stepLabels.filter((label) => !label.includes('Check demo-asset health'));
+  const tampered = stepLabels.filter((label) => !label.includes('Check README links'));
 
   const violation = findOrderViolation(tampered, REQUIRED_BUILD_STEP_ORDER);
   assert.ok(
-    violation && violation.includes('Check demo-asset health'),
-    'removing the asset-health-check step must be caught by the same order check',
+    violation && violation.includes('Check README links'),
+    'removing the README link check step must be caught by the same order check',
   );
 });
 
@@ -146,32 +286,73 @@ test('deployWorkflow_should_NeverTriggerOnPullRequest_When_YamlParsed', () => {
   assert.deepEqual((doc.on.push as { branches: string[] }).branches, ['main']);
 });
 
-type CiWorkflow = {
-  on: Record<string, unknown>;
-  jobs: Record<string, { steps: (WorkflowStep & { with?: unknown; 'working-directory'?: string })[] }>;
-};
-
 const WEBSITE_CI_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/website-ci.yml');
 
 // The PR gate must run every check the deploy runs, byte-for-byte, or a PR can
 // go green and still break the Pages deploy after merge (which is how the site
-// went 25 deploys without publishing). Only the Pages publishing steps are deploy-only.
+// went 25 deploys without publishing). Intentional differences are named below.
+const DEPLOY_ONLY = [
+  'Download demo clips',
+  'Download promo plan',
+  'Make promo tools executable',
+  'Download media shards',
+  'Stage shard media and merge manifests',
+  'Download last-known-good media (reuse)',
+  'Freshness precheck (mediatool fresh)',
+  'Use last-known-good media (scheduled fallback)',
+  'Warn when no clips were shipped',
+  'Regenerate features.json with the clips',
+];
+const CI_ONLY_PREFIX = 'Smoke: ';
+
+/** Drops TOURS_MEDIA_MODE from a step's env so the one intentional env difference does not fail equality. */
+function withoutMediaMode(step: Step): Step {
+  if (!step.env || !('TOURS_MEDIA_MODE' in step.env)) return step;
+  const { TOURS_MEDIA_MODE: _mode, ...rest } = step.env;
+  const copy: Step = { ...step };
+  if (Object.keys(rest).length > 0) copy.env = rest;
+  else delete copy.env;
+  return copy;
+}
+
 test('websiteCiWorkflow_should_RunTheSameChecksAsDeploy_When_YamlParsed', () => {
-  const deploy = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as CiWorkflow;
-  const ci = yaml.load(readFileSync(WEBSITE_CI_WORKFLOW_PATH, UTF8)) as CiWorkflow;
+  const deploy = loadDeploy();
+  const ci = yaml.load(readFileSync(WEBSITE_CI_WORKFLOW_PATH, UTF8)) as Workflow;
 
   assert.deepEqual(Object.keys(ci.on), ['pull_request'], 'website-ci.yml must trigger only on pull_request');
 
-  // Every deploy step before the Pages publishing steps must also run in the PR
-  // gate, except the ones that consume the deploy's own recorded clips.
-  const DEPLOY_ONLY = ['Download demo clips', 'Warn when no clips were shipped', 'Regenerate features.json with the clips'];
   const publishAt = deploy.jobs.build.steps.findIndex((step) => step.name === 'Configure Pages');
   assert.notEqual(publishAt, -1, 'deploy-website.yml must have a "Configure Pages" step');
   const deployChecks = deploy.jobs.build.steps
     .slice(0, publishAt)
     .filter((step) => !DEPLOY_ONLY.includes(step.name ?? ''));
   assert.ok(deployChecks.some((step) => step.name === 'Stop preview server'));
-  assert.deepEqual(ci.jobs.checks.steps, deployChecks);
+  const ciChecks = ci.jobs.checks.steps.filter((step) => !step.name?.startsWith(CI_ONLY_PREFIX));
+  assert.deepEqual(ciChecks.map(withoutMediaMode), deployChecks);
+  assert.ok(ci.jobs.checks.steps.some((step) => step.name?.startsWith(CI_ONLY_PREFIX)), 'smoke steps exist');
+});
+
+// Cross-cutting 6c: TOURS_MEDIA_MODE=smoke is set only by website-ci, on the site build and the e2e step that derives its expectations from it.
+test('websiteCiWorkflow_should_SmokeRecordOneClipAgainstItsOwnBinary_When_YamlParsed', () => {
+  const ciText = readFileSync(WEBSITE_CI_WORKFLOW_PATH, UTF8);
+  const ci = yaml.load(ciText) as Workflow & { on: { pull_request: { paths: string[] } } };
+
+  const withMode = ci.jobs.checks.steps.filter((step) => step.env?.TOURS_MEDIA_MODE !== undefined);
+  assert.deepEqual(withMode.map((step) => step.name), ['Build site', 'Check README links', 'E2E UX acceptance tests']);
+  assert.ok(withMode.every((step) => step.env?.TOURS_MEDIA_MODE === 'smoke'));
+  assert.ok(!/TOURS_MEDIA_MODE/.test(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)), 'deploy builds in the default deploy mode');
+
+  const record = ci.jobs.checks.steps.find((step) => step.name === 'Smoke: record the dashboard-lifecycle clip');
+  assert.ok(record, 'smoke record step exists');
+  assert.match(record.run ?? '', /--only dashboard-lifecycle --smoke/);
+  assert.ok(ci.jobs.checks.steps.some((step) => step.run?.includes('go build -o stapler-squad')), 'binary is built from the PR');
+  assert.ok(!ci.jobs.checks.steps.some((step) => step.uses?.includes('download-artifact')), 'no 1-day-retention binary download');
+
+  for (const trigger of ['website/**', 'tests/e2e/website-demos/**', 'tests/demo/**']) {
+    assert.ok(ci.on.pull_request.paths.includes(trigger), `smoke trigger path ${trigger}`);
+  }
+  assert.equal(Object.keys(ci.jobs).length, 1, 'website-ci stays one job (check budget)');
+  assert.ok((ci.jobs.checks['timeout-minutes'] ?? 0) <= 30);
 });
 
 // Story 1.1.2: the deploy job needs id-token: write to mint the OIDC token
@@ -185,4 +366,123 @@ test('deployWorkflow_should_RequestIdTokenWritePermission_When_YamlMissingPermis
   };
 
   assert.equal(doc.permissions['id-token'], 'write');
+});
+
+test('deployWorkflow_should_RetireTheReleaseAssetHealthCheck_When_YamlParsed', () => {
+  for (const file of ['deploy-website.yml', 'website-ci.yml']) {
+    const text = readFileSync(path.join(repoRoot, '.github/workflows', file), UTF8);
+    assert.ok(!/check-asset-health|demo-gifs-latest/.test(text), `${file} no longer runs the release-URL health check`);
+  }
+});
+
+// Every id the recorder can run must reach a shard: tours and shotlists by glob in shard-plan,
+// legacy clips (clips.ts, not files) through -extra.
+test('deployWorkflow_should_PlanEveryRecordableId_When_ShardPlanRuns', () => {
+  const plan = yaml.load(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)) as Workflow;
+  const run = plan.jobs.decide.steps.find((step) => step.name === 'Plan shards')?.run ?? '';
+  const extras = [...run.matchAll(/-extra\s+(\S+)/g)].map((m) => m[1]).sort();
+  const clips = readFileSync(path.join(repoRoot, 'tests/e2e/website-demos/clips.ts'), UTF8);
+  const legacy = [...clips.matchAll(/^\s{4}name: '([^']+)'/gm)].map((m) => m[1]).sort();
+  assert.ok(legacy.length > 0, 'clips.ts names were parsed');
+  assert.deepEqual(extras, legacy, 'legacy clips in clips.ts must be passed to shard-plan with -extra');
+  assert.ok(!/-shotlists-dir/.test(run), 'shotlists/ is planned from its default directory');
+  assert.ok(readdirSync(path.join(repoRoot, 'tests/e2e/website-demos/shotlists')).length > 0);
+});
+
+// docscoverage must never fall back to its merge-base default in CI: each event names its base
+// (Task 4.1.4a). github.event.before is the push base here; pull requests run it in the always-run
+// promo-guards job with HEAD^1 (see the guard-workflow tests below).
+test('buildWorkflow_should_PassExplicitBasePerEvent_When_DocsCoverageStepParsed', () => {
+  const build = yaml.load(readFileSync(path.join(repoRoot, '.github/workflows/build.yml'), UTF8)) as Workflow;
+  const steps = Object.values(build.jobs).flatMap((job) => job.steps ?? []);
+  const step = steps.find((candidate) => candidate.name?.startsWith('Docs coverage'));
+  assert.ok(step, 'build.yml has a Docs coverage step');
+  const run = String((step as Step & { run?: string }).run);
+
+  assert.equal(step.if, "${{ github.event_name != 'pull_request' }}", 'PRs run docs coverage in promo-guards, not build.yml');
+  assert.ok(!/pull_request\)/.test(run), 'no pull_request arm: that case lives in promo-guards');
+  assert.match(run, /push\)\s*BASE="\$EVENT_BEFORE"/);
+  assert.match(run, /\*\)\s*BASE=none/);
+  assert.match(run, /docscoverage -base "\$BASE"/);
+  assert.match(run, /docscoverage enforce -base "\$BASE"/, 'the enforce flag is read from the base blob, not the PR tree');
+  assert.ok(!/promo-flags\.json/.test(run), 'the step does not read the flags file from the working tree');
+  assert.equal(step.env?.EVENT_BEFORE, '${{ github.event.before }}');
+});
+
+// Task 4.1.4b: build.yml uploads the trend artifact on push; the weekly notify run reads it.
+test('workflows_should_ProduceAndConsumeDocsCoverageTrend_When_YamlParsed', () => {
+  const build = yaml.load(readFileSync(path.join(repoRoot, '.github/workflows/build.yml'), UTF8)) as Workflow;
+  const upload = Object.values(build.jobs)
+    .flatMap((job) => job.steps ?? [])
+    .find((step) => step.name === 'Upload docs-coverage trend');
+  assert.ok(upload, 'build.yml uploads the trend artifact');
+  assert.equal(upload.with?.name, 'docs-coverage-trend');
+
+  const trend = loadDeploy().jobs.notify.steps.find((step) => step.name === 'Docs coverage trend check');
+  assert.ok(trend, 'notify has a trend step');
+  assert.match(String(trend.if), /schedule/);
+  assert.match(String((trend as Step & { run?: string }).run), /docscoverage trend/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// backlog-scaffolding-guard.yml: the always-run PR guard workflow (Tasks 1.1.4b0, 1.1.4b, 2.1.1b, 2.1.1c).
+
+const GUARD_WORKFLOW_PATH = path.join(repoRoot, '.github/workflows/backlog-scaffolding-guard.yml');
+// Task 1.1.4b0 hard gate chose a separate job (decision and numbers: spike-notes.md, ADR-003).
+const PROMO_GUARD_JOB_ID = 'promo-guards';
+const loadGuard = (): Workflow => yaml.load(readFileSync(GUARD_WORKFLOW_PATH, UTF8)) as Workflow;
+const runOf = (step: Step): string => String((step as Step & { run?: string }).run ?? '');
+
+test('guardWorkflow_should_HaveNoPathFilterAndNeverUsePullRequestTarget_When_Parsed', () => {
+  const text = readFileSync(GUARD_WORKFLOW_PATH, UTF8);
+  const pr = loadGuard().on.pull_request as Record<string, unknown>;
+  assert.ok(pr, 'runs on pull_request');
+  assert.ok(!('paths' in pr) && !('paths-ignore' in pr), 'a path filter would leave a docs-only PR with no result');
+  assert.ok(!/^[^#\n]*pull_request_target/m.test(text), 'pull_request_target would run PR code with write-scoped secrets');
+  assert.deepEqual(pr.types, ['opened', 'synchronize', 'reopened', 'labeled', 'unlabeled']);
+  assert.equal(loadGuard().on.pull_request_target, undefined);
+});
+
+test('guardWorkflow_should_GiveBothJobsReadOnlyPermissions_When_Parsed', () => {
+  const doc = loadGuard();
+  for (const id of ['guard', PROMO_GUARD_JOB_ID]) {
+    assert.deepEqual(doc.jobs[id]?.permissions, { contents: 'read', 'pull-requests': 'read', issues: 'read' }, `${id} permissions`);
+  }
+});
+
+test('guardWorkflow_should_NotRerunScaffoldingChecksOnUnrelatedLabelEvents_When_Parsed', () => {
+  const doc = loadGuard();
+  assert.match(String(doc.jobs.guard.if), /action != 'labeled' && github\.event\.action != 'unlabeled'/);
+  assert.match(String(doc.jobs[PROMO_GUARD_JOB_ID].if), /github\.event\.label\.name == 'allow-media'/);
+});
+
+test('guardWorkflow_should_BuildAPrebuiltBinaryOnADepthTwoCheckout_When_PromoGuardsParsed', () => {
+  const job = loadGuard().jobs[PROMO_GUARD_JOB_ID];
+  assert.ok(job, `job ${PROMO_GUARD_JOB_ID} exists`);
+  assert.ok(job['timeout-minutes'] && job['timeout-minutes'] >= 8, 'timeout is set and at least the prior guard budget');
+  const checkout = job.steps.find((step) => step.uses?.includes('actions/checkout'));
+  assert.equal(checkout?.with?.['fetch-depth'], 2, 'depth 2 from the start: merge commit plus its base parent');
+  assert.ok(job.steps.some((step) => step.uses?.includes('setup-go-cached')), 'Go module and build cache restore');
+  const build = job.steps.find((step) => runOf(step).includes('go build -o'));
+  assert.match(runOf(build as Step), /promoguard/);
+  assert.equal(job.steps[0].id, 'scope', 'first step decides relevance so the check always reports');
+});
+
+test('guardWorkflow_should_ReadEveryGateInputFromTheBaseBlob_When_PromoGuardsParsed', () => {
+  const job = loadGuard().jobs[PROMO_GUARD_JOB_ID];
+  const term = job.steps.find((step) => step.name?.startsWith('Banned-term scan'));
+  const media = job.steps.find((step) => step.name?.startsWith('Binary media guard'));
+  const flagsStep = job.steps.find((step) => step.id === 'flags');
+  assert.match(runOf(term as Step), /termcheck -mode=source -base HEAD\^1/);
+  assert.match(runOf(media as Step), /mediaguard -base HEAD\^1/);
+  assert.match(runOf(media as Step), /-events-json/, 'override authority is judged from the issue events');
+  assert.match(runOf(flagsStep as Step), /promoguard" flags -base HEAD\^1/, 'kill switch from the base blob');
+  for (const step of [term, media]) {
+    assert.match(String(step?.['continue-on-error']), /steps\.flags\.outputs\.enforce != 'true'/, 'guardsEnforce kill switch');
+  }
+  const docs = job.steps.find((step) => step.name?.startsWith('Docs coverage'));
+  assert.match(runOf(docs as Step), /docscoverage" -base HEAD\^1/);
+  for (const step of job.steps) {
+    assert.ok(!/promo-flags\.json|CODEOWNERS|allowlist\.txt/.test(runOf(step)), 'no step reads a gate input from the PR tree');
+  }
 });

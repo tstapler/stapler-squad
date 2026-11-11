@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "startedAt": "2026-11-10T11:50:00Z",
+  "finishedAt": "2026-11-10T12:00:00Z",
+  "entries": [
+    {
+      "name": "approval-review",
+      "format": "webm",
+      "status": "failed",
+      "bytes": 0,
+      "commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "themeId": "grimdark",
+      "attempts": 2
+    },
+    {
+      "name": "dashboard-lifecycle",
+      "format": "mp4",
+      "status": "recorded",
+      "src": "clips/dashboard-lifecycle.mp4",
+      "poster": "shots/dashboard-lifecycle-poster.webp",
+      "bytes": 2400000,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "themeId": "grimdark",
+      "attempts": 1,
+      "seeded": "db",
+      "durationMs": 45000,
+      "formFactor": "desktop"
+    },
+    {
+      "name": "dashboard-lifecycle",
+      "format": "webm",
+      "status": "recorded",
+      "src": "clips/dashboard-lifecycle.webm",
+      "poster": "shots/dashboard-lifecycle-poster.webp",
+      "bytes": 2100000,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "themeId": "grimdark",
+      "attempts": 1,
+      "seeded": "db",
+      "durationMs": 45000,
+      "formFactor": "desktop"
+    },
+    {
+      "name": "dashboard-lifecycle-poster",
+      "format": "webp",
+      "status": "recorded",
+      "src": "shots/dashboard-lifecycle-poster.webp",
+      "bytes": 52000,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "themeId": "grimdark",
+      "attempts": 1,
+      "seeded": "db",
+      "formFactor": "desktop",
+      "width": 1280,
+      "height": 720
+    },
+    {
+      "name": "dashboard-mobile",
+      "format": "webp",
+      "status": "recorded",
+      "src": "shots/dashboard-mobile.webp",
+      "bytes": 31000,
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "themeId": "grimdark",
+      "attempts": 1,
+      "seeded": "db",
+      "formFactor": "mobile",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "name": "dashboard-overview",
+      "format": "webp",
+      "status": "recorded",
+      "src": "shots/dashboard-overview.webp",
+      "bytes": 64000,
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+      "themeId": "grimdark",
+      "attempts": 1,
+      "seeded": "db",
+      "formFactor": "desktop",
+      "width": 1280,
+      "height": 720
+    }
+  ]
+}

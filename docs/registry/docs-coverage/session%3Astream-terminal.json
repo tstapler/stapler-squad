@@ -1,0 +1,6 @@
+{
+  "id": "session:stream-terminal",
+  "userFacing": true,
+  "tour": "dashboard-lifecycle",
+  "website": "tours/dashboard-lifecycle"
+}

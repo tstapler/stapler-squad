@@ -60,22 +60,30 @@ Structured triage for every pending agent action.
 Visualise decision trends and classifier performance over time.
 `;
 
-async function writeFixtureFiles(dir: string): Promise<{ readmePath: string; featuresMdPath: string }> {
+const FIXTURE_MEDIA = {
+	Dashboard: { clip: 'session-dashboard', shot: '01-dashboard', alt: 'Dashboard alt' },
+	'Review Queue': { shot: '05-review-queue', alt: 'Review queue alt' },
+};
+
+async function writeFixtureFiles(dir: string): Promise<{ readmePath: string; featuresMdPath: string; mediaPath: string }> {
 	const readmePath = join(dir, 'README.md');
 	const featuresMdPath = join(dir, 'features.md');
+	const mediaPath = join(dir, 'feature-media.json');
 	await writeFile(readmePath, FIXTURE_README, ENCODING);
 	await writeFile(featuresMdPath, FIXTURE_FEATURES_MD, ENCODING);
-	return { readmePath, featuresMdPath };
+	await writeFile(mediaPath, JSON.stringify(FIXTURE_MEDIA), ENCODING);
+	return { readmePath, featuresMdPath, mediaPath };
 }
 
 describe('buildFeaturesJson', () => {
 	let dir: string;
 	let readmePath: string;
 	let featuresMdPath: string;
+	let mediaPath: string;
 
 	beforeEach(async () => {
 		dir = await mkdtemp(join(tmpdir(), 'build-features-test-'));
-		({ readmePath, featuresMdPath } = await writeFixtureFiles(dir));
+		({ readmePath, featuresMdPath, mediaPath } = await writeFixtureFiles(dir));
 	});
 
 	afterEach(async () => {
@@ -83,7 +91,7 @@ describe('buildFeaturesJson', () => {
 	});
 
 	it('buildFeaturesJson_should_Produce3CardsForReviewApprovalCategory_When_ReconcilingReadmeAndFeaturesMd', () => {
-		const cards = buildFeaturesJson({ readmePath, featuresMdPath });
+		const cards = buildFeaturesJson({ readmePath, featuresMdPath, mediaPath });
 
 		const reviewApprovalCards = cards.filter((card) => card.category === 'Review & Approval');
 		expect(reviewApprovalCards).toHaveLength(3);
@@ -95,32 +103,57 @@ describe('buildFeaturesJson', () => {
 		}
 	});
 
-	it('buildFeaturesJson_should_OmitScreenshotField_When_SectionHasNoMatchingPng', () => {
-		const cards = buildFeaturesJson({ readmePath, featuresMdPath });
+	it('buildFeaturesJson_should_OmitScreenshotField_When_HeadingHasNoMediaEntry', () => {
+		const cards = buildFeaturesJson({ readmePath, featuresMdPath, mediaPath });
 
 		const liveTerminal = cards.find((card) => card.heading === 'Live Terminal Streaming');
 		expect(liveTerminal).toBeDefined();
 		expect(liveTerminal).not.toHaveProperty('screenshot');
 
 		const dashboard = cards.find((card) => card.heading === 'Dashboard');
-		expect(dashboard?.screenshot).toBe('/features/01-dashboard.png');
+		expect(dashboard?.screenshot).toBe('/shots/01-dashboard.webp');
+		expect(dashboard?.alt).toBe('Dashboard alt');
 	});
 
-	// Clips are recorded during the deploy into public/clips/; a card gets one
-	// only if the file exists, so a failed recording leaves the screenshot card.
-	it.each([
-		['present', true],
-		['missing', false],
-	])('buildFeaturesJson_should_AttachDemoClipOnlyWhenFileExists_When_%s', async (_label, present) => {
-		const clipsDir = join(dir, 'clips');
-		await mkdir(clipsDir);
-		if (present) await writeFile(join(clipsDir, 'session-dashboard.webm'), 'x');
+	// Media is declared by name, so no file on disk changes the output (Story 3.1.2).
+	it('buildFeaturesJson_should_AttachDemoClipByName_When_MediaEntryDeclaresClip', () => {
+		const cards = buildFeaturesJson({ readmePath, featuresMdPath, mediaPath });
 
-		const cards = buildFeaturesJson({ readmePath, featuresMdPath, clipsDir });
+		expect(cards.find((card) => card.heading === 'Dashboard')?.demoClip).toEqual({ name: 'session-dashboard', ext: 'webm' });
+		expect(cards.find((card) => card.heading === 'Review Queue')).not.toHaveProperty('demoClip');
+	});
 
-		const dashboard = cards.find((card) => card.heading === 'Dashboard');
-		expect(dashboard?.demoClip).toEqual(present ? { name: 'session-dashboard', ext: 'webm' } : undefined);
-		// The screenshot is kept either way: it is the clip's poster.
-		expect(dashboard?.screenshot).toBe('/features/01-dashboard.png');
+	it('buildFeaturesJson_should_BeIdentical_When_ClipFilesPresentOrAbsent', async () => {
+		const before = buildFeaturesJson({ readmePath, featuresMdPath, mediaPath });
+		await mkdir(join(dir, 'public', 'clips'), { recursive: true });
+		await writeFile(join(dir, 'public', 'clips', 'session-dashboard.webm'), 'x');
+		expect(buildFeaturesJson({ readmePath, featuresMdPath, mediaPath })).toEqual(before);
+	});
+
+	it('buildFeaturesJson_should_NameHeading_When_MediaEntryHasNoMatchingSection', async () => {
+		await writeFile(mediaPath, JSON.stringify({ 'No Such Section': { shot: 's', alt: 'a' } }), ENCODING);
+		expect(() => buildFeaturesJson({ readmePath, featuresMdPath, mediaPath })).toThrow(/"No Such Section".*not a section heading/);
+	});
+
+	it('buildFeaturesJson_should_NameHeading_When_MediaEntryMissingAlt', async () => {
+		await writeFile(mediaPath, JSON.stringify({ Dashboard: { shot: 's' } }), ENCODING);
+		expect(() => buildFeaturesJson({ readmePath, featuresMdPath, mediaPath })).toThrow(/"Dashboard" needs a non-empty "shot" and "alt"/);
+	});
+
+	// Story 3.3.3: a new card without media fails the build, naming it.
+	it('buildFeaturesJson_should_NameEveryCardWithoutMedia_When_RequireMediaSet', () => {
+		expect(() => buildFeaturesJson({ readmePath, featuresMdPath, mediaPath, requireMedia: true })).toThrow(/"Live Terminal Streaming"/);
+	});
+
+	it('buildFeaturesJson_should_CarryTourId_When_MediaEntryNamesATour', async () => {
+		await writeFile(mediaPath, JSON.stringify({ Dashboard: { shot: 's', alt: 'a', tour: 'dashboard-lifecycle' } }), ENCODING);
+		const cards = buildFeaturesJson({ readmePath, featuresMdPath, mediaPath });
+		expect(cards.find((c) => c.heading === 'Dashboard')?.tour).toBe('dashboard-lifecycle');
+		expect(cards.find((c) => c.heading === 'Review Queue')).not.toHaveProperty('tour');
+	});
+
+	it('buildFeaturesJson_should_NameHeading_When_TourIsEmpty', async () => {
+		await writeFile(mediaPath, JSON.stringify({ Dashboard: { shot: 's', alt: 'a', tour: '' } }), ENCODING);
+		expect(() => buildFeaturesJson({ readmePath, featuresMdPath, mediaPath })).toThrow(/"Dashboard" has an empty "tour"/);
 	});
 });

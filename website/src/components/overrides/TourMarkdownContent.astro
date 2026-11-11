@@ -1,0 +1,29 @@
+---
+// Starlight MarkdownContent override: tour pages render clip, steps and footer
+// around the (optional) authored body; every other page is unchanged.
+import Default from '@astrojs/starlight/components/MarkdownContent.astro';
+import { PUBLIC_DIR, builtTours } from '../../lib/tours/site';
+import { prevNext } from '../../lib/tours/nav';
+import { readCaptions } from '../../lib/tours/transcript';
+import TourClip from '../TourClip.astro';
+import TourFooter from '../TourFooter.astro';
+import TourSteps from '../TourSteps.astro';
+
+const { entry } = Astro.locals.starlightRoute;
+const tour = entry.data.tour;
+const { prev, next } = tour ? prevNext(await builtTours(), entry.id) : {};
+const captions = tour ? readCaptions(PUBLIC_DIR, tour.clip) : [];
+---
+
+{
+	tour ? (
+		<div class="tour-page">
+			<TourClip clip={tour.clip} title={tour.title} />
+			<TourSteps tour={tour} captions={captions} />
+			<Default {...Astro.props}><slot /></Default>
+			<TourFooter tour={tour} prev={prev} next={next} />
+		</div>
+	) : (
+		<Default {...Astro.props}><slot /></Default>
+	)
+}

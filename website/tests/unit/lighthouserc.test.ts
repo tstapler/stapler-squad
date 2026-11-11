@@ -22,6 +22,19 @@ function loadAssertions(path: string): Record<string, unknown> {
 }
 
 describe('website/lighthouserc.json and lighthouserc.mobile.json', () => {
+	// Story 3.1.3: tours are covered at the same thresholds, desktop and mobile.
+	for (const file of [DESKTOP_CONFIG, MOBILE_CONFIG]) {
+		it(`lighthouseRc_should_ListToursIndexAndHeroTour_When_ConfigParsed (${file})`, () => {
+			const config = JSON.parse(readFileSync(join(WEBSITE_ROOT, file), 'utf8'));
+			expect(config.ci.collect.url).toEqual(
+				expect.arrayContaining([
+					'http://localhost:4321/stapler-squad/tours/',
+					'http://localhost:4321/stapler-squad/tours/dashboard-lifecycle/',
+				]),
+			);
+		});
+	}
+
 	for (const file of [DESKTOP_CONFIG, MOBILE_CONFIG]) {
 		it(`lighthouseRc_should_SetMinScore0_9WithErrorAssertion_When_ConfigParsed (${file})`, () => {
 			const assertions = loadAssertions(join(WEBSITE_ROOT, file));

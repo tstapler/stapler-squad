@@ -77,6 +77,9 @@ type EntRepository struct {
 	// NewTestEntRepository.
 	seedURI string
 
+	// migrations overrides DefaultStartupMigrations (nil = use the default); set via WithMigrations.
+	migrations []Migration
+
 	// wakeChanged is called after any WakeTrigger row change so the wake timer
 	// can re-arm (SetWakeChangeHook).
 	wakeChanged atomic.Pointer[func()]
@@ -264,7 +267,7 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	// One-time-per-database correction for rows that predate the enabled field
 	// — see workflow_enabled_field_migration.go's doc comment for why this
 	// must be gated on workflowEnabledColumnAlreadyExisted rather than run
-	// unconditionally like startupMigrations below. Doesn't implement
+	// unconditionally like the startup migrations below. Doesn't implement
 	// Migration for the same reason (see ent_repository_migrations.go): the
 	// preexisted check has to be taken before Schema.Create() runs, above.
 	if !workflowEnabledColumnAlreadyExisted {
@@ -272,10 +275,14 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	}
 
 	// Every other startup data migration is uniform-shaped (idempotent,
-	// (ctx, *EntRepository) error) and lives in startupMigrations — see
+	// (ctx, *EntRepository) error) and lives in DefaultStartupMigrations — see
 	// session/ent_repository_migrations.go for why the enabled-field backfill
 	// above this point is the documented exception that doesn't.
-	for _, m := range startupMigrations {
+	migrations := repo.migrations
+	if migrations == nil {
+		migrations = DefaultStartupMigrations()
+	}
+	for _, m := range migrations {
 		if err := m.Run(context.Background(), repo); err != nil {
 			_ = client.Close() // best-effort cleanup; we're already returning the real startup error
 			return nil, fmt.Errorf("failed to run migration %q: %w", m.Name(), err)

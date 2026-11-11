@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "mediaguard_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/promo/cmd/mediaguard",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/promo/internal/mediaguard"],
+)
+
+go_binary(
+    name = "mediaguard",
+    embed = [":mediaguard_lib"],
+    visibility = ["//visibility:public"],
+)

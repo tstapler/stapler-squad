@@ -1,0 +1,6 @@
+{
+  "id": "session:get-diff",
+  "userFacing": true,
+  "tour": "dashboard-lifecycle",
+  "website": "tours/dashboard-lifecycle"
+}

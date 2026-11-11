@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "promoguard_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/promo/cmd/promoguard",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/promo/internal/flags",
+        "//tools/promo/internal/mediaguard",
+        "//tools/promo/internal/termcheck",
+        "//tools/promolib/gitbase",
+    ],
+)
+
+go_binary(
+    name = "promoguard",
+    embed = [":promoguard_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "promoguard_test",
+    srcs = ["main_test.go"],
+    embed = [":promoguard_lib"],
+    deps = [
+        "//tools/promolib/gitbase/gitbasetest",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

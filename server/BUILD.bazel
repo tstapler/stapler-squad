@@ -104,6 +104,7 @@ go_library(
         "//session",
         "//session/artifacts",
         "//session/backlog",
+        "//session/backlog/shadowledger",
         "//session/cdp",
         "//session/contexthistory",
         "//session/dbmaint",
@@ -297,6 +298,7 @@ go_test(
         "//session",
         "//session/artifacts",
         "//session/backlog",
+        "//session/backlog/shadowledger",
         "//session/dbpool",
         "//session/domain",
         "//session/gitwiring",
@@ -330,12 +332,16 @@ go_test(
     ],
 )
 
-# Read by session tests that parse or scan server sources.
+# Read by session tests that parse or scan server sources, and by web-app jest's theme-id-parity test.
 exports_files(
     [
         "artifact_scan_complete.go",
         "pr_annotations.go",
         "prwatch_sessions.go",
+        "user_themes.go",
     ],
-    visibility = ["//session:__pkg__"],
+    visibility = [
+        "//session:__pkg__",
+        "//web-app:__pkg__",
+    ],
 )
