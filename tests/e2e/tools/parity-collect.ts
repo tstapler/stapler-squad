@@ -6,7 +6,7 @@
 import type { BrowserContext, Page } from '@playwright/test';
 import type { StyleSnapshot } from './parity-core.ts';
 
-export const THEME_NAMES = ['matrix', 'cyberpunk77', 'wh40k', 'clean', 'light', 'dark'] as const;
+export const THEME_NAMES = ['matrix', 'cyberpunk77', 'grimdark', 'clean', 'light', 'dark'] as const;
 export const FOCUS_SAMPLE = 5;
 const ELEMENT_CAP = 300;
 /** Data-driven surfaces that appear and disappear on their own; they cannot be compared across loads. */

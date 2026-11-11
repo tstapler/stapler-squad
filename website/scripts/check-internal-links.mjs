@@ -5,6 +5,9 @@
 // stale/typo'd slug (e.g. a cross-link to a doc that got excluded or renamed)
 // would otherwise only surface as a live 404 after deploy.
 //
+// It also checks media (img/video/source) references, so a missing poster or
+// clip fails here too.
+//
 // Run standalone: node website/scripts/check-internal-links.mjs
 // (wired as a step in .github/workflows/deploy-website.yml, between "Build
 // site" and "Check demo-asset health")
@@ -34,11 +37,29 @@ export function extractAnchorHrefs(html) {
 	return hrefs;
 }
 
+// Media references (Story 3.1.3): <img src>, <video src|poster>, <source src>.
+// A tour page whose poster or clip file is missing from dist/ must fail here,
+// not 404 after deploy. data: URIs and external origins are skipped by
+// isInternalLink; only attribute values on these three tags are read.
+const MEDIA_TAG_PATTERN = /<(img|video|source)\b[^>]*>/gi;
+const MEDIA_ATTRS = { img: ['src'], video: ['src', 'poster'], source: ['src'] };
+
+export function extractMediaRefs(html) {
+	const refs = [];
+	for (const [tag, name] of html.matchAll(MEDIA_TAG_PATTERN)) {
+		for (const attr of MEDIA_ATTRS[name.toLowerCase()]) {
+			const value = tag.match(new RegExp(`\\s${attr}="([^"]*)"`, 'i'));
+			if (value && value[1]) refs.push(value[1]);
+		}
+	}
+	return refs;
+}
+
 // Returns true for a link this checker should validate against dist/ --
 // false for same-page anchors, external origins, and non-http(s) schemes.
 export function isInternalLink(href, { base = SITE_BASE, origin = SITE_ORIGIN } = {}) {
 	if (!href || href.startsWith('#')) return false;
-	if (/^(mailto|tel|javascript):/i.test(href)) return false;
+	if (/^(mailto|tel|javascript|data|blob):/i.test(href)) return false;
 	if (href.startsWith('//')) return false; // protocol-relative -> external
 	if (/^https?:\/\//i.test(href)) {
 		// Only in-scope if it's a fully-qualified self-link back to this site's
@@ -92,7 +113,7 @@ export async function checkInternalLinks({ distDir = DEFAULT_DIST_DIR, base = SI
 	for (const file of htmlFiles) {
 		const html = await readFile(file, 'utf8');
 		const hrefs = extractAnchorHrefs(html);
-		for (const href of hrefs) {
+		for (const href of [...hrefs, ...extractMediaRefs(html)]) {
 			if (!isInternalLink(href, { base })) continue;
 			checked += 1;
 			const { resolved } = await resolveInternalLink(href, { distDir, base });
@@ -106,7 +127,8 @@ export async function checkInternalLinks({ distDir = DEFAULT_DIST_DIR, base = SI
 }
 
 async function main() {
-	const { failures, checked } = await checkInternalLinks();
+	// Optional first argument: a dist/ directory other than the site's own.
+	const { failures, checked } = await checkInternalLinks(process.argv[2] ? { distDir: path.resolve(process.argv[2]) } : {});
 
 	for (const failure of failures) {
 		console.error(`[check-internal-links] FAIL ${failure.href} (linked from ${failure.sourceFile})`);

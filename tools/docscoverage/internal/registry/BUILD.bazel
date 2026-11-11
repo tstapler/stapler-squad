@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "registry",
+    srcs = ["registry.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/docscoverage/internal/registry",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+    deps = [
+        "//tools/docscoverage/internal/model",
+        "//tools/promolib/gitbase",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":registry",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+)
+
+go_test(
+    name = "registry_test",
+    srcs = ["registry_test.go"],
+    data = ["//docs/registry:features"],
+    deps = [
+        ":registry",
+        "//tools/docscoverage/internal/model",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

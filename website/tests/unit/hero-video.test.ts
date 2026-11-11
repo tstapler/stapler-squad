@@ -9,9 +9,10 @@ import { JSDOM } from 'jsdom';
 import { describe, expect, it, vi } from 'vitest';
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
 import HeroVideo from '../../src/components/HeroVideo.astro';
-import { applyAutoplayUnlessReducedMotion, whenLoadedAndIdle } from '../../src/lib/reduced-motion-video.ts';
+import { applyAutoplayUnlessReducedMotion, startHeroPlayback, whenLoadedAndIdle } from '../../src/lib/reduced-motion-video.ts';
 
-const PROPS = { src: '/stapler-squad/demo.webm', poster: '/stapler-squad/screenshot.png' };
+const PROPS = { src: '/stapler-squad/clips/dashboard-lifecycle.webm', poster: '/stapler-squad/shots/dashboard-lifecycle-poster.webp' };
+const MP4 = '/stapler-squad/clips/dashboard-lifecycle.mp4';
 // Boolean attributes HeroVideo.astro always sets server-side, named once so
 // both the markup assertions and the jsdom fixture below share one spelling.
 // kibitzer:ignore replace-magic-literal -- these are the literal HTML
@@ -71,6 +72,18 @@ describe('HeroVideo component markup', () => {
 	});
 });
 
+describe('HeroVideo renditions (Cross-cutting 7e)', () => {
+	it('heroVideo_should_ListWebmThenMp4Sources_When_Mp4Given', async () => {
+		const container = await AstroContainer.create();
+		const html = await container.renderToString(HeroVideo, { props: { ...PROPS, mp4: MP4 } });
+		const webm = html.indexOf(`<source src="${PROPS.src}" type="video/webm"`);
+		const mp4 = html.indexOf(`<source src="${MP4}" type="video/mp4"`);
+		expect(webm).toBeGreaterThan(-1);
+		expect(mp4).toBeGreaterThan(webm);
+		expect(html).toContain(`poster="${PROPS.poster}"`);
+	});
+});
+
 describe('whenLoadedAndIdle', () => {
 	function fakeWindow(readyState: string, withIdle: boolean) {
 		const listeners: Record<string, () => void> = {};
@@ -114,5 +127,76 @@ describe('whenLoadedAndIdle', () => {
 		const start = vi.fn();
 		whenLoadedAndIdle(start, win);
 		expect(start).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('HeroVideo pause control and sources', () => {
+	it('heroVideo_should_ListWebmThenMp4Sources_When_Mp4Provided', async () => {
+		const container = await AstroContainer.create();
+		const html = await container.renderToString(HeroVideo, { props: { ...PROPS, mp4: '/stapler-squad/demo.mp4' } });
+		expect(html.indexOf('type="video/webm"')).toBeGreaterThan(-1);
+		expect(html.indexOf('type="video/webm"')).toBeLessThan(html.indexOf('type="video/mp4"'));
+		expect(html).toContain(`poster="${PROPS.poster}"`);
+	});
+
+	it('heroVideo_should_RenderHiddenPauseButtonBeforeVideo_When_Rendered', async () => {
+		const container = await AstroContainer.create();
+		const html = await container.renderToString(HeroVideo, { props: PROPS });
+		const button = html.indexOf('data-testid="hero-pause"');
+		expect(button).toBeGreaterThan(-1);
+		expect(button).toBeLessThan(html.indexOf('data-testid="hero-video"'));
+		expect(html).toMatch(/data-testid="hero-pause"[^>]*\bhidden\b/);
+	});
+
+	function setup(playImpl: () => Promise<void>) {
+		const dom = new JSDOM('<!doctype html><body><button hidden></button><video></video></body>', {
+			beforeParse(window) {
+				const proto = window.HTMLMediaElement.prototype;
+				let paused = true;
+				Object.defineProperty(proto, 'paused', { get: () => paused, configurable: true });
+				proto.play = function () {
+					return playImpl().then(() => {
+						paused = false;
+						this.dispatchEvent(new window.Event('play'));
+					});
+				};
+				proto.pause = function () {
+					paused = true;
+					this.dispatchEvent(new window.Event('pause'));
+				};
+			},
+		});
+		const doc = dom.window.document;
+		return { video: doc.querySelector('video')!, button: doc.querySelector('button')! };
+	}
+
+	it('startHeroPlayback_should_ShowPauseAndToggle_When_AutoplaySucceeds', async () => {
+		const { video, button } = setup(() => Promise.resolve());
+		await startHeroPlayback(video, button, () => ({ matches: false }));
+		expect(button.hidden).toBe(false);
+		expect(button.textContent).toBe('Pause');
+		expect(button.getAttribute('aria-pressed')).toBe('true');
+		button.click();
+		expect(button.textContent).toBe('Play');
+		expect(button.getAttribute('aria-pressed')).toBe('false');
+		button.click();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(button.textContent).toBe('Pause');
+	});
+
+	it('startHeroPlayback_should_StayPausedReadingPlay_When_PlayRejected', async () => {
+		const { video, button } = setup(() => Promise.reject(new Error('NotAllowedError')));
+		await startHeroPlayback(video, button, () => ({ matches: false }));
+		expect(button.hidden).toBe(false);
+		expect(button.textContent).toBe('Play');
+		expect(button.getAttribute('aria-pressed')).toBe('false');
+	});
+
+	it('startHeroPlayback_should_RenderNoButton_When_PrefersReducedMotion', async () => {
+		const { video, button } = setup(() => Promise.resolve());
+		await startHeroPlayback(video, button, () => ({ matches: true }));
+		expect(button.hidden).toBe(true);
+		expect(video.hasAttribute('autoplay')).toBe(false);
 	});
 });

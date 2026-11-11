@@ -1,0 +1,11 @@
+# Files allowed to contain a banned term. Format: path:reason. Stale entries fail the scan.
+# Read from the base blob on pull requests (Cross-cutting 7a), so a PR cannot extend it for itself.
+web-app/src/lib/theme/legacy-theme-ids.ts:legacy alias module
+web-app/src/lib/theme/legacy-theme-ids.test.ts:alias mapping test
+web-app/src/lib/contexts/ThemeContext.test.tsx:stored legacy id case
+web-app/build/__tests__/theme-boot.test.ts:stored legacy id matrix
+tests/e2e/theme-fouc.spec.ts:legacy stored-theme case
+web-app/src/lib/omnibar/detectors/CommandDetector.test.ts:legacy theme command case
+server/user_themes.go:legacy id compat constant
+server/user_themes_test.go:legacy id compat test
+tools/bzl/baseline/pr-sample.json:recorded main-branch PR file list, historical paths (from the origin/main merge)

@@ -1,0 +1,2 @@
+# Shots with a confirmed OCR false positive. Format: shot-name:reason (shot name without extension).
+# An entry whose shot was scanned but produced no hit is stale and fails the scan.

@@ -23,9 +23,15 @@ name: PR Diff Guards
 # Keep the grep pattern below in sync with git.ScaffoldingExcludePatterns in
 # session/git/scaffolding.go if that list ever changes.
 
+# The promo-guards job below also reads this file's `on.pull_request` triggers: the
+# `labeled`/`unlabeled` types exist for the `allow-media` override. Never switch this
+# workflow to `pull_request_target`: promo-guards builds PR code, which that trigger would
+# run with write-scoped secrets (website/tests/unit/workflow-yaml.test.ts forbids it).
+# No `paths:` filter either: a filtered-out workflow reports no check at all.
 on:
   pull_request:
     branches: [ main ]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 concurrency:
   group: backlog-scaffolding-guard-${{ github.event.pull_request.number || github.ref }}
@@ -34,6 +40,12 @@ concurrency:
 jobs:
   guard:
     name: pr-diff-guards (backlog scaffolding, generated protos)
+    # Label events exist for promo-guards' allow-media override; they must not re-run these checks.
+    if: ${{ github.event.action != 'labeled' && github.event.action != 'unlabeled' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
     runs-on: ubuntu-latest
     # Baseline avg 4m / max 10.1m. Backstop only — a timeout here is a real failure.
     timeout-minutes: 8
@@ -102,3 +114,98 @@ jobs:
             exit 1
           fi
           echo "No generated protobuf files in diff — OK"
+
+  # promo-materials-refresh PR guards (Tasks 1.1.4b, 2.1.1b). A separate job rather than steps in
+  # `guard`: that job's baseline (avg 4m, max 10.1m, above) is already near the 5-minute budget
+  # before it gains a checkout, Go setup and a build (Task 1.1.4b0 hard gate; numbers in
+  # project_plans/promo-materials-refresh/implementation/spike-notes.md). It has no `paths:`
+  # filter so it always reports a result; the scope step exits early when nothing relevant changed.
+  # Gate inputs (promo-flags.json, both allow-lists, CODEOWNERS) are read from the BASE blob
+  # (HEAD^1 of the pull_request merge ref), so a PR cannot loosen its own guard.
+  promo-guards:
+    name: promo-guards (banned terms, binary media, docs coverage)
+    # The label events matter only for allow-media; any other label must not re-run the guards.
+    if: ${{ (github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'allow-media' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    runs-on: ubuntu-latest
+    # CI timings are unmeasured (spike-notes.md); 12 covers a cold Go build and the 10.1m max seen on `guard`.
+    timeout-minutes: 12
+    steps:
+      - name: Scope (does this PR touch anything the guards read?)
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CHANGED=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')
+          # Any added or modified file can contain a banned term, so only a deletion-only or empty
+          # diff is skipped. Cheap to over-run; the point of the step is a result on every PR.
+          if [ -z "$CHANGED" ]; then
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "No changed files: nothing for the promo guards to read."
+          else
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # fetch-depth 2: the merge commit and its first parent (the base), which is all HEAD^1 and the
+      # go-git tree diff need. The repo's .git is ~16GB; never fetch full history here.
+      - name: Checkout (merge ref, depth 2)
+        if: ${{ steps.scope.outputs.relevant == 'true' }}
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # ratchet:actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Set up Go (restore-only cache)
+        if: ${{ steps.scope.outputs.relevant == 'true' }}
+        uses: ./.github/actions/setup-go-cached
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build promoguard and docscoverage
+        if: ${{ steps.scope.outputs.relevant == 'true' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -o "$RUNNER_TEMP/bin/promoguard" ./tools/promo/cmd/promoguard
+          go build -o "$RUNNER_TEMP/bin/docscoverage" ./tools/docscoverage/cmd/docscoverage
+
+      # guardsEnforce comes from the base blob; absent means true (Cross-cutting 8a).
+      - name: Read the guardsEnforce kill switch (base blob)
+        id: flags
+        if: ${{ steps.scope.outputs.relevant == 'true' }}
+        run: |
+          set -euo pipefail
+          FLAGS=$("$RUNNER_TEMP/bin/promoguard" flags -base HEAD^1)
+          echo "flags=$FLAGS"
+          echo "enforce=$(echo "$FLAGS" | jq -r .guardsEnforce)" >> "$GITHUB_OUTPUT"
+          echo "docs_enforce=$(echo "$FLAGS" | jq -r .docsCoverageEnforce)" >> "$GITHUB_OUTPUT"
+
+      - name: Banned-term scan (termcheck -mode=source)
+        if: ${{ steps.scope.outputs.relevant == 'true' }}
+        continue-on-error: ${{ steps.flags.outputs.enforce != 'true' }}
+        run: '"$RUNNER_TEMP/bin/promoguard" termcheck -mode=source -base HEAD^1'
+
+      # The allow-media override is judged from the issue events (latest `labeled` event by an
+      # individual user listed in the base CODEOWNERS; bots never count), not from the label alone.
+      - name: Binary media guard (mediaguard)
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
+        continue-on-error: ${{ steps.flags.outputs.enforce != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_ALLOW_MEDIA: ${{ contains(github.event.pull_request.labels.*.name, 'allow-media') }}
+        run: |
+          set -euo pipefail
+          EVENTS="$RUNNER_TEMP/issue-events.json"
+          gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/events" --paginate > "$EVENTS"
+          "$RUNNER_TEMP/bin/promoguard" mediaguard -base HEAD^1 -allow-media="$HAS_ALLOW_MEDIA" -events-json "$EVENTS"
+
+      # Moved out of build.yml's test-affected so a content-only PR (website/src/content/**,
+      # web-app/public/docs/**) is checked without running the full build.yml (~20 checks).
+      # build.yml keeps the push-to-main run, which uploads the trend artifact.
+      - name: Docs coverage (report-only unless docsCoverageEnforce)
+        if: ${{ !cancelled() && steps.scope.outputs.relevant == 'true' }}
+        continue-on-error: ${{ steps.flags.outputs.docs_enforce != 'true' }}
+        run: '"$RUNNER_TEMP/bin/docscoverage" -base HEAD^1'

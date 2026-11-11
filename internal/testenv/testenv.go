@@ -83,6 +83,15 @@ func requireUnder(what, dir, root string) error {
 	return nil
 }
 
+// SkipUnderBazel skips a test that reads parts of the checkout a Bazel sandbox cannot
+// contain (.git, or trees under .bazelignore such as website/); it still runs under go test.
+func SkipUnderBazel(t testing.TB, why string) {
+	t.Helper()
+	if os.Getenv("TEST_TMPDIR") != "" && os.Getenv("TEST_SRCDIR") != "" {
+		t.Skip(why + " (absent from the Bazel sandbox; runs under go test)")
+	}
+}
+
 // SkipGoListUnderBazel skips a test that shells out to `go list` over the module.
 // A Bazel test sandbox has neither the synced gen/ and session/ent trees nor the Go
 // module cache, so `go list` cannot resolve the graph there; the same test still runs

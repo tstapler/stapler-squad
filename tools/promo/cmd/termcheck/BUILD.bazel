@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "termcheck_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/promo/cmd/termcheck",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/promo/internal/termcheck"],
+)
+
+go_binary(
+    name = "termcheck",
+    embed = [":termcheck_lib"],
+    visibility = ["//visibility:public"],
+)

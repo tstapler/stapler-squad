@@ -1,0 +1,6 @@
+never	x240kb is a size
+never	data:image/png;base64,AAAA40kBBBB
+never	40kb download
+published	a 40k budget
+published	40k tokens
+published	a 40k context

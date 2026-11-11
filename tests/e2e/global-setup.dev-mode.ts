@@ -67,7 +67,7 @@ async function globalSetup(config: FullConfig) {
     const themeFixtures: Record<string, string> = {
       'matrix-theme.json': 'matrix',
       'cyberpunk77-theme.json': 'cyberpunk77',
-      'wh40k-theme.json': 'wh40k',
+      'grimdark-theme.json': 'grimdark',
       'clean-theme.json': 'clean',
     };
     const origin = process.env.TEST_SERVER_URL!;

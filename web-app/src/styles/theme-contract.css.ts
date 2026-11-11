@@ -38,7 +38,7 @@ export const vars = createThemeContract({
     primaryText: null,
     // Text on a SOLID primary / success / error fill (Approve, Deny, active filter pill, ...).
     // Separate from primaryText because bright fills (#10b981, #ef4444, dark #2d9cdb) need dark text
-    // while deep fills (wh40k) need white; each pair is >= 4.5:1 (notification-contrast-over-xterm spec).
+    // while deep fills (grimdark) need white; each pair is >= 4.5:1 (notification-contrast-over-xterm spec).
     onPrimaryFill: null,
     onSuccessFill: null,
     onErrorFill: null,

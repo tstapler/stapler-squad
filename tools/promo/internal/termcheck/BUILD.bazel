@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "termcheck",
+    srcs = [
+        "media.go",
+        "termcheck.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/promo/internal/termcheck",
+    visibility = ["//tools/promo:__subpackages__"],
+    deps = [
+        "//tools/promo/internal/manifest",
+        "//tools/promolib/gitbase",
+        "//tools/promolib/termscan",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":termcheck",
+    visibility = ["//tools/promo:__subpackages__"],
+)
+
+go_test(
+    name = "termcheck_test",
+    srcs = ["termcheck_test.go"],
+    deps = [
+        ":termcheck",
+        "//internal/testenv",
+        "//tools/promolib/gitbase",
+        "//tools/promolib/gitbase/gitbasetest",
+        "//tools/promolib/termscan",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -520,9 +520,9 @@ export const cyberpunk77Theme = createTheme(vars, {
 });
 
 // ---------------------------------------------------------------------------
-// WH40K theme — grimdark parchment + gold on near-black
+// Grimdark theme — parchment + gold on near-black
 // ---------------------------------------------------------------------------
-export const wh40kTheme = createTheme(vars, {
+export const grimdarkTheme = createTheme(vars, {
   color: {
     textPrimary: "#c8b89a",
     textSecondary: "#a89878",

@@ -4,10 +4,11 @@ description: 'Every Stapler Squad feature, grouped by category, with full descri
 ---
 
 import FeatureGrid from '../../../components/FeatureGrid.astro';
+import features from '../../features.json';
 
 # Features
 
-All 17 features, grouped by category. Screenshots are shown where one exists; the
-rest are listed as text-only cards.
+All {features.length} features, grouped by category, each with a current screenshot. Cards
+that have a guided tour link to it.
 
 <FeatureGrid />

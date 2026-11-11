@@ -1,6 +1,8 @@
 // Standalone config for scripts/record-website-demos.sh: no global server (the
 // script starts a seeded one), one chromium worker so clips never share a server
-// at the same time, and no retries (a retried clip would record twice).
+// at the same time, and no retries (a retried clip would record twice; the recorder retries a
+// flaky scene itself, on a fresh context). Mobile shots use their own 390x844 touch context
+// (website-demos/shots.ts), so there is a single desktop project here.
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({

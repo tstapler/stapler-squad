@@ -1,0 +1,6 @@
+# Hand-written: exposes files read by tests (Gazelle ignores BUILD files without Go sources).
+filegroup(
+    name = "features",
+    srcs = glob(["features/**/*.json"]),
+    visibility = ["//tools/docscoverage:__subpackages__"],
+)

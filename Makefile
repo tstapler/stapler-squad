@@ -103,6 +103,9 @@ help: ## Show this help message
 # so the default goal stays `help`; BUILD_SYSTEM validation runs at parse time.
 include make/bazel.mk
 
+# Promo-materials-refresh targets (after `help` so it stays the default goal).
+include make/promo.mk
+
 .PHONY: git-soak-status
 git-soak-status: ## Print the git backend shadow-soak counters and flip verdict (running service; exit 1 = not ready)
 	@scripts/git-soak-status.sh

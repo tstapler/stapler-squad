@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "scenario",
+    srcs = [
+        "approvals.go",
+        "automation.go",
+        "backlog.go",
+        "bundle.go",
+        "dashboard.go",
+        "fanout.go",
+        "files.go",
+        "history.go",
+        "insights.go",
+        "notifications.go",
+        "rpc.go",
+        "scenario.go",
+        "transcripts.go",
+    ],
+    embedsrcs = ["transcripts/approval-pending.txt"],
+    importpath = "github.com/tstapler/stapler-squad/tests/demo/scenario",
+    visibility = ["//visibility:public"],
+    deps = ["//tests/demo/scenario/fixtures"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":scenario",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "scenario_test",
+    srcs = [
+        "leak_test.go",
+        "route_fixture_test.go",
+        "scenario_test.go",
+    ],
+    data = glob(["transcripts/*.txt"]) + [
+        "//proto/session/v1:protos",
+        "//tests/demo:helpers.go",
+    ],
+    embed = [":scenario"],
+    deps = ["//tools/promolib/termscan"],
+)

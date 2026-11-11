@@ -15,19 +15,22 @@
 // resolves identically regardless of which path 404'd).
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { extractAnchorHrefs, isInternalLink } from '../../scripts/check-internal-links.mjs';
-import { runRealBuild } from '../helpers/run-build.ts';
+import { buildWithFixtures, type FixtureBuild } from '../helpers/tour-fixture.ts';
 
 const ENCODING = 'utf8';
 const WEBSITE_ROOT = join(import.meta.dirname, '..', '..');
 const NOT_FOUND_SOURCE_PATH = join(WEBSITE_ROOT, 'src', 'pages', '404.astro');
-const REAL_DIST_404_PATH = join(WEBSITE_ROOT, 'dist', '404.html');
 
 describe('404.astro', () => {
+	// Hermetic build of a scratch site copy: no recorded media is needed in the working tree.
+	let built: FixtureBuild;
 	beforeAll(() => {
-		runRealBuild(WEBSITE_ROOT);
+		built = buildWithFixtures({});
+		if (built.status !== 0) throw new Error(built.output);
 	}, 120_000);
+	afterAll(() => built?.cleanup());
 
 	it('notFoundPage_should_RenderSiteHeaderNavAndDocsHomeLink_When_Rendered', async () => {
 		const source = await readFile(NOT_FOUND_SOURCE_PATH, ENCODING);
@@ -39,7 +42,7 @@ describe('404.astro', () => {
 	});
 
 	it('notFoundPage_should_RenderConsistently_When_ReachedViaDeeplyNestedUnmatchedPath', async () => {
-		const html = await readFile(REAL_DIST_404_PATH, ENCODING);
+		const html = await readFile(join(built.outDir, '404.html'), ENCODING);
 
 		expect(html).toContain('Page not found');
 		expect(html).toContain('Go to the docs home');

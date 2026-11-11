@@ -1,0 +1,29 @@
+---
+// Breadcrumb, the page h1 (slot) and the meta row: audience, "Watch M:SS"
+// (manifest duration only), "Read N min", flag note.
+import { clipDurationMs, formatWatch } from '../lib/tours/manifest';
+import type { Tour } from '../lib/tours/schema';
+import { basePath, tourContext } from '../lib/tours/site';
+
+export interface Props {
+	tour: Tour;
+}
+
+const { tour } = Astro.props;
+const { manifest } = tourContext();
+const watch = formatWatch(clipDurationMs(manifest, tour.clip));
+---
+
+<nav class="tour-breadcrumb" aria-label="Breadcrumb">
+	<ol>
+		<li><a href={`${basePath()}/tours/`}>Tours</a></li>
+		<li aria-current="page">{tour.title}</li>
+	</ol>
+</nav>
+<slot />
+<ul class="tour-meta" data-testid="tour-meta">
+	<li class="tour-audience">{tour.audience}</li>
+	{watch && <li>Watch {watch}</li>}
+	<li>Read {tour.durationMin} min</li>
+	{tour.flagNote && <li data-testid="tour-flag-note">{tour.flagNote}</li>}
+</ul>

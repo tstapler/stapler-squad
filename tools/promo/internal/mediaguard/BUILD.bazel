@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "mediaguard",
+    srcs = [
+        "mediaguard.go",
+        "override.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/promo/internal/mediaguard",
+    visibility = ["//tools/promo:__subpackages__"],
+    deps = [
+        "//tools/promo/internal/codeowners",
+        "//tools/promo/internal/flags",
+        "//tools/promolib/gitbase",
+        "@com_github_bmatcuk_doublestar_v4//:doublestar",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mediaguard",
+    visibility = ["//tools/promo:__subpackages__"],
+)
+
+go_test(
+    name = "mediaguard_test",
+    srcs = ["mediaguard_test.go"],
+    data = [
+        "//.github:CODEOWNERS",
+        "//tools/promo/mediaguard:allowlist.txt",
+    ],
+    deps = [
+        ":mediaguard",
+        "//tools/promo/internal/codeowners",
+        "//tools/promolib/gitbase/gitbasetest",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -9,9 +9,11 @@ export interface Props {
 	screenshot?: string;
 	alt?: string;
 	demoClip?: { name: string; ext: string };
+	/** A built tour covering this card; the link text is its full accessible name. */
+	tour?: { title: string; href: string };
 }
 
-const { heading, description, screenshot, alt, demoClip } = Astro.props;
+const { heading, description, screenshot, alt, demoClip, tour } = Astro.props;
 
 // scripts/build-features.mjs emits `screenshot` as a root-relative path
 // (e.g. "/features/01-dashboard.png") with no knowledge of the Pages base
@@ -64,6 +66,7 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 	}
 	<h4>{heading}</h4>
 	<p>{description}</p>
+	{tour && <a class="feature-card-tour" data-testid="feature-card-tour" href={tour.href}>See the tour: {tour.title}</a>}
 </article>
 
 <style>
@@ -94,6 +97,13 @@ const clipSrc = demoClip ? `${basePath}/clips/${demoClip.name}.${demoClip.ext}` 
 	.feature-card h4 {
 		margin: 0;
 		font-size: var(--sl-text-lg, 1.125rem);
+	}
+
+	.feature-card-tour {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+		margin-top: auto;
 	}
 
 	.feature-card p {

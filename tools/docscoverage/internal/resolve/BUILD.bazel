@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "resolve",
+    srcs = [
+        "resolve.go",
+        "slug.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/docscoverage/internal/resolve",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+    deps = [
+        "//tools/docscoverage/internal/model",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":resolve",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+)
+
+go_test(
+    name = "resolve_test",
+    srcs = ["resolve_test.go"],
+    deps = [
+        ":resolve",
+        "//tools/docscoverage/internal/fixture",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
