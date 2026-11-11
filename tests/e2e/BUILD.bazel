@@ -3,3 +3,8 @@ exports_files(
     ["playwright.website-demos.config.ts"],
     visibility = ["//tools/promo:__subpackages__"],
 )
+
+exports_files(
+    ["tools/parity-collect.ts"],
+    visibility = ["//web-app:__pkg__"],
+)
