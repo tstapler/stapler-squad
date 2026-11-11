@@ -51,7 +51,7 @@ var notTerminalWriteRPCs = map[string][]string{
 		"CreateBacklogItemFromChat", "CreateItemSource", "CreateLivenessDefinition", "CreatePipelineMode",
 		"CreateStage", "CreateStageTransition", "CreateTransitionGate", "DeleteBacklogItem", "DeleteItemSource",
 		"DeleteLivenessDefinition", "DeletePipelineMode", "DeleteStage", "DeleteStageTransition",
-		"DeleteTransitionGate", "DispatchToJules", "GetBacklogItem", "GetBacklogItemCost", "GetBacklogItemDiff",
+		"DeleteTransitionGate", "DismissWorkflowSuggestion", "DispatchToJules", "GetBacklogItem", "GetBacklogItemCost", "GetBacklogItemDiff",
 		"GetBacklogItemShipStatus", "GetLivenessDefinition", "GetPendingGates", "GetPipelineMode",
 		"GetSessionBacklogIndex", "GetStage", "GetStageTransition", "GetSyncHistory", "GetTransitionGate", "GetWorkflowEngineStatus",
 		"ImportGitHubIssue", "ListAcAuditEvents", "ListBacklogItemDependencies", "ListBacklogItems", "ListForeignClaims", "ListGitHubIssues", "ListItemSources",
