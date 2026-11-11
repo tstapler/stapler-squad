@@ -337,7 +337,13 @@ Physical leaf moves that become honest only after waves 1-3 removed the concrete
 - **server/mcp P8-mcptest**: Conditional on a leaf split that is deferred; real size is ~164 lines plus per-leaf fakes. Do only if a leaf split is approved, as internal/mcptest with testonly=True.
 - **server P2 actuator, P3 httpx, P4 wakes/wiring, P5 prwatch/wiring, P6 startup**: Root server is already a leaf; no Bazel payoff; db_maintenance.go is not an actuator; httpx is a grab-bag mixing TLS, metrics, themes and changelog; wakes OCP claims false (installWakeTools is one struct); prwatch/wiring violates server/prwatch/deps_test.go and needs shutdownHooks and ServerDependencies; server/startup creates an import cycle through ServerDependencies/RuntimeDeps. In-place tables and functions are in SRV-wiring.
 
-## Owner questions
+## Owner decisions
+
+- **2026-11-10, Q1 answered by the owner: "open close shape alone justifies".** A physical move is justified by leaf-ness and an open-closed extension point alone; it does not need to pass ADR-010 SC4/SC6 or show a replayed Bazel gain. Wave 4 items (`ITEMSRC-move`, `BL-shadowledger`) and the `FLAGS-1` stage-1 package are therefore unblocked once their seams exist. SC1 (no new import cycle, at most 10 relocated declarations) and SC3 still apply because they protect feasibility, not payoff. Speculative abstractions are still rejected (consumer-side only, 2+ implementations or a real test seam).
+
+## Owner questions (open)
+
+(Q1 is answered above.)
 
 - Q1: For packages that fail ADR-010 SC6 (ITEMSRC-move, BL-shadowledger, FLAGS-1), is OCP/leaf shape alone sufficient justification to move them, or must scoping replay show a measured gain before each physical move?
 - Q2: Do you want the in-place OCP refactors inside backlogsvc (admission Gate slice with Prepare/Admit/Outcome, one CacheInvalidator interface, headless methods into their own files, session-role table replacing the Headless*UUIDPrefix HasPrefix switches in server/mcp and backlog_service_query.go) scheduled as wave 5, given they were rejected as package splits?
@@ -349,5 +355,5 @@ Physical leaf moves that become honest only after waves 1-3 removed the concrete
 ## Rules for executing
 
 - One split per PR, at most 3 open at once (ADR-010 Decision 4). Waves 1 and 2 are in-place OCP seams plus one pure move.
-- Every physical move must pass `go run ./tools/bzl/scoping criteria` and `replay` unless the owner answers Q1 "OCP is enough".
+- Every physical move must still pass `go run ./tools/bzl/scoping criteria` SC1 (boundary budget, no new cycle) and SC3 (isolation). SC4/SC6 (measured payoff) are NOT required: see Owner decisions.
 - A new interface is allowed only in the consumer package, with 2+ implementations or a real test seam (`interface-pollution-checklist`).
