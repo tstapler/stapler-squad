@@ -38,7 +38,12 @@ package session
 // (status_corruption_repair.go) is the one-time cleanup for exactly those
 // rows.
 
-import "context"
+import (
+	"context"
+
+	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/migrations"
+)
 
 type Migration interface {
 	// Name identifies the migration in log output and error wrapping.
@@ -54,10 +59,8 @@ type Migration interface {
 // plus a run function — so a hand-written adapter type with its own
 // Name()/Run() methods per migration (the pattern every migration file used
 // before this) was pure duplication with nothing migration-specific in it.
-// Adding a new migration is now: write `func runXBackfill(ctx
-// context.Context, er *EntRepository) error` (plus its test), and append
-// `funcMigration{"x backfill", runXBackfill}` to DefaultStartupMigrations below —
-// no new type, no boilerplate methods.
+// Ent-only migrations live in session/migrations; adding one is a new file
+// there plus one entry in migrations.Default, with no edit to this package.
 type funcMigration struct {
 	name string
 	fn   func(ctx context.Context, er *EntRepository) error
@@ -80,21 +83,42 @@ func WithMigrations(ms ...Migration) RepositoryOption {
 	}
 }
 
-// DefaultStartupMigrations lists every Migration NewEntRepository runs by
-// default, in the (non-load-bearing, each is independent) order they were
-// added. Adding one is a new Migration plus one line here; NewEntRepository
-// never changes.
+// DefaultStartupMigrations adapts session/migrations.Default to this package's
+// Migration, supplying the session-owned hooks (public-id backfill, PR URL
+// host recovery, main-repo-root resolution).
 func DefaultStartupMigrations() []Migration {
-	return []Migration{
-		funcMigration{"drop obsolete indexes", dropObsoleteIndexes}, // first: cheap, and later migrations shell out to git per item
-		funcMigration{"backlog item updated_at UTC backfill", runBacklogItemUpdatedAtUTCBackfill},
-		funcMigration{"workflow updated_at UTC backfill", runWorkflowUpdatedAtUTCBackfill},
-		funcMigration{"github pr url backfill", runGitHubPRURLBackfill},
-		funcMigration{"backlog item public id backfill", func(ctx context.Context, er *EntRepository) error {
-			return er.BackfillBacklogItemPublicIDs(ctx)
-		}},
-		funcMigration{"backlog item repo_path canonicalization", runBacklogItemRepoPathCanonicalizationBackfill},
-		funcMigration{"status corruption repair", runStatusCorruptionRepair},
-		funcMigration{"backlog item legacy import external backfill", runBacklogItemLegacyImportExternalBackfill},
+	hooks := migrations.Hooks{
+		PRURL:               sessionPRURL,
+		ResolveMainRepoRoot: ResolveMainRepoRoot,
 	}
+	defaults := migrations.Default(hooks)
+	out := make([]Migration, 0, len(defaults))
+	for _, m := range defaults {
+		out = append(out, adaptMigration(m))
+	}
+	return out
+}
+
+func adaptMigration(m migrations.Migration) Migration {
+	return funcMigration{m.Name, func(ctx context.Context, er *EntRepository) error {
+		return m.Run(ctx, migrations.Env{
+			Client:            er.Client,
+			Driver:            er.driver,
+			BackfillPublicIDs: er.BackfillBacklogItemPublicIDs,
+		})
+	}}
+}
+
+// sessionPRURL recovers the host from the session's cloned path and builds the
+// PR URL; false when the repo ref is invalid or the host is unrecoverable.
+func sessionPRURL(path, owner, repo string, prNumber int) (string, bool) {
+	ref, err := github.NewRepoRef(owner, repo)
+	if err != nil {
+		return "", false
+	}
+	host := hostFromClonedPath(path, ref)
+	if host == "" {
+		return "", false
+	}
+	return (&GitHubRef{Host: host, Owner: ref.Owner(), Repo: ref.Repo(), PRNumber: prNumber}).PRURL(), true
 }

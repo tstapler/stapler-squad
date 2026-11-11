@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "migrations",
+    srcs = [
+        "backlog_updated_at_utc.go",
+        "legacy_import_external.go",
+        "migrations.go",
+        "obsolete_indexes.go",
+        "pr_url_backfill.go",
+        "repo_path_canonicalization.go",
+        "status_corruption_repair.go",
+        "workflow_updated_at_utc.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/migrations",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:backlogitem",
+        "//tools/bzl/ent:session",
+        "@io_entgo_ent//dialect",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":migrations",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "migrations_test",
+    srcs = [
+        "imports_test.go",
+        "legacy_import_external_test.go",
+        "migrations_test.go",
+    ],
+    embed = [":migrations"],
+    deps = [
+        "//tools/bzl/ent",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_entgo_ent//dialect",
+        "@io_entgo_ent//dialect/sql",
+        "@org_modernc_sqlite//:sqlite",
+    ],
+)

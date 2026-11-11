@@ -1,4 +1,4 @@
-package session
+package migrations
 
 import (
 	"context"
@@ -18,15 +18,15 @@ var obsoleteIndexes = []string{ //nolint:gochecknoglobals
 	"classificationanalytics_rule_id",
 }
 
-// dropObsoleteIndexes is idempotent (DROP INDEX IF EXISTS). Freed pages return
+// DropObsoleteIndexes is idempotent (DROP INDEX IF EXISTS). Freed pages return
 // to the OS through the incremental-vacuum maintenance in session/dbmaint.
-func dropObsoleteIndexes(ctx context.Context, er *EntRepository) error {
-	if er.driver == nil {
+func DropObsoleteIndexes(ctx context.Context, env Env) error {
+	if env.Driver == nil {
 		return nil // built from a bare client (tests/seeded); no raw exec path
 	}
 	for _, name := range obsoleteIndexes {
 		var res sql.Result
-		if err := er.driver.Exec(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %q", name), []any{}, &res); err != nil {
+		if err := env.Driver.Exec(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %q", name), []any{}, &res); err != nil {
 			return fmt.Errorf("drop obsolete index %s: %w", name, err)
 		}
 	}

@@ -140,7 +140,7 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 		All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
-		// mirroring runGitHubPRURLBackfill's same defensive posture.
+		// mirroring migrations.PRURLBackfill's same defensive posture.
 		return nil //nolint:nilerr
 	}
 

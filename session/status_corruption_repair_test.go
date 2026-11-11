@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session/migrations"
 )
 
 // TestStatusCorruptionRepair_FixesOnceThenStaysStable is the property the
@@ -68,7 +70,7 @@ func TestStatusCorruptionRepair_UnrecoverableValueLeftUnchanged(t *testing.T) {
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
 	data := createTestSession("unrecoverable")
-	data.Status = Status(99) // 99 % 100 == 99, still > maxValidPersistedStatus
+	data.Status = Status(99) // 99 % 100 == 99, still > migrations.MaxValidPersistedStatus
 	require.NoError(t, repo.Create(ctx, data))
 	require.NoError(t, repo.Close())
 
@@ -108,4 +110,12 @@ func TestStatusCorruptionRepair_ValueOutsideShiftEligibleRangeLeftUnchanged(t *t
 	require.NoError(t, err)
 	require.Equal(t, Status(103), got.Status, "a status whose recovered value was never shift-eligible must be left unchanged, not silently repaired to a plausible-but-wrong value")
 	require.NoError(t, repo.Close())
+}
+
+// The repair file freezes these two values so it can move to a leaf package
+// without the Status enum; a new top status must bump both in the same commit.
+func TestStatusCorruptionRepair_FrozenConstantsMatchEnum(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, int(Failed), migrations.MaxValidPersistedStatus)
+	require.Equal(t, int(Restoring), migrations.MinShiftEligibleStatus)
 }

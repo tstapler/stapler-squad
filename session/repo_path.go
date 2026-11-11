@@ -193,7 +193,7 @@ func repoHost(ref *GitHubRef) string {
 
 // hostFromClonedPath attempts to recover a GitHub host from a session's
 // persisted local path, for rows whose github_pr_url was never populated
-// (see runGitHubPRURLBackfill). Paths for GitHub-backed sessions follow the
+// (see migrations.PRURLBackfill). Paths for GitHub-backed sessions follow the
 // GOPATH-style convention documented on RepoPathManager:
 // <baseDir>/<host>/<owner>/<repo>[/...]. Returns "" if path doesn't contain
 // an <owner>/<repo> segment pair immediately preceded by a host-shaped

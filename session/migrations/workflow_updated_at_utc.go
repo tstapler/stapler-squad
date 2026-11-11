@@ -1,4 +1,4 @@
-package session
+package migrations
 
 // workflow_updated_at_utc_migration.go — one-time idempotent migration that
 // normalizes Workflow.updated_at to UTC for rows written before the fix in
@@ -20,18 +20,18 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// runWorkflowUpdatedAtUTCBackfill re-saves every Workflow whose stored
+// WorkflowUpdatedAtUTC re-saves every Workflow whose stored
 // updated_at isn't already UTC, normalizing it in place. Idempotent: rows
 // already in UTC (including freshly-created ones, and rows already migrated
 // by a prior run) are skipped. Safe to call on a fresh/empty database.
 // Best-effort per row: a single row's save failure is logged and does not
 // abort the rest.
-func runWorkflowUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) error {
+func WorkflowUpdatedAtUTC(ctx context.Context, env Env) error {
 	//nolint:entfullscan one-time backfill normalizing every Workflow's updated_at to UTC; idempotent, safe to re-run.
-	wfs, err := er.Client.Workflow.Query().All(ctx)
+	wfs, err := env.Client.Workflow.Query().All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
-		// mirroring runBacklogItemUpdatedAtUTCBackfill's same defensive posture.
+		// mirroring BacklogItemUpdatedAtUTC's same defensive posture.
 		return nil //nolint:nilerr
 	}
 
@@ -40,7 +40,7 @@ func runWorkflowUpdatedAtUTCBackfill(ctx context.Context, er *EntRepository) err
 		if wf.UpdatedAt.Location() == time.UTC {
 			continue
 		}
-		if _, saveErr := er.Client.Workflow.UpdateOneID(wf.ID).
+		if _, saveErr := env.Client.Workflow.UpdateOneID(wf.ID).
 			SetUpdatedAt(wf.UpdatedAt.UTC()).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] workflow updated_at UTC backfill: workflow=%s: %v", wf.ID, saveErr)

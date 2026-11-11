@@ -1,4 +1,4 @@
-package session
+package migrations
 
 // backlog_item_legacy_import_external_backfill.go — idempotent startup
 // migration that fills ExternalID/ExternalURL on backlog items created by an
@@ -26,9 +26,9 @@ const legacyImportNotesPrefix = "Imported from "
 var legacyImportNotesPattern = regexp.MustCompile( //nolint:gochecknoglobals
 	`^Imported from (https://[^/\s]+/[\w.-]+/[\w.-]+/(?:issues|pull)/(\d+))\s*$`)
 
-// parseLegacyImportNotes returns the issue/PR URL and number from notes in the
+// ParseLegacyImportNotes returns the issue/PR URL and number from notes in the
 // exact legacy "Imported from <url>" form.
-func parseLegacyImportNotes(notes string) (url, number string, ok bool) {
+func ParseLegacyImportNotes(notes string) (url, number string, ok bool) {
 	m := legacyImportNotesPattern.FindStringSubmatch(notes)
 	if m == nil {
 		return "", "", false
@@ -36,13 +36,13 @@ func parseLegacyImportNotes(notes string) (url, number string, ok bool) {
 	return m[1], m[2], true
 }
 
-// runBacklogItemLegacyImportExternalBackfill sets external_url/external_id on
+// BacklogItemLegacyImportExternal sets external_url/external_id on
 // items that have both empty and legacy-import notes. Idempotent: filled rows
 // are excluded by the query, and a non-empty field is never overwritten.
 // updated_at is preserved so recency ordering and CAS preconditions are
 // unaffected. Best-effort per row.
-func runBacklogItemLegacyImportExternalBackfill(ctx context.Context, er *EntRepository) error {
-	rows, err := er.Client.BacklogItem.Query().
+func BacklogItemLegacyImportExternal(ctx context.Context, env Env) error {
+	rows, err := env.Client.BacklogItem.Query().
 		Where(
 			backlogitem.NotesHasPrefix(legacyImportNotesPrefix),
 			backlogitem.Or(backlogitem.ExternalURLIsNil(), backlogitem.ExternalURL("")),
@@ -56,11 +56,11 @@ func runBacklogItemLegacyImportExternalBackfill(ctx context.Context, er *EntRepo
 
 	var migrated int
 	for _, row := range rows {
-		url, number, ok := parseLegacyImportNotes(row.Notes)
+		url, number, ok := ParseLegacyImportNotes(row.Notes)
 		if !ok {
 			continue
 		}
-		if _, saveErr := er.Client.BacklogItem.UpdateOneID(row.ID).
+		if _, saveErr := env.Client.BacklogItem.UpdateOneID(row.ID).
 			SetExternalURL(url).
 			SetExternalID(number).
 			SetUpdatedAt(row.UpdatedAt).

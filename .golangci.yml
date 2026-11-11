@@ -117,6 +117,18 @@ linters:
             - "**/pkg/threatscan/*.go"
           allow:
             - $gostd
+        # session/migrations is ent-bound startup-migration infrastructure: session hands it behaviour
+        # through Hooks/Env, so it never imports session, github or server (TestNonTestFiles_*, boundaries.txt).
+        isolate_migrations:
+          list-mode: strict
+          files:
+            - "**/session/migrations/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - entgo.io/ent/dialect
+            - github.com/tstapler/stapler-squad/session/ent
+            - github.com/tstapler/stapler-squad/log
         # session/flow is the pure analytics core: no ent, session, proto or server imports, so
         # BacklogFlowService, the MCP tools and EntFlowReader depend on it, never the reverse.
         # `go list -deps` (TestFlowImports_*) catches transitive imports depguard cannot.

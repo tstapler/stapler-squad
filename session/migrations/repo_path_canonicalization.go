@@ -1,4 +1,4 @@
-package session
+package migrations
 
 // backlog_item_repo_path_canonicalization_migration.go — idempotent migration
 // that canonicalizes every BacklogItem's RepoPath to its main repo root, the
@@ -41,7 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 )
 
-// runBacklogItemRepoPathCanonicalizationBackfill re-resolves every
+// BacklogItemRepoPathCanonicalization re-resolves every
 // BacklogItem's RepoPath via ResolveMainRepoRoot, updating rows whose stored
 // path is a linked worktree (or otherwise resolves to a different main repo
 // root) in place. Idempotent: an empty, relative, no-longer-existing, or
@@ -50,9 +50,9 @@ import (
 // best-effort git subprocess call. Best-effort per row: a single row's
 // resolve or save failure is logged and does not abort the rest, mirroring
 // this file's sibling backfills' discipline.
-func runBacklogItemRepoPathCanonicalizationBackfill(ctx context.Context, er *EntRepository) error {
+func BacklogItemRepoPathCanonicalization(ctx context.Context, env Env, resolveMainRepoRoot func(string) (string, error)) error {
 	//nolint:entfullscan idempotent startup backfill canonicalizing every BacklogItem's repo_path; safe to re-run on every startup (see file doc comment).
-	items, err := er.Client.BacklogItem.Query().All(ctx)
+	items, err := env.Client.BacklogItem.Query().All(ctx)
 	if err != nil {
 		// Table may not exist yet (fresh DB before schema.Create) — ignore,
 		// mirroring this file's sibling migrations' defensive posture.
@@ -71,11 +71,11 @@ func runBacklogItemRepoPathCanonicalizationBackfill(ctx context.Context, er *Ent
 		if _, statErr := os.Stat(item.RepoPath); statErr != nil {
 			continue
 		}
-		resolved, resolveErr := ResolveMainRepoRoot(item.RepoPath)
+		resolved, resolveErr := resolveMainRepoRoot(item.RepoPath)
 		if resolveErr != nil || resolved == item.RepoPath {
 			continue
 		}
-		if _, saveErr := er.Client.BacklogItem.UpdateOneID(item.ID).
+		if _, saveErr := env.Client.BacklogItem.UpdateOneID(item.ID).
 			SetRepoPath(resolved).
 			Save(ctx); saveErr != nil {
 			log.WarningLog().Printf("[Migration] backlog item repo_path canonicalization: item=%s: %v", item.ID, saveErr)
