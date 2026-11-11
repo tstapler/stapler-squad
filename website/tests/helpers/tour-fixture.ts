@@ -4,16 +4,21 @@
 // node_modules is symlinked, not copied. The working tree is never written to.
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MediaManifest } from '../../src/lib/tours/manifest.ts';
 
 export const WEBSITE_ROOT = join(import.meta.dirname, '..', '..');
-const COPY_SKIP = new Set(['node_modules', 'dist', '.astro', 'tests', '.vscode']);
+// Scratch lives under website/, not os.tmpdir(): Astro's normalizeFilename treats an absolute path that
+// shares no ancestor beyond "/" with the site root (symlinked node_modules realpath vs /tmp on CI) as
+// root-relative, so its compile-metadata lookup misses and the build fails.
+const SCRATCH_DIR = '.tour-fixtures';
+const COPY_SKIP = new Set(['node_modules', 'dist', '.astro', 'tests', '.vscode', SCRATCH_DIR]);
 
 /** Copies the site sources into `dest` and drops every real tour (keeping tours/index.mdx). */
 function copySite(dest: string): void {
-	cpSync(WEBSITE_ROOT, dest, { recursive: true, filter: (src) => !COPY_SKIP.has(src.slice(WEBSITE_ROOT.length + 1).split('/')[0]) });
+	// Per entry, not one cpSync of the root: cpSync refuses a dest that sits inside its source.
+	mkdirSync(dest, { recursive: true });
+	for (const entry of readdirSync(WEBSITE_ROOT)) if (!COPY_SKIP.has(entry)) cpSync(join(WEBSITE_ROOT, entry), join(dest, entry), { recursive: true });
 	symlinkSync(join(WEBSITE_ROOT, 'node_modules'), join(dest, 'node_modules'), 'dir');
 	const tours = join(dest, 'src', 'content', 'docs', 'tours');
 	for (const f of readdirSync(tours)) if (f !== 'index.mdx') rmSync(join(tours, f), { recursive: true, force: true });
@@ -115,7 +120,8 @@ export function buildWithFixtures(opts: {
 	clipFiles?: Record<string, number>;
 }): FixtureBuild {
 	const { mode = 'deploy', manifest = manifestFor(), tours = { [FIXTURE_ID]: tourMdx() }, captions = [{ tMs: 1000, text: 'Caption one' }, { tMs: 9000, text: 'Caption two' }], clipName = FIXTURE_ID, transcriptClips = [clipName], clipFiles = {} } = opts;
-	const scratch = mkdtempSync(join(tmpdir(), 'tour-fixture-'));
+	mkdirSync(join(WEBSITE_ROOT, SCRATCH_DIR), { recursive: true });
+	const scratch = mkdtempSync(join(WEBSITE_ROOT, SCRATCH_DIR, 'tour-fixture-'));
 	const site = join(scratch, 'site');
 	const outDir = join(scratch, 'dist');
 	copySite(site);
