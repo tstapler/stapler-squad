@@ -340,6 +340,7 @@ Physical leaf moves that become honest only after waves 1-3 removed the concrete
 ## Owner decisions
 
 - **2026-11-10, Q1 answered by the owner: "open close shape alone justifies".** A physical move is justified by leaf-ness and an open-closed extension point alone; it does not need to pass ADR-010 SC4/SC6 or show a replayed Bazel gain. Wave 4 items (`ITEMSRC-move`, `BL-shadowledger`) and the `FLAGS-1` stage-1 package are therefore unblocked once their seams exist. SC1 (no new import cycle, at most 10 relocated declarations) and SC3 still apply because they protect feasibility, not payoff. Speculative abstractions are still rejected (consumer-side only, 2+ implementations or a real test seam).
+- **2026-11-10, ADR-010 open-PR cap lifted for file-disjoint split PRs (owner).** Waves 2 and 4 were opened together with wave 1 (PRs #1562-#1566) because they touch disjoint areas; the stacked `ITEMSRC-move` PR (#1566) is based on `ITEMSRC-registry` (#1563) and is retargeted to `main` after #1563 merges.
 
 ## Owner questions (open)
 
