@@ -310,8 +310,11 @@ type backlogHandlers struct {
 	// link_session_to_item return ErrUnavailable (stdio fallback, see ADR-001).
 	backlogSvc *backlogsvc.BacklogService
 
+	// plugins resolves the tracker plugins behind import_linear_issue / import_jira_issue.
+	plugins *session.PluginRegistry
+
 	// fetchLinearIssue / fetchJiraIssue back import_linear_issue / import_jira_issue.
-	// Default to the real plugins' FetchIssue when nil; overridable in tests to
+	// Default to the registry plugins' FetchIssue when nil; overridable in tests to
 	// avoid real network calls.
 	fetchLinearIssue func(ctx context.Context, identifier string) (session.ExternalItem, error)
 	fetchJiraIssue   func(ctx context.Context, ref session.JiraIssueRef) (session.ExternalItem, error)

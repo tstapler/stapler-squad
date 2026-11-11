@@ -135,8 +135,22 @@ type sourcelessCloseDeps struct {
 	tokenFor func(host string) string
 }
 
-func defaultSourcelessCloseDeps() sourcelessCloseDeps {
-	return sourcelessCloseDeps{plugin: &session.GitHubIssuesPlugin{}, tokenFor: githubpkg.GetKeychainTokenForHost}
+// githubIssuesPluginID is the registry ID of the GitHub issues plugin.
+const githubIssuesPluginID = "github_issues"
+
+// defaultSourcelessCloseDeps resolves the GitHub issues plugin from registry;
+// plugin is nil when it is not registered or cannot close issues.
+func defaultSourcelessCloseDeps(registry *session.PluginRegistry) sourcelessCloseDeps {
+	deps := sourcelessCloseDeps{tokenFor: githubpkg.GetKeychainTokenForHost}
+	if registry == nil {
+		return deps
+	}
+	if p, ok := registry.Get(githubIssuesPluginID); ok {
+		if closer, ok := p.(externalIssueCloser); ok {
+			deps.plugin = closer
+		}
+	}
+	return deps
 }
 
 // forwardSyncAction is everything the done-transition needs to close one item's
@@ -162,7 +176,7 @@ type forwardSyncAction struct {
 // there is a source) rather than propagated: this runs from an EventBus
 // subscriber goroutine, and the item has already reached done.
 func handleForwardSyncClose(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData) {
-	handleForwardSyncCloseWith(ctx, registry, syncLoop, storage, item, defaultSourcelessCloseDeps())
+	handleForwardSyncCloseWith(ctx, registry, syncLoop, storage, item, defaultSourcelessCloseDeps(registry))
 }
 
 func handleForwardSyncCloseWith(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData, sourceless sourcelessCloseDeps) {
@@ -301,7 +315,7 @@ func resolveSourceCloseAction(ctx context.Context, registry *session.PluginRegis
 // issue URL and no ItemSource. Mirrors resolveProgressTarget — GHE hosts are
 // skipped (no host list is passed to the parser). nil means nothing to do.
 func resolveSourcelessCloseAction(current *session.BacklogItemData, deps sourcelessCloseDeps) *forwardSyncAction {
-	if current.ExternalURL == "" {
+	if current.ExternalURL == "" || deps.plugin == nil {
 		return nil
 	}
 	ref, err := githubpkg.ParseGitHubRefWithHosts(current.ExternalURL, nil)

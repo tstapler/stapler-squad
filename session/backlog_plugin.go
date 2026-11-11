@@ -60,9 +60,14 @@ type PluginRegistry struct {
 	plugins map[string]ItemSourcePlugin
 }
 
-// NewPluginRegistry creates a new empty PluginRegistry.
-func NewPluginRegistry() *PluginRegistry {
-	return &PluginRegistry{plugins: make(map[string]ItemSourcePlugin)}
+// NewPluginRegistry creates a PluginRegistry holding the given plugins. The
+// composition root owns the list of built-in plugins.
+func NewPluginRegistry(plugins ...ItemSourcePlugin) *PluginRegistry {
+	r := &PluginRegistry{plugins: make(map[string]ItemSourcePlugin, len(plugins))}
+	for _, p := range plugins {
+		r.Register(p)
+	}
+	return r
 }
 
 // Register adds a plugin to the registry.
@@ -74,16 +79,6 @@ func (r *PluginRegistry) Register(p ItemSourcePlugin) {
 func (r *PluginRegistry) Get(id string) (ItemSourcePlugin, bool) {
 	p, ok := r.plugins[id]
 	return p, ok
-}
-
-// NewDefaultRegistry returns a registry with all built-in plugins registered.
-func NewDefaultRegistry() *PluginRegistry {
-	r := NewPluginRegistry()
-	r.Register(NewGitHubIssuesPlugin())
-	r.Register(NewGitHubPRsPlugin())
-	r.Register(NewLinearPlugin())
-	r.Register(NewJiraPlugin())
-	return r
 }
 
 const (

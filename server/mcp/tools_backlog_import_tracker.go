@@ -14,6 +14,28 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 )
 
+// IssueFetcher is the optional plugin capability behind the one-off tracker
+// imports: fetch a single issue by identifier. Linear and JIRA plugins implement it.
+type IssueFetcher interface {
+	FetchIssue(ctx context.Context, config session.PluginConfig, id string) (session.ExternalItem, error)
+}
+
+// fetchTrackerIssue resolves pluginID from the injected registry and fetches one issue.
+func (h *backlogHandlers) fetchTrackerIssue(ctx context.Context, pluginID string, cfg session.PluginConfig, id string) (session.ExternalItem, error) {
+	if h.plugins == nil {
+		return session.ExternalItem{}, fmt.Errorf("%s plugin registry is not wired", pluginID)
+	}
+	p, ok := h.plugins.Get(pluginID)
+	if !ok {
+		return session.ExternalItem{}, fmt.Errorf("no %s plugin registered", pluginID)
+	}
+	f, ok := p.(IssueFetcher)
+	if !ok {
+		return session.ExternalItem{}, fmt.Errorf("%s plugin cannot fetch a single issue", pluginID)
+	}
+	return f.FetchIssue(ctx, cfg, id)
+}
+
 // importTrackerIssue creates a backlog item from an already-fetched Linear or
 // JIRA issue — the shared tail of import_linear_issue / import_jira_issue,
 // mirroring importGitHubIssue's claim check, create, and auto-triage steps.
@@ -77,7 +99,7 @@ func (h *backlogHandlers) importLinearIssue(ctx context.Context, req mcpgo.CallT
 	fetch := h.fetchLinearIssue
 	if fetch == nil {
 		fetch = func(ctx context.Context, id string) (session.ExternalItem, error) {
-			return session.NewLinearPlugin().FetchIssue(ctx, session.PluginConfig{}, id)
+			return h.fetchTrackerIssue(ctx, "linear", session.PluginConfig{}, id)
 		}
 	}
 	ext, err := fetch(ctx, identifier)
@@ -112,7 +134,7 @@ func (h *backlogHandlers) importJiraIssue(ctx context.Context, req mcpgo.CallToo
 	if fetch == nil {
 		fetch = func(ctx context.Context, r session.JiraIssueRef) (session.ExternalItem, error) {
 			raw, _ := json.Marshal(map[string]string{"base_url": r.BaseURL})
-			return session.NewJiraPlugin().FetchIssue(ctx, session.PluginConfig{Raw: string(raw)}, r.Key)
+			return h.fetchTrackerIssue(ctx, "jira", session.PluginConfig{Raw: string(raw)}, r.Key)
 		}
 	}
 	ext, err := fetch(ctx, jref)

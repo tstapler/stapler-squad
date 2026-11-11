@@ -176,7 +176,8 @@ var (
 				// The flow service is built from storage alone and keeps its own
 				// aggregator cache; its as_of makes that visible to the agent.
 				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil,
-					mcpserver.WithFlowService(services.NewFlowServiceFromStorage(storage)))
+					mcpserver.WithFlowService(services.NewFlowServiceFromStorage(storage)),
+					mcpserver.WithPluginRegistry(server.NewItemSourceRegistry()))
 			}
 
 			// Enable test mode if flag is set

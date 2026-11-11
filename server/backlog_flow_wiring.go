@@ -6,8 +6,12 @@ import servermcp "github.com/tstapler/stapler-squad/server/mcp"
 // both transports share one aggregator and one cache. A nil service adds no
 // option, which leaves the flow tools answering ErrUnavailable.
 func flowMCPOptions(deps *ServerDependencies) []servermcp.CoreOption {
-	if deps.BacklogFlowService == nil {
-		return nil
+	var opts []servermcp.CoreOption
+	if deps.BacklogFlowService != nil {
+		opts = append(opts, servermcp.WithFlowService(deps.BacklogFlowService))
 	}
-	return []servermcp.CoreOption{servermcp.WithFlowService(deps.BacklogFlowService)}
+	if deps.BacklogService != nil {
+		opts = append(opts, servermcp.WithPluginRegistry(deps.BacklogService.Registry()))
+	}
+	return opts
 }

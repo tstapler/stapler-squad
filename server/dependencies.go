@@ -1605,7 +1605,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	// Build the BacklogController and initialize its enabled state from config.
-	syncRegistry := session.NewDefaultRegistry()
+	syncRegistry := NewItemSourceRegistry()
 	var keyFunc func() ([]byte, error)
 	if cfg != nil {
 		keyFunc = cfg.GetOrCreateEncryptionKey

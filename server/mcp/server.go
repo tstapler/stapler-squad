@@ -22,6 +22,7 @@ import (
 // adding one never grows the positional parameter lists below.
 type coreConfig struct {
 	flowSvc *services.BacklogFlowService
+	plugins *session.PluginRegistry
 }
 
 // CoreOption injects an optional dependency into NewCore, NewHTTPHandler or RunServer.
@@ -32,6 +33,12 @@ type CoreOption func(*coreConfig)
 // the RPC handler uses, so one aggregator cache serves both.
 func WithFlowService(svc *services.BacklogFlowService) CoreOption {
 	return func(c *coreConfig) { c.flowSvc = svc }
+}
+
+// WithPluginRegistry supplies the item-source plugins the tracker import tools
+// resolve by ID. Without it import_linear_issue / import_jira_issue return a fetch error.
+func WithPluginRegistry(r *session.PluginRegistry) CoreOption {
+	return func(c *coreConfig) { c.plugins = r }
 }
 
 // FlowServiceFromOptions returns the flow service the options carry, or nil.
@@ -123,7 +130,7 @@ func NewCore(
 		registerHistoryTools(s, &historyHandlers{svc: svc})
 	}
 	if storage != nil && (backlogEnabled == nil || backlogEnabled()) {
-		h := &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck}
+		h := &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc, reviewTrigger: svc, enabledCheck: backlogEnabled, autoReopener: autoReopener, backlogSvc: backlogSvc, liveCheck: liveCheck, plugins: cfg.plugins}
 		registerBacklogTools(s, h)
 		registerStuckReportTools(s, h)
 		if backlogSvc != nil {

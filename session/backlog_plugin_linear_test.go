@@ -46,17 +46,6 @@ func TestLinearPlugin_PluginID(t *testing.T) {
 	require.Equal(t, "linear", NewLinearPlugin().PluginID())
 }
 
-func TestNewDefaultRegistry_should_IncludeLinearAndJira(t *testing.T) {
-	t.Parallel()
-	r := NewDefaultRegistry()
-	p, ok := r.Get("linear")
-	require.True(t, ok)
-	require.IsType(t, &LinearPlugin{}, p)
-	p, ok = r.Get("jira")
-	require.True(t, ok)
-	require.IsType(t, &JiraPlugin{}, p)
-}
-
 func TestLinearPlugin_Fetch_should_ReturnEmpty_When_TokenMissing(t *testing.T) {
 	setLinearKey(t, "")
 	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"team_key":"ENG"}`}, "old")

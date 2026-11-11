@@ -194,7 +194,7 @@ func TestProgressSubscriber_FlagOffPostsNothing_FlagOnPosts(t *testing.T) {
 func TestResolveProgressTarget_SourcelessGitHubIssueURL(t *testing.T) {
 	t.Parallel()
 	storage := svctest.NewForwardSyncTestStorage(t)
-	registry := session.NewPluginRegistry()
+	registry := session.NewPluginRegistry(session.NewGitHubIssuesPlugin())
 	syncLoop := session.NewSyncLoop(storage, registry)
 
 	_, cfg, id, ok := resolveProgressTarget(context.Background(), registry, syncLoop, storage, &session.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"})
