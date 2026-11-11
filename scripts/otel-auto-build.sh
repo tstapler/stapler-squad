@@ -135,6 +135,11 @@ for arg in "${build_target_args[@]}"; do
       ;;
   esac
 done
+# `go build -tags "a b"` (space-separated) is valid, but this value goes out through GOFLAGS, which
+# splits on whitespace: "-tags=a b,otelcauto" parses `b,otelcauto` as a non-flag. Normalize to commas.
+caller_tags="$(printf '%s' "$caller_tags" | tr -s ' \t' ',,')"
+caller_tags="${caller_tags#,}"
+caller_tags="${caller_tags%,}"
 if [ -n "$caller_tags" ]; then
   merged_tags="${caller_tags},${OTELC_AUTO_TAG}"
 else

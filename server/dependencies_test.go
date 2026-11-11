@@ -77,9 +77,9 @@ func TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueu
 		t.Fatal("expected SessionService to be wired")
 	}
 
-	if deps.ReactiveQueueMgr.slackNotifier != deps.SlackNotifier {
+	if deps.ReactiveQueueMgr.SlackNotifier() != deps.SlackNotifier {
 		t.Errorf("ReactiveQueueManager.slackNotifier is not the same instance as deps.SlackNotifier: got %p, want %p",
-			deps.ReactiveQueueMgr.slackNotifier, deps.SlackNotifier)
+			deps.ReactiveQueueMgr.SlackNotifier(), deps.SlackNotifier)
 	}
 	if srv.approvalHandler.SlackNotifierForTest() != deps.SlackNotifier {
 		t.Errorf("ApprovalHandler's SlackNotifier is not the same instance as deps.SlackNotifier: got %p, want %p",

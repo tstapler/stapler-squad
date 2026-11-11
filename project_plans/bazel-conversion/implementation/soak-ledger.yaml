@@ -7,4 +7,6 @@ schema: 1
 soak_runs_n: 30
 soak_consecutive_green_k: 10
 queue_timeout_seconds: 900
-runs: []
+runs:
+  - run_id: nightly-42952269557-1
+    result: fail

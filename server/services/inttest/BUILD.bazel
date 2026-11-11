@@ -14,6 +14,7 @@ go_test(
         "//server",
         "//server/events",
         "//server/mcp",
+        "//server/reviewqueue",
         "//server/services",
         "//session",
         "//session/domain",
