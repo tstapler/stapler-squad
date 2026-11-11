@@ -51,12 +51,12 @@ func TestSeedDataHasNoLeaks(t *testing.T) {
 
 func TestTranscriptsHaveNoLeaks(t *testing.T) {
 	t.Parallel()
-	entries, err := os.ReadDir("testdata")
+	entries, err := os.ReadDir("transcripts")
 	if err != nil || len(entries) == 0 {
 		t.Fatalf("no transcripts: %v", err)
 	}
 	for _, e := range entries {
-		data, _ := os.ReadFile("testdata/" + e.Name())
+		data, _ := os.ReadFile("transcripts/" + e.Name())
 		if hits := leakHits(string(data)); len(hits) > 0 {
 			t.Errorf("%s leaks %v", e.Name(), hits)
 		}

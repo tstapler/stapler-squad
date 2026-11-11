@@ -10,11 +10,11 @@ import (
 	"github.com/tstapler/stapler-squad/tests/demo/scenario/fixtures"
 )
 
-//go:embed testdata/*.txt
+//go:embed transcripts/*.txt
 var transcripts embed.FS
 
 func writeTranscript(dir string, t Terminal) (string, error) {
-	data, err := transcripts.ReadFile("testdata/" + t.Transcript)
+	data, err := transcripts.ReadFile("transcripts/" + t.Transcript)
 	if err != nil {
 		return "", fmt.Errorf("terminal %s: %w", t.ID, err)
 	}

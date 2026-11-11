@@ -18,6 +18,7 @@ go_library(
         "scenario.go",
         "transcripts.go",
     ],
+    embedsrcs = ["transcripts/approval-pending.txt"],
     importpath = "github.com/tstapler/stapler-squad/tests/demo/scenario",
     visibility = ["//visibility:public"],
     deps = ["//tests/demo/scenario/fixtures"],
@@ -36,6 +37,7 @@ go_test(
         "route_fixture_test.go",
         "scenario_test.go",
     ],
+    data = glob(["transcripts/*.txt"]),
     embed = [":scenario"],
     deps = ["//tools/promolib/termscan"],
 )
