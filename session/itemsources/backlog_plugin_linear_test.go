@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/linear"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // Relies on TestMain in integration_test.go calling keyring.MockInit().
@@ -48,7 +49,7 @@ func TestLinearPlugin_PluginID(t *testing.T) {
 
 func TestLinearPlugin_Fetch_should_ReturnEmpty_When_TokenMissing(t *testing.T) {
 	setLinearKey(t, "")
-	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"team_key":"ENG"}`}, "old")
+	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), session.PluginConfig{Raw: `{"team_key":"ENG"}`}, "old")
 	require.NoError(t, err)
 	require.Empty(t, items)
 	require.Equal(t, "old", cursor)
@@ -56,7 +57,7 @@ func TestLinearPlugin_Fetch_should_ReturnEmpty_When_TokenMissing(t *testing.T) {
 
 func TestLinearPlugin_Fetch_should_Error_When_ConfigIsInvalidJSON(t *testing.T) {
 	setLinearKey(t, "k")
-	_, _, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{nope`}, "")
+	_, _, err := NewLinearPlugin().Fetch(context.Background(), session.PluginConfig{Raw: `{nope`}, "")
 	require.Error(t, err)
 }
 
@@ -76,7 +77,7 @@ func TestLinearPlugin_Fetch_should_MapIssuesAndAdvanceCursor(t *testing.T) {
 {"identifier":"ENG-1","title":"One","description":"d1","url":"https://linear.app/o/issue/ENG-1","priority":1,"updatedAt":"2026-08-01T00:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[{"name":"bug"}]}},
 {"identifier":"ENG-2","title":"Two","description":"","url":"https://linear.app/o/issue/ENG-2","priority":0,"updatedAt":"2026-08-03T00:00:00.000Z","state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}`, false, ""))
 	})
-	cfg := PluginConfig{Raw: `{"team_key":"ENG"}`}
+	cfg := session.PluginConfig{Raw: `{"team_key":"ENG"}`}
 	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), cfg, "2026-07-01T00:00:00.000Z")
 	require.NoError(t, err)
 	require.Equal(t, "lin_key", gotAuth, "raw key, no Bearer prefix")
@@ -85,7 +86,7 @@ func TestLinearPlugin_Fetch_should_MapIssuesAndAdvanceCursor(t *testing.T) {
 	require.Equal(t, "ENG-1", items[0].ExternalID)
 	require.Equal(t, []string{"bug"}, items[0].Labels)
 	require.Equal(t, 5, items[0].Priority)
-	require.Equal(t, DefaultBacklogPriority, items[1].Priority)
+	require.Equal(t, session.DefaultBacklogPriority, items[1].Priority)
 	require.False(t, items[0].IssueUpdatedAt.IsZero())
 
 	filter := gotVars["filter"].(map[string]any)
@@ -95,7 +96,7 @@ func TestLinearPlugin_Fetch_should_MapIssuesAndAdvanceCursor(t *testing.T) {
 
 func TestLinearPlugin_Fetch_should_NotReadTokenFromConfigJSON(t *testing.T) {
 	setLinearKey(t, "")
-	items, _, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{Raw: `{"token":"plaintext","api_key":"plaintext"}`}, "c0")
+	items, _, err := NewLinearPlugin().Fetch(context.Background(), session.PluginConfig{Raw: `{"token":"plaintext","api_key":"plaintext"}`}, "c0")
 	require.NoError(t, err)
 	require.Empty(t, items, "a token in Raw must not enable the source")
 }
@@ -109,7 +110,7 @@ func TestLinearPlugin_Fetch_should_PreferKeychainToken_OverEnv(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		fmt.Fprint(w, linearIssuesResponse("", false, ""))
 	})
-	_, _, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{}, "")
+	_, _, err := NewLinearPlugin().Fetch(context.Background(), session.PluginConfig{}, "")
 	require.NoError(t, err)
 	require.Equal(t, "from_keychain", gotAuth)
 }
@@ -125,7 +126,7 @@ func TestLinearPlugin_Fetch_should_FollowPagination(t *testing.T) {
 		}
 		fmt.Fprint(w, linearIssuesResponse(`{"identifier":"ENG-8","title":"o","priority":3,"updatedAt":"2026-08-08T00:00:00.000Z","labels":{"nodes":[]}}`, false, ""))
 	})
-	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{}, "")
+	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), session.PluginConfig{}, "")
 	require.NoError(t, err)
 	require.Equal(t, 2, calls)
 	require.Len(t, items, 2)
@@ -140,7 +141,7 @@ func TestLinearPlugin_Fetch_should_NotAdvanceCursor_When_PageCapHit(t *testing.T
 	withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, linearIssuesResponse(`{"identifier":"ENG-1","title":"t","priority":3,"updatedAt":"2026-08-09T00:00:00.000Z","labels":{"nodes":[]}}`, true, "more"))
 	})
-	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{}, "c0")
+	items, cursor, err := NewLinearPlugin().Fetch(context.Background(), session.PluginConfig{}, "c0")
 	require.Error(t, err)
 	require.Empty(t, items)
 	require.Equal(t, "c0", cursor)
@@ -163,7 +164,7 @@ func TestLinearPlugin_Fetch_should_ClassifyErrors(t *testing.T) {
 				w.WriteHeader(c.status)
 				fmt.Fprint(w, c.body)
 			})
-			_, cursor, err := NewLinearPlugin().Fetch(context.Background(), PluginConfig{}, "c0")
+			_, cursor, err := NewLinearPlugin().Fetch(context.Background(), session.PluginConfig{}, "c0")
 			require.ErrorContains(t, err, c.want)
 			require.NotContains(t, err.Error(), "secret_key")
 			require.Equal(t, "c0", cursor)
@@ -173,15 +174,15 @@ func TestLinearPlugin_Fetch_should_ClassifyErrors(t *testing.T) {
 
 func TestLinearPlugin_MapToBacklogItem_should_MapPriorityTable(t *testing.T) {
 	t.Parallel()
-	want := map[int]int{0: DefaultBacklogPriority, 1: 5, 2: 4, 3: 3, 4: 2}
+	want := map[int]int{0: session.DefaultBacklogPriority, 1: 5, 2: 4, 3: 3, 4: 2}
 	for native, backlog := range want {
 		require.Equal(t, backlog, linearPriorityToBacklog(native), "native %d", native)
 	}
-	got := NewLinearPlugin().MapToBacklogItem(ExternalItem{ExternalID: "ENG-123", Title: "T", URL: "https://linear.app/o/issue/ENG-123", Priority: 5, Labels: []string{"x"}}, "src1")
+	got := NewLinearPlugin().MapToBacklogItem(session.ExternalItem{ExternalID: "ENG-123", Title: "T", URL: "https://linear.app/o/issue/ENG-123", Priority: 5, Labels: []string{"x"}}, "src1")
 	require.Equal(t, "ENG-123", got.ExternalID)
 	require.Equal(t, "https://linear.app/o/issue/ENG-123", got.ExternalURL)
 	require.Equal(t, "src1", got.SourceID)
-	require.Equal(t, string(BacklogStatusIdea), got.Status)
+	require.Equal(t, string(session.BacklogStatusIdea), got.Status)
 }
 
 func TestParseLinearIssueRef(t *testing.T) {
@@ -211,7 +212,7 @@ func TestLinearPlugin_FetchIssue_should_ReturnItem_And_ErrorWhenNotFoundOrNoKey(
 		}
 		fmt.Fprint(w, `{"data":{"issue":{"identifier":"ENG-5","title":"Five","description":"d","url":"https://linear.app/o/issue/ENG-5","priority":2,"updatedAt":"2026-08-01T00:00:00.000Z","labels":{"nodes":[]}}}}`)
 	})
-	cfg := PluginConfig{}
+	cfg := session.PluginConfig{}
 	item, err := NewLinearPlugin().FetchIssue(context.Background(), cfg, "ENG-5")
 	require.NoError(t, err)
 	require.Equal(t, "ENG-5", item.ExternalID)

@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/jira"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 func jiraIssueJSON(key, updated, prio, desc string) string {
@@ -23,12 +24,12 @@ func jiraIssueJSON(key, updated, prio, desc string) string {
 
 // jiraCfg returns a config for ts and supplies credentials via the env
 // fallback; callers must not be parallel (t.Setenv).
-func jiraCfg(t *testing.T, ts *httptest.Server) PluginConfig {
+func jiraCfg(t *testing.T, ts *httptest.Server) session.PluginConfig {
 	t.Helper()
 	t.Setenv("JIRA_EMAIL", "a@b.c")
 	t.Setenv("JIRA_API_TOKEN", "jira_secret")
 	t.Setenv("JIRA_BASE_URL", ts.URL)
-	return PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q,"project_key":"ENG"}`, ts.URL)}
+	return session.PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q,"project_key":"ENG"}`, ts.URL)}
 }
 
 func clearJiraEnv(t *testing.T) {
@@ -45,7 +46,7 @@ func TestJiraPlugin_PluginID(t *testing.T) {
 
 func TestJiraPlugin_Fetch_should_ReturnEmpty_When_CredentialsMissing(t *testing.T) {
 	clearJiraEnv(t)
-	cfg := PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net","project_key":"ENG"}`}
+	cfg := session.PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net","project_key":"ENG"}`}
 	items, cursor, err := NewJiraPlugin().Fetch(context.Background(), cfg, "old")
 	require.NoError(t, err)
 	require.Empty(t, items)
@@ -62,7 +63,7 @@ func TestJiraPlugin_Fetch_should_Error_When_RequiredConfigMissingOrInvalid(t *te
 		`{"base_url":"https://x.atlassian.net","project_key":"ENG OR 1=1"}`,
 		`{"base_url":"http://x.atlassian.net","project_key":"ENG"}`,
 	} {
-		_, _, err := NewJiraPlugin().Fetch(context.Background(), PluginConfig{Raw: raw}, "")
+		_, _, err := NewJiraPlugin().Fetch(context.Background(), session.PluginConfig{Raw: raw}, "")
 		require.Error(t, err, raw)
 	}
 }
@@ -109,7 +110,7 @@ func TestJiraPlugin_Fetch_should_FollowNextPageToken_AcrossAllPages(t *testing.T
 	require.Equal(t, []string{"", "p2", "p3"}, tokens)
 	require.Len(t, items, 3)
 	require.Equal(t, "2026-08-03 10:30", cursor)
-	require.Equal(t, []int{4, DefaultBacklogPriority, 1}, []int{items[0].Priority, items[1].Priority, items[2].Priority})
+	require.Equal(t, []int{4, session.DefaultBacklogPriority, 1}, []int{items[0].Priority, items[1].Priority, items[2].Priority})
 	require.Equal(t, ts.URL+"/browse/ENG-1", items[0].URL)
 }
 
@@ -141,7 +142,7 @@ func TestJiraPlugin_Fetch_should_ClassifyHTTPErrors(t *testing.T) {
 
 func TestJiraPlugin_Fetch_should_NotReadCredentialsFromConfigJSON(t *testing.T) {
 	clearJiraEnv(t)
-	cfg := PluginConfig{Raw: `{"base_url":"https://plain.atlassian.net","project_key":"ENG","email":"a@b.c","token":"plaintext"}`}
+	cfg := session.PluginConfig{Raw: `{"base_url":"https://plain.atlassian.net","project_key":"ENG","email":"a@b.c","token":"plaintext"}`}
 	items, _, err := NewJiraPlugin().Fetch(context.Background(), cfg, "c0")
 	require.NoError(t, err)
 	require.Empty(t, items, "credentials in Raw must not enable the source")
@@ -159,7 +160,7 @@ func TestJiraPlugin_Fetch_should_PreferKeychainCredentials(t *testing.T) {
 	defer ts.Close()
 	require.NoError(t, jira.SetKeychainTokenForHost(ts.URL, "kc@x.com", "kc_tok"))
 	t.Cleanup(func() { _ = jira.DeleteKeychainTokenForHost(ts.URL) })
-	cfg := PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q,"project_key":"ENG"}`, ts.URL)}
+	cfg := session.PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q,"project_key":"ENG"}`, ts.URL)}
 	_, _, err := NewJiraPlugin().Fetch(context.Background(), cfg, "")
 	require.NoError(t, err)
 	require.Equal(t, "kc@x.com", gotUser)
@@ -167,10 +168,10 @@ func TestJiraPlugin_Fetch_should_PreferKeychainCredentials(t *testing.T) {
 
 func TestJiraPlugin_MapToBacklogItem_should_TruncateLongText(t *testing.T) {
 	t.Parallel()
-	got := NewJiraPlugin().MapToBacklogItem(ExternalItem{Title: strings.Repeat("a", 300), Description: strings.Repeat("b", 3000)}, "s")
+	got := NewJiraPlugin().MapToBacklogItem(session.ExternalItem{Title: strings.Repeat("a", 300), Description: strings.Repeat("b", 3000)}, "s")
 	require.Len(t, got.Title, 200)
 	require.Len(t, got.Description, 2000)
-	multi := NewJiraPlugin().MapToBacklogItem(ExternalItem{Title: strings.Repeat("é", 150)}, "s")
+	multi := NewJiraPlugin().MapToBacklogItem(session.ExternalItem{Title: strings.Repeat("é", 150)}, "s")
 	require.True(t, utf8.ValidString(multi.Title), "truncation must not split a rune")
 }
 
@@ -206,9 +207,9 @@ func TestJiraPlugin_FetchIssue_should_ReturnItem_And_ClassifyErrors(t *testing.T
 	_, err = NewJiraPlugin().FetchIssue(context.Background(), cfg, "ENG-404")
 	require.ErrorContains(t, err, "not found")
 	clearJiraEnv(t)
-	_, err = NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net"}`}, "ENG-5")
+	_, err = NewJiraPlugin().FetchIssue(context.Background(), session.PluginConfig{Raw: `{"base_url":"https://nocreds.atlassian.net"}`}, "ENG-5")
 	require.ErrorContains(t, err, "not configured")
-	_, err = NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{}, "ENG-5")
+	_, err = NewJiraPlugin().FetchIssue(context.Background(), session.PluginConfig{}, "ENG-5")
 	require.ErrorContains(t, err, "base_url")
 }
 
@@ -220,7 +221,7 @@ func TestJiraPlugin_should_NotSendEnvCredentialsToOtherHost(t *testing.T) {
 	t.Setenv("JIRA_EMAIL", "a@b.c")
 	t.Setenv("JIRA_API_TOKEN", "jira_secret")
 	t.Setenv("JIRA_BASE_URL", "https://acme.atlassian.net")
-	_, err := NewJiraPlugin().FetchIssue(context.Background(), PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q}`, evil.URL)}, "ENG-1")
+	_, err := NewJiraPlugin().FetchIssue(context.Background(), session.PluginConfig{Raw: fmt.Sprintf(`{"base_url":%q}`, evil.URL)}, "ENG-1")
 	require.ErrorContains(t, err, "not configured")
 	require.False(t, hit, "no request may reach a host other than JIRA_BASE_URL")
 }

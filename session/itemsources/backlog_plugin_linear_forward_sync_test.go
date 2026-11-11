@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 const linearStatesJSON = `{"data":{"issue":{"id":"uuid-1","team":{"states":{"nodes":[{"id":"s1","name":"In Review"},{"id":"s2","name":"Done"}]}}}}}`
@@ -25,7 +26,7 @@ func TestLinearPlugin_UpdateIssueState_should_ResolveStateAndReturnLinearTimesta
 		}
 		_, _ = w.Write([]byte(linearStatesJSON))
 	})
-	ts, err := NewLinearPlugin().UpdateIssueState(context.Background(), PluginConfig{}, "ENG-1", "done")
+	ts, err := NewLinearPlugin().UpdateIssueState(context.Background(), session.PluginConfig{}, "ENG-1", "done")
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC), ts)
 	require.Contains(t, mutationBody, `"stateId":"s2"`)
@@ -37,13 +38,13 @@ func TestLinearPlugin_UpdateIssueState_should_Error_When_StateNameUnknown(t *tes
 	withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(linearStatesJSON))
 	})
-	_, err := NewLinearPlugin().UpdateIssueState(context.Background(), PluginConfig{}, "ENG-1", "Shipped")
+	_, err := NewLinearPlugin().UpdateIssueState(context.Background(), session.PluginConfig{}, "ENG-1", "Shipped")
 	require.ErrorContains(t, err, `no workflow state named "Shipped" found`)
 }
 
 func TestLinearPlugin_UpdateIssueState_should_Error_When_KeyMissing(t *testing.T) {
 	setLinearKey(t, "")
-	_, err := NewLinearPlugin().UpdateIssueState(context.Background(), PluginConfig{}, "ENG-1", "Done")
+	_, err := NewLinearPlugin().UpdateIssueState(context.Background(), session.PluginConfig{}, "ENG-1", "Done")
 	require.ErrorContains(t, err, "API key not configured")
 }
 
@@ -59,7 +60,7 @@ func TestLinearPlugin_PostIssueComment_should_CreateComment(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"data":{"issue":{"id":"uuid-1"}}}`))
 	})
-	require.NoError(t, NewLinearPlugin().PostIssueComment(context.Background(), PluginConfig{}, "ENG-1", "hello"))
+	require.NoError(t, NewLinearPlugin().PostIssueComment(context.Background(), session.PluginConfig{}, "ENG-1", "hello"))
 	require.Contains(t, commentBody, `"issueId":"uuid-1"`)
 	require.Contains(t, commentBody, `"body":"hello"`)
 }
@@ -69,5 +70,5 @@ func TestLinearPlugin_PostIssueComment_should_Error_When_IssueNotFound(t *testin
 	withLinearTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"data":{"issue":null}}`))
 	})
-	require.ErrorContains(t, NewLinearPlugin().PostIssueComment(context.Background(), PluginConfig{}, "ENG-9", "x"), "not found")
+	require.ErrorContains(t, NewLinearPlugin().PostIssueComment(context.Background(), session.PluginConfig{}, "ENG-9", "x"), "not found")
 }
