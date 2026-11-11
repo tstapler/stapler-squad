@@ -99,7 +99,7 @@ func (d *DefaultStatusDeterminer) suppressedByAck(inst *Instance) bool {
 func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd bool, priority Priority) (newShouldAdd bool, newPriority Priority, newReason AttentionReason, newCtx string, cleanWorktree bool) {
 	worktree, err := inst.GetGitWorktree()
 	if err != nil {
-		log.Warn("failed to get git worktree", "session", inst.Title, "err", err)
+		log.Warn("failed to get git worktree", "session", inst.Snapshot().Title, "err", err)
 		return shouldAdd, priority, "", "", false
 	}
 	if worktree == nil {
@@ -107,12 +107,12 @@ func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd b
 	}
 	isDirty, err := worktree.IsDirty()
 	if err != nil {
-		log.Warn("failed to check git status", "session", inst.Title, "err", err)
+		log.Warn("failed to check git status", "session", inst.Snapshot().Title, "err", err)
 		return shouldAdd, priority, "", "", false
 	}
 	if isDirty {
 		if !shouldAdd || priority == PriorityLow {
-			log.Debug("uncommitted changes detected", "session", inst.Title)
+			log.Debug("uncommitted changes detected", "session", inst.Snapshot().Title)
 			return true, PriorityLow, ReasonUncommittedChanges, "Uncommitted changes ready to commit", false
 		}
 		return shouldAdd, priority, "", "", false
@@ -193,7 +193,7 @@ func (d *DefaultStatusDeterminer) Determine(
 	// when Hidden. This gate is reason-scoped and lives here (not as an early return) so it
 	// applies uniformly regardless of which caller (ReviewQueuePoller.checkSession,
 	// StartupScanner.Scan) invokes Determine.
-	if inst.Hidden && action == DetectionActionAdd &&
+	if inst.Snapshot().Hidden && action == DetectionActionAdd &&
 		(v.reason == ReasonTaskComplete || v.reason == ReasonIdle || v.reason == ReasonStale) {
 		action = DetectionActionSkip
 	}
@@ -260,7 +260,7 @@ func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content s
 
 		if dec, ok := reasonForStatus(detected, statusContext); ok {
 			v.apply(dec)
-			log.Debug("status detected (no controller)", "session", inst.Title, "reason", dec.Reason)
+			log.Debug("status detected (no controller)", "session", inst.Snapshot().Title, "reason", dec.Reason)
 		} else if isActiveStatus(detected) {
 			return claudeStatus, true
 		} else if detected == detection.StatusWaitingForAgent && idleClockAge(inst, opts) < waitingForAgentStuckThreshold {

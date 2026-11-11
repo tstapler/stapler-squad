@@ -10,7 +10,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -138,7 +137,7 @@ func (d *dedupTracker) allow(tag string) bool {
 // StartPushSubscriber is the legacy entry-point. New code should use
 // StartDeliverySubscriber with an explicit []Notifier slice. The returned
 // channel is closed once the subscriber goroutine has exited.
-func StartPushSubscriber(ctx context.Context, bus *events.EventBus, pushService *services.PushService, opts ...DeliveryOption) <-chan struct{} {
+func StartPushSubscriber(ctx context.Context, bus *events.EventBus, pushService *PushService, opts ...DeliveryOption) <-chan struct{} {
 	if pushService == nil {
 		log.Warn("PushSubscriber push service is nil, not starting")
 		done := make(chan struct{})

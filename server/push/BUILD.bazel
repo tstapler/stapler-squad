@@ -5,6 +5,8 @@ go_library(
     name = "push",
     srcs = [
         "notifier.go",
+        "push_handler.go",
+        "push_service.go",
         "subscriber.go",
         "trigger_constants.go",
     ],
@@ -13,8 +15,8 @@ go_library(
     deps = [
         "//log",
         "//server/events",
-        "//server/services",
         "//session",
+        "@com_github_sherclockholmes_webpush_go//:webpush-go",
     ],
 )
 
@@ -28,6 +30,7 @@ go_test(
     name = "push_test",
     srcs = [
         "delivery_gate_test.go",
+        "push_service_test.go",
         "subscriber_test.go",
     ],
     embed = [":push"],

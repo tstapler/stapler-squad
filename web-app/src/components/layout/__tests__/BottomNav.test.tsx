@@ -38,6 +38,12 @@ jest.mock("@/lib/contexts/OmnibarContext", () => ({
   useOmnibar: () => ({ open: mockOpenOmnibar }),
 }));
 
+// Mock AnalyticsContext (BottomNav tracks its taps)
+const mockTrack = jest.fn();
+jest.mock("@/lib/contexts/AnalyticsContext", () => ({
+  useAnalytics: () => ({ track: mockTrack }),
+}));
+
 // Mock AuthContext
 jest.mock("@/lib/contexts/AuthContext", () => ({
   useAuth: () => ({ authenticated: false, authEnabled: false }),
@@ -116,6 +122,14 @@ describe("BottomNav", () => {
       expect(screen.getByText(item.shortLabel ?? item.label)).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: "Create new session" })).toBeInTheDocument();
+  });
+
+  it("tracks the New session tap", () => {
+    mockTrack.mockClear();
+    (usePathname as jest.Mock).mockReturnValue("/");
+    render(<BottomNav />);
+    fireEvent.click(screen.getByRole("button", { name: "Create new session" }));
+    expect(mockTrack).toHaveBeenCalledWith({ name: "bottom_nav_new_session", category: "user_action" });
   });
 
   it("opens omnibar when New session button is clicked", () => {
@@ -249,7 +263,8 @@ describe("BottomNav — ResizeObserver", () => {
     render(<BottomNav />);
     // observe must be called with the nav element (not null/undefined)
     expect(mockObserve).toHaveBeenCalledTimes(1);
-    expect(mockObserve).toHaveBeenCalledWith(expect.any(HTMLElement));
+    // border-box, or a safe-area padding change never re-measures and the published height goes stale
+    expect(mockObserve).toHaveBeenCalledWith(expect.any(HTMLElement), { box: "border-box" });
     const observedElement = mockObserve.mock.calls[0][0] as HTMLElement;
     expect(observedElement.getAttribute("aria-label")).toBe("Bottom navigation");
     // --bottom-nav-height must be set to a px value (jsdom returns "0px" since no layout engine)

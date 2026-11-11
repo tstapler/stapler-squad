@@ -13,6 +13,7 @@ import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "@/lib/nav";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useNotificationState } from "@/lib/contexts/notificationContexts";
@@ -25,6 +26,7 @@ import { useHandedness } from "@/lib/hooks/useHandedness";
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
 
 export function BottomNav() {
+  const { track } = useAnalytics();
   const pathname = usePathname();
   const { open: openOmnibar } = useOmnibar();
   const { authenticated, authEnabled } = useAuth();
@@ -55,7 +57,10 @@ export function BottomNav() {
     return () => document.removeEventListener("keydown", handler);
   }, [moreOpen]);
 
-  // Measure actual nav height (includes safe-area padding) and publish to CSS
+  // Measure actual nav height (includes safe-area padding) and publish to CSS.
+  // Observe the border box: ResizeObserver defaults to the content box, which ignores padding, so a
+  // change in the safe-area inset (gesture-nav phones, rotation) left the published height stale and
+  // the pane strip above the nav ended up covered by it.
   const navRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const nav = navRef.current;
@@ -67,7 +72,7 @@ export function BottomNav() {
       );
     };
     const ro = new ResizeObserver(update);
-    ro.observe(nav);
+    ro.observe(nav, { box: "border-box" });
     update(); // set immediately on mount
     return () => ro.disconnect();
   }, []);
@@ -151,6 +156,7 @@ export function BottomNav() {
               className={styles.moreSheetItem}
               data-testid="more-notifications"
               onClick={() => {
+                track({ name: "bottom_nav_more_notifications", category: "user_action" });
                 setMoreOpen(false);
                 togglePanel();
               }}
@@ -160,7 +166,10 @@ export function BottomNav() {
             </button>
             <button
               className={styles.moreSheetItem}
-              onClick={toggleHandedness}
+              onClick={() => {
+                track({ name: "bottom_nav_toggle_handedness", category: "user_action" });
+                toggleHandedness();
+              }}
               aria-pressed={leftHanded}
             >
               <span className={styles.moreSheetItemIcon} aria-hidden="true"><Hand size={20} /></span>
@@ -198,7 +207,10 @@ export function BottomNav() {
           aria-expanded={isPanelOpen}
           aria-controls="notification-tray"
           aria-label={`${unreadCount > 0 ? `Notifications (${unreadCount} unread${needsAttention > 0 ? `, ${needsAttention} need you` : ""})` : "Notifications"}${quietMode ? ", quiet mode on" : ""}`}
-          onClick={() => togglePanel()}
+          onClick={() => {
+            track({ name: "bottom_nav_alerts", category: "user_action" });
+            togglePanel();
+          }}
           onMouseDown={(e) => e.preventDefault()}
         >
           <span className={styles.notificationIconWrap} aria-hidden="true">
@@ -211,7 +223,10 @@ export function BottomNav() {
         </button>
         <button
           className={styles.newSessionButton}
-          onClick={openOmnibar}
+          onClick={() => {
+            track({ name: "bottom_nav_new_session", category: "user_action" });
+            openOmnibar();
+          }}
           aria-label="Create new session"
         >
           <span className={styles.newSessionButtonInner} aria-hidden="true"><Plus size={20} /></span>
@@ -219,7 +234,10 @@ export function BottomNav() {
         </button>
         <button
           className={`${styles.navItem} ${isMoreActive ? styles.navItemActive : ""}`}
-          onClick={() => setMoreOpen((o) => !o)}
+          onClick={() => {
+            track({ name: "bottom_nav_more_toggle", category: "user_action" });
+            setMoreOpen((o) => !o);
+          }}
           aria-label="More navigation options"
           aria-expanded={moreOpen}
         >

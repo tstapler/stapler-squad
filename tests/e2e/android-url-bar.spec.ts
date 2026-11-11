@@ -80,4 +80,26 @@ test.describe('android-url-bar-overflow', () => {
 
     expect(overflowingFixed).toHaveLength(0);
   });
+  // The pane strip above the nav sits at `100dvh - --bottom-nav-height`. The nav's padding-bottom is the
+  // safe-area inset, which gesture-nav phones apply late or change on rotation; a stale published height
+  // leaves the strip under the nav (seen as the pane switcher half hidden on Android).
+  test('--bottom-nav-height follows the nav when its safe-area padding changes', async ({ page }) => {
+    await page.setViewportSize(ANDROID_URL_BAR);
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10_000 });
+    const bottomNav = page.getByRole('navigation', { name: 'Bottom navigation' });
+    await expect(bottomNav).toBeVisible();
+
+    await bottomNav.evaluate((el) => {
+      (el as HTMLElement).style.paddingBottom = '42px';
+    });
+
+    await expect
+      .poll(() =>
+        bottomNav.evaluate((el) => {
+          const published = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bottom-nav-height'));
+          return published - (el as HTMLElement).offsetHeight;
+        }),
+      )
+      .toBe(0);
+  });
 });

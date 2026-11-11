@@ -903,7 +903,7 @@ skip it in future rounds.
 - **severity**: medium
 - **fingerprint**: GAP-CONFIG-NotificationPrefs-PushEnabled-dead
 - **file**: `config/config.go`
-- **detail**: The `NotificationPrefs.PushEnabled` field (config.go:180-182) is documented as controlling whether web push notifications are sent and defaults to false (opt-in). However, `PushService` in `server/services/push_service.go` never reads this field — it sends pushes to all registered subscriptions unconditionally. There is no proto representation and no settings UI for this field. The only code that references `Notifications.PushEnabled` outside of config.go is in `config_test.go`, making this a dead config field.
+- **detail**: The `NotificationPrefs.PushEnabled` field (config.go:180-182) is documented as controlling whether web push notifications are sent and defaults to false (opt-in). However, `PushService` in `server/push/push_service.go` never reads this field — it sends pushes to all registered subscriptions unconditionally. There is no proto representation and no settings UI for this field. The only code that references `Notifications.PushEnabled` outside of config.go is in `config_test.go`, making this a dead config field.
 - **fix hint**: Either (a) add a gate in `PushService.Send` (or similar) that calls `config.LoadConfig().Notifications.PushEnabled` before delivering a notification, or (b) remove the `NotificationPrefs` struct and the `Notifications` field from `Config` since the push subscription mechanism already serves as the opt-in.
 
 ### GAP-113 — `WorkflowProto` has no `autonomous_mode` field — workflow-spawned sessions cannot self-complete
@@ -1067,7 +1067,7 @@ skip it in future rounds.
 - **severity**: low
 - **fingerprint**: GAP-CONFIG-NotificationPrefs-PushEnabled-dead-field
 - **file**: `config/config.go`
-- **detail**: `Config.Notifications.PushEnabled` (JSON: `push_enabled`) is defined in `config/config.go` with a comment saying it controls whether web push notifications are sent. However, a search of all Go files confirms the field is never read anywhere outside of its declaration. The push notification subsystem (`server/services/push_service.go`) manages subscriptions independently via browser Web Push API and ignores this config flag entirely. The `PushNotificationSettings` UI component also bypasses this field, toggling push subscriptions directly. There is no proto field and no RPC for this config value.
+- **detail**: `Config.Notifications.PushEnabled` (JSON: `push_enabled`) is defined in `config/config.go` with a comment saying it controls whether web push notifications are sent. However, a search of all Go files confirms the field is never read anywhere outside of its declaration. The push notification subsystem (`server/push/push_service.go`) manages subscriptions independently via browser Web Push API and ignores this config flag entirely. The `PushNotificationSettings` UI component also bypasses this field, toggling push subscriptions directly. There is no proto field and no RPC for this config value.
 - **fix hint**: Either (a) remove the dead `NotificationPrefs` struct and `Notifications` field from `Config`, or (b) wire up `cfg.Notifications.PushEnabled` in `push_service.go` to gate whether notifications are delivered, and add a proto field + settings UI toggle to let users control it.
 
 ### GAP-132 — `config.BranchPrefix` has no proto field and no settings UI

@@ -7,6 +7,7 @@ package session
 // recognised frame is parsed into TabbedFrame; a layout it does not know is no match.
 
 import (
+	"github.com/tstapler/stapler-squad/session/dialogpresence"
 	"regexp"
 	"strconv"
 	"strings"
@@ -71,7 +72,7 @@ func tabbedLines(capture string) []tabbedLine {
 	raw := strings.Split(capture, "\n")
 	out := make([]tabbedLine, len(raw))
 	for i, l := range raw {
-		l = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ansiEscape.ReplaceAllString(l, "")), dialogGutter))
+		l = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(dialogpresence.ANSIEscape.ReplaceAllString(l, "")), dialogpresence.Gutter))
 		focused := strings.HasPrefix(l, string(dialogSelectionGlyph))
 		if focused {
 			l = strings.TrimPrefix(l, string(dialogSelectionGlyph))
@@ -108,7 +109,7 @@ func ParseTabbedFrame(capture string) (TabbedFrame, bool) {
 		return TabbedFrame{}, false
 	}
 	frame := TabbedFrame{Tabs: tabs}
-	if strings.HasPrefix(region[len(region)-1].text, dialogFooterPrefix) {
+	if strings.HasPrefix(region[len(region)-1].text, dialogpresence.FooterPrefix) {
 		return parseTabbedQuestion(frame, region[:len(region)-1])
 	}
 	return parseTabbedReview(frame, region)

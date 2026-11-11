@@ -94,6 +94,13 @@ linters:
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "ADR-010 scoped packages must not import the ent ORM directly"
+        push_no_services:
+          files:
+            - "**/server/push/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/server/services"
+              desc: "server/push owns its web-push service and must not depend on the services hub"
         # Allow-list rather than a deny-list: depguard's `/**` deny globs did not match
         # subpackages (e.g. server/web) in a probe, so a deny rule here would silently pass.
         isolate_threatscan_stdlib_only:
@@ -126,6 +133,14 @@ linters:
             - $gostd
             - github.com/tstapler/stapler-squad/session/domain
             - golang.org/x/sync/singleflight
+        # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
+        isolate_dialogpresence:
+          list-mode: strict
+          files:
+            - "**/session/dialogpresence/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
         no_ioutil:
           files:
             - "$all"
