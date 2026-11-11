@@ -924,7 +924,8 @@ interface UseBacklogServiceReturn {
   archiveBacklogItem: (id: string) => Promise<boolean>;
   unarchiveBacklogItem: (id: string) => Promise<boolean>;
   deleteBacklogItem: (id: string) => Promise<boolean>;
-  dismissWorkflowSuggestion: (itemId: string, suggestionId: string) => Promise<boolean>;
+  /** Resolves on success; throws on any failure. */
+  dismissWorkflowSuggestion: (itemId: string, suggestionId: string) => Promise<void>;
   transitionStatus: (
     id: string,
     toStatus: BacklogItemStatus,
@@ -1221,11 +1222,10 @@ export function useBacklogService(): UseBacklogServiceReturn {
     }
   }, []);
 
-  const dismissWorkflowSuggestion = useCallback(async (itemId: string, suggestionId: string): Promise<boolean> => {
-    if (!clientRef.current) return false;
+  const dismissWorkflowSuggestion = useCallback(async (itemId: string, suggestionId: string): Promise<void> => {
+    if (!clientRef.current) throw new Error("Backlog service not ready.");
     try {
       await clientRef.current.dismissWorkflowSuggestion({ itemId, suggestionId });
-      return true;
     } catch (err) {
       console.error("[useBacklogService] dismissWorkflowSuggestion:", err);
       setLastError(new Error(getErrorMessage(err, "Failed to dismiss suggestion.")));

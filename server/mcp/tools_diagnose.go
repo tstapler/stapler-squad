@@ -35,6 +35,8 @@ type diagnoseHandlers struct {
 // diagnostic_service.go): a genuine defect, an inconclusive/informational
 // note, a successful nudge, or (added for completeness) no action needed at
 // all.
+const maxDiagnosisSummaryLen = 2000
+
 var diagnoseOutcomeValues = []string{"BUG_FILED", "NOTE_ONLY", "NUDGED", "REMEDIATION_RESET", "NO_ACTION"}
 
 func registerDiagnoseTools(s *mcpserver.MCPServer, dh *diagnoseHandlers) {
@@ -211,6 +213,10 @@ func (dh *diagnoseHandlers) submitDiagnosisResult(ctx context.Context, req mcpgo
 		return errResult(ErrInvalidArgument, "summary is required", ""), nil
 	}
 
+	if len(summary) > maxDiagnosisSummaryLen {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("summary must be at most %d chars", maxDiagnosisSummaryLen), ""), nil
+	}
+
 	itemSession, errRes := resolveDiagnoseItemLink(ctx, dh.storage, callerUUID, itemID)
 	if errRes != nil {
 		return errRes, nil
@@ -219,6 +225,9 @@ func (dh *diagnoseHandlers) submitDiagnosisResult(ctx context.Context, req mcpgo
 	if filedItemID != "" {
 		if err := validateUUID(filedItemID); err != nil {
 			return errResult(ErrInvalidArgument, "filed_item_id: "+err.Error(), ""), nil
+		}
+		if _, getErr := dh.storage.GetBacklogItem(ctx, filedItemID); getErr != nil {
+			return errResult(ErrItemNotFound, fmt.Sprintf("filed_item_id %s: %v", filedItemID, getErr), ""), nil
 		}
 	}
 	if resErr := dh.storage.UpdateItemSessionDiagnoseResult(ctx, itemSession.ID, session.DiagnoseResultData{

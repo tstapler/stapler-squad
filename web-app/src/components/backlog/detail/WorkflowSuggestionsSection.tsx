@@ -16,7 +16,7 @@ const ACTION_LABELS: Record<string, string> = {
 
 export interface WorkflowSuggestionsSectionProps {
   item: BacklogItem;
-  onDismiss: (itemId: string, suggestionId: string) => Promise<boolean>;
+  onDismiss: (itemId: string, suggestionId: string) => Promise<void>;
 }
 
 /** Dismissible operator recommendations posted by diagnose sessions; renders nothing when none are active. */
@@ -29,11 +29,11 @@ export function WorkflowSuggestionsSection({ item, onDismiss }: WorkflowSuggesti
   const active = (item.workflowSuggestions ?? []).filter((w) => !w.dismissed && !dismissedLocally.has(w.suggestionId));
   if (!enabled || active.length === 0) return null;
 
-  const dismiss = async (suggestionId: string) => {
+  const handleDismiss = async (suggestionId: string) => {
     setFailedId(null);
     try {
-      const ok = await onDismiss(item.id, suggestionId);
-      if (!ok) throw new Error("dismiss failed");
+      await onDismiss(item.id, suggestionId);
+      track({ name: "backlog_dismiss_workflow_suggestion", category: "user_action", component: "WorkflowSuggestionsSection", labels: {} });
       setDismissedLocally((prev) => new Set(prev).add(suggestionId));
     } catch {
       setFailedId(suggestionId);
@@ -47,10 +47,7 @@ export function WorkflowSuggestionsSection({ item, onDismiss }: WorkflowSuggesti
           <span>{ACTION_LABELS[w.actionType] ?? w.actionType}</span>
           <span className={styles.suggestionText}>{w.recommendation}</span>
           {failedId === w.suggestionId && <span role="alert">Could not dismiss. Try again.</span>}
-          <button type="button" className={styles.dismissButton} onClick={() => {
-              track({ name: "backlog_dismiss_workflow_suggestion", category: "user_action", component: "WorkflowSuggestionsSection", labels: {} });
-              void dismiss(w.suggestionId);
-            }}>
+          <button type="button" className={styles.dismissButton} onClick={() => void handleDismiss(w.suggestionId)}>
             Dismiss
           </button>
         </div>

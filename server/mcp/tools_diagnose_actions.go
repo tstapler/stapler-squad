@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,6 +16,9 @@ import (
 const (
 	maxWorkflowRecommendationLen = 500
 	harnessGapSeverityDefault    = "medium"
+	maxHarnessGapTitleLen        = 200
+	maxHarnessGapEvidenceBytes   = 4096
+	maxOpenHarnessGapsPerOrigin  = 3
 )
 
 var harnessGapSeverities = []string{"low", "medium", "high"}
@@ -56,6 +60,9 @@ func (dh *diagnoseHandlers) suggestWorkflowAction(ctx context.Context, req mcpgo
 	id, appendErr := dh.storage.AppendWorkflowSuggestion(ctx, itemID, session.WorkflowSuggestionData{
 		ActionType: actionType, Recommendation: recommendation, SessionUUID: callerUUID,
 	})
+	if errors.Is(appendErr, session.ErrDuplicateWorkflowSuggestion) || errors.Is(appendErr, session.ErrTooManyWorkflowSuggestions) {
+		return errResult(ErrInvalidArgument, appendErr.Error(), ""), nil
+	}
 	if appendErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("record workflow suggestion: %v", appendErr), ""), nil
 	}
@@ -86,6 +93,12 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 	if strings.TrimSpace(title) == "" || strings.TrimSpace(evidence) == "" {
 		return errResult(ErrInvalidArgument, "title and evidence are required", ""), nil
 	}
+	if len(title) > maxHarnessGapTitleLen {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("title must be at most %d chars", maxHarnessGapTitleLen), ""), nil
+	}
+	if len(evidence) > maxHarnessGapEvidenceBytes {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("evidence must be at most %d bytes", maxHarnessGapEvidenceBytes), ""), nil
+	}
 	severity, _ := args["severity"].(string)
 	if severity == "" {
 		severity = harnessGapSeverityDefault
@@ -96,6 +109,9 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 	origin, getErr := dh.storage.GetBacklogItem(ctx, originID)
 	if getErr != nil {
 		return errResult(ErrItemNotFound, fmt.Sprintf("originating item %s: %v", originID, getErr), ""), nil
+	}
+	if errRes := dh.checkHarnessGapCap(ctx, origin.ID); errRes != nil {
+		return errRes, nil
 	}
 	callerUUID := callerSessionUUIDForAudit(ctx)
 	created, createErr := dh.storage.CreateBacklogItem(ctx, session.BacklogItemData{
@@ -122,4 +138,26 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 func harnessGapDescription(evidence, severity, sessionUUID string, origin *session.BacklogItemData) string {
 	return fmt.Sprintf("%s\n\n## Evidence\n- Severity: %s\n- Originating item: %s (%s)\n- Reporting session: %s\n- Outcome/summary: see the originating item's diagnosis result\n",
 		evidence, severity, origin.ID, origin.Title, sessionUUID)
+}
+
+// checkHarnessGapCap rejects when origin already blocks too many open harness:bug items.
+func (dh *diagnoseHandlers) checkHarnessGapCap(ctx context.Context, originID string) *mcpgo.CallToolResult {
+	_, blocking, err := dh.storage.ListBacklogItemDependencies(ctx, originID)
+	if err != nil {
+		return errResult(ErrInternalError, fmt.Sprintf("check harness-gap cap: %v", err), "")
+	}
+	open := 0
+	for _, ref := range blocking {
+		if ref.Status == string(session.BacklogStatusDone) || ref.Status == string(session.BacklogStatusArchived) {
+			continue
+		}
+		item, getErr := dh.storage.GetBacklogItem(ctx, ref.ItemID)
+		if getErr == nil && slices.Contains(item.Labels, "harness:bug") {
+			open++
+		}
+	}
+	if open >= maxOpenHarnessGapsPerOrigin {
+		return errResult(ErrInvalidArgument, fmt.Sprintf("item already has %d open harness:bug items; resolve or reuse them instead of filing more", open), "")
+	}
+	return nil
 }

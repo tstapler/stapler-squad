@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -30,6 +31,14 @@ type WorkflowSuggestionData struct {
 	CreatedAt      time.Time `json:"created_at"`
 	Dismissed      bool      `json:"dismissed"`
 }
+
+// MaxActiveWorkflowSuggestions caps non-dismissed suggestions per item.
+const MaxActiveWorkflowSuggestions = 20
+
+var (
+	ErrTooManyWorkflowSuggestions  = errors.New("too many active workflow suggestions")
+	ErrDuplicateWorkflowSuggestion = errors.New("duplicate workflow suggestion")
+)
 
 // ParseDiagnoseResult decodes an ItemSessionSummary.DiagnoseResult column; ok is false when empty or invalid.
 func ParseDiagnoseResult(raw string) (DiagnoseResultData, bool) {
@@ -81,6 +90,19 @@ func (r *EntRepository) AppendWorkflowSuggestion(ctx context.Context, itemID str
 		sug.CreatedAt = time.Now().UTC()
 	}
 	err := r.mutateWorkflowSuggestions(ctx, itemID, func(list []WorkflowSuggestionData) ([]WorkflowSuggestionData, error) {
+		active := 0
+		for _, e := range list {
+			if e.Dismissed {
+				continue
+			}
+			if e.Recommendation == sug.Recommendation {
+				return nil, fmt.Errorf("%w: %q", ErrDuplicateWorkflowSuggestion, sug.Recommendation)
+			}
+			active++
+		}
+		if active >= MaxActiveWorkflowSuggestions {
+			return nil, fmt.Errorf("%w (max %d); dismiss some first", ErrTooManyWorkflowSuggestions, MaxActiveWorkflowSuggestions)
+		}
 		return append(list, sug), nil
 	})
 	if err != nil {

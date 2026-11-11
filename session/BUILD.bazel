@@ -523,6 +523,7 @@ go_test(
         "diagnose_nudge_dispatch_guard_test.go",
         "diagnose_nudge_race_test.go",
         "diagnose_nudge_test.go",
+        "diagnose_result_test.go",
         "dialog_presence_test.go",
         "driver_prompt_test.go",
         "driver_stall_loop_test.go",
