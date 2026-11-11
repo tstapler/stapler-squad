@@ -1,5 +1,6 @@
-import { DetectionResult, InputType } from "../types";
-import { Detector } from "../detector";
+import type { DetectionResult} from "../types";
+import { InputType } from "../types";
+import type { Detector } from "../detector";
 import { LEGACY_THEME_IDS, parseThemeId } from "@/lib/theme/legacy-theme-ids";
 
 /**

@@ -17,7 +17,7 @@ const netflix = {
 };
 
 function propName(cssVar: string): string {
-  return /^var\((--[^),\s]+)/.exec(cssVar)![1];
+  return /^var\((--[^),\s]+)/.exec(cssVar)?.[1] ?? "";
 }
 
 function Probe() {
@@ -26,8 +26,8 @@ function Probe() {
     <div>
       <span data-testid="theme">{theme}</span>
       <span data-testid="count">{customThemes.length}</span>
-      <button onClick={() => setTheme("custom:netflix")}>netflix</button>
-      <button onClick={() => setTheme("clean")}>clean</button>
+      <button onClick={() => setTheme("custom:netflix")}>{/* analytics-exempt */}netflix</button>
+      <button onClick={() => setTheme("clean")}>{/* analytics-exempt */}clean</button>
     </div>
   );
 }
@@ -103,7 +103,7 @@ describe("ThemeProvider user themes", () => {
     );
     await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("1"));
     act(() => screen.getByText("netflix").click());
-    const cache = JSON.parse(localStorage.getItem("stapler-theme-custom-v2")!);
+    const cache = JSON.parse(localStorage.getItem("stapler-theme-custom-v2") ?? "");
     expect(cache.id).toBe("custom:netflix");
     expect(cache.props[propName(vars.color.primary)]).toBe("#e50914");
   });
