@@ -170,6 +170,20 @@ Go web server on `localhost:8543` + React SPA. Manages AI agent sessions (Claude
 | Config | `config/` | JSON config, state persistence |
 | Web UI | `web-app/` | React SPA, real-time terminal via ConnectRPC |
 
+### Package layout (domain-driven design + PoEAA)
+
+Full mapping, recipes and status: `docs/explanation/package-layout.md`. The rules, in short:
+
+- **Dependency rule.** Dependencies point downward: `server/` -> `session/` -> `config/`/`pkg/`. `session` never imports `server`; `pkg/` never imports `session` (except `pkg/events`). Depguard (`.golangci.yml`) and `tools/bzl/scoping/boundaries.txt` enforce this.
+- **Layers and patterns.** Domain model and value types in `session/domain`; aggregates like `session.Instance` read via `Snapshot()`; persistence is Repository + Data Mapper (`Storage`/`EntRepository`, ent rows converted to DTOs only in `ent_repository_*.go`); use cases are the Service Layer (`server/services`, `session/backlog`); the ConnectRPC API is the Remote Facade with proto messages as DTOs; git, tmux, GitHub and push sit behind Gateway/Adapter ports; `server/dependencies.go` is the one composition root that names concrete types.
+- **Where new code goes.** A new package under the owning layer (`session/<concept>`, `server/<concept>`), not another file in `session/` or `server/services/` (about 81k and 74k lines, being split: `project_plans/package-split-ocp/`). A leaf is imported only by the composition root and tests.
+- **Interfaces.** Define them where they are consumed; add one only for a real consumer and either two implementations (adapter + fake) or a genuine test seam (`interface-pollution-checklist`).
+- **Open-closed.** A new tracker, migration, stuck detector, process backend or history adapter is a new file plus one registration at the composition root, never another `case` in a kind switch.
+- **Persistence.** Return domain DTOs, wrap `ent.IsNotFound` as `session.ErrNotFound`, and import `session/ent` only where depguard allows it.
+- **No lasting type aliases** to preserve old import paths; moves are `git mv` plus a codemod, one cluster per PR, with `make gazelle` clean and any budget raise carried in a `scoping-budget-raise:` commit line.
+
+Status: the hub types (`Instance`, `Storage`, `EntRepository`, `SessionService`) still bind most of `session` and `server/services`; persistence DTO lowering (ADR-011, `dto-lowering-roadmap.md`) is the staged plan to change that.
+
 Sessions support tag-based multi-dimensional organization with 8 grouping strategies (Category, Tag, Branch, Path, Program, Status, Session Type, None). Full reference: `docs/reference/tag-organization.md`
 
 ## Git Remotes
@@ -341,6 +355,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 
 | Topic | File |
 |---|---|
+| Package layout (DDD + PoEAA mapping, rules for new code, recipes, status of the hub split) | `docs/explanation/package-layout.md` |
 | Profiling / lock-up debugging | `docs/how-to/profile-lockups.md` |
 | Find and reduce blocking/locking: triage CPU starvation vs mutex vs channel vs exec vs network HOL, deadlock playbook, fix catalog | `profile-blocking-and-locking` skill |
 | OpenTelemetry / Datadog setup | `docs/how-to/enable-opentelemetry.md` |
