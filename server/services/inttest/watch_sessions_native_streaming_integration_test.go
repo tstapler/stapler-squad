@@ -26,6 +26,7 @@ import (
 	gh "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/importer"
@@ -85,7 +86,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 	registry := session.NewRegistry(storage, sessionService.WireInstanceCallbacks)
 	sessionService.SetRegistry(registry)
 
-	reactiveQueueMgr := server.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
+	reactiveQueueMgr := reviewqueue.NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
 
 	scrollbackConfig := scrollback.DefaultScrollbackConfig()
 	scrollbackConfig.StoragePath = t.TempDir()

@@ -1,4 +1,4 @@
-package server
+package reviewqueue
 
 import (
 	"sync"
