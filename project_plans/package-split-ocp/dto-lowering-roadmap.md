@@ -461,6 +461,16 @@ Close the series. BL-E deletes the temporary bridge so no new lasting alias rema
 - **wake kinds table-driven (describe.go/kinds.go switch)**: Known OCP violation (kind switches), but out of scope here and unmeasured. Candidate follow-up after WAKE-2.
 - **4 bare ent.IsNotFound sites in backlog_service_lifecycle.go**: Held back from NF-1: they change an RPC result from Internal to NotFound (a wire behaviour change). Needs the owner decision (question 1).
 
+## Owner decisions (2026-11-11)
+
+- **Home of the backlog DTOs:** `session/domain/backlogdto`, a separate sub-package, so the high-churn DTOs (73 and 60 commits per 180 days) do not destabilize the many importers of the stable `session/domain`. The temporary alias bridge is removed by BL-E.
+- **Existing `= domain.X` aliases in `session/backlog.go`:** retire them (BL-F). It is a very wide mechanical rewrite and runs in a quiet window.
+- **Freeze for the wide codemods (SENT-1, BL-D, BL-F):** a short coordinated freeze on `repository.go` and `storage_backlog.go` is acceptable. Publish the file list before opening each wide PR and merge it within one working session.
+- **Merging:** the owner re-granted the merge script with a floor of more than three checks so docs-only PRs qualify.
+- **Standing:** open-closed shape alone justifies a move (roadmap.md, 2026-11-10); the open-PR cap is lifted for file-disjoint splits.
+
+Still open: the `NF-1` `Internal` to `NotFound` wire behaviour change at four `ent.IsNotFound` sites, whether `NewEntRepository` should require the migrations list from the composition root, the WAKE-2 spike outcome, and single-implementation ports (accepted only with an in-memory fake and a shared contract suite in the same PR).
+
 ## Owner questions
 
 - Accept the Internal to NotFound behaviour fix at the four bare ent.IsNotFound sites (backlog_service_lifecycle.go :698, :1165, :1229, :1355) as a separate, explicitly labelled PR with RPC-level tests? NF-1 leaves them untouched.
