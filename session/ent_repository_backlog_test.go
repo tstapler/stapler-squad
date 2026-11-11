@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	_ "modernc.org/sqlite" // SQLite driver, for the raw-connection schema surgery below
 )
@@ -620,7 +621,7 @@ func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerDoesNotExist
 		BlockerID: uuid.New().String(),
 		BlockedID: blocked.ID,
 	})
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 // TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockedDoesNotExist
@@ -638,7 +639,7 @@ func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockedDoesNotExist
 		BlockerID: blocker.ID,
 		BlockedID: uuid.New().String(),
 	})
-	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 // TestNewEntRepository_should_MigrateExistingDatabaseSuccessfully_When_BacklogItemDependenciesTableIsMissing
@@ -798,7 +799,7 @@ func TestMapAppendActivityNoteCreateError_should_ReturnErrNotFound_When_ErrIsCon
 	got := mapAppendActivityNoteCreateError(constraintErr, "item-1")
 
 	require.Error(t, got)
-	assert.True(t, errors.Is(got, ErrNotFound), "a constraint-violation error must map to ErrNotFound")
+	assert.True(t, errors.Is(got, domain.ErrNotFound), "a constraint-violation error must map to ErrNotFound")
 }
 
 func TestMapAppendActivityNoteCreateError_should_WrapPlainError_When_ErrIsNotConstraintViolation(t *testing.T) {
@@ -808,7 +809,7 @@ func TestMapAppendActivityNoteCreateError_should_WrapPlainError_When_ErrIsNotCon
 	got := mapAppendActivityNoteCreateError(plain, "item-1")
 
 	require.Error(t, got)
-	assert.False(t, errors.Is(got, ErrNotFound), "a non-constraint error must not be misclassified as ErrNotFound")
+	assert.False(t, errors.Is(got, domain.ErrNotFound), "a non-constraint error must not be misclassified as ErrNotFound")
 	assert.True(t, errors.Is(got, plain), "the original error must remain unwrappable")
 }
 
@@ -1287,7 +1288,7 @@ func TestRemoveBacklogItemDependency_should_ReturnNotFound_When_ItemMissing(t *t
 		BlockerID: a.ID,
 		BlockedID: "00000000-0000-0000-0000-000000000000",
 	})
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 func TestListBacklogItemDependencies_should_ReturnBothDirections_When_EdgesExist(t *testing.T) {

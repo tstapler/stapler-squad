@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -136,17 +137,19 @@ type raceLosingPipelineModeRepo struct {
 
 func (r *raceLosingPipelineModeRepo) Create(_ context.Context, _ PipelineModeCreateInput) (*ent.PipelineMode, error) {
 	r.createCalled = true
-	return nil, ErrConflict
+	return nil, domain.ErrConflict
 }
 func (r *raceLosingPipelineModeRepo) Update(_ context.Context, _ uuid.UUID, _ PipelineModeUpdateInput) (*ent.PipelineMode, error) {
-	return nil, ErrNotFound
+	return nil, domain.ErrNotFound
 }
-func (r *raceLosingPipelineModeRepo) Delete(_ context.Context, _ uuid.UUID) error { return ErrNotFound }
+func (r *raceLosingPipelineModeRepo) Delete(_ context.Context, _ uuid.UUID) error {
+	return domain.ErrNotFound
+}
 func (r *raceLosingPipelineModeRepo) GetByID(_ context.Context, _ uuid.UUID) (*ent.PipelineMode, error) {
-	return nil, ErrNotFound
+	return nil, domain.ErrNotFound
 }
 func (r *raceLosingPipelineModeRepo) GetBySlug(_ context.Context, _ string) (*ent.PipelineMode, error) {
-	return nil, ErrNotFound
+	return nil, domain.ErrNotFound
 }
 func (r *raceLosingPipelineModeRepo) ListAll(_ context.Context) ([]*ent.PipelineMode, error) {
 	return nil, nil

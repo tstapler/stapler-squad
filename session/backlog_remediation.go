@@ -589,7 +589,7 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 			Precondition: &BacklogItemPrecondition{ExpectedStatus: d.From},
 			TriggeredBy:  TriggeredBySystem,
 		})
-		if err != nil && !errors.Is(err, ErrPreconditionFailed) {
+		if err != nil && !errors.Is(err, domain.ErrPreconditionFailed) {
 			log.Debug("[RedriveTransitionDenials] re-attempt not applied", "item", itemID, "caller", d.Caller, "error", err)
 			return false
 		}

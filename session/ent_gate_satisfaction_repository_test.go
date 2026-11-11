@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -83,7 +84,7 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnConflictAndLeaveRowUn
 		ExpectedSatisfied: &wrongExpectation,
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(t, err, domain.ErrConflict)
 
 	// The row must be entirely unchanged — the CAS must never partially apply.
 	row, err := repo.GetByItemAndGate(ctx, itemID, gateID)
@@ -104,7 +105,7 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnNotFound_When_RowDoes
 	newSatisfied := true
 	_, err := repo.Update(ctx, uuid.New(), gateID, GateSatisfactionUpdateInput{Satisfied: &newSatisfied})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 
 // TestEntGateSatisfactionRepository_Update_should_ReturnNotFound_When_RowDoesNotExistAndExpectedSatisfiedIsSet
@@ -124,6 +125,6 @@ func TestEntGateSatisfactionRepository_Update_should_ReturnNotFound_When_RowDoes
 		ExpectedSatisfied: &expected,
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNotFound)
-	assert.NotErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+	assert.NotErrorIs(t, err, domain.ErrConflict)
 }

@@ -12,6 +12,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // This file lives in the external session_test package (not the internal
@@ -122,7 +123,7 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 		ExpectedStatus: string(session.BacklogStatusReview),
 	}, session.TriggeredBySystem)
 	require.Error(t, err)
-	require.ErrorIs(t, err, session.ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	select {
 	case ev := <-sub:
@@ -337,7 +338,7 @@ func TestUnarchiveBacklogItem_should_returnNotFound_When_ItemIDDoesNotExist(t *t
 
 	_, err := storageOn(t, repo).RawUnarchiveBacklogItem(ctx, uuid.NewString())
 	require.Error(t, err)
-	require.ErrorIs(t, err, session.ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 
 	select {
 	case ev := <-sub:
@@ -446,7 +447,7 @@ func TestDeleteBacklogItem_should_notPublish_When_ItemIDDoesNotExist(t *testing.
 
 	err := repo.DeleteBacklogItem(ctx, uuid.NewString())
 	require.Error(t, err)
-	require.ErrorIs(t, err, session.ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 
 	select {
 	case ev := <-sub:

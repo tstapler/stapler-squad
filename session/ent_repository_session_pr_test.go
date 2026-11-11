@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/pullrequeststate"
 )
@@ -573,7 +574,7 @@ func TestUpdatePullRequestState_ShouldRejectBadInput(t *testing.T) {
 	_, err := repo.UpdatePullRequestState(ctx, PRRef{}, fetchObs(PRSourceTick, PRStateOpen, prRepoT0))
 	assert.ErrorIs(t, err, ErrZeroPRRef)
 	_, err = repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateOpen, prRepoT0))
-	assert.ErrorIs(t, err, ErrNotFound, "no state row yet")
+	assert.ErrorIs(t, err, domain.ErrNotFound, "no state row yet")
 	seedState(t, repo, ref, PRStateOpen, false)
 	_, err = repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, PRStateUnknown, prRepoT0))
 	assert.Error(t, err, "a fetch cannot report unknown")

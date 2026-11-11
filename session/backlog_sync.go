@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -317,7 +318,7 @@ func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from,
 	switch {
 	case err == nil:
 		return backwardSyncOutcome{updated: 1}
-	case IsGateDenial(err) || errors.Is(err, ErrPreconditionFailed):
+	case IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed):
 		log.Debug("[SyncLoop] backward-sync transition skipped, retried next tick", "item", itemID, "error", err)
 		return backwardSyncOutcome{skipped: 1}
 	default:
@@ -384,13 +385,13 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// source — two different repos can both have an issue #1 — so the lookup
 		// must never match across sources.
 		existing, lookupErr := er.GetBacklogItemByExternalID(ctx, source.ID.String(), extItem.ExternalID)
-		if lookupErr != nil && !errors.Is(lookupErr, ErrNotFound) {
+		if lookupErr != nil && !errors.Is(lookupErr, domain.ErrNotFound) {
 			log.ErrorLog().Printf("[SyncLoop] GetBacklogItemByExternalID(%s) error: %v", extItem.ExternalID, lookupErr)
 			errored++
 			continue
 		}
 
-		if errors.Is(lookupErr, ErrNotFound) || existing == nil {
+		if errors.Is(lookupErr, domain.ErrNotFound) || existing == nil {
 			// New item — create it, unless another host already holds the claim.
 			// Local-only on purpose: a background sweep must not fan out to peers.
 			if claim, blocked := sl.storage.ForeignClaim(data.ExternalURL); blocked {

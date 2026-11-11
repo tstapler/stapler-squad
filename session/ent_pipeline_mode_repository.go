@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/pipelinemode"
 )
@@ -56,7 +57,7 @@ func (r *EntPipelineModeRepository) Create(ctx context.Context, m PipelineModeCr
 	pm, err := c.Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
-			return nil, fmt.Errorf("%w: pipeline mode with slug %q already exists", ErrConflict, m.Slug)
+			return nil, fmt.Errorf("%w: pipeline mode with slug %q already exists", domain.ErrConflict, m.Slug)
 		}
 		return nil, fmt.Errorf("create pipeline mode: %w", err)
 	}
@@ -114,10 +115,10 @@ func (r *EntPipelineModeRepository) Update(ctx context.Context, id uuid.UUID, m 
 	pm, err := u.Save(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: pipeline mode %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: pipeline mode %s", domain.ErrNotFound, id)
 		}
 		if ent.IsConstraintError(err) {
-			return nil, fmt.Errorf("%w: slug already exists", ErrConflict)
+			return nil, fmt.Errorf("%w: slug already exists", domain.ErrConflict)
 		}
 		return nil, fmt.Errorf("update pipeline mode %s: %w", id, err)
 	}
@@ -129,7 +130,7 @@ func (r *EntPipelineModeRepository) Delete(ctx context.Context, id uuid.UUID) er
 	err := r.client.PipelineMode.DeleteOneID(id).Exec(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: pipeline mode %s", ErrNotFound, id)
+			return fmt.Errorf("%w: pipeline mode %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("delete pipeline mode %s: %w", id, err)
 	}
@@ -141,7 +142,7 @@ func (r *EntPipelineModeRepository) GetByID(ctx context.Context, id uuid.UUID) (
 	pm, err := r.client.PipelineMode.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: pipeline mode %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: pipeline mode %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("get pipeline mode %s: %w", id, err)
 	}
@@ -155,7 +156,7 @@ func (r *EntPipelineModeRepository) GetBySlug(ctx context.Context, slug string) 
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: pipeline mode with slug %q", ErrNotFound, slug)
+			return nil, fmt.Errorf("%w: pipeline mode with slug %q", domain.ErrNotFound, slug)
 		}
 		return nil, fmt.Errorf("get pipeline mode by slug %q: %w", slug, err)
 	}

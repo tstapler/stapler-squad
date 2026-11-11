@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 )
@@ -100,7 +101,7 @@ func TestGetBacklogItem_should_ResolveByEitherLegacyUUIDOrPublicId_When_BothForm
 
 	_, err = repo.GetBacklogItem(ctx, "bl_01JDOESNOTEXISTVALUE00001")
 	require.Error(t, err, "a well-formed but unknown public id must still be reported not found")
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 	assert.False(t, ent.IsNotFound(err), "the returned error should be the package sentinel ErrNotFound, not a raw ent.NotFoundError")
 }
 

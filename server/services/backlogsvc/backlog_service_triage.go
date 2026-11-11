@@ -519,7 +519,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// 1. Load item.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -730,7 +730,7 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *session.Bac
 	// queueing (-> Queued) always passes false rather than querying.
 	updated, err := s.TransitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy, false)
 	if err != nil {
-		if errors.Is(err, session.ErrPreconditionFailed) {
+		if errors.Is(err, domain.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("item status changed concurrently — retry the spawn: %w", err))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to queue item: %w", err))
@@ -899,7 +899,7 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item sessio
 // and surfaces it durably or quietly as appropriate. Callers hold dequeueMu.
 func (s *BacklogService) handleClaimError(ctx context.Context, item session.BacklogItemData, fromStatus session.BacklogStatus, claimErr error) {
 	switch {
-	case errors.Is(claimErr, session.ErrPreconditionFailed):
+	case errors.Is(claimErr, domain.ErrPreconditionFailed):
 		// Expected under concurrent claims (another process's dequeue
 		// sweep, or a manual un-queue) — not worth logging.
 	case errors.Is(claimErr, session.ErrUnresolvedBlockers):
@@ -3099,7 +3099,7 @@ func (s *BacklogService) TriggerReReview(
 	// 1. Load item.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))

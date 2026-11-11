@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // This file is the second UI exception to "no UI path writes to a hidden
@@ -60,7 +61,7 @@ func (r storageLinkResolver) ResolveLiveReviewLink(ctx context.Context, inst *se
 	}
 	row, err := r.lookup.GetItemSessionBySessionUUID(ctx, inst.GetStableID())
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return BacklogReviewLink{}, false, nil
 	case err != nil:
 		return BacklogReviewLink{}, false, err

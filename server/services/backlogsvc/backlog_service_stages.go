@@ -23,6 +23,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // stageToProto converts a session.StageData to its proto representation.
@@ -59,7 +60,7 @@ func (s *BacklogService) CreateStage(
 		Enabled:     req.Msg.Enabled,
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("stage with slug %q already exists", req.Msg.Slug))
 		}
@@ -102,7 +103,7 @@ func (s *BacklogService) UpdateStage(
 		Enabled:     req.Msg.Enabled,
 	})
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("stage %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update stage: %w", err))
@@ -139,7 +140,7 @@ func (s *BacklogService) DeleteStage(
 	if !req.Msg.Force {
 		stage, err := s.stageCRUDRepo.GetStageByID(ctx, id)
 		if err != nil {
-			if errors.Is(err, session.ErrNotFound) {
+			if errors.Is(err, domain.ErrNotFound) {
 				return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("stage %s not found", req.Msg.Id))
 			}
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get stage: %w", err))
@@ -161,7 +162,7 @@ func (s *BacklogService) DeleteStage(
 	}
 
 	if err := s.stageCRUDRepo.DeleteStage(ctx, id); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("stage %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete stage: %w", err))
@@ -200,7 +201,7 @@ func (s *BacklogService) rejectStageRemovalStranding(ctx context.Context, id uui
 // transaction ended) and maps the error to a connect code.
 func mapStageStrandingError(ctx context.Context, s *BacklogService, err error) error {
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
 	case errors.Is(err, backlog.ErrDisableWouldStrandLiveItems):
 		return connect.NewError(connect.CodeFailedPrecondition, s.withStrandedItemIDs(ctx, err))
@@ -237,7 +238,7 @@ func (s *BacklogService) GetStage(
 
 	stage, err := s.stageCRUDRepo.GetStageBySlug(ctx, req.Msg.Slug)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("stage %q not found", req.Msg.Slug))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get stage: %w", err))

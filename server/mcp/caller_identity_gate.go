@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Typed result codes of the wake and peer-help tools (plan Story 4.5). They
@@ -154,7 +155,7 @@ func roleLookupFrom(get func(ctx context.Context, sessionUUID string) (session.I
 	return func(ctx context.Context, sessionUUID string) callerRole {
 		link, err := get(ctx, sessionUUID)
 		switch {
-		case errors.Is(err, session.ErrNotFound):
+		case errors.Is(err, domain.ErrNotFound):
 			return roleWork
 		case err != nil:
 			return roleUnknown

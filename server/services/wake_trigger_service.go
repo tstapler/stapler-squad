@@ -219,7 +219,7 @@ func (s *WakeTriggerService) cancelAny(ctx context.Context, id string) (*session
 	if err != nil {
 		return nil, false, wakes.ErrWakeNotFound
 	}
-	if _, err := s.deps.Store.GetWakeTrigger(ctx, parsed); errors.Is(err, session.ErrNotFound) {
+	if _, err := s.deps.Store.GetWakeTrigger(ctx, parsed); errors.Is(err, domain.ErrNotFound) {
 		return nil, false, wakes.ErrWakeNotFound
 	} else if err != nil {
 		return nil, false, fmt.Errorf("cancel wake: %w", err)
@@ -315,7 +315,7 @@ func (s *WakeTriggerService) CancelPeerHelp(ctx context.Context, requestID strin
 	}
 	data, wasApplied, err := s.deps.Guidance.CancelPeerHelp(ctx, requestID)
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_ALREADY_RESOLVED, "not found"), nil
 	case errors.Is(err, ErrNotPeerHelp):
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, "not a peer help request"), nil

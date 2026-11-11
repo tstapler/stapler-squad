@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Webhook-management contract identity. Bumping CapabilityRevision is a compatible
@@ -508,7 +509,7 @@ func mapWebhookRepoError(err error) *WebhookAPIError {
 		e := apiErr(http.StatusConflict, "VERSION_CONFLICT", "expected_version does not match the current version")
 		e.CurrentVersion = &conflict.CurrentVersion
 		return e
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return apiErr(http.StatusNotFound, "NOT_FOUND", "registration not found")
 	case errors.Is(err, session.ErrIdempotencyKeyReused):
 		return apiErr(http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "request_id was already used for a different request")

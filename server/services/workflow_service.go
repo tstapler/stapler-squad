@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
@@ -310,7 +311,7 @@ func (s *WorkflowService) CreateWorkflow(
 	}
 	wf, err := s.repo.Create(ctx, createInput)
 	if err != nil {
-		if errors.Is(err, session.ErrConflict) {
+		if errors.Is(err, domain.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("workflow with slug %q already exists", req.Msg.Slug))
 		}
@@ -373,7 +374,7 @@ func (s *WorkflowService) UpdateWorkflow(
 	// spuriously rejected or, worse, let a mismatched combination through unnoticed.
 	existing, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get workflow: %w", err))
@@ -467,10 +468,10 @@ func (s *WorkflowService) UpdateWorkflow(
 		wf, err = s.repo.Update(ctx, id, update)
 	}
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
-		if errors.Is(err, session.ErrPreconditionFailed) {
+		if errors.Is(err, domain.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("workflow %s was changed concurrently, reload and retry", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update workflow: %w", err))
@@ -507,7 +508,7 @@ func (s *WorkflowService) DeleteWorkflow(
 	}
 
 	if err := s.repo.Delete(ctx, id); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete workflow: %w", err))
@@ -569,7 +570,7 @@ func (s *WorkflowService) RunWorkflow(
 
 	wf, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get workflow: %w", err))

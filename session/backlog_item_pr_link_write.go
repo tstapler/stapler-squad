@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
@@ -96,7 +97,7 @@ func (r *EntRepository) SetItemPRFieldsWithLink(ctx context.Context, itemID, prU
 		if n, uerr := tx.BacklogItem.Update().Where(backlogitem.ID(id)).SetPrURL(prURL).SetPrNumber(prNumber).Save(ctx); uerr != nil {
 			return fmt.Errorf("update item: %w", uerr)
 		} else if n == 0 {
-			return fmt.Errorf("%w: backlog item %s", ErrNotFound, itemID)
+			return fmt.Errorf("%w: backlog item %s", domain.ErrNotFound, itemID)
 		}
 		return link.writeTx(ctx, tx, itemID, r.afterPRLinkHook)
 	})

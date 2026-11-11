@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/reporoot"
 	"github.com/tstapler/stapler-squad/jules"
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --- fakes ---
@@ -160,7 +161,7 @@ func (f *fakeJulesPollerStorage) GetItemSessionBySessionUUID(_ context.Context, 
 	defer f.mu.Unlock()
 	row, ok := f.sessionsByUUID[sessionUUID]
 	if !ok {
-		return ItemSessionSummary{}, fmt.Errorf("%w: %s", ErrNotFound, sessionUUID)
+		return ItemSessionSummary{}, fmt.Errorf("%w: %s", domain.ErrNotFound, sessionUUID)
 	}
 	return row, nil
 }

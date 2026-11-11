@@ -329,7 +329,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedAgentPRs(ctx context.Context
 		// nil guard: this reconciler only ever lists review-status items
 		// (filter above), so it never hits the reassignment path.
 		if setErr := l.recordOrphanedAgentPR(ctx, item.ID, info, summary); setErr != nil {
-			if session.IsGateDenial(setErr) || errors.Is(setErr, session.ErrPreconditionFailed) {
+			if session.IsGateDenial(setErr) || errors.Is(setErr, domain.ErrPreconditionFailed) {
 				log.Debug("[BacklogLifecycle] reconcileOrphanedAgentPRs: PR association skipped, retried next tick", "item", item.ID, "pr", info.Number, "error", setErr)
 				continue
 			}
@@ -350,7 +350,7 @@ func (l *BacklogLifecycleListener) recordOrphanedAgentPR(ctx context.Context, it
 		return err
 	}
 	if observed.Status != string(session.BacklogStatusReview) {
-		return fmt.Errorf("%w: item %s is %q, not review", session.ErrPreconditionFailed, itemID, observed.Status)
+		return fmt.Errorf("%w: item %s is %q, not review", domain.ErrPreconditionFailed, itemID, observed.Status)
 	}
 	return l.storage.GatedSetPRAndTransition(ctx,
 		session.TransitionRequest{Caller: session.CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: session.TriggeredBySystem},
@@ -649,7 +649,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *se
 			Caller: session.CallerPushCreatePRFallback, ItemID: item.ID, To: session.BacklogStatusDone, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			logSystemTransitionFailure("pushAndCreatePR fallback done", item.ID, session.BacklogStatusDone, transErr)
-			if errors.Is(transErr, session.ErrPreconditionFailed) {
+			if errors.Is(transErr, domain.ErrPreconditionFailed) {
 				return // a concurrent mover changed the status; the next tick re-evaluates
 			}
 			// A PASS verdict already confirmed the work; there was nothing to

@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestEntPipelineModeRepository_Create_should_PersistAndRoundTrip_When_ValidInput(t *testing.T) {
@@ -52,7 +53,7 @@ func TestEntPipelineModeRepository_Create_should_ReturnConstraintError_When_Dupl
 		Name: "Quick Fix Again",
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(t, err, domain.ErrConflict)
 }
 
 func TestEntPipelineModeRepository_Update_should_OnlyChangeSuppliedFields_When_PartialUpdateInput(t *testing.T) {

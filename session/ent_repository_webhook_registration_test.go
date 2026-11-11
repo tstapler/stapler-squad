@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 var (
@@ -73,7 +74,7 @@ func TestReconcileWebhookRegistration_ExecutionTemplateOwnership(t *testing.T) {
 		_, err := r.ReconcileWebhookRegistration(ctx, hostile)
 		require.ErrorIs(t, err, ErrWebhookSlugUnavailable)
 		_, err = r.InspectWebhookRegistration(ctx, scope, in.InstanceID)
-		require.ErrorIs(t, err, ErrNotFound)
+		require.ErrorIs(t, err, domain.ErrNotFound)
 	}
 	got, err := r.InspectWebhookRegistration(ctx, scopeA, in.InstanceID)
 	require.NoError(t, err)
@@ -245,7 +246,7 @@ func TestInspectWebhookRegistration_should_ReturnNotFound_When_CallerScopeDoesNo
 	_, errMissing := r.InspectWebhookRegistration(ctx, scopeA, "no-such-instance")
 
 	for _, e := range []error{errOtherPrincipal, errOtherWorkspace, errMissing} {
-		assert.ErrorIs(t, e, ErrNotFound)
+		assert.ErrorIs(t, e, domain.ErrNotFound)
 	}
 }
 
@@ -417,14 +418,14 @@ func TestIntegrationCredential_should_AuthenticateOnlyWhileActive_When_IssuedAnd
 	assert.NotContains(t, stored.TokenSha256, token, "the plaintext token must never be stored")
 
 	_, err = r.AuthenticateIntegrationToken(ctx, token+"x")
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 	_, err = r.AuthenticateIntegrationToken(ctx, "")
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 
 	_, err = r.IssueIntegrationCredential(ctx, info)
-	assert.ErrorIs(t, err, ErrConflict, "re-issuing must not silently rotate an existing principal")
+	assert.ErrorIs(t, err, domain.ErrConflict, "re-issuing must not silently rotate an existing principal")
 
 	require.NoError(t, r.RevokeIntegrationCredential(ctx, "gh-signal"))
 	_, err = r.AuthenticateIntegrationToken(ctx, token)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 }

@@ -28,6 +28,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // stageTransitionToProto converts a session.TransitionData to its proto
@@ -111,9 +112,9 @@ func validateGateConfig(kind string, config map[string]string) error {
 // RPC caller should see.
 func mapTransitionGraphError(err error) error {
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, domain.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, session.ErrConflict):
+	case errors.Is(err, domain.ErrConflict):
 		return connect.NewError(connect.CodeAlreadyExists, err)
 	case errors.Is(err, backlog.ErrStageDeadEnd),
 		errors.Is(err, backlog.ErrStageUnreachable):

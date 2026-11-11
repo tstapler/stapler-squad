@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/pullrequeststate"
@@ -589,7 +590,7 @@ func (r *EntRepository) GetPullRequestState(ctx context.Context, ref PRRef) (PRV
 	st, err := r.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return PRView{}, fmt.Errorf("%w: pull request state %s", ErrNotFound, ref)
+			return PRView{}, fmt.Errorf("%w: pull request state %s", domain.ErrNotFound, ref)
 		}
 		return PRView{}, fmt.Errorf("load pull request state %s: %w", ref, err)
 	}
@@ -813,7 +814,7 @@ func (r *EntRepository) UpdatePullRequestState(ctx context.Context, ref PRRef, o
 		row, err := r.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(ctx)
 		if err != nil {
 			if ent.IsNotFound(err) {
-				return PRObservationResult{}, fmt.Errorf("%w: pull request state %s", ErrNotFound, ref)
+				return PRObservationResult{}, fmt.Errorf("%w: pull request state %s", domain.ErrNotFound, ref)
 			}
 			return PRObservationResult{}, fmt.Errorf("load pull request state %s: %w", ref, err)
 		}

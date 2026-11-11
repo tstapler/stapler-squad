@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -181,14 +182,14 @@ func createTransitionRow(ctx context.Context, c entGraphClients, in TransitionCr
 	fromStage, err := c.stages.Query().Where(backlogstage.Slug(in.FromStageSlug)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: from stage %q", ErrNotFound, in.FromStageSlug)
+			return nil, fmt.Errorf("%w: from stage %q", domain.ErrNotFound, in.FromStageSlug)
 		}
 		return nil, fmt.Errorf("lookup from stage %q: %w", in.FromStageSlug, err)
 	}
 	toStage, err := c.stages.Query().Where(backlogstage.Slug(in.ToStageSlug)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: to stage %q", ErrNotFound, in.ToStageSlug)
+			return nil, fmt.Errorf("%w: to stage %q", domain.ErrNotFound, in.ToStageSlug)
 		}
 		return nil, fmt.Errorf("lookup to stage %q: %w", in.ToStageSlug, err)
 	}
@@ -200,7 +201,7 @@ func createTransitionRow(ctx context.Context, c entGraphClients, in TransitionCr
 		Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
-			return nil, fmt.Errorf("%w: transition %s -> %s already exists", ErrConflict, in.FromStageSlug, in.ToStageSlug)
+			return nil, fmt.Errorf("%w: transition %s -> %s already exists", domain.ErrConflict, in.FromStageSlug, in.ToStageSlug)
 		}
 		return nil, fmt.Errorf("create transition %s -> %s: %w", in.FromStageSlug, in.ToStageSlug, err)
 	}
@@ -222,7 +223,7 @@ func updateTransitionRow(ctx context.Context, c entGraphClients, id uuid.UUID, i
 	}
 	if _, err := u.Save(ctx); err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: transition %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: transition %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("update transition %s: %w", id, err)
 	}
@@ -263,7 +264,7 @@ func (r *EntStageConfigRepository) CreateStage(ctx context.Context, in StageCrea
 		Save(ctx)
 	if err != nil {
 		if ent.IsConstraintError(err) {
-			return nil, fmt.Errorf("%w: stage with slug %q already exists", ErrConflict, in.Slug)
+			return nil, fmt.Errorf("%w: stage with slug %q already exists", domain.ErrConflict, in.Slug)
 		}
 		return nil, fmt.Errorf("create stage %q: %w", in.Slug, err)
 	}
@@ -291,7 +292,7 @@ func (r *EntStageConfigRepository) UpdateStage(ctx context.Context, id uuid.UUID
 	row, err := u.Save(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: stage %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: stage %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("update stage %s: %w", id, err)
 	}
@@ -304,7 +305,7 @@ func (r *EntStageConfigRepository) UpdateStage(ctx context.Context, id uuid.UUID
 func (r *EntStageConfigRepository) DeleteStage(ctx context.Context, id uuid.UUID) error {
 	if err := r.client.BacklogStage.DeleteOneID(id).Exec(ctx); err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: stage %s", ErrNotFound, id)
+			return fmt.Errorf("%w: stage %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("delete stage %s: %w", id, err)
 	}
@@ -316,7 +317,7 @@ func (r *EntStageConfigRepository) GetStageBySlug(ctx context.Context, slug stri
 	row, err := r.client.BacklogStage.Query().Where(backlogstage.Slug(slug)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: stage %q", ErrNotFound, slug)
+			return nil, fmt.Errorf("%w: stage %q", domain.ErrNotFound, slug)
 		}
 		return nil, fmt.Errorf("get stage %q: %w", slug, err)
 	}
@@ -328,7 +329,7 @@ func (r *EntStageConfigRepository) GetStageByID(ctx context.Context, id uuid.UUI
 	row, err := r.client.BacklogStage.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: stage %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: stage %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("get stage %s: %w", id, err)
 	}
@@ -369,7 +370,7 @@ func (r *EntStageConfigRepository) DeleteTransition(ctx context.Context, id uuid
 func deleteTransitionRow(ctx context.Context, c entGraphClients, id uuid.UUID) error {
 	if err := c.transitions.DeleteOneID(id).Exec(ctx); err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: transition %s", ErrNotFound, id)
+			return fmt.Errorf("%w: transition %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("delete transition %s: %w", id, err)
 	}
@@ -386,7 +387,7 @@ func (r *EntStageConfigRepository) GetTransition(ctx context.Context, id uuid.UU
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: transition %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: transition %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("get transition %s: %w", id, err)
 	}
@@ -401,7 +402,7 @@ func (r *EntStageConfigRepository) ListAllTransitions(ctx context.Context, fromS
 		fromStage, err := r.client.BacklogStage.Query().Where(backlogstage.Slug(fromStageSlug)).Only(ctx)
 		if err != nil {
 			if ent.IsNotFound(err) {
-				return nil, fmt.Errorf("%w: stage %q", ErrNotFound, fromStageSlug)
+				return nil, fmt.Errorf("%w: stage %q", domain.ErrNotFound, fromStageSlug)
 			}
 			return nil, fmt.Errorf("lookup stage %q: %w", fromStageSlug, err)
 		}
@@ -463,7 +464,7 @@ func (r *EntStageConfigRepository) UpdateGate(ctx context.Context, id uuid.UUID,
 	row, err := u.Save(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: gate %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: gate %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("update gate %s: %w", id, err)
 	}
@@ -474,7 +475,7 @@ func (r *EntStageConfigRepository) UpdateGate(ctx context.Context, id uuid.UUID,
 func (r *EntStageConfigRepository) DeleteGate(ctx context.Context, id uuid.UUID) error {
 	if err := r.client.TransitionGate.DeleteOneID(id).Exec(ctx); err != nil {
 		if ent.IsNotFound(err) {
-			return fmt.Errorf("%w: gate %s", ErrNotFound, id)
+			return fmt.Errorf("%w: gate %s", domain.ErrNotFound, id)
 		}
 		return fmt.Errorf("delete gate %s: %w", id, err)
 	}
@@ -486,7 +487,7 @@ func (r *EntStageConfigRepository) GetGate(ctx context.Context, id uuid.UUID) (*
 	row, err := r.client.TransitionGate.Get(ctx, id)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: gate %s", ErrNotFound, id)
+			return nil, fmt.Errorf("%w: gate %s", domain.ErrNotFound, id)
 		}
 		return nil, fmt.Errorf("get gate %s: %w", id, err)
 	}

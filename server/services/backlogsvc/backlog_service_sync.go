@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -48,7 +49,7 @@ func (s *BacklogService) AttachSessionToItem(
 	// 2. Load and validate item.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -210,7 +211,7 @@ func (s *BacklogService) TriggerSync(
 	defer cancel()
 
 	if err := sl.SyncByID(syncCtx, req.Msg.SourceId); err != nil {
-		if errors.Is(err, session.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("sync failed: %w", err))
@@ -291,7 +292,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 			Item:           backlogItemToProto(existing, s.engine, s.buildCostLookup()),
 			AlreadyExisted: true,
 		}), nil
-	} else if !errors.Is(lookupErr, session.ErrNotFound) {
+	} else if !errors.Is(lookupErr, domain.ErrNotFound) {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check for existing import: %w", lookupErr))
 	}
 

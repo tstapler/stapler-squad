@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -937,7 +938,7 @@ func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *
 		capRoleResolver = func(ctx context.Context, sessionUUID string) string {
 			is, err := concStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
 			if err != nil {
-				if !errors.Is(err, session.ErrNotFound) {
+				if !errors.Is(err, domain.ErrNotFound) {
 					log.Warn("capacity: role lookup failed; applying default (non-pipeline) limits", "uuid", sessionUUID, "err", err)
 				}
 				return ""

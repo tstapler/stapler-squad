@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadyShippedSinceReview
@@ -62,7 +63,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 		ExpectedUpdatedAt: &staleUpdatedAt,
 		Note:              "auto-reopened after failed review verdict",
 	}, TriggeredBySystem)
-	require.ErrorIs(t, err, ErrPreconditionFailed)
+	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 
 	final, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -115,7 +116,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 		switch {
 		case txErr == nil:
 			successes++
-		case errors.Is(txErr, ErrPreconditionFailed):
+		case errors.Is(txErr, domain.ErrPreconditionFailed):
 			failures++
 		default:
 			t.Fatalf("unexpected error: %v", txErr)

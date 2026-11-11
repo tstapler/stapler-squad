@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -278,7 +279,7 @@ func callTestTriageCompleteHook(itemID string) {
 // compare-and-swap means a work session raced the re-triage; anything else is
 // an engine denial, returned to the operator as is.
 func triageResetError(itemID string, transErr error) error {
-	if errors.Is(transErr, session.ErrPreconditionFailed) {
+	if errors.Is(transErr, domain.ErrPreconditionFailed) {
 		log.Warn("[TriggerTriage] moved past ready before triage reset (race with work-session spawn); aborting re-triage", "item", itemID)
 		return connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item %s was already moved past ready — a work session may have just started; retry after it completes", itemID))
@@ -302,7 +303,7 @@ func (s *BacklogService) TriggerTriage(
 	// 1. Load item.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+		if ent.IsNotFound(err) || errors.Is(err, domain.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
