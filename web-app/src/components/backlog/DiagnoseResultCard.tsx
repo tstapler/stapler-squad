@@ -1,5 +1,6 @@
 "use client";
 
+import { routes } from "@/lib/routes";
 import * as styles from "./ResultPanel.css";
 
 const DIAGNOSIS_PREFIX = "Diagnosis result: ";
@@ -14,18 +15,23 @@ export function parseDiagnosisNote(message: string): { outcome: string; summary:
   return { outcome, summary: sep === -1 ? "" : rest.slice(sep + 2).trim() };
 }
 
-export function DiagnoseResultCard({ message }: { message: string }) {
+export function diagnoseOutcomeBadgeClass(outcome: string): string {
+  if (outcome === "BUG_FILED") return styles.badgeFail;
+  return outcome === "NO_ACTION" ? styles.badge : styles.badgeWarn;
+}
+
+export function DiagnoseResultCard({ message, sessionUuid }: { message: string; sessionUuid?: string }) {
   const parsed = parseDiagnosisNote(message);
   // Parse-error fallback: unrecognized shape renders as the original plain text.
   if (!parsed) return <span>{message}</span>;
-  const badge = parsed.outcome === "BUG_FILED" ? styles.badgeFail : parsed.outcome === "NO_ACTION" ? styles.badge : styles.badgeWarn;
   return (
     <div className={styles.container} data-testid="diagnose-result-card">
       <div className={styles.header}>
         <h4 className={styles.title}>Diagnosis</h4>
-        <span className={badge}>{parsed.outcome}</span>
+        <span className={diagnoseOutcomeBadgeClass(parsed.outcome)}>{parsed.outcome}</span>
       </div>
       {parsed.summary && <p className={styles.mutedText}>{parsed.summary}</p>}
+      {sessionUuid && <a href={routes.sessionDetail(sessionUuid)}>View session →</a>}
     </div>
   );
 }

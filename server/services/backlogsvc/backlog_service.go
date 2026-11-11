@@ -972,6 +972,12 @@ func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID str
 			}
 		}
 	}
+	if dr, ok := session.ParseDiagnoseResult(is.DiagnoseResult); ok {
+		p.DiagnoseResult = &sessionv1.DiagnoseResult{
+			Outcome: dr.Outcome, Summary: dr.Summary, FiledItemId: dr.FiledItemID,
+			DiagnosedAt: timestamppb.New(dr.DiagnosedAt),
+		}
+	}
 	if costFor != nil && is.SessionUUID != "" {
 		p.EstimatedCostUsd = costFor(is.SessionUUID)
 	}
@@ -1097,9 +1103,10 @@ func allowedTransitionStrings(engine session.WorkflowEngine, from session.Backlo
 // engine must be the caller's s.engine — see allowedTransitionStrings.
 func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
-		Id:          item.ID,
-		Title:       item.Title,
-		Description: item.Description,
+		WorkflowSuggestions: workflowSuggestionsToProto(session.ParseWorkflowSuggestions(item.WorkflowSuggestions)),
+		Id:                  item.ID,
+		Title:               item.Title,
+		Description:         item.Description,
 		// #nosec G115 -- ent schema enforces priority in [1,5] (field.Int("priority").Min(1).Max(5))
 		Priority:            int32(item.Priority),
 		Status:              item.Status,
@@ -1531,4 +1538,18 @@ func duplicateRefPending(item *session.BacklogItemData) string {
 // headless re-review paths (TriggerReReview, AutoRespawnReview).
 func (s *BacklogService) SetReviewSpawnGuard(g *session.ReviewSpawnGuard) {
 	s.reviewGuard = g
+}
+
+func workflowSuggestionsToProto(in []session.WorkflowSuggestionData) []*sessionv1.WorkflowSuggestion {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*sessionv1.WorkflowSuggestion, len(in))
+	for i, w := range in {
+		out[i] = &sessionv1.WorkflowSuggestion{
+			SuggestionId: w.SuggestionID, ActionType: w.ActionType, Recommendation: w.Recommendation,
+			SessionUuid: w.SessionUUID, CreatedAt: timestamppb.New(w.CreatedAt), Dismissed: w.Dismissed,
+		}
+	}
+	return out
 }

@@ -253,10 +253,12 @@ type ItemSessionSummary struct {
 	CostPriced          bool
 	TriageResult        string // raw JSON stored in triage_result column
 	TriageResultSummary string // summary field parsed from TriageResult
-	VerificationNotes   string // freeform verification evidence reported via request_review
-	DiffTruncated       bool   // review session: diff handed to the reviewer was truncated
-	OverallOutcome      string // from linked review_verdict (empty if none)
-	ReviewVerdict       *ReviewVerdictSummary
+	// DiagnoseResult is the raw JSON (DiagnoseResultData) a diagnose session wrote via submit_diagnosis_result.
+	DiagnoseResult    string
+	VerificationNotes string // freeform verification evidence reported via request_review
+	DiffTruncated     bool   // review session: diff handed to the reviewer was truncated
+	OverallOutcome    string // from linked review_verdict (empty if none)
+	ReviewVerdict     *ReviewVerdictSummary
 	// ClaimantHostID identifies the physical stapler-squad process/host that claimed or
 	// attached this session. See ItemSession.claimant_host_id's schema comment for the
 	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.
@@ -465,6 +467,8 @@ type BacklogItemData struct {
 	// ShippedFileStats holds the JSON-encoded []ShippedFileStat snapshot of
 	// per-file diff stats captured at ship time.
 	ShippedFileStats string
+	// WorkflowSuggestions is the raw JSON []WorkflowSuggestionData column; use ParseWorkflowSuggestions.
+	WorkflowSuggestions string
 	// ShippedSnapshotCaptureFailed is true when CaptureShipSnapshot's GitHub
 	// fetch or file-stats computation failed — distinct from
 	// ShippedCheckConclusion, which holds only genuine CI-conclusion values.
