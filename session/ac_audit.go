@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,16 +15,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 )
-
-// ErrAcCriterionAlreadyWaived is returned when a waiver targets a criterion that is already waived.
-var ErrAcCriterionAlreadyWaived = errors.New("acceptance criterion is already waived")
-
-// ErrAcWaiverViaUpdate is returned when an item update tries to introduce a waived criterion;
-// waivers are recorded only through WaiveAcCriterion so they are audited.
-var ErrAcWaiverViaUpdate = errors.New("a waiver can only be recorded through WaiveAcCriterion")
-
-// ErrAcCriterionAlreadyDone is returned when a waiver targets a criterion already done.
-var ErrAcCriterionAlreadyDone = errors.New("acceptance criterion is already done; nothing to waive")
 
 // AcActorClass says how a caller identified itself. None of these prove the caller is "the owner":
 // authenticated classes only show a credential was presented, an agent class is a claim unless

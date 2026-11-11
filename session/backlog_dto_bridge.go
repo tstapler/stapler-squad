@@ -19,4 +19,35 @@ type (
 	ReviewVerdictSummary        = backlogdto.ReviewVerdictSummary
 	SourceSyncEventData         = backlogdto.SourceSyncEventData
 	StuckStateHistoryData       = backlogdto.StuckStateHistoryData
+	BacklogItemData             = backlogdto.BacklogItemData
+	BacklogItemSummary          = backlogdto.BacklogItemSummary
+	BacklogItemUpdate           = backlogdto.BacklogItemUpdate
+	BacklogItemFilter           = backlogdto.BacklogItemFilter
+	BacklogItemPrecondition     = backlogdto.BacklogItemPrecondition
+	ItemSessionSummary          = backlogdto.ItemSessionSummary
+	ItemSessionData             = backlogdto.ItemSessionData
+	ItemSessionBacklogEntry     = backlogdto.ItemSessionBacklogEntry
+	PRReassignmentGuard         = backlogdto.PRReassignmentGuard
+	BacklogItemID               = backlogdto.BacklogItemID
+)
+
+const BacklogItemIDPrefix = backlogdto.BacklogItemIDPrefix
+
+// Same variable identity keeps errors.Is working across both names.
+var (
+	ErrDependencyCycle          = backlogdto.ErrDependencyCycle
+	ErrPRReassignmentNotAllowed = backlogdto.ErrPRReassignmentNotAllowed
+	ErrPRDetached               = backlogdto.ErrPRDetached
+	ErrAcCriterionWaived        = backlogdto.ErrAcCriterionWaived
+	ErrAcCriterionOutOfRange    = backlogdto.ErrAcCriterionOutOfRange
+	ErrWaiverReasonRequired     = backlogdto.ErrWaiverReasonRequired
+	ErrAcCriterionAlreadyDone   = backlogdto.ErrAcCriterionAlreadyDone
+	ErrAcCriterionAlreadyWaived = backlogdto.ErrAcCriterionAlreadyWaived
+	ErrAcWaiverViaUpdate        = backlogdto.ErrAcWaiverViaUpdate
+)
+
+var (
+	NewBacklogItemID     = backlogdto.NewBacklogItemID
+	ParseBacklogItemID   = backlogdto.ParseBacklogItemID
+	IsBacklogItemIDShape = backlogdto.IsBacklogItemIDShape
 )
