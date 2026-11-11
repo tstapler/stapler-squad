@@ -192,7 +192,9 @@ func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuck
 		fmt.Fprintf(&sb, "3. Nudging is NOT available for this dispatch (%s) — do not attempt resume_session/steer_session/write_to_session/diagnose_nudge_session on it. File a bug or post a note instead.\n", nudgeDisallowedReason)
 	}
 	fmt.Fprintf(&sb, "4. If there is NO live session to nudge and the open %q row has exhausted its automated retries on a mechanical problem (e.g. a PR merge conflict that only needs a rebase), call diagnose_reset_remediation with stuck_reason=%q so the next reconcile tick spawns a fresh fix session. Do not use it for a genuine defect.\n", stuckReason, stuckReason)
-	sb.WriteString("\nWhen you conclude your investigation, call submit_diagnosis_result exactly once with your outcome and evidence.\n\n")
+	sb.WriteString("5. Independently of the above, call suggest_workflow_action to recommend an operator action on the item (e.g. move it back to ready); nothing is applied automatically.\n")
+	sb.WriteString("6. If the root cause is a gap in the stapler-squad harness itself (not the item's own code), call report_harness_gap to file a linked harness:bug item.\n")
+	sb.WriteString("\nWhen you conclude your investigation, call submit_diagnosis_result exactly once with your outcome and evidence (pass filed_item_id when you filed a bug).\n\n")
 	sb.WriteString(bundle.Prompt())
 	return sb.String()
 }

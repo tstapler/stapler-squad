@@ -1,0 +1,12 @@
+{
+  "id": "backlog:dismiss-workflow-suggestion",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "DismissWorkflowSuggestion",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service_workflow_suggestion.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-11-11T00:19:29.788339675-08:00"
+}

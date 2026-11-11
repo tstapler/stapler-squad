@@ -10,8 +10,12 @@ export type SessionKind =
   | "work"
   | "review"
   | "headless_diagnostic"
+  | "diagnose"
   | "blocked_guardrail"
   | "manual_review_marker";
+
+/** Feature flag gating the rich diagnose-session UI (DiagnoseSessionPanel, WorkflowSuggestionsSection). */
+export const DIAGNOSE_SESSION_PANEL_FLAG = "diagnose-session-panel";
 
 /**
  * Classifies a LinkedSession's kind from its role and sessionId prefix.
@@ -22,11 +26,15 @@ export type SessionKind =
  * fell through to a clickable `<a href="/?session=...">` even though it was
  * never Instance-backed.
  *
- * Check order matters: role "triage" or a "headless-" sessionId prefix wins
+ * Check order matters: role "diagnose" wins first, then role "triage" or a "headless-" sessionId prefix wins
  * first, then the two blocked-guardrail prefixes, then the manual-review
  * prefix, then role "review", with "work" as the final fallback.
  */
 export function classifySessionKind(session: Pick<LinkedSession, "role" | "sessionId">): SessionKind {
+  // A Diagnose & Nudge session is hidden and one-shot: it has a structured result, not a live terminal to steer.
+  if (session.role === "diagnose") {
+    return "diagnose";
+  }
   if (session.role === "triage" || session.sessionId.startsWith("headless-")) {
     return "headless_diagnostic";
   }

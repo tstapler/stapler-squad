@@ -99,6 +99,8 @@ export interface LinkedSession {
   };
   triageResult?: TriageResult;
   estimatedCostUsd: number;
+  /** Structured outcome of a diagnose session; undefined for older rows written before it existed. */
+  diagnoseResult?: DiagnoseResult;
   /** Git branch name for the session's worktree, if one exists. */
   worktreeBranch?: string;
   /** Absolute path to the session's git worktree, if one exists. */
@@ -252,6 +254,8 @@ export interface BacklogItem {
   pullRequests?: SessionPullRequest[];
   /** Why cleanup is held for this item. Detail responses only, never list responses. */
   prHolds?: PrHold[];
+  /** Diagnose-session recommendations for the operator (dismissed ones stay with dismissed=true). */
+  workflowSuggestions?: WorkflowSuggestion[];
   /** Source tracker's identifier for this item (e.g. a GitHub issue number), populated for imported items only. */
   externalId?: string;
   /** Source plugin id ("github_issues", "linear", ...), populated for imported items only. */
@@ -414,6 +418,22 @@ export interface ProgressNote {
 }
 
 /** A single post_backlog_update call — an ungated, free-form, attributed note. */
+export interface DiagnoseResult {
+  outcome: string;
+  summary: string;
+  filedItemId?: string;
+  diagnosedAt?: string;
+}
+
+export interface WorkflowSuggestion {
+  suggestionId: string;
+  actionType: string;
+  recommendation: string;
+  sessionUuid: string;
+  createdAt?: string;
+  dismissed: boolean;
+}
+
 export interface ActivityNote {
   id: string;
   message: string;
@@ -511,6 +531,15 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
     lastCommitMessage: s.lastCommitMessage || undefined,
     lastFileTouchAt: s.lastFileTouchAt ? timestampDate(s.lastFileTouchAt).toISOString() : undefined,
     estimatedCostUsd: s.estimatedCostUsd ?? 0,
+    diagnoseResult:
+      s.diagnoseResult && s.diagnoseResult.outcome
+        ? {
+            outcome: s.diagnoseResult.outcome,
+            summary: s.diagnoseResult.summary,
+            filedItemId: s.diagnoseResult.filedItemId || undefined,
+            diagnosedAt: s.diagnoseResult.diagnosedAt ? timestampDate(s.diagnoseResult.diagnosedAt).toISOString() : undefined,
+          }
+        : undefined,
     worktreeBranch: s.worktreeBranch || undefined,
     worktreePath: s.worktreePath || undefined,
     baseCommitSha: s.baseCommitSha || undefined,
@@ -727,6 +756,14 @@ export function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     prNumber: p.prNumber || undefined,
     pullRequests: p.pullRequests ?? [],
     prHolds: p.prHolds ?? [],
+    workflowSuggestions: (p.workflowSuggestions ?? []).map((w) => ({
+      suggestionId: w.suggestionId,
+      actionType: w.actionType,
+      recommendation: w.recommendation,
+      sessionUuid: w.sessionUuid,
+      createdAt: w.createdAt ? timestampDate(w.createdAt).toISOString() : undefined,
+      dismissed: w.dismissed,
+    })),
     pipelineMode: p.pipelineMode || undefined,
     category: p.category || undefined,
     reworkCapOverride: p.reworkCapOverride,
@@ -878,6 +915,7 @@ interface UseBacklogServiceReturn {
   archiveBacklogItem: (id: string) => Promise<boolean>;
   unarchiveBacklogItem: (id: string) => Promise<boolean>;
   deleteBacklogItem: (id: string) => Promise<boolean>;
+  dismissWorkflowSuggestion: (itemId: string, suggestionId: string) => Promise<boolean>;
   transitionStatus: (
     id: string,
     toStatus: BacklogItemStatus,
@@ -1170,6 +1208,18 @@ export function useBacklogService(): UseBacklogServiceReturn {
     } catch (err) {
       console.error("[useBacklogService] deleteBacklogItem:", err);
       setLastError(new Error(getErrorMessage(err, "Failed to delete backlog item.")));
+      throw err;
+    }
+  }, []);
+
+  const dismissWorkflowSuggestion = useCallback(async (itemId: string, suggestionId: string): Promise<boolean> => {
+    if (!clientRef.current) return false;
+    try {
+      await clientRef.current.dismissWorkflowSuggestion({ itemId, suggestionId });
+      return true;
+    } catch (err) {
+      console.error("[useBacklogService] dismissWorkflowSuggestion:", err);
+      setLastError(new Error(getErrorMessage(err, "Failed to dismiss suggestion.")));
       throw err;
     }
   }, []);
@@ -1600,6 +1650,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       archiveBacklogItem,
       unarchiveBacklogItem,
       deleteBacklogItem,
+      dismissWorkflowSuggestion,
       transitionStatus,
       spawnSessionFromItem,
       triggerTriage,
