@@ -2035,6 +2035,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 		workflowSvc := services.NewWorkflowService(workflowRepo, workflowScheduler, storage)
 		workflowSvc.SetEventBus(eventBus)
+		if attDir, attErr := cfg.WorkflowAttachmentDirOrDefault(); attErr != nil {
+			log.Warn("cannot resolve workflow attachment dir; workflow run attachments disabled", "err", attErr)
+		} else {
+			workflowSvc.SetAttachmentDir(attDir)
+		}
 		sessionService.SetWorkflowService(workflowSvc)
 		sessionService.SetWorkflowRepository(workflowRepo)
 		// Close the WIP-gate bypass (webhook-triggers Epic 1.3): every trigger-fired

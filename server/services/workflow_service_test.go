@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -19,10 +20,11 @@ import (
 
 // mockScheduler is a test double for WorkflowSchedulerInterface.
 type mockScheduler struct {
-	reloadCalled  bool
-	removeCalled  bool
-	fireNowCalled bool
-	reloadErr     error
+	reloadCalled    bool
+	removeCalled    bool
+	fireNowCalled   bool
+	lastAttachments []string
+	reloadErr       error
 }
 
 func (m *mockScheduler) Reload(_ context.Context, _ *ent.Workflow) error {
@@ -35,8 +37,9 @@ func (m *mockScheduler) Remove(_ string) error {
 	return nil
 }
 
-func (m *mockScheduler) FireNow(_ context.Context, _ *ent.Workflow, _ string) (string, error) {
+func (m *mockScheduler) FireNow(_ context.Context, _ *ent.Workflow, _ string, attachments []string) (string, error) {
 	m.fireNowCalled = true
+	m.lastAttachments = attachments
 	return "test-session-id", nil
 }
 
@@ -1045,4 +1048,37 @@ func TestArchiveWorkflowSessions_should_PublishSnapshotSoIsArchivedIsTrue_When_A
 		"IsArchived() must be true after ArchiveWorkflowSessions — a raw field write leaves the published snapshot stale")
 	assert.False(t, active.IsArchived(),
 		"control: an Active session is deliberately skipped by ArchiveWorkflowSessions")
+}
+
+func TestRunWorkflow_Attachments_ValidatedAndPassedToScheduler(t *testing.T) {
+	t.Parallel()
+	_, workflowSvc := createTestWorkflowService(t)
+	ctx := context.Background()
+	mock := &mockScheduler{}
+	workflowSvc.scheduler = mock
+	dir := t.TempDir()
+	workflowSvc.SetAttachmentDir(dir)
+	img := writeAttachmentFile(t, filepath.Join(dir, "a.png"))
+	outside := writeAttachmentFile(t, filepath.Join(t.TempDir(), "b.png"))
+
+	createResp, err := workflowSvc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug: "att-run", Name: "Att", Command: "cmd {{input}}", TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+
+	_, err = workflowSvc.RunWorkflow(ctx, connect.NewRequest(&sessionv1.RunWorkflowRequest{
+		Id: id, AttachmentPaths: []string{outside},
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.False(t, mock.fireNowCalled, "a rejected attachment must not fire the workflow")
+
+	_, err = workflowSvc.RunWorkflow(ctx, connect.NewRequest(&sessionv1.RunWorkflowRequest{
+		Id: id, Arg: "x", AttachmentPaths: []string{img},
+	}))
+	require.NoError(t, err)
+	resolved, err := filepath.EvalSymlinks(img)
+	require.NoError(t, err)
+	assert.Equal(t, []string{resolved}, mock.lastAttachments)
 }

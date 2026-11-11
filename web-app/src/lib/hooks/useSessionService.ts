@@ -177,7 +177,7 @@ interface UseSessionServiceReturn {
   listSessionsByWorkflow: (workflowId: string, includeArchived?: boolean) => Promise<Session[]>;
 
   // Workflow methods
-  runWorkflow: (request: { id: string; arg?: string }) => Promise<string | null>;
+  runWorkflow: (request: { id: string; arg?: string; attachmentPaths?: string[] }) => Promise<string | null>;
 
   // Shell methods
   spawnShell: (request: Partial<SpawnShellRequest>) => Promise<Shell | null>;
@@ -984,12 +984,13 @@ export function useSessionService(
   );
 
   const runWorkflow = useCallback(
-    async (request: { id: string; arg?: string }): Promise<string | null> => {
+    async (request: { id: string; arg?: string; attachmentPaths?: string[] }): Promise<string | null> => {
       if (!clientRef.current) return null;
       try {
         const req = create(RunWorkflowRequestSchema, {
           id: request.id,
           arg: request.arg ?? "",
+          attachmentPaths: request.attachmentPaths ?? [],
         });
         const response = await clientRef.current.runWorkflow(req);
         return response.sessionId ?? null;

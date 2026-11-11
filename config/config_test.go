@@ -921,6 +921,7 @@ func TestStateSubdirsOrDefault_should_RouteThroughGetConfigDir_When_NoOverride(t
 		{"TriageArtifactDirOrDefault", cfg.TriageArtifactDirOrDefault, "triage-artifacts"},
 		{"HeadlessFailureCaptureDirOrDefault", cfg.HeadlessFailureCaptureDirOrDefault, "headless-failures"},
 		{"BacklogAttachmentDirOrDefault", cfg.BacklogAttachmentDirOrDefault, "backlog-attachments"},
+		{"WorkflowAttachmentDirOrDefault", cfg.WorkflowAttachmentDirOrDefault, "workflow-attachments"},
 		{"PromptCacheDirOrDefault", cfg.PromptCacheDirOrDefault, "prompt-cache"},
 	}
 	for _, tt := range tests {

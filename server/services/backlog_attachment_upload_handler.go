@@ -39,6 +39,8 @@ var backlogAttachmentAllowedTypes = map[string]string{
 // real problem.
 type BacklogAttachmentUploadHandler struct {
 	dir string
+	// logPrefix names the instance in log lines ("BacklogAttachmentUpload", "WorkflowAttachmentUpload").
+	logPrefix string
 }
 
 // NewBacklogAttachmentUploadHandler creates a handler that saves into dir,
@@ -46,10 +48,27 @@ type BacklogAttachmentUploadHandler struct {
 // caller can fail registration instead of installing a handler backed by a
 // possibly-missing directory.
 func NewBacklogAttachmentUploadHandler(dir string) (*BacklogAttachmentUploadHandler, error) {
+	return newImageAttachmentUploadHandler(dir, "BacklogAttachmentUpload")
+}
+
+// NewWorkflowAttachmentUploadHandler creates the same validated image uploader
+// for workflow-run attachments, saving into its own dir.
+func NewWorkflowAttachmentUploadHandler(dir string) (*BacklogAttachmentUploadHandler, error) {
+	return newImageAttachmentUploadHandler(dir, "WorkflowAttachmentUpload")
+}
+
+func newImageAttachmentUploadHandler(dir, logPrefix string) (*BacklogAttachmentUploadHandler, error) {
 	if err := os.MkdirAll(dir, backlogAttachmentDirMode); err != nil {
-		return nil, fmt.Errorf("cannot create backlog attachment dir %q: %w", dir, err)
+		return nil, fmt.Errorf("cannot create attachment dir %q: %w", dir, err)
 	}
-	return &BacklogAttachmentUploadHandler{dir: dir}, nil
+	return &BacklogAttachmentUploadHandler{dir: dir, logPrefix: logPrefix}, nil
+}
+
+// +http: POST /api/v1/upload-workflow-attachment upload:workflow-attachment
+// HandleWorkflowUpload is HandleUpload registered for a workflow-run attachment
+// handler (see NewWorkflowAttachmentUploadHandler); same validation and response.
+func (h *BacklogAttachmentUploadHandler) HandleWorkflowUpload(w http.ResponseWriter, r *http.Request) {
+	h.HandleUpload(w, r)
 }
 
 type backlogAttachmentUploadResponse struct {
@@ -115,7 +134,7 @@ func (h *BacklogAttachmentUploadHandler) HandleUpload(w http.ResponseWriter, r *
 
 	f, err := os.CreateTemp(h.dir, pattern)
 	if err != nil {
-		log.Error("[BacklogAttachmentUpload] CreateTemp failed", "dir", h.dir, "err", err)
+		log.Error("["+h.logPrefix+"] CreateTemp failed", "dir", h.dir, "err", err)
 		http.Error(w, "failed to save file", http.StatusInternalServerError)
 		return
 	}
@@ -130,17 +149,17 @@ func (h *BacklogAttachmentUploadHandler) HandleUpload(w http.ResponseWriter, r *
 
 	if _, writeErr = io.Copy(f, file); writeErr != nil {
 		_ = f.Close()
-		log.Error("[BacklogAttachmentUpload] write failed", "err", writeErr)
+		log.Error("["+h.logPrefix+"] write failed", "err", writeErr)
 		http.Error(w, "failed to save file", http.StatusInternalServerError)
 		return
 	}
 	_ = f.Close()
 
 	if err := os.Chmod(savedPath, backlogAttachmentFileMode); err != nil {
-		log.Error("[BacklogAttachmentUpload] chmod failed (non-fatal)", "err", err)
+		log.Error("["+h.logPrefix+"] chmod failed (non-fatal)", "err", err)
 	}
 
-	log.Info("[BacklogAttachmentUpload] saved file", "path", savedPath)
+	log.Info("["+h.logPrefix+"] saved file", "path", savedPath)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(backlogAttachmentUploadResponse{

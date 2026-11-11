@@ -402,6 +402,7 @@ doesn't apply since it isn't always-loaded. See `instance-lock-free-reads.md`.
 | Capture the terminal stream (raw output, drops, resizes) to diagnose garbled terminals — records secrets | `docs/how-to/capture-terminal-stream-tap.md` |
 | Playwright Chromium install hangs during extraction | `docs/how-to/fix-playwright-chromium-install-stall.md` |
 | Add a custom UI theme (`~/.stapler-squad/themes/*.json`, `GET /api/themes`) | `docs/how-to/add-user-themes.md` |
+| Attach images to a workflow run (Run dialog for `{{input}}` workflows, upload route, `attachment_paths` validation) | `docs/how-to/attach-images-to-workflow-runs.md` |
 | Dispatch backlog work to Google Jules (prerequisites, badge states, escape hatch) | `docs/how-to/dispatch-work-to-google-jules.md` |
 | Use inline notification actions (flags, Tier A/B, Undo, desktop-only, away-operator dependency) | `docs/how-to/use-inline-notification-actions.md` |
 | Client network telemetry: `client_*` / `ws_unary_*` metrics, beacon path, label bounds, `ssq-client-network` dashboard | `docs/reference/client-network-telemetry.md` |
