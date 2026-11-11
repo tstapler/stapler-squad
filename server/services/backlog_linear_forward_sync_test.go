@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
 // fakeStateUpdaterPlugin stands in for LinearPlugin: implements
@@ -104,6 +105,6 @@ func TestForwardSync_should_RecordFailureAndSkipUpdate_When_TargetStateEmpty(t *
 // Both tracker plugins must be dispatched by the state-updater branch of
 // handleForwardSyncClose (ADR-002).
 var (
-	_ externalIssueStateUpdater = (*session.LinearPlugin)(nil)
-	_ externalIssueStateUpdater = (*session.JiraPlugin)(nil)
+	_ externalIssueStateUpdater = (*itemsources.LinearPlugin)(nil)
+	_ externalIssueStateUpdater = (*itemsources.JiraPlugin)(nil)
 )

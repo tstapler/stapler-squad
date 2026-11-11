@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
 // --- Session UUID context injection ---
@@ -317,7 +318,7 @@ type backlogHandlers struct {
 	// Default to the registry plugins' FetchIssue when nil; overridable in tests to
 	// avoid real network calls.
 	fetchLinearIssue func(ctx context.Context, identifier string) (session.ExternalItem, error)
-	fetchJiraIssue   func(ctx context.Context, ref session.JiraIssueRef) (session.ExternalItem, error)
+	fetchJiraIssue   func(ctx context.Context, ref itemsources.JiraIssueRef) (session.ExternalItem, error)
 
 	// backlogReaderOverride replaces the reader:backlog config lookup in tests.
 	backlogReaderOverride func() bool

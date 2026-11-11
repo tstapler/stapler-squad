@@ -1,4 +1,4 @@
-package session
+package itemsources
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -63,7 +64,7 @@ func (g *GitHubPRsPlugin) PluginID() string {
 
 // Fetch retrieves open pull requests. Cursor is unused (full refresh each time).
 // Returns empty list when token is absent.
-func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor string) ([]ExternalItem, string, error) {
+func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config session.PluginConfig, cursor string) ([]session.ExternalItem, string, error) {
 	var cfg githubPRPluginConfig
 	if config.Raw != "" {
 		if err := json.Unmarshal([]byte(config.Raw), &cfg); err != nil {
@@ -128,9 +129,9 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 	}
 	_ = eg.Wait() // computeLabels is best-effort and never returns an error
 
-	items := make([]ExternalItem, 0, len(prs))
+	items := make([]session.ExternalItem, 0, len(prs))
 	for i, pr := range prs {
-		items = append(items, ExternalItem{
+		items = append(items, session.ExternalItem{
 			ExternalID:  strconv.Itoa(pr.Number),
 			Title:       pr.Title,
 			Description: pr.Body,
@@ -197,7 +198,7 @@ func (g *GitHubPRsPlugin) fetchCILabel(ctx context.Context, cfg githubPRPluginCo
 }
 
 // MapToBacklogItem converts a GitHub PR ExternalItem to a BacklogItemData.
-func (g *GitHubPRsPlugin) MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
+func (g *GitHubPRsPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
 	title := item.Title
 	if len(title) > 200 {
 		title = title[:200]
@@ -206,11 +207,11 @@ func (g *GitHubPRsPlugin) MapToBacklogItem(item ExternalItem, sourceID string) B
 	if len(desc) > 2000 {
 		desc = desc[:2000]
 	}
-	return BacklogItemData{
+	return session.BacklogItemData{
 		Title:       title,
 		Description: desc,
 		Priority:    item.Priority,
-		Status:      string(BacklogStatusIdea),
+		Status:      string(session.BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
 		SourceID:    sourceID,
 	}

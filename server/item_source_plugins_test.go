@@ -9,17 +9,17 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
 func TestNewItemSourceRegistry_should_IncludeAllBuiltInPlugins(t *testing.T) {
 	t.Parallel()
 	r := NewItemSourceRegistry()
 	want := map[string]any{
-		"github_issues": &session.GitHubIssuesPlugin{},
-		"github_prs":    &session.GitHubPRsPlugin{},
-		"linear":        &session.LinearPlugin{},
-		"jira":          &session.JiraPlugin{},
+		"github_issues": &itemsources.GitHubIssuesPlugin{},
+		"github_prs":    &itemsources.GitHubPRsPlugin{},
+		"linear":        &itemsources.LinearPlugin{},
+		"jira":          &itemsources.JiraPlugin{},
 	}
 	for id, typ := range want {
 		p, ok := r.Get(id)
@@ -32,7 +32,7 @@ func TestNewItemSourceRegistry_should_IncludeAllBuiltInPlugins(t *testing.T) {
 // else resolves plugins from the injected registry (tests excluded).
 func TestConcretePluginConstructors_should_OnlyBeCalledFromCompositionRoot(t *testing.T) {
 	t.Parallel()
-	ctor := regexp.MustCompile(`session\.(NewLinearPlugin|NewJiraPlugin|NewGitHubIssuesPlugin|NewGitHubPRsPlugin)\(|session\.(GitHubIssuesPlugin|GitHubPRsPlugin|LinearPlugin|JiraPlugin)\{`)
+	ctor := regexp.MustCompile(`itemsources\.(NewLinearPlugin|NewJiraPlugin|NewGitHubIssuesPlugin|NewGitHubPRsPlugin)\(|itemsources\.(GitHubIssuesPlugin|GitHubPRsPlugin|LinearPlugin|JiraPlugin)\{`)
 	var offenders []string
 	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {
 		if err != nil {

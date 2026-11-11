@@ -94,6 +94,14 @@ linters:
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"
               desc: "ADR-010 scoped packages must not import the ent ORM directly"
+        # Tracker plugins are leaves: the session core consumes them only through ItemSourcePlugin.
+        session_core_off_itemsources:
+          files:
+            - "**/session/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/session/itemsources"
+              desc: "session core must not import tracker plugins; the composition root injects them"
         # Allow-list rather than a deny-list: depguard's `/**` deny globs did not match
         # subpackages (e.g. server/web) in a probe, so a deny rule here would silently pass.
         isolate_threatscan_stdlib_only:
