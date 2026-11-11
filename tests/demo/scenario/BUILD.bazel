@@ -37,7 +37,10 @@ go_test(
         "route_fixture_test.go",
         "scenario_test.go",
     ],
-    data = glob(["transcripts/*.txt"]),
+    data = glob(["transcripts/*.txt"]) + [
+        "//proto/session/v1:protos",
+        "//tests/demo:helpers.go",
+    ],
     embed = [":scenario"],
     deps = ["//tools/promolib/termscan"],
 )
