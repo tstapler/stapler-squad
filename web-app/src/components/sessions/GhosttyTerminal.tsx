@@ -9,6 +9,10 @@ import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme } from "@/lib/config/terminalConfig";
 import { asXtermCompatible, FRESH_TERMINAL_SCRUB, ghosttyScrollbackBytes, serializeGhosttyBuffer, toITerminal } from "@/lib/terminal/ghosttyAdapter";
 import { attachRenderGate } from "@/lib/terminal/ghosttyRenderGate";
+import { GhosttyCopyPasteUi, useCopyToast } from "./GhosttyCopyPasteUi";
+import { browserClipboardEnv } from "@/lib/terminal/clipboardEnv";
+import { ghosttyClipboardSurface } from "@/lib/terminal/ghosttyClipboardSurface";
+import { createClipboardActions } from "@/lib/terminal/terminalClipboard";
 import { createMouseWheelForwarder, type WheelTerminal } from "@/lib/terminal/ghosttyWheelForward";
 import { findInBuffer, type SearchState } from "@/lib/terminal/ghosttySearch";
 import { attachTerminalImeSupport } from "@/lib/terminal/terminalImeSupport";
@@ -77,6 +81,15 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
   const searchStateRef = useRef<SearchState>({ term: "", row: -1, col: -1 });
   const layerRef = useRef<MobileInputHandle | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
+  const { toast, show: showCopyToast } = useCopyToast();
+  const [clipboard] = useState(() =>
+    createClipboardActions(
+      () => (terminalRef.current ? ghosttyClipboardSurface(terminalRef.current) : null),
+      browserClipboardEnv((ok) => showCopyToastRef.current(ok)),
+    ),
+  );
+  const showCopyToastRef = useRef(showCopyToast);
+  showCopyToastRef.current = showCopyToast;
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
   const windowActiveRef = useRef(windowActive);
@@ -130,6 +143,8 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
         ime?.traceData(data);
         onDataRef.current?.(data);
       });
+      // ghostty-web's handler polarity: true consumes the key.
+      term.attachCustomKeyEventHandler((event) => clipboard.interceptCopyKey(event));
       term.attachCustomWheelEventHandler(
         createMouseWheelForwarder(ghosttyWheelTerminal(term), (data) => onDataRef.current?.(data)),
       );
@@ -238,6 +253,7 @@ export const GhosttyTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProp
     <div className={styles.container} data-context="terminal" data-renderer="ghostty">
       <div ref={containerRef} className={styles.terminal} />
       {layer.layerActive && <div ref={layer.layerContainerRef} data-mobile-input-host />}
+      <GhosttyCopyPasteUi terminal={terminalReady ? terminalRef.current : null} actions={clipboard} toast={toast} showToast={showCopyToast} />
     </div>
   );
 });
