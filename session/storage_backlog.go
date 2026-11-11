@@ -241,23 +241,6 @@ type ItemSessionData struct {
 	ClaimantHostID string
 }
 
-// ReviewVerdictData is the input data for saving a ReviewVerdict.
-type ReviewVerdictData struct {
-	ItemSessionID  string
-	OverallOutcome ReviewOutcome
-	PerCriterion   string // JSON
-	Summary        string
-	DiffHash       string
-	PromptHash     string
-	DiffTokenCount int
-	DiffTruncated  bool
-	// ReviewedCommitSha is the work-session tip commit the verdict reviewed; "" when unknown.
-	ReviewedCommitSha string
-	OverrideBy        string
-	OverrideReason    string
-	OverrideAt        *time.Time
-}
-
 // --- ItemSession ---
 
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
@@ -1231,32 +1214,6 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 
 // --- BacklogStuckState queries ---
 
-// OpenStuckStateData is a projected, already-filtered (open + un-snoozed)
-// BacklogStuckState row joined with its parent item's rendering-relevant
-// fields. Returned only by FindOpenStuckStates, which applies the "open"
-// (resolved_at IS NULL) and "not currently snoozed" filters at the query
-// boundary — callers never need to re-check ResolvedAt/SnoozedUntil
-// nullability themselves (parse-don't-validate at the repository boundary).
-type OpenStuckStateData struct {
-	ID                     string
-	ItemID                 string
-	Reason                 domain.StuckReason
-	FirstDetectedAt        time.Time
-	LastCheckedAt          time.Time
-	NotifiedAt             *time.Time
-	Context                string
-	ItemTitle              string
-	ItemStatus             BacklogStatus
-	PrNumber               int
-	PrURL                  string
-	RemediationAttempts    int32
-	NextRemediationAt      *time.Time
-	GraceBootTime          *time.Time
-	PlanArtifactsPath      string
-	DiagnoseNudgeCount     int32
-	DiagnoseNextEligibleAt *time.Time
-}
-
 // FindOpenStuckStates returns every BacklogStuckState row that is currently
 // open (resolved_at IS NULL) and not currently snoozed (snoozed_until IS NULL
 // OR snoozed_until is in the past), eager-loading the parent item so the
@@ -1325,23 +1282,6 @@ func (r *EntRepository) FindSnoozedStuckItemIDs(ctx context.Context, reason doma
 		ids = append(ids, row.ItemID.String())
 	}
 	return ids, nil
-}
-
-// StuckStateHistoryData is a single BacklogStuckState row for one item,
-// open or resolved — the full-history counterpart to OpenStuckStateData,
-// which deliberately filters to open-only. Used by
-// ListStuckStatesForItem for stuck-item root-cause reporting, where a
-// resolved row (e.g. an exhausted bounce or a since-fixed PR check) is
-// exactly the history a human or diagnose session needs to see.
-type StuckStateHistoryData struct {
-	ID                  string
-	Reason              domain.StuckReason
-	FirstDetectedAt     time.Time
-	LastCheckedAt       time.Time
-	ResolvedAt          *time.Time
-	Context             string
-	RemediationAttempts int32
-	DiagnoseNudgeCount  int32
 }
 
 // ListStuckStatesForItem returns every BacklogStuckState row for itemID,

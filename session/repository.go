@@ -45,26 +45,6 @@ type PRReassignmentGuard struct {
 // blocker->blocked edge would create a cycle in the dependency graph.
 var ErrDependencyCycle = errors.New("backlog item dependency would create a cycle")
 
-// BacklogItemDependencyEdge names a blocker/blocked pair explicitly so the
-// two bare ID strings can't be silently swapped at a call site — see
-// the `primitive-obsession-checklist` skill.
-type BacklogItemDependencyEdge struct {
-	// BlockerID is the item that must reach a resolved status (done or
-	// archived) before BlockedID is eligible for dequeue/start.
-	BlockerID string
-	// BlockedID is the dependent item, gated until BlockerID resolves.
-	BlockedID string
-}
-
-// BacklogItemDependencyRef identifies the other end of a dependency edge with
-// just enough context (title, status) to render "blocked by <title>".
-type BacklogItemDependencyRef struct {
-	ItemID   string
-	PublicID string // "" when the item has no public ID yet
-	Title    string
-	Status   string
-}
-
 // ApprovalRuleData is the domain model for an auto-approval rule.
 type ApprovalRuleData struct {
 	ID             string
@@ -172,22 +152,6 @@ type ProjectData struct {
 	UpdatedAt   time.Time
 }
 
-// ReviewVerdictSummary is a domain DTO for a review verdict embedded in ItemSessionSummary.
-type ReviewVerdictSummary struct {
-	ID                string
-	OverallOutcome    string
-	PerCriterion      string // JSON []CriterionVerdict
-	Summary           string
-	DiffHash          string
-	DiffTokenCount    int
-	DiffTruncated     bool
-	ReviewedCommitSha string
-	OverrideBy        string
-	OverrideReason    string
-	OverrideAt        *time.Time
-	CreatedAt         time.Time
-}
-
 // ItemSessionSummary is the domain DTO replacing *ent.ItemSession in Storage returns.
 // Note: item_sessions table has NO status, triage_result_summary, or overall_outcome columns.
 //   - EndedAt == nil means the session is still running
@@ -254,66 +218,6 @@ type ItemSessionSummary struct {
 	// attached this session. See ItemSession.claimant_host_id's schema comment for the
 	// full disambiguation against STAPLER_SQUAD_INSTANCE and CloudContext.InstanceID.
 	ClaimantHostID string
-}
-
-// BacklogStatusEventData is the domain DTO replacing *ent.BacklogStatusEvent in Storage returns.
-type BacklogStatusEventData struct {
-	ID          string
-	FromStatus  string
-	ToStatus    string
-	TriggeredBy string
-	Note        *string
-	// StageNameSnapshot is Epic 2.5's frozen-at-transition-time human-readable
-	// name of the destination BacklogStage, so item-detail history keeps
-	// rendering the original stage name after that stage row is later renamed
-	// or deleted. Nil for a row written before this field existed, or when no
-	// matching BacklogStage row was found at write time.
-	StageNameSnapshot *string
-	// AllowedTransitionsSnapshot is ADR-004's sibling snapshot: the destination
-	// BacklogStage's legal outgoing transition slugs (as BacklogStatus string
-	// values) at the moment of this transition, so CanTransition/
-	// AllowedTransitions/PendingGates can fall back to it when that stage is
-	// later deleted. Nil (not just empty) for a row written before this field
-	// existed, or when no matching BacklogStage row was found at write time —
-	// distinguishing "no snapshot captured" from "captured, zero transitions."
-	AllowedTransitionsSnapshot []string
-	CreatedAt                  time.Time
-}
-
-// ProgressNoteData is the domain DTO replacing *ent.BacklogProgressNote in Storage returns.
-// Unlike the current-note-per-criterion stored on BacklogItem.AcceptanceCriteria, this
-// represents a single append-only history entry from one report_progress call.
-type ProgressNoteData struct {
-	ID             string
-	CriterionIndex int
-	Note           string
-	Status         string
-	CreatedAt      time.Time
-}
-
-// ActivityNoteData is the domain DTO replacing *ent.BacklogActivityNote in Storage returns.
-// Unlike ProgressNoteData (written only by the role-gated report_progress tool), this
-// represents a single append-only entry from the ungated post_backlog_update tool — see
-// ADR-001 (sibling table, not extending BacklogProgressNote).
-type ActivityNoteData struct {
-	ID                 string
-	Message            string
-	AuthorSessionUUID  string
-	AuthorSessionTitle string
-	CreatedAt          time.Time
-}
-
-// SourceSyncEventData is the domain DTO replacing *ent.SourceSyncEvent in Storage returns.
-type SourceSyncEventData struct {
-	ID           string
-	ItemsCreated int
-	ItemsUpdated int
-	ItemsSkipped int
-	ItemsErrored int
-	ErrorMessage string
-	CursorAfter  string
-	StartedAt    time.Time
-	FinishedAt   *time.Time
 }
 
 // BacklogItemData is the domain model for a backlog item.
@@ -560,25 +464,6 @@ type ItemSessionBacklogEntry struct {
 	CreatedAt        time.Time
 }
 
-// DeletedItemSessionCostEntry is a ledger row preserving one deleted
-// ItemSession's cost attribution — written by DeleteBacklogItem just before
-// the item's ItemSession rows are hard-deleted. Returned by
-// GetDeletedItemSessionCostLedger. Field names mirror ItemSessionBacklogEntry
-// so callers can fold both shapes through the same SessionMeta path.
-type DeletedItemSessionCostEntry struct {
-	ConversationUUID string
-	SessionUUID      string
-	SessionRole      string
-	ItemID           string
-	ItemTitle        string
-	EstimatedCostUsd float64
-	CostPriced       bool
-	// CreatedAt is the original ItemSession's created_at (not this ledger
-	// row's deleted_at) — Insights' time-range filter needs the work's
-	// original timestamp.
-	CreatedAt time.Time
-}
-
 // BacklogItemFilter controls which items ListBacklogItems returns.
 type BacklogItemFilter struct {
 	// Statuses restricts results to these statuses. Empty means no restriction.
@@ -749,32 +634,6 @@ type BacklogItemPrecondition struct {
 	// transition. Use it to record why the transition happened (e.g. "auto-reopened
 	// after FAIL verdict").
 	Note string
-}
-
-// ItemSourceData is the domain model for an external item source.
-type ItemSourceData struct {
-	ID                    string
-	PluginID              string
-	DisplayName           string
-	Config                string // JSON, may contain encrypted token
-	Enabled               bool
-	ForwardSyncEnabled    bool
-	BackwardSyncEnabled   bool
-	ForwardSyncCloseLabel string
-	TokenConfigured       bool
-	LastSyncedAt          *time.Time
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-}
-
-// ItemSourceUpdate carries the mutable fields for UpdateItemSource.
-type ItemSourceUpdate struct {
-	DisplayName           *string
-	Enabled               *bool
-	ForwardSyncEnabled    *bool
-	BackwardSyncEnabled   *bool
-	ForwardSyncCloseLabel *string
-	Config                *string
 }
 
 // ShellRepository is the minimal persistence interface for per-session shell management.
