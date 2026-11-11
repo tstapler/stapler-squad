@@ -17,7 +17,7 @@ go_library(
         "//log",
         "//pkg/classifier",
         "//pkg/localtoken",
-        "//server/services",
+        "//server/services/antigravityexport",
         "//session",
         "@com_github_google_uuid//:uuid",
     ],
