@@ -63,7 +63,7 @@ func (r *EntRepository) UpdateItemSessionDiagnoseResult(ctx context.Context, id 
 	if err != nil {
 		return fmt.Errorf("marshal diagnose_result: %w", err)
 	}
-	if _, err := r.client.ItemSession.UpdateOneID(parsedID).SetDiagnoseResult(string(payload)).Save(ctx); err != nil {
+	if _, err := r.Client.ItemSession.UpdateOneID(parsedID).SetDiagnoseResult(string(payload)).Save(ctx); err != nil {
 		return fmt.Errorf("failed to update diagnose_result on item session %s: %w", id, err)
 	}
 	if item, lookupErr := r.backlogItemForItemSession(ctx, parsedID); lookupErr != nil {
@@ -108,7 +108,7 @@ func (r *EntRepository) mutateWorkflowSuggestions(ctx context.Context, itemID st
 	if err != nil {
 		return fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
-	tx, err := r.client.Tx(ctx)
+	tx, err := r.Client.Tx(ctx)
 	if err != nil {
 		return fmt.Errorf("begin workflow-suggestion tx: %w", err)
 	}

@@ -1817,17 +1817,17 @@ func (s *Storage) UpdateItemSessionTriageResult(ctx context.Context, id string, 
 
 // UpdateItemSessionDiagnoseResult stores a diagnose session's structured outcome.
 func (s *Storage) UpdateItemSessionDiagnoseResult(ctx context.Context, id string, result DiagnoseResultData) error {
-	return s.repo.UpdateItemSessionDiagnoseResult(ctx, id, result)
+	return s.Repo.UpdateItemSessionDiagnoseResult(ctx, id, result)
 }
 
 // AppendWorkflowSuggestion records a diagnose session's operator recommendation.
 func (s *Storage) AppendWorkflowSuggestion(ctx context.Context, itemID string, sug WorkflowSuggestionData) (string, error) {
-	return s.repo.AppendWorkflowSuggestion(ctx, itemID, sug)
+	return s.Repo.AppendWorkflowSuggestion(ctx, itemID, sug)
 }
 
 // DismissWorkflowSuggestion marks a recommendation dismissed.
 func (s *Storage) DismissWorkflowSuggestion(ctx context.Context, itemID, suggestionID string) error {
-	return s.repo.DismissWorkflowSuggestion(ctx, itemID, suggestionID)
+	return s.Repo.DismissWorkflowSuggestion(ctx, itemID, suggestionID)
 }
 
 // UpdateItemSessionVerificationNotes stores verification evidence (commands run, manual
