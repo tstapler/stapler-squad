@@ -22,8 +22,8 @@ Nothing can be tested until Task 1.1 is done.
 
 | ID | Severity | File | Bug |
 |----|----------|------|-----|
-| BUG-1 | 🔴 Critical | `server/services/push_service.go:143` | `defer ps.mu.RUnlock()` after `Lock()` → deadlock on first subscribe |
-| FM-2 | 🔴 High | `server/services/push_service.go` | HTTP 410/404 responses ignored; dead subscriptions accumulate |
+| BUG-1 | 🔴 Critical | `server/push/push_service.go:143` | `defer ps.mu.RUnlock()` after `Lock()` → deadlock on first subscribe |
+| FM-2 | 🔴 High | `server/push/push_service.go` | HTTP 410/404 responses ignored; dead subscriptions accumulate |
 | BUG-2 | 🟡 Medium | `server/push/subscriber.go:79` | `int32(3)` misses URGENT (4); APPROVAL_NEEDED not checked in EventNotification |
 | BUG-4 | 🟡 Medium | `server/push/subscriber.go:59,73` | Deep-link uses `Session.Title` not stable `Session.ID` |
 | FM-4 | 🟡 Medium | `usePushNotifications.ts` | No `PermissionStatus.onchange` listener; UI stale after revoke |
@@ -45,7 +45,7 @@ Acceptance: push fires end-to-end in Chrome; mutex/410 bugs fixed; race detector
 **Load these files:**
 - `server/server.go` — find where services are constructed and started
 - `server/push/subscriber.go` — `StartPushSubscriber` signature
-- `server/services/push_service.go` — `NewPushService` constructor
+- `server/push/push_service.go` — `NewPushService` constructor
 
 **What to do:**
 1. In `server/server.go`, construct `PushService` using the config directory path
@@ -62,7 +62,7 @@ Acceptance: push fires end-to-end in Chrome; mutex/410 bugs fixed; race detector
 ### Task 1.2 — Fix Mutex Deadlock [Micro, 1h]
 
 **Load these files:**
-- `server/services/push_service.go` — lines 135–165 (Subscribe + Unsubscribe methods)
+- `server/push/push_service.go` — lines 135–165 (Subscribe + Unsubscribe methods)
 
 **What to do:**
 1. Line 143: change `defer ps.mu.RUnlock()` → `defer ps.mu.Unlock()`
@@ -77,7 +77,7 @@ Acceptance: push fires end-to-end in Chrome; mutex/410 bugs fixed; race detector
 ### Task 1.3 — Handle 410/404 — Delete Stale Subscriptions [Small, 2h]
 
 **Load these files:**
-- `server/services/push_service.go` — `sendToSubscription` or `SendNotification` method
+- `server/push/push_service.go` — `sendToSubscription` or `SendNotification` method
 
 **What to do:**
 1. Capture `resp, err` from `webpush.SendNotification` (currently `_, err = ...`)
@@ -110,7 +110,7 @@ Acceptance: Notifier interface wired; URGENT + APPROVAL_NEEDED covered; deep-lin
 **Load these files:**
 - `server/notifications/subscriber.go` — read the Appender interface as the pattern to mirror
 - `server/push/subscriber.go` — current function signature
-- `server/services/push_service.go` — SendNotification method signature
+- `server/push/push_service.go` — SendNotification method signature
 
 **What to do:**
 1. Create `server/push/notifier.go`:
@@ -433,7 +433,7 @@ Acceptance: per-type actions/renotify in payload; SW reads dynamic actions; SW s
 ```
 Read: server/server.go (service construction patterns)
 Read: server/push/subscriber.go (StartPushSubscriber signature)
-Read: server/services/push_service.go (constructor + Subscribe + SendNotification)
+Read: server/push/push_service.go (constructor + Subscribe + SendNotification)
 Concepts: EventBus pub/sub; VAPID subscription lifecycle; sync.RWMutex
 ```
 

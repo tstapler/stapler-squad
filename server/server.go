@@ -463,8 +463,8 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Initialize push notification service.
 	if configErr == nil {
-		pushService := services.NewPushService(configDir)
-		pushHandler := services.NewPushHandler(pushService)
+		pushService := push.NewPushService(configDir)
+		pushHandler := push.NewPushHandler(pushService)
 		pushHandler.RegisterRoutes(srv.mux)
 		var pushOpts []push.DeliveryOption
 		if gate := deps.SessionService.DeliveryGate(); gate != nil {
