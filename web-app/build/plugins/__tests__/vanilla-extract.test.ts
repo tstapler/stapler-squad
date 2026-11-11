@@ -11,7 +11,7 @@ describe("VeCompiler (under Bun)", () => {
   it("returns the class map and virtual CSS for style, createTheme, globalStyle and keyframes, in both ident modes", () => {
     const out = run<Record<"short" | "debug", { exports: Record<string, string>; css: string }>>("output");
     for (const mode of ["short", "debug"] as const) {
-      expect(Object.keys(out[mode].exports).sort()).toEqual(["box", "cleanTheme", "cyberpunk77Theme", "darkTheme", "lightTheme", "matrixTheme", "grimdarkTheme"]);
+      expect(Object.keys(out[mode].exports).sort()).toEqual(["box", "cleanTheme", "cyberpunk77Theme", "darkTheme", "grimdarkTheme", "lightTheme", "matrixTheme"]);
       expect(out[mode].css).toContain("@keyframes");
       expect(out[mode].css).toContain("body {");
       expect(out[mode].css).toContain(`.${out[mode].exports.cleanTheme} {`);
