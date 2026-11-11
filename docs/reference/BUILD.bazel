@@ -3,3 +3,8 @@ exports_files(
     ["session-lifecycle.md"],
     visibility = ["//session:__pkg__"],
 )
+
+exports_files(
+    ["client-network-telemetry.md"],
+    visibility = ["//server/analytics:__pkg__"],
+)
