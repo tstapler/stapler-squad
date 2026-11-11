@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "changed",
+    srcs = ["changed.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/docscoverage/internal/changed",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+    deps = [
+        "//tools/docscoverage/internal/model",
+        "//tools/docscoverage/internal/registry",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":changed",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+)
+
+go_test(
+    name = "changed_test",
+    srcs = ["changed_test.go"],
+    deps = [
+        ":changed",
+        "//tools/docscoverage/internal/model",
+        "//tools/docscoverage/internal/registry",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

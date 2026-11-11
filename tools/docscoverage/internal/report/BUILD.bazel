@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "report",
+    srcs = [
+        "report.go",
+        "trend.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/tools/docscoverage/internal/report",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+    deps = [
+        "//tools/docscoverage/internal/check",
+        "//tools/docscoverage/internal/model",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":report",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+)
+
+go_test(
+    name = "report_test",
+    srcs = [
+        "report_test.go",
+        "trend_test.go",
+    ],
+    deps = [
+        ":report",
+        "//tools/docscoverage/internal/changed",
+        "//tools/docscoverage/internal/check",
+        "//tools/docscoverage/internal/model",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

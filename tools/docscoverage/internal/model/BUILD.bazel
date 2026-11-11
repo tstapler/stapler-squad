@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "model",
+    srcs = ["model.go"],
+    importpath = "github.com/tstapler/stapler-squad/tools/docscoverage/internal/model",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":model",
+    visibility = ["//tools/docscoverage:__subpackages__"],
+)
