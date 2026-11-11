@@ -1,6 +1,6 @@
-package backlog
+package shadowledger
 
-// workflow_engine_shadow.go — the ShadowRecorder behind the selector's Shadow
+// shadowledger.go — the ShadowRecorder behind the selector's Shadow
 // mode: lock-free counters on the call path, a bounded once-a-minute ledger on
 // disk (aggregates over closed-enum labels plus a ring of the last 200 repro
 // records), so a restart does not reset a soak window.

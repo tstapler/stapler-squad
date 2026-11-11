@@ -6,7 +6,8 @@ session/cmdexec files=4 loc=1418 imports=4
 session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
 session/importer files=13 loc=2173 imports=7
-session/backlog files=30 loc=14424 imports=15
+session/backlog files=29 loc=13802 imports=15
+session/backlog/shadowledger files=2 loc=621 imports=5
 session/internal/sessiontest files=3 loc=307 imports=7
 session/prpoller files=7 loc=2080 imports=7
 server/services files=299 loc=75773 imports=65
