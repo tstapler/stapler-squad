@@ -162,6 +162,9 @@ jobs:
 
       - name: E2E UX acceptance tests
         working-directory: website
+        # tests/helpers/tour-expectations.ts derives the expected tours from this mode (default: deploy).
+        env:
+          TOURS_MEDIA_MODE: smoke
         run: bun run test:e2e:ci
 
       - name: Stop preview server

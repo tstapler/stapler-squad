@@ -332,13 +332,13 @@ test('websiteCiWorkflow_should_RunTheSameChecksAsDeploy_When_YamlParsed', () => 
   assert.ok(ci.jobs.checks.steps.some((step) => step.name?.startsWith(CI_ONLY_PREFIX)), 'smoke steps exist');
 });
 
-// Cross-cutting 6c: TOURS_MEDIA_MODE=smoke is set only by website-ci, on the site build.
+// Cross-cutting 6c: TOURS_MEDIA_MODE=smoke is set only by website-ci, on the site build and the e2e step that derives its expectations from it.
 test('websiteCiWorkflow_should_SmokeRecordOneClipAgainstItsOwnBinary_When_YamlParsed', () => {
   const ciText = readFileSync(WEBSITE_CI_WORKFLOW_PATH, UTF8);
   const ci = yaml.load(ciText) as Workflow & { on: { pull_request: { paths: string[] } } };
 
   const withMode = ci.jobs.checks.steps.filter((step) => step.env?.TOURS_MEDIA_MODE !== undefined);
-  assert.deepEqual(withMode.map((step) => step.name), ['Build site', 'Check README links']);
+  assert.deepEqual(withMode.map((step) => step.name), ['Build site', 'Check README links', 'E2E UX acceptance tests']);
   assert.ok(withMode.every((step) => step.env?.TOURS_MEDIA_MODE === 'smoke'));
   assert.ok(!/TOURS_MEDIA_MODE/.test(readFileSync(DEPLOY_WEBSITE_WORKFLOW_PATH, UTF8)), 'deploy builds in the default deploy mode');
 
