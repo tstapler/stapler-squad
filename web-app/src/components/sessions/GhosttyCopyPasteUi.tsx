@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Terminal as GhosttyWebTerminal } from "ghostty-web";
-import { disableGhosttyAutoCopy } from "@/lib/terminal/ghosttyConfirmCopy";
+import { disableGhosttyAutoCopy, notifyGhosttySelectionCleared } from "@/lib/terminal/ghosttyConfirmCopy";
 import type { ClipboardActions } from "@/lib/terminal/terminalClipboard";
 import { TerminalContextMenu } from "./TerminalContextMenu";
 import * as styles from "./XtermTerminal.css";
@@ -42,6 +42,7 @@ export function GhosttyCopyPasteUi({ terminal, actions, toast, showToast }: Prop
   useEffect(() => {
     if (!terminal) return;
     disableGhosttyAutoCopy(terminal);
+    notifyGhosttySelectionCleared(terminal);
 
     const syncButton = () => {
       const pos = terminal.getSelection() ? terminal.getSelectionPosition() : undefined;
@@ -64,6 +65,7 @@ export function GhosttyCopyPasteUi({ terminal, actions, toast, showToast }: Prop
     terminal.element?.addEventListener("contextmenu", onContextMenu, true);
     return () => {
       selection.dispose();
+      setButton(null);
       terminal.element?.removeEventListener("contextmenu", onContextMenu, true);
     };
   }, [terminal, actions]);
