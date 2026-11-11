@@ -900,12 +900,10 @@ func validateBackendOverride(backendOverride ProcessManagerBackend) error {
 	if backendOverride == "" {
 		return nil
 	}
-	switch backendOverride {
-	case BackendTmux, BackendNative, BackendTymux:
-		return nil
-	default:
+	if !knownBackend(backendOverride) {
 		return fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backendOverride)
 	}
+	return nil
 }
 
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
@@ -923,7 +921,7 @@ func (i *Instance) initTmuxSession() {
 	command := i.launchCommand(claudeSessionID)
 	enrichedProgram := command.ShellString()
 	i.LaunchCommand = enrichedProgram
-	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendLabel(i.processManager)))
+	log.Info("creating session", "session", i.Title, "program", enrichedProgram, "backend", string(processManagerBackendKey(i.processManager)))
 
 	// Single choke point: every Start path funnels through here.
 	i.markWorkingDirTrusted()
