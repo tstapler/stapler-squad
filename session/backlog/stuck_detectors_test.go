@@ -19,8 +19,9 @@ func TestDefaultStuckDetectors_Order(t *testing.T) {
 		"pr_drift_recovery", "pr_pending_no_pr", "pr_ready+merge_detection",
 		"blocked_by_dependency", "dequeue_backlog_items", "trigger_chain_reconcile",
 	}
-	var got []string
-	for _, d := range (&BacklogLifecycleListener{}).defaultStuckDetectors() {
+	detectors := (&BacklogLifecycleListener{}).defaultStuckDetectors()
+	got := make([]string, 0, len(detectors))
+	for _, d := range detectors {
 		got = append(got, d.Name())
 	}
 	assert.Equal(t, want, got)
