@@ -911,3 +911,9 @@ filegroup(
     srcs = glob(["*.go"]),
     visibility = ["//session:__pkg__"],
 )
+
+# Read by web-app Jest (flagStore.test.ts cross-checks the mobile_input_layer default); //web-app:jest repo_data.
+exports_files(
+    ["feature_flag_service.go"],
+    visibility = ["//web-app:__pkg__"],
+)

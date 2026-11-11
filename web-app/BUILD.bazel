@@ -106,6 +106,7 @@ bun_jest_test(
     repo_data = [
         "//server/analytics:client_metrics.go",
         "//server/analytics:client_pages.json",
+        "//server/services:feature_flag_service.go",
     ],
     shard_count = 4,
     # tag-reason: web build output not proven byte-reproducible (Story 7.7); placeholder tracker (#1423)
