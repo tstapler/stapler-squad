@@ -9,6 +9,7 @@ filegroup(
         "//server/services:__pkg__",
         "//server/wakes:__pkg__",
         "//session:__pkg__",
+        "//session/dialogpresence:__pkg__",
     ],
 )
 
