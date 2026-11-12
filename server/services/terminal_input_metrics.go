@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 // Terminal input observability (ADR-005). Counters carry class-only labels
@@ -132,8 +133,8 @@ func isTextRune(r rune) bool {
 }
 
 var (
-	terminalInputFramesCounter = sync.OnceValue(CounterNamed("terminal_input_frames_total", "Terminal input frames by class, listener, entry path and stage (received|forwarded); never carries session or content"))
-	terminalInputBytesCounter  = sync.OnceValue(CounterNamed("terminal_input_bytes_total", "Terminal input bytes by class, listener, entry path and stage; never carries session or content"))
+	terminalInputFramesCounter = sync.OnceValue(telemetry.CounterNamed("terminal_input_frames_total", "Terminal input frames by class, listener, entry path and stage (received|forwarded); never carries session or content"))
+	terminalInputBytesCounter  = sync.OnceValue(telemetry.CounterNamed("terminal_input_bytes_total", "Terminal input bytes by class, listener, entry path and stage; never carries session or content"))
 )
 
 type inputSeries [inputClassCount][inputListenerCount][inputPathCount][inputStageCount]struct {

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -169,7 +169,7 @@ func assertSanitizedLeaves(t *testing.T, path string, m protoreflect.Message) {
 
 func TestGetFlowSummary_should_ExplainEveryEstimatedCode_When_FixtureHasHeuristics(t *testing.T) {
 	t.Parallel()
-	h := &flowHandlers{svc: services.NewBacklogFlowService(&liveShapedAgg{})}
+	h := &flowHandlers{svc: backlogflow.NewBacklogFlowService(&liveShapedAgg{})}
 
 	_, m := callFlowTool(t, h.getFlowSummary, map[string]any{"window_days": float64(30)})
 

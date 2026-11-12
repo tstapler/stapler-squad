@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
@@ -126,7 +127,7 @@ type ServerDependencies struct {
 	BacklogService *backlogsvc.BacklogService
 	// BacklogFlowService is the single flow-observability service; the RPC handler and
 	// the HTTP MCP core both use it so they share one aggregator cache.
-	BacklogFlowService *services.BacklogFlowService
+	BacklogFlowService *backlogflow.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -620,7 +621,7 @@ type RuntimeDeps struct {
 	BacklogService *backlogsvc.BacklogService
 	// BacklogFlowService is the single flow-observability service; the RPC handler and
 	// the HTTP MCP core both use it so they share one aggregator cache.
-	BacklogFlowService *services.BacklogFlowService
+	BacklogFlowService *backlogflow.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -1688,7 +1689,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	backlogSvc := backlogsvc.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
 	// One flow reader, aggregator and service for both the RPC handler and the HTTP MCP core.
-	backlogFlowSvc := services.NewFlowServiceFromStorage(storage, flow.WithObserver(services.NewFlowObserver()))
+	backlogFlowSvc := backlogflow.NewFlowServiceFromStorage(storage, flow.WithObserver(backlogflow.NewFlowObserver()))
 	backlogFlowSvc.SetEnabledCheck(backlogCtrl.IsEnabled)
 	if gateErr := workflowEngine.InjectTransitionGate(storage, backlogSvc.TransitionDeniedReporter()); gateErr != nil {
 		return nil, gateErr

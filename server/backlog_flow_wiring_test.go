@@ -13,12 +13,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	servermcp "github.com/tstapler/stapler-squad/server/mcp"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 )
 
 func TestFlowMCPOptions_should_ShareRpcServiceInstance_When_FlowServiceWired(t *testing.T) {
 	t.Parallel()
-	svc := &services.BacklogFlowService{}
+	svc := &backlogflow.BacklogFlowService{}
 
 	got := servermcp.FlowServiceFromOptions(flowMCPOptions(&ServerDependencies{BacklogFlowService: svc})...)
 

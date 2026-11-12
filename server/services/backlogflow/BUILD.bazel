@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "backlogflow",
+    srcs = [
+        "mapper.go",
+        "observer.go",
+        "service.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/backlogflow",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//proto/session/v1:sessionv1connect_go",
+        "//session",
+        "//session/flow",
+        "//telemetry",
+        "@com_connectrpc_connect//:connect",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backlogflow",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "backlogflow_test",
+    srcs = [
+        "observer_test.go",
+        "proto_test.go",
+        "service_test.go",
+    ],
+    data = ["service.go"],
+    embed = [":backlogflow"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/flow",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

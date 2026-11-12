@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -34,32 +33,12 @@ const (
 	reopenWindow = 60 * time.Second
 )
 
-// counterNamed resolves the instrument on every use (the SDK returns the same
-// one per meter), so a test that swaps the meter provider is never stuck with a
-// counter bound to an earlier one.
-func CounterNamed(name, desc string) func() metric.Int64Counter {
-	return func() metric.Int64Counter {
-		c, err := telemetry.GetMeter().Int64Counter(name, metric.WithDescription(desc))
-		if err != nil {
-			log.Error("services: failed to register "+name, "error", err)
-			return nil
-		}
-		return c
-	}
-}
-
-func AddOne(c metric.Int64Counter, attrs ...attribute.KeyValue) {
-	if c != nil {
-		c.Add(context.Background(), 1, metric.WithAttributes(attrs...))
-	}
-}
-
 var (
-	reopenCounter = CounterNamed(metricReopenAfterAction,
+	reopenCounter = telemetry.CounterNamed(metricReopenAfterAction,
 		"Operator opened a session's terminal within 60s of an applied inline answer to it")
-	answerUnconfirmedCounter = CounterNamed(metricGuidanceUnconfirmed,
+	answerUnconfirmedCounter = telemetry.CounterNamed(metricGuidanceUnconfirmed,
 		"Keystroke answers that entered the Unconfirmed sub-state (indeterminate write or no acknowledgement at 60s)")
-	scheduleWakeupCounter = CounterNamed(metricScheduleWakeupCalls,
+	scheduleWakeupCounter = telemetry.CounterNamed(metricScheduleWakeupCalls,
 		"ScheduleWakeup PostToolUse receipts by backlog role")
 )
 
@@ -121,13 +100,13 @@ func (t *reopenTracker) attached(ids ...string) {
 	}
 	t.mu.Unlock()
 	for _, kind := range hits {
-		AddOne(reopenCounter(), attribute.String("kind", kind))
+		telemetry.AddOne(reopenCounter(), attribute.String("kind", kind))
 	}
 }
 
 // recordAnswerUnconfirmed counts one answer entering Unconfirmed; the other
 // delivery states are already in guidance_answer_delivery_total{route,state}.
-func recordAnswerUnconfirmed() { AddOne(answerUnconfirmedCounter()) }
+func recordAnswerUnconfirmed() { telemetry.AddOne(answerUnconfirmedCounter()) }
 
 // scheduleWakeupRoles resolves a session's backlog role for the receipt counter.
 type scheduleWakeupRoles struct{ lookup itemSessionLookup }
@@ -152,7 +131,7 @@ func (r scheduleWakeupRoles) roleOf(ctx context.Context, sessionUUID string) str
 // structured line the wake-baseline script reads.
 func observeScheduleWakeup(ctx context.Context, roles scheduleWakeupRoles, sessionUUID string) {
 	role := roles.roleOf(ctx, sessionUUID)
-	AddOne(scheduleWakeupCounter(), attribute.String("role", role))
+	telemetry.AddOne(scheduleWakeupCounter(), attribute.String("role", role))
 	log.Info(scheduleWakeupReceiptEvent, "session", sessionUUID, "role", role)
 }
 

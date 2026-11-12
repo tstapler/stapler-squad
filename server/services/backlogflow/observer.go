@@ -1,4 +1,4 @@
-package services
+package backlogflow
 
 import (
 	"context"
@@ -26,7 +26,7 @@ var (
 		}
 		return h
 	})
-	flowCacheCounter = CounterNamed(metricFlowCacheHit, "Flow summary lookups by cache outcome (the aggregator reports computes, so only misses are observed)")
+	flowCacheCounter = telemetry.CounterNamed(metricFlowCacheHit, "Flow summary lookups by cache outcome (the aggregator reports computes, so only misses are observed)")
 )
 
 // NewFlowObserver returns the flow.Observer that logs one debug line and
@@ -39,6 +39,6 @@ func NewFlowObserver() flow.Observer {
 		if h := flowDurationHist(); h != nil {
 			h.Record(context.Background(), cs.QueryMs)
 		}
-		AddOne(flowCacheCounter(), attribute.String("cache", cs.Cache))
+		telemetry.AddOne(flowCacheCounter(), attribute.String("cache", cs.Cache))
 	}
 }
