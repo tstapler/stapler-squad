@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // stallNudgeRestartTimeout is the driver warm-up after a nudge, the value triage uses.
@@ -153,7 +154,7 @@ var errNotRestartable = errors.New("session is no longer restartable")
 
 // planStall evaluates the ADR-001 decision table. wouldNudge is the plan with
 // both flags forced on, so a disabled nudge is recorded as such.
-func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage *session.Storage, inst *session.Instance, item *session.BacklogItemData, rec stopRecord) (plan domain.StallAction, wouldNudge bool, none noneCause) {
+func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage *session.Storage, inst *session.Instance, item *backlogdto.BacklogItemData, rec stopRecord) (plan domain.StallAction, wouldNudge bool, none noneCause) {
 	diagnoseOn, stallOn := a.nudgeFlagsOn()
 	in := domain.StallDecisionInput{
 		Reason:           rec.reason(),
@@ -249,7 +250,7 @@ func classifyNudgeError(err error) (outcome nudgeOutcome, leavePane bool) {
 // nudgeStalledWorkSession runs the nudge plan end to end and returns the action
 // the stop finally took; rec.Recovery carries the outcome for the row and copy.
 // A false return from the fallback means the caller must run the respawn body.
-func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx context.Context, storage *session.Storage, inst *session.Instance, item *session.BacklogItemData, rec *stopRecord) (respawn, detached bool) {
+func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx context.Context, storage *session.Storage, inst *session.Instance, item *backlogdto.BacklogItemData, rec *stopRecord) (respawn, detached bool) {
 	nudgeCap := config.LoadConfig().DiagnoseNudgeMaxAttemptsOrDefault() - stallNudgeReserve
 	rec.Recovery.NudgeCap = nudgeCap
 	// The claim uses the outer ctx on purpose: the writer checks rctx right before it.
@@ -318,7 +319,7 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx conte
 
 // refreshStuckRow rewrites the open row's context with the final recovery;
 // best effort, the outcome is already decided.
-func (a *AutonomousOrchestrationService) refreshStuckRow(ctx context.Context, storage *session.Storage, item *session.BacklogItemData, rec stopRecord) {
+func (a *AutonomousOrchestrationService) refreshStuckRow(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, rec stopRecord) {
 	if _, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatus(item.Status), formatStopDetail(rec)); err != nil {
 		log.Warn("[AutonomousDriver] refresh autonomous_stuck row failed", "item", item.ID, "err", err)
 	}

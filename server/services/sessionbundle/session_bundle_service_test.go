@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ─── fakes ────────────────────────────────────────────────────────────────────
@@ -29,7 +30,7 @@ import (
 type fakeBundleStorage struct {
 	analytics    []session.AnalyticsData
 	analyticsErr error
-	itemSession  session.ItemSessionSummary
+	itemSession  backlogdto.ItemSessionSummary
 	itemErr      error
 	artBlob      *artifacts.SessionArtifactsBlob
 	artErr       error
@@ -39,7 +40,7 @@ func (f *fakeBundleStorage) ListAnalyticsBySessionID(_ context.Context, _ string
 	return f.analytics, f.analyticsErr
 }
 
-func (f *fakeBundleStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (session.ItemSessionSummary, error) {
+func (f *fakeBundleStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (backlogdto.ItemSessionSummary, error) {
 	return f.itemSession, f.itemErr
 }
 
@@ -312,8 +313,8 @@ func (b *blockingStorage) ListAnalyticsBySessionID(ctx context.Context, _ string
 	return nil, ctx.Err()
 }
 
-func (b *blockingStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (session.ItemSessionSummary, error) {
-	return session.ItemSessionSummary{}, nil
+func (b *blockingStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (backlogdto.ItemSessionSummary, error) {
+	return backlogdto.ItemSessionSummary{}, nil
 }
 
 func (b *blockingStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*artifacts.SessionArtifactsBlob, error) {

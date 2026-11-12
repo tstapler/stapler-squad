@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // steerEnv is a SessionService with an audit sink on an in-memory file system,
@@ -76,11 +77,11 @@ func (e *steerEnv) addSession(title string, hidden bool, role string, tweak ...f
 func (e *steerEnv) linkRow(inst *session.Instance, role string) string {
 	e.t.Helper()
 	ctx := context.Background()
-	item, err := e.fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := e.fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "Item for " + inst.Title, Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(e.t, err)
-	row, err := e.fix.storage.CreateItemSession(ctx, session.ItemSessionData{
+	row, err := e.fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID: item.ID, SessionUUID: inst.UUID, SessionRole: role,
 	})
 	require.NoError(e.t, err)

@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -808,12 +809,12 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 
 	backlogStorage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
-	item, err := backlogStorage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := backlogStorage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Backlog item behind this session",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
-	_, err = backlogStorage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = backlogStorage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleWork,

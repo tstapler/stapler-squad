@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -42,11 +43,11 @@ func (f *fakeMemoryStore) count() int {
 	return len(f.entries)
 }
 
-func richCompletionItem(t *testing.T, id string) *session.BacklogItemData {
+func richCompletionItem(t *testing.T, id string) *backlogdto.BacklogItemData {
 	t.Helper()
 	acs, err := session.SerializeAcCriteria([]session.AcCriterion{{Index: 0, Text: "works", Status: "done"}})
 	require.NoError(t, err)
-	return &session.BacklogItemData{ID: id, Title: "t", Description: "d", AcceptanceCriteria: acs, RepoPath: "/repo/x"}
+	return &backlogdto.BacklogItemData{ID: id, Title: "t", Description: "d", AcceptanceCriteria: acs, RepoPath: "/repo/x"}
 }
 
 func newTestReviewer(t *testing.T, call CompletionReviewCall, mem MemoryStore) *completionReviewer {
@@ -54,7 +55,7 @@ func newTestReviewer(t *testing.T, call CompletionReviewCall, mem MemoryStore) *
 	return &completionReviewer{storage: svctest.NewForwardSyncTestStorage(t), call: call, memory: mem, enabled: func() bool { return true }}
 }
 
-func doneEvent(item *session.BacklogItemData, kind events.BacklogChangeKind, newStatus string) *events.Event {
+func doneEvent(item *backlogdto.BacklogItemData, kind events.BacklogChangeKind, newStatus string) *events.Event {
 	return events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{Kind: kind, Item: item, NewStatus: newStatus})
 }
 

@@ -14,6 +14,7 @@ import (
 
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // This file covers Epic 7.2 (`MergeDatabase` Live-Leak Check) from
@@ -76,7 +77,7 @@ func seedBacklogItems(t *testing.T, repo *session.EntRepository, ctx context.Con
 	titles := make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		title := fmt.Sprintf("%s-%d", titlePrefix, i)
-		_, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+		_, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  title,
 			Status: string(session.BacklogStatusIdea),
 		})
@@ -234,7 +235,7 @@ func TestMergeDatabase_should_makeCopiedItemsVisibleOnNextSnapshot_When_ClientRe
 	require.NoError(t, err)
 	defer reconnected.Close()
 
-	items, err := reconnected.ListBacklogItems(ctx, session.BacklogItemFilter{})
+	items, err := reconnected.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 
 	gotTitles := make(map[string]bool, len(items))

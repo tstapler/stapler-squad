@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/itemsources"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -39,11 +40,11 @@ func (p *fakeProgressPlugin) posted() []string {
 	return append([]string(nil), p.bodies...)
 }
 
-func newProgressFixture(t *testing.T, fake *fakeProgressPlugin, prURL string) (*session.Storage, *session.PluginRegistry, *session.SyncLoop, *session.BacklogItemData) {
+func newProgressFixture(t *testing.T, fake *fakeProgressPlugin, prURL string) (*session.Storage, *session.PluginRegistry, *session.SyncLoop, *backlogdto.BacklogItemData) {
 	t.Helper()
 	storage := svctest.NewForwardSyncTestStorage(t)
 	sourceID := svctest.CreateForwardSyncTestSource(t, storage, fake.pluginID, false, "")
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:          "progress item",
 		Status:         string(session.BacklogStatusInProgress),
 		SourceID:       sourceID,
@@ -53,7 +54,7 @@ func newProgressFixture(t *testing.T, fake *fakeProgressPlugin, prURL string) (*
 	})
 	require.NoError(t, err)
 	if prURL != "" {
-		item, err = storage.UpdateBacklogItem(context.Background(), item.ID, session.BacklogItemUpdate{PrURL: &prURL}, nil)
+		item, err = storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL}, nil)
 		require.NoError(t, err)
 	}
 	registry := session.NewPluginRegistry()
@@ -198,12 +199,12 @@ func TestResolveProgressTarget_SourcelessGitHubIssueURL(t *testing.T) {
 	registry := session.NewPluginRegistry(itemsources.NewGitHubIssuesPlugin())
 	syncLoop := session.NewSyncLoop(storage, registry)
 
-	_, cfg, id, ok := resolveProgressTarget(context.Background(), registry, syncLoop, storage, &session.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"})
+	_, cfg, id, ok := resolveProgressTarget(context.Background(), registry, syncLoop, storage, &backlogdto.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"})
 	require.True(t, ok)
 	require.Equal(t, "5", id)
 	require.Contains(t, cfg.Raw, `"owner":"o"`)
 
-	_, _, _, ok = resolveProgressTarget(context.Background(), registry, syncLoop, storage, &session.BacklogItemData{ExternalURL: "https://example.com/not-github"})
+	_, _, _, ok = resolveProgressTarget(context.Background(), registry, syncLoop, storage, &backlogdto.BacklogItemData{ExternalURL: "https://example.com/not-github"})
 	require.False(t, ok)
 }
 
@@ -211,7 +212,7 @@ func TestForwardSyncClose_PostsCommentWithHostID(t *testing.T) {
 	t.Parallel()
 	storage := svctest.NewForwardSyncTestStorage(t)
 	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "fake_closer", true, "")
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "t", Status: string(session.BacklogStatusDone), SourceID: sourceID, ExternalID: "42", ClaimingHostID: "host-abc",
 	})
 	require.NoError(t, err)
@@ -236,10 +237,10 @@ func TestCreateBacklogItem_StampsClaimingHostOnlyWithExternalURL(t *testing.T) {
 	storage := svctest.NewForwardSyncTestStorage(t)
 	storage.SetClaimRecorder(stubHostRecorder{id: "host-xyz"})
 
-	withURL, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "a", Status: "idea", ExternalURL: "https://github.com/o/r/issues/1"})
+	withURL, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "a", Status: "idea", ExternalURL: "https://github.com/o/r/issues/1"})
 	require.NoError(t, err)
 	require.Equal(t, "host-xyz", withURL.ClaimingHostID)
-	local, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "b", Status: "idea"})
+	local, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "b", Status: "idea"})
 	require.NoError(t, err)
 	require.Empty(t, local.ClaimingHostID)
 }
@@ -270,7 +271,7 @@ func TestProgressSync_ShouldKeepSinglePRWording(t *testing.T) {
 func TestResolveProgressTarget_SourcelessSkipsWhenPluginMissingOrRegistryNil(t *testing.T) {
 	t.Parallel()
 	storage := svctest.NewForwardSyncTestStorage(t)
-	item := &session.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"}
+	item := &backlogdto.BacklogItemData{ExternalURL: "https://github.com/o/r/issues/5"}
 
 	empty := session.NewPluginRegistry()
 	_, _, _, ok := resolveProgressTarget(context.Background(), empty, session.NewSyncLoop(storage, empty), storage, item)

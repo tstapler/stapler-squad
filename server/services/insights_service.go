@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -32,7 +33,7 @@ var _ sessionv1connect.InsightsServiceHandler = (*InsightsService)(nil)
 // insightsBacklogReader is the narrow interface InsightsService uses to source
 // persisted session_role at summary-build time (ADR-029). Satisfied by *session.Storage.
 type insightsBacklogReader interface {
-	GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]session.ItemSessionBacklogEntry, error)
+	GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error)
 }
 
 // insightsDeletedCostLedgerReader is the narrow interface InsightsService uses
@@ -40,7 +41,7 @@ type insightsBacklogReader interface {
 // A separate seam from insightsBacklogReader so a backlogReader test double
 // that doesn't implement it is just treated as having no ledger (nil-safe).
 type insightsDeletedCostLedgerReader interface {
-	GetDeletedItemSessionCostLedger(ctx context.Context) ([]session.DeletedItemSessionCostEntry, error)
+	GetDeletedItemSessionCostLedger(ctx context.Context) ([]backlogdto.DeletedItemSessionCostEntry, error)
 }
 
 // DismissedFindingsRepository is the seam for finding-dismissal persistence.
@@ -186,8 +187,8 @@ func conversationKey(conversationUUID string) string { return "conv:" + conversa
 // time per request.
 type sessionMetaResult struct {
 	meta          map[string]SessionMeta
-	entries       []session.ItemSessionBacklogEntry
-	ledgerEntries []session.DeletedItemSessionCostEntry
+	entries       []backlogdto.ItemSessionBacklogEntry
+	ledgerEntries []backlogdto.DeletedItemSessionCostEntry
 }
 
 // sessionMetaForSessions builds a sessionUUID→SessionMeta map from one unfiltered
@@ -220,7 +221,7 @@ func (s *InsightsService) sessionMetaForSessions(ctx context.Context) sessionMet
 	// that was already gone before the item was even deleted, so it can never
 	// resolve a live association; only metaFor's conversation-UUID fallback can
 	// ever reach these rows.
-	var ledgerEntries []session.DeletedItemSessionCostEntry
+	var ledgerEntries []backlogdto.DeletedItemSessionCostEntry
 	if ledgerReader, ok := s.backlogReader.(insightsDeletedCostLedgerReader); ok {
 		le, err := ledgerReader.GetDeletedItemSessionCostLedger(ctx)
 		if err != nil {

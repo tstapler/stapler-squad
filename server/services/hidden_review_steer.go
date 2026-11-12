@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // This file is the second UI exception to "no UI path writes to a hidden
@@ -48,7 +49,7 @@ type BacklogReviewLink struct {
 }
 
 type itemSessionLookup interface {
-	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)
+	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
 }
 
 // storageLinkResolver implements the predicate over the item_session table. A

@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/deeplink"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -22,7 +23,7 @@ import (
 // no real *session.Storage (and no ent-backed repository) can stand in for
 // tests.
 type backlogItemGetter interface {
-	GetBacklogItem(ctx context.Context, id string) (*session.BacklogItemData, error)
+	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
 }
 
 // HostResolver resolves a deep link's hostname to either a live remote
@@ -198,8 +199,8 @@ type deepLinkUnreachableResponse struct {
 }
 
 type deepLinkLocalResponse struct {
-	Kind string                   `json:"kind"`
-	Item *session.BacklogItemData `json:"item"`
+	Kind string                      `json:"kind"`
+	Item *backlogdto.BacklogItemData `json:"item"`
 }
 
 type deepLinkHandoffResponse struct {

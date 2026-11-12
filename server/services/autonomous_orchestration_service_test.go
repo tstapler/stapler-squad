@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -200,13 +201,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 
 	// Item is already at 'review' — the triage-role transition below expects 'idea', so its
 	// precondition will fail and TransitionBacklogItemStatus must return an error.
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Notification race test item",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleTriage,
@@ -269,13 +270,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck test item",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleWork,
@@ -318,13 +319,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous done test item",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleWork,
@@ -379,13 +380,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 	inst := addPausedAutonomousInstance(t, storage, title)
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Mid-SDD-workflow work session, never called request_review",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleWork,
@@ -462,12 +463,12 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	// simulating an operator deleting an item while its autonomous session is still running.
 	// If the item session row also disappears via cascade, GetItemSessionBySessionUUID will
 	// return ErrNotFound and this test will report that below instead of asserting blindly.
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Deleted-out-from-under-us item",
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleTriage,
@@ -510,12 +511,12 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Unrecognized role test item",
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: "future-pipeline-stage", // not triage/work/review
@@ -581,13 +582,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck resolves test item",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleWork,
@@ -640,13 +641,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck review resolves test item",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleReview,
@@ -698,13 +699,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous still-stuck test item",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleWork,
@@ -753,13 +754,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	// Item has already been reopened to in_progress by the time this stuck
 	// review exit is processed (simulates bouncing's autoReopenWithBackoffGate
 	// having already acted via a different, earlier session exit).
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Review stuck, item already moved on",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleReview,
@@ -811,13 +812,13 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Review stuck, still stuck test item",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleReview,
@@ -870,13 +871,13 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Triage stuck metadata test item",
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleTriage,
@@ -986,13 +987,13 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Generic notif metadata test item",
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: "future-pipeline-stage", // reaches the generic notifier, not a status transition
@@ -1160,12 +1161,12 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	require.NoError(t, storage.AddInstance(inst))
 	svc.AutonomousSvc.SetInstanceFinder(func(_ string) *session.Instance { return inst })
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous respawn failure test item",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleWork,

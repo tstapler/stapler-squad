@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BundleStorage is the narrow persistence interface SessionBundleService needs
@@ -33,7 +34,7 @@ type BundleStorage interface {
 	ListAnalyticsBySessionID(ctx context.Context, sessionID string) ([]session.AnalyticsData, error)
 	// GetItemSessionBySessionUUID returns the most-recent backlog item session
 	// linked to this session, or domain.ErrNotFound when none exists.
-	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)
+	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
 	// GetSessionArtifactsByUUID returns the artifact blob, or (nil, nil) when none.
 	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)
 }

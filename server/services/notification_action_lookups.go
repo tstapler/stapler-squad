@@ -5,6 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // notification_action_lookups.go holds the production adapters behind the
@@ -61,7 +62,7 @@ func (l guidanceStorageLookup) OpenGuidance(ctx context.Context, ids []string) (
 
 // backlogLister is the one storage read the backlog decision lookup needs.
 type backlogLister interface {
-	ListBacklogItems(ctx context.Context, filter session.BacklogItemFilter) ([]session.BacklogItemData, error)
+	ListBacklogItems(ctx context.Context, filter backlogdto.BacklogItemFilter) ([]backlogdto.BacklogItemData, error)
 }
 
 type backlogStorageLookup struct{ storage backlogLister }
@@ -74,7 +75,7 @@ func NewBacklogDecisionLookup(storage backlogLister) BacklogDecisionLookup {
 }
 
 func (l backlogStorageLookup) DecisionStates(ctx context.Context, ids []string) (map[string]BacklogDecisionState, error) {
-	rows, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	rows, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{backlogStatusReview, backlogStatusPRPending},
 	})
 	if err != nil {

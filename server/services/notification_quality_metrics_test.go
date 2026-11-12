@@ -16,8 +16,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // The tests below read the process-wide ManualReader, so they stay serial: Go
@@ -152,17 +152,17 @@ func TestScrape_ShouldSampleWakeFiresAndCountScheduleWakeup_WhenSessionEndsAfter
 }
 
 type fakeRoleLookup struct {
-	row session.ItemSessionSummary
+	row backlogdto.ItemSessionSummary
 	err error
 }
 
-func (f fakeRoleLookup) GetItemSessionBySessionUUID(context.Context, string) (session.ItemSessionSummary, error) {
+func (f fakeRoleLookup) GetItemSessionBySessionUUID(context.Context, string) (backlogdto.ItemSessionSummary, error) {
 	return f.row, f.err
 }
 
 func TestScheduleWakeupRole_ShouldNameTheBacklogRole_WhenSessionIsLinked(t *testing.T) {
 	ctx := context.Background()
-	assert.Equal(t, "work", scheduleWakeupRoles{lookup: fakeRoleLookup{row: session.ItemSessionSummary{Role: "work"}}}.roleOf(ctx, "s"))
+	assert.Equal(t, "work", scheduleWakeupRoles{lookup: fakeRoleLookup{row: backlogdto.ItemSessionSummary{Role: "work"}}}.roleOf(ctx, "s"))
 	assert.Equal(t, roleUnlinked, scheduleWakeupRoles{lookup: fakeRoleLookup{err: domain.ErrNotFound}}.roleOf(ctx, "s"))
 	assert.Equal(t, roleUnknown, scheduleWakeupRoles{lookup: fakeRoleLookup{err: assert.AnError}}.roleOf(ctx, "s"))
 }

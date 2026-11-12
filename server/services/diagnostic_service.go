@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
@@ -22,7 +23,7 @@ import (
 // needs to dispatch a hidden, one-shot diagnostic agent — mirrors
 // session.ReviewGateSpawner's shape for the sibling dispatch case.
 type DiagnosticSpawner interface {
-	SpawnDiagnosticSession(ctx context.Context, item *session.BacklogItemData, prompt string) (*session.Instance, error)
+	SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*session.Instance, error)
 }
 
 // DiagnosticService backs the DiagnosticService RPCs for "Diagnose & Nudge"
@@ -130,7 +131,7 @@ func (d *DiagnosticService) DispatchDiagnose(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("dispatch diagnostic session: %w", spawnErr))
 	}
 
-	if _, createErr := d.storage.CreateItemSession(ctx, session.ItemSessionData{
+	if _, createErr := d.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleDiagnose,
@@ -204,7 +205,7 @@ func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuck
 // buildBundle gathers item/AC/history/verdicts/linked-session/git data and
 // hands it to session.BuildDiagnosticBundle (the pure assembly/compaction
 // logic — see session/diagnose_bundle.go).
-func (d *DiagnosticService) buildBundle(ctx context.Context, item *session.BacklogItemData) (session.DiagnosticBundle, error) {
+func (d *DiagnosticService) buildBundle(ctx context.Context, item *backlogdto.BacklogItemData) (session.DiagnosticBundle, error) {
 	acCriteria, acErr := session.ParseAcCriteria(item.AcceptanceCriteria)
 	if acErr != nil {
 		log.Warn("[DiagnosticService] ParseAcCriteria failed", "item", item.ID, "err", acErr)
@@ -280,7 +281,7 @@ func (d *DiagnosticService) buildLinkedSessions(ctx context.Context, itemID stri
 // ItemSession, in descending order of freshness — LastProgressAt refreshes
 // on every report_progress call, LastCommitAt only on new commits, CreatedAt
 // as the final fallback so the field is never a zero time.
-func lastActivityFor(is session.ItemSessionSummary) time.Time {
+func lastActivityFor(is backlogdto.ItemSessionSummary) time.Time {
 	if is.LastProgressAt != nil {
 		return *is.LastProgressAt
 	}

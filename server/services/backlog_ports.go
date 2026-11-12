@@ -8,6 +8,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
@@ -236,10 +237,10 @@ const headlessTriageUUIDPrefix = "headless-triage-"
 // genuinely-attached session from being archived on such a disagreement, not
 // this function agreeing with those two on "current."
 // Pure — no I/O, no locking — so it's table-testable without tmux/storage.
-func FindSupersededSessions(sessions []session.ItemSessionSummary) []session.ItemSessionSummary {
+func FindSupersededSessions(sessions []backlogdto.ItemSessionSummary) []backlogdto.ItemSessionSummary {
 	currentReview, currentWork := FindMostRecentSessions(sessions)
 
-	var superseded []session.ItemSessionSummary
+	var superseded []backlogdto.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
 		if !session.IsTmuxBackedSessionRole(is.Role) {
@@ -279,7 +280,7 @@ func RedactErrorDetail(s string) string {
 
 // findMostRecentSessions returns the most recently created review and work ItemSessions
 // from the provided list. Either return value may be nil if no session of that role exists.
-func FindMostRecentSessions(sessions []session.ItemSessionSummary) (reviewSession, workSession *session.ItemSessionSummary) {
+func FindMostRecentSessions(sessions []backlogdto.ItemSessionSummary) (reviewSession, workSession *backlogdto.ItemSessionSummary) {
 	for i := range sessions {
 		is := &sessions[i]
 		switch is.Role {

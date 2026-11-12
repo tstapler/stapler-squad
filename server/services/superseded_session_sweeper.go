@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // supersededSessionSweeperCheckInterval mirrors StaleCreationSweeper's cadence
@@ -18,8 +19,8 @@ const supersededSessionSweeperCheckInterval = 60 * time.Second
 // accumulated a superseded session, ListItemSessions to read each item's round
 // history.
 type supersededSessionStore interface {
-	ListBacklogItems(ctx context.Context, filter session.BacklogItemFilter) ([]session.BacklogItemData, error)
-	ListItemSessions(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
+	ListBacklogItems(ctx context.Context, filter backlogdto.BacklogItemFilter) ([]backlogdto.BacklogItemData, error)
+	ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error)
 	ArchivedSessionUUIDs(ctx context.Context, uuids []string) (map[string]bool, error)
 }
 
@@ -93,7 +94,7 @@ func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 		return
 	}
 
-	items, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress), string(session.BacklogStatusReview)},
 	})
 	if err != nil {
@@ -101,7 +102,7 @@ func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 		return
 	}
 
-	var superseded []session.ItemSessionSummary
+	var superseded []backlogdto.ItemSessionSummary
 	for _, item := range items {
 		sessions, err := s.storage.ListItemSessions(ctx, item.ID)
 		if err != nil {
@@ -136,7 +137,7 @@ func (s *SupersededSessionSweeper) sweep(ctx context.Context) {
 // is itself the actor-setter-routed, no-op-if-already-archived call
 // (SetArchivedAtIfNilAndStop or its storage-only fallback) -- see its doc
 // comment; this never performs a raw Status write.
-func (s *SupersededSessionSweeper) archiveIfNotLive(ctx context.Context, is session.ItemSessionSummary) {
+func (s *SupersededSessionSweeper) archiveIfNotLive(ctx context.Context, is backlogdto.ItemSessionSummary) {
 	if is.SessionUUID == "" {
 		return
 	}

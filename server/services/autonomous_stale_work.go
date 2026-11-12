@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // StaleWorkDisposition is what the stale-work remediator does after inspection.
@@ -24,7 +25,7 @@ const (
 // StaleWorkInspector looks at a stale work session before it is restarted.
 // Implemented by *AutonomousOrchestrationService.
 type StaleWorkInspector interface {
-	InspectStaleWork(ctx context.Context, sessionUUID string, item *session.BacklogItemData) StaleWorkDisposition
+	InspectStaleWork(ctx context.Context, sessionUUID string, item *backlogdto.BacklogItemData) StaleWorkDisposition
 }
 
 var _ StaleWorkInspector = (*AutonomousOrchestrationService)(nil)
@@ -41,7 +42,7 @@ func (a *AutonomousOrchestrationService) recoveryLive(title string) bool {
 // either nudges an idle-at-prompt session (ADR-001 row 7) or tells the caller
 // to restart it. It runs before UpdateItemSessionEnded, so the capture is
 // deadline-bound (stopCaptureTimeout) and never delays BUG-064's ordering.
-func (a *AutonomousOrchestrationService) InspectStaleWork(ctx context.Context, sessionUUID string, item *session.BacklogItemData) StaleWorkDisposition {
+func (a *AutonomousOrchestrationService) InspectStaleWork(ctx context.Context, sessionUUID string, item *backlogdto.BacklogItemData) StaleWorkDisposition {
 	var inst *session.Instance
 	if a.instanceFinder != nil {
 		inst = a.instanceFinder(sessionUUID)
@@ -101,7 +102,7 @@ func (a *AutonomousOrchestrationService) concreteStorage() *session.Storage {
 
 // nudgeStaleWork delivers the nudge under a registered recovery (so a user stop
 // cancels it) and falls back to a restart when the nudge cannot be delivered.
-func (a *AutonomousOrchestrationService) nudgeStaleWork(ctx context.Context, storage *session.Storage, inst *session.Instance, item *session.BacklogItemData, rec stopRecord) StaleWorkDisposition {
+func (a *AutonomousOrchestrationService) nudgeStaleWork(ctx context.Context, storage *session.Storage, inst *session.Instance, item *backlogdto.BacklogItemData, rec stopRecord) StaleWorkDisposition {
 	title := rec.Session
 	// Register before touching the row: a driver recovery that registered since the
 	// early recoveryLive check must not be overwritten (its cancel would be lost).

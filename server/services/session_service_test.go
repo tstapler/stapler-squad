@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -3804,7 +3805,7 @@ func TestSpawnReviewSession_SetsBacklogCategory(t *testing.T) {
 		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
 
 	repoPath := t.TempDir()
-	item := &session.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
 
 	inst, err := fix.svc.SpawnReviewSession(context.Background(), item, "item-session-id", "review this")
 	require.NoError(t, err)
@@ -3833,7 +3834,7 @@ func TestSpawnDiagnosticSession_RestrictsAllowedTools(t *testing.T) {
 		[]byte(`{"default_program": "bash -c 'sleep 30'"}`), 0o644))
 
 	repoPath := t.TempDir()
-	item := &session.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), RepoPath: repoPath}
 
 	inst, err := fix.svc.SpawnDiagnosticSession(context.Background(), item, "diagnose this")
 	require.NoError(t, err)
@@ -4065,13 +4066,13 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 	}
 	require.NoError(t, storage.AddInstance(inst))
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Rate limit metadata test item",
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
 		SessionRole: "primary",

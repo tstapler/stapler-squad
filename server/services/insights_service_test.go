@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 	"google.golang.org/protobuf/proto"
@@ -53,14 +54,14 @@ var _ insightsBacklogReader = (*svctest.FakeBacklogReader)(nil)
 // shape for the second seam InsightsService optionally asserts for.
 type fakeBacklogReaderWithLedger struct {
 	svctest.FakeBacklogReader
-	ledgerEntries []session.DeletedItemSessionCostEntry
+	ledgerEntries []backlogdto.DeletedItemSessionCostEntry
 	ledgerErr     error
 	// ledgerCalls counts GetDeletedItemSessionCostLedger invocations — see
 	// TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce.
 	ledgerCalls int
 }
 
-func (f *fakeBacklogReaderWithLedger) GetDeletedItemSessionCostLedger(_ context.Context) ([]session.DeletedItemSessionCostEntry, error) {
+func (f *fakeBacklogReaderWithLedger) GetDeletedItemSessionCostLedger(_ context.Context) ([]backlogdto.DeletedItemSessionCostEntry, error) {
 	f.ledgerCalls++
 	if f.ledgerErr != nil {
 		return nil, f.ledgerErr
@@ -1406,7 +1407,7 @@ func TestGetInsightsSummary_WhenSessionHasItemSessionRole_ExpectSessionRolePopul
 		{SessionID: "sess-role", ConversationID: "uuid-role", Path: "/home/user/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-role", SessionRole: session.SessionRoleWork},
 	}}
 	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
@@ -1431,7 +1432,7 @@ func TestGetInsightsSummary_WhenBacklogItemArchived_ExpectSessionRoleAndTagsPopu
 		{SessionID: "sess-archived", ConversationID: "uuid-archived", Path: "/home/user/proj", Tags: []string{"triage-tag"}},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-archived", SessionRole: session.SessionRoleTriage, ItemStatus: string(session.BacklogStatusArchived)},
 	}}
 	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
@@ -1498,7 +1499,7 @@ func TestGetInsightsSummary_WhenBacklogReaderNil_ExpectNoPanicAndExternalRole(t 
 
 func TestSessionMetaForSessions_should_RetainItemIDAndItemTitle_When_BuildingMapFromBacklogEntries(t *testing.T) {
 	t.Parallel()
-	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-1", SessionRole: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
 	}}
 	svc := NewInsightsService(&svctest.FakeTokenStore{}, tokens.DefaultPricingTable(), nil, backlogReader)
@@ -1513,7 +1514,7 @@ func TestSessionMetaForSessions_WhenSessionUUIDHasMultipleItemSessionEntries_Exp
 	t.Parallel()
 	// Mirrors the real query's explicit Order(Desc(CreatedAt)): the newest row
 	// comes first, so it must be the one the map keeps.
-	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 		{SessionUUID: "dup-uuid", SessionRole: session.SessionRoleWork},
 		{SessionUUID: "dup-uuid", SessionRole: session.SessionRoleTriage},
 	}}
@@ -1598,7 +1599,7 @@ func TestGetInsightsSummary_should_SumRoleBreakdownToTotalCost_When_MultipleRole
 		{SessionID: "sess-adhoc", ConversationID: "conv-adhoc", Path: "/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
 		{SessionUUID: "sess-review", SessionRole: session.SessionRoleReview, ItemID: "bl_abc123", ItemTitle: "Fix login bug"},
 		{SessionUUID: "sess-work", SessionRole: session.SessionRoleWork, ItemID: "bl_xyz789", ItemTitle: "Add feature"},
@@ -1651,7 +1652,7 @@ func TestGetInsightsSummary_RoleBreakdown_should_ExcludeUnpricedSessionFromCostS
 		{SessionID: "sess-review-unpriced", ConversationID: "conv-review-unpriced", Path: "/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-review-priced", SessionRole: session.SessionRoleReview, ItemID: "bl_1", ItemTitle: "Item One"},
 		{SessionUUID: "sess-review-unpriced", SessionRole: session.SessionRoleReview, ItemID: "bl_1", ItemTitle: "Item One"},
 	}}
@@ -1679,7 +1680,7 @@ func TestGetInsightsSummary_should_IncludeGeminiPricedSessionWithNoTranscript_Wh
 		{SessionID: "sess-claude-triage", ConversationID: "conv-claude-triage", Path: "/proj"},
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
-	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 		// Has a matching Claude transcript above — must be counted once, via the
 		// transcript path, not double-counted via this row's own EstimatedCostUsd.
 		{SessionUUID: "sess-claude-triage", SessionRole: session.SessionRoleTriage, ItemID: "bl_claude", ItemTitle: "Claude Item", EstimatedCostUsd: 0.02, CostPriced: true},
@@ -1942,10 +1943,10 @@ func TestGetInsightsSummary_should_FetchBacklogEntriesAndLedgerExactlyOnce(t *te
 	t.Parallel()
 	now := time.Now().UTC()
 	backlogReader := &fakeBacklogReaderWithLedger{
-		FakeBacklogReader: svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+		FakeBacklogReader: svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 			{SessionUUID: "sess-once", SessionRole: session.SessionRoleWork, ItemID: "item-1", ItemTitle: "T", EstimatedCostUsd: 1, CostPriced: true, CreatedAt: now},
 		}},
-		ledgerEntries: []session.DeletedItemSessionCostEntry{
+		ledgerEntries: []backlogdto.DeletedItemSessionCostEntry{
 			{ConversationUUID: "conv-once", SessionUUID: "sess-old-once", SessionRole: session.SessionRoleReview,
 				ItemID: "deleted-1", ItemTitle: "Deleted", EstimatedCostUsd: 0.5, CostPriced: true, CreatedAt: now},
 		},
@@ -1968,7 +1969,7 @@ func TestGetInsightsSummary_should_IncludeDeletedItemLedgerCost_When_NoMatchingT
 	t.Parallel()
 	now := time.Now().UTC()
 	backlogReader := &fakeBacklogReaderWithLedger{
-		ledgerEntries: []session.DeletedItemSessionCostEntry{
+		ledgerEntries: []backlogdto.DeletedItemSessionCostEntry{
 			{ConversationUUID: "conv-deleted-1", SessionUUID: "sess-old-1", SessionRole: session.SessionRoleReview,
 				ItemID: "deleted-1", ItemTitle: "Deleted Item", EstimatedCostUsd: 0.5, CostPriced: true, CreatedAt: now},
 		},
@@ -2001,7 +2002,7 @@ func TestGetInsightsSummary_WhenDeletedItemTranscriptStillOnDisk_ExpectAttribute
 	// No live session record: the transcript is an orphan by path/UUID association.
 	associator := tokens.NewAssociator(&fakeSessionStorage{})
 	backlogReader := &fakeBacklogReaderWithLedger{
-		ledgerEntries: []session.DeletedItemSessionCostEntry{
+		ledgerEntries: []backlogdto.DeletedItemSessionCostEntry{
 			{ConversationUUID: "conv-deleted-2", SessionUUID: "sess-old-2", SessionRole: session.SessionRoleWork,
 				ItemID: "deleted-2", ItemTitle: "T2", EstimatedCostUsd: 9, CostPriced: true, CreatedAt: now},
 		},
@@ -2027,7 +2028,7 @@ func TestGetInsightsSummary_WhenSessionDeleted_ExpectAttributedByConversationUUI
 	}
 	// No live session record: the transcript is an orphan by path/UUID association.
 	associator := tokens.NewAssociator(&fakeSessionStorage{})
-	backlogReader := &svctest.FakeBacklogReader{Entries: []session.ItemSessionBacklogEntry{
+	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
 		{SessionUUID: "sess-gone", ConversationUUID: "conv-gone", SessionRole: session.SessionRoleWork,
 			ItemID: "item-1", ItemTitle: "T", EstimatedCostUsd: 9, CostPriced: true, CreatedAt: now},
 	}}

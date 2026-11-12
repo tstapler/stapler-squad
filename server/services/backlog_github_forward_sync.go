@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // issueCommenter posts the visible comment that accompanies every automated
@@ -175,11 +176,11 @@ type forwardSyncAction struct {
 // Failures are logged (and recorded via storage.RecordSourceSyncFailure when
 // there is a source) rather than propagated: this runs from an EventBus
 // subscriber goroutine, and the item has already reached done.
-func handleForwardSyncClose(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData) {
+func handleForwardSyncClose(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *backlogdto.BacklogItemData) {
 	handleForwardSyncCloseWith(ctx, registry, syncLoop, storage, item, defaultSourcelessCloseDeps(registry))
 }
 
-func handleForwardSyncCloseWith(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData, sourceless sourcelessCloseDeps) {
+func handleForwardSyncCloseWith(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *backlogdto.BacklogItemData, sourceless sourcelessCloseDeps) {
 	if item == nil || item.ID == "" {
 		return
 	}
@@ -253,14 +254,14 @@ func persistForwardSyncWatermark(storage *session.Storage, itemID string, issueU
 	if watermark.IsZero() {
 		watermark = time.Now().UTC()
 	}
-	if _, err := storage.UpdateBacklogItem(context.Background(), itemID, session.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); err != nil {
+	if _, err := storage.UpdateBacklogItem(context.Background(), itemID, backlogdto.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); err != nil {
 		log.Warn("backlog_github_forward_sync: failed to persist watermark", "item", itemID, "err", err)
 	}
 }
 
 // resolveSourceCloseAction handles items ingested from an ItemSource. nil means
 // nothing to do.
-func resolveSourceCloseAction(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, current *session.BacklogItemData) *forwardSyncAction {
+func resolveSourceCloseAction(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, current *backlogdto.BacklogItemData) *forwardSyncAction {
 	source, err := storage.GetItemSourceByID(ctx, current.SourceID)
 	if err != nil {
 		log.Debug("backlog_github_forward_sync: source lookup failed, skip", "item", current.ID, "source_id", current.SourceID, "err", err)
@@ -314,7 +315,7 @@ func resolveSourceCloseAction(ctx context.Context, registry *session.PluginRegis
 // resolveSourcelessCloseAction handles MCP/web-imported items: a github.com
 // issue URL and no ItemSource. Mirrors resolveProgressTarget — GHE hosts are
 // skipped (no host list is passed to the parser). nil means nothing to do.
-func resolveSourcelessCloseAction(current *session.BacklogItemData, deps sourcelessCloseDeps) *forwardSyncAction {
+func resolveSourcelessCloseAction(current *backlogdto.BacklogItemData, deps sourcelessCloseDeps) *forwardSyncAction {
 	if current.ExternalURL == "" || deps.plugin == nil {
 		return nil
 	}

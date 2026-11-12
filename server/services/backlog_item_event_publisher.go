@@ -6,6 +6,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BacklogItemEventPublisher adapts an *events.EventBus to
@@ -29,7 +30,7 @@ type BacklogItemEventPublisher struct {
 // PublishItemChanged deliberately keeps its no-error-return signature: there
 // is never an error for a repository caller to log or swallow, because a
 // panic can never reach it in the first place.
-func (p *BacklogItemEventPublisher) PublishItemChanged(item *session.BacklogItemData, change session.BacklogItemChange) {
+func (p *BacklogItemEventPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change session.BacklogItemChange) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.WarningLog().Printf("[BacklogItemEventPublisher] PublishItemChanged panicked (recovered): %v", r)

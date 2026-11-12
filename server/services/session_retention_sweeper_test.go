@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -212,7 +213,7 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 	svctest.RunGit(t, repoDir, "commit", "-q", "-m", "initial")
 
 	ctx := context.Background()
-	item, err := fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "shared-worktree item",
 		RepoPath: repoDir,
 		Status:   string(session.BacklogStatusInProgress),
@@ -223,7 +224,7 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 
 	// Old round: archived long ago, past retention, otherwise safe to delete.
 	oldUUID := "old-round-uuid"
-	_, err = fix.storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: oldUUID,
 		SessionRole: session.SessionRoleWork,
@@ -238,7 +239,7 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 	// New round: still active (never archived), sharing the exact same worktree path —
 	// e.g. a rework/reopen that reused the branch per nativeFindExistingWorktreeForBranch.
 	newUUID := "new-round-uuid"
-	_, err = fix.storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: newUUID,
 		SessionRole: session.SessionRoleWork,
@@ -294,7 +295,7 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 	svctest.RunGit(t, mainRepoDir, "worktree", "add", "-q", "-b", "shared-branch", worktreeDir, "HEAD")
 
 	ctx := context.Background()
-	item, err := fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "converged item",
 		RepoPath: mainRepoDir,
 		// The backlog item itself has also reached a terminal state -- consistent
@@ -307,7 +308,7 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 	roundTitles := []string{"round-1", "round-2", "round-3"}
 	roundUUIDs := []string{"round-1-uuid", "round-2-uuid", "round-3-uuid"}
 	for i, title := range roundTitles {
-		_, err := fix.storage.CreateItemSession(ctx, session.ItemSessionData{
+		_, err := fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: roundUUIDs[i],
 			SessionRole: session.SessionRoleWork,

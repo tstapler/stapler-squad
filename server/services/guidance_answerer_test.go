@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func createPeerRequest(t *testing.T, storage *session.Storage, asker, answerer string) *session.GuidanceRequestData {
@@ -112,7 +113,7 @@ func TestAnswerAs_should_WaiveCriterion_Only_When_OwnerPicksWaiveResponse(t *tes
 		{Index: 1, Text: "b", Status: session.AcStatusPending},
 	})
 	require.NoError(t, err)
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "w", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: raw})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "w", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: raw})
 	require.NoError(t, err)
 	itemID := uuid.MustParse(item.ID)
 	ask := func(idx int) string {

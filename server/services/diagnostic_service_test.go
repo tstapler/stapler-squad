@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // fakeDiagnosticSpawner is a DiagnosticSpawner test double recording the
@@ -21,7 +22,7 @@ type fakeDiagnosticSpawner struct {
 	instUUID   string
 }
 
-func (f *fakeDiagnosticSpawner) SpawnDiagnosticSession(_ context.Context, item *session.BacklogItemData, prompt string) (*session.Instance, error) {
+func (f *fakeDiagnosticSpawner) SpawnDiagnosticSession(_ context.Context, item *backlogdto.BacklogItemData, prompt string) (*session.Instance, error) {
 	f.lastItemID = item.ID
 	f.lastPrompt = prompt
 	inst := &session.Instance{UUID: f.instUUID}
@@ -33,7 +34,7 @@ func TestAssembleDiagnosticBundle_should_IncludeItemContent_When_ItemExists(t *t
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "Investigate the flaky thing",
 		Description: "It flakes sometimes.",
 		Status:      string(session.BacklogStatusReview),
@@ -67,7 +68,7 @@ func TestDispatchDiagnose_should_LinkItemSession_When_DispatchSucceeds(t *testin
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Investigate",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -95,7 +96,7 @@ func TestDispatchDiagnose_should_Error_When_SpawnerNotConfigured(t *testing.T) {
 	storage := svctest.CreateTestStorage(t)
 	svc := NewDiagnosticService(storage, nil)
 
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "x", Status: string(session.BacklogStatusReview)})
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "x", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
 
 	_, err = svc.DispatchDiagnose(context.Background(), connect.NewRequest(&sessionv1.DispatchDiagnoseRequest{ItemId: item.ID}))

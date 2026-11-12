@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newParityTestStorage returns a *session.Storage backed by a fresh in-memory
@@ -113,7 +114,7 @@ func TestGuidanceRequestOwnershipParity_should_ProduceMatchingCodeAndRemediation
 	ctx := context.Background()
 	svc := services.NewGuidanceRequestService(storage, nil, nil)
 
-	linkedItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "parity linked item"})
+	linkedItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "parity linked item"})
 	require.NoError(t, err)
 
 	tests := []ownershipParityCase{
