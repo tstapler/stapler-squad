@@ -38,7 +38,7 @@ var ErrSubmitNotConfirmed = errors.New("submit keystroke sent but pane showed no
 // keySender is the narrow interface SendKeysWithTimeout needs — satisfied by
 // *Instance's existing SendKeys method.
 type keySender interface {
-	leaseOwner
+	LeaseOwner
 	SendKeys(keys string) error
 }
 
@@ -100,7 +100,7 @@ func (i *Instance) VerifyPaneOwner(ctx context.Context) error {
 // with ErrNoLease/ErrLeaseMismatch and 0 writes.
 func SubmitDriverContent(ctx context.Context, inst paneSubmitter, lease *HeldLease, content string, pollInterval, maxWait time.Duration) error {
 	defer lease.Release()
-	if err := lease.check(inst); err != nil {
+	if err := lease.Check(inst); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -176,7 +176,7 @@ func sendKeysChunked(ctx context.Context, inst keySender, content string) error 
 // lease stays held until an abandoned write's goroutine returns (a
 // DeadlineExceeded here does not mean the pane is free).
 func SubmitContentWithEnter(ctx context.Context, inst paneSubmitter, lease *HeldLease, content string) error {
-	if err := lease.check(inst); err != nil {
+	if err := lease.Check(inst); err != nil {
 		lease.Release()
 		return err
 	}
@@ -212,7 +212,7 @@ func SubmitContentWithEnter(ctx context.Context, inst paneSubmitter, lease *Held
 // The write goroutine releases lease when SendKeys returns, so a timed-out
 // caller leaves the lease held until the abandoned write actually finishes.
 func SendKeysWithTimeout(ctx context.Context, inst keySender, lease *HeldLease, content string, timeout time.Duration) error {
-	if err := lease.check(inst); err != nil {
+	if err := lease.Check(inst); err != nil {
 		lease.Release()
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // question_delivery_track.go keeps the durable delivery state of a keystroke
@@ -20,7 +21,7 @@ import (
 type SentDelivery struct {
 	RowID       string
 	SessionUUID string
-	Dialog      session.QuestionDialog
+	Dialog      panereply.QuestionDialog
 	// Matches overrides the Dialog check for a dialog DialogMatch cannot describe (the tabbed multi-question shape).
 	Matches func(capture string) bool
 	Route   domain.DeliveryRoute

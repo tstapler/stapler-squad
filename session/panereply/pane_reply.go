@@ -1,4 +1,4 @@
-package session
+package panereply
 
 // pane_reply.go is the Reply write path for a hidden session's AskUserQuestion
 // dialog (ADR-010 decisions 2d, 3, 4, 5): a positive structural match of a live
@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -200,7 +201,7 @@ func (s ReplyStage) String() string {
 const (
 	// ReplySendTimeout bounds the one-byte write (INFERRED: a healthy write is
 	// milliseconds; SendKeysWithTimeout's 5s default is the repo precedent).
-	ReplySendTimeout = DefaultSendKeysTimeout
+	ReplySendTimeout = session.DefaultSendKeysTimeout
 	// ReplyClosedPollEvery and ReplyClosedWindow bound the post-write check
 	// (the pane updated within 0.5 s in Spike 1.3g; the rest is margin).
 	ReplyClosedPollEvery = 100 * time.Millisecond
@@ -218,7 +219,7 @@ var (
 
 // replyPane is the narrow surface SubmitReplyOnce needs; *Instance satisfies it.
 type replyPane interface {
-	leaseOwner
+	session.LeaseOwner
 	// SendKeysN returns the byte count so a proven 0, err is not-sent.
 	SendKeysN(keys string) (int, error)
 	// CapturePaneContent is a live capture of the pane, never a cached status.
@@ -261,8 +262,8 @@ type replyResult struct {
 // the goroutine, idle -> aborted on the caller's timeout; the loser backs off),
 // so after the caller returns at most the one write already inside the syscall
 // can still land.
-func SubmitReplyOnce(ctx context.Context, pane replyPane, lease *HeldLease, digit byte, opts ReplyOptions) (ReplyStage, error) {
-	if err := lease.check(pane); err != nil {
+func SubmitReplyOnce(ctx context.Context, pane replyPane, lease *session.HeldLease, digit byte, opts ReplyOptions) (ReplyStage, error) {
+	if err := lease.Check(pane); err != nil {
 		lease.Release()
 		return StageNotStarted, err
 	}
@@ -393,4 +394,10 @@ func awaitDialogClosed(ctx context.Context, pane replyPane, o ReplyOptions) repl
 		}
 		elapsed += o.PollEvery
 	}
+}
+
+// paneOwnerVerifier is optionally implemented by panes backed by a real tmux
+// pane (*session.Instance); it is called just before the first write.
+type paneOwnerVerifier interface {
+	VerifyPaneOwner(ctx context.Context) error
 }

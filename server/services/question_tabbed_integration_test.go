@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // The measured Spike S1c dialog as a hook sends it: Q1 single (Redis/Memcached/None), Q2 multi (A/B/C).
@@ -88,7 +89,7 @@ func TestRegisterQuestion_should_KeepATabbedAskViewOnly_WhenTheSenderIsUnverifie
 }
 
 func tabbedGuidance() OpenGuidance {
-	return OpenGuidance{Source: domain.QuestionSourceHook, Tabbed: []session.TabbedQuestion{
+	return OpenGuidance{Source: domain.QuestionSourceHook, Tabbed: []panereply.TabbedQuestion{
 		{Text: "Which cache?", Header: "Cache", Labels: []string{"Redis", "None"}},
 		{Text: "Which letters?", Header: "Letters", Labels: []string{"A", "B"}, MultiSelect: true},
 	}}

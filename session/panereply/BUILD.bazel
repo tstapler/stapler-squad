@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "panereply",
+    srcs = [
+        "pane_reply.go",
+        "pane_reply_sequence.go",
+        "question_profile_claude.go",
+        "question_profile_row.go",
+        "question_tabbed.go",
+        "question_tabbed_plan.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/panereply",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session",
+        "//session/detection",
+        "//session/detection/binaries",
+        "//session/detection/dtypes",
+        "//session/dialogpresence",
+        "//session/domain",
+        "//session/tymux",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":panereply",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "panereply_test",
+    srcs = [
+        "pane_reply_exited_test.go",
+        "pane_reply_sequence_test.go",
+        "pane_reply_test.go",
+        "question_profile_test.go",
+        "question_tabbed_sim_test.go",
+        "question_tabbed_test.go",
+    ],
+    data = ["//session/testdata:all"],
+    embed = [":panereply"],
+    deps = [
+        "//session",
+        "//session/detection/dtypes",
+        "//session/domain",
+        "//session/tymux",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

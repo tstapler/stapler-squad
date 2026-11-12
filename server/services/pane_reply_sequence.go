@@ -12,12 +12,13 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // pane_reply_sequence.go is the multi-key sibling of PaneReplyCore.Run for the
 // tabbed multi-question AskUserQuestion (Story 3.5). Same rails and audit
 // order (limiters, audit line, lease, before-first-byte checks, write, closed
-// check); the write is session.SubmitReplySequence with a frame check before
+// check); the write is panereply.SubmitReplySequence with a frame check before
 // every key. It serves visible sessions only; a hidden session keeps the
 // single-digit Reply path.
 
@@ -30,7 +31,7 @@ type sequenceInput struct {
 	sessionUUID string
 	questionID  string
 	replyID     string
-	steps       []session.ReplyStep
+	steps       []panereply.ReplyStep
 	// summary is the audited, truncated text of the answer.
 	summary  string
 	question string
@@ -98,8 +99,8 @@ func (c *PaneReplyCore) writeSequenceUnderLease(ctx context.Context, target Answ
 		o, stage := target.mismatchOutcome()
 		return notSent(o, stage)
 	}
-	res := session.SubmitReplySequence(ctx, inst, lease, in.steps, session.SequenceOptions{
-		StillOpen:       session.TabbedStillOpen,
+	res := panereply.SubmitReplySequence(ctx, inst, lease, in.steps, panereply.SequenceOptions{
+		StillOpen:       panereply.TabbedStillOpen,
 		BeforeFirstByte: c.sequenceChecks(target, in, inst),
 		After:           c.after,
 	})
@@ -129,21 +130,21 @@ func (c *PaneReplyCore) sequenceChecks(target AnswerTarget, in sequenceInput, in
 // NOT_SENT only when no key was handed over, SEND_INDETERMINATE when a key may
 // have landed, STALE_PROMPT when a frame check failed (Partial when keys were
 // already typed).
-func mapSequenceResult(r session.SequenceResult) (sequenceOutcome, string, bool) {
+func mapSequenceResult(r panereply.SequenceResult) (sequenceOutcome, string, bool) {
 	out := sequenceOutcome{Written: r.Written, Total: r.Total, Partial: r.Partial()}
 	set := func(o sessionv1.ReplyOutcome) { out.Outcome = o }
 	var refused *replyWriteError
 	switch {
-	case r.Stage == session.StageDialogClosed:
+	case r.Stage == panereply.StageDialogClosed:
 		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT)
 		return out, replyStageDialogClosed, true
-	case r.Stage == session.StageDialogStillOpen:
+	case r.Stage == panereply.StageDialogStillOpen:
 		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE)
 		return out, replyStageDialogStillOpen, true
 	case r.Stale && r.Written > 0:
 		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT)
 		return out, replyStageAbortedPartial, true
-	case r.Stage == session.StageWriteEntered:
+	case r.Stage == panereply.StageWriteEntered:
 		set(sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE)
 		return out, replyStageIndeterminate, true
 	case r.Stale:
