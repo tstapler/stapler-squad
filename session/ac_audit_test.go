@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func ownerCtx() context.Context {
@@ -48,7 +49,7 @@ func TestAcAudit_should_RecordRejection_When_WaivingDoneCriterion(t *testing.T) 
 
 	err := repo.WaiveAcCriterion(ownerCtx(), id, 1, "why") // criterion 1 is done
 
-	require.ErrorIs(t, err, session.ErrAcCriterionAlreadyDone)
+	require.ErrorIs(t, err, backlogdto.ErrAcCriterionAlreadyDone)
 	assert.Equal(t, session.AcStatusDone, loadCriteria(t, repo, id)[1].Status)
 	rows, err := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, err)
@@ -67,8 +68,8 @@ func TestAcAudit_should_RecordOneRowPerMutation_When_AgentChangesStatusAndHitsWa
 
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "working"))
 	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "owner call"))
-	require.ErrorIs(t, repo.UpdateAcCriterionStatus(agent, id, 0, "done", ""), session.ErrAcCriterionWaived)
-	require.ErrorIs(t, repo.UpdateAcCriterionStatus(agent, id, 9, "done", ""), session.ErrAcCriterionOutOfRange)
+	require.ErrorIs(t, repo.UpdateAcCriterionStatus(agent, id, 0, "done", ""), backlogdto.ErrAcCriterionWaived)
+	require.ErrorIs(t, repo.UpdateAcCriterionStatus(agent, id, 9, "done", ""), backlogdto.ErrAcCriterionOutOfRange)
 
 	rows, err := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, err)
@@ -97,7 +98,7 @@ func createACItem(t *testing.T, repo *session.EntRepository, texts ...string) st
 	}
 	ac, err := session.SerializeAcCriteria(cs)
 	require.NoError(t, err)
-	item, err := repo.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "ac item", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: ac,
 	})
 	require.NoError(t, err)
@@ -108,7 +109,7 @@ func rewriteAC(t *testing.T, repo *session.EntRepository, id string, in []sessio
 	t.Helper()
 	ac, err := session.SerializeAcCriteria(in)
 	require.NoError(t, err)
-	_, err = repo.UpdateBacklogItem(ownerCtx(), id, session.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), id, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
 	return err
 }
 
@@ -178,7 +179,7 @@ func TestUpdateBacklogItem_should_RejectAndAudit_When_RewriteIntroducesWaiver(t 
 
 	err := rewriteAC(t, repo, id, in)
 
-	require.ErrorIs(t, err, session.ErrAcWaiverViaUpdate)
+	require.ErrorIs(t, err, backlogdto.ErrAcWaiverViaUpdate)
 	assert.Equal(t, session.AcStatusPending, loadCriteria(t, repo, id)[0].Status)
 	rows, lerr := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, lerr)
@@ -195,7 +196,7 @@ func TestAcAudit_should_SkipRepeatedSameStatusAndRefuseRewaive(t *testing.T) {
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "a"))
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "b"))
 	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "first"))
-	require.ErrorIs(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "second"), session.ErrAcCriterionAlreadyWaived)
+	require.ErrorIs(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "second"), backlogdto.ErrAcCriterionAlreadyWaived)
 
 	rows, err := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, err)
@@ -313,7 +314,7 @@ func TestUpdateBacklogItem_should_ReportClearedWaivers_And_RollBackOtherFields_W
 	title := "renamed"
 	ac, err := session.SerializeAcCriteria(pend("alpha", "beta reworded"))
 	require.NoError(t, err)
-	res, err := repo.UpdateBacklogItem(ownerCtx(), id, session.BacklogItemUpdate{Title: &title, AcceptanceCriteria: &ac}, nil)
+	res, err := repo.UpdateBacklogItem(ownerCtx(), id, backlogdto.BacklogItemUpdate{Title: &title, AcceptanceCriteria: &ac}, nil)
 	require.NoError(t, err)
 	require.Len(t, res.ClearedAcWaivers, 1)
 	assert.Equal(t, "beta", res.ClearedAcWaivers[0].Text)
@@ -325,8 +326,8 @@ func TestUpdateBacklogItem_should_ReportClearedWaivers_And_RollBackOtherFields_W
 	title2 := "should not stick"
 	badJSON, err := session.SerializeAcCriteria(bad)
 	require.NoError(t, err)
-	_, err = repo.UpdateBacklogItem(ownerCtx(), id, session.BacklogItemUpdate{Title: &title2, AcceptanceCriteria: &badJSON}, nil)
-	require.ErrorIs(t, err, session.ErrAcWaiverViaUpdate)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), id, backlogdto.BacklogItemUpdate{Title: &title2, AcceptanceCriteria: &badJSON}, nil)
+	require.ErrorIs(t, err, backlogdto.ErrAcWaiverViaUpdate)
 	item, err := repo.GetBacklogItem(context.Background(), id)
 	require.NoError(t, err)
 	assert.Equal(t, "renamed", item.Title)
@@ -335,17 +336,17 @@ func TestUpdateBacklogItem_should_ReportClearedWaivers_And_RollBackOtherFields_W
 func TestUpdateBacklogItem_should_TolerateLegacyPlainTextStoredCriteria_And_RejectPlainTextIncoming(t *testing.T) {
 	t.Parallel()
 	repo := session.NewTestEntRepository(t)
-	item, err := repo.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "legacy", Status: string(session.BacklogStatusIdea), AcceptanceCriteria: session.AcCriteriaJSON("- do the thing\n- other"),
 	})
 	require.NoError(t, err)
 
 	plain := session.AcCriteriaJSON("still plain text")
-	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &plain}, nil)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &plain}, nil)
 	require.Error(t, err, "plain-text criteria are not valid input to an update")
 
 	ac, serr := session.SerializeAcCriteria(pend("do the thing"))
 	require.NoError(t, serr)
-	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
 	require.NoError(t, err, "an unreadable stored list pins nothing and is replaced")
 }

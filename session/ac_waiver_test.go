@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func newWaiverItem(t *testing.T, repo *session.EntRepository) string {
@@ -18,7 +19,7 @@ func newWaiverItem(t *testing.T, repo *session.EntRepository) string {
 		{Index: 1, Text: "other", Status: session.AcStatusDone},
 	})
 	require.NoError(t, err)
-	item, err := repo.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:              "waiver item",
 		Status:             string(session.BacklogStatusInProgress),
 		AcceptanceCriteria: ac,
@@ -55,8 +56,8 @@ func TestWaiveAcCriterion_should_Reject_When_ReasonBlankOrIndexOutOfRange(t *tes
 	repo := session.NewTestEntRepository(t)
 	id := newWaiverItem(t, repo)
 
-	assert.ErrorIs(t, repo.WaiveAcCriterion(context.Background(), id, 0, "   "), session.ErrWaiverReasonRequired)
-	assert.ErrorIs(t, repo.WaiveAcCriterion(context.Background(), id, 9, "why"), session.ErrAcCriterionOutOfRange)
+	assert.ErrorIs(t, repo.WaiveAcCriterion(context.Background(), id, 0, "   "), backlogdto.ErrWaiverReasonRequired)
+	assert.ErrorIs(t, repo.WaiveAcCriterion(context.Background(), id, 9, "why"), backlogdto.ErrAcCriterionOutOfRange)
 	assert.Equal(t, session.AcStatusPending, loadCriteria(t, repo, id)[0].Status)
 }
 
@@ -68,7 +69,7 @@ func TestUpdateAcCriterionStatus_should_NotOverwrite_When_CriterionWaived(t *tes
 
 	err := repo.UpdateAcCriterionStatus(context.Background(), id, 0, string(session.AcStatusFail), "")
 
-	assert.ErrorIs(t, err, session.ErrAcCriterionWaived)
+	assert.ErrorIs(t, err, backlogdto.ErrAcCriterionWaived)
 	assert.Equal(t, session.AcStatusWaived, loadCriteria(t, repo, id)[0].Status)
 }
 
