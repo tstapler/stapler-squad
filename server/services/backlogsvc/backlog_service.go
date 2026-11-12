@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tokens"
+	"github.com/tstapler/stapler-squad/session/wtconsistency"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -1378,7 +1379,7 @@ func (s *BacklogService) warnMissingWorktreeRow(is backlogdto.ItemSessionSummary
 	// expected. Extra lookup needed since ItemSessionSummary lacks
 	// SessionType/Branch; a lookup failure falls back to silent skip.
 	sessionData, lookupErr := s.storage.FindInstanceDataByID(is.SessionUUID)
-	if lookupErr != nil || !session.ExpectsWorktree(*sessionData) {
+	if lookupErr != nil || !wtconsistency.ExpectsWorktree(*sessionData) {
 		return
 	}
 	log.Warn("[cleanupItemWorktreesExcept] worktree row missing but expected",

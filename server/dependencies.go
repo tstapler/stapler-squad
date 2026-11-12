@@ -48,6 +48,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
+	"github.com/tstapler/stapler-squad/session/wtconsistency"
 )
 
 // Delays before the startup transcript backfill begins (live file changes are
@@ -1674,7 +1675,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// against live `git worktree` state, gated by FeatureFlagWorktreeConsistencySweep
 	// (default off). config.LoadConfig is passed directly, not a closure over cfg, so
 	// the flag can be flipped live with no restart (matches quotaGate/julesDispatchSvc).
-	go session.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
+	go wtconsistency.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
 
 	// Per-item /backlog/* commands live in session worktrees only; a user-scope copy is stale
 	// scaffolding from an old build and shadows the real ones with a wrong item ID.

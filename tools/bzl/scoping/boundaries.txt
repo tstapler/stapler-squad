@@ -14,6 +14,7 @@ session/dialogpresence !server
 session/summaries !server
 session/panereply !server
 session/jules !server
+session/wtconsistency !server
 session/cmdexec !server
 session/itemsources !server
 session/migrations !github

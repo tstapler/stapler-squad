@@ -729,10 +729,10 @@ var reasonsWithoutAutomatedRemediation = map[domain.StuckReason]bool{
 	// StuckReasonWorktreeInconsistent (session-worktree-reconciliation, Epic
 	// 1.2/1.3): no "retry now" action exists because the remediation *is* the
 	// worktree consistency sweep itself — it already re-evaluates every
-	// candidate on its own 15-minute ticker (session.StartWorktreeConsistencySweeper)
+	// candidate on its own 15-minute ticker (wtconsistency.StartWorktreeConsistencySweeper)
 	// and repairs or re-flags automatically; there is nothing a manual
 	// TriggerRemediationNow call could do differently. See
-	// session/worktree_consistency_sweep.go's resolveFinding/sweep.
+	// session/wtconsistency/sweep.go's resolveFinding/sweep.
 	domain.StuckReasonWorktreeInconsistent: true,
 	// StuckReasonMergedPRUnverified: ReconcilePRPending already re-verifies every
 	// tick, so a "retry now" would repeat the same check. The only resolution is an
