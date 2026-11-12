@@ -5,7 +5,7 @@ package session
 // on a single point-in-time poll, which (a) can't distinguish Claude Code's
 // own idle prompt from a raw shell/vim prompt reporting the same StatusIdle
 // value, and (b) treats one noisy poll as sufficient. These tests build a
-// *ClaudeController against an in-memory buffer (newControllerWithMock, from
+// *claudectl.ClaudeController against an in-memory buffer (newControllerWithMock, from
 // claude_controller_test.go) instead of a real tmux session/PTY.
 
 import (
@@ -17,14 +17,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
+	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
 	"github.com/tstapler/stapler-squad/session/detection"
-	"github.com/tstapler/stapler-squad/session/ptyio"
 )
 
 // nudgeGateTestInstance wires cc as inst's controller via the unexported
 // controllerManager field (same-package test helper) so CheckNudgeEligible's
 // inst.GetController() call resolves to a controllable, non-tmux controller.
-func nudgeGateTestInstance(cc *ClaudeController) *Instance {
+func nudgeGateTestInstance(cc *claudectl.ClaudeController) *Instance {
 	inst := &Instance{Title: "nudge-gate-test", UUID: uuid.New().String()}
 	inst.controllerManager.SetController(cc)
 	return inst
@@ -37,7 +38,7 @@ func nudgeGateTestInstance(cc *ClaudeController) *Instance {
 // (IsSafeSteerStatus) tells them apart.
 func TestCheckNudgeEligibleWithSettleWindow_RejectsRawShellPrompt(t *testing.T) {
 	t.Parallel()
-	cc, _ := newControllerWithMock("tstapler@dev-box:~/stapler-squad$ ")
+	cc, _ := claudectltest.NewController("tstapler@dev-box:~/stapler-squad$ ")
 	status, _ := cc.GetCurrentStatus()
 	require.Equal(t, detection.StatusIdle, status, "sanity: a raw shell prompt must still report StatusIdle for this test to be meaningful")
 
@@ -53,7 +54,7 @@ func TestCheckNudgeEligibleWithSettleWindow_RejectsRawShellPrompt(t *testing.T) 
 // held steady the whole time passes.
 func TestCheckNudgeEligibleWithSettleWindow_AcceptsSafeIdlePromptAfterSettleWindow(t *testing.T) {
 	t.Parallel()
-	cc, _ := newControllerWithMock("I've fixed the null check in validator.go.\n> ")
+	cc, _ := claudectltest.NewController("I've fixed the null check in validator.go.\n> ")
 	status, _ := cc.GetCurrentStatus()
 	require.Equal(t, detection.StatusIdle, status)
 
@@ -67,33 +68,13 @@ func TestCheckNudgeEligibleWithSettleWindow_AcceptsSafeIdlePromptAfterSettleWind
 	assert.GreaterOrEqual(t, elapsed, settleWindow, "must actually wait out the settle window, not return on the first poll")
 }
 
-// newControllerWithSharedBuffer mirrors newControllerWithMock (claude_controller_test.go)
-// but returns the backing *CircularBuffer too, so a test can append further
-// output after construction to simulate the pane's content changing over
-// time — newControllerWithMock's buffer is write-once and not exposed.
-func newControllerWithSharedBuffer(content string) (*ClaudeController, *ptyio.CircularBuffer) {
-	inst := &mockInstance{title: "test", preview: content}
-	cc := &ClaudeController{
-		sessionName: "test",
-		instance:    inst,
-	}
-	cc.statusDetector.Store(detection.NewStatusDetector())
-	cc.idleDetector.Store(detection.NewIdleDetector("test", nil))
-	buf := ptyio.NewCircularBuffer(256 * 1024)
-	if content != "" {
-		_, _ = buf.Write([]byte(content))
-	}
-	cc.ptyAccess.Store(ptyio.NewPTYAccess("test", nil, buf))
-	return cc, buf
-}
-
 // TestCheckNudgeEligibleWithSettleWindow_RejectsWhenStatusFlipsDuringWindow is
 // the direct sustained-idle regression: a status that starts safe but flips
 // to a raw shell prompt partway through the settle window must be refused —
 // a single early safe poll must not be enough.
 func TestCheckNudgeEligibleWithSettleWindow_RejectsWhenStatusFlipsDuringWindow(t *testing.T) {
 	t.Parallel()
-	cc, buf := newControllerWithSharedBuffer("I've fixed the null check in validator.go.\n> ")
+	cc, buf := claudectltest.NewController("I've fixed the null check in validator.go.\n> ")
 	inst := nudgeGateTestInstance(cc)
 
 	const settleWindow = 200 * time.Millisecond
@@ -114,7 +95,7 @@ func TestCheckNudgeEligibleWithSettleWindow_RejectsWhenStatusFlipsDuringWindow(t
 // live ctx behaves exactly as CheckNudgeEligibleWithSettleWindow did.
 func TestCheckNudgeEligibleWithSettleWindowCtx_HonoursCancel(t *testing.T) {
 	t.Parallel()
-	cc, _ := newControllerWithMock("I've fixed the null check in validator.go.\n> ")
+	cc, _ := claudectltest.NewController("I've fixed the null check in validator.go.\n> ")
 	inst := nudgeGateTestInstance(cc)
 
 	cancelled, cancel := context.WithCancel(context.Background())
@@ -135,7 +116,7 @@ func TestCheckNudgeEligibleWithSettleWindowCtx_HonoursCancel(t *testing.T) {
 // NDG-11: the MCP-path entry points keep their signature and not-idle error.
 func TestCheckNudgeEligible_MCPPathUnchanged(t *testing.T) {
 	t.Parallel()
-	cc, _ := newControllerWithMock("tstapler@dev-box:~/stapler-squad$ ")
+	cc, _ := claudectltest.NewController("tstapler@dev-box:~/stapler-squad$ ")
 	inst := nudgeGateTestInstance(cc)
 
 	require.ErrorIs(t, CheckNudgeEligible(inst), ErrNudgeTargetNotIdle)

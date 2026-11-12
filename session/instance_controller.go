@@ -1,6 +1,6 @@
 package session
 
-// instance_controller.go contains ClaudeController lifecycle methods and
+// instance_controller.go contains claudectl.ClaudeController lifecycle methods and
 // rate limit delegation for Instance. The programExtension contract and its
 // runtime registry live in instance_program_extension.go.
 
@@ -11,14 +11,15 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
-// StartController creates and starts a ClaudeController for this instance,
+// StartController creates and starts a claudectl.ClaudeController for this instance,
 // UNLESS a programExtension (currently: a pi-support-enabled pi session) is
 // supported, in which case it starts that extension instead (Epic 5.2) — pi
-// has no PTY output for ClaudeController's regex-based detector to scrape,
+// has no PTY output for claudectl.ClaudeController's regex-based detector to scrape,
 // so the two are mutually exclusive per instance, not layered.
 // The controller enables automated idle detection and queue management.
 func (i *Instance) StartController() error {
@@ -69,8 +70,8 @@ func (i *Instance) StartController() error {
 		return nil
 	}
 
-	// Create new controller (no lock needed - NewClaudeController doesn't access mutex-protected fields)
-	controller, err := NewClaudeController(i)
+	// Create new controller (no lock needed - claudectl.NewClaudeController doesn't access mutex-protected fields)
+	controller, err := claudectl.NewClaudeController(i)
 	if err != nil {
 		return fmt.Errorf("failed to create controller: %w", err)
 	}
@@ -186,16 +187,16 @@ func (i *Instance) FireLifecycleEventForTest(event LifecycleEvent, reason string
 // StartController's normal preconditions (status manager wiring, a live PTY
 // subprocess). Exported exclusively for cross-package tests (e.g.
 // server/services' steerInstance autonomous-branch error/timeout tests) that
-// need a real, pipe-backed *ClaudeController (session.NewClaudeController +
-// Start against an os.Pipe()-backed InstanceContext, mirroring
+// need a real, pipe-backed *claudectl.ClaudeController (session.NewClaudeController +
+// Start against an os.Pipe()-backed claudectl.InstanceContext, mirroring
 // TestClaudeController_Start_TagsEscapeAnalyticsWithStableID's approach)
 // without spinning up a full session. Mirrors FireLifecycleEventForTest's
 // "exported for test" pattern.
-func (i *Instance) SetControllerForTest(c *ClaudeController) {
+func (i *Instance) SetControllerForTest(c *claudectl.ClaudeController) {
 	i.controllerManager.SetController(c)
 }
 
-// StopController stops and cleans up the ClaudeController for this
+// StopController stops and cleans up the claudectl.ClaudeController for this
 // instance, or the running programExtension (currently: the PiStatusSource
 // for a pi-support-enabled pi session) — see StartController's doc comment.
 //
@@ -241,7 +242,7 @@ func (i *Instance) StopController() {
 	log.Info("stopped claudecontroller for instance", "session", i.Title)
 }
 
-// stopControllerLocked stops the ClaudeController (or the running
+// stopControllerLocked stops the claudectl.ClaudeController (or the running
 // programExtension, e.g. PiStatusSource for a pi-support-enabled pi
 // session — see StartController's doc comment) from within an actor
 // command. See StopController's doc comment for why routing is gated on
@@ -262,7 +263,7 @@ func stopControllerLocked(s *instanceState) {
 	log.Info("stopped claudecontroller for instance", "session", i.Title)
 }
 
-// GetController returns the ClaudeController if one exists.
+// GetController returns the claudectl.ClaudeController if one exists.
 //
 // Deliberately does not take i.mu: controllerManager stores the controller in an
 // atomic.Pointer specifically so reads never need to serialize with the mutex-guarded
@@ -270,7 +271,7 @@ func stopControllerLocked(s *instanceState) {
 // doc comment. Profiling on 2026-09-02 showed StopController's i.mu.Lock() blocking a
 // large fraction of concurrent GetController callers (status polling, streaming) even
 // though GetController never touched any i.mu-protected field.
-func (i *Instance) GetController() *ClaudeController {
+func (i *Instance) GetController() *claudectl.ClaudeController {
 	return i.controllerManager.GetController()
 }
 
@@ -337,7 +338,7 @@ func (i *Instance) SetRateLimitEnabled(enabled bool) {
 }
 
 // SetStatusChangeCallback registers fn to be called on every terminal status change
-// detected by the ClaudeController. Safe to call before or after the controller is
+// detected by the claudectl.ClaudeController. Safe to call before or after the controller is
 // started; the callback is wired at controller start time via wireStatusChangeCallback.
 func (i *Instance) SetStatusChangeCallback(fn func(detection.DetectedStatus, string)) {
 	i.onStatusChange.Write(func(f *func(detection.DetectedStatus, string)) {
@@ -349,9 +350,9 @@ func (i *Instance) SetStatusChangeCallback(fn func(detection.DetectedStatus, str
 }
 
 // wireStatusChangeCallback wires the instance-level status-change callback to the
-// ClaudeController's fan-out listener set. Called both from SetStatusChangeCallback
+// claudectl.ClaudeController's fan-out listener set. Called both from SetStatusChangeCallback
 // and from StartController before controller.Start().
-func (i *Instance) wireStatusChangeCallback(ctrl *ClaudeController) {
+func (i *Instance) wireStatusChangeCallback(ctrl *claudectl.ClaudeController) {
 	if ctrl == nil {
 		return
 	}
@@ -395,7 +396,7 @@ func (i *Instance) SetRateLimitCallbacks(
 
 // wireRateLimitCallbacks wires the instance-level callbacks to the rate limit manager
 // inside the controller. Called both from SetRateLimitCallbacks and from controller startup.
-func (i *Instance) wireRateLimitCallbacks(ctrl *ClaudeController) {
+func (i *Instance) wireRateLimitCallbacks(ctrl *claudectl.ClaudeController) {
 	if ctrl == nil {
 		return
 	}

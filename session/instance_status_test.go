@@ -19,7 +19,7 @@ func (f *fakeApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID st
 
 // TestInstanceStatusManager_GetStatus_PiFallback covers Story 5.2.2's AC: an
 // instance with program "pi", a registered PiStatusSource reporting
-// StatusExecuting, and no registered ClaudeController falls back to the
+// StatusExecuting, and no registered claudectl.ClaudeController falls back to the
 // PiStatusSource's status.
 func TestInstanceStatusManager_GetStatus_PiFallback(t *testing.T) {
 	ism := NewInstanceStatusManager()

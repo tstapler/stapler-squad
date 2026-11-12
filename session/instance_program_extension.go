@@ -6,7 +6,7 @@ import "sync"
 // the runtime extension registry StartController/StopController dispatch
 // through (session/instance_controller.go). Split out of that file to keep
 // it under the file-size lint threshold -- this registry is a self-contained
-// concept with no dependency on ClaudeController's own lifecycle code.
+// concept with no dependency on claudectl.ClaudeController's own lifecycle code.
 
 // programExtension lets StartController/StopController dispatch through one
 // interface instead of an if-branch per program (mirroring

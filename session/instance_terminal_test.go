@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -44,8 +45,8 @@ func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
 	}
 
 	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
-	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
-	ctrl.ptyAccess.Store(pa)
+	ctrl := claudectl.NewBareForTest(inst.Title, inst)
+	ctrl.SetPTYAccessForTest(pa)
 	inst.controllerManager.SetController(ctrl)
 
 	content, err := inst.Preview()
@@ -72,14 +73,14 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 	inst := &Instance{Title: "tmux-preview-session", Status: Running, processManager: NewTmuxBackend(mock)}
 	inst.started.Store(true)
 
-	// Even if a stale ClaudeController buffer exists, capture-pane must win.
+	// Even if a stale claudectl.ClaudeController buffer exists, capture-pane must win.
 	buf := ptyio.NewCircularBuffer(1024)
 	if _, err := buf.Write([]byte("stale pty buffer content")); err != nil {
 		t.Fatalf("write buffer: %v", err)
 	}
 	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
-	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
-	ctrl.ptyAccess.Store(pa)
+	ctrl := claudectl.NewBareForTest(inst.Title, inst)
+	ctrl.SetPTYAccessForTest(pa)
 	inst.controllerManager.SetController(ctrl)
 
 	content, err := inst.Preview()
@@ -105,8 +106,8 @@ func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T
 		t.Fatalf("write buffer: %v", err)
 	}
 	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
-	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
-	ctrl.ptyAccess.Store(pa)
+	ctrl := claudectl.NewBareForTest(inst.Title, inst)
+	ctrl.SetPTYAccessForTest(pa)
 	inst.controllerManager.SetController(ctrl)
 
 	content, err := inst.Preview()
@@ -186,8 +187,8 @@ func TestInstance_PreviewContext_FallsBackToPreviewOnGenuineCaptureError(t *test
 		t.Fatalf("write buffer: %v", err)
 	}
 	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
-	ctrl := &ClaudeController{sessionName: inst.Title, instance: inst}
-	ctrl.ptyAccess.Store(pa)
+	ctrl := claudectl.NewBareForTest(inst.Title, inst)
+	ctrl.SetPTYAccessForTest(pa)
 	inst.controllerManager.SetController(ctrl)
 
 	content, err := inst.PreviewContext(context.Background())

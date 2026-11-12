@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -20,7 +21,7 @@ func (m *reactiveTestStatusProvider) GetStatus(inst *Instance) InstanceStatusInf
 	return InstanceStatusInfo{}
 }
 
-func (m *reactiveTestStatusProvider) GetController(title string) (*ClaudeController, bool) {
+func (m *reactiveTestStatusProvider) GetController(title string) (*claudectl.ClaudeController, bool) {
 	return nil, false
 }
 

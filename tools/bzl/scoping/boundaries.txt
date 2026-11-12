@@ -14,6 +14,8 @@ session/hostclaim !server
 session/dialogpresence !server
 session/summaries !server
 session/panereply !server
+session/claudectl !server
+session/claudectl/claudectltest !server
 session/jules !server
 session/wtconsistency !server
 session/cmdexec !server

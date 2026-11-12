@@ -19,18 +19,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/binaries"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
-	"go.uber.org/goleak"
 )
 
 // addPausedSession inserts a paused session directly into storage via AddInstance.
@@ -2056,7 +2058,7 @@ func TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_Returns
 // regression guard (AC7's "no parallel steering implementation"): the
 // pre-existing autonomous branch (ClaudeController.SendCommandImmediate) must
 // be untouched by widening the handler to add the non-autonomous SendKeys
-// branch. Wires a real, pipe-backed *session.ClaudeController (see
+// branch. Wires a real, pipe-backed *claudectl.ClaudeController (see
 // newRealControllerForTest) so this exercises an actual successful
 // SendCommandImmediate call end-to-end through UpdateSession.
 //
@@ -2130,8 +2132,8 @@ func TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError(t *t
 // steerInternal — autonomous branch error/timeout paths (Story 1.1.2)
 // --------------------------------------------------------------------------
 
-// fakeControllerInstance is a minimal session.InstanceContext double that lets
-// these tests construct a real *session.ClaudeController without a real PTY
+// fakeControllerInstance is a minimal claudectl.InstanceContext double that lets
+// these tests construct a real *claudectl.ClaudeController without a real PTY
 // subprocess (see newRealControllerForTest).
 type fakeControllerInstance struct {
 	title     string
@@ -2149,7 +2151,7 @@ func (f *fakeControllerInstance) GetStatus() int                      { return 0
 func (f *fakeControllerInstance) WriteToPTY(data []byte) (int, error) { return len(data), nil }
 func (f *fakeControllerInstance) GetProgram() string                  { return "claude" }
 
-// newRealControllerForTest builds a real *session.ClaudeController backed by
+// newRealControllerForTest builds a real *claudectl.ClaudeController backed by
 // a genuine pty pair (github.com/creack/pty, already a project dependency),
 // without requiring a subprocess fork (which this sandboxed test environment
 // does not permit; see
@@ -2191,7 +2193,7 @@ func (f *fakeControllerInstance) GetProgram() string                  { return "
 // harmless in the cancelImmediately=true case since streamLoop's own select
 // also sees ctx.Done() as its only ready case and exits on its own almost
 // immediately — nothing is actually left running there.
-func newRealControllerForTest(t *testing.T, title string, cancelImmediately bool) *session.ClaudeController {
+func newRealControllerForTest(t *testing.T, title string, cancelImmediately bool) *claudectl.ClaudeController {
 	t.Helper()
 	master, slave, err := pty.Open()
 	if err != nil {
@@ -2206,7 +2208,7 @@ func newRealControllerForTest(t *testing.T, title string, cancelImmediately bool
 		cancel()
 	}
 
-	ctrl, err := session.NewClaudeController(&fakeControllerInstance{title: title, ptyReader: master})
+	ctrl, err := claudectl.NewClaudeController(&fakeControllerInstance{title: title, ptyReader: master})
 	require.NoError(t, err)
 	require.NoError(t, ctrl.Start(ctx))
 	return ctrl
@@ -2238,7 +2240,7 @@ func TestSteerInstance_AutonomousNilController_ReturnsError(t *testing.T) {
 // TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError verifies
 // the fixed autonomous branch returns SendCommandImmediate's own error
 // (wrapped with context) instead of swallowing it — a real, non-nil
-// *session.ClaudeController that was never Start()ed reproduces this
+// *claudectl.ClaudeController that was never Start()ed reproduces this
 // deterministically (SendCommandImmediate's own "controller not started"
 // check), without needing a PTY.
 func TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError(t *testing.T) {
@@ -2246,7 +2248,7 @@ func TestSteerInstance_AutonomousSendCommandImmediateError_ReturnsError(t *testi
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	ctrl, err := session.NewClaudeController(&fakeControllerInstance{title: "autonomous-erroring-controller"})
+	ctrl, err := claudectl.NewClaudeController(&fakeControllerInstance{title: "autonomous-erroring-controller"})
 	require.NoError(t, err)
 
 	inst := &session.Instance{
@@ -2474,7 +2476,7 @@ func TestIsSafeSteerStatus_TurnCompleteOnly(t *testing.T) {
 // binaries.NewClaudeDetector() pattern set, not a hand-fabricated status) and
 // verifies isSafeSteerStatus — the exact function IsReadyForSteer defers to —
 // accepts the resulting (status, description) pair. Building a fully live
-// *session.ClaudeController here would additionally require a real PTY and
+// *claudectl.ClaudeController here would additionally require a real PTY and
 // Start()'s background goroutines (see session/claude_controller_test.go's
 // newControllerWithMock, which stays inside package session for the same
 // reason); exercising the real regexes directly is the documented fallback.

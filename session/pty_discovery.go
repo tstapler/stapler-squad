@@ -1,7 +1,5 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"bufio"
 	"bytes"
@@ -14,9 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/linkdata/deadlock"
+
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -261,13 +262,13 @@ func (s PTYStatus) String() string {
 
 // PTYConnection represents a discovered PTY
 type PTYConnection struct {
-	Path         string            // /dev/pts/12
-	PID          int               // Process ID
-	Command      string            // "claude" or "aider"
-	SessionName  string            // Associated squad session (if any)
-	Status       PTYStatus         // Current status
-	LastActivity time.Time         // Last activity timestamp
-	Controller   *ClaudeController // Connected controller (if any)
+	Path         string                      // /dev/pts/12
+	PID          int                         // Process ID
+	Command      string                      // "claude" or "aider"
+	SessionName  string                      // Associated squad session (if any)
+	Status       PTYStatus                   // Current status
+	LastActivity time.Time                   // Last activity timestamp
+	Controller   *claudectl.ClaudeController // Connected controller (if any)
 
 	// Ownership and management metadata
 	IsManaged       bool   // True if this is a squad-managed session

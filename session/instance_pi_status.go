@@ -2,7 +2,7 @@ package session
 
 // instance_pi_status.go wires Epic 5.2's PiStatusSource into Instance's
 // existing StartController/StopController lifecycle (session/instance_controller.go),
-// mirroring how a ClaudeController is registered/unregistered but via the
+// mirroring how a claudectl.ClaudeController is registered/unregistered but via the
 // piSources parallel map (session/instance_status.go), not the controllers map.
 
 import (

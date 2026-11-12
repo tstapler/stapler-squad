@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -35,7 +36,7 @@ type nudgePane interface {
 
 func newNudgeWriterInstance(t *testing.T, paneContent string, pm nudgePane) *Instance {
 	t.Helper()
-	cc, _ := newControllerWithMock(paneContent)
+	cc, _ := claudectltest.NewController(paneContent)
 	inst := minimalInstance(t)
 	inst.ForceStatus(Active)
 	inst.controllerManager.SetController(cc)

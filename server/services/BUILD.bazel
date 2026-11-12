@@ -824,6 +824,7 @@ go_test(
         "//session",
         "//session/artifacts",
         "//session/backlog",
+        "//session/claudectl",
         "//session/detection",
         "//session/detection/binaries",
         "//session/domain",

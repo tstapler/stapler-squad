@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
@@ -68,7 +69,7 @@ type stopSource interface {
 
 type instanceStopSource struct {
 	inst       *Instance
-	controller *ClaudeController
+	controller *claudectl.ClaudeController
 }
 
 func (s instanceStopSource) Status() (detection.DetectedStatus, string) {

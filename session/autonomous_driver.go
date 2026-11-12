@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -103,7 +104,7 @@ type panePreviewer interface {
 // AutonomousDriver monitors a session and injects orchestrator prompts when idle.
 type AutonomousDriver struct {
 	inst           *Instance
-	controller     *ClaudeController
+	controller     *claudectl.ClaudeController
 	headlessPool   HeadlessPoolClient
 	goal           string
 	maxTurns       int
@@ -671,7 +672,7 @@ func (d *AutonomousDriver) fireCompletion(sessionName string, outcome Autonomous
 // redirection (confirmed live 2026-08-02 on stapler-squad-backlog-self-resolve).
 //
 // Returns true if a turn is warranted, false if ctx expired first.
-func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *ClaudeController, settleWindow, pollInterval time.Duration) bool {
+func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, cc *claudectl.ClaudeController, settleWindow, pollInterval time.Duration) bool {
 	if settleWindow <= 0 {
 		if cc.IsIdle() {
 			return true

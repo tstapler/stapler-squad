@@ -1,4 +1,4 @@
-package session
+package claudectl
 
 import (
 	"context"
@@ -19,8 +19,8 @@ import (
 
 func TestNewClaudeController(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -47,8 +47,8 @@ func TestNewClaudeController_NilInstance(t *testing.T) {
 
 func TestNewClaudeController_EmptyTitle(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "",
+	instance := &mockInstance{
+		title: "",
 	}
 
 	_, err := NewClaudeController(instance)
@@ -66,8 +66,8 @@ func TestClaudeController_Initialize(t *testing.T) {
 
 func TestClaudeController_IsStarted(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -82,8 +82,8 @@ func TestClaudeController_IsStarted(t *testing.T) {
 
 func TestClaudeController_GetSessionName(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -98,8 +98,8 @@ func TestClaudeController_GetSessionName(t *testing.T) {
 
 func TestClaudeController_GetInstance(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -114,8 +114,8 @@ func TestClaudeController_GetInstance(t *testing.T) {
 
 func TestClaudeController_StopWithoutStart(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -131,8 +131,8 @@ func TestClaudeController_StopWithoutStart(t *testing.T) {
 
 func TestClaudeController_SendCommandWithoutStart(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -148,8 +148,8 @@ func TestClaudeController_SendCommandWithoutStart(t *testing.T) {
 
 func TestClaudeController_SendCommandImmediateWithoutStart(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -165,8 +165,8 @@ func TestClaudeController_SendCommandImmediateWithoutStart(t *testing.T) {
 
 func TestClaudeController_GetExecutionOptions(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -183,8 +183,8 @@ func TestClaudeController_GetExecutionOptions(t *testing.T) {
 
 func TestClaudeController_SetExecutionOptions(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -207,8 +207,8 @@ func TestClaudeController_SetExecutionOptions(t *testing.T) {
 
 func TestClaudeController_ClearHistoryWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -224,8 +224,8 @@ func TestClaudeController_ClearHistoryWithoutInit(t *testing.T) {
 
 func TestClaudeController_ClearQueueWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -241,8 +241,8 @@ func TestClaudeController_ClearQueueWithoutInit(t *testing.T) {
 
 func TestClaudeController_GetRecentOutputWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -258,8 +258,8 @@ func TestClaudeController_GetRecentOutputWithoutInit(t *testing.T) {
 
 func TestClaudeController_GetCurrentStatusWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -279,8 +279,8 @@ func TestClaudeController_GetCurrentStatusWithoutInit(t *testing.T) {
 
 func TestClaudeController_SubscribeWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -296,8 +296,8 @@ func TestClaudeController_SubscribeWithoutInit(t *testing.T) {
 
 func TestClaudeController_UnsubscribeWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -313,8 +313,8 @@ func TestClaudeController_UnsubscribeWithoutInit(t *testing.T) {
 
 func TestClaudeController_GetCommandStatusNoCommand(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -331,8 +331,8 @@ func TestClaudeController_GetCommandStatusNoCommand(t *testing.T) {
 
 func TestClaudeController_CancelCommandWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -347,8 +347,8 @@ func TestClaudeController_CancelCommandWithoutInit(t *testing.T) {
 
 func TestClaudeController_GetCurrentCommandWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -364,8 +364,8 @@ func TestClaudeController_GetCurrentCommandWithoutInit(t *testing.T) {
 
 func TestClaudeController_GetQueuedCommandsWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -381,8 +381,8 @@ func TestClaudeController_GetQueuedCommandsWithoutInit(t *testing.T) {
 
 func TestClaudeController_GetCommandHistoryWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -398,8 +398,8 @@ func TestClaudeController_GetCommandHistoryWithoutInit(t *testing.T) {
 
 func TestClaudeController_SearchHistoryWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -415,8 +415,8 @@ func TestClaudeController_SearchHistoryWithoutInit(t *testing.T) {
 
 func TestClaudeController_GetHistoryStatisticsWithoutInit(t *testing.T) {
 	t.Parallel()
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	controller, err := NewClaudeController(instance)
@@ -488,8 +488,8 @@ func TestClaudeController_FullLifecycle(t *testing.T) {
 
 // Benchmark tests
 func Benchmark_ClaudeController_Creation(b *testing.B) {
-	instance := &Instance{
-		Title: "test-session",
+	instance := &mockInstance{
+		title: "test-session",
 	}
 
 	b.ResetTimer()
@@ -544,87 +544,6 @@ var tmuxOutputLarge = func() string {
 	}
 	return sb.String()
 }()
-
-// ---------------------------------------------------------------------------
-// Unit tests — tailContent
-// ---------------------------------------------------------------------------
-
-func TestTailContent_ShorterThanWindow(t *testing.T) {
-	t.Parallel()
-	s := "hello\nworld\n"
-	got := tailContent(s, 4096)
-	if got != s {
-		t.Errorf("expected unchanged string, got %q", got)
-	}
-}
-
-func TestTailContent_LongerThanWindow(t *testing.T) {
-	t.Parallel()
-	// Build a string with 10 lines; keep only the last 3.
-	content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
-	// Window large enough to capture last ~3 lines but not all.
-	got := tailContent(content, 20)
-	// Must not start mid-line.
-	if len(got) == 0 || got[0] == '\n' {
-		t.Errorf("tail starts at bad position: %q", got)
-	}
-	// The last line of content must be present.
-	if !strings.Contains(got, "line10") {
-		t.Errorf("tail missing last line, got: %q", got)
-	}
-}
-
-func TestTailContent_ExactlyWindowSize(t *testing.T) {
-	t.Parallel()
-	s := strings.Repeat("x", statusDetectionTailBytes)
-	got := tailContent(s, statusDetectionTailBytes)
-	if got != s {
-		t.Errorf("expected unchanged string for exact-size input")
-	}
-}
-
-func TestTailContent_NoNewlineInTail(t *testing.T) {
-	t.Parallel()
-	// Content that after slicing has no newline — entire tail is one line.
-	prefix := strings.Repeat("a\n", 200) // lots of short lines
-	suffix := strings.Repeat("b", 100)   // no newline, fits in window
-	content := prefix + suffix
-	got := tailContent(content, 200)
-	// Should contain the suffix (no newline, so tail starts wherever the slice lands)
-	if !strings.Contains(got, suffix) {
-		t.Errorf("expected tail to include no-newline suffix, got %q", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Unit tests — hashString
-// ---------------------------------------------------------------------------
-
-func TestHashString_SameInputSameHash(t *testing.T) {
-	t.Parallel()
-	h1 := hashString("hello")
-	h2 := hashString("hello")
-	if h1 != h2 {
-		t.Error("identical inputs must produce identical hashes")
-	}
-}
-
-func TestHashString_DifferentInputDifferentHash(t *testing.T) {
-	t.Parallel()
-	if hashString("hello") == hashString("world") {
-		t.Error("different inputs must (almost certainly) produce different hashes")
-	}
-}
-
-func TestHashString_EmptyString(t *testing.T) {
-	t.Parallel()
-	// Should not panic and should return a consistent value.
-	h1 := hashString("")
-	h2 := hashString("")
-	if h1 != h2 {
-		t.Error("empty string hash must be deterministic")
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Unit tests — status cache (GetCurrentStatus)
@@ -1051,23 +970,6 @@ func Benchmark_filterTmuxMetadata_Large(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = filterTmuxMetadata(tmuxOutputLarge)
-	}
-}
-
-func Benchmark_tailContent_Large(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = tailContent(tmuxOutputLarge, statusDetectionTailBytes)
-	}
-}
-
-func Benchmark_hashString_4KB(b *testing.B) {
-	s := tailContent(tmuxOutputLarge, statusDetectionTailBytes)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = hashString(s)
 	}
 }
 
@@ -1530,4 +1432,32 @@ func TestApplyOSCStatusOverride_FullMatrix(t *testing.T) {
 			}
 		}
 	})
+}
+
+type leasedMockInstance struct {
+	mockInstance
+	recovery []byte
+}
+
+func (m *leasedMockInstance) WriteRateLimitRecovery(data []byte) (int, error) {
+	m.recovery = data
+	return len(data), nil
+}
+
+func TestRecoveryAccessor_ShouldDelegateToRateLimitWriter_WhenContextImplementsIt(t *testing.T) {
+	t.Parallel()
+	inst := &leasedMockInstance{}
+	if _, err := (recoveryAccessor{inst}).WriteToPTY([]byte("go\n")); err != nil {
+		t.Fatalf("WriteToPTY() error: %v", err)
+	}
+	if string(inst.recovery) != "go\n" {
+		t.Errorf("recovery write = %q, want %q", inst.recovery, "go\n")
+	}
+}
+
+func TestRecoveryAccessor_ShouldWriteDirectly_WhenContextCannotSerialize(t *testing.T) {
+	t.Parallel()
+	if n, err := (recoveryAccessor{&mockInstance{}}).WriteToPTY([]byte("x")); err != nil || n != 0 {
+		t.Errorf("WriteToPTY() = (%d, %v), want mockInstance's direct (0, nil)", n, err)
+	}
 }

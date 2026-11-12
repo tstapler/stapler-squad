@@ -23,7 +23,7 @@ import (
 // (instance_tmux.go) reads claudeSession unconditionally before dispatching
 // on programKind. It therefore does NOT implement programExtension: nothing
 // here starts or stops a controller. The default StartController/
-// StopController path (ClaudeController) is separate, unrelated business
+// StopController path (claudectl.ClaudeController) is separate, unrelated business
 // logic that happens to share the "claude" name -- see StartController's
 // doc comment in instance_controller.go.
 //

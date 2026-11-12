@@ -11,10 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// leasedCtxFake is an InstanceContext whose lease comes from a real Instance;
-// only WriteToPTY is exercised.
+// leasedCtxFake wraps a real Instance's lease and records the writes made under it.
 type leasedCtxFake struct {
-	InstanceContext
 	inst     *Instance
 	entered  chan struct{} // closed when the accessor starts waiting for the lease
 	released atomic.Bool   // set by the test just before the holder releases
@@ -41,7 +39,7 @@ func (f *leasedCtxFake) WriteToPTY(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func TestLeasedSessionAccessor_ShouldWaitForTheLeaseThenWriteUnderItAndRelease_WhenAnotherWriterHoldsItBriefly(t *testing.T) {
+func TestWriteUnderRateLimitLease_ShouldWaitForTheLeaseThenWriteUnderItAndRelease_WhenAnotherWriterHoldsItBriefly(t *testing.T) {
 	t.Parallel()
 	inst := leaseInstance(t, "ratelimit")
 	fake := &leasedCtxFake{inst: inst, entered: make(chan struct{})}
@@ -50,7 +48,7 @@ func TestLeasedSessionAccessor_ShouldWaitForTheLeaseThenWriteUnderItAndRelease_W
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := leasedSessionAccessor{fake}.WriteToPTY([]byte("go\n"))
+		_, err := writeUnderRateLimitLease(fake.AcquireTerminalWriteLease, fake.WriteToPTY, []byte("go\n"))
 		done <- err
 	}()
 	<-fake.entered
@@ -63,18 +61,3 @@ func TestLeasedSessionAccessor_ShouldWaitForTheLeaseThenWriteUnderItAndRelease_W
 	assert.False(t, fake.wroteWithoutLease, "the recovery input is typed while the wrapper holds the lease")
 	AssertLeaseFree(t, inst)
 }
-
-func TestLeasedSessionAccessor_ShouldWriteDirectly_WhenTheContextCannotAcquireALease(t *testing.T) {
-	t.Parallel()
-	fake := &noLeaseCtxFake{}
-	_, err := leasedSessionAccessor{fake}.WriteToPTY([]byte("x"))
-	require.NoError(t, err)
-	assert.Equal(t, 1, fake.writes)
-}
-
-type noLeaseCtxFake struct {
-	InstanceContext
-	writes int
-}
-
-func (f *noLeaseCtxFake) WriteToPTY(d []byte) (int, error) { f.writes++; return len(d), nil }
