@@ -835,6 +835,7 @@ go_test(
         "//session/detection/dtypes",
         "//session/detection/ratelimit",
         "//session/domain",
+        "//session/domain/backlogdto",
         "//session/flow",
         "//session/git",
         "//session/git/backend",

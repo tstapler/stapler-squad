@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/acauditevent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -202,7 +203,7 @@ func (r *EntRepository) RecordAcAudit(ctx context.Context, d AcAuditEventData) e
 // ErrNotFound only when the item is gone and no rows remain.
 func (r *EntRepository) ListAcAudit(ctx context.Context, itemID string) ([]AcAuditEventData, error) {
 	var where predicate.AcAuditEvent
-	if IsBacklogItemIDShape(itemID) {
+	if backlogdto.IsBacklogItemIDShape(itemID) {
 		where = acauditevent.ItemPublicID(itemID)
 	} else if parsed, err := uuid.Parse(itemID); err == nil {
 		where = acauditevent.ItemID(parsed)

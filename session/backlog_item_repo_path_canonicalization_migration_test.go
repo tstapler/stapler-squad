@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -72,7 +73,7 @@ func TestRunBacklogItemRepoPathCanonicalizationBackfill_should_BeIdempotent_When
 	_, err := git.PlainInit(mainDir, false)
 	require.NoError(t, err)
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "already-canonical item", RepoPath: mainDir})
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "already-canonical item", RepoPath: mainDir})
 	require.NoError(t, err)
 
 	require.NoError(t, runBacklogItemRepoPathCanonicalizationBackfill(ctx, repo))

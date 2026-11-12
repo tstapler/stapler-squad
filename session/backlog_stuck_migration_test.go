@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -26,7 +27,7 @@ func TestBacklogStuckStateSchema_should_createTableAndUniqueIndex_When_FreshClie
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "schema test item",
 		Status: string(BacklogStatusReview),
 	})
@@ -68,7 +69,7 @@ func TestBacklogStuckState_should_cascadeDelete_When_ParentItemDeleted(t *testin
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "cascade delete test item",
 		Status: string(BacklogStatusPRPending),
 	})

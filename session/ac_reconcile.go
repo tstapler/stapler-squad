@@ -3,6 +3,8 @@ package session
 import (
 	"fmt"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func acTextKey(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
@@ -33,7 +35,7 @@ func reconcileAcWaivers(existing, incoming []AcCriterion) (merged, cleared []AcC
 			continue
 		}
 		if c.Status == AcStatusWaived {
-			return nil, nil, fmt.Errorf("criterion %d: %w", c.Index, ErrAcWaiverViaUpdate)
+			return nil, nil, fmt.Errorf("criterion %d: %w", c.Index, backlogdto.ErrAcWaiverViaUpdate)
 		}
 		merged[i].WaiverReason, merged[i].WaivedBy, merged[i].WaivedAt = "", "", ""
 	}

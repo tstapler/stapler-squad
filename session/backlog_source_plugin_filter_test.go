@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestListBacklogItems_should_CarryAndFilterBySourcePluginID(t *testing.T) {
@@ -13,19 +14,19 @@ func TestListBacklogItems_should_CarryAndFilterBySourcePluginID(t *testing.T) {
 	storage, err := NewStorageWithRepository(NewTestEntRepository(t))
 	require.NoError(t, err)
 
-	linearSrc, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "linear", DisplayName: "L", Config: `{}`, Enabled: true})
+	linearSrc, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "linear", DisplayName: "L", Config: `{}`, Enabled: true})
 	require.NoError(t, err)
-	ghSrc, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "github_issues", DisplayName: "G", Config: `{}`, Enabled: true})
+	ghSrc, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "github_issues", DisplayName: "G", Config: `{}`, Enabled: true})
 	require.NoError(t, err)
 	mk := func(title, srcID, ext string) {
-		_, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: title, Status: string(BacklogStatusReady), SourceID: srcID, ExternalID: ext})
+		_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: title, Status: string(BacklogStatusReady), SourceID: srcID, ExternalID: ext})
 		require.NoError(t, err)
 	}
 	mk("lin", linearSrc.ID, "ENG-1")
 	mk("gh", ghSrc.ID, "7")
 	mk("local", "", "")
 
-	all, err := storage.ListBacklogItems(ctx, BacklogItemFilter{})
+	all, err := storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	plugins := map[string]string{}
 	for _, it := range all {
@@ -33,12 +34,12 @@ func TestListBacklogItems_should_CarryAndFilterBySourcePluginID(t *testing.T) {
 	}
 	require.Equal(t, map[string]string{"lin": "linear", "gh": "github_issues", "local": ""}, plugins)
 
-	got, err := storage.ListBacklogItems(ctx, BacklogItemFilter{SourcePluginIDs: []string{"linear"}})
+	got, err := storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{SourcePluginIDs: []string{"linear"}})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, "lin", got[0].Title)
 
-	sums, err := storage.ListBacklogItemSummaries(ctx, BacklogItemFilter{SourcePluginIDs: []string{"linear"}})
+	sums, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{SourcePluginIDs: []string{"linear"}})
 	require.NoError(t, err)
 	require.Len(t, sums, 1)
 	require.Equal(t, "linear", sums[0].SourcePluginID)

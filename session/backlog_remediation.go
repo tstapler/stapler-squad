@@ -19,6 +19,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // remediationBackoffSchedule is the gap BEFORE each numbered attempt after
@@ -155,7 +156,7 @@ const (
 // bootTime is the current process's serverStartTime, passed explicitly
 // (rather than read as a package var) so tests can simulate "server
 // restarted since this row was last checked" without process-level tricks.
-func EvaluateRemediation(row OpenStuckStateData, now, bootTime time.Time) remediationDecision {
+func EvaluateRemediation(row backlogdto.OpenStuckStateData, now, bootTime time.Time) remediationDecision {
 	if row.RemediationAttempts >= MaxRemediationAttempts {
 		// Parked. While parked, next_remediation_at is repurposed (by
 		// RemediationDue) to hold the cold-retry deadline rather than a
@@ -237,10 +238,10 @@ func nextRemediationAtForAttempt(attemptNumber int32, now time.Time) *time.Time 
 // RecordManualRemediationAttempt need "the single open row for this
 // (itemID, reason) pair, if any" and neither wants to duplicate the
 // find-in-slice scan.
-func (s *Storage) findOpenStuckStateForReason(ctx context.Context, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool, error) {
+func (s *Storage) findOpenStuckStateForReason(ctx context.Context, itemID string, reason domain.StuckReason) (backlogdto.OpenStuckStateData, bool, error) {
 	rows, err := s.FindOpenStuckStates(ctx)
 	if err != nil {
-		return OpenStuckStateData{}, false, err
+		return backlogdto.OpenStuckStateData{}, false, err
 	}
 	row, ok := FindOpenStuckStateFor(rows, itemID, reason)
 	return row, ok, nil
@@ -377,7 +378,7 @@ func (s *Storage) RemediationBlockedItems(ctx context.Context, reason domain.Stu
 }
 
 // OpenStuckState returns the open row for (itemID, reason), if any.
-func (s *Storage) OpenStuckState(ctx context.Context, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool, error) {
+func (s *Storage) OpenStuckState(ctx context.Context, itemID string, reason domain.StuckReason) (backlogdto.OpenStuckStateData, bool, error) {
 	return s.findOpenStuckStateForReason(ctx, itemID, reason)
 }
 
@@ -462,7 +463,7 @@ func liftableDenial(reason string) bool {
 // describes its item: the item is in the status the denial recorded as "from".
 // selfHealStuck resolves the row once the item has moved on, whichever path
 // moved it.
-func TransitionDenialAnchored(row OpenStuckStateData) bool {
+func TransitionDenialAnchored(row backlogdto.OpenStuckStateData) bool {
 	d, ok := domain.ParseTransitionDeniedContext(row.Context)
 	return ok && d.From == string(row.ItemStatus)
 }
@@ -494,7 +495,7 @@ func (s *Storage) HasOpenTransitionDenied(ctx context.Context, itemID string, st
 // denial the engine would now allow (gate satisfied, edge re-enabled, class no
 // longer enforced) is resolved here, so the held action proceeds on this call.
 // A read error fails open, as before the denial existed.
-func (s *Storage) TransitionDenialHolds(ctx context.Context, item *BacklogItemData) bool {
+func (s *Storage) TransitionDenialHolds(ctx context.Context, item *backlogdto.BacklogItemData) bool {
 	d, ok, err := s.OpenTransitionDenial(ctx, item.ID, BacklogStatus(item.Status))
 	if err != nil {
 		log.Debug("[TransitionDenialHolds] denial lookup failed; not holding", "item", item.ID, "error", err)
@@ -586,7 +587,7 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 			Caller:       caller,
 			ItemID:       itemID,
 			To:           BacklogStatus(d.To),
-			Precondition: &BacklogItemPrecondition{ExpectedStatus: d.From},
+			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: d.From},
 			TriggeredBy:  TriggeredBySystem,
 		})
 		if err != nil && !errors.Is(err, domain.ErrPreconditionFailed) {

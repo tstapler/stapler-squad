@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)
@@ -111,8 +112,8 @@ const MaxSameSessionReviewAttempts = 3
 // diverge from AutoReopenAfterFailedReview's own decision logic (a real bug
 // caught by TestAutoReopenAfterFailedReview_RepeatedFailureTwice_GrantsOneEscalatedRetry
 // asserting on the actual respawned prompt, not just the status transition).
-func ReviewVerdictSummariesMostRecentFirst(priorSessions []ItemSessionSummary) []ReviewVerdictSummary {
-	var out []ReviewVerdictSummary
+func ReviewVerdictSummariesMostRecentFirst(priorSessions []backlogdto.ItemSessionSummary) []backlogdto.ReviewVerdictSummary {
+	var out []backlogdto.ReviewVerdictSummary
 	for i := len(priorSessions) - 1; i >= 0; i-- {
 		s := priorSessions[i]
 		if s.Role == SessionRoleReview && s.ReviewVerdict != nil {
@@ -159,13 +160,13 @@ func IsGateDenial(err error) bool {
 }
 
 // findOpenStuckStateFor returns the row for (itemID, reason) from rows, if present.
-func FindOpenStuckStateFor(rows []OpenStuckStateData, itemID string, reason domain.StuckReason) (OpenStuckStateData, bool) {
+func FindOpenStuckStateFor(rows []backlogdto.OpenStuckStateData, itemID string, reason domain.StuckReason) (backlogdto.OpenStuckStateData, bool) {
 	for _, row := range rows {
 		if row.ItemID == itemID && row.Reason == reason {
 			return row, true
 		}
 	}
-	return OpenStuckStateData{}, false
+	return backlogdto.OpenStuckStateData{}, false
 }
 
 // extractTopLevelJSONObjects returns every complete JSON object found in raw, in

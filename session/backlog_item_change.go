@@ -1,6 +1,10 @@
 package session
 
-import "time"
+import (
+	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+)
 
 // BacklogChangeKind identifies which kind of backlog item mutation a
 // BacklogItemChange describes. Mirrors events.BacklogChangeKind
@@ -64,9 +68,9 @@ type BacklogItemChange struct {
 	// CreateItemSessionWithVerdict, session/storage_backlog.go) — this
 	// carries the verdict through the pipeline as first-class data, not via
 	// a client-side join against item_sessions.
-	Verdict *ReviewVerdictData
+	Verdict *backlogdto.ReviewVerdictData
 	// ActivityNote is populated only when Kind == ChangeActivityNoteAdded.
-	ActivityNote *ActivityNoteData
+	ActivityNote *backlogdto.ActivityNoteData
 }
 
 // ItemChangePublisher publishes a backlog item mutation to interested
@@ -82,5 +86,5 @@ type BacklogItemChange struct {
 // publisher may not be wired (e.g. in tests, or a repository that hasn't had
 // SetItemChangePublisher called on it).
 type ItemChangePublisher interface {
-	PublishItemChanged(item *BacklogItemData, change BacklogItemChange)
+	PublishItemChanged(item *backlogdto.BacklogItemData, change BacklogItemChange)
 }

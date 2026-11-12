@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -26,7 +27,7 @@ type itemPRSource interface {
 	ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error)
 	ListSessionTombstonesByUUIDs(ctx context.Context, uuids []string) (map[string][]PRRef, error)
 	ListItemTombstones(ctx context.Context, itemIDs []string) (map[string][]PRRef, error)
-	ListItemSessions(ctx context.Context, itemID string) ([]ItemSessionSummary, error)
+	ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error)
 }
 
 var _ PRSetReader = (*EntRepository)(nil)
@@ -50,7 +51,7 @@ func (r *EntRepository) ItemPRsByID(ctx context.Context, itemID string) ([]PRVie
 }
 
 // workSessionNewer orders work sessions newest first: created_at, then the larger id.
-func workSessionNewer(a, b ItemSessionSummary) bool {
+func workSessionNewer(a, b backlogdto.ItemSessionSummary) bool {
 	if !a.CreatedAt.Equal(b.CreatedAt) {
 		return a.CreatedAt.After(b.CreatedAt)
 	}
@@ -61,8 +62,8 @@ func workSessionNewer(a, b ItemSessionSummary) bool {
 // link nor tombstone is skipped (skipped reports whether any was); the first one
 // with a link, or with a tombstone and no link, is the round. "" means none.
 // ended_at is deliberately never read.
-func currentRoundSession(work []ItemSessionSummary, links map[string][]PRView, tombs map[string][]PRRef) (uuid string, skipped bool) {
-	sorted := append([]ItemSessionSummary(nil), work...)
+func currentRoundSession(work []backlogdto.ItemSessionSummary, links map[string][]PRView, tombs map[string][]PRRef) (uuid string, skipped bool) {
+	sorted := append([]backlogdto.ItemSessionSummary(nil), work...)
 	sort.Slice(sorted, func(i, j int) bool { return workSessionNewer(sorted[i], sorted[j]) })
 	for _, s := range sorted {
 		if len(links[s.SessionUUID]) > 0 || len(tombs[s.SessionUUID]) > 0 {
@@ -73,7 +74,7 @@ func currentRoundSession(work []ItemSessionSummary, links map[string][]PRView, t
 	return "", skipped
 }
 
-func workSessions(all []ItemSessionSummary) (work []ItemSessionSummary, uuids []string) {
+func workSessions(all []backlogdto.ItemSessionSummary) (work []backlogdto.ItemSessionSummary, uuids []string) {
 	for _, s := range all {
 		if s.Role == SessionRoleWork && s.SessionUUID != "" {
 			work = append(work, s)
@@ -136,7 +137,7 @@ func subtractRefs(prs []PRView, drop []PRRef) []PRView {
 // item or any of its sessions represents it and no tombstone of the item or any
 // session covers it. It returns before the all-rounds query when the derived set
 // already holds the number.
-func appendLegacyFallback(ctx context.Context, src itemPRSource, set []PRView, sessions []ItemSessionSummary, in itemPRInputs) ([]PRView, error) {
+func appendLegacyFallback(ctx context.Context, src itemPRSource, set []PRView, sessions []backlogdto.ItemSessionSummary, in itemPRInputs) ([]PRView, error) {
 	prURL, prNumber := in.prURL, in.prNumber
 	if prNumber <= 0 {
 		return set, nil
@@ -172,7 +173,7 @@ type itemPRInputs struct {
 	itemTombs []PRRef
 }
 
-func loadSessionCoverage(ctx context.Context, src itemPRSource, sessions []ItemSessionSummary, in itemPRInputs) (ItemPRCoverage, error) {
+func loadSessionCoverage(ctx context.Context, src itemPRSource, sessions []backlogdto.ItemSessionSummary, in itemPRInputs) (ItemPRCoverage, error) {
 	cov := ItemPRCoverage{
 		ItemTombstones: in.itemTombs,
 		SessionLinks:   map[string][]PRRef{}, SessionTombstones: map[string][]PRRef{},

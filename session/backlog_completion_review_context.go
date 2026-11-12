@@ -3,6 +3,8 @@ package session
 import (
 	"fmt"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BuildCompletionReviewContext assembles the text the completion reviewer reads for a
@@ -12,7 +14,7 @@ import (
 // is omitted entirely (no placeholder) when its data is absent — the SkipReviewGate path has
 // no verdict, and a cleaned-up worktree is why the diff summary uses persisted commit fields
 // instead of a live diff.
-func BuildCompletionReviewContext(item *BacklogItemData, sessions []ItemSessionSummary) string {
+func BuildCompletionReviewContext(item *backlogdto.BacklogItemData, sessions []backlogdto.ItemSessionSummary) string {
 	if item == nil {
 		return ""
 	}
@@ -32,7 +34,7 @@ func BuildCompletionReviewContext(item *BacklogItemData, sessions []ItemSessionS
 	return strings.ReplaceAll(sb.String(), "</completed_item>", "[/completed_item]")
 }
 
-func writeCompletionVerdictSection(sb *strings.Builder, sessions []ItemSessionSummary) {
+func writeCompletionVerdictSection(sb *strings.Builder, sessions []backlogdto.ItemSessionSummary) {
 	verdicts := ReviewVerdictSummariesMostRecentFirst(sessions)
 	if len(verdicts) == 0 {
 		return
@@ -51,7 +53,7 @@ func writeCompletionVerdictSection(sb *strings.Builder, sessions []ItemSessionSu
 	}
 }
 
-func writeCompletionDiffSection(sb *strings.Builder, sessions []ItemSessionSummary) {
+func writeCompletionDiffSection(sb *strings.Builder, sessions []backlogdto.ItemSessionSummary) {
 	for i := len(sessions) - 1; i >= 0; i-- {
 		s := sessions[i]
 		if s.Role != SessionRoleWork || (s.LastCommitMessage == "" && s.CommitCountSinceSpawn == 0) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -34,7 +35,7 @@ func TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustom
 		Save(ctx)
 	require.NoError(t, err)
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item entering a custom stage",
 		Status: string(BacklogStatusIdea),
 	})
@@ -50,7 +51,7 @@ func TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustom
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
-	var found *BacklogStatusEventData
+	var found *backlogdto.BacklogStatusEventData
 	for i := range reloaded.StatusEvents {
 		if reloaded.StatusEvents[i].ToStatus == "design-review" {
 			found = &reloaded.StatusEvents[i]
@@ -142,7 +143,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReconstructSnapshotFromMostRece
 	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item entering review-a",
 		Status: string(BacklogStatusIdea),
 	})
@@ -181,7 +182,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	edgeV1, err := client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toStageV1.ID).SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item entering review-a twice",
 		Status: string(BacklogStatusIdea),
 	})
@@ -231,7 +232,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnNil_When_NoStatusEventMat
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "fresh item, never transitioned",
 		Status: string(BacklogStatusIdea),
 	})
