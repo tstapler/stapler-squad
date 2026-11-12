@@ -1,6 +1,6 @@
 //go:build linux
 
-package session
+package gitwt
 
 import (
 	"os"

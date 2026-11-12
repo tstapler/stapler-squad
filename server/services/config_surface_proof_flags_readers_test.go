@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -152,7 +153,7 @@ func TestConfigSurfaceProof_WorktreeChangeDetection_ChangesWorktreeSetup(t *test
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set(worktreeChangeDetectionFlagName, setting.(bool))
-		return session.WorktreeChangeDetectionEnabled()
+		return gitwt.WorktreeChangeDetectionEnabled()
 	}, false, true)
 }
 

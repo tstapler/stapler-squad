@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 )
 
 // brokenWorktreeInstance returns a started worktree Instance whose worktree
@@ -25,7 +26,7 @@ func brokenWorktreeInstance(t *testing.T) (*Instance, string) {
 		Status:      Running,
 		IsWorktree:  true,
 		Permissions: GetManagedPermissions(),
-		GitManager: GitWorktreeManager{
+		GitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), wtDir, "dirty-check-fails", "branch", ""),
 		},
 	}
@@ -67,7 +68,7 @@ func TestWorktreeNeedsCommit_should_PreserveUntrackedFile_When_WorktreeRemoved(t
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
 
-	inst := &Instance{IsWorktree: true, GitManager: GitWorktreeManager{Worktree: wt}}
+	inst := &Instance{IsWorktree: true, GitManager: gitwt.Manager{Worktree: wt}}
 	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "untracked.txt"), []byte("keep me"), 0o644))
 
 	needs, err := inst.worktreeNeedsCommit()
@@ -94,7 +95,7 @@ func TestWorktreeNeedsCommit_should_BeFalse_When_WorktreeDirMissing(t *testing.T
 	t.Parallel()
 	inst := &Instance{
 		IsWorktree: true,
-		GitManager: GitWorktreeManager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
+		GitManager: gitwt.Manager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
 	}
 
 	needs, err := inst.worktreeNeedsCommit()
@@ -113,7 +114,7 @@ func TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean(t *t
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
-	inst := &Instance{IsWorktree: true, GitManager: GitWorktreeManager{Worktree: wt}}
+	inst := &Instance{IsWorktree: true, GitManager: gitwt.Manager{Worktree: wt}}
 
 	dirty, err := inst.GitManager.IsDirty() // primes the clean cache
 	require.NoError(t, err)
@@ -187,7 +188,7 @@ func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testin
 	inst := &Instance{
 		Title: "force-known-dirty", Status: Running, IsWorktree: true,
 		Permissions: GetManagedPermissions(),
-		GitManager:  GitWorktreeManager{Worktree: wt},
+		GitManager:  gitwt.Manager{Worktree: wt},
 	}
 	inst.started.Store(true)
 	inst.processManager = &fakeStopByUserProcessManager{hasSession: true}

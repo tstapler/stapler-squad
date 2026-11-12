@@ -1,4 +1,4 @@
-package session
+package gitwt
 
 import (
 	"testing"
@@ -13,7 +13,7 @@ import (
 func TestGitWorktreeManager_DiffStatsFresh(t *testing.T) {
 	t.Parallel()
 
-	gm := &GitWorktreeManager{}
+	gm := &Manager{}
 	if gm.DiffStatsFresh() {
 		t.Fatal("zero-value manager should report stale (never computed)")
 	}
