@@ -776,6 +776,7 @@ go_test(
         "//server/reviewqueue:review_queue_manager.go",
         "//server/services:go_sources",
         "//server/services/backlogsvc:go_sources",
+        "//server/services/debugseed:go_sources",
         "//session/backlog:go_sources",
         "//session/detection:testdata",
         "//session/domain:go_sources",

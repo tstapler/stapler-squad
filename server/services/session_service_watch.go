@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -23,7 +25,7 @@ func (s *SessionService) WatchSessions(
 	req *connect.Request[sessionv1.WatchSessionsRequest],
 	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
-	done := TrackOpenStream("WatchSessions")
+	done := streammetrics.TrackOpenStream("WatchSessions")
 	defer done()
 
 	// Subscribe before building the snapshot so no events are lost between the

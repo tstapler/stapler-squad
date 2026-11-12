@@ -1,4 +1,4 @@
-package services
+package debugseed
 
 // backlog_debug_seed_handler.go — test-only debug endpoint that seeds an open
 // BacklogStuckState row directly, closing the e2e seeding gap flagged by
@@ -27,12 +27,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	sessiongit "github.com/tstapler/stapler-squad/session/git"
 )
+
+// triageSessionUUIDPrefix mirrors services.HeadlessTriageUUIDPrefix (duplicated: this leaf must not import server/services).
+const triageSessionUUIDPrefix = "headless-triage-"
 
 // BacklogDebugSeedHandler seeds BacklogStuckState rows for the e2e suite.
 type BacklogDebugSeedHandler struct {
@@ -340,7 +344,7 @@ type seedHeadlessTriageSessionResponse struct {
 // exercise SessionDiagnosticPanel's TriageReviewPanel-readOnly branch without
 // waiting on a real headless triage LLM call. Mirrors
 // server/services/backlog_service_triage.go's real headless-triage session
-// creation path (headlessTriageUUIDPrefix + uuid.New().String(), role
+// creation path (triageSessionUUIDPrefix + uuid.New().String(), role
 // session.SessionRoleTriage, TriageResult JSON) closely enough that
 // classifySessionKind() (web-app/src/lib/backlog/sessionKind.ts) classifies
 // the seeded row identically to a production one.
@@ -385,7 +389,7 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 		return
 	}
 
-	sessionUUID := headlessTriageUUIDPrefix + uuid.New().String()
+	sessionUUID := triageSessionUUIDPrefix + uuid.New().String()
 	itemSession, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:       item.ID,
 		SessionUUID:  sessionUUID,
@@ -765,7 +769,7 @@ func (h *BacklogDebugSeedHandler) handleSeedJulesWorkSession(w http.ResponseWrit
 	// row reproduces the exact "jules-sessions/{id}" storage form ADR-004
 	// documents — julesWebUrlFor (SessionsSection.tsx) strips this same
 	// prefix to build the jules.google.com escape-hatch link.
-	sessionUUID := JulesSessionUUIDPrefix + "sessions/" + uuid.New().String()
+	sessionUUID := services.JulesSessionUUIDPrefix + "sessions/" + uuid.New().String()
 	itemSession, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,

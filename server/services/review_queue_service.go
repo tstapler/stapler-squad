@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -218,7 +220,7 @@ func (rqs *ReviewQueueService) WatchReviewQueue(
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("reactive queue manager not initialized"))
 	}
 
-	done := TrackOpenStream("WatchReviewQueue")
+	done := streammetrics.TrackOpenStream("WatchReviewQueue")
 	defer done()
 
 	filters := &WatchReviewQueueFilters{

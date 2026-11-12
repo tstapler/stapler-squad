@@ -1,4 +1,4 @@
-package services
+package insights
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
 
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -616,7 +618,7 @@ func (s *InsightsService) ListSessionTokens(
 // insightsEventSender is the narrow interface watchInsights sends through.
 // Satisfied structurally (no explicit "implements") by
 // *connect.ServerStream[sessionv1.InsightsEvent] in production, and by a
-// mutex-guarded fake in tests (server/services/insights_service_test.go).
+// mutex-guarded fake in tests (server/services/insights/insights_service_test.go).
 // Mirrors backlogItemEventSender (backlog_service_events.go) — same problem
 // (*connect.ServerStream[T] has no exported constructor, so no real fake can
 // be built outside the connect package), same fix.
@@ -640,7 +642,7 @@ func (s *InsightsService) WatchInsights(
 // insightsEventSender interface (see its doc comment) so it is directly
 // unit-testable without a real RPC round-trip.
 func (s *InsightsService) watchInsights(ctx context.Context, sender insightsEventSender) error {
-	done := TrackOpenStream("WatchInsights")
+	done := streammetrics.TrackOpenStream("WatchInsights")
 	defer done()
 
 	// 1. Send initial state.

@@ -32,7 +32,7 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"session/ent_repository_session_pr_guard.go":                 {itemScalarOK, "guard view flags an item scalar no link or tombstone represents, the same rule as the backfill"},
 	"server/mcp/tools_backlog_pr.go":                             {itemScalarOK, "pr_pending reassignment guard compares the one tracked PR number"},
 	"server/mcp/tools_stuck_report.go":                           {itemPRsSeam, "report lists the whole item PR set under reader:backlog; the CI cross-check still targets the tracked scalar"},
-	"server/services/backlog_debug_seed_handler.go":              {itemScalarOK, "debug seed writes the scalars onto a fixture item"},
+	"server/services/debugseed/backlog_debug_seed_handler.go":    {itemScalarOK, "debug seed writes the scalars onto a fixture item"},
 	"server/services/backlog_github_forward_sync.go":             {itemScalarOK, "close comment links the item's tracked PR URL"},
 	"server/services/backlog_github_progress_sync.go":            {itemPRsSeam, "review comment lists the whole item PR set under reader:backlog; the tracked URL is the flag-off fallback"},
 	"server/services/backlogsvc/backlog_service.go":              {itemScalarOK, "maps the stored scalars onto the item proto"},
