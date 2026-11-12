@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	sessiongit "github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -98,8 +99,8 @@ func writeInternalError(w http.ResponseWriter, logMsg, userMsg string, err error
 // by every seed handler that doesn't need extra fields (handleSeed sets
 // QueuedAt/PrNumber and handleSeedWorkSessionWithWorktree sets RepoPath, so
 // those call storage.CreateBacklogItem directly instead).
-func (h *BacklogDebugSeedHandler) createSimpleBacklogItem(w http.ResponseWriter, ctx context.Context, title, status string) (*session.BacklogItemData, bool) {
-	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
+func (h *BacklogDebugSeedHandler) createSimpleBacklogItem(w http.ResponseWriter, ctx context.Context, title, status string) (*backlogdto.BacklogItemData, bool) {
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{
 		Title:  title,
 		Status: status,
 	})
@@ -149,7 +150,7 @@ func (h *BacklogDebugSeedHandler) handleSeedQueued(w http.ResponseWriter, r *htt
 
 	ctx := r.Context()
 	now := time.Now()
-	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{
 		Title:    req.Title,
 		Status:   string(session.BacklogStatusQueued),
 		QueuedAt: &now,
@@ -227,7 +228,7 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 
 	ctx := r.Context()
 	status := statusForSeedReason(reason)
-	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{
 		Title:  req.Title,
 		Status: string(status),
 	})
@@ -239,7 +240,7 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 	if req.PrNumber > 0 || req.PrUrl != "" {
 		prNumber := req.PrNumber
 		prURL := req.PrUrl
-		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 			PrNumber: &prNumber,
 			PrURL:    &prURL,
 		}, nil); err != nil {
@@ -270,7 +271,7 @@ func (h *BacklogDebugSeedHandler) handleSeed(w http.ResponseWriter, r *http.Requ
 			writeInternalError(w, "backlog debug seed: write plan file failed", "failed to write plan artifacts file", err)
 			return
 		}
-		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 			PlanArtifactsPath: &planPath,
 		}, nil); err != nil {
 			writeInternalError(w, "backlog debug seed: set plan_artifacts_path failed", "failed to set plan_artifacts_path", err)
@@ -385,7 +386,7 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 	}
 
 	sessionUUID := headlessTriageUUIDPrefix + uuid.New().String()
-	itemSession, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
+	itemSession, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:       item.ID,
 		SessionUUID:  sessionUUID,
 		SessionRole:  session.SessionRoleTriage,
@@ -447,7 +448,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkItemSession(w http.ResponseWrite
 	}
 
 	sessionUUID := "e2e-work-" + uuid.New().String()
-	itemSession, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
+	itemSession, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -494,11 +495,11 @@ func (h *BacklogDebugSeedHandler) handleSeedReviewVerdict(w http.ResponseWriter,
 		writeInternalError(w, "backlog debug seed: marshal per-criterion failed", "failed to marshal verdict", err)
 		return
 	}
-	itemSession, err := h.storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+	itemSession, err := h.storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "e2e-review-" + uuid.New().String(),
 		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewOutcomePartial,
 		PerCriterion:   string(perCriterion),
 		Summary:        "Seeded verdict for e2e.",
@@ -619,7 +620,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 	}
 
 	ctx := r.Context()
-	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{
 		Title:    req.Title,
 		Status:   status,
 		RepoPath: req.RepoPath,
@@ -652,7 +653,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		return
 	}
 
-	if _, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
+	if _, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -726,7 +727,7 @@ func (h *BacklogDebugSeedHandler) handleSeedJulesWorkSession(w http.ResponseWrit
 	}
 
 	ctx := r.Context()
-	var item *session.BacklogItemData
+	var item *backlogdto.BacklogItemData
 	if req.ItemID != "" {
 		existing, err := h.storage.GetBacklogItem(ctx, req.ItemID)
 		if err != nil {
@@ -750,7 +751,7 @@ func (h *BacklogDebugSeedHandler) handleSeedJulesWorkSession(w http.ResponseWrit
 	if req.PrNumber > 0 || req.PrUrl != "" {
 		prNumber := req.PrNumber
 		prURL := req.PrUrl
-		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+		if _, err := h.storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 			PrNumber: &prNumber,
 			PrURL:    &prURL,
 		}, nil); err != nil {
@@ -765,7 +766,7 @@ func (h *BacklogDebugSeedHandler) handleSeedJulesWorkSession(w http.ResponseWrit
 	// documents — julesWebUrlFor (SessionsSection.tsx) strips this same
 	// prefix to build the jules.google.com escape-hatch link.
 	sessionUUID := JulesSessionUUIDPrefix + "sessions/" + uuid.New().String()
-	itemSession, err := h.storage.CreateItemSession(ctx, session.ItemSessionData{
+	itemSession, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: session.SessionRoleJulesWork,

@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -149,7 +150,7 @@ func (r *completionReviewer) loop(ctx context.Context, ch <-chan *events.Event) 
 				return
 			}
 			wg.Add(1)
-			go func(item *session.BacklogItemData) {
+			go func(item *backlogdto.BacklogItemData) {
 				defer wg.Done()
 				defer func() { <-sem }()
 				r.safeReview(ctx, item)
@@ -176,7 +177,7 @@ func skipRecentlyReviewed(recent map[string]time.Time, itemID string, now time.T
 }
 
 // safeReview isolates panics: the publisher's own recovery only covers its synchronous call.
-func (r *completionReviewer) safeReview(ctx context.Context, item *session.BacklogItemData) {
+func (r *completionReviewer) safeReview(ctx context.Context, item *backlogdto.BacklogItemData) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			r.failures.Add(1)
@@ -187,7 +188,7 @@ func (r *completionReviewer) safeReview(ctx context.Context, item *session.Backl
 	r.maybeLogStatus()
 }
 
-func hasNonTrivialCompletionReviewContent(item *session.BacklogItemData) bool {
+func hasNonTrivialCompletionReviewContent(item *backlogdto.BacklogItemData) bool {
 	if item == nil || strings.TrimSpace(item.Description) == "" {
 		return false
 	}
@@ -195,7 +196,7 @@ func hasNonTrivialCompletionReviewContent(item *session.BacklogItemData) bool {
 	return len(criteria) > 0
 }
 
-func (r *completionReviewer) review(ctx context.Context, item *session.BacklogItemData) {
+func (r *completionReviewer) review(ctx context.Context, item *backlogdto.BacklogItemData) {
 	if !hasNonTrivialCompletionReviewContent(item) {
 		log.Debug("completion_reviewer: skipped (thin content)", "item", item.ID)
 		return

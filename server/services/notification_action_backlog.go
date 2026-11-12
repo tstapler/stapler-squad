@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // notification_action_backlog.go delegates BACKLOG_DECISION choices to the
@@ -151,8 +152,8 @@ func stringIn(set []string, v string) bool {
 
 // backlogStorage is the storage the production readers use.
 type backlogStorage interface {
-	GetBacklogItem(ctx context.Context, id string) (*session.BacklogItemData, error)
-	ListItemSessions(ctx context.Context, itemID string) ([]session.ItemSessionSummary, error)
+	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
+	ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error)
 }
 
 type storageItemReader struct{ storage backlogStorage }

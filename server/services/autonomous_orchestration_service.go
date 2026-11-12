@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -662,7 +663,7 @@ type notifyOverride struct {
 // recovery (ADR-001), writes the stuck row, applies the instance stop once, then
 // nudges the idle session or ends the ItemSession and dispatches a respawn.
 // ctx is the outer Background ctx; every storage write here uses it.
-func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx context.Context, concreteStorage *session.Storage, inst *session.Instance, item *session.BacklogItemData, is session.ItemSessionSummary, rec *stopRecord, outcome session.AutonomousDriverOutcome, applyStop func(domain.StallAction)) stallResult {
+func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx context.Context, concreteStorage *session.Storage, inst *session.Instance, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary, rec *stopRecord, outcome session.AutonomousDriverOutcome, applyStop func(domain.StallAction)) stallResult {
 	if recoveryCtx.Err() != nil {
 		// A stop was requested while this stop was being recorded: the stopper owns the outcome.
 		rec.Recovery = stopRecovery{Action: stopActionNone, NudgeOutcome: nudgeOutcomeCtxCancelled}
@@ -767,7 +768,7 @@ func (a *AutonomousOrchestrationService) stopObservedAsPlain(inst *session.Insta
 // respawnStalledWork ends the stalled ItemSession and, subject to the
 // remediation backoff, dispatches a respawn (the pre-nudge behaviour, unchanged).
 // It reports whether a respawn was actually dispatched.
-func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context, concreteStorage *session.Storage, item *session.BacklogItemData, is session.ItemSessionSummary, outcome session.AutonomousDriverOutcome) (dispatched bool) {
+func (a *AutonomousOrchestrationService) respawnStalledWork(ctx context.Context, concreteStorage *session.Storage, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary, outcome session.AutonomousDriverOutcome) (dispatched bool) {
 	log.Info("[AutonomousDriver] work session hit turn cap without DONE; leaving in_progress instead of forcing review", "item", item.ID, "reason", outcome.Reason)
 	// A stopped driver leaves the pane live; end the ItemSession now so the respawn's
 	// liveness check does not self-block on it (BUG-048).
@@ -919,12 +920,12 @@ func (a *AutonomousOrchestrationService) resolveAutonomousStuck(ctx context.Cont
 // run makes (triage idea->ready) through the transition gate. A returned error,
 // including an engine denial, is surfaced by the caller as the "status update
 // failed" notification.
-func (a *AutonomousOrchestrationService) advanceItemOnDriverComplete(ctx context.Context, storage *session.Storage, item *session.BacklogItemData, toStatus session.BacklogStatus, expectedStatus string, done bool) error {
+func (a *AutonomousOrchestrationService) advanceItemOnDriverComplete(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, toStatus session.BacklogStatus, expectedStatus string, done bool) error {
 	_, err := storage.GatedTransition(ctx, session.TransitionRequest{
 		Caller:       session.CallerAutonomousComplete,
 		ItemID:       item.ID,
 		To:           toStatus,
-		Precondition: &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus},
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: expectedStatus},
 		TriggeredBy:  session.TriggeredBySystem,
 	})
 	if err != nil {

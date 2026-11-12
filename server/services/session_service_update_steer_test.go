@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // steerRecordingPM captures SendKeys traffic and reports one pane change after
@@ -84,12 +85,12 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 	inst.UpdatedAt = time.Now()
 	svctest.AddInstanceToPoller(fix.poller, inst)
 
-	item, err := fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Awaiting review",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
-	_, err = fix.storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: session.SessionRoleReview,

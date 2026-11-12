@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -24,7 +25,7 @@ func hiddenVisibleInList(hidden bool, req *sessionv1.ListSessionsRequest) bool {
 
 // itemSessionBatchLookup is the one storage call background_outcome needs.
 type itemSessionBatchLookup interface {
-	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]session.ItemSessionSummary, error)
+	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]backlogdto.ItemSessionSummary, error)
 }
 
 type hiddenOutcomeEntry struct {
@@ -44,7 +45,7 @@ func (s *SessionService) populateBackgroundOutcomes(ctx context.Context, entries
 	if lookup == nil && s.concStorage != nil {
 		lookup = s.concStorage
 	}
-	var byUUID map[string]session.ItemSessionSummary
+	var byUUID map[string]backlogdto.ItemSessionSummary
 	if lookup != nil {
 		uuids := make([]string, 0, len(entries))
 		for _, e := range entries {
@@ -56,7 +57,7 @@ func (s *SessionService) populateBackgroundOutcomes(ctx context.Context, entries
 		}
 	}
 	for _, e := range entries {
-		var is *session.ItemSessionSummary
+		var is *backlogdto.ItemSessionSummary
 		if row, ok := byUUID[e.uuid]; ok {
 			is = &row
 		}

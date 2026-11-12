@@ -33,6 +33,7 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -248,7 +249,7 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	// the real transition itself first, mirroring what *BacklogService's real
 	// transitionWithGuard would have done in production.
 	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress,
-		&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}, session.TriggeredByUser)
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}, session.TriggeredByUser)
 	require.NoError(t, err)
 
 	pollClient := &fakeUsageCycleClient{}

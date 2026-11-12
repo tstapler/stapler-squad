@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestBacklogItemEventPublisher_should_publishConvertedEventToBus_When_PublishItemChangedCalled
@@ -29,7 +30,7 @@ func TestBacklogItemEventPublisher_should_publishConvertedEventToBus_When_Publis
 	eventCh, _ := bus.Subscribe(ctx)
 
 	publisher := &BacklogItemEventPublisher{Bus: bus}
-	item := &session.BacklogItemData{ID: "item-123", Title: "test item"}
+	item := &backlogdto.BacklogItemData{ID: "item-123", Title: "test item"}
 
 	publisher.PublishItemChanged(item, session.BacklogItemChange{
 		Kind:      session.ChangeStatusTransition,
@@ -82,7 +83,7 @@ func TestBacklogItemEventPublisher_should_recoverAndLog_When_PublishItemChangedP
 	eventCh, _ := bus.Subscribe(ctx)
 
 	publisher := &BacklogItemEventPublisher{Bus: bus}
-	item := &session.BacklogItemData{ID: "item-456"}
+	item := &backlogdto.BacklogItemData{ID: "item-456"}
 
 	func() {
 		defer func() {
@@ -121,7 +122,7 @@ func TestMapBacklogChangeKind_should_MapActivityNoteAdded_When_Called(t *testing
 func TestBacklogItemEventPublisher_should_noOp_When_BusIsNil(t *testing.T) {
 	t.Parallel()
 	publisher := &BacklogItemEventPublisher{}
-	item := &session.BacklogItemData{ID: "item-789"}
+	item := &backlogdto.BacklogItemData{ID: "item-789"}
 
 	publisher.PublishItemChanged(item, session.BacklogItemChange{Kind: session.ChangeStatusTransition})
 	// No assertion beyond "did not panic" — reaching this line is the test.
@@ -152,7 +153,7 @@ func TestEventBus_should_neverCrossDeliverBacklogEvents_When_TwoIndependentBusIn
 	// Publisher is wired to busA only, mirroring one workspace process's
 	// single per-process eventBus.
 	publisher := &BacklogItemEventPublisher{Bus: busA}
-	item := &session.BacklogItemData{ID: "item-isolation-1"}
+	item := &backlogdto.BacklogItemData{ID: "item-isolation-1"}
 
 	publisher.PublishItemChanged(item, session.BacklogItemChange{
 		Kind:      session.ChangeStatusTransition,
@@ -192,7 +193,7 @@ func TestBacklogItemEventPublisher_should_notPanic_When_PublishingWithZeroSubscr
 	defer bus.Close()
 
 	publisher := &BacklogItemEventPublisher{Bus: bus}
-	item := &session.BacklogItemData{ID: "item-no-subscribers"}
+	item := &backlogdto.BacklogItemData{ID: "item-no-subscribers"}
 
 	done := make(chan struct{})
 	go func() {
@@ -253,7 +254,7 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 	defer busB.Unsubscribe(subB)
 
 	// Mutate workspace A only.
-	item, err := repoA.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repoA.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "workspace A item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -261,7 +262,7 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 
 	storageA, err := session.NewStorageWithRepository(repoA)
 	require.NoError(t, err)
-	_, err = storageA.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
+	_, err = storageA.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(session.BacklogStatusInProgress),
 	}, session.TriggeredBySystem)
 	require.NoError(t, err)

@@ -724,16 +724,16 @@ func TestWorkflowBypassInventory_CreateScannerFlagsNonIdleStatuses(t *testing.T)
 	dir := t.TempDir()
 	src := `package x
 type a struct{}
-func (a *a) Idle(s st)         { s.CreateBacklogItem(ctx, session.BacklogItemData{Status: string(session.BacklogStatusIdea)}) }
-func (a *a) NoStatus(s st)     { s.CreateBacklogItem(ctx, session.BacklogItemData{Title: "t"}) }
-func (a *a) Done(s st)         { s.CreateBacklogItem(ctx, session.BacklogItemData{Status: string(session.BacklogStatusDone)}) }
-func (a *a) Variable(s st, v string) { s.CreateBacklogItem(ctx, session.BacklogItemData{Status: v}) }
-func (a *a) ViaStringLiteral(s st)      { d := session.BacklogItemData{Status: "idea"}; _ = d; s.CreateBacklogItem(ctx, d) }
-func (a *a) ViaIdent(s st)     { d := session.BacklogItemData{Status: string(session.BacklogStatusIdea)}; s.CreateBacklogItem(ctx, d) }
-func (a *a) ViaReassigned(s st) { d := session.BacklogItemData{}; d.Status = string(session.BacklogStatusDone); s.CreateBacklogItem(ctx, d) }
-func (a *a) Param(s st, d session.BacklogItemData) { s.CreateBacklogItem(ctx, d) }
+func (a *a) Idle(s st)         { s.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Status: string(session.BacklogStatusIdea)}) }
+func (a *a) NoStatus(s st)     { s.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "t"}) }
+func (a *a) Done(s st)         { s.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Status: string(session.BacklogStatusDone)}) }
+func (a *a) Variable(s st, v string) { s.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Status: v}) }
+func (a *a) ViaStringLiteral(s st)      { d := backlogdto.BacklogItemData{Status: "idea"}; _ = d; s.CreateBacklogItem(ctx, d) }
+func (a *a) ViaIdent(s st)     { d := backlogdto.BacklogItemData{Status: string(session.BacklogStatusIdea)}; s.CreateBacklogItem(ctx, d) }
+func (a *a) ViaReassigned(s st) { d := backlogdto.BacklogItemData{}; d.Status = string(session.BacklogStatusDone); s.CreateBacklogItem(ctx, d) }
+func (a *a) Param(s st, d backlogdto.BacklogItemData) { s.CreateBacklogItem(ctx, d) }
 func (a *a) RPC(s st)          { s.CreateBacklogItem(ctx, connect.NewRequest(req)) }
-func (a *a) Debug(s st)        { s.CreateBacklogItemForDebug(ctx, session.BacklogItemData{Status: "done"}) }
+func (a *a) Debug(s st)        { s.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{Status: "done"}) }
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "x.go"), []byte(src), 0o600))
 	got := map[string]int{}

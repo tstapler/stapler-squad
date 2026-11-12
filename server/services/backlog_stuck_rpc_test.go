@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestFromProtoStuckReason_should_ReturnBounceCapExhausted_When_ProtoBounceCapExhausted
@@ -49,7 +50,7 @@ func TestBulkResetStuckRemediation_should_resolveToLastWriterDeterministically_W
 		ctx := t.Context()
 		reason := domain.StuckReasonBouncing
 
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
 		require.NoError(t, err)
 		svctest.SeedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "bouncing")
 		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
@@ -74,7 +75,7 @@ func TestBulkResetStuckRemediation_should_resolveToLastWriterDeterministically_W
 		ctx := t.Context()
 		reason := domain.StuckReasonBouncing
 
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
 		require.NoError(t, err)
 		svctest.SeedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "bouncing")
 		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)

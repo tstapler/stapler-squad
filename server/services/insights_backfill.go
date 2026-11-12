@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -65,7 +65,7 @@ func (s *InsightsService) BackfillConversationUUIDs(ctx context.Context) (int, e
 		if err := ctx.Err(); err != nil {
 			return stamped, err
 		}
-		var match *session.ItemSessionBacklogEntry
+		var match *backlogdto.ItemSessionBacklogEntry
 		matches := 0
 		for i := range candidates {
 			c := &candidates[i]
@@ -101,8 +101,8 @@ type backfillTranscript struct {
 
 // backfillCandidates filters entries down to ItemSessions eligible for stamping: a
 // real (non-synthetic) session UUID, not already linked, and not currently live.
-func backfillCandidates(entries []session.ItemSessionBacklogEntry, liveSessions map[string]bool) []session.ItemSessionBacklogEntry {
-	var candidates []session.ItemSessionBacklogEntry
+func backfillCandidates(entries []backlogdto.ItemSessionBacklogEntry, liveSessions map[string]bool) []backlogdto.ItemSessionBacklogEntry {
+	var candidates []backlogdto.ItemSessionBacklogEntry
 	for _, e := range entries {
 		// A synthetic UUID (headless-*, empty-diff-*, ...) never had a session; live
 		// sessions get stamped by EntRepository.Delete instead.

@@ -10,11 +10,12 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func seedItemDirectPR(t *testing.T, fix *forkTestFixture, status session.BacklogStatus, number int) (string, session.PRRef) {
 	t.Helper()
-	item, err := fix.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "detach item", Status: string(status)})
+	item, err := fix.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "detach item", Status: string(status)})
 	require.NoError(t, err)
 	ref, err := session.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
@@ -96,7 +97,7 @@ func TestDetachItemPullRequest_ShouldRemovePRFromVerdict_WhenAlsoReachableViaCur
 	ctx := context.Background()
 	itemID, _ := seedItemDirectPR(t, fix, session.BacklogStatus("in_progress"), 42)
 	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{42, session.PRStateOpen, false})
-	_, err := fix.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: itemID, SessionUUID: "uuid-u1", SessionRole: session.SessionRoleWork})
+	_, err := fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: "uuid-u1", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	before, err := fix.storage.ItemPRs(ctx, itemID)
 	require.NoError(t, err)

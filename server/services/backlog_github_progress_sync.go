@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // githubIssueProgressCommentsFlagName gates the in_progress and review comments.
@@ -80,7 +81,7 @@ func StartBacklogGitHubProgressSyncSubscriber(ctx context.Context, bus *events.E
 // and swallowed: this runs from a subscriber goroutine and a missing token or
 // GitHub outage must never fail the transition that triggered it. Best-effort:
 // the dedup status is persisted after the post, so a persist failure can duplicate.
-func handleProgressComment(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData, newStatus string) {
+func handleProgressComment(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *backlogdto.BacklogItemData, newStatus string) {
 	if item == nil || item.ID == "" {
 		return
 	}
@@ -121,7 +122,7 @@ func handleProgressComment(ctx context.Context, registry *session.PluginRegistry
 
 	// A zero updatedAt means the read-back failed: record the dedup status but
 	// leave the watermark, since a guessed one could skip real remote edits.
-	update := session.BacklogItemUpdate{GitHubLastProgressCommentStatus: &newStatus}
+	update := backlogdto.BacklogItemUpdate{GitHubLastProgressCommentStatus: &newStatus}
 	if !issueUpdatedAt.IsZero() {
 		update.GitHubSyncedIssueUpdatedAt = &issueUpdatedAt
 	}
@@ -151,7 +152,7 @@ type progressPR struct {
 
 // progressPRLines lists every PR of the item's set when reader:backlog is on;
 // otherwise, or when the set cannot be read, it is the single tracked PR URL.
-func progressPRLines(ctx context.Context, storage *session.Storage, item *session.BacklogItemData) []progressPR {
+func progressPRLines(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData) []progressPR {
 	single := func() []progressPR {
 		if item.PrURL == "" {
 			return nil
@@ -233,7 +234,7 @@ func progressStartedComment(hostID string) string {
 // github.com config derived from ExternalURL, whose token the plugin takes from
 // the keychain (these trust external_url as-is, and GHE hosts are skipped since
 // no host list is passed to the parser). ok is false when the item has no postable GitHub issue.
-func resolveProgressTarget(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *session.BacklogItemData) (poster issueProgressCommenter, cfg session.PluginConfig, externalID string, ok bool) {
+func resolveProgressTarget(ctx context.Context, registry *session.PluginRegistry, syncLoop *session.SyncLoop, storage *session.Storage, item *backlogdto.BacklogItemData) (poster issueProgressCommenter, cfg session.PluginConfig, externalID string, ok bool) {
 	if item.SourceID != "" && item.ExternalID != "" {
 		source, err := storage.GetItemSourceByID(ctx, item.SourceID)
 		if err != nil {

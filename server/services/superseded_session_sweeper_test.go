@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // seedItemWithRounds creates an in_progress backlog item plus one work-role
@@ -20,7 +21,7 @@ import (
 // regression shape: rows persisted before a sweeper ever ran.
 func seedItemWithRounds(t *testing.T, storage *session.Storage, createdAts []time.Time) (itemID string, sessionUUIDs []string) {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "multi-round item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -28,7 +29,7 @@ func seedItemWithRounds(t *testing.T, storage *session.Storage, createdAts []tim
 
 	for i, createdAt := range createdAts {
 		uuid := "round-uuid-" + time.Duration(i).String()
-		is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: uuid,
 			SessionRole: session.SessionRoleWork,

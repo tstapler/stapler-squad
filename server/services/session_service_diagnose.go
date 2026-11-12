@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // uniqueDispatchTitle builds a title for a repeatedly-dispatchable one-shot
@@ -51,7 +52,7 @@ type SessionSpawnOptions struct {
 // SpawnReviewSession satisfies the session.ReviewGateSpawner interface so that
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
 // a work session exits. The session is tagged "backlog:review" and runs one-shot.
-func (s *SessionService) SpawnReviewSession(ctx context.Context, item *session.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
+func (s *SessionService) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
 	inst, err := s.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
 		Title:   uniqueDispatchTitle("review", item.ID),
 		Prompt:  prompt,
@@ -101,7 +102,7 @@ const diagnosticSessionAllowedTools = "Read,Grep,Glob,Bash," +
 // services.DiagnosticSpawner. Unlike SpawnReviewSession, restricts the
 // session's MCP tool surface via diagnosticSessionAllowedTools — see that
 // constant's doc comment for why this alone isn't the real enforcement.
-func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *session.BacklogItemData, prompt string) (*session.Instance, error) {
+func (s *SessionService) SpawnDiagnosticSession(ctx context.Context, item *backlogdto.BacklogItemData, prompt string) (*session.Instance, error) {
 	inst, err := s.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
 		Title:        uniqueDispatchTitle("diagnose", item.ID),
 		Prompt:       prompt,

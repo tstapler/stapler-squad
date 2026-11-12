@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -52,15 +53,15 @@ func (f *fakeJulesKeyManager) DeleteJulesAPIKey(_ context.Context) error {
 // *session.Storage. Only ListOpenJulesItemSessions/GetItemSessionBySessionUUID
 // carry test-controlled data; every write is a no-op success.
 type fakeJulesPollerStorage struct {
-	entries []session.ItemSessionBacklogEntry
-	summary session.ItemSessionSummary
+	entries []backlogdto.ItemSessionBacklogEntry
+	summary backlogdto.ItemSessionSummary
 }
 
-func (f *fakeJulesPollerStorage) ListOpenJulesItemSessions(_ context.Context) ([]session.ItemSessionBacklogEntry, error) {
+func (f *fakeJulesPollerStorage) ListOpenJulesItemSessions(_ context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	return f.entries, nil
 }
 
-func (f *fakeJulesPollerStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (session.ItemSessionSummary, error) {
+func (f *fakeJulesPollerStorage) GetItemSessionBySessionUUID(_ context.Context, _ string) (backlogdto.ItemSessionSummary, error) {
 	return f.summary, nil
 }
 
@@ -84,8 +85,8 @@ func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, _, _ string
 	return true, nil
 }
 
-func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, _ session.TransitionRequest) (*session.BacklogItemData, error) {
-	return &session.BacklogItemData{}, nil
+func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, _ session.TransitionRequest) (*backlogdto.BacklogItemData, error) {
+	return &backlogdto.BacklogItemData{}, nil
 }
 
 // fakeJulesPollStatusClient is a fake session.julesStatusClient whose
@@ -188,12 +189,12 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 	svctest.WithIsolatedStateDir(t)
 	client := newFakeJulesPollStatusClient(true)
 	storage := &fakeJulesPollerStorage{
-		entries: []session.ItemSessionBacklogEntry{{
+		entries: []backlogdto.ItemSessionBacklogEntry{{
 			SessionUUID: "jules-sessions/xyz",
 			SessionRole: session.SessionRoleJulesWork,
 			ItemID:      "item-1",
 		}},
-		summary: session.ItemSessionSummary{ID: "is-1", SessionUUID: "jules-sessions/xyz", Role: session.SessionRoleJulesWork},
+		summary: backlogdto.ItemSessionSummary{ID: "is-1", SessionUUID: "jules-sessions/xyz", Role: session.SessionRoleJulesWork},
 	}
 	pollerCfg := session.JulesSessionPollerConfig{
 		PollInterval:  5 * time.Millisecond,

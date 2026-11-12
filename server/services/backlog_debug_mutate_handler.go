@@ -28,6 +28,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BacklogDebugMutateHandler mutates BacklogItem rows directly for the e2e suite.
@@ -112,7 +113,7 @@ func (h *BacklogDebugMutateHandler) handleCreate(w http.ResponseWriter, r *http.
 	}
 
 	ctx := r.Context()
-	item, err := h.storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{
+	item, err := h.storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{
 		Title:              req.Title,
 		Description:        req.Description,
 		Status:             status,
@@ -209,7 +210,7 @@ func (h *BacklogDebugMutateHandler) handleUpdate(w http.ResponseWriter, r *http.
 	}
 
 	ctx := r.Context()
-	if _, err := h.storage.UpdateBacklogItem(ctx, req.ItemID, session.BacklogItemUpdate{
+	if _, err := h.storage.UpdateBacklogItem(ctx, req.ItemID, backlogdto.BacklogItemUpdate{
 		Title:       req.Title,
 		Description: req.Description,
 	}, nil); err != nil {

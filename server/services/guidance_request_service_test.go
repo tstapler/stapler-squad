@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // fakeTriageRespawner is a test double for TriageRespawner recording calls,
@@ -188,7 +189,7 @@ func TestCreateGuidanceRequest_should_RejectPermissionDenied_When_CallerNotLinke
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "unlinked item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "unlinked item"})
 	require.NoError(t, err)
 
 	_, err = svc.CreateGuidanceRequest(ctx, connect.NewRequest(&sessionv1.CreateGuidanceRequestRequest{
@@ -266,10 +267,10 @@ func TestAnswerGuidanceRequest_should_RespawnTriage_When_BacklogItemScopeAnswere
 	svc := NewGuidanceRequestService(storage, nil, respawner)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "ambiguous item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "ambiguous item"})
 	require.NoError(t, err)
 	callerUUID := "triage-session-1"
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: callerUUID,
 		SessionRole: "triage",

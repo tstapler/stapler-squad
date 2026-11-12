@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // fakeStallNudger runs the real claim (so the slot cap and cooldown are exercised) and
@@ -74,9 +75,9 @@ type stallNudgeFixture struct {
 func newStallNudgeFixture(t *testing.T, title string, itemStatus session.BacklogStatus, diagnoseOn, stallOn bool) *stallNudgeFixture {
 	t.Helper()
 	base := newUnlinkedCharFixtureWithStatus(t, title, session.Active)
-	item, err := base.storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
+	item, err := base.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
 	require.NoError(t, err)
-	is, err := base.storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: base.inst.UUID, SessionRole: session.SessionRoleWork})
+	is, err := base.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: base.inst.UUID, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	base.itemID, base.itemSes = item.ID, is.ID
 
