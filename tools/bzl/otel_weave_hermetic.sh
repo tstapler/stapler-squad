@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Sandboxed otelc weave (spike S15b), run by tools/bzl/otel_weave_hermetic.bzl with one @paramfile (one arg per line):
 #   MODE GO OUT, then repeated flags: --overlay F  --src F  --gen F  --ent F  --web F  --stage F  --tag T
-#   --modcache F  --status F  --target GOOS/GOARCH (the modcache action gets neither --status nor --target, so it is shared across platforms).
+#   --modcache F  --otelc F  --status F  --target GOOS/GOARCH (the modcache action gets neither --status nor --target, so it is shared across platforms).
 #   MODE is modcache (go mod download of the overlay go.mod/go.sum into the tarball OUT; the only step that may touch
-#   the network, go.sum verifies it) or weave (toolexec build of the declared source tree).
+#   the network, go.sum verifies it), otelc (build the otelc toolexec binary once into OUT, shared by every weave) or
+#   weave (toolexec build of the declared source tree using that otelc binary).
 # Destinations are derived from the paths: bazel-out/*/bin/ is stripped, generated proto/ent are re-rooted.
 # The weave never runs `otelc setup`: tools/bzl/otel_overlay/ holds its pre-computed output
 # (go.mod/go.sum with the otelc modules, otel.instrumentation.go, otelc.runtime.go, .otelc-build/ as a tar, .bin because *.tar is commonly git-ignored).
@@ -14,11 +15,11 @@ mode=$1 go_arg=$2 out_arg=$3
 shift 3
 exec_root=$PWD
 abs() { case "$1" in /*) echo "$1" ;; *) echo "$exec_root/$1" ;; esac; }
-overlay=() srcs=() gens=() ents=() webs=() stages=() tags=() modcache_arg='' status='' target=''
+overlay=() srcs=() gens=() ents=() webs=() stages=() tags=() modcache_arg='' otelc_arg='' status='' target=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --overlay) overlay+=("$2") ;; --src) srcs+=("$2") ;; --gen) gens+=("$2") ;; --ent) ents+=("$2") ;;
-    --web) webs+=("$2") ;; --stage) stages+=("$2") ;; --tag) tags+=("$2") ;; --modcache) modcache_arg=$2 ;; --status) status=$2 ;; --target) target=$2 ;;
+    --web) webs+=("$2") ;; --stage) stages+=("$2") ;; --tag) tags+=("$2") ;; --modcache) modcache_arg=$2 ;; --otelc) otelc_arg=$2 ;; --status) status=$2 ;; --target) target=$2 ;;
     *) echo "otel_weave_hermetic: bad flag $1" >&2; exit 2 ;;
   esac
   shift 2
@@ -66,6 +67,17 @@ fi
 
 modcache=$(abs "$modcache_arg")
 out=$(abs "$out_arg")
+
+if [ "$mode" = otelc ]; then
+  # Only the module graph (go.mod, go.sum, the replaced .otelc-build modules) is needed to build the tool, not the source tree.
+  mkdir -p "$work/mod" "$work/mc"
+  apply_overlay "$work/mod"
+  tar -xf "$modcache" -C "$work/mc"
+  cd "$work/mod"
+  GOMODCACHE=$work/mc "$go_bin" build -mod=readonly -o "$out" go.opentelemetry.io/otelc/tool/cmd/otelc
+  exit 0
+fi
+
 src=$work/src
 mkdir -p "$src"
 put() { # SRC_PATH DEST
@@ -99,7 +111,7 @@ fi
 
 cd "$src"
 mkdir -p "$work/bin"
-"$go_bin" build -mod=readonly -o "$work/bin/otelc" go.opentelemetry.io/otelc/tool/cmd/otelc
+cp "$(abs "$otelc_arg")" "$work/bin/otelc"
 # By name on PATH, not by path: cmd/go hashes the toolexec string into action IDs, so a sandbox path would make the binary differ per run.
 export PATH=$work/bin:$PATH
 export GOFLAGS="-mod=readonly -trimpath '-toolexec=otelc toolexec'"
