@@ -41,6 +41,11 @@ build:ci --lockfile_mode=error
 build:ci --noshow_progress
 build:ci --verbose_failures
 build:ci --test_output=errors
+# The half-CPU / one-fifth-RAM limits above protect the dev host's live service. A hosted runner has nothing to
+# protect: on a 4-vCPU, 16 GB ubuntu-latest they left Bazel 2 cores and ~3 GB (profile of the 28m full-graph build:
+# average action concurrency 1.9, critical path 629s of 1676s wall). Later --local_resources for the same resource wins.
+build:ci --local_resources=cpu=HOST_CPUS
+build:ci --local_resources=memory=HOST_RAM*.75
 
 # Remote cache for CI. A cache outage must cost seconds, not minutes. The failure policy is
 # timeout + retries + circuit breaker; --remote_local_fallback is a no-op for a cache-only setup
