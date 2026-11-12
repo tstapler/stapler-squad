@@ -22,7 +22,7 @@ const (
 	// ScrollGateNotAltScreen means the pane is not in the alternate screen
 	// buffer.
 	ScrollGateNotAltScreen
-	// ScrollGateNoActiveController means no ClaudeController/PiStatusSource is
+	// ScrollGateNoActiveController means no claudectl.ClaudeController/PiStatusSource is
 	// active for inst, so DetectedStatus carries no live signal at all --
 	// distinct from ScrollGateUnsafeStatus, where a controller is active but
 	// reported a specific unsafe status.

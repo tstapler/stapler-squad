@@ -57,7 +57,7 @@ type piCommandFactory func() *exec.Cmd
 // costs two live pi processes while this feature is active) and infers a
 // detection.DetectedStatus from its event stream.
 //
-// Unlike ClaudeController, PiStatusSource does not scrape PTY output --pi's
+// Unlike claudectl.ClaudeController, PiStatusSource does not scrape PTY output --pi's
 // `--mode json` transcript is a structured, typed event feed (see
 // session/pi_adapter.go), so status inference here is a straightforward
 // event-to-status mapping rather than regex-based PTY pattern matching.

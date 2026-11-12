@@ -1,6 +1,6 @@
-package session
+package claudectl
 
-// Copies of the session/ptyio test doubles that package session's tests use; ptyio's own are in its _test.go files.
+// Copies of the session/ptyio test doubles; ptyio's own are in its _test.go files.
 
 import (
 	"context"

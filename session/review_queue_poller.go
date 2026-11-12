@@ -1,19 +1,20 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/linkdata/deadlock"
 	"github.com/puzpuzpuz/xsync/v4"
+
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -22,7 +23,7 @@ import (
 // Defined at the consumption point (the poller), not the production point.
 type StatusProvider interface {
 	GetStatus(inst *Instance) InstanceStatusInfo
-	GetController(instanceTitle string) (*ClaudeController, bool)
+	GetController(instanceTitle string) (*claudectl.ClaudeController, bool)
 }
 
 // ContentProvider fetches terminal content for a session.
@@ -147,7 +148,7 @@ type ReviewQueuePoller struct {
 	storage          *Storage
 	instances        []*Instance
 	config           ReviewQueuePollerConfig
-	statusDetector   detection.TerminalDetector // For detecting status in sessions without ClaudeController
+	statusDetector   detection.TerminalDetector // For detecting status in sessions without claudectl.ClaudeController
 	approvalProvider ApprovalMetadataProvider   // Optional: enriches approval items with hook metadata
 	contentProvider  ContentProvider            // Fetches and caches terminal content
 	statusDeterminer StatusDeterminer           // Evaluates whether session should be in queue
@@ -755,10 +756,10 @@ func paneActivitySettled(activity, captureStart time.Time) bool {
 // GetContent returns the terminal content for inst, using a cache to avoid
 // spawning a subprocess when no new output has arrived since the last poll.
 //
-// For sessions with an active ClaudeController: the idle detector's lastActivity
+// For sessions with an active claudectl.ClaudeController: the idle detector's lastActivity
 // timestamp (driven by PTY reads, no subprocess) is the change signal.
 //
-// For sessions without a ClaudeController: #{window_activity} from the
+// For sessions without a claudectl.ClaudeController: #{window_activity} from the
 // paneActivity snapshot (one `tmux list-panes -a` call shared across all sessions)
 // is the change signal. capture-pane is only called when that timestamp advances.
 // A 30s TTL acts as a fallback when paneActivity is nil (tmux unavailable).

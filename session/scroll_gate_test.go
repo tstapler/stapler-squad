@@ -88,7 +88,7 @@ func TestAppScrollGate_should_ReturnTrue_When_DetectedStatusIsReady(t *testing.T
 
 // TestAppScrollGate_should_ReturnFalseWithNoActiveControllerReason_When_NoControllerIsRegistered
 // covers the other source of StatusUnknown: GetDetectedStatus also returns
-// it when no ClaudeController/PiStatusSource is active at all, which must
+// it when no claudectl.ClaudeController/PiStatusSource is active at all, which must
 // stay unsafe even though bare StatusUnknown is now allowlisted above.
 func TestAppScrollGate_should_ReturnFalseWithNoActiveControllerReason_When_NoControllerIsRegistered(t *testing.T) {
 	inst := &Instance{Title: t.Name(), Program: "claude", AltScreenActive: true}

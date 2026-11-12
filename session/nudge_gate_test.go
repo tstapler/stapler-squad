@@ -96,7 +96,7 @@ func TestVerifyPaneOwnershipBeforeWrite_NoTmuxIdentity(t *testing.T) {
 }
 
 // TestCheckNudgeEligible_RejectsNilController covers CheckNudgeEligible's
-// no-controller branch: a session with no running ClaudeController (e.g.
+// no-controller branch: a session with no running claudectl.ClaudeController (e.g.
 // paused, or never started) can never be nudge-eligible regardless of its
 // last-known status.
 func TestCheckNudgeEligible_RejectsNilController(t *testing.T) {

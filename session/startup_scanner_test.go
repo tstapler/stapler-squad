@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
@@ -19,7 +20,7 @@ func (f *fakeStatusProvider) GetStatus(inst *Instance) InstanceStatusInfo {
 	return InstanceStatusInfo{}
 }
 
-func (f *fakeStatusProvider) GetController(instanceTitle string) (*ClaudeController, bool) {
+func (f *fakeStatusProvider) GetController(instanceTitle string) (*claudectl.ClaudeController, bool) {
 	return nil, false
 }
 

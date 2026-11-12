@@ -1053,10 +1053,10 @@ func buildGrowingPrefixContent(chunk string, reps int, dialogText string) string
 // evaluated and rejected as disproportionate scaffolding. Reaching the
 // NeedsApproval branch requires inst.GetStatusManager().GetStatus(inst).ClaudeStatus
 // == detection.StatusNeedsApproval, which in turn requires a REAL, started
-// *ClaudeController registered in an *InstanceStatusManager for this instance's
+// *claudectl.ClaudeController registered in an *InstanceStatusManager for this instance's
 // Title — InstanceStatusManager.GetStatus (instance_status.go:73-104) only
 // consults its internal controllers map, so there is no interface seam to fake
-// this condition directly. ClaudeController.Start (claude_controller.go:128ff)
+// this condition directly. claudectl.ClaudeController.Start (claude_controller.go:128ff)
 // requires a real PTY reader from the instance, persistence directories for its
 // command queue/history, and starts multiple background goroutines — genuinely
 // disproportionate scaffolding for what would still just be exercising the same

@@ -1,4 +1,4 @@
-package session
+package claudectl
 
 import (
 	"context"
@@ -8,9 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
-	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
@@ -21,6 +19,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/ptyio"
 )
+
+// stopJoinTimeout bounds how long Stop() waits for runStatusChangeLoop to exit.
+// Mirrors session.stopJoinTimeout (the other join sites use the same bound).
+const stopJoinTimeout = 10 * time.Second
 
 // StatusChangeListener is called when the controller detects a terminal status transition.
 // Always invoked from the controller's own background goroutine, outside any lock.
@@ -241,7 +243,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		pa := ptyio.NewPTYAccess(cc.sessionName, ptyReader, buffer)
 
 		// Create rate limit detection handler
-		rateLimitManager := ratelimit.NewManager(cc.sessionName, leasedSessionAccessor{cc.instance})
+		rateLimitManager := ratelimit.NewManager(cc.sessionName, recoveryAccessor{cc.instance})
 		rlh := ratelimit.NewPTYConsumer(pa, rateLimitManager)
 
 		// Create response stream
@@ -895,29 +897,6 @@ func lastNLines(s string, n int) []string {
 	}
 	// Fewer than n newlines in the whole string — return all lines.
 	return strings.Split(s, "\n")
-}
-
-// tailContent returns the last n bytes of s, snapped forward to the next
-// newline boundary so we never split a line mid-way through.
-// If s is shorter than n bytes, s itself is returned unchanged.
-func tailContent(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	tail := s[len(s)-n:]
-	// Advance to the next newline so we start on a clean line boundary.
-	if nl := strings.IndexByte(tail, '\n'); nl >= 0 {
-		tail = tail[nl+1:]
-	}
-	return tail
-}
-
-// hashString returns a murmur3-64 hash of s without allocating a []byte copy.
-func hashString(s string) uint64 {
-	if len(s) == 0 {
-		return murmur3.Sum64(nil)
-	}
-	return murmur3.Sum64(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
 // GetRecentOutput returns recent output from the PTY buffer.

@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "claudectltest",
+    srcs = ["claudectltest.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/claudectl/claudectltest",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/claudectl",
+        "//session/detection",
+        "//session/ptyio",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":claudectltest",
+    visibility = ["//visibility:public"],
+)

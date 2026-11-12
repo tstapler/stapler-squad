@@ -352,7 +352,7 @@ func (i *Instance) SetLastMeaningfulOutput(t time.Time) {
 // GetEffectiveStatus returns the most accurate status for this instance,
 // combining the lifecycle status with real-time terminal detection when available.
 // Unlike Status (which only reflects lifecycle transitions), this consults the
-// ClaudeController's detected terminal state to surface NeedsApproval, Idle, etc.
+// claudectl.ClaudeController's detected terminal state to surface NeedsApproval, Idle, etc.
 func (i *Instance) GetEffectiveStatus() Status {
 	mgr := i.GetStatusManager()
 	if mgr == nil {
@@ -395,7 +395,7 @@ func (i *Instance) GetDetectedStatus() detection.DetectedStatus {
 }
 
 // GetDetectedStatusInfo returns both the raw DetectedStatus and whether a
-// status controller (ClaudeController or PiStatusSource) is actually active
+// status controller (claudectl.ClaudeController or PiStatusSource) is actually active
 // for this instance. GetDetectedStatus alone can't distinguish "a controller
 // is active and genuinely reported StatusUnknown" from "no controller is
 // active at all" -- both collapse to the same StatusUnknown value, which

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
+	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -697,10 +699,7 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 	// Wire a controller that is NOT started (ctx == nil → IsStarted() = false).
 	// GetController() returns non-nil, but IsControllerActive will be false so the
 	// no-controller terminal-content path runs.
-	bareController := &ClaudeController{
-		sessionName: inst.Title,
-		instance:    inst,
-	}
+	bareController := claudectl.NewBareForTest(inst.Title, inst)
 	inst.controllerManager.SetController(bareController)
 
 	// Pre-populate the content cache with an approval prompt so the no-controller
@@ -764,16 +763,16 @@ func TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue(t *testing.T) {
 }
 
 // TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue verifies that
-// sessions with an active (started) ClaudeController that reports StatusNeedsApproval are
+// sessions with an active (started) claudectl.ClaudeController that reports StatusNeedsApproval are
 // added to the review queue via the controller-based detection path (lines 696-828).
 func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t *testing.T) {
 	t.Parallel()
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
-	// Use a mock InstanceContext so GetCurrentStatus() returns StatusNeedsApproval
+	// Use a mock claudectl.InstanceContext so GetCurrentStatus() returns StatusNeedsApproval
 	// without requiring a real tmux session.
 	approvalContent := "Yes, allow reading /home/user/file.go\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
 	inst := &Instance{
 		Title:  "active-controller-session",
@@ -781,10 +780,10 @@ func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t
 		Status: Running,
 	}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
+	ctrl.SetSessionNameForTest(inst.Title)
 
 	// Mark the controller as started by setting a non-nil context.
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.MarkRunningForTest(t.Context())
 
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
@@ -1259,7 +1258,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
 	inst := &Instance{
 		Title:  "session-title-not-used-as-key",
@@ -1267,8 +1266,8 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 		Status: Running,
 	}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.SetSessionNameForTest(inst.Title)
+	ctrl.MarkRunningForTest(t.Context())
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
 
@@ -1316,12 +1315,12 @@ func TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataH
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
 	inst := &Instance{Title: "session-risk-set", UUID: "session-risk-set-uuid", Status: Running}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.SetSessionNameForTest(inst.Title)
+	ctrl.MarkRunningForTest(t.Context())
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
 
@@ -1348,12 +1347,12 @@ func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadata
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
 	inst := &Instance{Title: "session-risk-empty", UUID: "session-risk-empty-uuid", Status: Running}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.SetSessionNameForTest(inst.Title)
+	ctrl.MarkRunningForTest(t.Context())
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
 
@@ -1467,7 +1466,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
 	inst := &Instance{
 		Title:  "session-with-no-uuid",
@@ -1475,8 +1474,8 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 		Status: Running,
 	}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.SetSessionNameForTest(inst.Title)
+	ctrl.MarkRunningForTest(t.Context())
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
 

@@ -15,6 +15,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
@@ -619,7 +620,7 @@ type Instance struct {
 	// Set via SetNotifier, mirroring reviewQueue/SetReviewQueue.
 	notifier Notifier
 
-	// controllerManager owns the ClaudeController and InstanceStatusManager references.
+	// controllerManager owns the claudectl.ClaudeController and InstanceStatusManager references.
 	controllerManager ControllerManager
 
 	// Instance type and management metadata
@@ -859,7 +860,7 @@ type Instance struct {
 	// success=true means recovery input was sent; false means it failed.
 	onRateLimitRecovery func(sessionID string, success bool, errMsg string)
 
-	// onStatusChange is called when the ClaudeController detects a status transition.
+	// onStatusChange is called when the claudectl.ClaudeController detects a status transition.
 	// Wired by the server layer to trigger reactive queue checks.
 	onStatusChange ptyio.Locked[func(detection.DetectedStatus, string)]
 
@@ -2572,7 +2573,7 @@ func (i *Instance) Resume() error {
 	i.GitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session resumed")
 
-	// Start ClaudeController for idle detection and automation
+	// Start claudectl.ClaudeController for idle detection and automation
 	// This is non-critical - we log errors but don't fail the resume
 	if err := i.StartController(); err != nil {
 		log.Warn("failed to start controller on resume", "session", i.Title, "err", err)

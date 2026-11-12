@@ -42,7 +42,7 @@ func (i *Instance) GetStableID() string {
 // (SetProgram/SwitchProgram and friends) write i.Program directly outside
 // i.mu, publishing the change only by atomically storing a fresh snapshot at
 // the end of the mutation — the same reasoning as GetStatus's doc comment.
-// ClaudeController.Start reads this from a different goroutine than whatever
+// claudectl.ClaudeController.Start reads this from a different goroutine than whatever
 // last set it, so only the atomic snapshot read is synchronized with that
 // write; a direct field read or an i.mu-guarded read would not be.
 func (i *Instance) GetProgram() string {
@@ -155,7 +155,7 @@ func (i *Instance) previewBlocked() bool {
 
 // Preview returns the current visible terminal content.
 // Prefers tmux's own capture-pane (authoritative rendered screen) for tmux-backed
-// instances; falls back to the in-memory PTY buffer from ClaudeController otherwise.
+// instances; falls back to the in-memory PTY buffer from claudectl.ClaudeController otherwise.
 //
 // Its underlying capture-pane subprocess runs with context.Background() and
 // cannot be cancelled. Driver-loop callers (session_driver.go) MUST use
