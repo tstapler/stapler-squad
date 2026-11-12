@@ -23,7 +23,7 @@ async function openSessionAndSeed(page: Page, request: Parameters<typeof sendNot
   await page.addInitScript((key) => localStorage.setItem(key, 'true'), ONBOARDED_KEY);
   watchStreamLive(page);
   await page.goto(`${BASE_URL}/?session=${session.id}`, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('textbox', { name: 'Terminal input' })).toBeAttached({ timeout: 20_000 });
+  await expect(page.getByRole('textbox', { name: 'Terminal input' }).last()).toBeAttached({ timeout: 20_000 });
 
   const deck = new ToastDeck(page);
   await sendOnceStreamLive(page, async () => {
@@ -47,7 +47,7 @@ test.describe('toast stack (phone)', () => {
 
         const deckBox = await deck.deck.boundingBox();
         const tabBox = await page.getByRole('tab', { name: /Terminal/ }).first().boundingBox();
-        const inputBox = await page.getByRole('textbox', { name: 'Terminal input' }).boundingBox();
+        const inputBox = await page.getByRole('textbox', { name: 'Terminal input' }).last().boundingBox();
         const keysBox = await page.getByTestId('mobile-key').first().boundingBox();
         expect(deckBox).not.toBeNull();
         expect(deckBox!.y).toBeGreaterThanOrEqual(tabBox!.y + tabBox!.height - 1);
@@ -157,7 +157,7 @@ test.describe('toast stack (phone)', () => {
     test('toast_stack_should_show_only_a_40px_strip_and_keep_textarea_focused_when_keyboard_open', async ({ page, request }) => {
       const { client, session, deck } = await openSessionAndSeed(page, request, 3);
       try {
-        const textarea = page.getByRole('textbox', { name: 'Terminal input' });
+        const textarea = page.getByRole('textbox', { name: 'Terminal input' }).last();
         await textarea.focus();
         await setKeyboardOpen(page, 300);
 

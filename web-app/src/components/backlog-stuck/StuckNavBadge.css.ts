@@ -9,7 +9,7 @@ export const badge = style({
   height: "1.25rem",
   padding: `0 ${vars.space["2"]}`,
   background: vars.color.error,
-  color: vars.color.textInverse,
+  color: vars.color.onErrorFill, // white on the bright error fill is 3.76:1; onErrorFill is the >= 4.5:1 pair
   fontSize: vars.fontSize.xs,
   fontWeight: 600,
   borderRadius: vars.radii.full,
