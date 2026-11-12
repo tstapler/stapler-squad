@@ -22,7 +22,7 @@ import (
 // UUID), delivered through a per-session 0600 file the shared hook command reads
 // through STAPLER_SESSION_UUID, never in argv. It narrows who can create a
 // replyable question; it is NOT the guard against typing into the wrong dialog
-// (session.DialogMatch is), and it does not stop the agent or a same-user process.
+// (panereply.DialogMatch is), and it does not stop the agent or a same-user process.
 const (
 	hookProofHeader     = "X-CS-Hook-Proof"
 	hookProofDomain     = "ssq-hook-v1"

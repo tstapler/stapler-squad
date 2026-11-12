@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // pane_reply_core.go is the claim, audit, write-lease, DialogMatch and
@@ -200,10 +201,10 @@ func (a TerminalAccess) QuestionReplyWriter(target AnswerTarget, claim PendingQu
 	return &QuestionReplyWriter{claim: claim, inst: inst, after: after}, nil
 }
 
-// SubmitReply writes the digit through session.SubmitReplyOnce under lease. It
+// SubmitReply writes the digit through panereply.SubmitReplyOnce under lease. It
 // never calls SubmitContentWithEnter: that primitive writes a blind second Enter.
-func (w *QuestionReplyWriter) SubmitReply(ctx context.Context, lease *session.HeldLease, digit byte, beforeFirstByte func() error) (session.ReplyStage, error) {
-	return session.SubmitReplyOnce(ctx, w.inst, lease, digit, session.ReplyOptions{
+func (w *QuestionReplyWriter) SubmitReply(ctx context.Context, lease *session.HeldLease, digit byte, beforeFirstByte func() error) (panereply.ReplyStage, error) {
+	return panereply.SubmitReplyOnce(ctx, w.inst, lease, digit, panereply.ReplyOptions{
 		Dialog:          w.claim.Question().Dialog,
 		BeforeFirstByte: beforeFirstByte,
 		After:           w.after,
@@ -315,14 +316,14 @@ func (c *PaneReplyCore) writeUnderLease(ctx context.Context, target AnswerTarget
 	return mapReplyStage(rs, err)
 }
 
-func mapReplyStage(rs session.ReplyStage, err error) (replyOutcomeResult, string, bool) {
+func mapReplyStage(rs panereply.ReplyStage, err error) (replyOutcomeResult, string, bool) {
 	var refused *replyWriteError
 	switch rs {
-	case session.StageDialogClosed:
+	case panereply.StageDialogClosed:
 		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT}, replyStageDialogClosed, true
-	case session.StageDialogStillOpen:
+	case panereply.StageDialogStillOpen:
 		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE}, replyStageDialogStillOpen, true
-	case session.StageWriteEntered:
+	case panereply.StageWriteEntered:
 		return replyOutcomeResult{Outcome: sessionv1.ReplyOutcome_REPLY_OUTCOME_SEND_INDETERMINATE}, replyStageIndeterminate, true
 	}
 	if errors.As(err, &refused) {
@@ -352,7 +353,7 @@ func (c *PaneReplyCore) beforeFirstByteChecks(target AnswerTarget, claim Pending
 		if err != nil {
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_NOT_WAITING, replyStageNotWaiting}
 		}
-		matched := session.DialogMatch(capture, claim.Question().Dialog)
+		matched := panereply.DialogMatch(capture, claim.Question().Dialog)
 		c.canary.Record(DialogMatchResultOf(matched))
 		if !matched {
 			return &replyWriteError{sessionv1.ReplyOutcome_REPLY_OUTCOME_STALE_PROMPT, replyStageStalePrompt}

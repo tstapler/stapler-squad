@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 const (
@@ -33,7 +34,7 @@ type replyEnv struct {
 	qid   string
 }
 
-var colorDialog = session.QuestionDialog{
+var colorDialog = panereply.QuestionDialog{
 	Question: "Which color should the spike use?",
 	Header:   "Color",
 	Labels:   []string{"Red", replyColorLabel, "Blue"},
@@ -76,7 +77,7 @@ func newReplyEnv(t *testing.T) *replyEnv {
 	return re
 }
 
-func (e *replyEnv) register(inst *session.Instance, d session.QuestionDialog) string {
+func (e *replyEnv) register(inst *session.Instance, d panereply.QuestionDialog) string {
 	id := NewQuestionID()
 	e.fix.svc.PendingQuestions().Register(PendingQuestion{
 		QuestionID: id, SessionUUID: inst.UUID, Dialog: d, Token: QuestionToken(d.Question),
@@ -283,7 +284,7 @@ func TestReply_ShouldReturnRateLimitedWithRetryAfterBeforeTakingAnyClaim_WhenSec
 	e := newReplyEnv(t)
 	assert.Equal(t, sessionv1.ReplyOutcome_REPLY_OUTCOME_SENT, e.replyOK("1", "r-1").Outcome)
 
-	q2 := e.register(e.inst, session.QuestionDialog{Question: "Which color should the spike use?", Header: "Color", Labels: []string{"Red", replyColorLabel, "Blue", "Teal"}})
+	q2 := e.register(e.inst, panereply.QuestionDialog{Question: "Which color should the spike use?", Header: "Color", Labels: []string{"Red", replyColorLabel, "Blue", "Teal"}})
 	e.clock.Advance(time.Second)
 	resp, err := e.reply(e.inst.UUID, q2, "1", "r-2")
 	require.NoError(t, err)

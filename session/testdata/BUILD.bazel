@@ -10,6 +10,7 @@ filegroup(
         "//server/wakes:__pkg__",
         "//session:__pkg__",
         "//session/dialogpresence:__pkg__",
+        "//session/panereply:__pkg__",
     ],
 )
 

@@ -218,7 +218,7 @@ The dialog matcher is pinned to fixtures captured from Claude Code `v2.1.296` (`
 2. Re-run the fixture tests against current captures. First capture a fresh dialog from the new version into a scratch file with `tmux -L ssq-manual-1 capture-pane -p -t <session>`, then compare it by eye with `session/testdata/reply_dialogs/claude_auq_twoq_step1_single_select.txt`. Then run the existing matcher tests:
 
    ```bash
-   go test ./session -run 'TestClaudeProfile' -count=1
+   go test ./session/panereply -run 'TestClaudeProfile' -count=1
    ```
 
    Output:

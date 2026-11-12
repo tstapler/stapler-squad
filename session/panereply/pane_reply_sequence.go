@@ -1,4 +1,4 @@
-package session
+package panereply
 
 // pane_reply_sequence.go writes a short fixed key sequence into a dialog that
 // needs several keys (the tabbed multi-question AskUserQuestion, Story 3.5).
@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -83,13 +84,13 @@ func (o SequenceOptions) withDefaults() SequenceOptions {
 
 // SubmitReplySequence runs steps under lease and releases it exactly once. See
 // the file comment for the guarantees; SubmitReplyOnce's single-byte contract is unchanged.
-func SubmitReplySequence(ctx context.Context, pane replyPane, lease *HeldLease, steps []ReplyStep, opts SequenceOptions) SequenceResult {
+func SubmitReplySequence(ctx context.Context, pane replyPane, lease *session.HeldLease, steps []ReplyStep, opts SequenceOptions) SequenceResult {
 	total := len(steps)
 	fail := func(err error) SequenceResult {
 		lease.Release()
 		return SequenceResult{Stage: StageNotStarted, Total: total, Err: err}
 	}
-	if err := lease.check(pane); err != nil {
+	if err := lease.Check(pane); err != nil {
 		return fail(err)
 	}
 	if total == 0 {

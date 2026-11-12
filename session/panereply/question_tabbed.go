@@ -1,4 +1,4 @@
-package session
+package panereply
 
 // question_tabbed.go matches the multi-question AskUserQuestion layout of
 // Claude Code 2.1.303 (Spike S1c fixtures claude_auq_twoq_*.txt): a tab bar

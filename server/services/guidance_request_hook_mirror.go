@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // guidance_request_hook_mirror.go mirrors AskUserQuestion hooks into durable
@@ -176,33 +177,33 @@ func redactedPayload(p domain.QuestionPayload) (domain.QuestionPayload, error) {
 
 // dialogFromRow rebuilds the on-screen dialog of a replyable hook row: one
 // single-select question that passes the same label rules as a live parse.
-func dialogFromRow(row *session.GuidanceRequestData) (session.QuestionDialog, bool) {
+func dialogFromRow(row *session.GuidanceRequestData) (panereply.QuestionDialog, bool) {
 	if row.Source != domain.QuestionSourceHook || row.DeliveryRoute != domain.DeliveryRouteLiveKeystroke {
-		return session.QuestionDialog{}, false
+		return panereply.QuestionDialog{}, false
 	}
 	payload, err := domain.ParseQuestionPayload([]byte(row.QuestionsJSON))
 	if err != nil {
-		return session.QuestionDialog{}, false
+		return panereply.QuestionDialog{}, false
 	}
 	qs := payload.Questions()
 	if len(qs) != 1 || qs[0].MultiSelect || qs[0].Header == "" {
-		return session.QuestionDialog{}, false
+		return panereply.QuestionDialog{}, false
 	}
 	labels := make([]string, len(qs[0].Options))
 	for i, o := range qs[0].Options {
 		labels[i] = o.Label
 	}
 	if !replyableLabels(labels) {
-		return session.QuestionDialog{}, false
+		return panereply.QuestionDialog{}, false
 	}
-	return session.QuestionDialog{Question: qs[0].Text, Header: qs[0].Header, Labels: labels}, true
+	return panereply.QuestionDialog{Question: qs[0].Text, Header: qs[0].Header, Labels: labels}, true
 }
 
 // tabbedFromRow returns the questions of a replyable hook row in the measured
 // tabbed shape. It is the identity the router and the descriptor builder share:
 // such a row is answered by the stepwise driver and re-verified with
-// session.ParseTabbedFrame, never session.DialogMatch.
-func tabbedFromRow(row *session.GuidanceRequestData) ([]session.TabbedQuestion, bool) {
+// panereply.ParseTabbedFrame, never panereply.DialogMatch.
+func tabbedFromRow(row *session.GuidanceRequestData) ([]panereply.TabbedQuestion, bool) {
 	if row.Source != domain.QuestionSourceHook || row.DeliveryRoute != domain.DeliveryRouteLiveKeystroke || row.QuestionsJSON == "" {
 		return nil, false
 	}
@@ -216,9 +217,9 @@ func tabbedFromRow(row *session.GuidanceRequestData) ([]session.TabbedQuestion, 
 
 // tabbedHeadersMatch reports whether a capture shows a recognised tabbed frame
 // whose tab headers are the row's.
-func tabbedHeadersMatch(qs []session.TabbedQuestion) func(capture string) bool {
+func tabbedHeadersMatch(qs []panereply.TabbedQuestion) func(capture string) bool {
 	return func(capture string) bool {
-		f, ok := session.ParseTabbedFrame(capture)
+		f, ok := panereply.ParseTabbedFrame(capture)
 		if !ok || len(f.Tabs) != len(qs) {
 			return false
 		}
@@ -246,7 +247,7 @@ func (m *GuidanceHookMirror) register(row *session.GuidanceRequestData) bool {
 
 // Rehydrate re-registers every open replyable hook row after a restart and
 // returns how many it registered. It writes nothing to a pane: the claim path
-// re-verifies session.DialogMatch before any byte, so a dialog that changed
+// re-verifies panereply.DialogMatch before any byte, so a dialog that changed
 // while the service was down fails closed as STALE.
 func (m *GuidanceHookMirror) Rehydrate(ctx context.Context) (int, error) {
 	rows, err := m.store.ListAllPendingGuidanceRequests(ctx)
