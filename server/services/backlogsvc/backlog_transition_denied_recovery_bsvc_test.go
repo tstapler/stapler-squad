@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func transitionDeniedRows(t *testing.T, svc *BacklogService, itemID string) []*sessionv1.StuckBacklogItem {
@@ -162,7 +163,7 @@ func denSpawnCases() []denSpawnCase {
 			func(t *testing.T) (*BacklogService, string) {
 				svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 				svc.SetHeadlessPool(&fakeHeadlessPool{})
-				item, err := svc.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+				item, err := svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 					Title: "has a plan", Status: string(session.BacklogStatusIdea), RepoPath: t.TempDir(), PlanApproved: true,
 				})
 				require.NoError(t, err)
@@ -351,7 +352,7 @@ func TestReconcileStuckDenied_should_NotRespawnWork_And_MoveToReviewOnceApproved
 	remove := h.blockWithGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
 	item := systemItemAt(t, svc, session.BacklogStatusInProgress)
 	ctx := context.Background()
-	workIS, err := svc.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: "ended-work", SessionRole: session.SessionRoleWork})
+	workIS, err := svc.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "ended-work", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	require.NoError(t, svc.storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
 	listener := backlog.NewBacklogLifecycleListener(svc.storage)

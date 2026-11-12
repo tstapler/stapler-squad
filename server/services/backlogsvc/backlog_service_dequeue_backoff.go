@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // Dequeue spawn-failure backoff. A claim whose spawn fails is rolled back to
@@ -225,7 +226,7 @@ func (s *BacklogService) dequeueSpawnBlocks(itemID string, blocked map[string]bo
 // recordDequeueSpawnFailure handles a failed spawn (item already rolled back to fromStatus).
 // A real failure opens or refreshes the spawn_failed row and spends one remediation attempt,
 // which sets the next deadline; the operator is notified when the budget is exhausted.
-func (s *BacklogService) recordDequeueSpawnFailure(ctx context.Context, item session.BacklogItemData, fromStatus session.BacklogStatus, spawnErr error) {
+func (s *BacklogService) recordDequeueSpawnFailure(ctx context.Context, item backlogdto.BacklogItemData, fromStatus session.BacklogStatus, spawnErr error) {
 	switch classifySpawnFailure(ctx, spawnErr) {
 	case spawnFailureCancelled:
 		return
@@ -248,7 +249,7 @@ func (s *BacklogService) recordDequeueSpawnFailure(ctx context.Context, item ses
 }
 
 // chargeDequeueSpawnFailure opens or refreshes the durable spawn_failed row and spends an attempt.
-func (s *BacklogService) chargeDequeueSpawnFailure(ctx context.Context, item session.BacklogItemData, fromStatus session.BacklogStatus, spawnErr error) {
+func (s *BacklogService) chargeDequeueSpawnFailure(ctx context.Context, item backlogdto.BacklogItemData, fromStatus session.BacklogStatus, spawnErr error) {
 	msg := fmt.Sprintf("%scould not spawn a work session (%v); retrying with backoff", domain.DequeueSpawnFailedContextPrefix, spawnErr)
 	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, fromStatus, msg)
 	if err != nil {
@@ -271,7 +272,7 @@ func (s *BacklogService) chargeDequeueSpawnFailure(ctx context.Context, item ses
 	}
 }
 
-func (s *BacklogService) notifyDequeueSpawnParked(ctx context.Context, item session.BacklogItemData, spawnErr error) {
+func (s *BacklogService) notifyDequeueSpawnParked(ctx context.Context, item backlogdto.BacklogItemData, spawnErr error) {
 	if s.eventBus == nil {
 		return
 	}

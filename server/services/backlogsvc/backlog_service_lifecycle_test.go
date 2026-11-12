@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ─── pipeline_mode presence gating (Story 1.4.4) ───────────────────────────────
@@ -421,7 +422,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with an open, unmerged PR",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusReview),
@@ -431,11 +432,11 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 
 	// A PASS review verdict, so the failure below is unambiguously the code-on-main
 	// gate (ErrCodeNotOnMain), not the separate, already-covered verdict gate.
-	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session",
 		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
@@ -498,7 +499,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with an open, conflicted PR",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusPRPending),
@@ -507,11 +508,11 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session",
 		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
@@ -548,17 +549,17 @@ func TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_Review
 			svc := newBacklogService(t)
 			storage := svc.storage
 
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 				Title:  "item with a passing review verdict",
 				Status: string(from),
 			})
 			require.NoError(t, err)
 
-			_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+			_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: "review-session-pass-verdict",
 				SessionRole: session.SessionRoleReview,
-			}, session.ReviewVerdictData{
+			}, backlogdto.ReviewVerdictData{
 				OverallOutcome: session.ReviewVerdictPass,
 			})
 			require.NoError(t, err)
@@ -585,17 +586,17 @@ func TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideR
 	svc := newBacklogService(t)
 	storage := svc.storage
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item with a passing review verdict and an override",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session-pass-verdict-override",
 		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
@@ -639,7 +640,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with a stale shipped-looking LastCommitSha",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusReview),
@@ -648,11 +649,11 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 
 	// A PASS review verdict, so the failure below is unambiguously the
 	// code-on-main gate, not the separate verdict-required gate.
-	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session",
 		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
@@ -703,13 +704,13 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReaches
 	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item reaching done",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-session-to-archive",
 		SessionRole: session.SessionRoleWork,
@@ -736,13 +737,13 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchive
 	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item being archived",
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "idea-work-session-to-archive",
 		SessionRole: session.SessionRoleWork,
@@ -769,14 +770,14 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "item mid-flight",
 		Status:       string(session.BacklogStatusReady),
 		SkipPlanning: true,
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "in-flight-work-session",
 		SessionRole: session.SessionRoleWork,
@@ -813,13 +814,13 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToR
 			stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 			svc.SetSessionStopper(stopper)
 
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 				Title:  "item sent back to ready",
 				Status: string(from),
 			})
 			require.NoError(t, err)
 
-			_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+			_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: "work-live-1",
 				SessionRole: session.SessionRoleWork,
@@ -857,22 +858,22 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item with a passing review verdict and a live work session",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session-pass-verdict",
 		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-live-1",
 		SessionRole: session.SessionRoleWork,
@@ -902,14 +903,14 @@ func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_Transiti
 	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}
 	svc.SetSessionStopper(stopper)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "item moving forward from ready",
 		Status:       string(session.BacklogStatusReady),
 		SkipPlanning: true,
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-forward-1",
 		SessionRole: session.SessionRoleWork,
@@ -939,13 +940,13 @@ func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTear
 	stopper := &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}, StopperErr: errors.New("tmux teardown failed")}
 	svc.SetSessionStopper(stopper)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item whose live session teardown fails",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-live-1",
 		SessionRole: session.SessionRoleWork,
@@ -967,7 +968,7 @@ func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTear
 
 	sessions, err := storage.ListItemSessions(t.Context(), item.ID)
 	require.NoError(t, err)
-	var fetchedIS *session.ItemSessionSummary
+	var fetchedIS *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		if sessions[i].ID == is.ID {
 			fetchedIS = &sessions[i]
@@ -1047,7 +1048,7 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with unshipped code",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusInProgress),
@@ -1169,7 +1170,7 @@ func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemI
 	sub, subID := bus.Subscribe(t.Context())
 	defer bus.Unsubscribe(subID)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item stuck in review with an out-of-band PR",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -1204,7 +1205,7 @@ func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *te
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item mid-flight, not in review",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -1243,7 +1244,7 @@ func TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideRea
 	sub, subID := bus.Subscribe(t.Context())
 	defer bus.Unsubscribe(subID)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item to manually force out of review",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -1284,7 +1285,7 @@ func TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet(t
 	sub, subID := bus.Subscribe(t.Context())
 	defer bus.Unsubscribe(subID)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "item transitioned routinely",
 		Status:       string(session.BacklogStatusReady),
 		SkipPlanning: true,
@@ -1316,7 +1317,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item racing an automated transition",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -1333,7 +1334,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 	go func() {
 		defer wg.Done()
 		startBarrier.Wait()
-		_, automatedErr = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusPRPending, &session.BacklogItemPrecondition{
+		_, automatedErr = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
 			ExpectedStatus: string(session.BacklogStatusReview),
 		}, session.TriggeredBySystem)
 	}()
@@ -1399,10 +1400,10 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 // this fix's scope. The underlying CAS mechanism itself IS deterministically
 // regression-tested at the storage layer, without any of this ordering
 // ambiguity, by TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverrideRaces
-// above (same session.BacklogItemPrecondition type OverrideVerdict now
+// above (same backlogdto.BacklogItemPrecondition type OverrideVerdict now
 // builds) and by direct inspection: OverrideVerdict
 // (server/services/backlog_service_lifecycle.go) now builds a real
-// &session.BacklogItemPrecondition{ExpectedStatus, ExpectedUpdatedAt} from
+// &backlogdto.BacklogItemPrecondition{ExpectedStatus, ExpectedUpdatedAt} from
 // the freshly-loaded item immediately before its write, replacing the prior
 // unconditional nil precondition — the same pattern its sibling
 // TransitionBacklogItemStatus RPC handler already used.
@@ -1417,13 +1418,13 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item for a single non-racing override",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session-single-override",
 		SessionRole: session.SessionRoleReview,
@@ -1482,11 +1483,11 @@ func newEnforcedGateService(t *testing.T) (*BacklogService, *session.Storage, *s
 	return svc, storage, stageRepo, cfg
 }
 
-func newOverrideVerdictItem(t *testing.T, storage *session.Storage, from session.BacklogStatus) (*session.BacklogItemData, session.ItemSessionSummary) {
+func newOverrideVerdictItem(t *testing.T, storage *session.Storage, from session.BacklogStatus) (*backlogdto.BacklogItemData, backlogdto.ItemSessionSummary) {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "override verdict item", Status: string(from)})
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "override verdict item", Status: string(from)})
 	require.NoError(t, err)
-	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID: item.ID, SessionUUID: "review-session-" + item.ID[:8], SessionRole: session.SessionRoleReview,
 	})
 	require.NoError(t, err)
@@ -1581,7 +1582,7 @@ func TestAddBacklogItemDependency_should_PersistEdge_When_ItemsExistAndNoCycle(t
 }
 
 // TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependency
-// covers the handler's translation of session.ErrDependencyCycle (self-edges
+// covers the handler's translation of backlogdto.ErrDependencyCycle (self-edges
 // included) into connect.CodeInvalidArgument.
 func TestAddBacklogItemDependency_should_ReturnInvalidArgument_When_SelfDependency(t *testing.T) {
 	t.Parallel()

@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const enfOverride = "ship per owner"
@@ -25,9 +26,9 @@ func enfService(t *testing.T) (*BacklogService, *session.Storage, *session.EntSt
 	return svc, storage, repo, cfg
 }
 
-func enfItemAt(t *testing.T, storage *session.Storage, status session.BacklogStatus) *session.BacklogItemData {
+func enfItemAt(t *testing.T, storage *session.Storage, status session.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "enforcement item", Status: string(status)})
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "enforcement item", Status: string(status)})
 	require.NoError(t, err)
 	return item
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 type auditFixture struct {
@@ -32,7 +33,7 @@ func newAuditFixture(t *testing.T, status session.BacklogStatus) auditFixture {
 		{Index: 1, Text: "done one", Status: session.AcStatusDone},
 	})
 	require.NoError(t, err)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "audit item", Status: string(status), AcceptanceCriteria: ac,
 	})
 	require.NoError(t, err)
@@ -253,7 +254,7 @@ func TestApplyTriageResultToUpdate_should_NeverStoreModelWaiver_And_RepoCarriesE
 		{Text: "done one", Status: session.AcStatusDone},
 		{Text: "Pending One", Status: session.AcStatusPending},
 	}}
-	var update session.BacklogItemUpdate
+	var update backlogdto.BacklogItemUpdate
 	applyTriageResultToUpdate(result, &update)
 	_, err := f.storage.UpdateBacklogItem(session.WithAcActor(t.Context(), session.AcActor{Class: session.AcActorSystem, Source: "api"}), f.itemID, update, nil)
 	require.NoError(t, err)

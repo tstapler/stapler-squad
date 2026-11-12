@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -129,7 +130,7 @@ func TestCreatePipelineMode_should_PersistAndInvalidateCacheSynchronously_When_V
 	require.NoError(t, err)
 	assert.Equal(t, "quick", createResp.Msg.Item.Slug)
 
-	item := &session.BacklogItemData{ID: "item-abc", Title: "test item", PipelineMode: "quick"}
+	item := &backlogdto.BacklogItemData{ID: "item-abc", Title: "test item", PipelineMode: "quick"}
 	gotPrompt := engine.TriagePromptFor(item, "")
 	assert.Equal(t, "Fix item-abc fast.", gotPrompt,
 		"expected the new mode's rendered prompt with no stale-cache window")
@@ -367,7 +368,7 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 	require.NoError(t, err)
 	id := createResp.Msg.Item.Id
 
-	_, err = svc.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	_, err = svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "item referencing quick",
 		Status:       string(session.BacklogStatusIdea),
 		PipelineMode: "quick",
@@ -412,7 +413,7 @@ func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDe
 	require.NoError(t, err)
 	id := createResp.Msg.Item.Id
 
-	item, err := svc.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "quick-mode item about to lose its mode",
 		Status:       string(session.BacklogStatusIdea),
 		Priority:     3,

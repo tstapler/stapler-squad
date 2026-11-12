@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const (
@@ -68,7 +69,7 @@ func (s *BacklogService) dispatchVerdictSteer(p *events.BacklogItemEventPayload)
 	go s.steerWorkSessionWithVerdict(s.shutdownCtx, p, key)
 }
 
-func verdictSteerKey(v *session.ReviewVerdictData) string {
+func verdictSteerKey(v *backlogdto.ReviewVerdictData) string {
 	override := ""
 	if v.OverrideAt != nil {
 		override = v.OverrideAt.UTC().Format(time.RFC3339Nano)
@@ -162,7 +163,7 @@ func (s *BacklogService) waitForSteerReady(ctx context.Context, sessionUUID stri
 	}
 }
 
-func buildVerdictSteerMessage(itemID string, v *session.ReviewVerdictData) string {
+func buildVerdictSteerMessage(itemID string, v *backlogdto.ReviewVerdictData) string {
 	summary := truncateUTF8Bytes(strings.TrimSpace(v.Summary), maxVerdictSummaryBytes)
 	var next string
 	if v.OverallOutcome == session.ReviewOutcomePass {

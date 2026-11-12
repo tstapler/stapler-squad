@@ -3,13 +3,14 @@ package backlogsvc
 import (
 	"context"
 	"fmt"
-	githubpkg "github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	githubpkg "github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -434,7 +436,7 @@ func newTestBacklogServiceForSteerNotify(t *testing.T) (*BacklogService, *events
 
 func createTestBacklogItemForSteerNotify(t *testing.T, svc *BacklogService) string {
 	t.Helper()
-	item, err := svc.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := svc.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:  "Steer notify test item",
 		Status: string(session.BacklogStatusPRPending),
 	})
@@ -654,7 +656,7 @@ func requireNotificationEvent(t *testing.T, ch <-chan *events.Event) *events.Eve
 func pinnedBaselineSteer(t *testing.T, svc *BacklogService, itemID, fixContext string) {
 	t.Helper()
 	svc.steerActiveSessionForPRFix(context.Background(), itemID, "pinned item", session.BacklogStatusPRPending,
-		&session.ItemSessionSummary{SessionUUID: activeSessionUUIDPrimary, Role: session.SessionRoleWork}, fixContext)
+		&backlogdto.ItemSessionSummary{SessionUUID: activeSessionUUIDPrimary, Role: session.SessionRoleWork}, fixContext)
 }
 
 func TestSteerActiveSessionForPRFix_should_DeliverWhenReady_When_PinnedBaseline(t *testing.T) {
@@ -821,7 +823,7 @@ func TestGuardKey_should_Match_When_GetStableIDEqualsActiveSessionUUID(t *testin
 	t.Cleanup(fix.cleanup)
 	inst := &session.Instance{UUID: "stable-uuid-1", Title: "guard-key-session", Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	svctest.AddInstanceToPoller(fix.poller, inst)
-	active := &session.ItemSessionSummary{SessionUUID: inst.UUID, Role: session.SessionRoleWork}
+	active := &backlogdto.ItemSessionSummary{SessionUUID: inst.UUID, Role: session.SessionRoleWork}
 
 	live := fix.svc.FindLiveInstance(active.SessionUUID)
 

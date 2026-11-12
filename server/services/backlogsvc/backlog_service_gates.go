@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // gateSatisfactionToProto converts a session.GateSatisfactionData to its
@@ -144,7 +145,7 @@ func (s *BacklogService) GetPendingGates(
 // never worth failing the whole request over.
 func (s *BacklogService) buildPendingGatesGuardInput(
 	ctx context.Context,
-	item *session.BacklogItemData,
+	item *backlogdto.BacklogItemData,
 	to session.BacklogStatus,
 ) session.BacklogItemTransitionInput {
 	guardInput, err := s.buildGuardInput(ctx, item, to, "GetPendingGates")
@@ -163,7 +164,7 @@ func (s *BacklogService) buildPendingGatesGuardInput(
 // leaves OverallOutcome empty (TransitionGuard then blocks review->done).
 func (s *BacklogService) buildGuardInput(
 	ctx context.Context,
-	item *session.BacklogItemData,
+	item *backlogdto.BacklogItemData,
 	to session.BacklogStatus,
 	caller string,
 ) (session.BacklogItemTransitionInput, error) {

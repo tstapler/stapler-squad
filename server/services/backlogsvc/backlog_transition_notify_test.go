@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // enforceEveryClass is a class-aware mode source that enforces every class.
@@ -28,7 +29,7 @@ func TestTransitionDeniedReporter_should_RecordOnceAndReportDistinctCallersSepar
 	ch, _ := bus.Subscribe(t.Context())
 	ctx := context.Background()
 
-	item, err := svc.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "denied", Status: string(session.BacklogStatusReady)})
+	item, err := svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "denied", Status: string(session.BacklogStatusReady)})
 	require.NoError(t, err)
 	denied := func(caller session.TransitionCaller) {
 		t.Helper()

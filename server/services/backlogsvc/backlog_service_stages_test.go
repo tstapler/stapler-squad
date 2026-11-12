@@ -15,6 +15,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newStageCRUDTestService builds a *BacklogService wired with a real
@@ -119,11 +120,11 @@ func TestDeleteStage_should_ReturnFailedPrecondition_When_StageHasLiveItems(t *t
 	reviewStage, err := repo.GetStageBySlug(ctx, string(session.BacklogStatusReview))
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item 1", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 1", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item 2", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 2", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item 3", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 3", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
 
 	_, err = svc.DeleteStage(ctx, connect.NewRequest(&sessionv1.DeleteStageRequest{Id: reviewStage.ID.String()}))
@@ -147,7 +148,7 @@ func TestDeleteStage_should_Succeed_When_ForceIsTrueDespiteLiveItems(t *testing.
 	reviewStage, err := repo.GetStageBySlug(ctx, string(session.BacklogStatusReview))
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "item 1", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 1", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
 
 	_, err = svc.DeleteStage(ctx, connect.NewRequest(&sessionv1.DeleteStageRequest{Id: reviewStage.ID.String(), Force: true}))

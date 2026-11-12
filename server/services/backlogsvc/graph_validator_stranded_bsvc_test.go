@@ -9,6 +9,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func seededTransition(t *testing.T, svc *BacklogService, from, to session.BacklogStatus) *sessionv1.StageTransition {
@@ -98,7 +99,7 @@ func TestUpdateStageTransition_should_NameStatusAndItemIDs_When_DisableWouldStra
 		require.NoError(t, err)
 		edges = append(edges, resp.Msg.Item)
 	}
-	created, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stuck", Status: slug})
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stuck", Status: slug})
 	require.NoError(t, err)
 
 	_, err = svc.UpdateStageTransition(ctx, connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{Id: edges[0].Id, Enabled: svctest.BoolPtr(false)}))
@@ -123,7 +124,7 @@ func strandableStages(t *testing.T, svc *BacklogService, storage *session.Storag
 	require.NoError(t, err)
 	_, err = svc.CreateStageTransition(ctx, connect.NewRequest(&sessionv1.CreateStageTransitionRequest{FromStageSlug: from, ToStageSlug: to, Enabled: true}))
 	require.NoError(t, err)
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stuck", Status: from})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stuck", Status: from})
 	require.NoError(t, err)
 	return fr.Msg.Item.Id, tr.Msg.Item.Id, item.ID
 }
@@ -164,7 +165,7 @@ func TestDeleteStage_should_NotSuggestForce_When_StageHostsSystemRequiredEdges(t
 	svc, _, _, storage := newTransitionCRUDTestService(t)
 	stage, err := svc.GetStage(t.Context(), connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(session.BacklogStatusReview)}))
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "in review", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "in review", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
 
 	_, err = svc.DeleteStage(t.Context(), connect.NewRequest(&sessionv1.DeleteStageRequest{Id: stage.Msg.Item.Id}))

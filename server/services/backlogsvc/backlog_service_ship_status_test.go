@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -22,7 +23,7 @@ import (
 // so GetBacklogItemShipStatus can resolve both the commit and the branch.
 func attachWorkSessionWithCommit(t *testing.T, storage *session.Storage, repo *session.EntRepository, itemID, sessionUUID, repoPath, worktreePath, branchName, sha string) {
 	t.Helper()
-	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: sessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -62,7 +63,7 @@ func TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNo
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "direct commit item",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusDone),
@@ -97,14 +98,14 @@ func TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerg
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "PR-shipped item",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	prURL := "https://github.com/example/repo/pull/42"
-	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{PrURL: &prURL}, nil)
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL}, nil)
 	require.NoError(t, err)
 	attachWorkSessionWithCommit(t, storage, repo, item.ID, "pr-work", repoPath, repoPath, "feature", sha)
 
@@ -133,14 +134,14 @@ func TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with an open, unmerged PR",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	prURL := "https://github.com/example/repo/pull/999"
-	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{PrURL: &prURL}, nil)
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL}, nil)
 	require.NoError(t, err)
 	attachWorkSessionWithCommit(t, storage, repo, item.ID, "unmerged-work", repoPath, repoPath, "feature", sha)
 
@@ -162,7 +163,7 @@ func TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEver
 	storage, _ := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with no code",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusDone),
@@ -195,7 +196,7 @@ func TestGetBacklogItemShipStatus_should_ListShippedCommits_When_MultipleCommits
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with two shipped commits",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusDone),
@@ -215,8 +216,8 @@ func TestGetBacklogItemShipStatus_should_ListShippedCommits_When_MultipleCommits
 // snapshotBacklogItemUpdate builds a BacklogItemUpdate populating all 6 durable
 // ship-snapshot fields, mirroring what CaptureShipSnapshot (Epic 3.3, implemented
 // separately) writes via a single UpdateBacklogItem call.
-func snapshotBacklogItemUpdate(checkConclusion string, approvedCount, changesReqCount int, snapshotAt time.Time, fileStatsJSON string, captureFailed bool) session.BacklogItemUpdate {
-	return session.BacklogItemUpdate{
+func snapshotBacklogItemUpdate(checkConclusion string, approvedCount, changesReqCount int, snapshotAt time.Time, fileStatsJSON string, captureFailed bool) backlogdto.BacklogItemUpdate {
+	return backlogdto.BacklogItemUpdate{
 		ShippedCheckConclusion:       &checkConclusion,
 		ShippedApprovedCount:         &approvedCount,
 		ShippedChangesReqCount:       &changesReqCount,
@@ -238,7 +239,7 @@ func TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapsh
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with a durable ship snapshot",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusDone),
@@ -290,7 +291,7 @@ func TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJs
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with a corrupt ship snapshot",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusDone),
@@ -330,7 +331,7 @@ func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstR
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with a snapshot captured by the real reconciler path",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusDone),
@@ -386,14 +387,14 @@ func TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBase
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item whose session only ever recorded its base SHA",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusPRPending),
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "base-only-work",
 		SessionRole: session.SessionRoleWork,

@@ -19,8 +19,8 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -96,7 +96,7 @@ func importClaimIssue(svc *BacklogService, override bool, reason string) (*conne
 
 func itemCount(t *testing.T, svc *BacklogService) int {
 	t.Helper()
-	items, err := svc.storage.ListBacklogItems(context.Background(), session.BacklogItemFilter{})
+	items, err := svc.storage.ListBacklogItems(context.Background(), backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	return len(items)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newTestJulesRepoWithRemote creates a real (empty) git repository at a
@@ -112,10 +113,10 @@ func NewTestJulesConfig(repoPath string) *config.Config {
 // repo (remote "https://github.com/tstapler/stapler-squad.git") so
 // resolveJulesOwnerRepo resolves it to tstapler/stapler-squad, matching
 // newTestJulesSourceRegistry's registered source.
-func CreateTestJulesReadyItem(t *testing.T, ctx context.Context, storage *session.Storage, title string) *session.BacklogItemData {
+func CreateTestJulesReadyItem(t *testing.T, ctx context.Context, storage *session.Storage, title string) *backlogdto.BacklogItemData {
 	t.Helper()
 	repoPath := NewTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    title,
 		Status:   string(session.BacklogStatusReady),
 		RepoPath: repoPath,

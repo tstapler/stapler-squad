@@ -9,13 +9,14 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestDismissWorkflowSuggestion(t *testing.T) {
 	t.Parallel()
 	storage, _ := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "x", Status: string(session.BacklogStatusIdea)})
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "x", Status: string(session.BacklogStatusIdea)})
 	require.NoError(t, err)
 	sugID, err := storage.AppendWorkflowSuggestion(t.Context(), item.ID, session.WorkflowSuggestionData{ActionType: "operator_note", Recommendation: "r"})
 	require.NoError(t, err)

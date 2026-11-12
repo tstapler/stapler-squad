@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // stageTransitionToProto converts a session.TransitionData to its proto
@@ -200,7 +201,7 @@ func (s *BacklogService) withStrandedItemIDs(ctx context.Context, err error) err
 	if !errors.As(err, &se) || s.storage == nil {
 		return err
 	}
-	items, listErr := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{Statuses: []string{se.status}})
+	items, listErr := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{Statuses: []string{se.status}})
 	if listErr != nil {
 		return err
 	}

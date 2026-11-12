@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // blockerHarness is a done item with one work session whose worktree row points at a
@@ -40,7 +41,7 @@ func newBlockerHarness(t *testing.T, status session.BacklogStatus) *blockerHarne
 		h.removed = append(h.removed, wt.WorktreePath)
 		return nil
 	}
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "blocker item", Status: string(status)})
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "blocker item", Status: string(status)})
 	require.NoError(t, err)
 	h.itemID = item.ID
 	h.path = filepath.Join(t.TempDir(), "wt")
@@ -49,12 +50,12 @@ func newBlockerHarness(t *testing.T, status session.BacklogStatus) *blockerHarne
 		Title: h.uuid, UUID: h.uuid, Path: h.path, Status: session.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
 		Worktree: session.GitWorktreeData{RepoPath: filepath.Dir(h.path), WorktreePath: h.path, SessionName: h.uuid, BranchName: "backlog/x", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: h.uuid, SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: h.uuid, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	return h
 }
 
-func (h *blockerHarness) sessions() []session.ItemSessionSummary {
+func (h *blockerHarness) sessions() []backlogdto.ItemSessionSummary {
 	h.t.Helper()
 	s, err := h.storage.ListItemSessions(h.t.Context(), h.itemID)
 	require.NoError(h.t, err)
@@ -151,7 +152,7 @@ func TestCleanupGate_ShouldFailClosed_WhenItemPrNumberHasNoLink(t *testing.T) {
 	t.Parallel()
 	h := newBlockerHarness(t, session.BacklogStatusDone)
 	number, url := 5, ""
-	_, err := h.storage.UpdateBacklogItem(t.Context(), h.itemID, session.BacklogItemUpdate{PrNumber: &number, PrURL: &url}, nil)
+	_, err := h.storage.UpdateBacklogItem(t.Context(), h.itemID, backlogdto.BacklogItemUpdate{PrNumber: &number, PrURL: &url}, nil)
 	require.NoError(t, err)
 
 	out := h.svc.cleanupItemWorktrees(uniquePath(h, session.CleanupPathSweep), h.sessions())
@@ -228,7 +229,7 @@ func TestCleanupGate_ShouldRecheckBeforeEachRemoval_WhenPRAttachesMidCleanup(t *
 		Title: second, UUID: second, Path: path2, Status: session.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
 		Worktree: session.GitWorktreeData{RepoPath: filepath.Dir(path2), WorktreePath: path2, SessionName: second, BranchName: "backlog/y", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
-	_, err := h.storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: h.itemID, SessionUUID: second, SessionRole: session.SessionRoleWork})
+	_, err := h.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: h.itemID, SessionUUID: second, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	h.svc.cleanup.removeFn = func(wt session.GitWorktreeData) error {
 		h.removed = append(h.removed, wt.WorktreePath)

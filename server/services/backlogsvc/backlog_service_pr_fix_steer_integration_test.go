@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ func createPRPendingItemWithActiveSession(t *testing.T, storage *session.Storage
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
 
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:    "PR-pending item with an active fix session",
 		RepoPath: repoPath,
 		Status:   string(session.BacklogStatusPRPending),
@@ -72,7 +73,7 @@ func createPRPendingItemWithActiveSession(t *testing.T, storage *session.Storage
 		PrURL:    "https://github.com/example/repo/pull/42",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: activeSessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -303,7 +304,7 @@ func TestAutoReopenForPRFix_ActiveWorkSession_SessionUUIDChanged_ReSteersDespite
 	sessions, err := storage.ListItemSessions(context.Background(), itemID)
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(context.Background(), sessions[0].ID, time.Now()))
-	_, err = storage.CreateItemSession(context.Background(), session.ItemSessionData{
+	_, err = storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: activeSessionUUIDSecondary,
 		SessionRole: session.SessionRoleWork,

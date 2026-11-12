@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // The fixtures below are the backlogsvc copies of server/services' in-package test helpers of the same names: those
@@ -106,9 +107,9 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus session.
 	ch, _ := bus.Subscribe(ctx)
 	f := &charFixture{svc: svc, storage: storage, inst: inst, title: title, ch: ch}
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
 	require.NoError(t, err)
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: inst.UUID, SessionRole: role})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: inst.UUID, SessionRole: role})
 	require.NoError(t, err)
 	f.itemID, f.itemSes = item.ID, is.ID
 	return f

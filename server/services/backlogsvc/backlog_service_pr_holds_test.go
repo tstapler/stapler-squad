@@ -9,6 +9,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func (h *blockerHarness) getItem() *sessionv1.BacklogItem {
@@ -52,7 +53,7 @@ func TestGetBacklogItem_ShouldNameSupersededRoundPR_AndLiveSession(t *testing.T)
 	// Round 1 links open #30; round 2 (the newest, live) links merged #31, so #30 is no
 	// longer in the item's set but still holds round 1's worktree.
 	h.link(session.SessionPROwner(h.uuid), 30, session.PRStateOpen)
-	_, err := h.storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: h.itemID, SessionUUID: "round-two", SessionRole: session.SessionRoleWork})
+	_, err := h.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: h.itemID, SessionUUID: "round-two", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	h.link(session.SessionPROwner("round-two"), 31, session.PRStateMerged)
 

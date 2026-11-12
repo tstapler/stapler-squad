@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newForwardSyncTestStorage creates a temporary ent-backed *session.Storage,
@@ -23,7 +24,7 @@ func NewForwardSyncTestStorage(t *testing.T) *session.Storage {
 // createForwardSyncTestSource creates an ItemSource row and returns its ID.
 func CreateForwardSyncTestSource(t *testing.T, storage *session.Storage, pluginID string, forwardSyncEnabled bool, closeLabel string) string {
 	t.Helper()
-	src, err := storage.CreateItemSource(context.Background(), session.ItemSourceData{
+	src, err := storage.CreateItemSource(context.Background(), backlogdto.ItemSourceData{
 		PluginID:              pluginID,
 		DisplayName:           "test source",
 		Config:                `{}`,
@@ -37,9 +38,9 @@ func CreateForwardSyncTestSource(t *testing.T, storage *session.Storage, pluginI
 
 // createForwardSyncTestItem creates a BacklogItemData linked to sourceID with
 // the given externalID/labels.
-func CreateForwardSyncTestItem(t *testing.T, storage *session.Storage, sourceID, externalID string, labels []string) *session.BacklogItemData {
+func CreateForwardSyncTestItem(t *testing.T, storage *session.Storage, sourceID, externalID string, labels []string) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:      "forward sync test item",
 		Status:     string(session.BacklogStatusDone),
 		SourceID:   sourceID,

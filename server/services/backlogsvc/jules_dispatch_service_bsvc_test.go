@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // createTestJulesReadyItemForRPC is createTestJulesReadyItem plus
@@ -22,10 +23,10 @@ import (
 // additionally enforces "plan approved or skip_planning" before allowing the
 // in_progress transition; that gate is orthogonal to what Epic 2.4.3 tests,
 // so it's satisfied here rather than exercised.
-func createTestJulesReadyItemForRPC(t *testing.T, ctx context.Context, storage *session.Storage, title string) *session.BacklogItemData {
+func createTestJulesReadyItemForRPC(t *testing.T, ctx context.Context, storage *session.Storage, title string) *backlogdto.BacklogItemData {
 	t.Helper()
 	repoPath := svctest.NewTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        title,
 		Status:       string(session.BacklogStatusReady),
 		RepoPath:     repoPath,

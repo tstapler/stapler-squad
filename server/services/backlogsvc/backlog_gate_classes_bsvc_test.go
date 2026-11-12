@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // clsGateHarness is an Enforce-for-every-class gate over a Configured engine.
@@ -48,9 +49,9 @@ func (c *clsGateHarness) approve(t *testing.T, itemID string, gateID uuid.UUID) 
 	require.NoError(t, err)
 }
 
-func (c *clsGateHarness) itemAt(t *testing.T, status session.BacklogStatus) *session.BacklogItemData {
+func (c *clsGateHarness) itemAt(t *testing.T, status session.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := c.svc.storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "class proof item", Status: string(status), SkipPlanning: true})
+	item, err := c.svc.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "class proof item", Status: string(status), SkipPlanning: true})
 	require.NoError(t, err)
 	return item
 }

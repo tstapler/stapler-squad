@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func associatePR(t *testing.T, svc *BacklogService, itemID string, number int32) (*sessionv1.UpdateBacklogItemResponse, error) {
@@ -32,7 +33,7 @@ func TestUpdateBacklogItem_ShouldReportEachPRAssociationOutcome_WhenTrackingByUR
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
 	create := func(status session.BacklogStatus) string {
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "pr wire", Status: string(status)})
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "pr wire", Status: string(status)})
 		require.NoError(t, err)
 		return item.ID
 	}
@@ -113,7 +114,7 @@ func TestListStuckBacklogItems_ShouldCountMergedPRsOfTheItemSet_WhenMultiPRBackl
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stuck multi", Status: string(session.BacklogStatusPRPending)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stuck multi", Status: string(session.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	seedItemPRs(t, storage, item.ID, 2, 1)
 	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatusPRPending, "ctx")
@@ -142,7 +143,7 @@ func TestGetBacklogItem_ShouldFlagItemDirectPRs_WhenSetHoldsItemAndSessionLinks(
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	ctx := context.Background()
-	item, err := fix.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "mixed", Status: string(session.BacklogStatusPRPending)})
+	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "mixed", Status: string(session.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	seedItemPRs(t, fix.storage, item.ID, 0, 1) // #101, item-direct
 

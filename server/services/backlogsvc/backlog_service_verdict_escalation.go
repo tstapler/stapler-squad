@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ownerChoiceFixed means the owner has resolved the gap outside the app (environment repaired,
@@ -45,7 +46,7 @@ func flaggedForOwner(perCriterionJSON string, criteria []session.AcCriterion) []
 // escalateVerdictToOwner raises one owner-action request for the first flagged criterion
 // instead of reopening the worker blindly. It returns true when the item should stay in
 // review (a request is pending or was just raised).
-func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *session.BacklogItemData, flagged []session.CriterionVerdict) bool {
+func (s *BacklogService) escalateVerdictToOwner(ctx context.Context, item *backlogdto.BacklogItemData, flagged []session.CriterionVerdict) bool {
 	v := flagged[0]
 	id, err := uuid.Parse(item.ID)
 	if err != nil {

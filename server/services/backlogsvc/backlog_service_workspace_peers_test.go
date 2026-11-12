@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndPeerExists
@@ -40,7 +41,7 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndP
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(t.Context(), "peer-uuid", peer.WorkspaceKey()))
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "item-1",
 		Title:              "new backlog item",
 		Description:        "do the thing",
@@ -77,7 +78,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_FlagDisabledByDefa
 	}
 	require.NoError(t, storage.AddInstance(peer))
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "item-1",
 		Title:              "new backlog item",
 		Description:        "do the thing",
@@ -100,7 +101,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_NoPeersExist(t *te
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "item-1",
 		Title:              "new backlog item",
 		Description:        "do the thing",
@@ -120,7 +121,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_RepoPathIsEmpty(t 
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "item-1",
 		Title:              "one-off item",
 		Description:        "do the thing",

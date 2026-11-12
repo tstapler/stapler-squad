@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -208,7 +209,7 @@ func (f foreignClaimSet) heldFor(externalURL string) (hostclaim.ClaimRecord, boo
 // makes the skip visible as a StuckReasonBlockedByClaim row. Local-only: it runs
 // under dequeueMu, so it must never touch the network. Callers check the feature
 // flag once per sweep.
-func (s *BacklogService) skipForForeignClaim(ctx context.Context, item *session.BacklogItemData, claims foreignClaimSet) bool {
+func (s *BacklogService) skipForForeignClaim(ctx context.Context, item *backlogdto.BacklogItemData, claims foreignClaimSet) bool {
 	if item.ExternalURL == "" {
 		return false
 	}
@@ -226,7 +227,7 @@ func (s *BacklogService) skipForForeignClaim(ctx context.Context, item *session.
 
 // notifyBlockedByClaim writes the durable StuckReasonBlockedByClaim row,
 // mirroring notifyBlockedByDependency's call shape.
-func (s *BacklogService) notifyBlockedByClaim(ctx context.Context, item *session.BacklogItemData, claim hostclaim.ClaimRecord) {
+func (s *BacklogService) notifyBlockedByClaim(ctx context.Context, item *backlogdto.BacklogItemData, claim hostclaim.ClaimRecord) {
 	message := fmt.Sprintf("claimed by host %s (%s); override to work on it from this host",
 		claim.ClaimingHostID.String(), claim.ItemDeepLink)
 	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonBlockedByClaim, session.BacklogStatus(item.Status), message)
@@ -407,7 +408,7 @@ func NewFlagGatedPRProvenance(inner session.PRProvenanceSource) session.PRProven
 	return flagGatedPRProvenance{inner: inner}
 }
 
-func (f flagGatedPRProvenance) PRProvenanceComment(item *session.BacklogItemData) (string, bool) {
+func (f flagGatedPRProvenance) PRProvenanceComment(item *backlogdto.BacklogItemData) (string, bool) {
 	if !config.LoadConfig().GetFeatureFlag(services.CrossHostClaimDedupFlagName) {
 		return "", false
 	}

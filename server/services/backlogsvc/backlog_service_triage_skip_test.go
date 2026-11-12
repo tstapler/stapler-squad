@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -76,7 +77,7 @@ func TestMaybeTriggerTriage_SkipsItemWithACAndRecordsReason(t *testing.T) {
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "has ac", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
 		AcceptanceCriteria: acJSON(t, "do it"),
 	})
@@ -102,14 +103,14 @@ func TestMaybeTriggerTriage_SkipsApprovedPlan_RunsPlainItem(t *testing.T) {
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	approved, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	approved, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "approved", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(), PlanApproved: true,
 	})
 	require.NoError(t, err)
 	assert.False(t, svc.MaybeTriggerTriage(t.Context(), approved.ID, false, approved.RepoPath))
 	assert.Empty(t, pool.calls)
 
-	plain, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	plain, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "plain", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
 	})
 	require.NoError(t, err)
@@ -125,7 +126,7 @@ func TestAutoRespawnTriage_UnchangedContentSkipped_ChangedRuns_ResumeBypasses(t 
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "retriage", Description: "v1", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
 	})
 	require.NoError(t, err)
@@ -170,7 +171,7 @@ func newTriageSkipTestService(t *testing.T) (*session.Storage, *fakeHeadlessPool
 func TestIsRetriagePointless_MatchesUnchangedContentGate(t *testing.T) {
 	t.Parallel()
 	storage, _, svc := newTriageSkipTestService(t)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "pointless-check", Description: "v1", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
 	})
 	require.NoError(t, err)
@@ -187,7 +188,7 @@ func TestIsRetriagePointless_MatchesUnchangedContentGate(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, svc.IsRetriagePointless(t.Context(), item.ID), "content unchanged since the completed triage")
 
-	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{Description: svctest.StrPtr("v2")}, nil)
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{Description: svctest.StrPtr("v2")}, nil)
 	require.NoError(t, err)
 	assert.False(t, svc.IsRetriagePointless(t.Context(), item.ID), "changed description must no longer read as pointless")
 }
@@ -227,7 +228,7 @@ func runBulkTriage(t *testing.T, cap int, rendezvous bool) int32 {
 	svc.SetHeadlessPool(pool)
 
 	for i := 0; i < 3; i++ {
-		it, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		it, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 			Title: "bulk", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
 		})
 		require.NoError(t, err)
@@ -249,7 +250,7 @@ func TestTriageCallUsesConfiguredModel(t *testing.T) {
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, &config.Config{HeadlessTriageModel: "family:haiku"}, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	it, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	it, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "m", Status: string(session.BacklogStatusIdea), Priority: 3, RepoPath: t.TempDir(),
 	})
 	require.NoError(t, err)

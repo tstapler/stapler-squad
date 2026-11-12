@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -135,9 +136,9 @@ func TestWatchBacklogItems_should_sendSnapshotEventsForAllItems_When_AfterSeqIsZ
 	svc, storage, _ := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
-	item1, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Item 1", Status: string(session.BacklogStatusReady)})
+	item1, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Item 1", Status: string(session.BacklogStatusReady)})
 	require.NoError(t, err)
-	item2, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Item 2", Status: string(session.BacklogStatusInProgress)})
+	item2, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Item 2", Status: string(session.BacklogStatusInProgress)})
 	require.NoError(t, err)
 
 	sender := &fakeBacklogItemEventSender{}
@@ -177,7 +178,7 @@ func TestWatchBacklogItems_should_replayBufferedEventsInSeqOrder_When_AfterSeqIs
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Replay item", Status: string(session.BacklogStatusReview)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Replay item", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
 
 	// Baseline event establishes afterSeq; the client has already seen this one.
@@ -241,7 +242,7 @@ func TestWatchBacklogItems_should_deliverRaceWindowEventExactlyOnceAsSnapshot_Wh
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Race item", Status: string(session.BacklogStatusReview)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Race item", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
 
 	baseline := events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
@@ -298,7 +299,7 @@ func TestWatchBacklogItems_should_forwardLiveEvent_When_PublishedWhileStreamIsLi
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Live item", Status: string(session.BacklogStatusInProgress)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Live item", Status: string(session.BacklogStatusInProgress)})
 	require.NoError(t, err)
 
 	sender := &fakeBacklogItemEventSender{}
@@ -337,9 +338,9 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_StatusFilterAppli
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
-	matching, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "In progress item", Status: string(session.BacklogStatusInProgress)})
+	matching, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "In progress item", Status: string(session.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Done item", Status: string(session.BacklogStatusDone)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Done item", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
 
 	sender := &fakeBacklogItemEventSender{}
@@ -402,9 +403,9 @@ func TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNo
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
-	_, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "In progress item", Status: string(session.BacklogStatusInProgress)})
+	_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "In progress item", Status: string(session.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Done item", Status: string(session.BacklogStatusDone)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Done item", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
 
 	sender := &fakeBacklogItemEventSender{}
@@ -424,7 +425,7 @@ func TestWatchBacklogItems_should_returnEmptySnapshot_When_StatusFilterMatchesNo
 	const sentinelID = "sentinel-archived"
 	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
 		Kind:      events.BacklogChangeStatusTransition,
-		Item:      &session.BacklogItemData{ID: sentinelID, Status: string(session.BacklogStatusArchived)},
+		Item:      &backlogdto.BacklogItemData{ID: sentinelID, Status: string(session.BacklogStatusArchived)},
 		OldStatus: string(session.BacklogStatusReady),
 		NewStatus: string(session.BacklogStatusArchived),
 	}))
@@ -471,7 +472,7 @@ func TestWatchBacklogItems_should_sendSnapshotCompleteMarker_When_BacklogIsGenui
 	const sentinelID = "sentinel-empty-backlog"
 	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
 		Kind:      events.BacklogChangeStatusTransition,
-		Item:      &session.BacklogItemData{ID: sentinelID, Status: string(session.BacklogStatusInProgress)},
+		Item:      &backlogdto.BacklogItemData{ID: sentinelID, Status: string(session.BacklogStatusInProgress)},
 		OldStatus: string(session.BacklogStatusReady),
 		NewStatus: string(session.BacklogStatusInProgress),
 	}))
@@ -496,9 +497,9 @@ func TestWatchBacklogItems_should_excludeNonMatchingItems_When_CategoryFilterApp
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
-	matching, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Repo A item", Status: string(session.BacklogStatusReady), RepoPath: "/repo/a"})
+	matching, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Repo A item", Status: string(session.BacklogStatusReady), RepoPath: "/repo/a"})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Repo B item", Status: string(session.BacklogStatusReady), RepoPath: "/repo/b"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Repo B item", Status: string(session.BacklogStatusReady), RepoPath: "/repo/b"})
 	require.NoError(t, err)
 
 	sender := &fakeBacklogItemEventSender{}
@@ -540,9 +541,9 @@ func TestWatchBacklogItems_should_onlyForwardMatchingLiveEvents_When_StatusFilte
 	svc, storage, bus := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
 
-	matchItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Matches filter", Status: string(session.BacklogStatusInProgress)})
+	matchItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Matches filter", Status: string(session.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	otherItem, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Does not match", Status: string(session.BacklogStatusDone)})
+	otherItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Does not match", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
 
 	sender := &fakeBacklogItemEventSender{}
@@ -635,7 +636,7 @@ func TestWatchBacklogItems_should_unsubscribeAndReturn_When_ContextIsCanceled(t 
 	// return a "context canceled" error, which is correct propagation
 	// behavior but would make this test about that race instead of about
 	// clean shutdown/unsubscribe.
-	_, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "Item", Status: string(session.BacklogStatusReady)})
+	_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Item", Status: string(session.BacklogStatusReady)})
 	require.NoError(t, err)
 
 	sender := &fakeBacklogItemEventSender{}
@@ -660,7 +661,7 @@ func TestWatchBacklogItems_should_unsubscribeAndReturn_When_ContextIsCanceled(t 
 func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_KindVaries(t *testing.T) {
 	t.Parallel()
 	fixedTime := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
-	item := &session.BacklogItemData{ID: "item-1", Title: "T", Status: "review", CreatedAt: fixedTime, UpdatedAt: fixedTime}
+	item := &backlogdto.BacklogItemData{ID: "item-1", Title: "T", Status: "review", CreatedAt: fixedTime, UpdatedAt: fixedTime}
 	archivedAt := fixedTime
 
 	tests := []struct {
@@ -687,7 +688,7 @@ func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_Ki
 			name: "verdict_recorded",
 			payload: &events.BacklogItemEventPayload{
 				Kind: events.BacklogChangeVerdictRecorded, Item: item,
-				Verdict: &session.ReviewVerdictData{OverallOutcome: session.ReviewOutcomePass, Summary: "looks good"},
+				Verdict: &backlogdto.ReviewVerdictData{OverallOutcome: session.ReviewOutcomePass, Summary: "looks good"},
 			},
 			check: func(t *testing.T, ev *sessionv1.BacklogItemEvent) {
 				vr := ev.GetVerdictRecorded()
@@ -767,7 +768,7 @@ func TestConvertEventToBacklogItemEvent_should_buildMatchingOneofVariant_When_Ki
 			name: "activity_note_added",
 			payload: &events.BacklogItemEventPayload{
 				Kind: events.BacklogChangeActivityNoteAdded, Item: item,
-				ActivityNote: &session.ActivityNoteData{
+				ActivityNote: &backlogdto.ActivityNoteData{
 					ID: "note-1", Message: "a note", AuthorSessionUUID: "sess-1", AuthorSessionTitle: "Worker",
 				},
 			},
@@ -809,10 +810,10 @@ func TestBacklogItemMatchesFilters_should_MatchActivityNoteEvent_When_StatusFilt
 		CategoryFilter: []string{"/repo/a"},
 	}
 
-	populated := &session.BacklogItemData{ID: "item-1", Status: "in_progress", RepoPath: "/repo/a"}
+	populated := &backlogdto.BacklogItemData{ID: "item-1", Status: "in_progress", RepoPath: "/repo/a"}
 	assert.True(t, backlogItemMatchesFilters(populated, msg), "an activity-note event with Status/RepoPath populated must match a non-empty filter")
 
-	sparse := &session.BacklogItemData{ID: "item-1"}
+	sparse := &backlogdto.BacklogItemData{ID: "item-1"}
 	assert.False(t, backlogItemMatchesFilters(sparse, msg), "a sparse snapshot with no Status/RepoPath (the pre-fix shape) would have been silently dropped by a non-empty filter")
 }
 
@@ -830,12 +831,12 @@ func TestSnapshotEventsForItems_Should_BatchWorktreeLookups(t *testing.T) {
 		})
 	}))
 
-	build := func(n int) []*session.BacklogItemData {
-		items := make([]*session.BacklogItemData, n)
+	build := func(n int) []*backlogdto.BacklogItemData {
+		items := make([]*backlogdto.BacklogItemData, n)
 		for i := range items {
-			items[i] = &session.BacklogItemData{
+			items[i] = &backlogdto.BacklogItemData{
 				ID: fmt.Sprintf("item-%d", i),
-				ItemSessions: []session.ItemSessionSummary{
+				ItemSessions: []backlogdto.ItemSessionSummary{
 					{ID: fmt.Sprintf("is-%d", i), SessionUUID: fmt.Sprintf("00000000-0000-0000-0000-%012d", i)},
 				},
 			}

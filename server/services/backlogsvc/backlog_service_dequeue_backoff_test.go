@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 var errSpawnBoom = errors.New("tmux exploded")
@@ -76,7 +77,7 @@ func countEventsWithNote(t *testing.T, storage *session.Storage, itemID, note st
 	return n
 }
 
-func openSpawnFailedRow(t *testing.T, storage *session.Storage, itemID string) (session.OpenStuckStateData, bool) {
+func openSpawnFailedRow(t *testing.T, storage *session.Storage, itemID string) (backlogdto.OpenStuckStateData, bool) {
 	t.Helper()
 	row, ok, err := storage.OpenStuckState(t.Context(), itemID, domain.StuckReasonSpawnFailed)
 	require.NoError(t, err)

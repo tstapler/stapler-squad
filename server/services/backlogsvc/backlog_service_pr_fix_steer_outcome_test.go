@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // withPRNumber persists PrNumber, which CreateBacklogItem ignores.
 func withPRNumber(t *testing.T, storage *session.Storage, itemID string, n int) {
 	t.Helper()
-	_, err := storage.UpdateBacklogItem(context.Background(), itemID, session.BacklogItemUpdate{PrNumber: &n}, nil)
+	_, err := storage.UpdateBacklogItem(context.Background(), itemID, backlogdto.BacklogItemUpdate{PrNumber: &n}, nil)
 	require.NoError(t, err)
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestFindConfirmedLiveWorkSession covers the 8b2 concurrent-liveness cap's
@@ -31,57 +32,57 @@ func TestFindConfirmedLiveWorkSession(t *testing.T) {
 	t.Parallel()
 
 	ended := time.Now().Add(-time.Hour)
-	open := session.ItemSessionSummary{SessionUUID: "uuid-open-work", Role: session.SessionRoleWork}
-	tombstoned := session.ItemSessionSummary{SessionUUID: "uuid-ended-work", Role: session.SessionRoleWork, EndedAt: &ended}
-	review := session.ItemSessionSummary{SessionUUID: "uuid-review", Role: session.SessionRoleReview}
+	open := backlogdto.ItemSessionSummary{SessionUUID: "uuid-open-work", Role: session.SessionRoleWork}
+	tombstoned := backlogdto.ItemSessionSummary{SessionUUID: "uuid-ended-work", Role: session.SessionRoleWork, EndedAt: &ended}
+	review := backlogdto.ItemSessionSummary{SessionUUID: "uuid-review", Role: session.SessionRoleReview}
 	allEndedRecheck := map[string]bool{"uuid-ended-work": true}
 
 	cases := []struct {
 		name        string
 		stopper     services.SessionStopper
-		prior       []session.ItemSessionSummary
+		prior       []backlogdto.ItemSessionSummary
 		mustRecheck map[string]bool
 		wantUUID    string
 	}{
 		{
 			name:    "nil stopper never blocks",
 			stopper: nil,
-			prior:   []session.ItemSessionSummary{open},
+			prior:   []backlogdto.ItemSessionSummary{open},
 		},
 		{
 			name:        "already-tombstoned work session confirmed live still blocks the spawn",
 			stopper:     &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"uuid-ended-work": true}},
-			prior:       []session.ItemSessionSummary{tombstoned},
+			prior:       []backlogdto.ItemSessionSummary{tombstoned},
 			mustRecheck: allEndedRecheck,
 			wantUUID:    "uuid-ended-work",
 		},
 		{
 			name:        "tombstoned work session the stopper cannot confirm live does not block",
 			stopper:     &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}},
-			prior:       []session.ItemSessionSummary{tombstoned},
+			prior:       []backlogdto.ItemSessionSummary{tombstoned},
 			mustRecheck: allEndedRecheck,
 		},
 		{
 			name:    "already-confirmed-dead tombstoned session is not rechecked even if the stopper would (wrongly) call it live",
 			stopper: &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"uuid-ended-work": true}},
-			prior:   []session.ItemSessionSummary{tombstoned},
+			prior:   []backlogdto.ItemSessionSummary{tombstoned},
 			// mustRecheck omitted: killEndedWorkSessionPanes already confirmed
 			// this one dead, so IsSessionLive must never be consulted for it.
 		},
 		{
 			name:    "non-work role is out of scope",
 			stopper: &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"uuid-review": true}},
-			prior:   []session.ItemSessionSummary{review},
+			prior:   []backlogdto.ItemSessionSummary{review},
 		},
 		{
 			name:    "open work session the stopper cannot confirm live does not block",
 			stopper: &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}},
-			prior:   []session.ItemSessionSummary{open},
+			prior:   []backlogdto.ItemSessionSummary{open},
 		},
 		{
 			name:     "open work session confirmed live blocks the spawn regardless of mustRecheck",
 			stopper:  &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{"uuid-open-work": true}},
-			prior:    []session.ItemSessionSummary{tombstoned, review, open},
+			prior:    []backlogdto.ItemSessionSummary{tombstoned, review, open},
 			wantUUID: "uuid-open-work",
 		},
 	}
