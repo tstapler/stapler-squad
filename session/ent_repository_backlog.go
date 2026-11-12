@@ -1206,130 +1206,9 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		u.SetAcceptanceCriteria(string(merged))
 		clearedWaivers = cleared
 	}
-	if update.Priority != nil {
-		u.SetPriority(*update.Priority)
-	}
-	if update.RepoPath != nil {
-		u.SetRepoPath(*update.RepoPath)
-	}
-	if update.BaseBranch != nil {
-		u.SetBaseBranch(*update.BaseBranch)
-	}
-	if update.SkipReviewGate != nil {
-		u.SetSkipReviewGate(*update.SkipReviewGate)
-	}
-	if update.SkipPlanning != nil {
-		u.SetSkipPlanning(*update.SkipPlanning)
-	}
-	if update.AutoSpawnSession != nil {
-		u.SetAutoSpawnSession(*update.AutoSpawnSession)
-	}
-	if update.AutoCreatePR != nil {
-		u.SetAutoCreatePr(*update.AutoCreatePR)
-	}
-	if update.AutoApprovePlan != nil {
-		u.SetAutoApprovePlan(*update.AutoApprovePlan)
-	}
-	if update.PipelineMode != nil {
-		u.SetPipelineMode(*update.PipelineMode)
-	}
-	if update.Category != nil {
-		u.SetCategory(*update.Category)
-	}
-	if update.Notes != nil {
-		u.SetNotes(*update.Notes)
-	}
-	if update.PlanApproved != nil {
-		u.SetPlanApproved(*update.PlanApproved)
-	}
-	if update.PlanApprovedAt != nil {
-		u.SetPlanApprovedAt(*update.PlanApprovedAt)
-	}
-	if update.QueuedAt != nil {
-		u.SetQueuedAt(*update.QueuedAt)
-	}
-	if update.QueuedAutonomous != nil {
-		u.SetQueuedAutonomous(*update.QueuedAutonomous)
-	}
-	if update.PlanArtifactsPath != nil {
-		u.SetPlanArtifactsPath(*update.PlanArtifactsPath)
-	}
-	if update.PlanRejectionReason != nil {
-		u.SetPlanRejectionReason(*update.PlanRejectionReason)
-	}
-	if update.ClearPlanRejectedAt {
-		u.ClearPlanRejectedAt()
-	} else if update.PlanRejectedAt != nil {
-		u.SetPlanRejectedAt(*update.PlanRejectedAt)
-	}
-	if update.PrURL != nil {
-		u.SetPrURL(*update.PrURL)
-	}
-	if update.PrNumber != nil {
-		u.SetPrNumber(*update.PrNumber)
-	}
-	if update.ShippedCheckConclusion != nil {
-		u.SetShippedCheckConclusion(*update.ShippedCheckConclusion)
-	}
-	if update.ShippedApprovedCount != nil {
-		u.SetShippedApprovedCount(*update.ShippedApprovedCount)
-	}
-	if update.ShippedChangesReqCount != nil {
-		u.SetShippedChangesReqCount(*update.ShippedChangesReqCount)
-	}
-	if update.ShippedSnapshotAt != nil {
-		u.SetShippedSnapshotAt(*update.ShippedSnapshotAt)
-	}
-	if update.ClearPrFeedbackAddressedAt {
-		u.ClearPrFeedbackAddressedAt()
-	} else if update.PrFeedbackAddressedAt != nil {
-		u.SetPrFeedbackAddressedAt(*update.PrFeedbackAddressedAt)
-	}
-	if update.ShippedFileStats != nil {
-		u.SetShippedFileStats(*update.ShippedFileStats)
-	}
-	if update.ShippedSnapshotCaptureFailed != nil {
-		u.SetShippedSnapshotCaptureFailed(*update.ShippedSnapshotCaptureFailed)
-	}
-	if update.ReworkCapOverride != nil {
-		u.SetReworkCapOverride(*update.ReworkCapOverride)
-	}
-	if update.CostBudgetThresholdUsd != nil {
-		u.SetCostBudgetThresholdUsd(*update.CostBudgetThresholdUsd)
-	}
-	if update.ExternalURL != nil {
-		u.SetExternalURL(*update.ExternalURL)
-	}
-	if update.Labels != nil {
-		u.SetLabels(*update.Labels)
-	}
-	if update.ClearGitHubSyncedIssueUpdatedAt {
-		u.ClearGithubSyncedIssueUpdatedAt()
-	} else if update.GitHubSyncedIssueUpdatedAt != nil {
-		u.SetGithubSyncedIssueUpdatedAt(*update.GitHubSyncedIssueUpdatedAt)
-	}
-	if update.GitHubLastProgressCommentStatus != nil {
-		u.SetGithubLastProgressCommentStatus(*update.GitHubLastProgressCommentStatus)
-	}
-	if update.UserModifiedFields != nil {
-		u.SetUserModifiedFields(*update.UserModifiedFields)
-	}
-	if update.ClearNextWorkflowID {
-		u.ClearNextWorkflowID()
-	} else if update.NextWorkflowID != nil {
-		u.SetNextWorkflowID(*update.NextWorkflowID)
-	}
-	if update.ChainFired != nil {
-		u.SetChainFired(*update.ChainFired)
-	}
-	if update.ClearChainedAt {
-		u.ClearChainedAt()
-	} else if update.ChainedAt != nil {
-		u.SetChainedAt(*update.ChainedAt)
-	}
-	if update.TriggeredByChainDepth != nil {
-		u.SetTriggeredByChainDepth(*update.TriggeredByChainDepth)
-	}
+	applyBacklogItemConfigUpdate(u, update)
+	applyBacklogItemPlanAndPRUpdate(u, update)
+	applyBacklogItemShippedAndChainUpdate(u, update)
 
 	item, err := u.Save(ctx)
 	if err != nil {
@@ -1396,6 +1275,145 @@ func (r *EntRepository) reconcileAcUpdate(ctx context.Context, tx *ent.Tx, curre
 // any field name.
 func updatedFieldsFromBacklogItemUpdate(update backlogdto.BacklogItemUpdate) []string {
 	fields := make([]string, 0, 24)
+	fields = appendConfigUpdatedFields(update, fields)
+	fields = appendPlanAndPRUpdatedFields(update, fields)
+	return appendShippedAndChainUpdatedFields(update, fields)
+}
+
+func applyBacklogItemConfigUpdate(u *ent.BacklogItemUpdateOne, update backlogdto.BacklogItemUpdate) {
+	if update.Priority != nil {
+		u.SetPriority(*update.Priority)
+	}
+	if update.RepoPath != nil {
+		u.SetRepoPath(*update.RepoPath)
+	}
+	if update.BaseBranch != nil {
+		u.SetBaseBranch(*update.BaseBranch)
+	}
+	if update.SkipReviewGate != nil {
+		u.SetSkipReviewGate(*update.SkipReviewGate)
+	}
+	if update.SkipPlanning != nil {
+		u.SetSkipPlanning(*update.SkipPlanning)
+	}
+	if update.AutoSpawnSession != nil {
+		u.SetAutoSpawnSession(*update.AutoSpawnSession)
+	}
+	if update.AutoCreatePR != nil {
+		u.SetAutoCreatePr(*update.AutoCreatePR)
+	}
+	if update.AutoApprovePlan != nil {
+		u.SetAutoApprovePlan(*update.AutoApprovePlan)
+	}
+	if update.PipelineMode != nil {
+		u.SetPipelineMode(*update.PipelineMode)
+	}
+	if update.Category != nil {
+		u.SetCategory(*update.Category)
+	}
+	if update.Notes != nil {
+		u.SetNotes(*update.Notes)
+	}
+	if update.PlanApproved != nil {
+		u.SetPlanApproved(*update.PlanApproved)
+	}
+	if update.PlanApprovedAt != nil {
+		u.SetPlanApprovedAt(*update.PlanApprovedAt)
+	}
+	if update.QueuedAt != nil {
+		u.SetQueuedAt(*update.QueuedAt)
+	}
+	if update.QueuedAutonomous != nil {
+		u.SetQueuedAutonomous(*update.QueuedAutonomous)
+	}
+}
+
+func applyBacklogItemPlanAndPRUpdate(u *ent.BacklogItemUpdateOne, update backlogdto.BacklogItemUpdate) {
+	if update.PlanArtifactsPath != nil {
+		u.SetPlanArtifactsPath(*update.PlanArtifactsPath)
+	}
+	if update.PlanRejectionReason != nil {
+		u.SetPlanRejectionReason(*update.PlanRejectionReason)
+	}
+	if update.ClearPlanRejectedAt {
+		u.ClearPlanRejectedAt()
+	} else if update.PlanRejectedAt != nil {
+		u.SetPlanRejectedAt(*update.PlanRejectedAt)
+	}
+	if update.PrURL != nil {
+		u.SetPrURL(*update.PrURL)
+	}
+	if update.PrNumber != nil {
+		u.SetPrNumber(*update.PrNumber)
+	}
+	if update.ShippedCheckConclusion != nil {
+		u.SetShippedCheckConclusion(*update.ShippedCheckConclusion)
+	}
+	if update.ShippedApprovedCount != nil {
+		u.SetShippedApprovedCount(*update.ShippedApprovedCount)
+	}
+	if update.ShippedChangesReqCount != nil {
+		u.SetShippedChangesReqCount(*update.ShippedChangesReqCount)
+	}
+	if update.ShippedSnapshotAt != nil {
+		u.SetShippedSnapshotAt(*update.ShippedSnapshotAt)
+	}
+	if update.ClearPrFeedbackAddressedAt {
+		u.ClearPrFeedbackAddressedAt()
+	} else if update.PrFeedbackAddressedAt != nil {
+		u.SetPrFeedbackAddressedAt(*update.PrFeedbackAddressedAt)
+	}
+}
+
+func applyBacklogItemShippedAndChainUpdate(u *ent.BacklogItemUpdateOne, update backlogdto.BacklogItemUpdate) {
+	if update.ShippedFileStats != nil {
+		u.SetShippedFileStats(*update.ShippedFileStats)
+	}
+	if update.ShippedSnapshotCaptureFailed != nil {
+		u.SetShippedSnapshotCaptureFailed(*update.ShippedSnapshotCaptureFailed)
+	}
+	if update.ReworkCapOverride != nil {
+		u.SetReworkCapOverride(*update.ReworkCapOverride)
+	}
+	if update.CostBudgetThresholdUsd != nil {
+		u.SetCostBudgetThresholdUsd(*update.CostBudgetThresholdUsd)
+	}
+	if update.ExternalURL != nil {
+		u.SetExternalURL(*update.ExternalURL)
+	}
+	if update.Labels != nil {
+		u.SetLabels(*update.Labels)
+	}
+	if update.ClearGitHubSyncedIssueUpdatedAt {
+		u.ClearGithubSyncedIssueUpdatedAt()
+	} else if update.GitHubSyncedIssueUpdatedAt != nil {
+		u.SetGithubSyncedIssueUpdatedAt(*update.GitHubSyncedIssueUpdatedAt)
+	}
+	if update.GitHubLastProgressCommentStatus != nil {
+		u.SetGithubLastProgressCommentStatus(*update.GitHubLastProgressCommentStatus)
+	}
+	if update.UserModifiedFields != nil {
+		u.SetUserModifiedFields(*update.UserModifiedFields)
+	}
+	if update.ClearNextWorkflowID {
+		u.ClearNextWorkflowID()
+	} else if update.NextWorkflowID != nil {
+		u.SetNextWorkflowID(*update.NextWorkflowID)
+	}
+	if update.ChainFired != nil {
+		u.SetChainFired(*update.ChainFired)
+	}
+	if update.ClearChainedAt {
+		u.ClearChainedAt()
+	} else if update.ChainedAt != nil {
+		u.SetChainedAt(*update.ChainedAt)
+	}
+	if update.TriggeredByChainDepth != nil {
+		u.SetTriggeredByChainDepth(*update.TriggeredByChainDepth)
+	}
+}
+
+func appendConfigUpdatedFields(update backlogdto.BacklogItemUpdate, fields []string) []string {
 	if update.Title != nil {
 		fields = append(fields, "title")
 	}
@@ -1456,6 +1474,10 @@ func updatedFieldsFromBacklogItemUpdate(update backlogdto.BacklogItemUpdate) []s
 	if update.PlanRejectionReason != nil {
 		fields = append(fields, "planRejectionReason")
 	}
+	return fields
+}
+
+func appendPlanAndPRUpdatedFields(update backlogdto.BacklogItemUpdate, fields []string) []string {
 	if update.PlanRejectedAt != nil || update.ClearPlanRejectedAt {
 		fields = append(fields, "planRejectedAt")
 	}
@@ -1498,6 +1520,10 @@ func updatedFieldsFromBacklogItemUpdate(update backlogdto.BacklogItemUpdate) []s
 	if update.Labels != nil {
 		fields = append(fields, "labels")
 	}
+	return fields
+}
+
+func appendShippedAndChainUpdatedFields(update backlogdto.BacklogItemUpdate, fields []string) []string {
 	if update.GitHubSyncedIssueUpdatedAt != nil || update.ClearGitHubSyncedIssueUpdatedAt {
 		fields = append(fields, "gitHubSyncedIssueUpdatedAt")
 	}
