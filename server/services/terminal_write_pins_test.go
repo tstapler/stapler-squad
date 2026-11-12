@@ -61,8 +61,8 @@ var pinnedCallers = map[string]callerRow{
 	"session:leasedSessionAccessor.WriteToPTY":                              {kind: kindAcquirer, reason: "the wrapper that implements ratelimit.SessionAccessor: takes the lease, writes, releases"},
 	"session:sendAnswerKeyUnderLease":                                       {kind: kindAcquirer, reason: "session driver answer key: takes the lease once"},
 	"session:sendInitialPromptTick":                                         {kind: kindAcquirer, reason: "session driver initial prompt: takes the lease once, before the attempt counter"},
-	"session:sequenceRun.write":                                             {kind: kindReceiver, reason: "SubmitReplySequence's writing goroutine: one Enter or Down per step under the lease PaneReplyCore.writeSequenceUnderLease took, a frame check before every key, no retry"},
-	"session:replyRun.execute":                                              {kind: kindReceiver, reason: "SubmitReplyOnce's writing goroutine: one digit under the lease PaneReplyCore.writeUnderLease took, no Enter, no retry"},
+	"session/panereply:sequenceRun.write":                                   {kind: kindReceiver, reason: "SubmitReplySequence's writing goroutine: one Enter or Down per step under the lease PaneReplyCore.writeSequenceUnderLease took, a frame check before every key, no retry"},
+	"session/panereply:replyRun.execute":                                    {kind: kindReceiver, reason: "SubmitReplyOnce's writing goroutine: one digit under the lease PaneReplyCore.writeUnderLease took, no Enter, no retry"},
 	"session:submitInitialPrompt.func1":                                     {kind: kindReceiver, reason: "initial-prompt submit under the lease sendInitialPromptTick took (a variable only so a test can force a lease error)"},
 	"session:switchWorkspaceLocked":                                         {kind: kindLifecycle, reason: "directory switch under the workspace lock; reached only from SwitchWorkspace, guarded by Story 5.2"},
 }
