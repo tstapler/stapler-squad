@@ -34,6 +34,7 @@ import (
 	mcpserver "github.com/tstapler/stapler-squad/server/mcp"
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -176,7 +177,7 @@ var (
 				// The flow service is built from storage alone and keeps its own
 				// aggregator cache; its as_of makes that visible to the agent.
 				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil, backlogEnabled, nil, nil, nil,
-					mcpserver.WithFlowService(services.NewFlowServiceFromStorage(storage)),
+					mcpserver.WithFlowService(backlogflow.NewFlowServiceFromStorage(storage)),
 					mcpserver.WithPluginRegistry(server.NewItemSourceRegistry()))
 			}
 

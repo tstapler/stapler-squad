@@ -1,4 +1,4 @@
-package services
+package backlogflow
 
 import (
 	"context"
@@ -361,7 +361,7 @@ func TestBacklogFlowService_should_EmitSnakeCaseJSONWithDrillKeys(t *testing.T) 
 
 func TestBacklogFlowService_should_HaveAPIMarkerOnEveryHandler(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile("backlog_flow_service.go")
+	raw, err := os.ReadFile("service.go")
 	require.NoError(t, err)
 	src := string(raw)
 	for _, action := range []string{"get_summary", "list_deadlock_candidates", "list_thrash_episodes", "get_item_timeline", "compare_windows", "list_drilldown"} {

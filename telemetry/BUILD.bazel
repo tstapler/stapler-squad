@@ -7,6 +7,7 @@ go_library(
         "attributes.go",
         "cgroup_linux.go",
         "cgroup_other.go",
+        "counter.go",
         "goruntime.go",
         "latency_views.go",
         "runtime_contention.go",

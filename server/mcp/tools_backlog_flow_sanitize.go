@@ -5,7 +5,7 @@ import (
 
 	"strings"
 
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -91,7 +91,7 @@ func collectUntrusted(msg protoreflect.Message, found map[string]bool) {
 // HTML tags and truncates, so stored titles, notes and error text cannot
 // inject a line break or a long payload into the agent's context.
 func sanitizeFlowLeaf(s string) string {
-	flat := services.SanitizeFlowText(s, int(^uint(0)>>1))
+	flat := backlogflow.SanitizeFlowText(s, int(^uint(0)>>1))
 	return cutAtRuneBoundary(backlog.SanitizeForAgentContext(flat, flowLeafMaxLen))
 }
 
@@ -100,7 +100,7 @@ func sanitizeFlowLeaf(s string) string {
 func cutAtRuneBoundary(s string) string { return strings.ToValidUTF8(s, "") }
 
 func sanitizeFlowKeyEcho(s string) string {
-	flat := services.SanitizeFlowText(s, int(^uint(0)>>1))
+	flat := backlogflow.SanitizeFlowText(s, int(^uint(0)>>1))
 	return cutAtRuneBoundary(backlog.SanitizeForAgentContext(flat, flowKeyEchoMaxLen))
 }
 
