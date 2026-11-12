@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
@@ -57,7 +58,7 @@ var ErrTransitionNotAllowed = domain.ErrTransitionNotAllowed
 // another EntRepository method that already calls resolveBacklogItemLookup,
 // so no other call site needs its own dual-ID branch.
 func (r *EntRepository) resolveBacklogItemLookup(ctx context.Context, id string) (uuid.UUID, error) {
-	if IsBacklogItemIDShape(id) {
+	if backlogdto.IsBacklogItemIDShape(id) {
 		item, err := r.Client.BacklogItem.Query().
 			Where(backlogitem.PublicID(id)).
 			Only(ctx)
@@ -151,12 +152,12 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 		// against a row that was assigned a public_id (e.g. by a
 		// concurrent CreateBacklogItem call) between the query above and
 		// this loop iteration.
-		data := &BacklogItemData{PublicIDRaw: row.PublicID}
+		data := &backlogdto.BacklogItemData{PublicIDRaw: row.PublicID}
 		if _, ok := data.PublicID(); ok {
 			continue
 		}
 
-		newID, err := NewBacklogItemID()
+		newID, err := backlogdto.NewBacklogItemID()
 		if err != nil {
 			return fmt.Errorf("failed to mint backlog item public id for row %s: %w", row.ID, err)
 		}
@@ -181,7 +182,7 @@ func (r *EntRepository) backfillBacklogItemPublicIDsLocked(ctx context.Context) 
 // GetItemSession's .WithBacklogItem() query already loads. Callers must treat
 // a returned error as best-effort: log it and skip the publish call rather
 // than failing the mutation that already succeeded.
-func (r *EntRepository) backlogItemForItemSession(ctx context.Context, itemSessionID uuid.UUID) (*BacklogItemData, error) {
+func (r *EntRepository) backlogItemForItemSession(ctx context.Context, itemSessionID uuid.UUID) (*backlogdto.BacklogItemData, error) {
 	ownerID, err := r.Client.ItemSession.Query().
 		Where(itemsession.ID(itemSessionID)).
 		QueryBacklogItem().
@@ -199,10 +200,10 @@ func (r *EntRepository) backlogItemForItemSession(ctx context.Context, itemSessi
 // --- ItemSession ---
 
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
-func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionData) (ItemSessionSummary, error) {
+func (r *EntRepository) CreateItemSession(ctx context.Context, data backlogdto.ItemSessionData) (backlogdto.ItemSessionSummary, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, data.ItemID)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", data.ItemID, err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", data.ItemID, err)
 	}
 
 	q := r.Client.ItemSession.Create().
@@ -231,7 +232,7 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 	}
 	is, err := q.Save(ctx)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("failed to create item session: %w", err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("failed to create item session: %w", err)
 	}
 	// BacklogItemID is not loaded via edge on create; set it directly from the input.
 	summary := ItemSessionToSummary(is)
@@ -252,10 +253,10 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 }
 
 // GetItemSession retrieves an ItemSession by entity UUID string. Loads the BacklogItem edge.
-func (r *EntRepository) GetItemSession(ctx context.Context, id string) (ItemSessionSummary, error) {
+func (r *EntRepository) GetItemSession(ctx context.Context, id string) (backlogdto.ItemSessionSummary, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
 	}
 
 	is, err := r.Client.ItemSession.Query().
@@ -264,15 +265,15 @@ func (r *EntRepository) GetItemSession(ctx context.Context, id string) (ItemSess
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return ItemSessionSummary{}, fmt.Errorf("%w: item session %s", domain.ErrNotFound, id)
+			return backlogdto.ItemSessionSummary{}, fmt.Errorf("%w: item session %s", domain.ErrNotFound, id)
 		}
-		return ItemSessionSummary{}, fmt.Errorf("failed to get item session %s: %w", id, err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("failed to get item session %s: %w", id, err)
 	}
 	return ItemSessionToSummary(is), nil
 }
 
 // ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
-func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]ItemSessionSummary, error) {
+func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
@@ -286,7 +287,7 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 	if err != nil {
 		return nil, fmt.Errorf("failed to list item sessions for item %s: %w", itemID, err)
 	}
-	result := make([]ItemSessionSummary, len(sessions))
+	result := make([]backlogdto.ItemSessionSummary, len(sessions))
 	for i, is := range sessions {
 		s := ItemSessionToSummary(is)
 		s.BacklogItemID = itemID
@@ -303,8 +304,8 @@ const itemSessionBatchChunk = 500
 // item id) instead of two per item. IDs that are not UUIDs are skipped, and an
 // item with no sessions maps to no entry. Each slice is oldest-first, matching
 // ListItemSessions.
-func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []string) (map[string][]ItemSessionSummary, error) {
-	result := make(map[string][]ItemSessionSummary, len(itemIDs))
+func (r *EntRepository) ListItemSessionsForItems(ctx context.Context, itemIDs []string) (map[string][]backlogdto.ItemSessionSummary, error) {
+	result := make(map[string][]backlogdto.ItemSessionSummary, len(itemIDs))
 	uuids := make([]uuid.UUID, 0, len(itemIDs))
 	for _, id := range itemIDs {
 		if u, err := uuid.Parse(id); err == nil {
@@ -371,7 +372,7 @@ func (r *EntRepository) GetBaseCommitSHAsForSessions(ctx context.Context, sessio
 // session_uuid is not unique across records (a session may be reused), so we order by
 // created_at descending and take the first match. Returns ErrNotFound if no record exists.
 // Loads the BacklogItem edge so BacklogItemID is populated in the returned summary.
-func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
+func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error) {
 	is, err := r.Client.ItemSession.Query().
 		Where(itemsession.SessionUUID(sessionUUID)).
 		WithBacklogItem().
@@ -379,9 +380,9 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return ItemSessionSummary{}, fmt.Errorf("%w: item session for session=%s", domain.ErrNotFound, sessionUUID)
+			return backlogdto.ItemSessionSummary{}, fmt.Errorf("%w: item session for session=%s", domain.ErrNotFound, sessionUUID)
 		}
-		return ItemSessionSummary{}, fmt.Errorf("failed to get item session by session uuid: %w", err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("failed to get item session by session uuid: %w", err)
 	}
 	return ItemSessionToSummary(is), nil
 }
@@ -389,9 +390,9 @@ func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, session
 // ListItemSessionsBySessionUUIDs returns the most recent ItemSession for each
 // of the given session UUIDs in a single query (UUIDs with no row are absent
 // from the map). The ReviewVerdict edge is loaded; the BacklogItem edge is not.
-func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]ItemSessionSummary, error) {
+func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]backlogdto.ItemSessionSummary, error) {
 	if len(sessionUUIDs) == 0 {
-		return map[string]ItemSessionSummary{}, nil
+		return map[string]backlogdto.ItemSessionSummary{}, nil
 	}
 	rows, err := r.Client.ItemSession.Query().
 		Where(itemsession.SessionUUIDIn(sessionUUIDs...)).
@@ -401,7 +402,7 @@ func (r *EntRepository) ListItemSessionsBySessionUUIDs(ctx context.Context, sess
 	if err != nil {
 		return nil, fmt.Errorf("list item sessions by session uuids: %w", err)
 	}
-	result := make(map[string]ItemSessionSummary, len(rows))
+	result := make(map[string]backlogdto.ItemSessionSummary, len(rows))
 	for _, row := range rows {
 		if _, seen := result[row.SessionUUID]; !seen { // newest first
 			result[row.SessionUUID] = ItemSessionToSummary(row)
@@ -435,10 +436,10 @@ func (r *EntRepository) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUU
 }
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
-func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {
+func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (backlogdto.ItemSessionSummary, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", itemID, err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", itemID, err)
 	}
 
 	is, err := r.Client.ItemSession.Query().
@@ -450,9 +451,9 @@ func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sess
 		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return ItemSessionSummary{}, fmt.Errorf("%w: item session for session=%s item=%s", domain.ErrNotFound, sessionUUID, itemID)
+			return backlogdto.ItemSessionSummary{}, fmt.Errorf("%w: item session for session=%s item=%s", domain.ErrNotFound, sessionUUID, itemID)
 		}
-		return ItemSessionSummary{}, fmt.Errorf("failed to get item session: %w", err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("failed to get item session: %w", err)
 	}
 	summary := ItemSessionToSummary(is)
 	summary.BacklogItemID = itemID
@@ -812,7 +813,7 @@ func (r *EntRepository) UpdateItemSessionVerificationNotes(ctx context.Context, 
 // The query-then-create/update is wrapped in a transaction to prevent a
 // check-then-act race condition when concurrent callers save verdicts for the
 // same item session.
-func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) error {
+func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict backlogdto.ReviewVerdictData) error {
 	parsedSessionID, err := uuid.Parse(itemSessionID)
 	if err != nil {
 		return fmt.Errorf("invalid item session id %q: %w", itemSessionID, err)
@@ -894,15 +895,15 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 // CreateItemSessionWithVerdict atomically creates an ItemSession and its initial
 // ReviewVerdict in a single transaction. If the verdict write fails the ItemSession
 // is rolled back, preventing dangling sessions with no verdict.
-func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData ItemSessionData, verdict ReviewVerdictData) (ItemSessionSummary, error) {
+func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData backlogdto.ItemSessionData, verdict backlogdto.ReviewVerdictData) (backlogdto.ItemSessionSummary, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, isData.ItemID)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", isData.ItemID, err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("invalid item id %q: %w", isData.ItemID, err)
 	}
 
 	tx, err := r.Client.Tx(ctx)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("begin transaction: %w", err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
@@ -928,7 +929,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 	}
 	is, err := isq.Save(ctx)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("create item session: %w", err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("create item session: %w", err)
 	}
 
 	rv, err := tx.ReviewVerdict.Create().
@@ -946,11 +947,11 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 		SetItemSessionID(is.ID).
 		Save(ctx)
 	if err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("create review verdict: %w", err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("create review verdict: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return ItemSessionSummary{}, fmt.Errorf("commit: %w", err)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("commit: %w", err)
 	}
 
 	// Build summary with the verdict embedded.
@@ -979,7 +980,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 // FindStuckInProgressCandidates returns in_progress items that have at least one
 // item session and none still running. It only reads; Storage.GatedReconcileStuck
 // moves each one to review through the transition gate.
-func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]BacklogItemData, error) {
+func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]backlogdto.BacklogItemData, error) {
 	items, err := r.Client.BacklogItem.Query().
 		Where(
 			backlogitem.Status(string(BacklogStatusInProgress)),
@@ -992,7 +993,7 @@ func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]Ba
 	if err != nil {
 		return nil, fmt.Errorf("failed to query stuck items: %w", err)
 	}
-	out := make([]BacklogItemData, 0, len(items))
+	out := make([]backlogdto.BacklogItemData, 0, len(items))
 	for _, item := range items {
 		out = append(out, BacklogItemToData(item))
 	}
@@ -1174,7 +1175,7 @@ func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, erro
 // OR snoozed_until is in the past), eager-loading the parent item so the
 // projection carries title/status/pr_number/pr_url for rendering without a
 // second round trip.
-func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData, error) {
+func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]backlogdto.OpenStuckStateData, error) {
 	now := time.Now()
 	rows, err := r.Client.BacklogStuckState.Query().
 		Where(
@@ -1190,9 +1191,9 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]OpenStuckSta
 		return nil, fmt.Errorf("failed to query open stuck states: %w", err)
 	}
 
-	result := make([]OpenStuckStateData, 0, len(rows))
+	result := make([]backlogdto.OpenStuckStateData, 0, len(rows))
 	for _, row := range rows {
-		data := OpenStuckStateData{
+		data := backlogdto.OpenStuckStateData{
 			ID:                     row.ID.String(),
 			ItemID:                 row.ItemID.String(),
 			Reason:                 domain.StuckReason(row.Reason),
@@ -1243,7 +1244,7 @@ func (r *EntRepository) FindSnoozedStuckItemIDs(ctx context.Context, reason doma
 // open or resolved, ordered oldest-first. Unlike FindOpenStuckStates this
 // applies no resolved_at/snoozed_until filter — it's a single-item history
 // read, not a sweep's work queue.
-func (r *EntRepository) ListStuckStatesForItem(ctx context.Context, itemID string) ([]StuckStateHistoryData, error) {
+func (r *EntRepository) ListStuckStatesForItem(ctx context.Context, itemID string) ([]backlogdto.StuckStateHistoryData, error) {
 	id, err := uuid.Parse(itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id: %w", err)
@@ -1255,9 +1256,9 @@ func (r *EntRepository) ListStuckStatesForItem(ctx context.Context, itemID strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to query stuck states for item %s: %w", itemID, err)
 	}
-	result := make([]StuckStateHistoryData, 0, len(rows))
+	result := make([]backlogdto.StuckStateHistoryData, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, StuckStateHistoryData{
+		result = append(result, backlogdto.StuckStateHistoryData{
 			ID:                  row.ID.String(),
 			Reason:              domain.StuckReason(row.Reason),
 			FirstDetectedAt:     row.FirstDetectedAt,
@@ -1309,7 +1310,7 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 // ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome,
 // Summary, and DiffHash are populated, since that's all callers
 // (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck_decisions.go) need.
-func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
+func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]backlogdto.ReviewVerdictSummary, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item id %q: %w", itemID, err)
@@ -1328,12 +1329,12 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 		return nil, fmt.Errorf("failed to query review verdicts for item %s: %w", itemID, err)
 	}
 
-	result := make([]ReviewVerdictSummary, 0, len(sessions))
+	result := make([]backlogdto.ReviewVerdictSummary, 0, len(sessions))
 	for _, is := range sessions {
 		if is.Edges.ReviewVerdict == nil {
 			continue
 		}
-		result = append(result, ReviewVerdictSummary{
+		result = append(result, backlogdto.ReviewVerdictSummary{
 			ID:                is.Edges.ReviewVerdict.ID.String(),
 			OverallOutcome:    is.Edges.ReviewVerdict.OverallOutcome,
 			PerCriterion:      is.Edges.ReviewVerdict.PerCriterion,
@@ -1353,7 +1354,7 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
 	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: status, reason: note}, func(c *AcCriterion) error {
 		if c.Status == AcStatusWaived {
-			return ErrAcCriterionWaived
+			return backlogdto.ErrAcCriterionWaived
 		}
 		c.Status = AcStatus(status)
 		if note != "" {
@@ -1368,15 +1369,15 @@ func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID stri
 func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, criterionIndex int, reason string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return ErrWaiverReasonRequired
+		return backlogdto.ErrWaiverReasonRequired
 	}
 	actor := AcActorFrom(ctx)
 	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: string(AcStatusWaived), reason: reason}, func(c *AcCriterion) error {
 		switch c.Status {
 		case AcStatusDone:
-			return ErrAcCriterionAlreadyDone
+			return backlogdto.ErrAcCriterionAlreadyDone
 		case AcStatusWaived:
-			return ErrAcCriterionAlreadyWaived
+			return backlogdto.ErrAcCriterionAlreadyWaived
 		}
 		c.Status = AcStatusWaived
 		c.WaiverReason = reason
@@ -1441,7 +1442,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 	}
 
 	if criterionIndex < 0 || criterionIndex >= len(criteria) {
-		return reject("", fmt.Errorf("%w: index %d (len=%d)", ErrAcCriterionOutOfRange, criterionIndex, len(criteria)))
+		return reject("", fmt.Errorf("%w: index %d (len=%d)", backlogdto.ErrAcCriterionOutOfRange, criterionIndex, len(criteria)))
 	}
 	prev := string(criteria[criterionIndex].Status)
 

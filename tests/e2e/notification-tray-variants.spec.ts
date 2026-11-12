@@ -217,7 +217,7 @@ test.describe('notification tray variants', () => {
 
         // The entry never covers the input line or page keys (TH-2).
         const entryBox = await tray.entry.boundingBox();
-        const inputBox = await page.getByRole('textbox', { name: 'Terminal input' }).boundingBox();
+        const inputBox = await page.getByRole('textbox', { name: 'Terminal input' }).last().boundingBox();
         if (inputBox && entryBox) {
           const overlap = entryBox.y < inputBox.y + inputBox.height && entryBox.y + entryBox.height > inputBox.y;
           expect(overlap).toBe(false);
@@ -371,7 +371,7 @@ test.describe('notification tray variants', () => {
       try {
         const tray = new NotificationTray(page);
         await seed(request, `tray-v4-${Date.now()}`, 2);
-        const textarea = page.getByRole('textbox', { name: 'Terminal input' });
+        const textarea = page.getByRole('textbox', { name: 'Terminal input' }).last();
         await textarea.focus();
         await setKeyboardOpen(page, 300);
         await expect(tray.entry).toHaveAttribute('data-content', 'keyboard-chip');

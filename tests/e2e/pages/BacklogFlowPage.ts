@@ -1,7 +1,7 @@
 import { APIRequestContext, Locator, Page, Route } from "@playwright/test";
 import { baseUrl } from "../helpers/base-url";
 import { seedReviewVerdictItem } from "./BacklogItemDetailPage";
-import { createBacklogItemDirect, transitionBacklogItemDirect } from "./BacklogMutations";
+import { createBacklogItemDirect, deleteBacklogItemsByTitlePrefix, transitionBacklogItemDirect } from "./BacklogMutations";
 
 const BASE_URL = baseUrl();
 const SUMMARY_PATH = "**/session.v1.BacklogFlowService/GetFlowSummary";
@@ -21,6 +21,9 @@ export interface SeededFlowData {
  * PARTIAL review verdict so the verdict-mix chart has bars.
  */
 export async function seedFlowData(request: APIRequestContext): Promise<SeededFlowData> {
+  // beforeAll runs once per worker and each Playwright project gets its own worker on the same slot server, so a
+  // second project would otherwise add a second thrash item and break the singular "1 item thrashing" banner.
+  await deleteBacklogItemsByTitlePrefix(request, ["Flow e2e "]);
   const mergedItemId = await createBacklogItemDirect(request, { title: "Flow e2e merged item" });
   for (const status of ["ready", "in_progress", "review", "pr_pending", "done"]) {
     await transitionBacklogItemDirect(request, mergedItemId, status);

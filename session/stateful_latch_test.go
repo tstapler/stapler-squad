@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const (
@@ -83,7 +84,7 @@ func TestRollback_ClearsStatefulLatchOfUndoneEdge(t *testing.T) {
 	require.NoError(t, h.cfg.ValidateGates(regressed, to, nil), "latched")
 	h.moveRaw(t, item.ID, to)
 
-	_, err := h.storage.Rollback(ctx, item.ID, from, &BacklogItemPrecondition{ExpectedStatus: string(to)}, TriggeredBySystem)
+	_, err := h.storage.Rollback(ctx, item.ID, from, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(to)}, TriggeredBySystem)
 	require.NoError(t, err)
 	require.Error(t, h.cfg.ValidateGates(regressed, to, nil), "a rolled-back transition must not leave the gate latched")
 }

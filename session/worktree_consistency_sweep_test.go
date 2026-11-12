@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -618,7 +619,7 @@ func TestResolveFinding_should_CallMarkStuck_When_LiveNonTerminalBacklogItemLink
 	ctx := context.Background()
 	sessionUUID := uuid.New().String()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "worktree inconsistency test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -626,7 +627,7 @@ func TestResolveFinding_should_CallMarkStuck_When_LiveNonTerminalBacklogItemLink
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: SessionRoleWork,
@@ -690,7 +691,7 @@ func TestResolveFinding_should_NotCallMarkStuck_When_NoBacklogItemLinked(t *test
 }
 
 // hasOpenStuckState reports whether states contains an open row for (itemID, reason).
-func hasOpenStuckState(states []OpenStuckStateData, itemID string, reason domain.StuckReason) bool {
+func hasOpenStuckState(states []backlogdto.OpenStuckStateData, itemID string, reason domain.StuckReason) bool {
 	for _, s := range states {
 		if s.ItemID == itemID && s.Reason == reason {
 			return true
@@ -710,7 +711,7 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 	ctx := context.Background()
 	sessionUUID := uuid.New().String()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "resolve-stuck-on-repair test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -718,7 +719,7 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: SessionRoleWork,

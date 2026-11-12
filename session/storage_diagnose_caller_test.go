@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newItemSessionRoleFixture creates a fresh Storage-backed backlog item and
@@ -21,10 +22,10 @@ func newItemSessionRoleFixture(t *testing.T, role, title string) (storage *Stora
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: title})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: title})
 	require.NoError(t, err)
 	sessUUID = uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessUUID,
 		SessionRole: role,
