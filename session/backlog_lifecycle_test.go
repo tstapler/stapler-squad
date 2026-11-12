@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -24,7 +25,7 @@ func TestCreateItemSessionWithVerdict_Atomic(t *testing.T) {
 
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Atomic Verdict Test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -33,11 +34,11 @@ func TestCreateItemSessionWithVerdict_Atomic(t *testing.T) {
 	require.NoError(t, err)
 
 	sessionUUID := "headless-review-" + uuid.New().String()
-	is, err := storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
+	is, err := storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: SessionRoleReview,
-	}, ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: ReviewVerdictFail,
 		Summary:        "Blocked by security check.",
 	})
@@ -77,7 +78,7 @@ func TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless(t *
 
 	// Gateless item: review status but no review ItemSession at all — belongs
 	// to FindReviewItemsWithoutGate, must NOT show up here.
-	gateless, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	gateless, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Gateless review item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -110,7 +111,7 @@ func TestBackfillMissingPRNumbers_ParsesNumberFromURL(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Missing pr_number test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -120,7 +121,7 @@ func TestBackfillMissingPRNumbers_ParsesNumberFromURL(t *testing.T) {
 	require.NoError(t, err)
 
 	prURL := "https://github.com/tstapler/stapler-squad/pull/148"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL}, nil)
 	require.NoError(t, err)
 
 	er := storage.Repo
@@ -180,7 +181,7 @@ func TestFindDriftedPRItems_ExcludesPRPendingAndTerminalStatuses(t *testing.T) {
 	for _, status := range []BacklogStatus{BacklogStatusPRPending, BacklogStatusDone, BacklogStatusArchived} {
 		prURL := "https://github.com/tstapler/stapler-squad/pull/900"
 		prNumber := 900
-		item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:              "Terminal/pr_pending item " + string(status),
 			AcceptanceCriteria: `[]`,
 			Priority:           1,
@@ -188,7 +189,7 @@ func TestFindDriftedPRItems_ExcludesPRPendingAndTerminalStatuses(t *testing.T) {
 			RepoPath:           "/tmp/fake-repo",
 		})
 		require.NoError(t, err)
-		_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+		_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 			PrURL:    &prURL,
 			PrNumber: &prNumber,
 		}, nil)
@@ -223,7 +224,7 @@ func TestCreateBacklogItem_Labels_RoundTripsThroughGetBacklogItem(t *testing.T) 
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "item with labels and external URL",
 		Labels:      []string{"bug", "p1"},
 		ExternalURL: "https://github.com/tstapler/stapler-squad/issues/42",
@@ -248,7 +249,7 @@ func TestCreateBacklogItem_BaseBranch_RoundTripsThroughGetBacklogItem(t *testing
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "item with an explicit base_branch override",
 		BaseBranch: "release-2.0",
 	})
@@ -260,7 +261,7 @@ func TestCreateBacklogItem_BaseBranch_RoundTripsThroughGetBacklogItem(t *testing
 	assert.Equal(t, "release-2.0", fetched.BaseBranch)
 
 	newBranch := "release-2.1"
-	updated, err := storage.UpdateBacklogItem(ctx, created.ID, BacklogItemUpdate{BaseBranch: &newBranch}, nil)
+	updated, err := storage.UpdateBacklogItem(ctx, created.ID, backlogdto.BacklogItemUpdate{BaseBranch: &newBranch}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "release-2.1", updated.BaseBranch)
 }
@@ -293,7 +294,7 @@ func TestCreateBacklogItem_CanonicalizesRepoPathToMainRepo(t *testing.T) {
 	worktreeDir := filepath.Join(t.TempDir(), "agent-worktree")
 	sessiontest.RunGitOrFail(t, mainDir, "worktree", "add", "-b", "agent-branch", worktreeDir)
 
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "item filed from an agent's own worktree",
 		RepoPath: worktreeDir,
 	})

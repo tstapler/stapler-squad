@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 	"unicode/utf8"
+
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ItemSourcePlugin is the interface all external source integrations must implement.
@@ -13,7 +15,7 @@ type ItemSourcePlugin interface {
 	// Fetch retrieves new and updated items since the cursor. Returns items and the new cursor.
 	Fetch(ctx context.Context, config PluginConfig, cursor string) ([]ExternalItem, string, error)
 	// MapToBacklogItem converts an external item to a BacklogItemData.
-	MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData
+	MapToBacklogItem(item ExternalItem, sourceID string) backlogdto.BacklogItemData
 }
 
 // PaginatedFetcher is an optional capability an ItemSourcePlugin can

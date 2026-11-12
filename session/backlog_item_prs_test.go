@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -23,7 +24,7 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	t.Helper()
 	storage, cleanup := createTestStorage(t)
 	t.Cleanup(cleanup)
-	item, err := storage.CreateBacklogItem(context.Background(), BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "item prs", AcceptanceCriteria: `[]`, Priority: 1,
 		Status: string(BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
 	})
@@ -31,7 +32,7 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	f := &itemPRFixture{t: t, storage: storage, repo: storage.Repo, itemID: item.ID}
 	if legacyNumber > 0 {
 		url := "https://github.com/acme/app/pull/" + strconv.Itoa(legacyNumber)
-		_, err = storage.UpdateBacklogItem(context.Background(), item.ID, BacklogItemUpdate{PrURL: &url, PrNumber: &legacyNumber}, nil)
+		_, err = storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrURL: &url, PrNumber: &legacyNumber}, nil)
 		require.NoError(t, err)
 	}
 	return f
@@ -48,7 +49,7 @@ func testRef(n int) PRRef {
 func (f *itemPRFixture) session(role string) string {
 	f.t.Helper()
 	id := uuid.New().String()
-	_, err := f.storage.CreateItemSession(context.Background(), ItemSessionData{ItemID: f.itemID, SessionUUID: id, SessionRole: role})
+	_, err := f.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{ItemID: f.itemID, SessionUUID: id, SessionRole: role})
 	require.NoError(f.t, err)
 	return id
 }
@@ -203,7 +204,7 @@ func TestItemPRs_ShouldNotSupersede_WhenLaterReviewSession(t *testing.T) {
 func TestCurrentRoundSession_ShouldBreakCreatedAtTiesByLargerID(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	work := []ItemSessionSummary{
+	work := []backlogdto.ItemSessionSummary{
 		{ID: "a", SessionUUID: "ua", CreatedAt: now},
 		{ID: "b", SessionUUID: "ub", CreatedAt: now},
 	}
@@ -361,7 +362,7 @@ func TestItemMirror_ShouldLoseToConcurrentWriter_WhenStoredNumberChangedUndernea
 	f.link(ItemPROwner(f.itemID), 22, PRStateOpen)
 	stale := f.itemEnt()
 	n := 99
-	_, err := f.storage.UpdateBacklogItem(ctx, f.itemID, BacklogItemUpdate{PrNumber: &n}, nil)
+	_, err := f.storage.UpdateBacklogItem(ctx, f.itemID, backlogdto.BacklogItemUpdate{PrNumber: &n}, nil)
 	require.NoError(t, err)
 
 	changed, err := f.repo.recomputeItemPRMirror(ctx, stale)

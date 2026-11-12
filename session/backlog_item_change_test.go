@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // recordingItemChangePublisher is a minimal ItemChangePublisher test double
@@ -17,7 +18,7 @@ type recordingItemChangePublisher struct {
 	calls []BacklogItemChange
 }
 
-func (p *recordingItemChangePublisher) PublishItemChanged(item *BacklogItemData, change BacklogItemChange) {
+func (p *recordingItemChangePublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change BacklogItemChange) {
 	p.calls = append(p.calls, change)
 }
 
@@ -51,13 +52,13 @@ func TestEntRepository_should_noOpPublish_When_ItemChangePublisherIsNil(t *testi
 
 	require.Nil(t, repo.itemChangePublisher, "test setup: no publisher should be wired by default")
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item with no publisher wired",
 		Status: string(BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
+	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusReview),
 	}, TriggeredBySystem)
 	require.NoError(t, err, "transition must succeed even though no ItemChangePublisher is wired")

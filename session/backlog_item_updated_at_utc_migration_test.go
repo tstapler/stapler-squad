@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestRunBacklogItemUpdatedAtUTCBackfill_should_NormalizePreExistingLocalRows_When_Called
@@ -54,7 +55,7 @@ func TestRunBacklogItemUpdatedAtUTCBackfill_should_BeIdempotent_When_RunTwice(t 
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "freshly created item"})
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "freshly created item"})
 	require.NoError(t, err)
 	require.Equal(t, time.UTC, created.UpdatedAt.Location(), "a freshly created item must already be UTC under the fixed schema default")
 

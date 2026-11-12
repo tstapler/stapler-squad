@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	domain "github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BacklogStatus represents the lifecycle state of a backlog item.
@@ -97,7 +98,7 @@ func IsTmuxBackedSessionRole(role string) bool {
 // jules_work-role session — the Jules-specific counterpart used alongside
 // hasActiveSession's work/review gating (see its doc comment) so a local respawn
 // path can also see "this item already has a Jules session in flight".
-func HasActiveJulesSession(sessions []ItemSessionSummary) bool {
+func HasActiveJulesSession(sessions []backlogdto.ItemSessionSummary) bool {
 	for _, s := range sessions {
 		if s.EndedAt == nil && s.Role == SessionRoleJulesWork {
 			return true
@@ -267,7 +268,7 @@ type BacklogItemTransitionInput = domain.BacklogItemTransitionInput
 // item's current ("from") status; callers needing OverallOutcome,
 // OverrideReason, HasUnshippedCode, or HasUnresolvedBlockers set those on the
 // returned value afterward.
-func NewBacklogItemTransitionInput(item *BacklogItemData, status BacklogStatus) BacklogItemTransitionInput {
+func NewBacklogItemTransitionInput(item *backlogdto.BacklogItemData, status BacklogStatus) BacklogItemTransitionInput {
 	return BacklogItemTransitionInput{
 		ItemID:            item.ID,
 		Status:            status,

@@ -8,9 +8,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-func itemInStatus(t *testing.T, f *itemPRFixture, status BacklogStatus) *BacklogItemData {
+func itemInStatus(t *testing.T, f *itemPRFixture, status BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
 	_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(status)).Save(context.Background())
 	require.NoError(t, err)
@@ -60,7 +61,7 @@ func TestSetPRAndTransition_ShouldDropReplacedItemLinkWithoutTombstone_WhenCorre
 	f.link(ItemPROwner(f.itemID), 21, PRStateOpen)
 	item := itemInStatus(t, f, BacklogStatusPRPending)
 	pr := prAssoc(22, AttachSourceReportPRCreated)
-	pr.Guard = &PRReassignmentGuard{OverrideReason: "polluted branch", NewPRAuthorVerified: true}
+	pr.Guard = &backlogdto.PRReassignmentGuard{OverrideReason: "polluted branch", NewPRAuthorVerified: true}
 
 	require.NoError(t, f.storage.setPRAndTransition(ctx, item, pr))
 
@@ -107,7 +108,7 @@ func TestSetPRAndTransition_ShouldRefuseAdditive_WhenOperatorDetachedThatPR(t *t
 
 	err := f.storage.setPRAndTransition(ctx, item, pr)
 
-	require.ErrorIs(t, err, ErrPRDetached)
+	require.ErrorIs(t, err, backlogdto.ErrPRDetached)
 	assert.Empty(t, itemLinkNumbers(t, f))
 }
 
@@ -116,7 +117,7 @@ func TestSetPRAndTransition_ShouldKeepLegacyReassignRules_WhenNotAdditive(t *tes
 	f := newItemPRFixture(t, 21)
 	item := itemInStatus(t, f, BacklogStatusPRPending)
 	err := f.storage.setPRAndTransition(context.Background(), item, prAssoc(22, AttachSourceReportPRCreated))
-	require.ErrorIs(t, err, ErrPRReassignmentNotAllowed, "flag off: a different PR on pr_pending still needs the guard")
+	require.ErrorIs(t, err, backlogdto.ErrPRReassignmentNotAllowed, "flag off: a different PR on pr_pending still needs the guard")
 }
 
 func TestSetItemPRFieldsWithLink_ShouldWriteFieldsAndLinkAtomically_AndRollBackBoth(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -313,7 +314,7 @@ type backwardSyncOutcome struct{ updated, skipped, errored int }
 func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from, target BacklogStatus) backwardSyncOutcome {
 	_, err := sl.storage.GatedTransition(ctx, TransitionRequest{
 		Caller: CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: TriggeredByGitHubSync,
-		Precondition: &BacklogItemPrecondition{ExpectedStatus: string(from)},
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(from)},
 	})
 	switch {
 	case err == nil:
@@ -412,7 +413,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		// Existing item — apply local-wins: only update fields not in UserModifiedFields.
 		modifiedFields := ParseUserModifiedFields(existing.UserModifiedFields)
 
-		update := BacklogItemUpdate{}
+		update := backlogdto.BacklogItemUpdate{}
 		anyField := false
 		// anyChange tracks whether the closed/reopened blocks below already
 		// accounted for this item this tick (via their own updated/errored/
@@ -518,7 +519,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 					}
 					if advanceWatermark {
 						watermark := extItem.IssueUpdatedAt
-						if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+						if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), backlogdto.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
 							log.WarningLog().Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
 						}
 					}
@@ -536,7 +537,7 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 				if !alreadyLogged {
 					log.InfoLog().Printf("[SyncLoop] GitHub issue reopened; backlog item=%s is %s — reopen manually to re-triage (no automatic action taken)", existing.ID, existing.Status)
 					watermark := extItem.IssueUpdatedAt
-					if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
+					if _, wmErr := sl.storage.UpdateBacklogItem(ctx, existing.ID.String(), backlogdto.BacklogItemUpdate{GitHubSyncedIssueUpdatedAt: &watermark}, nil); wmErr != nil {
 						log.WarningLog().Printf("[SyncLoop] backward-sync watermark update failed item=%s: %v", existing.ID, wmErr)
 					} else {
 						// This is a real (if content-free) change to the item's

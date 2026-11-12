@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -35,32 +36,32 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 
 	tests := []struct {
 		name string
-		row  OpenStuckStateData
+		row  backlogdto.OpenStuckStateData
 		want remediationDecision
 	}{
 		{
 			name: "fresh row, no attempts yet, no next_remediation_at -> granted",
-			row:  OpenStuckStateData{RemediationAttempts: 0, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 0, LastCheckedAt: now},
 			want: remediationGranted,
 		},
 		{
 			name: "attempts at cap, no next_remediation_at -> parked (no cold-retry deadline recorded)",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, LastCheckedAt: now},
 			want: RemediationSkippedParked,
 		},
 		{
 			name: "attempts over cap (defensive) -> parked",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + 1, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + 1, LastCheckedAt: now},
 			want: RemediationSkippedParked,
 		},
 		{
 			name: "cold retries spent, deadline in the past -> permanently parked",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries, NextRemediationAt: &past, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries, NextRemediationAt: &past, LastCheckedAt: now},
 			want: RemediationSkippedParked,
 		},
 		{
 			name: "one cold retry left, deadline in the past -> granted cold retry",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries - 1, NextRemediationAt: &past, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts + MaxRemediationColdRetries - 1, NextRemediationAt: &past, LastCheckedAt: now},
 			want: remediationGrantedColdRetry,
 		},
 		{
@@ -68,47 +69,47 @@ func TestEvaluateRemediation_should_returnExpectedDecision_When_GivenRowState(t 
 			// repurposed while parked to hold the cold-retry deadline, gates a
 			// slow automatic heartbeat instead.
 			name: "attempts at cap, cold-retry deadline in the future -> still parked",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &future, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &future, LastCheckedAt: now},
 			want: RemediationSkippedParked,
 		},
 		{
 			name: "attempts at cap, cold-retry deadline in the past -> granted cold retry",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &past, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &past, LastCheckedAt: now},
 			want: remediationGrantedColdRetry,
 		},
 		{
 			name: "attempts at cap, cold-retry deadline exactly now -> granted cold retry (not before now, so due)",
-			row:  OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &now, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: MaxRemediationAttempts, NextRemediationAt: &now, LastCheckedAt: now},
 			want: remediationGrantedColdRetry,
 		},
 		{
 			name: "next_remediation_at in the future -> not due",
-			row:  OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &future, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &future, LastCheckedAt: now},
 			want: RemediationSkippedNotDue,
 		},
 		{
 			name: "next_remediation_at in the past -> granted",
-			row:  OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &past, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &past, LastCheckedAt: now},
 			want: remediationGranted,
 		},
 		{
 			name: "next_remediation_at exactly now -> granted (not before now, so due)",
-			row:  OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &now, LastCheckedAt: now},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, NextRemediationAt: &now, LastCheckedAt: now},
 			want: remediationGranted,
 		},
 		{
 			name: "boot after last_checked_at, no grace consumed yet -> restart grace",
-			row:  OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(-1 * time.Minute)},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(-1 * time.Minute)},
 			want: remediationGrantedRestartGrace,
 		},
 		{
 			name: "boot after last_checked_at, grace already consumed this boot -> granted (normal attempt)",
-			row:  OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(-1 * time.Minute), GraceBootTime: &boot},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(-1 * time.Minute), GraceBootTime: &boot},
 			want: remediationGranted,
 		},
 		{
 			name: "boot before last_checked_at (no restart since) -> granted",
-			row:  OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(1 * time.Minute)},
+			row:  backlogdto.OpenStuckStateData{RemediationAttempts: 1, LastCheckedAt: boot.Add(1 * time.Minute)},
 			want: remediationGranted,
 		},
 	}
