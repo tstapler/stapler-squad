@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 )
 
 // startedWorktreeInstance returns a started Instance backed by a real, clean git worktree.
@@ -27,7 +28,7 @@ func startedWorktreeInstance(t *testing.T, name string) *Instance {
 		Status:      Running,
 		IsWorktree:  true,
 		Permissions: GetManagedPermissions(),
-		GitManager:  GitWorktreeManager{Worktree: wt},
+		GitManager:  gitwt.Manager{Worktree: wt},
 	}
 	inst.started.Store(true)
 	return inst
@@ -67,7 +68,7 @@ func TestCheckWorktreeRemovable(t *testing.T) {
 		t.Parallel()
 		inst := &Instance{
 			IsWorktree: true,
-			GitManager: GitWorktreeManager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
+			GitManager: gitwt.Manager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
 		}
 		assert.NoError(t, inst.CheckWorktreeRemovable())
 	})

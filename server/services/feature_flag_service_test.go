@@ -666,7 +666,7 @@ var dfltKnownLiteralSites = map[string]bool{
 	"server/services/lease_flag.go|" + terminalWriteLeaseFlagName:            true,
 	"github/client.go|" + githubGraphQLMigrationFlagName:                     true,
 	"github/http_client.go|" + githubPriorityAdmissionFlagName:               true,
-	"session/git_worktree_manager.go|" + worktreeChangeDetectionFlagName:     true,
+	"session/gitwt/manager.go|" + worktreeChangeDetectionFlagName:            true,
 }
 
 // dfltKnownPlainReadDisagreements are plain GetFeatureFlag reads of a flag whose

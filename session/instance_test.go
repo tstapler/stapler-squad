@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -49,7 +50,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Program:   "claude",
-		GitManager: GitWorktreeManager{
+		GitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(
 				"/path/to/repo",
 				worktreePath,
@@ -83,7 +84,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Program:   "claude",
-		GitManager: GitWorktreeManager{
+		GitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(
 				"/path/to/repo",
 				worktreePath,
@@ -523,7 +524,7 @@ func TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree(t *testi
 // TestInstance_GetBaseCommitSHA_should_ReturnWorktreeBaseSHA_When_WorktreeModeSession
 // covers GetBaseCommitSHA's worktree-mode branch (session/instance_worktree.go):
 // with a worktree set via SetGitWorktree, it must delegate to
-// GitWorktreeManager.GetBaseCommitSHA() rather than the directory-mode
+// gitwt.Manager.GetBaseCommitSHA() rather than the directory-mode
 // GetDirBaseSHA() fallback. Uses NewGitWorktreeFromStorage (plain struct
 // construction, no real git repo needed) since this only exercises the
 // delegation, not actual git plumbing.
@@ -543,7 +544,7 @@ func TestInstance_GetBaseCommitSHA_should_ReturnWorktreeBaseSHA_When_WorktreeMod
 // TestInstance_GetBaseCommitSHA_should_ReturnDirBaseSHA_When_DirectoryModeSession
 // covers the directory-mode fallback a prior review found untested: no worktree
 // set, only SetDirBaseSHA — GetBaseCommitSHA must fall through to
-// GitWorktreeManager.GetDirBaseSHA() rather than returning "" just because
+// gitwt.Manager.GetDirBaseSHA() rather than returning "" just because
 // HasWorktree() is false.
 func TestInstance_GetBaseCommitSHA_should_ReturnDirBaseSHA_When_DirectoryModeSession(t *testing.T) {
 	t.Parallel()

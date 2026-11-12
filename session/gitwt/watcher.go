@@ -1,4 +1,4 @@
-package session
+package gitwt
 
 import (
 	"context"
@@ -96,7 +96,7 @@ func (d *WorktreeChangeDetector) GitWatchActive() bool {
 // cross-boundary callback dispatch (session/ent_repository_backlog.go's
 // publishItemChanged, session/chain_firer.go:160, session/backlog_lifecycle.go's
 // runStuckDetector, session/autonomous_driver.go:285). This detector invokes
-// multiple independently-registered callbacks (GitWorktreeManager's own
+// multiple independently-registered callbacks (Manager's own
 // diff-stats-clearing callback, plus WorkspaceService's lazily-registered
 // vcsStatusCache.Delete closure per Story 2.3.2) -- an unrecovered panic in
 // any one of them would otherwise crash the whole process (Go terminates the
@@ -169,7 +169,7 @@ func (d *WorktreeChangeDetector) periodicLoop(ctx context.Context, wg *sync.Wait
 
 	// Jitter the first tick so 134 worktrees whose Setup() calls land in the
 	// same burst (e.g. process restart) don't all stat-walk on the same
-	// wall-clock tick -- mirrors GitWorktreeManager.PrimeDirtyCacheJitter's
+	// wall-clock tick -- mirrors Manager.PrimeDirtyCacheJitter's
 	// existing rand.Int63n staggering idiom.
 	initialDelay := time.Duration(rand.Int63n(int64(d.statWalkInterval)))
 	timer := time.NewTimer(initialDelay)

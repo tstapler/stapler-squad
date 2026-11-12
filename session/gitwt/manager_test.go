@@ -1,7 +1,7 @@
-package session
+package gitwt
 
-// git_worktree_manager_test.go covers Epic 2.2 (wiring WorktreeChangeDetector
-// into GitWorktreeManager):
+// manager_test.go covers Epic 2.2 (wiring WorktreeChangeDetector
+// into Manager):
 //  - Story 2.2.1: Setup()/Cleanup()/Remove() lifecycle, DiffStatsFresh()'s
 //    TTL widening, and the 20-cycle goroutine-leak proxy.
 //  - Story 2.2.2: lastRequestedAt/hasRecentActivity tracking both the
@@ -13,10 +13,14 @@ package session
 // do not run under t.Parallel().
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
@@ -24,7 +28,15 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
-// withChangeDetectionFlag sets worktreeChangeDetectionFlagName to value for
+// knownBackgroundGoroutines lists process-wide goroutines started by the log
+// package and lumberjack, which goleak must ignore.
+var knownBackgroundGoroutines = []goleak.Option{
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.newAsyncWriter.func1"),
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.(*AsyncHandler).StartDrain.func1"),
+	goleak.IgnoreAnyFunction("gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun"),
+}
+
+// withChangeDetectionFlag setsworktreeChangeDetectionFlagName to value for
 // the duration of the calling test, restoring the prior value on cleanup.
 func withChangeDetectionFlag(t *testing.T, value bool) {
 	t.Helper()
@@ -40,18 +52,35 @@ func withChangeDetectionFlag(t *testing.T, value bool) {
 	})
 }
 
-// newTestGitWorktreeManager builds a GitWorktreeManager around a real,
+// newTestGitWorktreeManager builds a Manager around a real,
 // set-up git worktree in a fresh temp repo -- Setup()/Cleanup() need a real
 // *git.GitWorktree (worktree path, .git dir) for WorktreeChangeDetector's
 // real fsnotify watch and IsDirtyUncached fingerprint calls to do anything
 // meaningful.
-func newTestGitWorktreeManager(t *testing.T, sessionName string) *GitWorktreeManager {
+func setupTestRepository(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test Repository"), 0o644))
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add(".")
+	require.NoError(t, err)
+	_, err = wt.Commit("Initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+	return dir
+}
+
+func newTestGitWorktreeManager(t *testing.T, sessionName string) *Manager {
 	t.Helper()
 	repoDir := setupTestRepository(t)
 	wt, _, err := git.NewGitWorktree(repoDir, sessionName)
 	require.NoError(t, err)
 
-	gm := &GitWorktreeManager{}
+	gm := &Manager{}
 	gm.SetWorktree(wt)
 	return gm
 }
@@ -116,7 +145,7 @@ func TestGitWorktreeManager_Cleanup_should_NoOp_When_NoDetectorWasEverStarted(t 
 func TestDiffStatsFresh_should_Use5MinuteTTL_When_ChangeDetectionActive(t *testing.T) {
 	t.Parallel()
 
-	gm := &GitWorktreeManager{}
+	gm := &Manager{}
 	gm.changeDetectionActive = true
 
 	gm.diffStatsAt = time.Now().Add(-4 * time.Minute)
@@ -143,7 +172,7 @@ func TestDiffStatsFresh_should_Use15sTTLBoundaryUnchanged_When_FlagIsOff(t *test
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			gm := &GitWorktreeManager{}
+			gm := &Manager{}
 			gm.diffStatsAt = time.Now().Add(-tt.age)
 			require.Equal(t, tt.want, gm.DiffStatsFresh())
 		})
@@ -173,7 +202,7 @@ func TestGitWorktreeManager_SetupCleanupCycle_should_LeakNoGoroutines_When_Run20
 
 // ageOutLastRequestedAt backdates gm.lastRequestedAt past coldActivityThreshold,
 // simulating "nobody has asked in a while" for hasRecentActivity() tests.
-func ageOutLastRequestedAt(gm *GitWorktreeManager) {
+func ageOutLastRequestedAt(gm *Manager) {
 	gm.mu.Lock()
 	gm.lastRequestedAt = time.Now().Add(-(coldActivityThreshold + time.Second))
 	gm.mu.Unlock()
@@ -183,10 +212,10 @@ func ageOutLastRequestedAt(gm *GitWorktreeManager) {
 // TestGitWorktreeManager_HasRecentActivity_TracksBothRPCPaths's table.
 type hasRecentActivityCase struct {
 	name string
-	run  func(t *testing.T, gm *GitWorktreeManager)
+	run  func(t *testing.T, gm *Manager)
 }
 
-func hasRecentActivityViaUpdateDiffStats(t *testing.T, gm *GitWorktreeManager) {
+func hasRecentActivityViaUpdateDiffStats(t *testing.T, gm *Manager) {
 	t.Helper()
 	gm.UpdateDiffStats() // no worktree set -- exercises the nil-worktree branch
 	require.True(t, gm.hasRecentActivity())
@@ -194,7 +223,7 @@ func hasRecentActivityViaUpdateDiffStats(t *testing.T, gm *GitWorktreeManager) {
 	require.False(t, gm.hasRecentActivity())
 }
 
-func hasRecentActivityViaRecordRequest(t *testing.T, gm *GitWorktreeManager) {
+func hasRecentActivityViaRecordRequest(t *testing.T, gm *Manager) {
 	t.Helper()
 	gm.RecordRequest()
 	require.True(t, gm.hasRecentActivity())
@@ -202,7 +231,7 @@ func hasRecentActivityViaRecordRequest(t *testing.T, gm *GitWorktreeManager) {
 	require.False(t, gm.hasRecentActivity())
 }
 
-func hasRecentActivitySurvivesChangeFire(t *testing.T, gm *GitWorktreeManager) {
+func hasRecentActivitySurvivesChangeFire(t *testing.T, gm *Manager) {
 	t.Helper()
 	gm.RecordRequest()
 	gm.RecordRequest()
@@ -233,7 +262,7 @@ func TestGitWorktreeManager_HasRecentActivity_TracksBothRPCPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			gm := &GitWorktreeManager{}
+			gm := &Manager{}
 			require.False(t, gm.hasRecentActivity(), "a freshly constructed manager must report no recent activity")
 			tt.run(t, gm)
 		})
