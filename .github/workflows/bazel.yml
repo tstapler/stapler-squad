@@ -155,15 +155,13 @@ jobs:
 
       # Full graph on a clean checkout: no generation step precedes it (Task 2.6a). Failures left are
       # Epic 3/4 items listed in tools/bzl/test-exclusions.yaml.
-      - name: Build the full graph
-        run: |
-          bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false \
-            --keep_going --build_event_json_file=bep.json --profile=profile.gz //...
-
-      - name: Test the full graph
+      # One invocation, not `build //...` then `test //...`: tests start as soon as their own deps are built instead of
+      # waiting for the ~15 min woven-binary action (OtelWeaveHermetic, 928s in the profile), and the test BEP/profile now
+      # cover tests too. docs/explanation/bazel-parallelism.md has the profile numbers.
+      - name: Build and test the full graph
         run: |
           bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false \
-            --keep_going \
+            --keep_going --build_event_json_file=bep.json --profile=profile.gz \
             --test_env=HOME="$RUNNER_TEMP/home" --sandbox_writable_path="$RUNNER_TEMP/home" \
             --test_env=GO_TEST_WRAP_TESTV=1 //...
 
