@@ -1,4 +1,4 @@
-package session
+package backlogdto
 
 import (
 	"crypto/rand"

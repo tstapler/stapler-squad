@@ -9,18 +9,41 @@ import (
 	"testing"
 )
 
-// bridgedDTOAliases is the sunset list for `X = backlogdto.X` aliases. It may only
+// bridgedDTOAliases is the sunset list for `X = backlogdto.X` type aliases and const/var re-exports. It may only
 // shrink; BL-E deletes the bridge file and this list with it.
 var bridgedDTOAliases = []string{
 	"ActivityNoteData",
+	"BacklogItemData",
 	"BacklogItemDependencyEdge",
 	"BacklogItemDependencyRef",
+	"BacklogItemFilter",
+	"BacklogItemID",
+	"BacklogItemIDPrefix",
+	"BacklogItemPrecondition",
+	"BacklogItemSummary",
+	"BacklogItemUpdate",
 	"BacklogStatusEventData",
 	"DeletedItemSessionCostEntry",
 	"DiagnoseResultData",
+	"ErrAcCriterionAlreadyDone",
+	"ErrAcCriterionAlreadyWaived",
+	"ErrAcCriterionOutOfRange",
+	"ErrAcCriterionWaived",
+	"ErrAcWaiverViaUpdate",
+	"ErrDependencyCycle",
+	"ErrPRDetached",
+	"ErrPRReassignmentNotAllowed",
+	"ErrWaiverReasonRequired",
+	"IsBacklogItemIDShape",
+	"ItemSessionBacklogEntry",
+	"ItemSessionData",
+	"ItemSessionSummary",
 	"ItemSourceData",
 	"ItemSourceUpdate",
+	"NewBacklogItemID",
 	"OpenStuckStateData",
+	"PRReassignmentGuard",
+	"ParseBacklogItemID",
 	"ProgressNoteData",
 	"ReviewVerdictData",
 	"ReviewVerdictSummary",
@@ -61,7 +84,8 @@ func TestBacklogDTOAliasesOnlyShrink(t *testing.T) {
 	}
 }
 
-// backlogdtoAliases returns the names of `type X = backlogdto.Y` declarations in f.
+// backlogdtoAliases returns the names of `type X = backlogdto.Y` declarations and
+// `const|var X = backlogdto.Y` re-exports in f.
 func backlogdtoAliases(f *ast.File) []string {
 	local := backlogdtoLocalName(f)
 	if local == "" {
@@ -70,13 +94,21 @@ func backlogdtoAliases(f *ast.File) []string {
 	var names []string
 	for _, decl := range f.Decls {
 		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.TYPE {
+		if !ok {
 			continue
 		}
 		for _, spec := range gd.Specs {
-			ts := spec.(*ast.TypeSpec)
-			if ts.Assign.IsValid() && isSelectorOn(ts.Type, local) {
-				names = append(names, ts.Name.Name)
+			switch sp := spec.(type) {
+			case *ast.TypeSpec:
+				if sp.Assign.IsValid() && isSelectorOn(sp.Type, local) {
+					names = append(names, sp.Name.Name)
+				}
+			case *ast.ValueSpec:
+				for i, v := range sp.Values {
+					if isSelectorOn(v, local) {
+						names = append(names, sp.Names[i].Name)
+					}
+				}
 			}
 		}
 	}

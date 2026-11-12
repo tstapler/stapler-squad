@@ -196,51 +196,6 @@ func (r *EntRepository) backlogItemForItemSession(ctx context.Context, itemSessi
 	return item, nil
 }
 
-// ItemSessionData is the input data for creating a new ItemSession.
-type ItemSessionData struct {
-	ItemID      string // BacklogItem UUID
-	SessionUUID string
-	SessionRole string
-	// ConversationUUID is the Claude transcript UUID when already known at creation
-	// (a headless call that has finished); "" otherwise — see EntRepository.Delete
-	// and UpdateItemSessionConversationUUID for the other ways it gets recorded.
-	ConversationUUID string
-	// BranchName is the work session's git branch, stamped once at spawn
-	// time — see ItemSession.branch_name's schema comment for why this
-	// needs to outlive the Session/Worktree rows it would otherwise be
-	// read from.
-	BranchName string
-	AcSnapshot AcCriteriaJSON
-	// PipelineModeSnapshot/PipelineModeSnapshotHash freeze the resolved
-	// PipelineMode slug and its content hash at the moment this session
-	// first starts — see ItemSessionSummary.PipelineModeSnapshot(Hash).
-	PipelineModeSnapshot     string
-	PipelineModeSnapshotHash string
-	// ResolvedProgram/ResolvedModel/ExecutorSnapshotHash/ConfiguredProgram/
-	// ExecutorFallbackReason freeze this stage's resolved executor at spawn
-	// time — see ItemSessionSummary's fields of the same name and the
-	// ItemSession ent schema's field comments.
-	ResolvedProgram        string
-	ResolvedModel          string
-	ExecutorSnapshotHash   string
-	ConfiguredProgram      string
-	ExecutorFallbackReason string
-	TriageResult           string
-	VerificationNotes      string  // Freeform verification evidence reported via request_review
-	DiffTruncated          bool    // Review sessions: the reviewer's diff was truncated at spawn
-	EstimatedCostUsd       float64 // Only set for headless sessions where cost is known at creation time
-	// CostUnpriced marks EstimatedCostUsd as untrustworthy (see headless.CostSink's
-	// priced signal) rather than a genuine dollar figure — e.g. an unpriced Gemini
-	// model family. Zero-value false means priced, matching cost_priced's ent
-	// schema default, so existing callers that never set this field are unaffected.
-	CostUnpriced bool
-	// ClaimantHostID is the claiming/attaching process's own stable host identifier
-	// (Config.GetOrCreateClaimantHostID), never anything derived from the session being
-	// claimed/attached. See ItemSession.claimant_host_id's schema comment for the full
-	// disambiguation against STAPLER_SQUAD_INSTANCE and session/contexts.go's CloudContext.InstanceID.
-	ClaimantHostID string
-}
-
 // --- ItemSession ---
 
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
@@ -1394,10 +1349,6 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 
 // --- AC criterion update ---
 
-// ErrAcCriterionWaived is returned when an agent-driven status update targets a
-// criterion that was waived; only the audited waiver path changes it.
-var ErrAcCriterionWaived = errors.New("acceptance criterion was waived")
-
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
 	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: status, reason: note}, func(c *AcCriterion) error {
@@ -1411,12 +1362,6 @@ func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID stri
 		return nil
 	})
 }
-
-// ErrAcCriterionOutOfRange is returned when a criterion index does not exist on the item.
-var ErrAcCriterionOutOfRange = errors.New("acceptance criterion index out of range")
-
-// ErrWaiverReasonRequired is returned when a waiver carries a blank reason.
-var ErrWaiverReasonRequired = errors.New("a waiver needs a non-empty reason")
 
 // WaiveAcCriterion marks a criterion waived with a non-empty reason. Refused (and audited) when
 // the criterion is already done or already waived.
