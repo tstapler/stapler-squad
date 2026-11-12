@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
@@ -119,7 +120,7 @@ type ServerDependencies struct {
 	GitHubUserService *services.GitHubUserService
 
 	// Token usage analytics.
-	InsightsService *services.InsightsService
+	InsightsService *insights.InsightsService
 
 	BacklogService *backlogsvc.BacklogService
 	// BacklogFlowService is the single flow-observability service; the RPC handler and
@@ -613,7 +614,7 @@ type RuntimeDeps struct {
 	GitHubUserService *services.GitHubUserService
 
 	// Token usage analytics.
-	InsightsService *services.InsightsService
+	InsightsService *insights.InsightsService
 
 	BacklogService *backlogsvc.BacklogService
 	// BacklogFlowService is the single flow-observability service; the RPC handler and
@@ -1906,7 +1907,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// block only builds the InsightsService/ArtifactExtractor machinery that
 	// depends on them, plus backlogSvc/sessionSummaryGenerator, all of which
 	// need backlogSvc (constructed after that early wiring).
-	var insightsSvc *services.InsightsService
+	var insightsSvc *insights.InsightsService
 	var geminiCaller *headless.GeminiCaller
 	if tokenStore != nil {
 		pricing := tokens.DefaultPricingTable()
@@ -1944,7 +1945,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 
 		associator := tokens.NewAssociator(storage)
-		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator, storage)
+		insightsSvc = insights.NewInsightsService(tokenStore, pricing, associator, storage)
 		insightsSvc.SetDismissedFindingsStore(storage)
 		insightsSvc.SetContextHistoryStore(ctxHistoryStore)
 		sessionService.SetTokenStoreReader(tokenStore)

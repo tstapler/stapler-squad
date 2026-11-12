@@ -5,7 +5,7 @@
   "method": "WatchInsights",
   "protoFile": "proto/session/v1/insights.proto",
   "markerFound": true,
-  "handlerFile": "server/services/insights_service.go",
+  "handlerFile": "server/services/insights/insights_service.go",
   "tested": true,
   "testIds": [
     "TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies",
@@ -13,5 +13,5 @@
     "TestWatchInsights_WhenChannelReceivesNonNilParseResult_ExpectUpdateEventWithPopulatedSession",
     "TestWatchInsights_WhenChannelReceivesNil_ExpectParseCompleteEventNotBareUpdate"
   ],
-  "lastModified": "2026-09-04T00:00:00Z"
+  "lastModified": "2026-11-11T22:58:15.569523055-08:00"
 }

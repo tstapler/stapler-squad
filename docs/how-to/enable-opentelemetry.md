@@ -76,7 +76,7 @@ regression early instead of requiring another round of manual Tempo queries:
 |---|---|---|---|
 | `http.server.connections_open` | Observable gauge | — | `server/http_connection_metrics.go`, fed by the main listener's `(*http.Server).ConnState` hook (wired in `server/server.go`'s `newServerBase`). Current count of connections net/http still tracks as plain HTTP/1.1 (new/active/idle) — excludes hijacked ones. |
 | `http.server.connections_hijacked_total` | Observable counter | — | Same file. Cumulative count of connections hijacked off net/http's tracking — in this server, exclusively WebSocket upgrades (`StateHijacked` is `net/http`'s terminal state for a hijacked connection, so this is the only place to count them). |
-| `rpc.server_streams.open` | Observable gauge | `method` (`WatchSessions`, `WatchReviewQueue`, `WatchBacklogItems`, `WatchInsights`, `WatchUnfinishedWork`, `StreamTerminal`) | `server/services/watch_stream_metrics.go`'s `TrackOpenStream`, called at the top of each Watch* handler's body and around the terminal stream's `HandleWebSocket` call, with a `defer`/paired call decrementing on stream close. |
+| `rpc.server_streams.open` | Observable gauge | `method` (`WatchSessions`, `WatchReviewQueue`, `WatchBacklogItems`, `WatchInsights`, `WatchUnfinishedWork`, `StreamTerminal`) | `server/services/internal/streammetrics/watch_stream_metrics.go`'s `TrackOpenStream`, called at the top of each Watch* handler's body and around the terminal stream's `HandleWebSocket` call, with a `defer`/paired call decrementing on stream close. |
 
 ### Listener, descriptor and request-flow metrics
 
