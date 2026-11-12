@@ -18,7 +18,7 @@ package services
 // ValidateGates business rules (plan approval, AC criteria, review verdict,
 // etc.) that a legitimate multi-step UI flow would otherwise require.
 //
-// Mirrors backlog_debug_seed_handler.go's shape and gating exactly: these
+// Mirrors debugseed/backlog_debug_seed_handler.go's shape and gating exactly: these
 // routes are registered by server.go ONLY when
 // STAPLER_SQUAD_INSTANCE=e2e-local — never reachable in a normal deploy.
 

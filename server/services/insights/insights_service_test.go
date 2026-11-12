@@ -1,4 +1,4 @@
-package services
+package insights
 
 import (
 	"context"
@@ -660,7 +660,7 @@ func TestWatchInsights_should_forwardUpdateEvent_When_TokenStoreNotifies(t *test
 	// (not just "some update event exists"), ties the assertion to the
 	// causal chain this test claims to exercise rather than either notify.
 	before := len(sender.Sent())
-	store.OnHistoryFileChanged("../../session/tokens/testdata/valid_session.jsonl")
+	store.OnHistoryFileChanged("../../../session/tokens/testdata/valid_session.jsonl")
 
 	wait.RequireEventually(t, func() bool {
 		return len(sender.Sent()) > before && store.GetByUUID("valid_session") != nil
@@ -759,7 +759,7 @@ func TestGetSessionTurnTimeline_should_returnTurns_When_backedByRealTokenStore(t
 	store.Start(ctx)
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, nil)
 
-	store.OnHistoryFileChanged("../../session/tokens/testdata/valid_session.jsonl")
+	store.OnHistoryFileChanged("../../../session/tokens/testdata/valid_session.jsonl")
 	wait.RequireEventually(t, func() bool {
 		return store.GetByUUID("valid_session") != nil
 	}, 2*time.Second, 10*time.Millisecond)

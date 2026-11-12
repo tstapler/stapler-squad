@@ -43,6 +43,7 @@ go_library(
         "//server/events",
         "//server/protocol",
         "//server/services",
+        "//server/services/internal/streammetrics",
         "//session",
         "//session/hostclaim",
         "//session/resize",

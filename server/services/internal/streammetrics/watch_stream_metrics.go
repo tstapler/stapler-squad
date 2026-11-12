@@ -1,4 +1,4 @@
-package services
+package streammetrics
 
 // watch_stream_metrics.go instruments how many server-streaming RPC calls
 // (the WatchSessions/WatchReviewQueue/WatchBacklogItems/WatchInsights/
@@ -49,7 +49,7 @@ func init() {
 	watchStreamMetricsRegisterOnce.Do(func() {
 		watchStreamMetricsRegisterErr = registerWatchStreamMetrics()
 		if watchStreamMetricsRegisterErr != nil {
-			log.Error("services: failed to register watch-stream OTel metrics", "error", watchStreamMetricsRegisterErr)
+			log.Error("streammetrics: failed to register watch-stream OTel metrics", "error", watchStreamMetricsRegisterErr)
 		}
 	})
 }
@@ -83,7 +83,7 @@ func registerWatchStreamMetrics() error {
 // Call this at the top of each Watch* handler's body / the terminal stream's
 // entry point, before the blocking send/receive loop starts:
 //
-//	done := services.TrackOpenStream("WatchSessions")
+//	done := streammetrics.TrackOpenStream("WatchSessions")
 //	defer done()
 func TrackOpenStream(method string) (done func()) {
 	v, _ := openStreamCounts.LoadOrStore(method, new(atomic.Int64))
@@ -110,7 +110,7 @@ func recordStreamAge(method string, age time.Duration) {
 			metric.WithDescription("How long a server-streaming RPC or terminal WebSocket stayed open, observed at close, by method"),
 			metric.WithExplicitBucketBoundaries(streamAgeBucketsSeconds...))
 		if err != nil {
-			log.Error("services: failed to register rpc.server.stream_age_seconds", "error", err)
+			log.Error("streammetrics: failed to register rpc.server.stream_age_seconds", "error", err)
 			return
 		}
 		streamAgeHistogram.CompareAndSwap(nil, &created)

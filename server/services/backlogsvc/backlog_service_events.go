@@ -25,6 +25,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
@@ -99,7 +101,7 @@ func (s *BacklogService) watchBacklogItems(
 		return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("backlog event stream is not available"))
 	}
 
-	done := services.TrackOpenStream("WatchBacklogItems")
+	done := streammetrics.TrackOpenStream("WatchBacklogItems")
 	defer done()
 
 	// Subscribe before building the snapshot/replay batch so no events are
