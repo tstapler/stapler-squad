@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestAttachedImagesSection(t *testing.T) {
@@ -72,20 +72,20 @@ func TestPromptBuilders_ListAttachedImagePaths(t *testing.T) {
 	dir := backlogAttachmentDir()
 	require.NotEmpty(t, dir)
 	want := "- " + dir + "/a.png"
-	withImage := &session.BacklogItemData{ID: "i1", Title: "t", Description: "Bug ![a](/api/local/serve" + dir + "/a.png)"}
-	noImage := &session.BacklogItemData{ID: "i2", Title: "t", Description: "Bug, no screenshot"}
+	withImage := &backlogdto.BacklogItemData{ID: "i1", Title: "t", Description: "Bug ![a](/api/local/serve" + dir + "/a.png)"}
+	noImage := &backlogdto.BacklogItemData{ID: "i2", Title: "t", Description: "Bug, no screenshot"}
 
-	builders := map[string]func(*session.BacklogItemData) string{
-		"triage": func(i *session.BacklogItemData) string { return BuildHeadlessTriagePrompt(i, "/tmp/art") },
-		"retriage": func(i *session.BacklogItemData) string {
+	builders := map[string]func(*backlogdto.BacklogItemData) string{
+		"triage": func(i *backlogdto.BacklogItemData) string { return BuildHeadlessTriagePrompt(i, "/tmp/art") },
+		"retriage": func(i *backlogdto.BacklogItemData) string {
 			return BuildHeadlessRetriagePrompt(i, "/tmp/art", HeadlessTriageResult{}, "fb")
 		},
-		"review": func(i *session.BacklogItemData) string { return BuildReviewPrompt(i, nil, "", false, "sid", "") },
-		"headless review": func(i *session.BacklogItemData) string {
+		"review": func(i *backlogdto.BacklogItemData) string { return BuildReviewPrompt(i, nil, "", false, "sid", "") },
+		"headless review": func(i *backlogdto.BacklogItemData) string {
 			return BuildHeadlessReviewPrompt(i, nil, "", false, "", ReviewContextExtras{})
 		},
-		"session initial":      func(i *session.BacklogItemData) string { return BuildSessionInitialPrompt(i, nil) },
-		"pipeline placeholder": func(i *session.BacklogItemData) string { return itemPlaceholders(i)["item_description"] },
+		"session initial":      func(i *backlogdto.BacklogItemData) string { return BuildSessionInitialPrompt(i, nil) },
+		"pipeline placeholder": func(i *backlogdto.BacklogItemData) string { return itemPlaceholders(i)["item_description"] },
 	}
 	for name, build := range builders {
 		t.Run(name, func(t *testing.T) {

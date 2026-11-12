@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // makeTestBacklogItem creates a minimal *BacklogItemData for unit tests.
-func makeTestBacklogItem(title, description, acJSON, status string, priority int, notes string) *session.BacklogItemData {
-	return &session.BacklogItemData{
+func makeTestBacklogItem(title, description, acJSON, status string, priority int, notes string) *backlogdto.BacklogItemData {
+	return &backlogdto.BacklogItemData{
 		ID:                 "test-item-ctx-1",
 		Title:              title,
 		Description:        description,
@@ -24,9 +25,9 @@ func makeTestBacklogItem(title, description, acJSON, status string, priority int
 }
 
 // makeEndedItemSession creates a minimal ItemSessionSummary with EndedAt set.
-func makeEndedItemSession(role string, commitCount int, lastMsg string) session.ItemSessionSummary {
+func makeEndedItemSession(role string, commitCount int, lastMsg string) backlogdto.ItemSessionSummary {
 	now := time.Now()
-	return session.ItemSessionSummary{
+	return backlogdto.ItemSessionSummary{
 		ID:                    "test-session-1",
 		Role:                  role,
 		CommitCountSinceSpawn: commitCount,
@@ -121,7 +122,7 @@ func TestBuildSessionInitialPrompt_WithPriorAttempts_ContainsHandoffSection(t *t
 	s := makeEndedItemSession("work", 3, "fix: implement handler")
 
 	// With a prior session that has ended.
-	outWith := BuildSessionInitialPrompt(item, []session.ItemSessionSummary{s})
+	outWith := BuildSessionInitialPrompt(item, []backlogdto.ItemSessionSummary{s})
 	if !strings.Contains(outWith, "Prior Attempts") {
 		t.Errorf("expected 'Prior Attempts' section when prior sessions present\nOutput:\n%s", outWith)
 	}
@@ -133,11 +134,11 @@ func TestBuildSessionInitialPrompt_WithPriorAttempts_ContainsHandoffSection(t *t
 	}
 
 	// With a session that has NOT ended (EndedAt == nil) → should not appear.
-	notEnded := session.ItemSessionSummary{
+	notEnded := backlogdto.ItemSessionSummary{
 		ID:   "test-session-2",
 		Role: "work",
 	}
-	outNotEnded := BuildSessionInitialPrompt(item, []session.ItemSessionSummary{notEnded})
+	outNotEnded := BuildSessionInitialPrompt(item, []backlogdto.ItemSessionSummary{notEnded})
 	if strings.Contains(outNotEnded, "Prior Attempts") {
 		t.Errorf("did not expect 'Prior Attempts' when no sessions have ended\nOutput:\n%s", outNotEnded)
 	}
@@ -156,14 +157,14 @@ func TestBuildSessionInitialPrompt_WithReviewVerdict_ContainsSummaryAndFailedCri
 		`{"criterion_index":0,"outcome":"FAIL","evidence":"handler does not validate input, causing a panic on empty body"},` +
 		`{"criterion_index":1,"outcome":"PASS","evidence":"tests pass and cover the happy path"}` +
 		`]`
-	s.ReviewVerdict = &session.ReviewVerdictSummary{
+	s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 		ID:             "test-verdict-1",
 		OverallOutcome: string(session.ReviewOutcomeFail),
 		Summary:        "Handler crashes on empty request body; missing input validation.",
 		PerCriterion:   perCriterion,
 	}
 
-	out := BuildSessionInitialPrompt(item, []session.ItemSessionSummary{s})
+	out := BuildSessionInitialPrompt(item, []backlogdto.ItemSessionSummary{s})
 
 	mustContain := []string{
 		"Verdict: FAIL",
@@ -192,7 +193,7 @@ func TestBuildSessionInitialPrompt_WithoutReviewVerdict_DoesNotPanicOrRenderEvid
 	s := makeEndedItemSession("work", 1, "wip")
 	s.ReviewVerdict = nil
 
-	out := BuildSessionInitialPrompt(item, []session.ItemSessionSummary{s})
+	out := BuildSessionInitialPrompt(item, []backlogdto.ItemSessionSummary{s})
 
 	if !strings.Contains(out, "Prior Attempts") {
 		t.Errorf("expected 'Prior Attempts' section\nOutput:\n%s", out)
@@ -212,11 +213,11 @@ func TestBuildSessionInitialPrompt_OlderPriorAttempts_OmitFullEvidence(t *testin
 	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
 	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
 
-	var sessions []session.ItemSessionSummary
+	var sessions []backlogdto.ItemSessionSummary
 	for i := 0; i < maxPriorAttemptsWithFullEvidence+2; i++ {
 		s := makeEndedItemSession("work", i, "wip")
 		s.ID = fmt.Sprintf("test-session-%d", i)
-		s.ReviewVerdict = &session.ReviewVerdictSummary{
+		s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 			OverallOutcome: string(session.ReviewOutcomeFail),
 			Summary:        fmt.Sprintf("summary-marker-%d", i),
 			PerCriterion:   `[{"criterion_index":0,"outcome":"FAIL","evidence":"evidence-marker"}]`,
@@ -257,11 +258,11 @@ func TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTw
 	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
 	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
 
-	var sessions []session.ItemSessionSummary
+	var sessions []backlogdto.ItemSessionSummary
 	for i := 0; i < 2; i++ {
 		s := makeEndedItemSession(session.SessionRoleReview, 0, "")
 		s.ID = fmt.Sprintf("test-review-session-%d", i)
-		s.ReviewVerdict = &session.ReviewVerdictSummary{
+		s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 			OverallOutcome: string(session.ReviewOutcomeFail),
 			Summary:        "diff computation failed",
 		}
@@ -290,12 +291,12 @@ func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_OnlyOneRevie
 	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
 
 	s := makeEndedItemSession(session.SessionRoleReview, 0, "")
-	s.ReviewVerdict = &session.ReviewVerdictSummary{
+	s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 		OverallOutcome: string(session.ReviewOutcomeFail),
 		Summary:        "diff computation failed",
 	}
 
-	out := BuildSessionInitialPrompt(item, []session.ItemSessionSummary{s})
+	out := BuildSessionInitialPrompt(item, []backlogdto.ItemSessionSummary{s})
 	if strings.Contains(out, "Escalation Notice") {
 		t.Errorf("did not expect an Escalation Notice after only 1 review failure\nOutput:\n%s", out)
 	}
@@ -314,11 +315,11 @@ func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_ThreeIdentic
 	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
 	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
 
-	var sessions []session.ItemSessionSummary
+	var sessions []backlogdto.ItemSessionSummary
 	for i := 0; i < 3; i++ {
 		s := makeEndedItemSession(session.SessionRoleReview, 0, "")
 		s.ID = fmt.Sprintf("test-review-session-%d", i)
-		s.ReviewVerdict = &session.ReviewVerdictSummary{
+		s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 			OverallOutcome: string(session.ReviewOutcomeFail),
 			Summary:        "diff computation failed",
 		}
@@ -341,7 +342,7 @@ func TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTw
 	ac := `[{"index":0,"text":"Do something","status":"pending"}]`
 	item := makeTestBacklogItem("Feature", "desc", ac, "in_progress", 2, "")
 
-	var sessions []session.ItemSessionSummary
+	var sessions []backlogdto.ItemSessionSummary
 	for i := 0; i < 2; i++ {
 		s := makeEndedItemSession(session.SessionRoleReview, 0, "")
 		s.ID = fmt.Sprintf("test-review-session-%d", i)

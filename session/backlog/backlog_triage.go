@@ -3,8 +3,10 @@ package backlog
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/tstapler/stapler-squad/session"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TriageSuggestion is a canonical suggestion entry shared by the headless triage
@@ -56,7 +58,7 @@ const maxHeadlessTriageTasks = 12
 
 // BuildHeadlessTriagePrompt constructs the JSON-output triage prompt for a backlog item.
 // artifactAbsPath is the absolute path where the LLM should write planning files.
-func BuildHeadlessTriagePrompt(item *session.BacklogItemData, artifactAbsPath string) string {
+func BuildHeadlessTriagePrompt(item *backlogdto.BacklogItemData, artifactAbsPath string) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
@@ -112,7 +114,7 @@ After all files are written, output ONLY a JSON object (no other text before or 
 // directory used by the original triage run — research/*.md, plan.md, and
 // validation.md already exist there and are treated as valid context unless the
 // feedback indicates otherwise.
-func BuildHeadlessRetriagePrompt(item *session.BacklogItemData, artifactAbsPath string, prior HeadlessTriageResult, feedback string) string {
+func BuildHeadlessRetriagePrompt(item *backlogdto.BacklogItemData, artifactAbsPath string, prior HeadlessTriageResult, feedback string) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
@@ -165,7 +167,7 @@ after):
 // chat-originated refinement (CreateBacklogItemFromChat's existing_item_id
 // path), where a tightened one-question-at-a-time round trip is expected
 // instead of a batch dump of questions.
-func BuildHeadlessChatRetriagePrompt(item *session.BacklogItemData, artifactAbsPath string, prior HeadlessTriageResult, feedback string) string {
+func BuildHeadlessChatRetriagePrompt(item *backlogdto.BacklogItemData, artifactAbsPath string, prior HeadlessTriageResult, feedback string) string {
 	base := BuildHeadlessRetriagePrompt(item, artifactAbsPath, prior, feedback)
 	return base + `
 

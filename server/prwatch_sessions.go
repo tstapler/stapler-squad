@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // prwatchSessionView is the steerer subset the Sessions adapter needs;
@@ -22,9 +23,9 @@ type prwatchSessionView interface {
 
 // prwatchBacklogStore is the Storage subset used for the D4 exclusion.
 type prwatchBacklogStore interface {
-	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]session.ItemSessionSummary, error)
-	GetBacklogItem(ctx context.Context, id string) (*session.BacklogItemData, error)
-	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)
+	ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]backlogdto.ItemSessionSummary, error)
+	GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error)
+	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
 }
 
 // prwatchRemoteResolver resolves owner/repo/host from a session's git remote

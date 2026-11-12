@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // Typed result codes of the wake and peer-help tools (plan Story 4.5). They
@@ -151,7 +152,7 @@ func rawTypedError(e typedError) *mcpgo.CallToolResult {
 
 // roleLookupFrom resolves a role from a backlog-link read. Only "no link" means
 // a work session; any other error yields roleUnknown, which no tool allows.
-func roleLookupFrom(get func(ctx context.Context, sessionUUID string) (session.ItemSessionSummary, error)) callerRoleLookup {
+func roleLookupFrom(get func(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)) callerRoleLookup {
 	return func(ctx context.Context, sessionUUID string) callerRole {
 		link, err := get(ctx, sessionUUID)
 		switch {

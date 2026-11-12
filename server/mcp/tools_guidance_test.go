@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newTestGuidanceStorage creates a temporary Storage for guidance tool tests,
@@ -183,10 +184,10 @@ func TestCreateGuidanceRequest_should_Succeed_When_BacklogItemScopeCallerIsLinke
 	h := &backlogHandlers{storage: storage}
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "guidance mcp test item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "guidance mcp test item"})
 	require.NoError(t, err)
 	callerUUID := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: callerUUID,
 		SessionRole: "work",
@@ -211,7 +212,7 @@ func TestCreateGuidanceRequest_should_ReturnPermissionDenied_When_BacklogItemSco
 	h := &backlogHandlers{storage: storage}
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "guidance mcp unlinked item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "guidance mcp unlinked item"})
 	require.NoError(t, err)
 	callerUUID := uuid.New().String()
 

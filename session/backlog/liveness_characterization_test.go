@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestLivenessCharacterization_should_ProduceIdenticalStuckDecisionAndReasonDetail_When_ComparingHardcodedConstantPathToDefaultLivenessEngine
@@ -129,8 +130,8 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 
 	// Reuses the exact fixture shape as
 	// TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCyclesIn24hNoPass.
-	newBouncingFixture := func(title string) *session.BacklogItemData {
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	newBouncingFixture := func(title string) *backlogdto.BacklogItemData {
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  title,
 			Status: string(session.BacklogStatusInProgress),
 		})

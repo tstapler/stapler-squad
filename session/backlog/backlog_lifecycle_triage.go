@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TriageRespawner can automatically re-trigger triage for a backlog item whose
@@ -86,8 +87,8 @@ const maxHeadlessTriageSessionStaleness = 3*time.Hour + 15*time.Minute
 // Shared by reconcileOrphanedTriageItems (which needs both the open-and-stale
 // and already-ended cases) and reconcilePlanNotApprovedItems (which only
 // needs to check whether the latest attempt left a usable result behind).
-func latestTriageSession(sessions []session.ItemSessionSummary) *session.ItemSessionSummary {
-	var latest *session.ItemSessionSummary
+func latestTriageSession(sessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
+	var latest *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		if sessions[i].Role != session.SessionRoleTriage {
 			continue
@@ -263,7 +264,7 @@ func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(itemID strin
 //
 //nolint:gocognit,gocyclo // see above
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Context, er *session.EntRepository) {
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusIdea), string(session.BacklogStatusQueued)},
 	})
 	if err != nil {
@@ -463,7 +464,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx contex
 			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea/queued
 		}
 		// Checked before RemediationDue so a held item does not spend backoff attempts.
-		if l.heldByTransitionDenial(ctx, &session.BacklogItemData{ID: row.ItemID, Status: string(row.ItemStatus)}, "orphaned_triage_remediation") {
+		if l.heldByTransitionDenial(ctx, &backlogdto.BacklogItemData{ID: row.ItemID, Status: string(row.ItemStatus)}, "orphaned_triage_remediation") {
 			continue
 		}
 		l.retryOrphanedTriageWithBackoffGate(ctx, row.ItemID, row.ItemTitle)

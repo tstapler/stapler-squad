@@ -232,6 +232,7 @@ go_test(
         "//server/middleware",
         "//session",
         "//session/deeplink",
+        "//session/domain/backlogdto",
         "//session/hostclaim",
         "//session/tymux",
         "@com_github_stretchr_testify//assert",

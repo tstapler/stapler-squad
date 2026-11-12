@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const githubIssuesPerPage = 50
@@ -464,7 +465,7 @@ func readIssueState(ctx context.Context, cfg githubPluginConfig, externalID stri
 }
 
 // MapToBacklogItem converts a GitHub ExternalItem to a BacklogItemData.
-func (g *GitHubIssuesPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
+func (g *GitHubIssuesPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) backlogdto.BacklogItemData {
 	title := item.Title
 	if len(title) > 200 {
 		title = title[:200]
@@ -475,7 +476,7 @@ func (g *GitHubIssuesPlugin) MapToBacklogItem(item session.ExternalItem, sourceI
 		desc = desc[:2000]
 	}
 
-	return session.BacklogItemData{
+	return backlogdto.BacklogItemData{
 		Title:       title,
 		Description: desc,
 		Priority:    item.Priority,

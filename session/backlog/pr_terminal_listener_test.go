@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // blockingCleaner blocks every CleanupTerminalItem until released and records the
@@ -92,7 +93,7 @@ func TestPRTerminalListener_ShouldStartAtMostTwentyCleanups_WhenThreeHundredItem
 	ctx := context.Background()
 	var stateID int
 	for i := 0; i < 30; i++ {
-		item, err := f.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: fmt.Sprintf("done %d", i), Status: string(session.BacklogStatusDone)})
+		item, err := f.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: fmt.Sprintf("done %d", i), Status: string(session.BacklogStatusDone)})
 		require.NoError(t, err)
 		f.link(session.ItemPROwner(item.ID), 22, session.PRStateMerged)
 	}

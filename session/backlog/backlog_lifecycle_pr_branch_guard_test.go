@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -38,7 +39,7 @@ func newTrackedWorkSession(t *testing.T, storage *session.Storage, itemID, repoP
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath+"/../wt", "tracked-work-session", branchName, "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: inst.UUID,
 		SessionRole: session.SessionRoleWork,
@@ -62,7 +63,7 @@ func newUntrackedWorkSessionWithBranchName(t *testing.T, storage *session.Storag
 	t.Helper()
 	ctx := context.Background()
 
-	_, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      itemID,
 		SessionUUID: uuid.New().String(),
 		SessionRole: session.SessionRoleWork,
@@ -177,7 +178,7 @@ func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetect
 	runGitTestCmd(t, dir, "commit", "-m", "the fix, already on main via a different PR")
 	shippedSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Branch-mismatch superseded test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -187,7 +188,7 @@ func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetect
 	require.NoError(t, err)
 	prURL := "https://github.com/owner/repo/pull/999"
 	prNumber := 999
-	updated, err := storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/tracked-branch", shippedSHA)
@@ -311,7 +312,7 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with merged PR, mismatched head branch",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: "/tmp/fake-repo",
@@ -319,7 +320,7 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 	require.NoError(t, err)
 	prNumber := 172
 	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/172"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		PrURL:    &prURL,
 		PrNumber: &prNumber,
 	}, nil)
@@ -374,7 +375,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHead
 	featureSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
 	runGitTestCmd(t, dir, "checkout", "main")
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Closed PR, unverified association",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -384,7 +385,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHead
 	require.NoError(t, err)
 	prURL := "https://github.com/owner/repo/pull/501"
 	prNumber := 501
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/closed-mismatch", featureSHA)
@@ -431,7 +432,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRH
 	featureSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
 	runGitTestCmd(t, dir, "checkout", "main")
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "CI-failing PR, unverified association",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -441,7 +442,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRH
 	require.NoError(t, err)
 	prURL := "https://github.com/owner/repo/pull/502"
 	prNumber := 502
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/ci-mismatch", featureSHA)
@@ -493,7 +494,7 @@ func TestReconcilePRPending_should_OmitUnverifiedDisclaimer_When_CIFailingPRHead
 	featureSHA := strings.TrimSpace(runGitTestCmd(t, dir, "rev-parse", "HEAD"))
 	runGitTestCmd(t, dir, "checkout", "main")
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "CI-failing PR, verified association",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -503,7 +504,7 @@ func TestReconcilePRPending_should_OmitUnverifiedDisclaimer_When_CIFailingPRHead
 	require.NoError(t, err)
 	prURL := "https://github.com/owner/repo/pull/503"
 	prNumber := 503
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	newTrackedWorkSession(t, storage, item.ID, dir, "backlog/ci-matches", featureSHA)
@@ -570,7 +571,7 @@ func TestReconcilePRPending_should_TransitionToDone_When_OnlyTipCommitSurvives(t
 	ctx := context.Background()
 
 	item := newPRPendingTestItem(t, storage, 951)
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.New().String(),
 		SessionRole: session.SessionRoleWork,
@@ -688,19 +689,19 @@ func TestPROwnershipFor(t *testing.T) {
 	const tip, base = "tip111", "base222"
 
 	t.Run("bare stamped slug also yields its prefixed branch", func(t *testing.T) {
-		own := prOwnershipFor(&session.ItemSessionSummary{BranchName: "x"}, nil)
+		own := prOwnershipFor(&backlogdto.ItemSessionSummary{BranchName: "x"}, nil)
 		assert.Equal(t, []string{"x", session.BacklogBranchPrefix + "x"}, own.branches)
 	})
 	t.Run("already-prefixed branch is not double-prefixed and dedupes the worktree copy", func(t *testing.T) {
-		own := prOwnershipFor(&session.ItemSessionSummary{BranchName: "backlog/x"}, &session.GitWorktreeData{BranchName: "backlog/x"})
+		own := prOwnershipFor(&backlogdto.ItemSessionSummary{BranchName: "backlog/x"}, &session.GitWorktreeData{BranchName: "backlog/x"})
 		assert.Equal(t, []string{"backlog/x"}, own.branches)
 	})
 	t.Run("tip commit is evidence", func(t *testing.T) {
-		own := prOwnershipFor(&session.ItemSessionSummary{LastCommitSha: tip, BaseCommitSha: base}, nil)
+		own := prOwnershipFor(&backlogdto.ItemSessionSummary{LastCommitSha: tip, BaseCommitSha: base}, nil)
 		assert.Equal(t, tip, own.tipSHA)
 	})
 	t.Run("tip equal to base commit is not evidence", func(t *testing.T) {
-		own := prOwnershipFor(&session.ItemSessionSummary{LastCommitSha: base, BaseCommitSha: base}, nil)
+		own := prOwnershipFor(&backlogdto.ItemSessionSummary{LastCommitSha: base, BaseCommitSha: base}, nil)
 		assert.True(t, own.empty())
 	})
 	t.Run("nothing recorded is empty", func(t *testing.T) {

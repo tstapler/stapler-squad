@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // This file lives in the external session_test package (not the internal
@@ -51,7 +52,7 @@ func storageOn(t *testing.T, repo *session.EntRepository) *session.Storage {
 // wired in.
 type panickingItemChangePublisher struct{}
 
-func (panickingItemChangePublisher) PublishItemChanged(item *session.BacklogItemData, change session.BacklogItemChange) {
+func (panickingItemChangePublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change session.BacklogItemChange) {
 	panic("boom")
 }
 
@@ -72,13 +73,13 @@ func TestTransitionBacklogItemStatus_should_publishOldAndNewStatus_When_CASSucce
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for status transition publish test",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(session.BacklogStatusInProgress),
 	}, session.TriggeredBySystem)
 	require.NoError(t, err)
@@ -111,7 +112,7 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for lost-race no-publish test",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -119,7 +120,7 @@ func TestTransitionBacklogItemStatus_should_notPublish_When_CASAffectsZeroRows(t
 
 	// Stale precondition: the item is actually "in_progress", not "review", so
 	// the CAS WHERE clause matches zero rows.
-	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
+	_, err = storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(session.BacklogStatusReview),
 	}, session.TriggeredBySystem)
 	require.Error(t, err)
@@ -150,14 +151,14 @@ func TestTransitionBacklogItemStatus_should_returnSuccessAndPersistRow_When_Item
 
 	repo.SetItemChangePublisher(panickingItemChangePublisher{})
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for panicking publisher regression test",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
 	require.NotPanics(t, func() {
-		updated, transErr := storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &session.BacklogItemPrecondition{
+		updated, transErr := storageOn(t, repo).RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 			ExpectedStatus: string(session.BacklogStatusInProgress),
 		}, session.TriggeredBySystem)
 		require.NoError(t, transErr)
@@ -184,14 +185,14 @@ func TestUpdateBacklogItem_should_publishChangedFieldNames_When_TitleIsUpdated(t
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Old title",
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	newTitle := "New title"
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{Title: &newTitle}, nil)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Title: &newTitle}, nil)
 	require.NoError(t, err)
 
 	select {
@@ -222,13 +223,13 @@ func TestUpdateBacklogItem_should_notPublishMisleadingFieldList_When_NoParamsAre
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for no-op update test",
 		Status: string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{}, nil)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{}, nil)
 	require.NoError(t, err)
 
 	select {
@@ -257,7 +258,7 @@ func TestUpdateBacklogItem_should_deliverEventThroughRealBus_When_MultipleFields
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Old title",
 		Status: string(session.BacklogStatusIdea),
 	})
@@ -266,7 +267,7 @@ func TestUpdateBacklogItem_should_deliverEventThroughRealBus_When_MultipleFields
 	newTitle := "New title"
 	newDescription := "New description"
 	newNotes := "New notes"
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		Title:       &newTitle,
 		Description: &newDescription,
 		Notes:       &newNotes,
@@ -301,7 +302,7 @@ func TestArchiveBacklogItem_should_publishArchivedAtTimestamp_When_DoneItemIsArc
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item to archive",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -362,7 +363,7 @@ func TestUnarchiveBacklogItem_should_restoreToIdeaAndPublishTransition_When_Item
 	bus := pkgevents.NewEventBus(10)
 	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item to unarchive",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -405,7 +406,7 @@ func TestUnarchiveBacklogItem_should_unconditionallyFlipToIdea_When_ItemIsNotArc
 	bus := pkgevents.NewEventBus(10)
 	repo.SetItemChangePublisher(&services.BacklogItemEventPublisher{Bus: bus})
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item never archived",
 		Status: string(session.BacklogStatusReady),
 	})
@@ -474,7 +475,7 @@ func TestDeleteBacklogItem_should_publishRemovedNotUpdated_When_ExistingItemIsDe
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item to delete",
 		Status: string(session.BacklogStatusIdea),
 	})
@@ -522,13 +523,13 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for embedded-itemSessions regression test",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "review",
@@ -543,7 +544,7 @@ func TestTransitionBacklogItemStatus_should_embedNonEmptyItemSessions_When_ItemH
 		t.Fatal("timed out waiting for CreateItemSession's own BacklogItemChanged event")
 	}
 
-	err = repo.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
+	err = repo.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewOutcomePass,
 		Summary:        "looks good",
 	})
@@ -605,7 +606,7 @@ func TestTransitionBacklogItemStatus_should_embedStatusEvents_When_ItemHasPriorT
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for embedded-statusEvents regression test",
 		Status: string(session.BacklogStatusIdea),
 	})
@@ -666,7 +667,7 @@ func TestUpdateAcCriterionStatus_should_publishItemUpdatedEvent_When_CriterionSt
 	})
 	require.NoError(t, err)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "item for AC-status publish regression test",
 		Status:             string(session.BacklogStatusInProgress),
 		AcceptanceCriteria: ac,
@@ -712,13 +713,13 @@ func TestReconcileStuckItems_should_publishStatusChangedEvent_When_ItemTransitio
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "stuck item for reconcile publish test",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -769,13 +770,13 @@ func TestUpdateItemSessionStarted_should_publishItemUpdatedEvent_When_StartedAtI
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for UpdateItemSessionStarted publish regression test",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -818,13 +819,13 @@ func TestUpdateItemSessionGitActivity_should_publishItemUpdatedEvent_When_Commit
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for UpdateItemSessionGitActivity publish regression test",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -865,13 +866,13 @@ func TestUpdateItemSessionFileTouch_should_publishItemUpdatedEvent_When_FileTouc
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for UpdateItemSessionFileTouch publish regression test",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -912,13 +913,13 @@ func TestUpdateItemSessionVerificationNotes_should_publishItemUpdatedEvent_When_
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for UpdateItemSessionVerificationNotes publish regression test",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "review",
@@ -961,7 +962,7 @@ func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIs
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "item for BackfillMissingPRNumbers publish regression test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -971,7 +972,7 @@ func TestBackfillMissingPRNumbers_should_publishItemUpdatedEvent_When_PrNumberIs
 	require.NoError(t, err)
 
 	prURL := "https://github.com/tstapler/stapler-squad/pull/148"
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL}, nil)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL}, nil)
 	require.NoError(t, err)
 
 	// Drain UpdateBacklogItem's own event — it is a different call site from
@@ -1019,7 +1020,7 @@ func TestAppendActivityNote_should_PublishActivityNoteAddedEvent_When_Called(t *
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for activity-note publish test",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -1059,7 +1060,7 @@ func TestAppendActivityNote_should_PopulateStatusAndRepoPathOnPublishedSnapshot_
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "item with known status and repo path",
 		Status:   string(session.BacklogStatusReview),
 		RepoPath: "/repo/known-path",
@@ -1085,15 +1086,15 @@ func TestSaveReviewVerdict_should_persistCommitShaAndTruncation_When_Set(t *test
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{Title: "verdict sha round trip", Status: string(session.BacklogStatusReview)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "verdict sha round trip", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID: item.ID, SessionUUID: "review-" + uuid.NewString(), SessionRole: session.SessionRoleReview, DiffTruncated: true,
 	})
 	require.NoError(t, err)
 	assert.True(t, is.DiffTruncated, "spawn-time truncation must round-trip on the item session")
 
-	require.NoError(t, repo.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
+	require.NoError(t, repo.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewVerdictFail, ReviewedCommitSha: "abc123", DiffTruncated: true,
 	}))
 

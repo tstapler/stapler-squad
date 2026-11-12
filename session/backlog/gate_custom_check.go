@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -115,7 +116,7 @@ func InvokeCustomGateCheck(
 	ctx context.Context,
 	caller CustomCheckCaller,
 	repo session.GateSatisfactionRepository,
-	item *session.BacklogItemData,
+	item *backlogdto.BacklogItemData,
 	gateID uuid.UUID,
 	cfg session.CustomCheckConfig,
 	livenessDef LivenessDefinition,

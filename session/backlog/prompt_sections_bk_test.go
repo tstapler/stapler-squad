@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestSDDTemplates_should_ShareTheDefaultProtocolRules(t *testing.T) {
@@ -26,12 +27,12 @@ func TestSDDTemplates_should_ShareTheDefaultProtocolRules(t *testing.T) {
 
 func TestReworkContextFor_should_CarryPriorAttemptsAndFixesLine(t *testing.T) {
 	t.Parallel()
-	if got := reworkContextFor(&session.BacklogItemData{ID: "i"}, nil); got != "" {
+	if got := reworkContextFor(&backlogdto.BacklogItemData{ID: "i"}, nil); got != "" {
 		t.Errorf("first attempt without an issue should add nothing, got %q", got)
 	}
-	item := &session.BacklogItemData{ID: "i", ExternalURL: "https://github.com/o/r/issues/7"}
+	item := &backlogdto.BacklogItemData{ID: "i", ExternalURL: "https://github.com/o/r/issues/7"}
 	ended := time.Now()
-	got := reworkContextFor(item, []session.ItemSessionSummary{{Role: "work", EndedAt: &ended, CommitCountSinceSpawn: 2}})
+	got := reworkContextFor(item, []backlogdto.ItemSessionSummary{{Role: "work", EndedAt: &ended, CommitCountSinceSpawn: 2}})
 	for _, want := range []string{"Prior Attempts", "Fixes https://github.com/o/r/issues/7"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rework context missing %q in %q", want, got)

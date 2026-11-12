@@ -30,6 +30,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // PipelineMode identifies which PipelineMode definition (by slug) drives a
@@ -70,11 +71,11 @@ func ResolvedModeLabel(mode string) string {
 type PipelineEngine interface {
 	// SlashCommandSet returns the filename→rendered-content map that
 	// WriteSlashCommands writes to .claude/commands/backlog/ for item.
-	SlashCommandSet(item *session.BacklogItemData) (map[string]string, error)
+	SlashCommandSet(item *backlogdto.BacklogItemData) (map[string]string, error)
 	// TriagePromptFor builds the headless-triage prompt for item.
-	TriagePromptFor(item *session.BacklogItemData, artifactAbsPath string) string
+	TriagePromptFor(item *backlogdto.BacklogItemData, artifactAbsPath string) string
 	// ReviewPromptFor builds the headless-review prompt for item.
-	ReviewPromptFor(item *session.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string
+	ReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string
 	// InteractiveReviewPromptFor builds the tool-call-style review prompt used
 	// by the automatic review gate's real, hidden session.Instance (see
 	// ReviewGateRunner.Run) — the review path most items actually go through.
@@ -84,10 +85,10 @@ type PipelineEngine interface {
 	// renders the same ReviewPromptTemplate field ReviewPromptFor uses — mode
 	// authors must include verdict-tool-call instructions in that template if
 	// they want it to drive the real review gate too.
-	InteractiveReviewPromptFor(item *session.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string
+	InteractiveReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string
 	// InitialPromptFor builds the interactive/autonomous session's initial
 	// prompt (inst.Prompt).
-	InitialPromptFor(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary) string
+	InitialPromptFor(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary) string
 	// ContentHashFor returns the content hash of a resolved mode's 9 raw
 	// content-template fields. ok is false for PipelineModeDefault (code-
 	// backed content can't drift without a redeploy — nothing to hash) or an
@@ -99,7 +100,7 @@ type PipelineEngine interface {
 	// resolved mode with no override configured for role -> ("", ""). An
 	// empty return value from either half means "inherit the pool/session
 	// default" for that half, not "run with an empty program/model".
-	ExecutorFor(item *session.BacklogItemData, role session.StageRole) (program, model string)
+	ExecutorFor(item *backlogdto.BacklogItemData, role session.StageRole) (program, model string)
 }
 
 // resolvedPipelineMode is an unexported, immutable snapshot of one enabled
@@ -282,7 +283,7 @@ func renderTemplate(tmpl string, placeholders map[string]string) string {
 // values recognized by renderTemplate for item: item_id, item_title,
 // item_description, repo_path. Callers add criteria_index/criteria_count/
 // criteria_text themselves where applicable.
-func itemPlaceholders(item *session.BacklogItemData) map[string]string {
+func itemPlaceholders(item *backlogdto.BacklogItemData) map[string]string {
 	return map[string]string{
 		"item_id":          item.ID,
 		"item_title":       item.Title,
@@ -347,7 +348,7 @@ func (e *CachingPipelineEngine) InvalidateCache(ctx context.Context) error {
 }
 
 // SlashCommandSet implements PipelineEngine.
-func (e *CachingPipelineEngine) SlashCommandSet(item *session.BacklogItemData) (map[string]string, error) {
+func (e *CachingPipelineEngine) SlashCommandSet(item *backlogdto.BacklogItemData) (map[string]string, error) {
 	mode := PipelineMode(item.PipelineMode)
 	if mode == PipelineModeDefault {
 		return buildDefaultSlashCommandSet(item)
@@ -389,7 +390,7 @@ func (e *CachingPipelineEngine) SlashCommandSet(item *session.BacklogItemData) (
 }
 
 // TriagePromptFor implements PipelineEngine.
-func (e *CachingPipelineEngine) TriagePromptFor(item *session.BacklogItemData, artifactAbsPath string) string {
+func (e *CachingPipelineEngine) TriagePromptFor(item *backlogdto.BacklogItemData, artifactAbsPath string) string {
 	mode := PipelineMode(item.PipelineMode)
 	if mode == PipelineModeDefault {
 		return BuildHeadlessTriagePrompt(item, artifactAbsPath)
@@ -413,7 +414,7 @@ func (e *CachingPipelineEngine) TriagePromptFor(item *session.BacklogItemData, a
 // TriggerReReview) always populate it — dropping it silently would have been
 // a real behavior regression on the default path, not just an interface
 // nicety. Epic 1.5's call sites should pass their real extras value here.
-func (e *CachingPipelineEngine) ReviewPromptFor(item *session.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string {
+func (e *CachingPipelineEngine) ReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string {
 	mode := PipelineMode(item.PipelineMode)
 	if mode == PipelineModeDefault {
 		return BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
@@ -441,7 +442,7 @@ func (e *CachingPipelineEngine) ReviewPromptFor(item *session.BacklogItemData, a
 // for the two paths. Custom-mode authors who want their template to drive
 // the real review gate (this method) must include submit_review_verdict
 // call instructions themselves — see the interface doc comment.
-func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *session.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
 	mode := PipelineMode(item.PipelineMode)
 	if mode == PipelineModeDefault {
 		return BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
@@ -459,7 +460,7 @@ func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *session.Backlog
 }
 
 // InitialPromptFor implements PipelineEngine.
-func (e *CachingPipelineEngine) InitialPromptFor(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary) string {
+func (e *CachingPipelineEngine) InitialPromptFor(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary) string {
 	mode := PipelineMode(item.PipelineMode)
 	if mode == PipelineModeDefault {
 		return BuildTokenBudgetedPrompt(item, priorSessions)
@@ -500,7 +501,7 @@ func (e *CachingPipelineEngine) ContentHashFor(mode PipelineMode) (string, bool)
 }
 
 // ExecutorFor implements PipelineEngine.
-func (e *CachingPipelineEngine) ExecutorFor(item *session.BacklogItemData, role session.StageRole) (program, model string) {
+func (e *CachingPipelineEngine) ExecutorFor(item *backlogdto.BacklogItemData, role session.StageRole) (program, model string) {
 	mode := PipelineMode(item.PipelineMode)
 	if mode == PipelineModeDefault {
 		return "", ""

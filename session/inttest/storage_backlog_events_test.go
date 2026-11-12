@@ -16,6 +16,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // This file covers the Epic 2.2 publish hooks that live in
@@ -27,9 +28,9 @@ import (
 // without an import-cycle build error.
 
 // createBacklogItemForEvents seeds a minimal BacklogItem for the tests below.
-func createBacklogItemForEvents(t *testing.T, repo *session.EntRepository, ctx context.Context) *session.BacklogItemData {
+func createBacklogItemForEvents(t *testing.T, repo *session.EntRepository, ctx context.Context) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for storage_backlog event test",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -55,7 +56,7 @@ func TestCreateItemSession_should_publishSessionAttachedWithSessionID_When_Sessi
 	item := createBacklogItemForEvents(t, repo, ctx)
 	sessionUUID := uuid.NewString()
 
-	_, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	_, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -119,7 +120,7 @@ func TestDequeueSweep_should_publishTwoSessionAttachedEvents_When_CreateThenUpda
 	item := createBacklogItemForEvents(t, repo, ctx)
 	placeholderUUID := uuid.NewString()
 
-	created, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	created, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: placeholderUUID,
 		SessionRole: "work",
@@ -166,7 +167,7 @@ func TestSaveReviewVerdict_should_publishVerdictInlineOnPayload_When_VerdictIsSa
 	defer bus.Unsubscribe(subID)
 
 	item := createBacklogItemForEvents(t, repo, ctx)
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -180,7 +181,7 @@ func TestSaveReviewVerdict_should_publishVerdictInlineOnPayload_When_VerdictIsSa
 		t.Fatal("timed out waiting for CreateItemSession's BacklogItemChanged event")
 	}
 
-	err = repo.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
+	err = repo.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewOutcomePass,
 		Summary:        "looks good",
 	})
@@ -213,7 +214,7 @@ func TestSaveReviewVerdict_should_notPublish_When_UnderlyingWriteFails(t *testin
 	sub, subID := bus.Subscribe(ctx)
 	defer bus.Unsubscribe(subID)
 
-	err := repo.SaveReviewVerdict(ctx, "not-a-valid-uuid", session.ReviewVerdictData{
+	err := repo.SaveReviewVerdict(ctx, "not-a-valid-uuid", backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewOutcomePass,
 	})
 	require.Error(t, err)
@@ -246,7 +247,7 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 
 	// RPC path: SaveReviewVerdict against an existing ItemSession.
 	rpcItem := createBacklogItemForEvents(t, repo, ctx)
-	rpcSession, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	rpcSession, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      rpcItem.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "work",
@@ -258,7 +259,7 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 		t.Fatal("timed out waiting for CreateItemSession's BacklogItemChanged event")
 	}
 
-	err = repo.SaveReviewVerdict(ctx, rpcSession.ID, session.ReviewVerdictData{
+	err = repo.SaveReviewVerdict(ctx, rpcSession.ID, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewOutcomePass,
 		Summary:        "rpc path verdict",
 	})
@@ -278,12 +279,12 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 	// MCP path: CreateItemSessionWithVerdict combines both writes.
 	mcpItem := createBacklogItemForEvents(t, repo, ctx)
 	_, err = repo.CreateItemSessionWithVerdict(ctx,
-		session.ItemSessionData{
+		backlogdto.ItemSessionData{
 			ItemID:      mcpItem.ID,
 			SessionUUID: uuid.NewString(),
 			SessionRole: "review",
 		},
-		session.ReviewVerdictData{
+		backlogdto.ReviewVerdictData{
 			OverallOutcome: session.ReviewOutcomeFail,
 			Summary:        "mcp path verdict",
 		},
@@ -320,7 +321,7 @@ func TestUpdateItemSessionTriageResult_should_publishTriageProgressUpdated_When_
 	defer bus.Unsubscribe(subID)
 
 	item := createBacklogItemForEvents(t, repo, ctx)
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "triage",
@@ -377,7 +378,7 @@ func TestUpdateItemSessionTriageResult_should_stillSucceed_When_OwningItemLookup
 	defer bus.Unsubscribe(subID)
 
 	item := createBacklogItemForEvents(t, repo, ctx)
-	is, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.NewString(),
 		SessionRole: "triage",

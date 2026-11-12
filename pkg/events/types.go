@@ -1,11 +1,13 @@
 package events
 
 import (
+	"time"
+
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/sshremote"
-	"time"
 )
 
 // EventType represents the type of session event that occurred.
@@ -82,7 +84,7 @@ type BacklogItemEventPayload struct {
 	// Kind identifies which backlog mutation this payload describes.
 	Kind BacklogChangeKind
 	// Item is the current snapshot of the backlog item after the mutation.
-	Item *session.BacklogItemData
+	Item *backlogdto.BacklogItemData
 	// OldStatus is the prior status for BacklogChangeStatusTransition.
 	OldStatus string
 	// NewStatus is the new status for BacklogChangeStatusTransition.
@@ -104,10 +106,10 @@ type BacklogItemEventPayload struct {
 	// when Kind == BacklogChangeVerdictRecorded, copied straight through by
 	// the adapter so the verdict reaches subscribers as first-class payload
 	// data rather than something derived by joining item_sessions.
-	Verdict *session.ReviewVerdictData
+	Verdict *backlogdto.ReviewVerdictData
 	// ActivityNote mirrors session.BacklogItemChange.ActivityNote one-to-one;
 	// populated only when Kind == BacklogChangeActivityNoteAdded.
-	ActivityNote *session.ActivityNoteData
+	ActivityNote *backlogdto.ActivityNoteData
 	// IsSnapshot is true when this event was generated as part of an
 	// initial-snapshot send (e.g. WatchBacklogItems's first batch) rather
 	// than a live mutation.

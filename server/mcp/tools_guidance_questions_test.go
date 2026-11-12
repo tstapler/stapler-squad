@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func newGuidanceCaller(t *testing.T) (*backlogHandlers, *session.Storage, context.Context) {
@@ -121,7 +122,7 @@ func TestCreateGuidanceRequest_should_RequireQuestionTextOrQuestions(t *testing.
 func TestCreateGuidanceRequest_should_KeepOwnershipCheck_When_QuestionsGivenForBacklogItem(t *testing.T) {
 	t.Parallel()
 	h, storage, ctx := newGuidanceCaller(t)
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "unlinked structured"})
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "unlinked structured"})
 	require.NoError(t, err)
 	result, err := h.createGuidanceRequest(ctx, makeToolReq(map[string]interface{}{
 		"scope": "backlog-item", "item_id": item.ID,

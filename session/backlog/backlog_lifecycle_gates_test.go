@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 )
@@ -20,7 +21,7 @@ import (
 // and CreatedAt backdated by age — modeling InvokeCustomGateCheck's in-flight
 // row (session/gate_custom_check.go) at invocation time. Returns the item and
 // the gate's ID.
-func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug string, age time.Duration, expectedDuration, stalenessMargin time.Duration) (*session.BacklogItemData, uuid.UUID) {
+func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug string, age time.Duration, expectedDuration, stalenessMargin time.Duration) (*backlogdto.BacklogItemData, uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
 	client := storage.GetEntClient()
@@ -41,7 +42,7 @@ func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug st
 		Save(ctx)
 	require.NoError(t, err)
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Gate timeout test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,

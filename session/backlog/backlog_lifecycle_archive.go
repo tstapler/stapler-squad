@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // SessionArchiver soft-archives a session by UUID so it stops accumulating in the
@@ -88,7 +89,7 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	}
 	archived := 0
 	for _, item := range items {
-		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusDone)}
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusDone)}
 		if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
 			Caller: session.CallerArchiveStaleDone, ItemID: item.ID, To: session.BacklogStatusArchived, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
@@ -120,7 +121,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 	if archiver == nil {
 		return
 	}
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusDone), string(session.BacklogStatusArchived)},
 	})
 	if err != nil {
@@ -202,7 +203,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Co
 	if l.getWorktreeCleaner() == nil {
 		return
 	}
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusDone), string(session.BacklogStatusArchived)},
 	})
 	if err != nil {
@@ -240,7 +241,7 @@ func (l *BacklogLifecycleListener) sweepNow() time.Time {
 // terminalSweepKey scopes a settled entry to one sweep and one version of the item.
 // sessionCount is part of the key because attaching an item session does not bump
 // the item's updated_at, and a session attached late must re-enter the sweep.
-func terminalSweepKey(sweep string, item session.BacklogItemData, sessionCount int) string {
+func terminalSweepKey(sweep string, item backlogdto.BacklogItemData, sessionCount int) string {
 	return sweep + "/" + item.ID + "@" + strconv.FormatInt(item.UpdatedAt.UnixNano(), 10) + "#" + strconv.Itoa(sessionCount)
 }
 

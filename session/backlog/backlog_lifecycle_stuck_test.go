@@ -17,6 +17,7 @@ import (
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
@@ -46,11 +47,11 @@ func backdateStuckFirstDetected(t *testing.T, er *session.EntRepository, itemID 
 // (EndedAt nil) work-role ItemSession whose last_progress_at is backdated
 // beyond maxWorkSessionStaleness, matching the shape reconcileStaleWorkSessions
 // (and BackfillStuckStates' mirror of it) looks for.
-func newStaleWorkTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository) *session.BacklogItemData {
+func newStaleWorkTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Stale work test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -58,7 +59,7 @@ func newStaleWorkTestItem(t *testing.T, storage *session.Storage, er *session.En
 	})
 	require.NoError(t, err)
 
-	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-" + uuid.New().String(),
 		SessionRole: session.SessionRoleWork,
@@ -77,11 +78,11 @@ func newStaleWorkTestItem(t *testing.T, storage *session.Storage, er *session.En
 // newOrphanedTriageTestItem creates an idea-status BacklogItem with a single open
 // (EndedAt nil) triage-role ItemSession whose created_at is backdated by ageAgo,
 // matching the shape reconcileOrphanedTriageItems looks for.
-func newOrphanedTriageTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository, ageAgo time.Duration) *session.BacklogItemData {
+func newOrphanedTriageTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository, ageAgo time.Duration) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Orphaned triage test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -114,11 +115,11 @@ func newOrphanedTriageTestItem(t *testing.T, storage *session.Storage, er *sessi
 // out of idea. No staleness backdating needed — shape 2 has no staleness gate,
 // since an ended session with the item still in idea is unambiguous the moment
 // it's observed.
-func newEndedTriageTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository) *session.BacklogItemData {
+func newEndedTriageTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Ended-without-transition triage test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -126,7 +127,7 @@ func newEndedTriageTestItem(t *testing.T, storage *session.Storage, er *session.
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-" + uuid.New().String(),
 		SessionRole: session.SessionRoleTriage,
@@ -169,7 +170,7 @@ func TestBackfillStuckStates_should_seedDBDerivableRowsWithNotifiedAt_When_Items
 	require.NoError(t, err)
 	require.Len(t, open, 2)
 
-	byItem := make(map[string]session.OpenStuckStateData, len(open))
+	byItem := make(map[string]backlogdto.OpenStuckStateData, len(open))
 	for _, row := range open {
 		byItem[row.ItemID] = row
 	}
@@ -635,7 +636,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 		// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive's
 		// setup; no worktree recorded, so this exercises the same pre-existing
 		// fallbackToDone("no worktree") branch that test does.
-		_, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: uuid.New().String(),
 			SessionRole: session.SessionRoleWork,
@@ -741,7 +742,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_Newes
 	// the shape of a re-review attempt that never got a live process to
 	// actually run (or crashed before calling submit_review_verdict).
 	newerReviewUUID := "headless-re-review-" + uuid.New().String()
-	_, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: newerReviewUUID,
 		SessionRole: session.SessionRoleReview,
@@ -804,7 +805,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRe
 	item := newStuckReviewTestItem(t, storage, session.ReviewVerdictFail, true, false)
 
 	newerReviewUUID := "headless-review-" + uuid.New().String()
-	_, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: newerReviewUUID,
 		SessionRole: session.SessionRoleReview,
@@ -882,7 +883,7 @@ func TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBac
 	require.Len(t, open, 1, "abandoned_review row must be open after the first tick")
 
 	// The review gate comes back in flight: a fresh active work session appears.
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.New().String(),
 		SessionRole: session.SessionRoleWork,
@@ -1102,12 +1103,12 @@ func TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressI
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Healthy in-progress item",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "healthy-work-session-uuid",
 		SessionRole: session.SessionRoleWork,
@@ -1158,13 +1159,13 @@ func TestRemediateStaleWorkWithBackoffGate_should_parkAfterMaxAttempts_When_Rewo
 	er := storage.Repo
 
 	unlimited := 0
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:             "Unlimited-rework-cap stale item",
 		Status:            string(session.BacklogStatusInProgress),
 		ReworkCapOverride: &unlimited,
 	})
 	require.NoError(t, err)
-	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-" + uuid.New().String(),
 		SessionRole: session.SessionRoleWork,
@@ -1246,7 +1247,7 @@ func TestReconcileReworkBlockedStaleResolution_should_delegateToResolver_When_Op
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Item blocked by a stale-but-alive session",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -1316,13 +1317,13 @@ func TestReconcileRespawnBlockedActiveResolution_should_resolveRow_When_Blocking
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Item stuck abandoned_review, its abandoned_review remediation now parked",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "review-session-that-has-since-ended",
 		SessionRole: session.SessionRoleReview,
@@ -1361,13 +1362,13 @@ func TestReconcileRespawnBlockedActiveResolution_should_leaveRowOpen_When_Blocki
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Item still genuinely blocked by an active work session",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "still-active-work-session",
 		SessionRole: session.SessionRoleWork,
@@ -1668,7 +1669,7 @@ func TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_Tria
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Process-error-ended triage test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -1676,7 +1677,7 @@ func TestReconcileOrphanedTriageItems_should_surfaceEndReasonInContext_When_Tria
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-" + uuid.New().String(),
 		SessionRole: session.SessionRoleTriage,
@@ -1744,7 +1745,7 @@ func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_Whe
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Shutdown-orphaned triage test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -1752,7 +1753,7 @@ func TestReconcileOrphanedTriageItems_should_respawnImmediatelyWithNoPenalty_Whe
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-" + uuid.New().String(),
 		SessionRole: session.SessionRoleTriage,
@@ -1800,7 +1801,7 @@ func TestReconcileOrphanedTriageItems_should_preferNewerOpenSession_When_OlderEn
 	// A newer triage session was since started (e.g. auto-retried) and is
 	// still fresh/open — the detector must key off THIS one, not the older
 	// ended row, and must not fire yet.
-	_, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-" + uuid.New().String(),
 		SessionRole: session.SessionRoleTriage,
@@ -1825,7 +1826,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_NoTriageSessionEverRan
 	ctx := context.Background()
 	er := storage.Repo
 
-	_, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Never triaged item",
 		Status: string(session.BacklogStatusIdea),
 	})
@@ -1883,9 +1884,9 @@ func TestReconcileOrphanedTriageRemediation_should_notRetry_When_LatestTriageHit
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "ceiling", AcceptanceCriteria: `[]`, Priority: 1, Status: string(session.BacklogStatusIdea)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "ceiling", AcceptanceCriteria: `[]`, Priority: 1, Status: string(session.BacklogStatusIdea)})
 	require.NoError(t, err)
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: session.SessionRoleTriage})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-" + uuid.New().String(), SessionRole: session.SessionRoleTriage})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, is.ID, time.Now(), TriageEndReasonFanoutCeiling))
 
@@ -2033,7 +2034,7 @@ func TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea(t 
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Orphaned triage item no longer idea",
 		Status: string(session.BacklogStatusIdea),
 	})
@@ -2071,11 +2072,11 @@ func TestReconcileOrphanedTriageRemediation_should_skip_When_ItemNoLongerIdea(t 
 // triage session that ran, ended, but left nothing behind, after the item had
 // already advanced past idea (here, straight to queued, standing in for the
 // WIP-cap-driven idea->ready->queued path the live incident took).
-func newQueuedNoTriageResultTestItem(t *testing.T, storage *session.Storage) *session.BacklogItemData {
+func newQueuedNoTriageResultTestItem(t *testing.T, storage *session.Storage) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Queued item with no usable triage result",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -2085,7 +2086,7 @@ func newQueuedNoTriageResultTestItem(t *testing.T, storage *session.Storage) *se
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-" + uuid.New().String(),
 		SessionRole: session.SessionRoleTriage,
@@ -2145,7 +2146,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResult
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Queued item with a real plan",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -2155,7 +2156,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResult
 	})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-" + uuid.New().String(),
 		SessionRole: session.SessionRoleTriage,
@@ -2187,7 +2188,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriag
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Queued item with an unexpected open triage session",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -2243,7 +2244,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanning
 		{"skip_planning", true, false},
 		{"plan_approved", false, true},
 	} {
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:              "Queued gate-bypass item " + tc.name,
 			AcceptanceCriteria: `[]`,
 			Priority:           1,
@@ -2253,7 +2254,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_SkipPlanning
 		})
 		require.NoError(t, err)
 
-		is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: "headless-triage-" + uuid.New().String(),
 			SessionRole: session.SessionRoleTriage,
@@ -2323,7 +2324,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesRea
 
 	// Simulate a successful automated retry: queued -> idea (reset) -> ready
 	// (fresh triage succeeded).
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
 	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusIdea, precondition, session.TriggeredBySystem)
 	require.NoError(t, err)
 
@@ -2333,7 +2334,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_QueuedItemReachesRea
 	require.NoError(t, err)
 	require.Len(t, open, 1, "row must stay open while the retry is in flight (item reset to idea, still an anchor status)")
 
-	precondition = &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+	precondition = &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReady, precondition, session.TriggeredBySystem)
 	require.NoError(t, err)
 
@@ -2354,7 +2355,7 @@ func TestRetryOrphanedTriageWithBackoffGate_should_respectBackoffSchedule_When_C
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Orphaned triage backoff test item",
 		Status: string(session.BacklogStatusIdea),
 	})
@@ -2385,7 +2386,7 @@ func TestSelfHealSweep_should_resolveOrphanedTriageRow_When_ItemLeavesIdea(t *te
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Orphaned triage item that got re-triggered",
 		Status: string(session.BacklogStatusReady),
 	})
@@ -2443,12 +2444,12 @@ func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlread
 	// SubmitManualReview, which transitions review->done via
 	// storage.TransitionBacklogItemStatus directly) — the sweep is the backstop
 	// for exactly this case.
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already-done item missed by the transition hook",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "done-work-session",
 		SessionRole: session.SessionRoleWork,
@@ -2474,12 +2475,12 @@ func TestReconcileTerminalItemSessions_should_KillTmuxPane_When_ItemAlreadyDone(
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item with a still-live work session",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "leaked-live-session",
 		SessionRole: session.SessionRoleWork,
@@ -2506,12 +2507,12 @@ func TestReconcileTerminalItemSessions_should_ArchiveAndKillReviewSession_When_I
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item with a still-live review session",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "leaked-live-review-session",
 		SessionRole: session.SessionRoleReview,
@@ -2540,12 +2541,12 @@ func TestReconcileTerminalItemSessions_should_ArchiveAndKillDiagnoseSession_When
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item with a still-live diagnose session",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "leaked-live-diagnose-session",
 		SessionRole: session.SessionRoleDiagnose,
@@ -2572,12 +2573,12 @@ func TestReconcileTerminalItemSessions_should_SkipTmuxKill_When_ItemSessionRoleI
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item with one ended jules_work session",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "jules-sessions/ended-jules-session",
 		SessionRole: session.SessionRoleJulesWork,
@@ -2605,12 +2606,12 @@ func TestReconcileTerminalItemSessions_should_ArchiveWorkSession_When_ItemAlread
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already-archived item missed by the transition hook",
 		Status: string(session.BacklogStatusArchived),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "archived-work-session",
 		SessionRole: session.SessionRoleWork,
@@ -2639,12 +2640,12 @@ func TestReconcileTerminalItemSessions_should_NotArchiveTriageSessions_When_Item
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item with a triage session",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "triage-session-not-archived-here",
 		SessionRole: session.SessionRoleTriage,
@@ -2667,12 +2668,12 @@ func TestReconcileTerminalItemSessions_should_NotArchiveAnything_When_ItemNotTer
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "still in-flight item",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "in-flight-work-session",
 		SessionRole: session.SessionRoleWork,
@@ -2694,12 +2695,12 @@ func TestReconcileTerminalItemSessions_should_NoOp_When_ArchiverNotWired(t *test
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item with no archiver wired",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "no-archiver-work-session",
 		SessionRole: session.SessionRoleWork,
@@ -2725,12 +2726,12 @@ func TestReconcileTerminalItemSessions_should_BeIdempotent_When_RunTwice(t *test
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item swept twice",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "swept-twice-work-session",
 		SessionRole: session.SessionRoleWork,
@@ -2764,7 +2765,7 @@ func TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyDone(
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already-done item missed by the synchronous cleanup call",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -2787,7 +2788,7 @@ func TestReconcileTerminalItemWorktrees_should_CleanupItem_When_ItemAlreadyArchi
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already-archived item missed by the synchronous cleanup call",
 		Status: string(session.BacklogStatusArchived),
 	})
@@ -2810,7 +2811,7 @@ func TestReconcileTerminalItemWorktrees_should_NotCleanup_When_ItemNotTerminal(t
 	defer cleanup()
 	ctx := context.Background()
 
-	_, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "still in-flight item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -2834,7 +2835,7 @@ func TestReconcileTerminalItemWorktrees_should_NoOp_When_CleanerNotWired(t *test
 	defer cleanup()
 	ctx := context.Background()
 
-	_, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item with no cleaner wired",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -2858,7 +2859,7 @@ func TestBacklogLifecycleListener_ReconcileStuck_CleansUpTerminalItemWorktrees(t
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item relying on the ReconcileStuck-level sweep",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -2885,7 +2886,7 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bouncing cycle count test item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -2920,7 +2921,7 @@ func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCycl
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bouncing item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -2967,7 +2968,7 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bouncing item with failed verdict",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -2983,11 +2984,11 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 	// ItemSession for this item — this is the diagnostic detail the fix must
 	// thread through into the stuck-state context instead of discarding.
 	const wantSummary = "AC3 not implemented: rate limiting missing from the new endpoint"
-	_, err = storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-review-" + uuid.New().String(),
 		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: session.ReviewOutcomeFail,
 		Summary:        wantSummary,
 	})
@@ -3022,7 +3023,7 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 	er := storage.Repo
 
 	// Below threshold: only 2 cycles.
-	belowThreshold, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	belowThreshold, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Below threshold item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -3083,7 +3084,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with merged PR",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: "/tmp/fake-repo",
@@ -3091,7 +3092,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	require.NoError(t, err)
 	prNumber := 172
 	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/172"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		PrURL:    &prURL,
 		PrNumber: &prNumber,
 	}, nil)
@@ -3138,7 +3139,7 @@ func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingRe
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item, capped, with merged PR",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: "/tmp/fake-repo",
@@ -3146,7 +3147,7 @@ func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingRe
 	require.NoError(t, err)
 	prNumber := 173
 	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		PrURL:    &prURL,
 		PrNumber: &prNumber,
 	}, nil)
@@ -3205,7 +3206,7 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with merged PR, verdict gate check",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: "/tmp/fake-repo",
@@ -3213,7 +3214,7 @@ func TestReconcileBouncingItems_should_recordPassVerdictAndUseLegalEdges_When_Li
 	require.NoError(t, err)
 	prNumber := 174
 	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/174"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		PrURL:    &prURL,
 		PrNumber: &prNumber,
 	}, nil)
@@ -3281,7 +3282,7 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with merged PR, concurrent status race",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: "/tmp/fake-repo",
@@ -3289,7 +3290,7 @@ func TestReconcileBouncingItems_should_notifyTransitionFailed_When_DoneTransitio
 	require.NoError(t, err)
 	prNumber := 173
 	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		PrURL:    &prURL,
 		PrNumber: &prNumber,
 	}, nil)
@@ -3342,7 +3343,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged(t *te
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with open PR",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: "/tmp/fake-repo",
@@ -3350,7 +3351,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LinkedPRNotYetMerged(t *te
 	require.NoError(t, err)
 	prNumber := 173
 	prURL := "https://github.com/TylerStaplerAtFanatics/stapler-squad/pull/173"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		PrURL:    &prURL,
 		PrNumber: &prNumber,
 	}, nil)
@@ -3426,7 +3427,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item shipped without a PR",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: repoPath,
@@ -3434,7 +3435,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	require.NoError(t, err)
 
 	workSessionUUID := "shipped-no-pr-work-session"
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -3498,7 +3499,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *
 	runGitTestCmd(t, repoPath, "commit", "-m", "work that never merged")
 	featureSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with unshipped commit and no PR",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: repoPath,
@@ -3506,7 +3507,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *
 	require.NoError(t, err)
 
 	workSessionUUID := "unshipped-no-pr-work-session"
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -3573,7 +3574,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSe
 	runGitTestCmd(t, repoPath, "commit", "-m", "work that never merged")
 	featureSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with a stale shipped-looking LastCommitSha",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: repoPath,
@@ -3581,7 +3582,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSe
 	require.NoError(t, err)
 
 	workSessionUUID := "stale-base-seed-work-session"
-	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -3651,7 +3652,7 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	// exactly the state of a worktree in the first moments after spawn.
 	runGitTestCmd(t, repoPath, "checkout", "-b", "backlog/fresh-feature")
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Freshly spawned item with zero commits",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: repoPath,
@@ -3659,7 +3660,7 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	require.NoError(t, err)
 
 	workSessionUUID := "fresh-branch-work-session"
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -3728,7 +3729,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToA
 	runGitTestCmd(t, repoPath, "commit", "-m", "work that never merged")
 	staleFeatureSHA := strings.TrimSpace(runGitTestCmd(t, repoPath, "rev-parse", "HEAD"))
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Stale item whose worktree path got recycled",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: repoPath,
@@ -3736,7 +3737,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToA
 	require.NoError(t, err)
 
 	workSessionUUID := "recycled-worktree-work-session"
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -3805,7 +3806,7 @@ func TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedD
 
 	repoPath, mainSHA := setupBounceMainRepo(t)
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Work committed directly to main, no feature branch",
 		Status:   string(session.BacklogStatusInProgress),
 		RepoPath: repoPath,
@@ -3813,7 +3814,7 @@ func TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedD
 	require.NoError(t, err)
 
 	workSessionUUID := "direct-to-main-work-session"
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: session.SessionRoleWork,
@@ -4216,7 +4217,7 @@ func TestSelfHealSweep_should_resolveAnchoredRow_When_ItemStatusInconsistentWith
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Phantom stale_work item",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -4244,7 +4245,7 @@ func TestSelfHealSweep_should_notResolveBouncingRow_When_ItemInInProgressHealthy
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bouncing item mid-cycle",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -4271,7 +4272,7 @@ func TestSelfHealSweep_should_resolveBouncingRow_When_ItemReachesDoneOrPass(t *t
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bouncing item converged",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -4304,7 +4305,7 @@ func TestSelfHealStuck_should_ResolveBounceCapExhausted_When_ItemStatusLeavesInP
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bounce cap exhausted item now pr_pending",
 		Status: string(session.BacklogStatusPRPending),
 	})
@@ -4331,7 +4332,7 @@ func TestSelfHealStuck_should_notResolveBounceCapExhaustedRow_When_ItemStillInRe
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bounce cap exhausted item still in review",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -4363,7 +4364,7 @@ func TestSelfHealStuck_should_ResolveAutonomousStuck_When_ItemLeavesInProgressOr
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous-stuck item back to ready",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -4399,7 +4400,7 @@ func TestSelfHealStuck_should_ResolveVerdictUndelivered_When_ItemLeavesReview(t 
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Verdict-undelivered item back to in_progress",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -4429,7 +4430,7 @@ func TestSelfHealStuck_should_notResolveVerdictUndelivered_When_ItemStillInRevie
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Verdict-undelivered item still in review",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -4462,7 +4463,7 @@ func TestSelfHealSweep_should_notResolveEventShapedRows_When_ItemNotYetTerminal(
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Event-shaped rows item",
 		Status: string(session.BacklogStatusInProgress), // non-terminal
 	})
@@ -4494,7 +4495,7 @@ func TestSelfHealSweep_should_resolvePhantomRow_When_WriteRacedTransitionToDone(
 	// Simulate the race: item is created in_progress, a stale_work row is
 	// marked while the precondition read still shows in_progress, then the
 	// item concurrently transitions to done before the self-heal tick runs.
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Raced transition item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -4551,7 +4552,7 @@ func TestSelfHealSweep_should_resolveAnyReasonRow_When_ItemReachesTerminalStatus
 				ctx := context.Background()
 				er := storage.Repo
 
-				item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+				item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 					Title:  "Terminal blanket-rule item: " + tc.name,
 					Status: string(tc.initialStatus),
 				})
@@ -4598,7 +4599,7 @@ func TestSelfHealSweep_should_ResolveAnyReasonRow_When_ItemReachesConfiguredCust
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Terminal blanket-rule item: custom stage",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -4633,7 +4634,7 @@ func TestSelfHealSweep_should_resolveReworkCapRow_When_ItemReachesDone(t *testin
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Rework-cap item that finished",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -4670,7 +4671,7 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemStillInProgr
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous item still stuck",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -4706,7 +4707,7 @@ func TestSelfHealSweep_should_notResolveAutonomousStuckRow_When_ItemTransientlyI
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous item mid-cycle",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -4743,7 +4744,7 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemStillInReview(t *
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Push-failed item still stuck",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -4775,7 +4776,7 @@ func TestSelfHealSweep_should_notResolvePushFailedRow_When_ItemTransientlyInProg
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Push-failed item mid-cycle",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -4847,11 +4848,11 @@ func TestReconcilers_should_delegateThresholdDecisionsToPureFns_When_Reviewed(t 
 // the past — mirroring newOrphanedTriageTestItem's pattern of writing
 // directly via the raw ent client, since BacklogStatusEvent.created_at is
 // Immutable() (no Update-builder setter; must be set at Create time).
-func newDoneTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository, doneAgo time.Duration) *session.BacklogItemData {
+func newDoneTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository, doneAgo time.Duration) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Done test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -4936,7 +4937,7 @@ func TestArchiveStaleDoneItems_should_SkipItem_When_NoDoneStatusEventHistory(t *
 	// Created directly in "done" status with no status-event history at all
 	// (e.g. a directly-seeded row) — must not age out based on an unrelated
 	// timestamp; see FindDoneItemsOlderThan's doc comment.
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "done item with no status-event history",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -4969,7 +4970,7 @@ func TestArchiveStaleDoneItems_should_DisappearFromDefaultBacklogView_When_AutoA
 	// Sanity check: before the sweep runs, both done items are visible under
 	// the default filter (done included, archived excluded — but neither is
 	// archived yet).
-	before, err := storage.ListBacklogItemSummaries(ctx, session.BacklogItemFilter{ExcludeArchived: true})
+	before, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{ExcludeArchived: true})
 	require.NoError(t, err)
 	beforeIDs := make([]string, len(before))
 	for i, s := range before {
@@ -4981,7 +4982,7 @@ func TestArchiveStaleDoneItems_should_DisappearFromDefaultBacklogView_When_AutoA
 	listener := NewBacklogLifecycleListener(storage)
 	listener.archiveStaleDoneItems(ctx)
 
-	after, err := storage.ListBacklogItemSummaries(ctx, session.BacklogItemFilter{ExcludeArchived: true})
+	after, err := storage.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{ExcludeArchived: true})
 	require.NoError(t, err)
 	afterIDs := make([]string, len(after))
 	for i, s := range after {
@@ -4994,12 +4995,12 @@ func TestArchiveStaleDoneItems_should_DisappearFromDefaultBacklogView_When_AutoA
 // newQueuedPlanNotApprovedTestItem creates a queued item blocked by
 // DequeueNextQueuedItems' planning gate (SkipPlanning=false, PlanApproved=
 // false), with QueuedAt backdated by queuedAgo.
-func newQueuedPlanNotApprovedTestItem(t *testing.T, storage *session.Storage, queuedAgo time.Duration) *session.BacklogItemData {
+func newQueuedPlanNotApprovedTestItem(t *testing.T, storage *session.Storage, queuedAgo time.Duration) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
 	queuedAt := time.Now().Add(-queuedAgo)
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Plan-not-approved test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -5073,7 +5074,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_SkipPlanningTrue(t *t
 	er := storage.Repo
 
 	queuedAt := time.Now().Add(-10 * time.Minute)
-	_, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Skip-planning queued test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -5108,7 +5109,7 @@ func TestReconcilePlanNotApprovedItems_should_notFlag_When_LatestTriageResultUnu
 
 	item := newQueuedNoTriageResultTestItem(t, storage)
 	queuedAt := time.Now().Add(-10 * time.Minute)
-	_, err := storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{QueuedAt: &queuedAt}, nil)
+	_, err := storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{QueuedAt: &queuedAt}, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -5142,9 +5143,9 @@ func TestSelfHealSweep_should_resolvePlanNotApprovedRow_When_ItemLeavesQueued(t 
 	require.Len(t, open, 1, "row must be open before the item leaves queued")
 
 	approved := true
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PlanApproved: &approved}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PlanApproved: &approved}, nil)
 	require.NoError(t, err)
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
 	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
 	require.NoError(t, err)
 
@@ -5168,7 +5169,7 @@ func TestReconcilePRPendingWithoutPRItems_should_writeDurableRowNotifyOnce_When_
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "PR-pending-no-PR test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -5225,7 +5226,7 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "PR-pending-no-PR self-heal test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -5240,7 +5241,7 @@ func TestSelfHealSweep_should_resolvePRPendingNoPRRow_When_ItemLeavesPRPending(t
 	require.NoError(t, err)
 	require.Len(t, open, 1, "row must be open before the item leaves pr_pending")
 
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusPRPending)}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusPRPending)}
 	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, precondition, session.TriggeredBySystem)
 	require.NoError(t, err)
 
@@ -5261,15 +5262,15 @@ func TestReconcileBlockedByDependencyResolution_should_resolveRow_When_BlockerHa
 	ctx := context.Background()
 	er := storage.Repo
 
-	blocker, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "blocker item"})
+	blocker, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker item"})
 	require.NoError(t, err)
-	blocked, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	blocked, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item blocked by a dependency that is about to ship",
 		Status: string(session.BacklogStatusQueued),
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, er.AddBacklogItemDependency(ctx, session.BacklogItemDependencyEdge{
+	require.NoError(t, er.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: blocker.ID,
 		BlockedID: blocked.ID,
 	}))
@@ -5304,15 +5305,15 @@ func TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_Blocker
 	ctx := context.Background()
 	er := storage.Repo
 
-	blocker, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "blocker item still in progress"})
+	blocker, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker item still in progress"})
 	require.NoError(t, err)
-	blocked, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	blocked, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item blocked by a dependency that has not shipped",
 		Status: string(session.BacklogStatusQueued),
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, er.AddBacklogItemDependency(ctx, session.BacklogItemDependencyEdge{
+	require.NoError(t, er.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: blocker.ID,
 		BlockedID: blocked.ID,
 	}))
@@ -5348,7 +5349,7 @@ func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_Th
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Multi-reason item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -5386,7 +5387,7 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Multi-reason item, dwell elapsed",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -5438,7 +5439,7 @@ func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelow
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Multi-reason item, de-escalating",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -5481,7 +5482,7 @@ func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Self-reinforcement guard item",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -5514,7 +5515,7 @@ func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyWaitingReaso
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "PR waiting on review",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -5551,7 +5552,7 @@ func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBounc
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Coupled bouncing+abandoned_review item",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -5588,7 +5589,7 @@ func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusInde
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Coupled pair plus independent reason item",
 		Status: string(session.BacklogStatusReview),
 	})
@@ -5621,11 +5622,11 @@ func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusInde
 // tests below — a separate helper rather than adding a parameter to
 // newOrphanedTriageTestItem, which many pre-Epic-1.4 tests already call
 // positionally.
-func newOrphanedTriageTestItemWithMode(t *testing.T, storage *session.Storage, er *session.EntRepository, ageAgo time.Duration, pipelineMode string) *session.BacklogItemData {
+func newOrphanedTriageTestItemWithMode(t *testing.T, storage *session.Storage, er *session.EntRepository, ageAgo time.Duration, pipelineMode string) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Orphaned triage test item (mode=" + pipelineMode + ")",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -5713,11 +5714,11 @@ func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_SddModeOverrideRa
 // newStaleWorkTestItemWithAge is newStaleWorkTestItem plus a configurable
 // backdated last_progress_at and pipelineMode, needed for Epic 1.4's
 // per-(stage,mode) override regression tests below.
-func newStaleWorkTestItemWithAge(t *testing.T, storage *session.Storage, er *session.EntRepository, progressAgo time.Duration, pipelineMode string) *session.BacklogItemData {
+func newStaleWorkTestItemWithAge(t *testing.T, storage *session.Storage, er *session.EntRepository, progressAgo time.Duration, pipelineMode string) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Stale work test item (mode=" + pipelineMode + ")",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -5726,7 +5727,7 @@ func newStaleWorkTestItemWithAge(t *testing.T, storage *session.Storage, er *ses
 	})
 	require.NoError(t, err)
 
-	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-" + uuid.New().String(),
 		SessionRole: session.SessionRoleWork,
@@ -5829,7 +5830,7 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 	ctx := context.Background()
 	er := storage.Repo
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bouncing item, no override",
 		Status: string(session.BacklogStatusInProgress),
 	})
@@ -5881,8 +5882,8 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 	engine, err := NewCachingLivenessEngine(repo)
 	require.NoError(t, err)
 
-	newFourCycleItem := func(pipelineMode string) *session.BacklogItemData {
-		item, itemErr := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	newFourCycleItem := func(pipelineMode string) *backlogdto.BacklogItemData {
+		item, itemErr := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:        "Bouncing per-item override item (mode=" + pipelineMode + ")",
 			Status:       string(session.BacklogStatusInProgress),
 			PipelineMode: pipelineMode,
@@ -5918,14 +5919,14 @@ func TestReconcileOrphanedTriageItems_should_includeErrorDetailInContext_When_En
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Other-ended triage test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
 		Status:             string(session.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-triage-" + uuid.New().String(),
 		SessionRole: session.SessionRoleTriage,
@@ -6058,7 +6059,7 @@ func TestRetryOrphanedTriageWithBackoffGate_should_escalateOnceForBatch_And_NotF
 	er := storage.Repo
 
 	parkable := func(title string) string {
-		item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: title, AcceptanceCriteria: `[]`, Priority: 1, Status: string(session.BacklogStatusIdea)})
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: title, AcceptanceCriteria: `[]`, Priority: 1, Status: string(session.BacklogStatusIdea)})
 		require.NoError(t, err)
 		_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, session.BacklogStatusIdea, "orphaned triage")
 		require.NoError(t, err)
@@ -6130,9 +6131,9 @@ func TestReconcileTerminalItemSessions_should_RetryNextTick_When_ArchiveFailed(t
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "archive fails once", Status: string(session.BacklogStatusDone)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "archive fails once", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: "flaky-session", SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "flaky-session", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -6154,9 +6155,9 @@ func TestReconcileTerminalItemSessions_should_ReprocessItem_When_ItemChangedInsi
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "reopened and re-terminated", Status: string(session.BacklogStatusDone)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "reopened and re-terminated", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: "round-1", SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "round-1", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -6168,7 +6169,7 @@ func TestReconcileTerminalItemSessions_should_ReprocessItem_When_ItemChangedInsi
 	require.Equal(t, []string{"round-1"}, archiver.archivedUUIDs)
 
 	title := "retitled"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{Title: &title}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Title: &title}, nil)
 	require.NoError(t, err)
 
 	listener.reconcileTerminalItemSessions(ctx)
@@ -6183,9 +6184,9 @@ func TestReconcileTerminalItemSessions_should_ReprocessItem_When_SessionAttached
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "late session", Status: string(session.BacklogStatusDone)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "late session", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: "early", SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "early", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -6194,7 +6195,7 @@ func TestReconcileTerminalItemSessions_should_ReprocessItem_When_SessionAttached
 	listener.sweepClock = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	listener.reconcileTerminalItemSessions(ctx)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: "late", SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "late", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	listener.reconcileTerminalItemSessions(ctx)
 
@@ -6207,9 +6208,9 @@ func TestReconcileTerminalItemSessions_should_RetryNextTick_When_KillFailed(t *t
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "kill fails once", Status: string(session.BacklogStatusDone)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "kill fails once", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: "stuck-pane", SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "stuck-pane", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -6229,7 +6230,7 @@ func TestReconcileTerminalItemWorktrees_should_SkipSettledItem_UntilTTLElapses(t
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "done, worktree swept", Status: string(session.BacklogStatusDone)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "done, worktree swept", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)

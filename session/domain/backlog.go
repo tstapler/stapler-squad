@@ -774,7 +774,7 @@ var (
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
 type BacklogItemTransitionInput struct {
 	// ItemID is the BacklogItem's own ID (string form, matching
-	// session.BacklogItemData.ID). Added for Epic 2.4's
+	// backlogdto.BacklogItemData.ID). Added for Epic 2.4's
 	// ConfiguredWorkflowEngine.PendingGates, which must look up a stateful
 	// gate's persisted GateSatisfactionRecord by (item, gate) — TransitionGuard
 	// itself never reads this field. Zero value ("") is safe for every

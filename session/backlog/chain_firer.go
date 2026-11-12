@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -139,7 +140,7 @@ func NewChainFirer(repo *session.EntRepository, workflows session.WorkflowReposi
 // deliberately-Background() context) may already be cancelled or long gone —
 // see dispatchChainFire's doc comment (session/ent_repository_backlog.go) for
 // the same rationale applied one layer up.
-func (c *ChainFirer) Dispatch(item *session.BacklogItemData) {
+func (c *ChainFirer) Dispatch(item *backlogdto.BacklogItemData) {
 	if c == nil || item == nil {
 		return
 	}
@@ -189,7 +190,7 @@ func (c *ChainFirer) Dispatch(item *session.BacklogItemData) {
 // affects zero rows (ErrPreconditionFailed) and backs off without ever
 // reaching FireTriggerChained — so at most one goroutine can ever call
 // CreateSession for a given item's chain.
-func (c *ChainFirer) Fire(ctx context.Context, item *session.BacklogItemData) (fired bool, err error) {
+func (c *ChainFirer) Fire(ctx context.Context, item *backlogdto.BacklogItemData) (fired bool, err error) {
 	if item == nil || item.NextWorkflowID == nil || item.ChainFired {
 		return false, nil
 	}
@@ -223,7 +224,7 @@ func (c *ChainFirer) Fire(ctx context.Context, item *session.BacklogItemData) (f
 		return false, fmt.Errorf("get next workflow %s for item %s: %w", *item.NextWorkflowID, item.ID, err)
 	}
 
-	var priorSessions []session.ItemSessionSummary
+	var priorSessions []backlogdto.ItemSessionSummary
 	if c.repo != nil {
 		priorSessions, err = c.repo.ListItemSessions(ctx, item.ID)
 		if err != nil {
@@ -264,7 +265,7 @@ func (c *ChainFirer) Fire(ctx context.Context, item *session.BacklogItemData) (f
 // true iff this call won the claim. A lost claim is the expected, common
 // outcome of the double-fire race described on Fire's doc comment, not an
 // error — callers must not treat it as one.
-func (c *ChainFirer) claimIfUnfired(ctx context.Context, item *session.BacklogItemData) bool {
+func (c *ChainFirer) claimIfUnfired(ctx context.Context, item *backlogdto.BacklogItemData) bool {
 	if c.repo == nil {
 		return false
 	}
@@ -343,7 +344,7 @@ func (r *TriggerChainReconciler) ReconcileChains(ctx context.Context, er *sessio
 	}
 	chainFired := false
 	nextWorkflowSet := true
-	items, err := er.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := er.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses:          []string{string(session.BacklogStatusDone)},
 		ChainFired:        &chainFired,
 		NextWorkflowIDSet: &nextWorkflowSet,

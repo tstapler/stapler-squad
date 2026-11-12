@@ -17,6 +17,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/jira"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const jiraIssuesPerPage = 50
@@ -331,7 +332,7 @@ func jiraPriorityToBacklog(name string) int {
 }
 
 // MapToBacklogItem converts a JIRA ExternalItem to a BacklogItemData.
-func (j *JiraPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
+func (j *JiraPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) backlogdto.BacklogItemData {
 	return mapExternalToBacklogItem(item, sourceID)
 }
 

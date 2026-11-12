@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -23,8 +23,8 @@ func pinScheduleWake(t *testing.T, on bool) {
 	t.Cleanup(func() { scheduleWakeAdvertised = prev })
 }
 
-func wakePromptItem() *session.BacklogItemData {
-	return &session.BacklogItemData{
+func wakePromptItem() *backlogdto.BacklogItemData {
+	return &backlogdto.BacklogItemData{
 		ID: "11111111-1111-1111-1111-111111111111", Title: "Add retry", RepoPath: "/repo/path",
 		AcceptanceCriteria: `[{"index":0,"text":"retries three times"}]`,
 	}

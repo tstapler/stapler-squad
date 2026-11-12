@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -34,11 +35,11 @@ func supersededFixture(t *testing.T) (repoPath, mainSHA, featureSHA, branch stri
 // supersededItem creates a pr_pending item with an open PR and one work
 // session seeded exactly the way production spawn seeding leaves it, then
 // returns the item and its work session.
-func supersededItem(t *testing.T, storage *session.Storage, repoPath, baseSHA string, prNumber int) (*session.BacklogItemData, session.ItemSessionSummary) {
+func supersededItem(t *testing.T, storage *session.Storage, repoPath, baseSHA string, prNumber int) (*backlogdto.BacklogItemData, backlogdto.ItemSessionSummary) {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "bug: reviewer session that submits a verdict but never exits wedges the item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -48,10 +49,10 @@ func supersededItem(t *testing.T, storage *session.Storage, repoPath, baseSHA st
 	require.NoError(t, err)
 
 	prURL := "https://github.com/tstapler/stapler-squad/pull/342"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
-	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "bug047-work-session",
 		SessionRole: session.SessionRoleWork,
@@ -250,7 +251,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 	// session or worktree went on to do the real, reviewed work on this same
 	// branch name.
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "feat: user-extensible agent detection plugins",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -260,10 +261,10 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/307"
 	prNumber := 307
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
-	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID: item.ID,
 		// Must match attachWorktree's hardcoded instance UUID below so
 		// GetWorktreeDataBySessionUUID actually finds this session's worktree.
@@ -351,13 +352,13 @@ func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_Whe
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item whose session rebased a backdated commit",
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	workIS, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "backdated-commit-session",
 		SessionRole: session.SessionRoleWork,

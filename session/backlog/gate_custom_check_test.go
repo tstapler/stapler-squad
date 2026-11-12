@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -36,9 +37,9 @@ func (f *fakeCustomCheckCaller) CallBlocking(_ context.Context, key headless.Fea
 // newCustomCheckTestItem creates a minimal BacklogItemData for
 // InvokeCustomGateCheck tests — no repo path/worktree needed since this gate
 // kind never computes a diff.
-func newCustomCheckTestItem(t *testing.T, storage *session.Storage, title string) *session.BacklogItemData {
+func newCustomCheckTestItem(t *testing.T, storage *session.Storage, title string) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:              title,
 		AcceptanceCriteria: `[]`,
 		Priority:           1,

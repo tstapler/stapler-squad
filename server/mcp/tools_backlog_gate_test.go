@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // Story 1.5.5d: the agent writers decide through the transition gate.
@@ -66,12 +67,12 @@ func (f *gateFixture) addApprovalGate(t *testing.T, from, to session.BacklogStat
 	return uuid.Nil
 }
 
-func (f *gateFixture) workItem(t *testing.T, status session.BacklogStatus, ac string) (*session.BacklogItemData, context.Context) {
+func (f *gateFixture) workItem(t *testing.T, status session.BacklogStatus, ac string) (*backlogdto.BacklogItemData, context.Context) {
 	t.Helper()
-	item, err := f.storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "gate item", Status: string(status), AcceptanceCriteria: session.AcCriteriaJSON(ac), SkipPlanning: true})
+	item, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status), AcceptanceCriteria: session.AcCriteriaJSON(ac), SkipPlanning: true})
 	require.NoError(t, err)
 	sessionUUID := uuid.New().String()
-	_, err = f.storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+	_, err = f.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	return item, WithSessionUUID(t.Context(), sessionUUID)
 }
@@ -147,7 +148,7 @@ func TestRequestReview_Enforce_GateDeniesWithStructuredResultThenSucceedsOnceSat
 func TestRequestReview_Enforce_SkipReviewGateStillCompletesWithoutAVerdict(t *testing.T) {
 	f := newEnforcedGateFixture(t)
 	item, ctx := f.workItem(t, session.BacklogStatusInProgress, allDoneAC)
-	_, err := f.storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{SkipReviewGate: boolPtr(true)}, nil)
+	_, err := f.storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{SkipReviewGate: boolPtr(true)}, nil)
 	require.NoError(t, err)
 
 	res, err := (&backlogHandlers{storage: f.storage}).requestReview(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID, "message": "done"}))
@@ -172,7 +173,7 @@ func TestReportBlocked_EscalationFromReview_DoesNotWriteAReviewToReviewTransitio
 	for _, enforced := range []bool{false, true} {
 		var storage *session.Storage
 		var ctx context.Context
-		var item *session.BacklogItemData
+		var item *backlogdto.BacklogItemData
 		if enforced {
 			f := newEnforcedGateFixture(t)
 			item, ctx = f.workItem(t, session.BacklogStatusReview, "")
@@ -180,19 +181,19 @@ func TestReportBlocked_EscalationFromReview_DoesNotWriteAReviewToReviewTransitio
 		} else {
 			storage = newTestBacklogStorage(t)
 			var err error
-			item, err = storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			item, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 				Title: "blocked in review", Status: string(session.BacklogStatusReview),
 				Notes: blockedNoteMarker + " first\n" + blockedNoteMarker + " second",
 			})
 			require.NoError(t, err)
 			sessionUUID := uuid.New().String()
-			_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+			_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
 			require.NoError(t, err)
 			ctx = WithSessionUUID(t.Context(), sessionUUID)
 		}
 		if enforced {
 			notes := blockedNoteMarker + " first\n" + blockedNoteMarker + " second"
-			_, err := storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{Notes: &notes}, nil)
+			_, err := storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{Notes: &notes}, nil)
 			require.NoError(t, err)
 		}
 		before, err := storage.GetBacklogItem(t.Context(), item.ID)
@@ -211,10 +212,10 @@ func TestReportBlocked_EscalationFromReview_DoesNotWriteAReviewToReviewTransitio
 
 func TestReportDuplicate_Enforce_ArchivesFromAnyStatusAndHonorsAnOperatorGate(t *testing.T) {
 	f := newEnforcedGateFixture(t)
-	survivor, err := f.storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "survivor", Status: string(session.BacklogStatusReady)})
+	survivor, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "survivor", Status: string(session.BacklogStatusReady)})
 	require.NoError(t, err)
 	handler := &backlogHandlers{storage: f.storage}
-	report := func(item *session.BacklogItemData) string {
+	report := func(item *backlogdto.BacklogItemData) string {
 		res, callErr := handler.reportDuplicate(WithSessionUUID(t.Context(), uuid.New().String()), makeToolReq(map[string]interface{}{
 			"item_id": item.ID, "duplicate_ref": backlogDuplicateRefPrefix + survivor.ID, "reason": "already covered",
 		}))
@@ -223,14 +224,14 @@ func TestReportDuplicate_Enforce_ArchivesFromAnyStatusAndHonorsAnOperatorGate(t 
 	}
 
 	for _, from := range []session.BacklogStatus{session.BacklogStatusReady, session.BacklogStatusRefining, session.BacklogStatusIdea} {
-		dup, createErr := f.storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "dup", Status: string(from)})
+		dup, createErr := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "dup", Status: string(from)})
 		require.NoError(t, createErr)
 		assert.Contains(t, report(dup), "archived as a duplicate", "archive from %s", from)
 		assert.Equal(t, string(session.BacklogStatusArchived), f.status(t, dup.ID))
 	}
 
 	f.addApprovalGate(t, session.BacklogStatusQueued, session.BacklogStatusArchived)
-	gated, err := f.storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "gated dup", Status: string(session.BacklogStatusQueued)})
+	gated, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "gated dup", Status: string(session.BacklogStatusQueued)})
 	require.NoError(t, err)
 	denied := requireDenied(t, report(gated))
 	assert.Equal(t, "operator_gate", denied.Error.BlockedBy)

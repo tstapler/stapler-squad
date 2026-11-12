@@ -2,7 +2,10 @@
 // JIRA). A new tracker is a new file here plus one entry in Default.
 package itemsources
 
-import "github.com/tstapler/stapler-squad/session"
+import (
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+)
 
 // Default returns the built-in plugins for the composition root to register.
 func Default() []session.ItemSourcePlugin {
@@ -19,9 +22,9 @@ const maxTrackerResponseBytes = 8 << 20
 
 // mapExternalToBacklogItem is the shared ExternalItem to BacklogItemData
 // mapping used by the tracker plugins.
-func mapExternalToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
+func mapExternalToBacklogItem(item session.ExternalItem, sourceID string) backlogdto.BacklogItemData {
 	title, description := session.BoundImportedText(item.Title, item.Description)
-	return session.BacklogItemData{
+	return backlogdto.BacklogItemData{
 		Title:       title,
 		Description: description,
 		Priority:    item.Priority,

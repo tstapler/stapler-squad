@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -24,7 +25,7 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	t.Helper()
 	storage, cleanup := createTestStorage(t)
 	t.Cleanup(cleanup)
-	item, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "item prs", AcceptanceCriteria: `[]`, Priority: 1,
 		Status: string(session.BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
 	})
@@ -32,7 +33,7 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	f := &itemPRFixture{t: t, storage: storage, repo: storage.Repo, itemID: item.ID}
 	if legacyNumber > 0 {
 		url := "https://github.com/acme/app/pull/" + strconv.Itoa(legacyNumber)
-		_, err = storage.UpdateBacklogItem(context.Background(), item.ID, session.BacklogItemUpdate{PrURL: &url, PrNumber: &legacyNumber}, nil)
+		_, err = storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrURL: &url, PrNumber: &legacyNumber}, nil)
 		require.NoError(t, err)
 	}
 	return f
@@ -49,7 +50,7 @@ func testRef(n int) session.PRRef {
 func (f *itemPRFixture) session(role string) string {
 	f.t.Helper()
 	id := uuid.New().String()
-	_, err := f.storage.CreateItemSession(context.Background(), session.ItemSessionData{ItemID: f.itemID, SessionUUID: id, SessionRole: role})
+	_, err := f.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{ItemID: f.itemID, SessionUUID: id, SessionRole: role})
 	require.NoError(f.t, err)
 	return id
 }

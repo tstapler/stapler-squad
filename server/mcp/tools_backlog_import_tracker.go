@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
@@ -53,7 +54,7 @@ func (h *backlogHandlers) importTrackerIssue(ctx context.Context, toolName, trac
 	}
 
 	title, description := session.BoundImportedText(ext.Title, ext.Description)
-	created, err := h.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	created, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       title,
 		Description: description,
 		Priority:    ext.Priority,

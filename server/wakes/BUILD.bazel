@@ -91,6 +91,7 @@ go_test(
         "//pkg/events",
         "//session",
         "//session/domain",
+        "//session/domain/backlogdto",
         "//session/tymux",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",

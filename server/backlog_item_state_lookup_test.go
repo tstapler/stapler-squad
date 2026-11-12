@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestBacklogItemStateLookup_should_ReportTerminalAndOpenStuckState(t *testing.T) {
@@ -16,9 +17,9 @@ func TestBacklogItemStateLookup_should_ReportTerminalAndOpenStuckState(t *testin
 	storage, err := session.NewStorageWithRepository(session.NewTestEntRepository(t))
 	require.NoError(t, err)
 
-	done, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "done", Status: string(session.BacklogStatusDone)})
+	done, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "done", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
-	stuck, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "stuck", Status: string(session.BacklogStatusInProgress)})
+	stuck, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stuck", Status: string(session.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	_, err = storage.MarkStuck(ctx, stuck.ID, domain.StuckReasonPRNeedsFix, session.BacklogStatusInProgress, "ci failing")
 	require.NoError(t, err)

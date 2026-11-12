@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
@@ -67,13 +68,13 @@ func TestBuildFallbackPRBody(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		item           *session.BacklogItemData
+		item           *backlogdto.BacklogItemData
 		wantContains   []string
 		wantNotContain []string
 	}{
 		{
 			name: "no acceptance criteria — no test plan section",
-			item: &session.BacklogItemData{
+			item: &backlogdto.BacklogItemData{
 				ID:          itemID,
 				Description: "Fixes the flaky retry loop in the push remediation path.",
 			},
@@ -86,7 +87,7 @@ func TestBuildFallbackPRBody(t *testing.T) {
 		},
 		{
 			name: "acceptance criteria present — test plan checklist with mixed statuses",
-			item: &session.BacklogItemData{
+			item: &backlogdto.BacklogItemData{
 				ID:          itemID,
 				Description: "Adds a deep link to the fallback PR body.",
 				AcceptanceCriteria: mustSerializeAcCriteria(t, []domain.AcCriterion{
@@ -125,7 +126,7 @@ func TestBuildFallbackPRBody(t *testing.T) {
 func TestBuildFallbackPRBody_SanitizesDescription(t *testing.T) {
 	t.Parallel()
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:          "b608ab1e-b86e-4130-8879-7328cd363063",
 		Description: "<script>alert(1)</script>" + strings.Repeat("a", 2000),
 	}
@@ -150,7 +151,7 @@ var testHostID = func() hostclaim.HostID {
 func TestPRFooter_AlwaysIdentifiesItemAndHost(t *testing.T) {
 	t.Parallel()
 
-	item := &session.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
+	item := &backlogdto.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
 	tests := []struct {
 		name         string
 		origin       PRFooterOrigin
@@ -199,14 +200,14 @@ func TestPRFooter_AlwaysIdentifiesItemAndHost(t *testing.T) {
 func TestPRFooter_WithoutHostStillNamesItem(t *testing.T) {
 	t.Parallel()
 
-	got := prFooter(PRFooterOrigin{}, &session.BacklogItemData{ID: "abc"})
+	got := prFooter(PRFooterOrigin{}, &backlogdto.BacklogItemData{ID: "abc"})
 	require.Equal(t, "Backlog item: abc\n", got)
 }
 
 func TestBuildFallbackPRBody_TextOnlyFooter_WhenNoBaseURL(t *testing.T) {
 	t.Parallel()
 
-	item := &session.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063", Description: "Fixes the thing."}
+	item := &backlogdto.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063", Description: "Fixes the thing."}
 	got := buildFallbackPRBody(item, PRFooterOrigin{HostID: testHostID}, "")
 
 	require.Contains(t, got, "Backlog item: "+item.ID)
@@ -218,7 +219,7 @@ func TestBuildFallbackPRBody_TextOnlyFooter_WhenNoBaseURL(t *testing.T) {
 func TestAppendBacklogFooter(t *testing.T) {
 	t.Parallel()
 
-	item := &session.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
+	item := &backlogdto.BacklogItemData{ID: "b608ab1e-b86e-4130-8879-7328cd363063"}
 	origin := PRFooterOrigin{BaseURL: "https://ssq.example.com", HostID: testHostID, Hostname: "onyx.lan"}
 	got := appendBacklogFooter("## Summary\n\nBody text.\n\n", origin, item, "")
 
@@ -273,7 +274,7 @@ func mustSerializeAcCriteria(t *testing.T, criteria []domain.AcCriterion) domain
 
 // failingCIListener wires a listener over a still-CI-failing PR and returns it
 // with its stamped-capable notifier and fix spawner.
-func failingCIListener(t *testing.T, storage *session.Storage, prNumber int) (*BacklogLifecycleListener, *autoRemediatingNotifier, *session.BacklogItemData) {
+func failingCIListener(t *testing.T, storage *session.Storage, prNumber int) (*BacklogLifecycleListener, *autoRemediatingNotifier, *backlogdto.BacklogItemData) {
 	t.Helper()
 	item := newPRPendingTestItem(t, storage, prNumber)
 	listener := NewBacklogLifecycleListener(storage)
@@ -324,7 +325,7 @@ func TestPRNeedsAttention_ShouldHaveUnstampedEscalation_WhenAutomationFails(t *t
 
 // newPreflightFixture is newPushAndCreatePRTestFixture with a real git repo
 // whose origin remote resolves to tstapler/stapler-squad.
-func newPreflightFixture(t *testing.T, storage *session.Storage) (*session.BacklogItemData, session.ItemSessionSummary) {
+func newPreflightFixture(t *testing.T, storage *session.Storage) (*backlogdto.BacklogItemData, backlogdto.ItemSessionSummary) {
 	t.Helper()
 	ctx := context.Background()
 	repoDir := t.TempDir()
@@ -338,19 +339,19 @@ func newPreflightFixture(t *testing.T, storage *session.Storage) (*session.Backl
 		require.NoError(t, err, string(out))
 	}
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "Preflight item", AcceptanceCriteria: `[]`, Priority: 1,
 		Status: string(session.BacklogStatusReview), RepoPath: repoDir,
 	})
 	require.NoError(t, err)
 	sessionUUID := uuid.New().String()
-	is, err := storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	inst := newTestInstance("preflight-" + sessionUUID[:8])
 	inst.UUID = sessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir+"/../wt", "preflight-test", "backlog/preflight-test", "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
-	return item, session.ItemSessionSummary{ID: is.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
+	return item, backlogdto.ItemSessionSummary{ID: is.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
 }
 
 type preflightHarness struct {
@@ -564,7 +565,7 @@ func TestPRBodies_ClosingKeyword(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			item := &session.BacklogItemData{ID: "item-1", Description: "Fix it.", ExternalURL: tt.externalURL}
+			item := &backlogdto.BacklogItemData{ID: "item-1", Description: "Fix it.", ExternalURL: tt.externalURL}
 			bodies := map[string]string{
 				"fallback": buildFallbackPRBody(item, PRFooterOrigin{}, tt.remote),
 				"drafted":  appendBacklogFooter("## Summary\n\nBody.\n", PRFooterOrigin{}, item, tt.remote),

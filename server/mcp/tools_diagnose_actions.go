@@ -11,6 +11,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const (
@@ -114,7 +115,7 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 		return errRes, nil
 	}
 	callerUUID := callerSessionUUIDForAudit(ctx)
-	created, createErr := dh.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	created, createErr := dh.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       title,
 		Description: harnessGapDescription(evidence, severity, callerUUID, origin),
 		Priority:    session.DefaultBacklogPriority,
@@ -127,7 +128,7 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 		return errResult(ErrInternalError, fmt.Sprintf("create harness-gap item: %v", createErr), ""), nil
 	}
 	linkNote := ""
-	if depErr := dh.storage.AddBacklogItemDependency(ctx, session.BacklogItemDependencyEdge{BlockerID: origin.ID, BlockedID: created.ID}); depErr != nil {
+	if depErr := dh.storage.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: origin.ID, BlockedID: created.ID}); depErr != nil {
 		log.WarningLog().Printf("[mcp:report_harness_gap] link %s blocked_by %s: %v", created.ID, origin.ID, depErr)
 		linkNote = fmt.Sprintf(" (warning: could not link blocked_by %s: %v)", origin.ID, depErr)
 	}
@@ -135,7 +136,7 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 	return mcpgo.NewToolResultText(fmt.Sprintf("Filed harness gap as item %s%s", created.ID, linkNote)), nil
 }
 
-func harnessGapDescription(evidence, severity, sessionUUID string, origin *session.BacklogItemData) string {
+func harnessGapDescription(evidence, severity, sessionUUID string, origin *backlogdto.BacklogItemData) string {
 	return fmt.Sprintf("%s\n\n## Evidence\n- Severity: %s\n- Originating item: %s (%s)\n- Reporting session: %s\n- Outcome/summary: see the originating item's diagnosis result\n",
 		evidence, severity, origin.ID, origin.Title, sessionUUID)
 }

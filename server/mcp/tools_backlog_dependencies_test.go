@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const missingItemUUID = "00000000-0000-0000-0000-000000000000"
@@ -30,13 +31,13 @@ func toolText(t *testing.T, res *mcpgo.CallToolResult) string {
 	return tc.Text
 }
 
-func newDepItems(t *testing.T, storage *session.Storage, titles ...string) []session.BacklogItemData {
+func newDepItems(t *testing.T, storage *session.Storage, titles ...string) []backlogdto.BacklogItemData {
 	t.Helper()
-	out := make([]session.BacklogItemData, 0, len(titles))
+	out := make([]backlogdto.BacklogItemData, 0, len(titles))
 	for _, title := range titles {
 		ac, err := acCriteriaFromStrings([]string{"Given X, when Y, then Z"})
 		require.NoError(t, err)
-		it, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+		it, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 			Title:              title,
 			Status:             string(session.BacklogStatusIdea),
 			AcceptanceCriteria: ac, // required before idea -> ready
@@ -99,7 +100,7 @@ func TestMCPRemoveBacklogItemDependency_should_RemoveEdgeAndBeIdempotent(t *test
 	h, storage := newDepHandlers(t)
 	items := newDepItems(t, storage, "A", "B")
 	ctx := context.Background()
-	require.NoError(t, storage.AddBacklogItemDependency(ctx, session.BacklogItemDependencyEdge{BlockerID: items[0].ID, BlockedID: items[1].ID}))
+	require.NoError(t, storage.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: items[0].ID, BlockedID: items[1].ID}))
 
 	for i := 0; i < 2; i++ { // second pass: edge already gone
 		res, err := h.removeBacklogItemDependency(ctx, makeToolReq(edgeArgs(items[0].ID, items[1].ID)))
@@ -175,7 +176,7 @@ func TestMCPTransitionBacklogItemStatus_should_RefuseStart_When_BlockerUnresolve
 	h, storage := newDepHandlers(t)
 	ctx := context.Background()
 	items := newDepItems(t, storage, "blocker", "dependent")
-	require.NoError(t, storage.AddBacklogItemDependency(ctx, session.BacklogItemDependencyEdge{BlockerID: items[0].ID, BlockedID: items[1].ID}))
+	require.NoError(t, storage.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: items[0].ID, BlockedID: items[1].ID}))
 	for _, to := range []string{"ready", "queued"} {
 		res, err := h.transitionBacklogItemStatus(ctx, makeToolReq(map[string]any{
 			"item_id": items[1].ID, "target_status": to, "expected_status": statusBefore(to),
@@ -235,7 +236,7 @@ func TestMCPCreateBacklogItem_should_CreateNothing_When_DependsOnBlockerMissing(
 	require.NoError(t, err)
 	assert.Contains(t, toolText(t, res), ErrItemNotFound)
 
-	list, err := storage.ListBacklogItems(context.Background(), session.BacklogItemFilter{})
+	list, err := storage.ListBacklogItems(context.Background(), backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, list, "a bad depends_on must fail before the item is created")
 }
@@ -256,7 +257,7 @@ func TestMCPCreateBacklogItem_should_RejectBadDependsOnShape(t *testing.T) {
 		require.NoError(t, err, name)
 		assert.Contains(t, toolText(t, res), ErrInvalidArgument, name)
 	}
-	list, err := storage.ListBacklogItems(ctx, session.BacklogItemFilter{})
+	list, err := storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, list)
 }

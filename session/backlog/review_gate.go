@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -222,7 +223,7 @@ const (
 // by other callers — server/services/backlog_service_triage.go's headless
 // review path in particular — that this Epic does not touch). A no-op when
 // the substring isn't present, e.g. a custom PipelineMode's own template.
-func (r *ReviewGateRunner) reviewPromptFor(gateContext GateContext, item *session.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+func (r *ReviewGateRunner) reviewPromptFor(gateContext GateContext, item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
 	effectiveItem := item
 	if gateContext.PipelineMode != "" && gateContext.PipelineMode != item.PipelineMode {
 		clone := *item
@@ -253,9 +254,9 @@ func (r *ReviewGateRunner) reviewPromptFor(gateContext GateContext, item *sessio
 func (r *ReviewGateRunner) Run(
 	ctx context.Context,
 	gateContext GateContext,
-	item *session.BacklogItemData,
-	is session.ItemSessionSummary,
-	onPass func(ctx context.Context, item *session.BacklogItemData, is session.ItemSessionSummary),
+	item *backlogdto.BacklogItemData,
+	is backlogdto.ItemSessionSummary,
+	onPass func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary),
 ) {
 	// Short-circuit: items with SkipReviewGate bypass the review mechanism entirely.
 	if item.SkipReviewGate {
@@ -443,7 +444,7 @@ func (r *ReviewGateRunner) Run(
 	}
 
 	// Create ItemSession linking the new review session to the backlog item.
-	if _, createErr := r.storage.CreateItemSession(ctx, session.ItemSessionData{
+	if _, createErr := r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:        item.ID,
 		SessionUUID:   reviewInst.UUID,
 		SessionRole:   session.SessionRoleReview,
@@ -472,7 +473,7 @@ func (r *ReviewGateRunner) Run(
 // worktreeDiffErr for: blocked=true is sufficient, since Run's own
 // committedDiffEmpty check can never fire on this path (diff is always ""
 // when this returns blocked=true).
-func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext GateContext, item *session.BacklogItemData, is session.ItemSessionSummary) (diff string, truncated bool, uncommittedWarning string, blocked bool) { //nolint:gocyclo // moved verbatim by the package split; simplification is a separate change
+func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext GateContext, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) (diff string, truncated bool, uncommittedWarning string, blocked bool) { //nolint:gocyclo // moved verbatim by the package split; simplification is a separate change
 	// worktreeDiffErr is set only when we positively know a worktree/base-commit exists
 	// for this session but the diff still couldn't be computed (e.g. a stale/corrupted
 	// base_commit_sha pointing at a pruned or otherwise nonexistent git object). That is
@@ -647,8 +648,8 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext Gat
 func (r *ReviewGateRunner) blockReviewWithTerminalVerdict(
 	ctx context.Context,
 	gateContext GateContext,
-	item *session.BacklogItemData,
-	is session.ItemSessionSummary,
+	item *backlogdto.BacklogItemData,
+	is backlogdto.ItemSessionSummary,
 	verdictKeyPrefix, reason, summary, notifyTitle, notifyBody string,
 ) (string, bool, string, bool) {
 	blockedIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, verdictKeyPrefix+"-"+uuid.New().String(), session.ReviewVerdictFail, summary)
@@ -723,7 +724,7 @@ func WorktreeIdentityMismatch(worktreePath, branchName string) string {
 // branch that already carries commits starts with base == tip, so base..HEAD is
 // empty even though the branch is ahead of main. A branch with zero commits ahead
 // of the merge-base still diffs empty, so the "no committed changes" gate holds.
-func (r *ReviewGateRunner) diffFromMergeBaseWhenResumed(ctx context.Context, item *session.BacklogItemData, worktreePath, branch, recordedBase, diff string, truncated bool) (string, bool) {
+func (r *ReviewGateRunner) diffFromMergeBaseWhenResumed(ctx context.Context, item *backlogdto.BacklogItemData, worktreePath, branch, recordedBase, diff string, truncated bool) (string, bool) {
 	dir := item.RepoPath
 	if info, err := os.Stat(worktreePath); err == nil && info.IsDir() {
 		dir = worktreePath

@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // StaleWorkRemediator can clean up and respawn an in_progress backlog item
@@ -63,7 +64,7 @@ type ReworkBlockStaleResolver interface {
 const maxWorkSessionStaleness = 2 * time.Hour
 
 func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Context, er *session.EntRepository) { //nolint:gocognit // moved verbatim by the package split; simplification is a separate change
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress)},
 	})
 	if err != nil {
@@ -79,7 +80,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions ListItemSessions item=%s: %v", item.ID, sessErr)
 			continue
 		}
-		var active *session.ItemSessionSummary
+		var active *backlogdto.ItemSessionSummary
 		for i := range sessions {
 			if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
 				active = &sessions[i]

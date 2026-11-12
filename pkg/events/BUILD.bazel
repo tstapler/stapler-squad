@@ -15,6 +15,7 @@ go_library(
     deps = [
         "//session",
         "//session/detection",
+        "//session/domain/backlogdto",
         "//session/sshremote",
         "//tools/bzl/ent",
     ],

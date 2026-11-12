@@ -2,12 +2,14 @@ package backlog
 
 import (
 	"fmt"
-	"github.com/tstapler/stapler-squad/session"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // characterizationFixture bundles one representative BacklogItemData plus the
@@ -15,7 +17,7 @@ import (
 // so both characterization tests exercise identical inputs.
 type characterizationFixture struct {
 	name string
-	item *session.BacklogItemData
+	item *backlogdto.BacklogItemData
 }
 
 // characterizationFixtures returns the 3 representative fixtures Story 1.7.1
@@ -26,7 +28,7 @@ func characterizationFixtures() []characterizationFixture {
 	return []characterizationFixture{
 		{
 			name: "zero_criteria",
-			item: &session.BacklogItemData{
+			item: &backlogdto.BacklogItemData{
 				ID:                 "char-fixture-0",
 				Title:              "Zero Criteria Item",
 				Description:        "An item with no acceptance criteria yet.",
@@ -36,7 +38,7 @@ func characterizationFixtures() []characterizationFixture {
 		},
 		{
 			name: "one_criterion",
-			item: &session.BacklogItemData{
+			item: &backlogdto.BacklogItemData{
 				ID:                 "char-fixture-1",
 				Title:              "One Criterion Item",
 				Description:        "An item with exactly one acceptance criterion.",
@@ -46,7 +48,7 @@ func characterizationFixtures() []characterizationFixture {
 		},
 		{
 			name: "two_plus_criteria",
-			item: &session.BacklogItemData{
+			item: &backlogdto.BacklogItemData{
 				ID:          "char-fixture-2",
 				Title:       "Two Plus Criteria Item",
 				Description: "An item with multiple acceptance criteria.",
@@ -68,7 +70,7 @@ const characterizationArtifactAbsPath = "/artifacts/char-fixture"
 // inputs BuildHeadlessReviewPrompt/ReviewPromptFor need. acSnapshot is derived
 // from the fixture item's own AcceptanceCriteria so the review prompt's
 // "## Acceptance Criteria" section matches the fixture's shape (0/1/2+).
-func characterizationReviewParams(t *testing.T, item *session.BacklogItemData) (acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) {
+func characterizationReviewParams(t *testing.T, item *backlogdto.BacklogItemData) (acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) {
 	t.Helper()
 	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
 	if err != nil {

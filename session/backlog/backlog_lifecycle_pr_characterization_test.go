@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -59,12 +60,12 @@ func TestFindPRPendingItems_ShouldReturnOnlyPRPendingWithPositiveNumber(t *testi
 	ctx := context.Background()
 
 	withPR := newPRPendingTestItem(t, storage, 21)
-	noPR, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	noPR, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "pr_pending, no number", AcceptanceCriteria: `[]`, Priority: 1,
 		Status: string(session.BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "review", AcceptanceCriteria: `[]`, Priority: 1,
 		Status: string(session.BacklogStatusReview), RepoPath: "/tmp/fake-repo",
 	})
@@ -83,7 +84,7 @@ func TestReconcilePRPendingWithoutPRItems_ShouldFlagStuck_WhenNumberZero(t *test
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "pr_pending, no number", AcceptanceCriteria: `[]`, Priority: 1,
 		Status: string(session.BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
 	})

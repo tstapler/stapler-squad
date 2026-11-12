@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -100,7 +101,7 @@ func TestParseHeadlessVerdictResult_PartialAndUnverifiable(t *testing.T) {
 // TestBuildHeadlessReviewPrompt_ContainsExpectedSections verifies the prompt structure.
 func TestBuildHeadlessReviewPrompt_ContainsExpectedSections(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:          uuid.New().String(),
 		Title:       "Add OAuth2 login",
 		Description: "Users should be able to log in via Google.",
@@ -129,7 +130,7 @@ func TestBuildHeadlessReviewPrompt_ContainsExpectedSections(t *testing.T) {
 // TestBuildHeadlessReviewPrompt_DiffTruncation_IncludesNote verifies truncation marker.
 func TestBuildHeadlessReviewPrompt_DiffTruncation_IncludesNote(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", true, "", ReviewContextExtras{})
 	assert.Contains(t, prompt, "truncated")
 }
@@ -137,7 +138,7 @@ func TestBuildHeadlessReviewPrompt_DiffTruncation_IncludesNote(t *testing.T) {
 // TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder verifies empty-diff handling.
 func TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", ReviewContextExtras{})
 	assert.Contains(t, prompt, "no diff available")
 }
@@ -147,7 +148,7 @@ func TestBuildHeadlessReviewPrompt_NoDiff_ContainsPlaceholder(t *testing.T) {
 // current codebase rather than trusting the work session's self-report alone.
 func TestBuildHeadlessReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", ReviewContextExtras{})
 	assert.Contains(t, prompt, "## No-Diff Verification")
 }
@@ -157,7 +158,7 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection(t
 // actually no diff to review.
 func TestBuildHeadlessReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "", ReviewContextExtras{})
 	assert.NotContains(t, prompt, "## No-Diff Verification")
 }
@@ -166,7 +167,7 @@ func TestBuildHeadlessReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t
 // headless test for the tool-invocation (non-headless) prompt variant.
 func TestBuildReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildReviewPrompt(item, nil, "", false, uuid.New().String(), "")
 	assert.Contains(t, prompt, "## No-Diff Verification")
 }
@@ -175,7 +176,7 @@ func TestBuildReviewPrompt_EmptyDiff_ContainsNoDiffVerificationSection(t *testin
 // BuildReviewPrompt regression guard counterpart.
 func TestBuildReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, uuid.New().String(), "")
 	assert.NotContains(t, prompt, "## No-Diff Verification")
 }
@@ -190,7 +191,7 @@ func TestBuildReviewPrompt_NonEmptyDiff_OmitsNoDiffVerificationSection(t *testin
 // verdict is in.
 func TestBuildReviewPrompt_InstructsEndingSessionAfterSubmitReviewVerdict(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, uuid.New().String(), "")
 	assert.Contains(t, prompt, "End your session immediately after calling submit_review_verdict")
 }
@@ -200,7 +201,7 @@ func TestBuildReviewPrompt_InstructsEndingSessionAfterSubmitReviewVerdict(t *tes
 // separate from the diff, so the reviewer can tell it apart from code-derived evidence.
 func TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	notes := "ran `go test ./session/...` -> ok (41 tests)"
 	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", false, notes, ReviewContextExtras{})
 
@@ -213,7 +214,7 @@ func TestBuildHeadlessReviewPrompt_VerificationNotes_IncludedInLabeledSection(t 
 // reviewer isn't cued to look for evidence that doesn't exist.
 func TestBuildHeadlessReviewPrompt_EmptyVerificationNotes_OmitsSection(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "diff content", false, "", ReviewContextExtras{})
 
 	assert.NotContains(t, prompt, "Verification Evidence")
@@ -223,7 +224,7 @@ func TestBuildHeadlessReviewPrompt_EmptyVerificationNotes_OmitsSection(t *testin
 // headless test for the tool-invocation (non-headless) prompt variant.
 func TestBuildReviewPrompt_VerificationNotes_IncludedInLabeledSection(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	notes := "ran make install-service, confirmed via UI that sessions group under Category=Backlog"
 	prompt := BuildReviewPrompt(item, nil, "diff content", false, uuid.New().String(), notes)
 
@@ -235,7 +236,7 @@ func TestBuildReviewPrompt_VerificationNotes_IncludedInLabeledSection(t *testing
 // section is bounded so a runaway self-report can't blow out the prompt budget.
 func TestBuildReviewPrompt_VerificationNotes_TruncatedBeyond4000Chars(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	notes := strings.Repeat("a", 5000)
 	prompt := BuildReviewPrompt(item, nil, "diff content", false, uuid.New().String(), notes)
 
@@ -246,7 +247,7 @@ func TestBuildReviewPrompt_VerificationNotes_TruncatedBeyond4000Chars(t *testing
 // self-reported Note (via report_progress) is rendered alongside its text.
 func TestBuildReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
 	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
 
@@ -257,7 +258,7 @@ func TestBuildReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
 // rendered when the criterion has no self-reported note.
 func TestBuildReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing"}}
 	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
 
@@ -269,7 +270,7 @@ func TestBuildReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
 // the prompt budget.
 func TestBuildReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
 	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
 
@@ -281,7 +282,7 @@ func TestBuildReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
 // (not gated on diff == "").
 func TestBuildHeadlessReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
 	prompt := BuildHeadlessReviewPrompt(item, ac, "diff --git a/foo.go b/foo.go\n+added line", false, "", ReviewContextExtras{})
 
@@ -292,7 +293,7 @@ func TestBuildHeadlessReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.
 // line is rendered when the criterion has no self-reported note.
 func TestBuildHeadlessReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing"}}
 	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "", ReviewContextExtras{})
 
@@ -303,7 +304,7 @@ func TestBuildHeadlessReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) 
 // the Note is bounded in the headless prompt variant too.
 func TestBuildHeadlessReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
 	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "", ReviewContextExtras{})
 
@@ -325,12 +326,12 @@ func perCriterionJSONFixture(t *testing.T, idx int, outcome session.ReviewOutcom
 // per-criterion evidence from a prior review-role ItemSession.
 func TestBuildHeadlessReviewPrompt_EmptyDiff_PriorReviewAttempts_Rendered(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	extras := ReviewContextExtras{
-		PriorSessions: []session.ItemSessionSummary{
+		PriorSessions: []backlogdto.ItemSessionSummary{
 			{
 				Role: session.SessionRoleReview,
-				ReviewVerdict: &session.ReviewVerdictSummary{
+				ReviewVerdict: &backlogdto.ReviewVerdictSummary{
 					OverallOutcome: string(session.ReviewVerdictUnverifiable),
 					Summary:        "could not locate satisfying code",
 					PerCriterion:   perCriterionJSONFixture(t, 1, session.ReviewOutcomeFail, "no evidence found in auth.go"),
@@ -350,12 +351,12 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_PriorReviewAttempts_Rendered(t *tes
 // diff-review path, even when extras is populated.
 func TestBuildHeadlessReviewPrompt_NonEmptyDiff_PriorReviewAttempts_Omitted(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	extras := ReviewContextExtras{
-		PriorSessions: []session.ItemSessionSummary{
+		PriorSessions: []backlogdto.ItemSessionSummary{
 			{
 				Role: session.SessionRoleReview,
-				ReviewVerdict: &session.ReviewVerdictSummary{
+				ReviewVerdict: &backlogdto.ReviewVerdictSummary{
 					OverallOutcome: string(session.ReviewVerdictUnverifiable),
 					Summary:        "could not locate satisfying code",
 				},
@@ -372,9 +373,9 @@ func TestBuildHeadlessReviewPrompt_NonEmptyDiff_PriorReviewAttempts_Omitted(t *t
 // "## Full Notes History" section renders every ProgressNoteData entry.
 func TestBuildHeadlessReviewPrompt_EmptyDiff_FullNotesHistory_Rendered(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	extras := ReviewContextExtras{
-		ProgressNotes: []session.ProgressNoteData{
+		ProgressNotes: []backlogdto.ProgressNoteData{
 			{CriterionIndex: 0, Status: "in_progress", Note: "started work on the OAuth flow", CreatedAt: time.Now()},
 			{CriterionIndex: 0, Status: "done", Note: "OAuth flow now complete and tested", CreatedAt: time.Now()},
 		},
@@ -390,9 +391,9 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_FullNotesHistory_Rendered(t *testin
 // guard for the Full Notes History section.
 func TestBuildHeadlessReviewPrompt_NonEmptyDiff_FullNotesHistory_Omitted(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	extras := ReviewContextExtras{
-		ProgressNotes: []session.ProgressNoteData{
+		ProgressNotes: []backlogdto.ProgressNoteData{
 			{CriterionIndex: 0, Status: "done", Note: "should never appear on diff path", CreatedAt: time.Now()},
 		},
 	}
@@ -408,10 +409,10 @@ func TestBuildHeadlessReviewPrompt_NonEmptyDiff_FullNotesHistory_Omitted(t *test
 // maxPriorAttemptsWithFullEvidence capping pattern.
 func TestBuildHeadlessReviewPrompt_FullNotesHistory_CapsAtMaxEntries(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	var notes []session.ProgressNoteData
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	var notes []backlogdto.ProgressNoteData
 	for i := 0; i < maxContextExtrasEntries+5; i++ {
-		notes = append(notes, session.ProgressNoteData{CriterionIndex: 0, Status: "in_progress", Note: "note", CreatedAt: time.Now()})
+		notes = append(notes, backlogdto.ProgressNoteData{CriterionIndex: 0, Status: "in_progress", Note: "note", CreatedAt: time.Now()})
 	}
 	extras := ReviewContextExtras{ProgressNotes: notes}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", extras)
@@ -424,11 +425,11 @@ func TestBuildHeadlessReviewPrompt_FullNotesHistory_CapsAtMaxEntries(t *testing.
 // status-transition history.
 func TestBuildHeadlessReviewPrompt_EmptyDiff_ItemContext_Rendered(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	note := "auto-reopened after failed review"
 	extras := ReviewContextExtras{
 		ItemDescription: "Add OAuth2 login support",
-		StatusEvents: []session.BacklogStatusEventData{
+		StatusEvents: []backlogdto.BacklogStatusEventData{
 			{FromStatus: "review", ToStatus: "in_progress", TriggeredBy: "auto-reopen", Note: &note, CreatedAt: time.Now()},
 		},
 	}
@@ -444,7 +445,7 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_ItemContext_Rendered(t *testing.T) 
 // for the Item Context section.
 func TestBuildHeadlessReviewPrompt_NonEmptyDiff_ItemContext_Omitted(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	extras := ReviewContextExtras{ItemDescription: "should never appear on diff path"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "", extras)
 
@@ -457,7 +458,7 @@ func TestBuildHeadlessReviewPrompt_NonEmptyDiff_ItemContext_Omitted(t *testing.T
 // file's relative path, when TranscriptRelPath is set.
 func TestBuildHeadlessReviewPrompt_EmptyDiff_SessionTranscript_Rendered(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	extras := ReviewContextExtras{TranscriptRelPath: ".stapler-squad-review-transcript-abc123.txt"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", extras)
 
@@ -470,7 +471,7 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_SessionTranscript_Rendered(t *testi
 // verifies no Session Transcript section renders when no transcript was available.
 func TestBuildHeadlessReviewPrompt_EmptyDiff_SessionTranscript_OmittedWhenEmptyPath(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "", false, "", ReviewContextExtras{})
 
 	assert.NotContains(t, prompt, "## Session Transcript")
@@ -480,7 +481,7 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_SessionTranscript_OmittedWhenEmptyP
 // guard for the Session Transcript section.
 func TestBuildHeadlessReviewPrompt_NonEmptyDiff_SessionTranscript_Omitted(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	extras := ReviewContextExtras{TranscriptRelPath: ".stapler-squad-review-transcript-abc123.txt"}
 	prompt := BuildHeadlessReviewPrompt(item, nil, "diff --git a/foo.go b/foo.go\n+added", false, "", extras)
 

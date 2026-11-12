@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -38,7 +39,7 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 	// of the 12 real items this epic exists for (reason="orphaned_triage",
 	// remediation_attempts=5, next_remediation_at 7+ days in the past — the
 	// BUG-083 cold-retry deadline already elapsed).
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "parked orphaned-triage item (sdd mode)",
 		Status:       string(session.BacklogStatusIdea),
 		PipelineMode: "sdd",
