@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "backlogdto",
+    srcs = [
+        "history.go",
+        "review.go",
+        "source_dependency.go",
+        "stuck.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/domain/backlogdto",
+    visibility = ["//visibility:public"],
+    deps = ["//session/domain"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backlogdto",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "backlogdto_test",
+    srcs = ["purity_test.go"],
+    embed = [":backlogdto"],
+)
+
+# Read by session tests that scan the item PR readers (legacy_item_pr_readers_test.go).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session:__pkg__"],
+)

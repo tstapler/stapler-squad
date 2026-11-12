@@ -46,3 +46,28 @@ func TestSentinelMessagesStable(t *testing.T) {
 		}
 	}
 }
+
+// Subpackages of session/domain may import the standard library and the
+// domain package itself, nothing else from this module.
+func TestDomainSubpackagesImportOnlyDomain(t *testing.T) {
+	t.Parallel()
+	files, err := filepath.Glob("*/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, imp := range f.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			if strings.HasPrefix(path, modulePrefix) && path != modulePrefix+"/session/domain" {
+				t.Errorf("%s imports %s", name, path)
+			}
+		}
+	}
+}

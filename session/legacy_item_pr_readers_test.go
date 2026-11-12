@@ -48,6 +48,7 @@ var legacyItemPRReaders = map[string]itemPRReader{
 	"session/backlog/backlog_lifecycle.go":                       {itemScalarOK, "merge check on the item's tracked PR number"},
 	"session/backlog/backlog_lifecycle_pr.go":                    {itemScalarOK, "pr_pending reconciler is keyed on the item's tracked PR"},
 	"session/domain/backlog.go":                                  {itemScalarOK, "domain field definitions and their doc comments"},
+	"session/domain/backlogdto/stuck.go":                         {itemScalarOK, "stuck-state row DTO carrying the stored columns"},
 	"session/ent_repository_backlog.go":                          {itemScalarOK, "persistence mapping of the stored columns"},
 	"session/repository.go":                                      {itemScalarOK, "repository row types carrying the stored columns"},
 	"session/session_pr_backfill.go":                             {itemScalarOK, "backfill imports the stored scalar into links"},
