@@ -52,6 +52,7 @@ go_library(
         "//server/events",
         "//session",
         "//session/domain",
+        "//session/domain/backlogdto",
         "//session/headless",
         "//session/hostclaim",
         "//session/tmux",

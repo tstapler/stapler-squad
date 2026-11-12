@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -379,7 +380,7 @@ func (s *BacklogService) TriggerTriage(
 	// Use a precondition so a concurrent work-session spawn (ready→in_progress) that
 	// races with this re-triage doesn't drag the item backwards to idea.
 	if item.Status == string(session.BacklogStatusReady) {
-		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
 		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
 			Caller: session.CallerOperatorTriggerTriage, ItemID: req.Msg.ItemId, Observed: item, To: session.BacklogStatusIdea,
 			Precondition: precondition, TriggeredBy: session.TriggeredByUser,
@@ -463,7 +464,7 @@ func (s *BacklogService) TriggerTriage(
 	triageCaller, triageConfiguredProgram, triageFallbackReason := s.resolveHeadlessCaller(triageExecProgram, item.ID, "triage")
 	triageResolvedModel := resolveTriageModel(s.cfg, s.modelFamilies, triageExecProgram, triageExecModel)
 
-	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              triageSessionUUID,
 		SessionRole:              session.SessionRoleTriage,
@@ -787,7 +788,7 @@ func (s *BacklogService) TriggerTriage(
 		}
 		approvalReset := false
 		clearedReason := ""
-		update := session.BacklogItemUpdate{
+		update := backlogdto.BacklogItemUpdate{
 			PlanApproved:        &approvalReset,
 			PlanRejectionReason: &clearedReason,
 			ClearPlanRejectedAt: true,
@@ -879,7 +880,7 @@ func (s *BacklogService) TriggerTriage(
 		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now()) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
 		s.triageInFlight.Delete(itemID)
 
-		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
 		if _, transErr := s.storage.GatedTransition(persistCtx, session.TransitionRequest{
 			Caller: session.CallerTriageComplete, ItemID: itemID, To: session.BacklogStatusReady,
@@ -952,7 +953,7 @@ func (s *BacklogService) CancelTriage(
 
 // findPriorTriageResult returns the most recent successfully-parsed triage result from
 // the provided sessions, along with a boolean indicating whether one was found.
-func findPriorTriageResult(sessions []session.ItemSessionSummary) (backlog.HeadlessTriageResult, bool) {
+func findPriorTriageResult(sessions []backlogdto.ItemSessionSummary) (backlog.HeadlessTriageResult, bool) {
 	for i := len(sessions) - 1; i >= 0; i-- {
 		is := sessions[i]
 		if is.Role != string(session.SessionRoleTriage) || is.TriageResult == "" {
@@ -976,7 +977,7 @@ func findPriorTriageResult(sessions []session.ItemSessionSummary) (backlog.Headl
 // value leaves the item's existing priority/category untouched rather than
 // clobbering it with a zero value — same convention AcceptanceCriteria already uses
 // here (an empty result means "no assessment", not "clear the existing value").
-func applyTriageResultToUpdate(result *backlog.HeadlessTriageResult, update *session.BacklogItemUpdate) {
+func applyTriageResultToUpdate(result *backlog.HeadlessTriageResult, update *backlogdto.BacklogItemUpdate) {
 	if len(result.AcceptanceCriteria) > 0 {
 		// Re-index to ensure 0-based contiguous indices regardless of what the model output.
 		for i := range result.AcceptanceCriteria {

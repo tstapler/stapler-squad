@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func newWaiveService(t *testing.T) (*BacklogService, string) {
@@ -19,7 +20,7 @@ func newWaiveService(t *testing.T) (*BacklogService, string) {
 		{Index: 0, Text: "needs macOS proof", Status: session.AcStatusPending},
 	})
 	require.NoError(t, err)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:              "waive item",
 		Status:             string(session.BacklogStatusInProgress),
 		AcceptanceCriteria: ac,

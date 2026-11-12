@@ -19,12 +19,13 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // sourceSyncEventToProto converts a SourceSyncEventData to its proto representation.
-func sourceSyncEventToProto(ev session.SourceSyncEventData) *sessionv1.SourceSyncEvent {
+func sourceSyncEventToProto(ev backlogdto.SourceSyncEventData) *sessionv1.SourceSyncEvent {
 	// Counts below are per-sync-run tallies of GitHub issues processed in a single
 	// SyncGitHubIssues call, bounded by that run's result-page size — nowhere near
 	// int32 overflow.
@@ -169,7 +170,7 @@ func (s *BacklogService) ListBacklogItems(
 		return connect.NewResponse(&sessionv1.ListBacklogItemsResponse{}), nil
 	}
 
-	filter := session.BacklogItemFilter{
+	filter := backlogdto.BacklogItemFilter{
 		SortBy:          req.Msg.SortBy,
 		ExcludeDone:     !req.Msg.IncludeTerminal,
 		ExcludeArchived: !req.Msg.IncludeArchived,
@@ -242,7 +243,7 @@ func (s *BacklogService) SuggestNextItem(
 	}
 
 	// Load ready items ordered by priority (lower number = higher priority).
-	items, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusReady)},
 		SortBy:   "priority",
 	})
@@ -429,7 +430,7 @@ func (s *BacklogService) GetBacklogItemDiff(
 	// ListItemSessions returns sessions ordered oldest-first (see
 	// EntRepository.ListItemSessions), but we compare CreatedAt explicitly
 	// rather than depending on that ordering.
-	var earliestWorkSession, mostRecentWorkSession *session.ItemSessionSummary
+	var earliestWorkSession, mostRecentWorkSession *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
 		if is.Role != session.SessionRoleWork {
@@ -601,7 +602,7 @@ func (s *BacklogService) GetSessionBacklogIndex(
 // annotateDuplicatePending sets duplicate_pending/duplicate_ref on a list-view
 // item from the item sessions ListBacklogItemSummaries already batch-loaded, so
 // no per-item query is needed. Only review items can be pending.
-func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []session.ItemSessionSummary) {
+func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []backlogdto.ItemSessionSummary) {
 	if p.Status != string(session.BacklogStatusReview) {
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 type transitionCase struct {
@@ -25,7 +26,7 @@ type transitionCase struct {
 	wantSentinel error
 }
 
-func seedItem(t *testing.T, svc *BacklogService, data session.BacklogItemData) string {
+func seedItem(t *testing.T, svc *BacklogService, data backlogdto.BacklogItemData) string {
 	t.Helper()
 	item, err := svc.storage.CreateBacklogItem(t.Context(), data)
 	require.NoError(t, err)
@@ -34,13 +35,13 @@ func seedItem(t *testing.T, svc *BacklogService, data session.BacklogItemData) s
 
 func seedReviewItemWithVerdict(t *testing.T, svc *BacklogService, status session.BacklogStatus, outcome session.ReviewOutcome) string {
 	t.Helper()
-	id := seedItem(t, svc, session.BacklogItemData{Title: "characterization item", Status: string(status)})
+	id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "characterization item", Status: string(status)})
 	if outcome != "" {
-		_, err := svc.storage.CreateItemSessionWithVerdict(t.Context(), session.ItemSessionData{
+		_, err := svc.storage.CreateItemSessionWithVerdict(t.Context(), backlogdto.ItemSessionData{
 			ItemID:      id,
 			SessionUUID: "char-review-session-" + id,
 			SessionRole: session.SessionRoleReview,
-		}, session.ReviewVerdictData{OverallOutcome: outcome})
+		}, backlogdto.ReviewVerdictData{OverallOutcome: outcome})
 		require.NoError(t, err)
 	}
 	return id
@@ -84,44 +85,44 @@ func TestTransitionBacklogItemStatus_CharacterizesOverrideAndErrorCodes_UnderDef
 		{
 			name: "idea_to_ready_without_AC_is_FailedPrecondition_ErrACRequired",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, session.BacklogItemData{Title: "no ac", Status: string(session.BacklogStatusIdea)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no ac", Status: string(session.BacklogStatusIdea)})
 			},
 			to: session.BacklogStatusReady, wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrACRequired,
 		},
 		{
 			name: "idea_to_ready_without_AC_is_NOT_bypassed_by_override",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, session.BacklogItemData{Title: "no ac", Status: string(session.BacklogStatusIdea)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no ac", Status: string(session.BacklogStatusIdea)})
 			},
 			to: session.BacklogStatusReady, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrACRequired,
 		},
 		{
 			name: "idea_to_ready_with_AC_succeeds",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, session.BacklogItemData{Title: "has ac", Status: string(session.BacklogStatusIdea), AcceptanceCriteria: oneAC})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "has ac", Status: string(session.BacklogStatusIdea), AcceptanceCriteria: oneAC})
 			},
 			to: session.BacklogStatusReady, wantOK: true,
 		},
 		{
 			name: "ready_to_in_progress_without_plan_is_FailedPrecondition_ErrPlanRequired",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, session.BacklogItemData{Title: "no plan", Status: string(session.BacklogStatusReady)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no plan", Status: string(session.BacklogStatusReady)})
 			},
 			to: session.BacklogStatusInProgress, wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrPlanRequired,
 		},
 		{
 			name: "ready_to_in_progress_without_plan_is_NOT_bypassed_by_override",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, session.BacklogItemData{Title: "no plan", Status: string(session.BacklogStatusReady)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no plan", Status: string(session.BacklogStatusReady)})
 			},
 			to: session.BacklogStatusInProgress, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrPlanRequired,
 		},
 		{
 			name: "ready_to_in_progress_with_approved_plan_but_no_artifacts_path_is_FailedPrecondition_ErrPlanArtifactsRequired",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				id := seedItem(t, svc, session.BacklogItemData{Title: "plan no path", Status: string(session.BacklogStatusReady)})
+				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "plan no path", Status: string(session.BacklogStatusReady)})
 				approved := true
-				_, err := svc.storage.UpdateBacklogItem(t.Context(), id, session.BacklogItemUpdate{PlanApproved: &approved}, nil)
+				_, err := svc.storage.UpdateBacklogItem(t.Context(), id, backlogdto.BacklogItemUpdate{PlanApproved: &approved}, nil)
 				require.NoError(t, err)
 				return id
 			},
@@ -130,10 +131,10 @@ func TestTransitionBacklogItemStatus_CharacterizesOverrideAndErrorCodes_UnderDef
 		{
 			name: "ready_to_in_progress_with_artifacts_path_missing_on_disk_is_FailedPrecondition_ErrPlanArtifactsMissing",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				id := seedItem(t, svc, session.BacklogItemData{Title: "plan gone", Status: string(session.BacklogStatusReady)})
+				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "plan gone", Status: string(session.BacklogStatusReady)})
 				approved := true
 				gone := filepath.Join(t.TempDir(), "deleted-plan-dir")
-				_, err := svc.storage.UpdateBacklogItem(t.Context(), id, session.BacklogItemUpdate{PlanApproved: &approved, PlanArtifactsPath: &gone}, nil)
+				_, err := svc.storage.UpdateBacklogItem(t.Context(), id, backlogdto.BacklogItemUpdate{PlanApproved: &approved, PlanArtifactsPath: &gone}, nil)
 				require.NoError(t, err)
 				return id
 			},
@@ -142,9 +143,9 @@ func TestTransitionBacklogItemStatus_CharacterizesOverrideAndErrorCodes_UnderDef
 		{
 			name: "ready_to_in_progress_with_unresolved_blocker_is_FailedPrecondition_ErrUnresolvedBlockers",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				blocker := seedItem(t, svc, session.BacklogItemData{Title: "blocker", Status: string(session.BacklogStatusIdea)})
-				id := seedItem(t, svc, session.BacklogItemData{Title: "blocked", Status: string(session.BacklogStatusReady), SkipPlanning: true})
-				require.NoError(t, svc.storage.AddBacklogItemDependency(t.Context(), session.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: id}))
+				blocker := seedItem(t, svc, backlogdto.BacklogItemData{Title: "blocker", Status: string(session.BacklogStatusIdea)})
+				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "blocked", Status: string(session.BacklogStatusReady), SkipPlanning: true})
+				require.NoError(t, svc.storage.AddBacklogItemDependency(t.Context(), backlogdto.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: id}))
 				return id
 			},
 			to: session.BacklogStatusInProgress, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrUnresolvedBlockers,
@@ -152,14 +153,14 @@ func TestTransitionBacklogItemStatus_CharacterizesOverrideAndErrorCodes_UnderDef
 		{
 			name: "idea_to_done_is_InvalidArgument_without_override",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, session.BacklogItemData{Title: "skip ahead", Status: string(session.BacklogStatusIdea)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "skip ahead", Status: string(session.BacklogStatusIdea)})
 			},
 			to: session.BacklogStatusDone, wantCode: connect.CodeInvalidArgument,
 		},
 		{
 			name: "idea_to_done_is_InvalidArgument_even_with_override_because_CanTransition_runs_first",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, session.BacklogItemData{Title: "skip ahead", Status: string(session.BacklogStatusIdea)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "skip ahead", Status: string(session.BacklogStatusIdea)})
 			},
 			to: session.BacklogStatusDone, override: "ship per owner", wantCode: connect.CodeInvalidArgument,
 		},

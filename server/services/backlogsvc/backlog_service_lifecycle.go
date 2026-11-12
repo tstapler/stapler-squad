@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -231,7 +232,7 @@ func (s *BacklogService) CreateBacklogItem(
 		return connect.NewResponse(&sessionv1.CreateBacklogItemResponse{AlreadyClaimedElsewhere: gate.Claimed}), nil
 	}
 
-	data := session.BacklogItemData{
+	data := backlogdto.BacklogItemData{
 		Title:                  req.Msg.Title,
 		Description:            req.Msg.Description,
 		ExternalURL:            externalURL,
@@ -299,7 +300,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid acceptance_criteria: %w", err))
 	}
 
-	update := session.BacklogItemUpdate{}
+	update := backlogdto.BacklogItemUpdate{}
 	if req.Msg.Title != "" {
 		title := req.Msg.Title
 		update.Title = &title
@@ -442,9 +443,9 @@ func (s *BacklogService) UpdateBacklogItem(
 		}
 	}
 
-	var precondition *session.BacklogItemPrecondition
+	var precondition *backlogdto.BacklogItemPrecondition
 	if req.Msg.ExpectedStatus != "" || req.Msg.ExpectedUpdatedAt != nil {
-		precondition = &session.BacklogItemPrecondition{
+		precondition = &backlogdto.BacklogItemPrecondition{
 			ExpectedStatus: req.Msg.ExpectedStatus,
 		}
 		if req.Msg.ExpectedUpdatedAt != nil {
@@ -510,7 +511,7 @@ func (s *BacklogService) UpdateBacklogItem(
 			if isTransitionDenial(setErr) {
 				return nil, transitionConnectError(setErr, req.Msg.ItemId, "associate PR")
 			}
-			if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
+			if errors.Is(setErr, backlogdto.ErrPRReassignmentNotAllowed) {
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
 					fmt.Errorf("cannot associate PR: item %q already has PR #%d tracked (status pr_pending) — this manual override endpoint does not support reassigning an already-tracked PR to a different one (no GitHub verification is performed here); use report_pr_created from a work session instead: %w", req.Msg.ItemId, updated.PrNumber, setErr))
 			}
@@ -544,7 +545,7 @@ func (s *BacklogService) UpdateBacklogItem(
 // item as it stood before the write: pr_pending on the same PR number is the
 // idempotent no-op (setPRAndTransition), anything else that succeeds is a first
 // link from review. Failures never reach a response, so they need no value.
-func prAssociationOutcome(before *session.BacklogItemData, prNumber int) sessionv1.PrAssociationResult {
+func prAssociationOutcome(before *backlogdto.BacklogItemData, prNumber int) sessionv1.PrAssociationResult {
 	if before.Status == string(session.BacklogStatusPRPending) && before.PrNumber == prNumber {
 		return sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_ALREADY_TRACKED
 	}
@@ -657,7 +658,7 @@ func (s *BacklogService) WaiveAcceptanceCriterion(
 		return deny(connect.CodeFailedPrecondition, "denied:item_terminal",
 			fmt.Errorf("backlog item %q is %s; its criteria can no longer be waived", m.ItemId, current.Status))
 	case strings.TrimSpace(m.Reason) == "":
-		return deny(connect.CodeInvalidArgument, "rejected:reason_required", session.ErrWaiverReasonRequired)
+		return deny(connect.CodeInvalidArgument, "rejected:reason_required", backlogdto.ErrWaiverReasonRequired)
 	case len(m.Reason) > maxWaiverReason:
 		return deny(connect.CodeInvalidArgument, "rejected:reason_too_long", fmt.Errorf("waiver reason is limited to %d bytes", maxWaiverReason))
 	}
@@ -666,9 +667,9 @@ func (s *BacklogService) WaiveAcceptanceCriterion(
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", m.ItemId))
-	case errors.Is(err, session.ErrAcCriterionAlreadyDone), errors.Is(err, session.ErrAcCriterionAlreadyWaived):
+	case errors.Is(err, backlogdto.ErrAcCriterionAlreadyDone), errors.Is(err, backlogdto.ErrAcCriterionAlreadyWaived):
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-	case errors.Is(err, session.ErrWaiverReasonRequired), errors.Is(err, session.ErrAcCriterionOutOfRange):
+	case errors.Is(err, backlogdto.ErrWaiverReasonRequired), errors.Is(err, backlogdto.ErrAcCriterionOutOfRange):
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	case err != nil:
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to waive criterion: %w", err))
@@ -718,12 +719,12 @@ func (s *BacklogService) AddBacklogItemDependency(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
-	edge := session.BacklogItemDependencyEdge{
+	edge := backlogdto.BacklogItemDependencyEdge{
 		BlockerID: req.Msg.BlockerItemId,
 		BlockedID: req.Msg.BlockedItemId,
 	}
 	if err := s.storage.AddBacklogItemDependency(ctx, edge); err != nil {
-		if errors.Is(err, session.ErrDependencyCycle) {
+		if errors.Is(err, backlogdto.ErrDependencyCycle) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("dependency would create a cycle: %w", err))
 		}
 		if errors.Is(err, domain.ErrNotFound) {
@@ -755,7 +756,7 @@ func (s *BacklogService) RemoveBacklogItemDependency(
 	if req.Msg.BlockerItemId == "" || req.Msg.BlockedItemId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("blocker_item_id and blocked_item_id are required"))
 	}
-	edge := session.BacklogItemDependencyEdge{
+	edge := backlogdto.BacklogItemDependencyEdge{
 		BlockerID: req.Msg.BlockerItemId,
 		BlockedID: req.Msg.BlockedItemId,
 	}
@@ -840,7 +841,7 @@ func attachUnresolvedBlockersTo(ctx context.Context, storage *session.Storage, i
 	}
 }
 
-func dependencyRefsToProto(refs []session.BacklogItemDependencyRef) []*sessionv1.DependencyInfo {
+func dependencyRefsToProto(refs []backlogdto.BacklogItemDependencyRef) []*sessionv1.DependencyInfo {
 	out := make([]*sessionv1.DependencyInfo, 0, len(refs))
 	for _, r := range refs {
 		out = append(out, &sessionv1.DependencyInfo{
@@ -1033,9 +1034,9 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to check unresolved blockers: %w", blockersErr))
 	}
 
-	var precondition *session.BacklogItemPrecondition
+	var precondition *backlogdto.BacklogItemPrecondition
 	if req.Msg.ExpectedStatus != "" || req.Msg.ExpectedUpdatedAt != nil {
-		precondition = &session.BacklogItemPrecondition{
+		precondition = &backlogdto.BacklogItemPrecondition{
 			ExpectedStatus: req.Msg.ExpectedStatus,
 		}
 		if req.Msg.ExpectedUpdatedAt != nil {
@@ -1102,7 +1103,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		planApproved := false
 		planArtifactsPath := ""
 		rejectionReason := ""
-		if upd, resetErr := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, session.BacklogItemUpdate{
+		if upd, resetErr := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, backlogdto.BacklogItemUpdate{
 			PlanApproved:        &planApproved,
 			PlanArtifactsPath:   &planArtifactsPath,
 			PlanRejectionReason: &rejectionReason,
@@ -1138,7 +1139,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 // rather than the single "re-run TriggerTriage" message both cases used to
 // share, which was actively misleading for the second case (see backlog item
 // 1cfae441-8953-41e6-803d-959062119d4f).
-func checkPlanArtifactsOnDisk(item *session.BacklogItemData) error {
+func checkPlanArtifactsOnDisk(item *backlogdto.BacklogItemData) error {
 	if item.PlanArtifactsPath == "" {
 		return fmt.Errorf("no plan artifacts found — run TriggerTriage first")
 	}
@@ -1175,7 +1176,7 @@ func (s *BacklogService) ApprovePlan(
 	now := time.Now()
 	approved := true
 	clearedReason := ""
-	update := session.BacklogItemUpdate{
+	update := backlogdto.BacklogItemUpdate{
 		PlanApproved:        &approved,
 		PlanApprovedAt:      &now,
 		PlanRejectionReason: &clearedReason,
@@ -1238,7 +1239,7 @@ func (s *BacklogService) RejectPlan(
 
 	now := time.Now()
 	approvalReset := false
-	update := session.BacklogItemUpdate{
+	update := backlogdto.BacklogItemUpdate{
 		PlanRejectionReason: &reason,
 		PlanRejectedAt:      &now,
 		PlanApproved:        &approvalReset,
@@ -1266,7 +1267,7 @@ func (s *BacklogService) CreateItemSource(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
-	data := session.ItemSourceData{
+	data := backlogdto.ItemSourceData{
 		PluginID:    req.Msg.PluginId,
 		DisplayName: req.Msg.DisplayName,
 		Enabled:     true,
@@ -1301,7 +1302,7 @@ func (s *BacklogService) UpdateItemSource(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
-	update := session.ItemSourceUpdate{}
+	update := backlogdto.ItemSourceUpdate{}
 	if req.Msg.DisplayName != "" {
 		dn := req.Msg.DisplayName
 		update.DisplayName = &dn
@@ -1406,7 +1407,7 @@ func (s *BacklogService) OverrideVerdict(
 
 	// 4. Save/upsert the ReviewVerdict with override fields.
 	now := time.Now()
-	if verdictErr := s.storage.SaveReviewVerdict(ctx, is.ID, session.ReviewVerdictData{
+	if verdictErr := s.storage.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
 		OverallOutcome:    outcome,
 		Summary:           fmt.Sprintf("Manual override: %s", req.Msg.OverrideReason),
 		DiffHash:          s.storage.ComputeCurrentDiffHash(ctx, itemID),
@@ -1419,7 +1420,7 @@ func (s *BacklogService) OverrideVerdict(
 	}
 
 	// 5. Transition item to target status if valid (validate via state machine).
-	var updatedItem *session.BacklogItemData
+	var updatedItem *backlogdto.BacklogItemData
 	if req.Msg.ToStatus != "" {
 		toStatus := session.BacklogStatus(req.Msg.ToStatus)
 		currentItem, currentErr := s.storage.GetBacklogItem(ctx, itemID)
@@ -1437,7 +1438,7 @@ func (s *BacklogService) OverrideVerdict(
 			ItemID:   itemID,
 			Observed: currentItem,
 			To:       toStatus,
-			Precondition: &session.BacklogItemPrecondition{
+			Precondition: &backlogdto.BacklogItemPrecondition{
 				ExpectedStatus:    currentItem.Status,
 				ExpectedUpdatedAt: &updatedAt,
 			},
@@ -1531,12 +1532,12 @@ func (s *BacklogService) SubmitManualReview(
 
 	// Create a synthetic review ItemSession + verdict atomically.
 	syntheticUUID := "manual-review-" + req.Msg.ItemId[:8] + "-" + fmt.Sprintf("%d", now.UnixNano())
-	is, createErr := s.storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+	is, createErr := s.storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      req.Msg.ItemId,
 		SessionUUID: syntheticUUID,
 		SessionRole: session.SessionRoleReview,
 		AcSnapshot:  item.AcceptanceCriteria,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome:    overall,
 		PerCriterion:      string(perCriterionJSON),
 		Summary:           req.Msg.Summary,
@@ -1574,7 +1575,7 @@ func (s *BacklogService) SubmitManualReview(
 					Caller:       session.CallerOperatorManualReview,
 					ItemID:       req.Msg.ItemId,
 					To:           session.BacklogStatusDone,
-					Precondition: &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)},
+					Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)},
 					TriggeredBy:  session.TriggeredByUser,
 					Guard:        &guard,
 				}); transErr != nil {

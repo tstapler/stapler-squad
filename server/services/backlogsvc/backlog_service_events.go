@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -150,11 +151,11 @@ func (s *BacklogService) watchBacklogItems(
 		// Fresh connection: send one event per currently-visible item as its
 		// current state. There is no prior state to diff against, so every
 		// item is delivered as an item_updated variant (empty updated_fields).
-		items, err := s.storage.ListBacklogItems(ctx, session.BacklogItemFilter{})
+		items, err := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{})
 		if err != nil {
 			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog items: %w", err))
 		}
-		visible := make([]*session.BacklogItemData, 0, len(items))
+		visible := make([]*backlogdto.BacklogItemData, 0, len(items))
 		for i := range items {
 			if backlogItemMatchesFilters(&items[i], msg) {
 				visible = append(visible, &items[i])
@@ -221,7 +222,7 @@ func (s *BacklogService) watchBacklogItems(
 // matched against RepoPath — the closest existing grouping concept — as a
 // deliberate deviation from the plan's "category" wording; see the
 // implementation report for this task.
-func backlogItemMatchesFilters(item *session.BacklogItemData, msg *sessionv1.WatchBacklogItemsRequest) bool {
+func backlogItemMatchesFilters(item *backlogdto.BacklogItemData, msg *sessionv1.WatchBacklogItemsRequest) bool {
 	if item == nil {
 		return false
 	}
@@ -246,7 +247,7 @@ func backlogItemMatchesFilters(item *session.BacklogItemData, msg *sessionv1.Wat
 // population — without it, every fresh connection immediately overwrote an
 // already-loaded item's enriched worktree data, hiding BacklogFileBrowserModal's
 // trigger.
-func snapshotEventsForItems(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, items []*session.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) []*sessionv1.BacklogItemEvent {
+func snapshotEventsForItems(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, items []*backlogdto.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) []*sessionv1.BacklogItemEvent {
 	protoItems := make([]*sessionv1.BacklogItem, len(items))
 	for i, item := range items {
 		protoItems[i] = backlogItemToProto(item, engine, costFor)
@@ -401,20 +402,20 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 // BacklogItemEventPayload.Item may legitimately be nil (defensive only —
 // production publishers always populate it) so every call site here must
 // guard first.
-func backlogItemToProtoOrNil(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+func backlogItemToProtoOrNil(item *backlogdto.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	if item == nil {
 		return nil
 	}
 	return backlogItemToProto(item, engine, costFor)
 }
 
-// activityNoteDataToProto converts a session.ActivityNoteData (the payload
+// activityNoteDataToProto converts a backlogdto.ActivityNoteData (the payload
 // carried by BacklogChangeActivityNoteAdded) to the wire
 // sessionv1.BacklogActivityNote. Nil-safe: BacklogItemChange.ActivityNote is
 // only guaranteed non-nil when Kind == ChangeActivityNoteAdded, but this is
 // called unconditionally from that switch case, so a defensive nil check
 // still guards against a caller bug rather than trusting the invariant.
-func activityNoteDataToProto(n *session.ActivityNoteData) *sessionv1.BacklogActivityNote {
+func activityNoteDataToProto(n *backlogdto.ActivityNoteData) *sessionv1.BacklogActivityNote {
 	if n == nil {
 		return nil
 	}
@@ -427,13 +428,13 @@ func activityNoteDataToProto(n *session.ActivityNoteData) *sessionv1.BacklogActi
 	}
 }
 
-// reviewVerdictDataToProto converts a session.ReviewVerdictData (the payload
+// reviewVerdictDataToProto converts a backlogdto.ReviewVerdictData (the payload
 // carried by BacklogChangeVerdictRecorded) to the wire sessionv1.ReviewVerdict.
 // ReviewVerdictData has no Id/CreatedAt of its own (it is a save-input DTO,
 // session/storage_backlog.go), so CreatedAt is set from the event's own
 // timestamp and Id is left empty — this mirrors itemSessionToProto's
 // ReviewVerdict-building logic (backlog_service.go) minus those two fields.
-func reviewVerdictDataToProto(v *session.ReviewVerdictData, occurredAt time.Time) *sessionv1.ReviewVerdict {
+func reviewVerdictDataToProto(v *backlogdto.ReviewVerdictData, occurredAt time.Time) *sessionv1.ReviewVerdict {
 	if v == nil {
 		return nil
 	}

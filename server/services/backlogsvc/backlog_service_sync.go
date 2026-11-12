@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -107,7 +108,7 @@ func (s *BacklogService) AttachSessionToItem(
 
 	// 5. Create ItemSession. ClaimantHostID is the attaching process's own
 	// identity (s.cfg), never derived from req.Msg or the attached session.
-	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
+	is, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:         item.ID,
 		SessionUUID:    req.Msg.SessionUuid,
 		SessionRole:    session.SessionRoleWork,
@@ -318,7 +319,7 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 		}
 	}
 
-	created, err := s.storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	created, err := s.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        issue.Title,
 		Description:  issue.Body,
 		Priority:     session.DefaultBacklogPriority,

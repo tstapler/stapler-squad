@@ -8,6 +8,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const (
@@ -41,7 +42,7 @@ func stfRegressedAnswer(t *testing.T, configure func(svc *BacklogService, edge s
 	t.Helper()
 	svc, storage, repo, _ := enfService(t)
 	configure(svc, enfEdgeID(t, repo, session.BacklogStatusIdea, session.BacklogStatusRefining))
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "stateful item", Status: string(session.BacklogStatusIdea), AcceptanceCriteria: session.AcCriteriaJSON(stfACDone),
 	})
 	require.NoError(t, err)
@@ -51,7 +52,7 @@ func stfRegressedAnswer(t *testing.T, configure func(svc *BacklogService, edge s
 	_, err = storage.DebugForce(t.Context(), item.ID, session.BacklogStatusIdea, "test")
 	require.NoError(t, err)
 	pending := session.AcCriteriaJSON(stfACPending)
-	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &pending}, nil)
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &pending}, nil)
 	require.NoError(t, err)
 
 	return bkfUUID.ReplaceAllString(errText(enfTransition(t.Context(), svc, item.ID, session.BacklogStatusRefining, "")), "<id>")

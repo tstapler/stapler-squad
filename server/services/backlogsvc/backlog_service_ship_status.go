@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -51,7 +52,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 		}), nil
 	}
 
-	var lastWork *session.ItemSessionSummary
+	var lastWork *backlogdto.ItemSessionSummary
 	for i := range itemSessions {
 		// Ascending by CreatedAt (ListItemSessions' query order) — keep
 		// overwriting so this ends up holding the *most recent* work session.

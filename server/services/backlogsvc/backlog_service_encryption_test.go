@@ -7,12 +7,14 @@ import (
 	"io"
 	"testing"
 
-	"connectrpc.com/connect"
 	"crypto/rand"
+
+	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newTestEncryptionService builds a BacklogService wired to a narrow source backend for encryption tests.
@@ -22,23 +24,23 @@ func newTestEncryptionService(backend itemSourceBackend, cfg *config.Config) *Ba
 
 // testStorageRecorder captures calls to backlog methods
 type testStorageRecorder struct {
-	createdData map[string]session.ItemSourceData
-	updatedData map[string]session.ItemSourceData
+	createdData map[string]backlogdto.ItemSourceData
+	updatedData map[string]backlogdto.ItemSourceData
 }
 
-func (tsr *testStorageRecorder) CreateItemSource(ctx context.Context, data session.ItemSourceData) (*session.ItemSourceData, error) {
+func (tsr *testStorageRecorder) CreateItemSource(ctx context.Context, data backlogdto.ItemSourceData) (*backlogdto.ItemSourceData, error) {
 	if tsr.createdData == nil {
-		tsr.createdData = make(map[string]session.ItemSourceData)
+		tsr.createdData = make(map[string]backlogdto.ItemSourceData)
 	}
 	tsr.createdData[data.PluginID] = data
 	return &data, nil
 }
 
-func (tsr *testStorageRecorder) UpdateItemSource(ctx context.Context, id string, update session.ItemSourceUpdate) (*session.ItemSourceData, error) {
+func (tsr *testStorageRecorder) UpdateItemSource(ctx context.Context, id string, update backlogdto.ItemSourceUpdate) (*backlogdto.ItemSourceData, error) {
 	if tsr.updatedData == nil {
-		tsr.updatedData = make(map[string]session.ItemSourceData)
+		tsr.updatedData = make(map[string]backlogdto.ItemSourceData)
 	}
-	data := session.ItemSourceData{}
+	data := backlogdto.ItemSourceData{}
 	if update.Config != nil {
 		data.Config = *update.Config
 	}

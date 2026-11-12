@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func gateEdge(t *testing.T, repo *session.EntStageConfigRepository, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus) session.TransitionData {
@@ -44,9 +45,9 @@ func storedStatus(t *testing.T, storage *session.Storage, id string) string {
 	return item.Status
 }
 
-func newItemAt(t *testing.T, storage *session.Storage, status session.BacklogStatus) *session.BacklogItemData {
+func newItemAt(t *testing.T, storage *session.Storage, status session.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "gate item", Status: string(status)})
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status)})
 	require.NoError(t, err)
 	return item
 }

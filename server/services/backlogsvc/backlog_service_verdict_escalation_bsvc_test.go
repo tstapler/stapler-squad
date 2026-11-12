@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func verdictsJSON(t *testing.T, vs ...session.CriterionVerdict) string {
@@ -43,7 +44,7 @@ func TestEscalateVerdictToOwner_should_AskOnce_And_HonourTheAnswer(t *testing.T)
 	ctx := context.Background()
 	raw, err := session.SerializeAcCriteria([]session.AcCriterion{{Index: 0, Text: "c", Status: session.AcStatusPending}})
 	require.NoError(t, err)
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "t", Status: string(session.BacklogStatusReview), AcceptanceCriteria: raw})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "t", Status: string(session.BacklogStatusReview), AcceptanceCriteria: raw})
 	require.NoError(t, err)
 	flagged := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewVerdictFail, FailureClass: domain.FailureClassUnattainable, Evidence: "cannot reproduce"}}
 

@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -101,7 +102,7 @@ func (s *BacklogService) BlockedCleanups() []session.BlockedItem {
 
 // gateOutcome runs the gate; blocked true means the caller must remove nothing.
 // The first block of a (path, item) pair is counted and logged once.
-func (s *BacklogService) gateOutcome(ctx context.Context, sessions []session.ItemSessionSummary, opts session.GateOptions) (session.CleanupOutcome, bool) {
+func (s *BacklogService) gateOutcome(ctx context.Context, sessions []backlogdto.ItemSessionSummary, opts session.GateOptions) (session.CleanupOutcome, bool) {
 	gate, set := s.cleanup.gateAndSet()
 	if gate == nil {
 		return session.CleanupOutcome{}, false
@@ -123,7 +124,7 @@ func (s *BacklogService) gateOutcome(ctx context.Context, sessions []session.Ite
 	return session.CleanupBlockedOutcome(block), true
 }
 
-func firstItemID(sessions []session.ItemSessionSummary) string {
+func firstItemID(sessions []backlogdto.ItemSessionSummary) string {
 	for _, is := range sessions {
 		if is.BacklogItemID != "" {
 			return is.BacklogItemID

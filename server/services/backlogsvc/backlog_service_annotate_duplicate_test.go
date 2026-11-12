@@ -5,10 +5,11 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestAnnotateDuplicatePending_UsesPreloadedSessions(t *testing.T) {
-	sessions := []session.ItemSessionSummary{{VerificationNotes: "duplicate_ref=abc123 reason"}}
+	sessions := []backlogdto.ItemSessionSummary{{VerificationNotes: "duplicate_ref=abc123 reason"}}
 
 	review := &sessionv1.BacklogItem{Status: string(session.BacklogStatusReview)}
 	annotateDuplicatePending(review, sessions)

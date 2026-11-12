@@ -12,24 +12,25 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const verdictSteerSessionUUID = "verdict-steer-work-uuid"
 
-func newVerdictSteerFixture(t *testing.T, withWorkSession bool) (*BacklogService, *mockSessionSteerer, *events.EventBus, *session.BacklogItemData) {
+func newVerdictSteerFixture(t *testing.T, withWorkSession bool) (*BacklogService, *mockSessionSteerer, *events.EventBus, *backlogdto.BacklogItemData) {
 	t.Helper()
 	svc, steerer, bus := newTestBacklogServiceForSteerIntegration(t, verdictSteerSessionUUID, "claude")
 	svc.verdictSteerPollInterval = 5 * time.Millisecond
 	svc.verdictSteerReadyTimeout = 2 * time.Second
 	t.Cleanup(svc.Shutdown)
 
-	item, err := svc.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := svc.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:  "Awaiting review",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	if withWorkSession {
-		_, err = svc.storage.CreateItemSession(context.Background(), session.ItemSessionData{
+		_, err = svc.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: verdictSteerSessionUUID,
 			SessionRole: session.SessionRoleWork,
@@ -39,11 +40,11 @@ func newVerdictSteerFixture(t *testing.T, withWorkSession bool) (*BacklogService
 	return svc, steerer, bus, item
 }
 
-func publishVerdict(bus *events.EventBus, item *session.BacklogItemData, outcome session.ReviewOutcome, summary string) {
+func publishVerdict(bus *events.EventBus, item *backlogdto.BacklogItemData, outcome session.ReviewOutcome, summary string) {
 	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
 		Kind:    events.BacklogChangeVerdictRecorded,
 		Item:    item,
-		Verdict: &session.ReviewVerdictData{OverallOutcome: outcome, Summary: summary},
+		Verdict: &backlogdto.ReviewVerdictData{OverallOutcome: outcome, Summary: summary},
 	}))
 }
 

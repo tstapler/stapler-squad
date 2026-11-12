@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -59,8 +60,8 @@ type RepoWatchRemover interface {
 
 // itemSourceBackend is a narrow interface for item source persistence; satisfied by *session.Storage.
 type itemSourceBackend interface {
-	CreateItemSource(ctx context.Context, data session.ItemSourceData) (*session.ItemSourceData, error)
-	UpdateItemSource(ctx context.Context, id string, update session.ItemSourceUpdate) (*session.ItemSourceData, error)
+	CreateItemSource(ctx context.Context, data backlogdto.ItemSourceData) (*backlogdto.ItemSourceData, error)
+	UpdateItemSource(ctx context.Context, id string, update backlogdto.ItemSourceUpdate) (*backlogdto.ItemSourceData, error)
 }
 
 // BacklogService handles Backlog RPCs.
@@ -865,7 +866,7 @@ func (s *BacklogService) isEnterpriseGitHubURL(input string) bool {
 
 // itemSessionToProto converts an ItemSessionSummary to its proto representation.
 // costFor, if non-nil, is called with the tmux session UUID to populate EstimatedCostUsd.
-func itemSessionToProto(is session.ItemSessionSummary, costFor func(tmuxUUID string) float64) *sessionv1.ItemSession {
+func itemSessionToProto(is backlogdto.ItemSessionSummary, costFor func(tmuxUUID string) float64) *sessionv1.ItemSession {
 	p := &sessionv1.ItemSession{
 		Id:          is.ID,
 		SessionUuid: is.SessionUUID,
@@ -1007,7 +1008,7 @@ type triageResultJSON struct {
 // backlogItemToProto, BacklogItemSummary doesn't carry StatusEvents (that's
 // the whole point of the "summary" — avoid over-hydration), so
 // BuildStageConfigSnapshotFallback has nothing to reconstruct from.
-func backlogItemSummaryToProto(item *session.BacklogItemSummary, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:       item.ID,
 		PublicId: item.PublicIDRaw,
@@ -1101,7 +1102,7 @@ func allowedTransitionStrings(engine session.WorkflowEngine, from session.Backlo
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 // engine must be the caller's s.engine — see allowedTransitionStrings.
-func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+func backlogItemToProto(item *backlogdto.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		WorkflowSuggestions: workflowSuggestionsToProto(session.ParseWorkflowSuggestions(item.WorkflowSuggestions)),
 		Id:                  item.ID,
@@ -1251,7 +1252,7 @@ func backlogItemToProto(item *session.BacklogItemData, engine session.WorkflowEn
 }
 
 // itemSourceToProto maps an ItemSourceData to the proto ItemSource message.
-func itemSourceToProto(src *session.ItemSourceData) *sessionv1.ItemSource {
+func itemSourceToProto(src *backlogdto.ItemSourceData) *sessionv1.ItemSource {
 	p := &sessionv1.ItemSource{
 		Id:                    src.ID,
 		PluginId:              src.PluginID,
@@ -1273,7 +1274,7 @@ func itemSourceToProto(src *session.ItemSourceData) *sessionv1.ItemSource {
 // commitAndPushItemWorktrees commits any dirty work and pushes branches to the remote
 // for all work-role item sessions. Called BEFORE status transitions to ensure changes
 // are durable before the item is marked done. Errors are logged but not returned.
-func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, sessions []session.ItemSessionSummary) {
+func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, sessions []backlogdto.ItemSessionSummary) {
 	for _, is := range sessions {
 		if is.SessionUUID == "" || is.Role != string(session.SessionRoleWork) {
 			continue
@@ -1296,7 +1297,7 @@ func (s *BacklogService) commitAndPushItemWorktrees(ctx context.Context, session
 // cleanupItemWorktrees removes git worktrees for work-role item sessions.
 // Call commitAndPushItemWorktrees first to ensure changes are durable.
 // Errors are logged but do not fail the caller — cleanup is best-effort.
-func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []session.ItemSessionSummary) session.CleanupOutcome {
+func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []backlogdto.ItemSessionSummary) session.CleanupOutcome {
 	return s.cleanupItemWorktreesExcept(ctx, sessions, "")
 }
 
@@ -1312,11 +1313,11 @@ func (s *BacklogService) cleanupItemWorktrees(ctx context.Context, sessions []se
 // SpawnSessionFromItem step 10's comment), so exceptPath keeps the one path the
 // brand-new session just started using while still clearing genuinely stale
 // worktrees from earlier, differently-named revisions.
-func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, sessions []session.ItemSessionSummary, exceptPath string) session.CleanupOutcome {
+func (s *BacklogService) cleanupItemWorktreesExcept(ctx context.Context, sessions []backlogdto.ItemSessionSummary, exceptPath string) session.CleanupOutcome {
 	return s.cleanupWorktrees(ctx, sessions, exceptPath, session.GateOptions{})
 }
 
-func (s *BacklogService) cleanupWorktrees(ctx context.Context, sessions []session.ItemSessionSummary, exceptPath string, opts session.GateOptions) session.CleanupOutcome {
+func (s *BacklogService) cleanupWorktrees(ctx context.Context, sessions []backlogdto.ItemSessionSummary, exceptPath string, opts session.GateOptions) session.CleanupOutcome {
 	if out, blocked := s.gateOutcome(ctx, sessions, opts); blocked {
 		return out
 	}
@@ -1372,7 +1373,7 @@ func (s *BacklogService) removeWorktree(wt session.GitWorktreeData) bool {
 }
 
 // warnMissingWorktreeRow surfaces a work session that expected a worktree but has no row.
-func (s *BacklogService) warnMissingWorktreeRow(is session.ItemSessionSummary) {
+func (s *BacklogService) warnMissingWorktreeRow(is backlogdto.ItemSessionSummary) {
 	// Epic 2.1: previously silently skipped here even when a worktree row was
 	// expected. Extra lookup needed since ItemSessionSummary lacks
 	// SessionType/Branch; a lookup failure falls back to silent skip.
@@ -1435,7 +1436,7 @@ func (s *BacklogService) CleanupTerminalItem(ctx context.Context, itemID string)
 // passed in — the brand-new session is never included. Nil-safe (sessionStopper may
 // be unwired, e.g. in tests) and best-effort: archival/kill failures are logged, not
 // returned, matching cleanupItemWorktreesExcept's contract.
-func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions []session.ItemSessionSummary) {
+func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions []backlogdto.ItemSessionSummary) {
 	if s.sessionStopper == nil {
 		return
 	}
@@ -1459,7 +1460,7 @@ func (s *BacklogService) archiveItemWorkSessions(ctx context.Context, sessions [
 // the correct known-spend total — unpricedCount exists only so callers can
 // surface the gap in a log line rather than silently treating it as "under
 // threshold" (Task 4.2.2b).
-func cumulativeItemSpendUSD(sessions []session.ItemSessionSummary) (totalUSD float64, unpricedCount int) {
+func cumulativeItemSpendUSD(sessions []backlogdto.ItemSessionSummary) (totalUSD float64, unpricedCount int) {
 	for _, is := range sessions {
 		totalUSD += is.EstimatedCostUsd
 		if !is.CostPriced {
@@ -1488,7 +1489,7 @@ func effectiveBudgetThreshold(itemThresholdUSD *float64) *float64 {
 // the item's new cumulative spend. Purely observational — never blocks,
 // retries, or errors the call that triggered it (see EvaluateBudgetThreshold's
 // own doc comment).
-func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, priorSessions []session.ItemSessionSummary, callCostUSD float64) {
+func logBudgetWarningIfCrossed(itemID, stage string, thresholdUSD *float64, priorSessions []backlogdto.ItemSessionSummary, callCostUSD float64) {
 	thresholdUSD = effectiveBudgetThreshold(thresholdUSD)
 	priorTotal, unpricedCount := cumulativeItemSpendUSD(priorSessions)
 	cumulative := priorTotal + callCostUSD
@@ -1527,7 +1528,7 @@ func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float
 
 // duplicateRefPending returns the claimed duplicate_ref while item sits in
 // review awaiting confirmation, "" otherwise. Needs eagerly loaded ItemSessions.
-func duplicateRefPending(item *session.BacklogItemData) string {
+func duplicateRefPending(item *backlogdto.BacklogItemData) string {
 	if item.Status != string(session.BacklogStatusReview) {
 		return ""
 	}

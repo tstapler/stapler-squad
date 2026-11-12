@@ -12,13 +12,14 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // notifyTransitionDenied makes a denied automatic transition visible: a
 // transition_denied stuck row, one progress comment and one notification,
 // idempotent per (item, caller, from, to, reason) while the row stays open. It
 // reports whether it recorded anything new. Service-layer callers only.
-func (s *BacklogService) notifyTransitionDenied(ctx context.Context, item *session.BacklogItemData, d domain.TransitionDenial, denyErr error) bool {
+func (s *BacklogService) notifyTransitionDenied(ctx context.Context, item *backlogdto.BacklogItemData, d domain.TransitionDenial, denyErr error) bool {
 	if s.storage == nil {
 		return false
 	}
@@ -88,7 +89,7 @@ func (s *BacklogService) TransitionDeniedReporter() session.TransitionDeniedRepo
 }
 
 // Report implements session.TransitionDeniedReporter.
-func (r transitionDeniedReporter) Report(ctx context.Context, item *session.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
 	r.svc.notifyTransitionDenied(ctx, item, domain.TransitionDenial{
 		Caller: string(caller),
 		From:   string(from),
@@ -122,7 +123,7 @@ func isEngineDenial(err error) bool {
 // A lifted denial is resolved here and the action proceeds. Periodic callers
 // treat the skip as success; the operator's "Retry now" asks
 // transitionDenialHoldError instead.
-func (s *BacklogService) heldByTransitionDenial(ctx context.Context, spawnPoint string, item *session.BacklogItemData) bool {
+func (s *BacklogService) heldByTransitionDenial(ctx context.Context, spawnPoint string, item *backlogdto.BacklogItemData) bool {
 	if s.storage == nil || !s.storage.TransitionDenialHolds(ctx, item) {
 		return false
 	}

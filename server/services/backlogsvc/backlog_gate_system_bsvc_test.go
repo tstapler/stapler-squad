@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // systemGateHarness is the storage's gate, backed by a Configured engine whose
@@ -70,9 +71,9 @@ func (h *systemGateHarness) blockWithGate(t *testing.T, from, to session.Backlog
 	}
 }
 
-func systemItemAt(t *testing.T, svc *BacklogService, status session.BacklogStatus) *session.BacklogItemData {
+func systemItemAt(t *testing.T, svc *BacklogService, status session.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := svc.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "gate item", Status: string(status)})
+	item, err := svc.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status)})
 	require.NoError(t, err)
 	return item
 }
@@ -141,7 +142,7 @@ func TestMaybeTriggerTriage_should_ReportOnceUnderItsOwnCallerAndStartNoTriage_W
 	svc.SetHeadlessPool(&fakeHeadlessPool{})
 	h := wireEnforcedGate(t, svc)
 	h.blockWithGate(t, session.BacklogStatusIdea, session.BacklogStatusReady)
-	item, err := svc.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	item, err := svc.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "has a plan already", Status: string(session.BacklogStatusIdea), RepoPath: t.TempDir(), PlanApproved: true,
 	})
 	require.NoError(t, err)

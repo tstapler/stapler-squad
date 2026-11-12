@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -164,7 +165,7 @@ func applyAutoMerge(item *sessionv1.StuckBacklogItem, res githubpkg.RepoSettings
 // filtered to open + un-snoozed by FindOpenStuckStates) to its proto
 // representation. allow_auto_merge is left unset here; ListStuckBacklogItems populates it via
 // populateAutoMerge so one lookup serves every item of a repo.
-func stuckBacklogItemToProto(row session.OpenStuckStateData) *sessionv1.StuckBacklogItem {
+func stuckBacklogItemToProto(row backlogdto.OpenStuckStateData) *sessionv1.StuckBacklogItem {
 	item := &sessionv1.StuckBacklogItem{
 		ItemId:          row.ItemID,
 		Title:           row.ItemTitle,
@@ -220,7 +221,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 			reviewIDs = append(reviewIDs, row.ItemID)
 		}
 	}
-	var sessionsByItem map[string][]session.ItemSessionSummary
+	var sessionsByItem map[string][]backlogdto.ItemSessionSummary
 	if len(reviewIDs) > 0 {
 		var sessErr error
 		if sessionsByItem, sessErr = s.storage.ListItemSessionsForItems(ctx, reviewIDs); sessErr != nil {

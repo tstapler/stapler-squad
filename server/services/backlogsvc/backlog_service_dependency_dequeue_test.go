@@ -11,8 +11,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // blockedDequeueFixture seeds a queued dependent whose blocker is a not-yet-started
@@ -115,7 +115,7 @@ func TestDequeueNextQueuedItems_should_NotStartItem_When_PlanArtifactsPathDelete
 	itemID := createResp.Msg.Item.Id
 
 	planArtifactsPath := planDir
-	_, err = svc.storage.UpdateBacklogItem(ctx, itemID, session.BacklogItemUpdate{PlanArtifactsPath: &planArtifactsPath}, nil)
+	_, err = svc.storage.UpdateBacklogItem(ctx, itemID, backlogdto.BacklogItemUpdate{PlanArtifactsPath: &planArtifactsPath}, nil)
 	require.NoError(t, err)
 	_, err = svc.ApprovePlan(ctx, connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: itemID}))
 	require.NoError(t, err)

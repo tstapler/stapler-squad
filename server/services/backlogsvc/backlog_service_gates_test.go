@@ -15,6 +15,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestGetPendingGates_should_ReturnNotFound_When_ItemDoesNotExist(t *testing.T) {
@@ -43,7 +44,7 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 
 	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "an item",
 		Status: string(session.BacklogStatusIdea),
 	})
@@ -106,7 +107,7 @@ func TestGetPendingGates_should_ReturnPopulatedGateStatus_When_TransitionHasConf
 		{Index: 0, Text: "criterion one", Status: session.AcStatusPending},
 	})
 	require.NoError(t, err)
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "item with an unfinished AC",
 		Status:             fromStage.Slug,
 		AcceptanceCriteria: criteria,
@@ -155,7 +156,7 @@ func TestGetPendingGates_should_SetConfigError_When_CustomGateReferencesUnregist
 	require.NoError(t, err)
 	require.NoError(t, engine.InvalidateCache(ctx))
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item behind an unregistered custom gate",
 		Status: fromStage.Slug,
 	})

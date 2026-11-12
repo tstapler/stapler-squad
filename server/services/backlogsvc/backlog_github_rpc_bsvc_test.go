@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestSearchGitHubRepos_NilStorage(t *testing.T) {
@@ -312,7 +312,7 @@ func TestImportGitHubIssue_DedupsExistingImport(t *testing.T) {
 	assert.Equal(t, firstID, second.Msg.Item.Id, "second import should return the same item ID as the first")
 	assert.False(t, second.Msg.TriageTriggered, "dedup path must not re-trigger triage")
 
-	items, err := svc.storage.ListBacklogItems(context.Background(), session.BacklogItemFilter{})
+	items, err := svc.storage.ListBacklogItems(context.Background(), backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	require.Len(t, items, 1, "only one backlog item should exist after importing the same issue URL twice")
 	assert.Equal(t, firstID, items[0].ID)
@@ -373,13 +373,13 @@ func TestGetSessionBacklogIndex_WithEntries(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Test Backlog Item",
 		Status: "idea",
 	})
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "test-session-uuid-abc",
 		SessionRole: "work",

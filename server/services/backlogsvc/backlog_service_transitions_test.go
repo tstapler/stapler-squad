@@ -22,6 +22,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newTransitionCRUDTestService mirrors newStageCRUDTestService
@@ -159,7 +160,7 @@ func TestUpdateStageTransition_should_ReturnFailedPreconditionAndPersistNothing_
 	}))
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "live item", Status: "design-review"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "live item", Status: "design-review"})
 	require.NoError(t, err)
 
 	_, err = svc.UpdateStageTransition(ctx, connect.NewRequest(&sessionv1.UpdateStageTransitionRequest{
@@ -224,7 +225,7 @@ func TestDeleteStageTransition_should_ReturnFailedPreconditionAndPersistNothing_
 	}))
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "live item", Status: "design-review-delete"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "live item", Status: "design-review-delete"})
 	require.NoError(t, err)
 
 	_, err = svc.DeleteStageTransition(ctx, connect.NewRequest(&sessionv1.DeleteStageTransitionRequest{

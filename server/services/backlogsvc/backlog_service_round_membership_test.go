@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // @feature backlog:multi-pr
@@ -57,7 +58,7 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 	}
 
 	s1 := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: itemID, SessionUUID: s1, SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: s1, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	link(session.SessionPROwner(s1), 30)
 

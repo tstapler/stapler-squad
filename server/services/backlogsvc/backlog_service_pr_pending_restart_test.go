@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,10 +24,10 @@ func spawnedPRPendingItem(t *testing.T, svc *BacklogService, storage *session.St
 	require.NoError(t, err)
 
 	notes, prURL := "keep these notes", "https://github.com/o/r/pull/7"
-	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{Notes: &notes, PrURL: &prURL}, nil)
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{Notes: &notes, PrURL: &prURL}, nil)
 	require.NoError(t, err)
 	_, err = storage.Rollback(t.Context(), itemID, session.BacklogStatusPRPending,
-		&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}, session.TriggeredBySystem)
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}, session.TriggeredBySystem)
 	require.NoError(t, err)
 	return itemID
 }
@@ -105,7 +106,7 @@ func TestForceResetItem_should_StopSessionsAndMoveToInProgress_When_PRPending(t 
 	svctest.SeedOpenStuckRow(t, storage, itemID, domain.StuckReasonSteerFailed, time.Now(), "steer")
 	svctest.SeedOpenStuckRow(t, storage, itemID, domain.StuckReasonRespawnBlockedActive, time.Now(), "blocked")
 	svctest.SeedOpenStuckRow(t, storage, itemID, domain.StuckReasonBouncing, time.Now(), "out of scope")
-	other, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "other", Status: string(session.BacklogStatusPRPending)})
+	other, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "other", Status: string(session.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, other.ID, domain.StuckReasonPRNeedsFix, time.Now(), "other item")
 
@@ -159,9 +160,9 @@ func TestTriggerRemediationNow_should_ExplainMultipleReasons_When_Aggregate(t *t
 			t.Parallel()
 			storage := svctest.CreateTestStorage(t)
 			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "multi", Status: string(session.BacklogStatusPRPending)})
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "multi", Status: string(session.BacklogStatusPRPending)})
 			require.NoError(t, err)
-			other, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "other", Status: string(session.BacklogStatusPRPending)})
+			other, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "other", Status: string(session.BacklogStatusPRPending)})
 			require.NoError(t, err)
 			for _, reason := range tt.seed {
 				svctest.SeedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "x")
@@ -194,7 +195,7 @@ func TestSpawnSessionFromItem_should_RefuseForceRestart_When_JulesSessionLive(t 
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil, nil, nil)
 	itemID := spawnedPRPendingItem(t, svc, storage)
-	_, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID: itemID, SessionUUID: "jules-sessions/force-guard", SessionRole: session.SessionRoleJulesWork,
 	})
 	require.NoError(t, err)
