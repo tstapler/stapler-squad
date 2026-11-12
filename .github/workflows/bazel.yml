@@ -165,17 +165,22 @@ jobs:
             --test_env=HOME="$RUNNER_TEMP/home" --sandbox_writable_path="$RUNNER_TEMP/home" \
             --test_env=GO_TEST_WRAP_TESTV=1 //...
 
-      # Windows is cross-compile only (ADR-005): build both goreleaser windows arches and check the
-      # PE header; the windows-only probe must be reported incompatible, not failed (Task 6.1b).
+      # Windows is cross-compile only (ADR-005). The cross targets are `manual` (tools/bzl/windows/BUILD.bazel)
+      # because building them nogo-validates the whole closure per arch; so they build only off pull requests.
       - name: Cross-compile Windows
+        if: github.event_name != 'pull_request'
         run: |
           bazel build --config=ci --lockfile_mode=error --remote_upload_local_results=false \
             //tools/bzl/windows:stapler-squad_windows_amd64 //tools/bzl/windows:stapler-squad_windows_arm64 \
             //tools/bzl/windows:ssq-mux_windows_amd64 //tools/bzl/windows:ssq-mux_windows_arm64 \
             //tools/bzl/windows:ssq-hooks_windows_amd64 //tools/bzl/windows:ssq-hooks_windows_arm64
-          bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false //tools/bzl/windows:all
+          bazel test --config=ci --lockfile_mode=error --remote_upload_local_results=false \
+            //tools/bzl/windows:pe_header_test
           file -L bazel-bin/tools/bzl/windows/stapler-squad_windows_amd64.exe | grep -q 'PE32+'
-          bash tools/bzl/check-platform-targets.sh
+
+      # The windows-only canary must be reported incompatible, not failed (Task 6.1b); analysis only, so it runs on PRs too.
+      - name: Platform target check
+        run: bash tools/bzl/check-platform-targets.sh
 
       # The woven build runs from a committed otelc overlay; this fails when go.mod, go.sum, the otelc version or the
       # custom rule changed without `tools/bzl/otel_overlay/gen.sh` being re-run (S15b-6).

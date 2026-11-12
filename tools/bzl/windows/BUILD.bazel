@@ -19,6 +19,9 @@ platform(
     ],
 )
 
+# Every cross target and pe_header_test is `manual`, so //... (and `:all`) skips them: building the windows
+# closure also ran compile + nogo validation over the whole stapler-squad graph per arch (~620 CPU-s in CI).
+# Request them by label (see the "Cross-compile Windows" step in .github/workflows/bazel.yml).
 # Pure Go: a cross-compiling C toolchain is not available, and the production sqlite driver is
 # pure Go (ADR-006). The tmux embed does not apply on Windows, so no embed tag config is set.
 # .goreleaser.yaml builds windows/{amd64,arm64} for all three binaries, so all six are here. The
@@ -27,67 +30,79 @@ platform(
 otel_cross_binary(
     name = "stapler-squad_windows_amd64.exe",
     platform = ":windows_amd64",
+    tags = ["manual"],
     target = "//:stapler-squad",
 )
 
 alias(
     name = "stapler-squad_windows_amd64",
     actual = ":stapler-squad_windows_amd64.exe",
+    tags = ["manual"],
 )
 
 go_cross_binary(
     name = "ssq-mux_windows_amd64.exe",
     platform = ":windows_amd64",
+    tags = ["manual"],
     target = "//cmd/ssq-mux",
 )
 
 alias(
     name = "ssq-mux_windows_amd64",
     actual = ":ssq-mux_windows_amd64.exe",
+    tags = ["manual"],
 )
 
 go_cross_binary(
     name = "ssq-hooks_windows_amd64.exe",
     platform = ":windows_amd64",
+    tags = ["manual"],
     target = "//cmd/ssq-hooks",
 )
 
 alias(
     name = "ssq-hooks_windows_amd64",
     actual = ":ssq-hooks_windows_amd64.exe",
+    tags = ["manual"],
 )
 
 otel_cross_binary(
     name = "stapler-squad_windows_arm64.exe",
     platform = ":windows_arm64",
+    tags = ["manual"],
     target = "//:stapler-squad",
 )
 
 alias(
     name = "stapler-squad_windows_arm64",
     actual = ":stapler-squad_windows_arm64.exe",
+    tags = ["manual"],
 )
 
 go_cross_binary(
     name = "ssq-mux_windows_arm64.exe",
     platform = ":windows_arm64",
+    tags = ["manual"],
     target = "//cmd/ssq-mux",
 )
 
 alias(
     name = "ssq-mux_windows_arm64",
     actual = ":ssq-mux_windows_arm64.exe",
+    tags = ["manual"],
 )
 
 go_cross_binary(
     name = "ssq-hooks_windows_arm64.exe",
     platform = ":windows_arm64",
+    tags = ["manual"],
     target = "//cmd/ssq-hooks",
 )
 
 alias(
     name = "ssq-hooks_windows_arm64",
     actual = ":ssq-hooks_windows_arm64.exe",
+    tags = ["manual"],
 )
 
 # Cheap structural check that runs on any host: the cross output is a PE image (MZ header, and
@@ -97,6 +112,7 @@ sh_test(
     srcs = ["pe_header_test.sh"],
     args = ["$(rootpath :stapler-squad_windows_amd64.exe)"],
     data = [":stapler-squad_windows_amd64.exe"],
+    tags = ["manual"],
 )
 
 # Pattern for any windows-only test target: target_compatible_with makes Bazel report it
