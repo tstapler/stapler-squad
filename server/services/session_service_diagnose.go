@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/summaries"
 )
 
 // uniqueDispatchTitle builds a title for a repeatedly-dispatchable one-shot
@@ -187,7 +188,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
 	if s.sessionSummaryGenerator != nil {
-		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+		summaries.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 	}
 	return instance, nil
 }
@@ -254,7 +255,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
 	if s.sessionSummaryGenerator != nil {
-		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+		summaries.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 	}
 	return instance, nil
 }

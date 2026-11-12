@@ -157,7 +157,7 @@ func (r *EntLivenessRepository) ListAll(ctx context.Context) ([]*LivenessDefinit
 
 // recordFromEntLivenessDefinition converts a persisted ent row into the
 // ent-free LivenessDefinitionRecord DTO — mirrors fromEntHandoffSummary
-// (session/handoff_summary_service.go)'s pattern: server/services must not
+// (session/summaries/handoff_summary_service.go)'s pattern: server/services must not
 // import session/ent directly (the no_ent_in_services lint rule), so every
 // LivenessRepository method returns this plain struct instead of *ent.StageLivenessDefinition.
 func recordFromEntLivenessDefinition(row *ent.StageLivenessDefinition) *LivenessDefinitionRecord {

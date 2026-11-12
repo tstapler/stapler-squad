@@ -1,4 +1,4 @@
-package session
+package summaries
 
 import (
 	"context"
@@ -173,7 +173,7 @@ func TestBuildCostSnapshot_should_ReturnTotalTokensAndCost_When_RealTranscriptPa
 	// TokenStore derives SessionUUID from the filename (session/tokens/parser.go's
 	// ParseFile), not from the JSONL content's "sessionId" field — the fixture's
 	// resulting UUID is "valid_session" (its basename minus .jsonl).
-	store.OnHistoryFileChanged("tokens/testdata/valid_session.jsonl")
+	store.OnHistoryFileChanged("../tokens/testdata/valid_session.jsonl")
 
 	wait.RequireEventually(t, func() bool { return store.GetByUUID("valid_session") != nil }, 5*time.Second, 10*time.Millisecond)
 
