@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -46,7 +47,7 @@ func TestClaimIndexRecorder_PRProvenanceComment_should_NameHostByOpaqueIDAndLink
 	require.NoError(t, err)
 	recorder, err := NewClaimIndexRecorder(identity, index, nil, "laptop", nil)
 	require.NoError(t, err)
-	item := &BacklogItemData{ID: "bl_01J7QK0000000000000000000A"}
+	item := &backlogdto.BacklogItemData{ID: "bl_01J7QK0000000000000000000A"}
 
 	body, ok := recorder.PRProvenanceComment(item)
 
@@ -66,6 +67,6 @@ func TestClaimIndexRecorder_PRProvenanceComment_should_NameHostByOpaqueIDAndLink
 
 func TestStorage_PRProvenanceComment_should_ReportFalse_When_NoSourceWired(t *testing.T) {
 	var s Storage
-	_, ok := s.PRProvenanceComment(&BacklogItemData{ID: "x"})
+	_, ok := s.PRProvenanceComment(&backlogdto.BacklogItemData{ID: "x"})
 	assert.False(t, ok)
 }

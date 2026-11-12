@@ -10,11 +10,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // --- fixtures --------------------------------------------------------------
 
-func lastEvent(t *testing.T, h *gateHarness, id string) BacklogStatusEventData {
+func lastEvent(t *testing.T, h *gateHarness, id string) backlogdto.BacklogStatusEventData {
 	t.Helper()
 	item, err := h.storage.GetBacklogItem(context.Background(), id)
 	require.NoError(t, err)
@@ -62,7 +63,7 @@ func TestGatedTransition_CallerExpectedStatusMismatch_FailsWithoutEngineCall(t *
 	before := GateCallsTotal(ClassSystem, CallerQueueBacklogItem, ModeEnforce)
 	_, err := h.storage.GatedTransition(context.Background(), TransitionRequest{
 		Caller: CallerQueueBacklogItem, ItemID: item.ID, To: BacklogStatusQueued,
-		Precondition: &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusIdea)},
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusIdea)},
 	})
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.Equal(t, before, GateCallsTotal(ClassSystem, CallerQueueBacklogItem, ModeEnforce), "the engine was not consulted")
@@ -78,7 +79,7 @@ func TestGatedTransition_PassesWholePreconditionThrough_AndRecordsNoteAndTrigger
 	stale := item.UpdatedAt.Add(-time.Hour)
 	_, err := h.storage.GatedTransition(ctx, TransitionRequest{
 		Caller: CallerQueueBacklogItem, ItemID: item.ID, To: BacklogStatusQueued,
-		Precondition: &BacklogItemPrecondition{ExpectedUpdatedAt: &stale},
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedUpdatedAt: &stale},
 	})
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed, "ExpectedUpdatedAt is never dropped")
 	require.Equal(t, string(BacklogStatusReady), h.status(t, item.ID))
@@ -87,7 +88,7 @@ func TestGatedTransition_PassesWholePreconditionThrough_AndRecordsNoteAndTrigger
 	require.NoError(t, err)
 	_, err = h.storage.GatedTransition(ctx, TransitionRequest{
 		Caller: CallerQueueBacklogItem, ItemID: item.ID, To: BacklogStatusQueued, TriggeredBy: TriggeredBySystem,
-		Precondition: &BacklogItemPrecondition{ExpectedUpdatedAt: &fresh.UpdatedAt, Note: "WIP cap hit"},
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedUpdatedAt: &fresh.UpdatedAt, Note: "WIP cap hit"},
 	})
 	require.NoError(t, err)
 	ev := lastEvent(t, h, item.ID)
@@ -108,7 +109,7 @@ func TestGatedTransition_PinsUpdatedAtOnlyWhenGuardInputAndObservedSupplied(t *t
 		require.NoError(t, err)
 		// An unrelated field edit bumps updated_at after the caller's read.
 		title := "edited"
-		_, err = h.storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &title}, nil)
+		_, err = h.storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Title: &title}, nil)
 		require.NoError(t, err)
 		req := TransitionRequest{Caller: caller, Observed: observed, To: BacklogStatusRefining}
 		if withGuard {
@@ -190,7 +191,7 @@ func TestGatedTransition_Unconditional_RedecidesOnceAndNeverWritesAStaleFrom(t *
 		now := time.Now()
 		_, err := h.storage.GatedTransition(ctx, TransitionRequest{
 			Caller: CallerOperatorForceReset, ItemID: item.ID, To: BacklogStatusIdea, Unconditional: true,
-			Precondition: &BacklogItemPrecondition{ExpectedUpdatedAt: &now},
+			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedUpdatedAt: &now},
 		})
 		require.ErrorIs(t, err, ErrInvalidTransitionRequest)
 	})
@@ -246,22 +247,22 @@ func TestGatedTransition_BeforeCommit_RunsAfterDecisionAndBeforeCAS(t *testing.T
 // denialRig is one denial source: how to build the item and gate, and the edge asked.
 type denialRig struct {
 	source string
-	setup  func(t *testing.T, h *gateHarness) (item *BacklogItemData, to BacklogStatus)
+	setup  func(t *testing.T, h *gateHarness) (item *backlogdto.BacklogItemData, to BacklogStatus)
 }
 
 func denialRigs() []denialRig {
 	return []denialRig{
-		{DeniedConfigGraph, func(t *testing.T, h *gateHarness) (*BacklogItemData, BacklogStatus) {
+		{DeniedConfigGraph, func(t *testing.T, h *gateHarness) (*backlogdto.BacklogItemData, BacklogStatus) {
 			return h.newItem(t, BacklogStatusIdea), BacklogStatusDone // no such edge
 		}},
-		{DeniedDefaultGuard, func(t *testing.T, h *gateHarness) (*BacklogItemData, BacklogStatus) {
+		{DeniedDefaultGuard, func(t *testing.T, h *gateHarness) (*backlogdto.BacklogItemData, BacklogStatus) {
 			return h.newItem(t, BacklogStatusReady), BacklogStatusInProgress // no approved plan
 		}},
-		{DeniedOperatorGate, func(t *testing.T, h *gateHarness) (*BacklogItemData, BacklogStatus) {
+		{DeniedOperatorGate, func(t *testing.T, h *gateHarness) (*backlogdto.BacklogItemData, BacklogStatus) {
 			addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, GateKindHumanApproval, nil)
 			return h.newItem(t, BacklogStatusIdea), BacklogStatusRefining
 		}},
-		{DeniedTargetStageRemoved, func(t *testing.T, h *gateHarness) (*BacklogItemData, BacklogStatus) {
+		{DeniedTargetStageRemoved, func(t *testing.T, h *gateHarness) (*backlogdto.BacklogItemData, BacklogStatus) {
 			ctx := context.Background()
 			from, err := h.repo.Client.BacklogStage.Create().SetSlug("gone-from").SetName("Gone From").SetEnabled(true).Save(ctx)
 			require.NoError(t, err)
@@ -398,7 +399,7 @@ func TestGatedTransition_Unwired_BehavesAsOff_AndCountsUnwired(t *testing.T) {
 	require.False(t, storage.TransitionGateWired())
 	require.Nil(t, storage.TransitionGateEngine())
 
-	item, err := storage.CreateBacklogItem(context.Background(), BacklogItemData{Title: "unwired", Status: string(BacklogStatusIdea)})
+	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "unwired", Status: string(BacklogStatusIdea)})
 	require.NoError(t, err)
 
 	before := GateUnwiredTotal()
@@ -409,7 +410,7 @@ func TestGatedTransition_Unwired_BehavesAsOff_AndCountsUnwired(t *testing.T) {
 	require.Greater(t, GateUnwiredTotal(), before)
 
 	// An engine-legacy caller still gets Default's answer.
-	other, err := storage.CreateBacklogItem(context.Background(), BacklogItemData{Title: "unwired 2", Status: string(BacklogStatusIdea)})
+	other, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "unwired 2", Status: string(BacklogStatusIdea)})
 	require.NoError(t, err)
 	_, err = storage.GatedTransition(context.Background(), TransitionRequest{Caller: CallerQueueBacklogItem, ItemID: other.ID, To: BacklogStatusDone})
 	require.ErrorIs(t, err, ErrTransitionNotAllowed)
@@ -460,15 +461,15 @@ func TestRollback_RequiresExpectedStatus_AndCountsBypass(t *testing.T) {
 
 	_, err := h.storage.Rollback(ctx, item.ID, BacklogStatusReady, nil, TriggeredBySystem)
 	require.ErrorIs(t, err, ErrInvalidTransitionRequest)
-	_, err = h.storage.Rollback(ctx, item.ID, BacklogStatusReady, &BacklogItemPrecondition{}, TriggeredBySystem)
+	_, err = h.storage.Rollback(ctx, item.ID, BacklogStatusReady, &backlogdto.BacklogItemPrecondition{}, TriggeredBySystem)
 	require.ErrorIs(t, err, ErrInvalidTransitionRequest)
 
 	before := EngineBypassCount(CallerRollback)
-	_, err = h.storage.Rollback(ctx, item.ID, BacklogStatusReady, &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReady)}, TriggeredBySystem)
+	_, err = h.storage.Rollback(ctx, item.ID, BacklogStatusReady, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusReady)}, TriggeredBySystem)
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
 	require.Equal(t, before, EngineBypassCount(CallerRollback), "a lost CAS is not a bypass write")
 
-	_, err = h.storage.Rollback(ctx, item.ID, BacklogStatusReady, &BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusQueued)}, TriggeredBySystem)
+	_, err = h.storage.Rollback(ctx, item.ID, BacklogStatusReady, &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusQueued)}, TriggeredBySystem)
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReady), h.status(t, item.ID))
 	require.Equal(t, before+1, EngineBypassCount(CallerRollback))
@@ -504,7 +505,7 @@ func TestGatedArchive_ArchivesFromAnyStatus_AndBeforeCommitRunsFirst(t *testing.
 		var statusInHook string
 		got, err := h.storage.GatedArchive(ctx, TransitionRequest{
 			Caller: CallerOperatorArchiveRPC, ItemID: item.ID, TriggeredBy: TriggeredByUser,
-			Precondition: &BacklogItemPrecondition{Note: "operator archived"},
+			Precondition: &backlogdto.BacklogItemPrecondition{Note: "operator archived"},
 			BeforeCommit: func(context.Context) error { statusInHook = h.status(t, item.ID); return nil },
 		})
 		require.NoError(t, err, "mode %d", mode)
@@ -560,7 +561,7 @@ func TestGatedUnarchive_RestoresToIdea_AndRejectsRequestsTheRawWriterCannotHonor
 	require.NoError(t, err)
 
 	at := time.Now()
-	_, err = h.storage.GatedUnarchive(ctx, TransitionRequest{Caller: CallerOperatorUnarchiveRPC, ItemID: item.ID, Precondition: &BacklogItemPrecondition{ExpectedUpdatedAt: &at}})
+	_, err = h.storage.GatedUnarchive(ctx, TransitionRequest{Caller: CallerOperatorUnarchiveRPC, ItemID: item.ID, Precondition: &backlogdto.BacklogItemPrecondition{ExpectedUpdatedAt: &at}})
 	require.ErrorIs(t, err, ErrInvalidTransitionRequest)
 	require.Equal(t, string(BacklogStatusArchived), h.status(t, item.ID))
 
@@ -594,8 +595,8 @@ func TestGatedSetPRAndTransition_RecordsPRInOneWrite_IsIdempotent_AndGuardsReass
 	// Reassigning to another PR is a field write that still needs the guard.
 	other := PRAssociation{URL: "https://example.test/o/r/pull/8", Number: 8, Summary: "moved"}
 	err = h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: got}, other)
-	require.ErrorIs(t, err, ErrPRReassignmentNotAllowed)
-	other.Guard = &PRReassignmentGuard{OverrideReason: "polluted branch", NewPRAuthorVerified: true}
+	require.ErrorIs(t, err, backlogdto.ErrPRReassignmentNotAllowed)
+	other.Guard = &backlogdto.PRReassignmentGuard{OverrideReason: "polluted branch", NewPRAuthorVerified: true}
 	require.NoError(t, h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: got}, other))
 	got, err = h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -634,7 +635,7 @@ func TestGatedSetPRAndTransition_RejectsMissingObservedAndPrecondition(t *testin
 	require.ErrorIs(t, h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, ItemID: item.ID}, pr), ErrInvalidTransitionRequest)
 	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	require.ErrorIs(t, h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: observed, Precondition: &BacklogItemPrecondition{}}, pr), ErrInvalidTransitionRequest)
+	require.ErrorIs(t, h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: observed, Precondition: &backlogdto.BacklogItemPrecondition{}}, pr), ErrInvalidTransitionRequest)
 }
 
 // --- GatedReconcileStuck -----------------------------------------------------
@@ -645,7 +646,7 @@ type countingPublisher struct {
 	transitions map[string][]BacklogItemChange
 }
 
-func (p *countingPublisher) PublishItemChanged(item *BacklogItemData, change BacklogItemChange) {
+func (p *countingPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, change BacklogItemChange) {
 	if change.Kind != ChangeStatusTransition {
 		return
 	}
@@ -714,9 +715,9 @@ func TestGatedReconcileStuck_SkipsItemsWithARunningSessionAndCountsNothingWhenId
 	require.NoError(t, err)
 	require.Zero(t, moved)
 
-	item, err := h.storage.CreateBacklogItem(ctx, BacklogItemData{Title: "running", Status: string(BacklogStatusInProgress)})
+	item, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "running", Status: string(BacklogStatusInProgress)})
 	require.NoError(t, err)
-	_, err = h.storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
+	_, err = h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
 	require.NoError(t, err)
 	moved, err = h.storage.GatedReconcileStuck(ctx)
 	require.NoError(t, err)
@@ -729,7 +730,7 @@ func TestCreateBacklogItemForDebug_CreatesAtAnyStatus_AndCountsDebugCreate(t *te
 	h := newGateHarness(t, ModeEnforce)
 	before := EngineBypassCount(CallerDebugCreate)
 
-	item, err := h.storage.CreateBacklogItemForDebug(context.Background(), BacklogItemData{Title: "seeded", Status: string(BacklogStatusReview)})
+	item, err := h.storage.CreateBacklogItemForDebug(context.Background(), backlogdto.BacklogItemData{Title: "seeded", Status: string(BacklogStatusReview)})
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReview), h.status(t, item.ID))
 	require.Equal(t, before+1, EngineBypassCount(CallerDebugCreate))

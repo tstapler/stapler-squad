@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // BenchmarkGatedTransitionDecision measures the gate's engine decision (caller
@@ -19,7 +21,7 @@ func BenchmarkGatedTransitionDecision(b *testing.B) {
 		b.Fatal(err)
 	}
 	def := NewDefaultWorkflowEngine()
-	item := &BacklogItemData{ID: "00000000-0000-0000-0000-000000000001", Status: string(BacklogStatusIdea)}
+	item := &backlogdto.BacklogItemData{ID: "00000000-0000-0000-0000-000000000001", Status: string(BacklogStatusIdea)}
 	req := TransitionRequest{Caller: CallerOperatorTransitionRPC, ItemID: item.ID, To: BacklogStatusRefining}
 	spec, ok := LookupTransitionCaller(req.Caller)
 	if !ok {

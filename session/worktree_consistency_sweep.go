@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entSession "github.com/tstapler/stapler-squad/session/ent/session"
 	entWorktree "github.com/tstapler/stapler-squad/session/ent/worktree"
@@ -448,7 +449,7 @@ func buildRepairMessage(finding WorktreeConsistencyFinding) (title, message stri
 // fatal). Mirrors the 3-step pattern used elsewhere in this codebase (e.g.
 // server/services/autonomous_orchestration_service.go, session/backlog_lifecycle_pr.go's
 // RecordPRCreatedOutOfBand): GetItemSessionBySessionUUID, then GetBacklogItem.
-func lookupBacklogLinkage(ctx context.Context, repo *EntRepository, sessionID string) (itemID string, item *BacklogItemData) {
+func lookupBacklogLinkage(ctx context.Context, repo *EntRepository, sessionID string) (itemID string, item *backlogdto.BacklogItemData) {
 	is, err := repo.GetItemSessionBySessionUUID(ctx, sessionID)
 	if err != nil || is.BacklogItemID == "" {
 		return "", nil
@@ -498,7 +499,7 @@ func notifyLinkageAware(notifier Notifier, backoff *notifyBackoff, req notifyReq
 // mirrors notifyIfActiveWorkSessionStale's dual-write pattern
 // (server/services/backlog_service_triage.go): a storage error or a status precondition
 // mismatch is logged, never propagated or allowed to block the caller's notification.
-func markStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID string, item *BacklogItemData, detail string) {
+func markStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID string, item *backlogdto.BacklogItemData, detail string) {
 	if itemID == "" || item == nil || IsTerminalStatus(BacklogStatus(item.Status)) {
 		return
 	}
@@ -519,7 +520,7 @@ func markStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID s
 // MarkStuck'd) on one tick, then successfully repaired on a later tick, left its
 // BacklogItem visibly "stuck" forever — undermining this sweep's own self-healing premise
 // (BLOCKER). A storage error is logged, never propagated.
-func resolveStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID string, item *BacklogItemData) {
+func resolveStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID string, item *backlogdto.BacklogItemData) {
 	if itemID == "" || item == nil || IsTerminalStatus(BacklogStatus(item.Status)) {
 		return
 	}
@@ -564,7 +565,7 @@ type notifyGlueSpec struct {
 // build the title/message via spec.BuildMessage, and fire notifyLinkageAware — returning the
 // looked-up linkage so the caller can also dual-write MarkStuck/ResolveStuck without a second
 // lookup. See notifyGlueSpec.BypassBackoff's doc comment for why the repair path must set it.
-func finishNotify(ctx context.Context, deps notifyGlueDeps, finding *WorktreeConsistencyFinding, spec notifyGlueSpec) (itemID string, item *BacklogItemData) {
+func finishNotify(ctx context.Context, deps notifyGlueDeps, finding *WorktreeConsistencyFinding, spec notifyGlueSpec) (itemID string, item *backlogdto.BacklogItemData) {
 	itemID, item = lookupBacklogLinkage(ctx, deps.Repo, finding.SessionID)
 
 	title, message := spec.BuildMessage(*finding)

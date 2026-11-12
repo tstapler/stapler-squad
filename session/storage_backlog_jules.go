@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 )
 
@@ -40,7 +41,7 @@ const julesDispatchFailedEndReason = "dispatch_failed"
 // (via the ItemSessionBacklogEntry shape already returned by
 // GetAllItemSessionsWithBacklogInfo) for the dispatcher/poller to act on it
 // without a second query.
-func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	sessions, err := r.Client.ItemSession.Query().
 		Where(
 			itemsession.SessionRole(SessionRoleJulesWork),
@@ -51,12 +52,12 @@ func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]ItemSe
 	if err != nil {
 		return nil, fmt.Errorf("failed to list open jules item sessions: %w", err)
 	}
-	results := make([]ItemSessionBacklogEntry, 0, len(sessions))
+	results := make([]backlogdto.ItemSessionBacklogEntry, 0, len(sessions))
 	for _, is := range sessions {
 		if is.Edges.BacklogItem == nil {
 			continue
 		}
-		results = append(results, ItemSessionBacklogEntry{
+		results = append(results, backlogdto.ItemSessionBacklogEntry{
 			SessionUUID: is.SessionUUID,
 			SessionRole: is.SessionRole,
 			ItemID:      is.Edges.BacklogItem.ID.String(),

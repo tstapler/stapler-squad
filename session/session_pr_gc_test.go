@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // backdate rewrites an immutable timestamp column directly, since ent exposes no
@@ -29,7 +30,7 @@ func createLiveSession(t *testing.T, repo *EntRepository, title, uuid string) {
 
 func createLiveItem(t *testing.T, repo *EntRepository, title string) string {
 	t.Helper()
-	item, err := repo.CreateBacklogItem(context.Background(), BacklogItemData{Title: title})
+	item, err := repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: title})
 	require.NoError(t, err)
 	return item.ID
 }

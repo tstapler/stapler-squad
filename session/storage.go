@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
@@ -1225,7 +1226,7 @@ func (s *Storage) AssignSessionsToProject(ctx context.Context, projectName strin
 // --- Backlog ---
 
 // CreateBacklogItem inserts a new backlog item.
-func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (*BacklogItemData, error) {
+func (s *Storage) CreateBacklogItem(ctx context.Context, data backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	// Every creation path (create_backlog_item, import_github_issue, the web
 	// UI's RPC handlers) funnels through here, so this is the one place that
 	// guarantees every item's RepoPath is canonicalized regardless of which
@@ -1267,7 +1268,7 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (
 // counted as workflow_engine_bypass_total{caller=debug_create}; every other
 // creator is held to idea (or no status) by the bypass inventory test
 // (ADR-007 D1), which is why CreateBacklogItem itself rejects nothing.
-func (s *Storage) CreateBacklogItemForDebug(ctx context.Context, data BacklogItemData) (*BacklogItemData, error) {
+func (s *Storage) CreateBacklogItemForDebug(ctx context.Context, data backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	created, err := s.CreateBacklogItem(ctx, data)
 	if err == nil {
 		RecordEngineBypass(CallerDebugCreate)
@@ -1279,7 +1280,7 @@ func (s *Storage) CreateBacklogItemForDebug(ctx context.Context, data BacklogIte
 // project_plans/cross-host-claim-dedup/decisions/) that records a cross-host
 // claim for every newly created item that has an ExternalURL. Best-effort: a
 // failure is logged and never fails item creation.
-func (s *Storage) recordClaim(ctx context.Context, item *BacklogItemData) {
+func (s *Storage) recordClaim(ctx context.Context, item *backlogdto.BacklogItemData) {
 	recorder := s.claimRecorder.Load()
 	if recorder == nil || item == nil || item.ExternalURL == "" {
 		return
@@ -1295,43 +1296,43 @@ func (s *Storage) recordClaim(ctx context.Context, item *BacklogItemData) {
 }
 
 // GetBacklogItem retrieves a backlog item by UUID string.
-func (s *Storage) GetBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+func (s *Storage) GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error) {
 	return s.Repo.GetBacklogItem(ctx, id)
 }
 
 // GetBacklogItemByExternalURL retrieves a backlog item previously imported
 // from externalURL (e.g. a GitHub issue URL), or ErrNotFound if none exists.
-func (s *Storage) GetBacklogItemByExternalURL(ctx context.Context, externalURL string) (*BacklogItemData, error) {
+func (s *Storage) GetBacklogItemByExternalURL(ctx context.Context, externalURL string) (*backlogdto.BacklogItemData, error) {
 	return s.Repo.GetBacklogItemByExternalURL(ctx, externalURL)
 }
 
 // ListBacklogItems returns backlog items with optional filtering.
-func (s *Storage) ListBacklogItems(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemData, error) {
+func (s *Storage) ListBacklogItems(ctx context.Context, filter backlogdto.BacklogItemFilter) ([]backlogdto.BacklogItemData, error) {
 	return s.Repo.ListBacklogItems(ctx, filter)
 }
 
 // ListBacklogItemSummaries returns lightweight summaries for list views.
-func (s *Storage) ListBacklogItemSummaries(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemSummary, error) {
+func (s *Storage) ListBacklogItemSummaries(ctx context.Context, filter backlogdto.BacklogItemFilter) ([]backlogdto.BacklogItemSummary, error) {
 	return s.Repo.ListBacklogItemSummaries(ctx, filter)
 }
 
 // AddBacklogItemDependency records a blocker/blocked dependency edge.
-func (s *Storage) AddBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+func (s *Storage) AddBacklogItemDependency(ctx context.Context, edge backlogdto.BacklogItemDependencyEdge) error {
 	return s.Repo.AddBacklogItemDependency(ctx, edge)
 }
 
 // RemoveBacklogItemDependency deletes a blocker/blocked edge (idempotent).
-func (s *Storage) RemoveBacklogItemDependency(ctx context.Context, edge BacklogItemDependencyEdge) error {
+func (s *Storage) RemoveBacklogItemDependency(ctx context.Context, edge backlogdto.BacklogItemDependencyEdge) error {
 	return s.Repo.RemoveBacklogItemDependency(ctx, edge)
 }
 
 // ListBacklogItemDependencies returns the blocked-by and blocking refs for an item.
-func (s *Storage) ListBacklogItemDependencies(ctx context.Context, itemID string) (blockedBy, blocking []BacklogItemDependencyRef, err error) {
+func (s *Storage) ListBacklogItemDependencies(ctx context.Context, itemID string) (blockedBy, blocking []backlogdto.BacklogItemDependencyRef, err error) {
 	return s.Repo.ListBacklogItemDependencies(ctx, itemID)
 }
 
 // UnresolvedBlockersForItems returns unresolved blocker refs per blocked item (batched).
-func (s *Storage) UnresolvedBlockersForItems(ctx context.Context, itemIDs []string) (map[string][]BacklogItemDependencyRef, error) {
+func (s *Storage) UnresolvedBlockersForItems(ctx context.Context, itemIDs []string) (map[string][]backlogdto.BacklogItemDependencyRef, error) {
 	return s.Repo.UnresolvedBlockersForItems(ctx, itemIDs)
 }
 
@@ -1346,18 +1347,18 @@ func (s *Storage) UnresolvedBlockerIDs(ctx context.Context, itemID string) ([]st
 }
 
 // UpdateBacklogItem modifies an existing backlog item.
-func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
+func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update backlogdto.BacklogItemUpdate, precondition *backlogdto.BacklogItemPrecondition) (*backlogdto.BacklogItemData, error) {
 	return s.Repo.UpdateBacklogItem(ctx, id, update, precondition)
 }
 
 // RawArchiveBacklogItem sets the archived_at timestamp and status. See
 // EntRepository.ArchiveBacklogItem's doc comment for precondition/triggeredBy/note.
-func (s *Storage) RawArchiveBacklogItem(ctx context.Context, id string, precondition *BacklogItemPrecondition, triggeredBy, note string) (*BacklogItemData, error) {
+func (s *Storage) RawArchiveBacklogItem(ctx context.Context, id string, precondition *backlogdto.BacklogItemPrecondition, triggeredBy, note string) (*backlogdto.BacklogItemData, error) {
 	return s.Repo.rawArchiveBacklogItem(ctx, id, precondition, triggeredBy, note)
 }
 
 // RawUnarchiveBacklogItem clears archived_at and restores the item to "idea".
-func (s *Storage) RawUnarchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+func (s *Storage) RawUnarchiveBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error) {
 	return s.Repo.rawUnarchiveBacklogItem(ctx, id, "")
 }
 
@@ -1367,7 +1368,7 @@ func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 }
 
 // RawTransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition, triggeredBy string) (*BacklogItemData, error) {
+func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
 	return s.Repo.RawTransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
 }
 
@@ -1428,14 +1429,14 @@ func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string,
 // than silently succeeding because the check only lived in one handler.
 // guard is ignored (may be nil) when observed.Status is review — a
 // first-time recording never needs one.
-func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed *BacklogItemData, prURL string, prNumber int, summary string, guard *PRReassignmentGuard) error {
+func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, prURL string, prNumber int, summary string, guard *backlogdto.PRReassignmentGuard) error {
 	return s.setPRAndTransition(ctx, observed, PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard})
 }
 
 // setPRAndTransition is the single-UPDATE write shared by
 // RawSetBacklogItemPRAndTransition and GatedSetPRAndTransition; the contract
 // is documented on the former.
-func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemData, pr PRAssociation) error {
+func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, pr PRAssociation) error {
 	prURL, prNumber, summary, guard := pr.URL, pr.Number, pr.Summary, pr.Guard
 	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
@@ -1450,13 +1451,13 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 	if isReassignment {
 		switch {
 		case guard == nil:
-			return fmt.Errorf("%w: item already has PR #%d tracked (status pr_pending) — this caller did not supply a PRReassignmentGuard", ErrPRReassignmentNotAllowed, observed.PrNumber)
+			return fmt.Errorf("%w: item already has PR #%d tracked (status pr_pending) — this caller did not supply a PRReassignmentGuard", backlogdto.ErrPRReassignmentNotAllowed, observed.PrNumber)
 		case guard.OverrideReason == "":
-			return fmt.Errorf("%w: override_reason is required to reassign PR #%d to a different PR", ErrPRReassignmentNotAllowed, observed.PrNumber)
+			return fmt.Errorf("%w: override_reason is required to reassign PR #%d to a different PR", backlogdto.ErrPRReassignmentNotAllowed, observed.PrNumber)
 		case guard.CurrentPRMerged:
-			return fmt.Errorf("%w: currently tracked PR #%d is already merged — its association cannot be changed", ErrPRReassignmentNotAllowed, observed.PrNumber)
+			return fmt.Errorf("%w: currently tracked PR #%d is already merged — its association cannot be changed", backlogdto.ErrPRReassignmentNotAllowed, observed.PrNumber)
 		case !guard.NewPRAuthorVerified:
-			return fmt.Errorf("%w: the new PR's author must be verified to match the caller's identity before reassigning PR #%d", ErrPRReassignmentNotAllowed, observed.PrNumber)
+			return fmt.Errorf("%w: the new PR's author must be verified to match the caller's identity before reassigning PR #%d", backlogdto.ErrPRReassignmentNotAllowed, observed.PrNumber)
 		}
 	}
 
@@ -1488,7 +1489,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 		progressNoteStatus = "pr_corrected"
 	}
 	expectedUpdatedAt := observed.UpdatedAt
-	precondition := &BacklogItemPrecondition{
+	precondition := &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus:    observed.Status,
 		ExpectedUpdatedAt: &expectedUpdatedAt,
 		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
@@ -1526,7 +1527,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *BacklogItemD
 	// land after the old watermark's timestamp. Best-effort, same discipline
 	// as the resolves above.
 	if isReassignment {
-		if _, clearErr := s.UpdateBacklogItem(ctx, observed.ID, BacklogItemUpdate{ClearPrFeedbackAddressedAt: true}, nil); clearErr != nil {
+		if _, clearErr := s.UpdateBacklogItem(ctx, observed.ID, backlogdto.BacklogItemUpdate{ClearPrFeedbackAddressedAt: true}, nil); clearErr != nil {
 			log.WarningLog().Printf("[Storage] SetBacklogItemPRAndTransition: failed to clear pr_feedback_addressed_at item=%s: %v", observed.ID, clearErr)
 		}
 	}
@@ -1544,7 +1545,7 @@ func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL str
 // mirror follow the derived active PR. The status never changes and no override_reason
 // or reassignment guard applies. If the mirror recompute fails, the next
 // ReconcilePRPending pass repairs it.
-func (s *Storage) attachAdditivePR(ctx context.Context, observed *BacklogItemData, pr PRAssociation) error {
+func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.BacklogItemData, pr PRAssociation) error {
 	ref, err := ParseItemPRRef(pr.URL, pr.Number)
 	if err != nil {
 		return fmt.Errorf("additive PR: %w", err)
@@ -1560,7 +1561,7 @@ func (s *Storage) attachAdditivePR(ctx context.Context, observed *BacklogItemDat
 		return fmt.Errorf("additive PR: record link: %w", err)
 	}
 	if res.Tombstoned {
-		return fmt.Errorf("%w: %s was detached from this item earlier; re-attach it from the UI first", ErrPRDetached, ref)
+		return fmt.Errorf("%w: %s was detached from this item earlier; re-attach it from the UI first", backlogdto.ErrPRDetached, ref)
 	}
 	if _, mirrorErr := s.Repo.RecomputeItemPRMirror(ctx, observed.ID); mirrorErr != nil {
 		log.WarningLog().Printf("[Storage] additive PR: mirror recompute item=%s: %v", observed.ID, mirrorErr)
@@ -1576,7 +1577,7 @@ func (s *Storage) attachAdditivePR(ctx context.Context, observed *BacklogItemDat
 // ent-backed repository (same rationale as MarkStuck below) — returns
 // nil, nil for backends that don't support it (e.g. an in-memory test
 // double), never an error.
-func (s *Storage) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]BacklogItemData, error) {
+func (s *Storage) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]backlogdto.BacklogItemData, error) {
 	return s.Repo.FindDoneItemsOlderThan(ctx, cutoff)
 }
 
@@ -1586,7 +1587,7 @@ func (s *Storage) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) 
 // BacklogStuckState row, joined with rendering-relevant item fields. Returns
 // an empty slice (no error) when the backend does not support stuck-state
 // queries (e.g. an in-memory test double).
-func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData, error) {
+func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]backlogdto.OpenStuckStateData, error) {
 	return s.Repo.FindOpenStuckStates(ctx)
 }
 
@@ -1594,7 +1595,7 @@ func (s *Storage) FindOpenStuckStates(ctx context.Context) ([]OpenStuckStateData
 // open or resolved, ordered oldest-first — the full-history read backing
 // get_backlog_stuck_report. Thin passthrough, same rationale as
 // FindOpenStuckStates above.
-func (s *Storage) ListStuckStatesForItem(ctx context.Context, itemID string) ([]StuckStateHistoryData, error) {
+func (s *Storage) ListStuckStatesForItem(ctx context.Context, itemID string) ([]backlogdto.StuckStateHistoryData, error) {
 	return s.Repo.ListStuckStatesForItem(ctx, itemID)
 }
 
@@ -1641,17 +1642,17 @@ func (s *Storage) MarkStuckNotified(ctx context.Context, itemID string, reason d
 // --- ItemSource ---
 
 // CreateItemSource registers a new external item source.
-func (s *Storage) CreateItemSource(ctx context.Context, data ItemSourceData) (*ItemSourceData, error) {
+func (s *Storage) CreateItemSource(ctx context.Context, data backlogdto.ItemSourceData) (*backlogdto.ItemSourceData, error) {
 	return s.Repo.CreateItemSource(ctx, data)
 }
 
 // ListItemSources returns all registered item sources.
-func (s *Storage) ListItemSources(ctx context.Context) ([]ItemSourceData, error) {
+func (s *Storage) ListItemSources(ctx context.Context) ([]backlogdto.ItemSourceData, error) {
 	return s.Repo.ListItemSources(ctx)
 }
 
 // UpdateItemSource modifies an existing item source.
-func (s *Storage) UpdateItemSource(ctx context.Context, id string, update ItemSourceUpdate) (*ItemSourceData, error) {
+func (s *Storage) UpdateItemSource(ctx context.Context, id string, update backlogdto.ItemSourceUpdate) (*backlogdto.ItemSourceData, error) {
 	return s.Repo.UpdateItemSource(ctx, id, update)
 }
 
@@ -1665,7 +1666,7 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 // server/services/backlog_github_forward_sync.go) to look up a backlog item's
 // source (ForwardSyncEnabled, ForwardSyncCloseLabel, PluginID, Config) without
 // needing an *EntRepository handle of its own.
-func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*ItemSourceData, error) {
+func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*backlogdto.ItemSourceData, error) {
 	src, err := s.Repo.GetItemSourceByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1676,7 +1677,7 @@ func (s *Storage) GetItemSourceByID(ctx context.Context, id string) (*ItemSource
 
 // ListSourceSyncEvents returns sync history events for an item source, most
 // recent first. Direct EntRepository delegation, like GetItemSession below.
-func (s *Storage) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]SourceSyncEventData, bool, error) {
+func (s *Storage) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]backlogdto.SourceSyncEventData, bool, error) {
 	return s.Repo.ListSourceSyncEvents(ctx, sourceID)
 }
 
@@ -1696,7 +1697,7 @@ func (s *Storage) RecordSourceSyncFailure(ctx context.Context, sourceID, message
 // --- ItemSession (direct EntRepository delegation) ---
 
 // GetItemSession looks up an ItemSession by entity UUID (loads BacklogItem edge).
-func (s *Storage) GetItemSession(ctx context.Context, id string) (ItemSessionSummary, error) {
+func (s *Storage) GetItemSession(ctx context.Context, id string) (backlogdto.ItemSessionSummary, error) {
 	return s.Repo.GetItemSession(ctx, id)
 }
 
@@ -1706,7 +1707,7 @@ func (s *Storage) GetBaseCommitSHAsForSessions(ctx context.Context, uuids []stri
 }
 
 // GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
-func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (ItemSessionSummary, error) {
+func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error) {
 	return s.Repo.GetItemSessionBySessionUUID(ctx, sessionUUID)
 }
 
@@ -1769,7 +1770,7 @@ func (s *Storage) ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string)
 }
 
 // ListItemSessionsBySessionUUIDs batches GetItemSessionBySessionUUID: one query for all UUIDs.
-func (s *Storage) ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]ItemSessionSummary, error) {
+func (s *Storage) ListItemSessionsBySessionUUIDs(ctx context.Context, uuids []string) (map[string]backlogdto.ItemSessionSummary, error) {
 	return s.Repo.ListItemSessionsBySessionUUIDs(ctx, uuids)
 }
 
@@ -1816,7 +1817,7 @@ func (s *Storage) UpdateItemSessionTriageResult(ctx context.Context, id string, 
 }
 
 // UpdateItemSessionDiagnoseResult stores a diagnose session's structured outcome.
-func (s *Storage) UpdateItemSessionDiagnoseResult(ctx context.Context, id string, result DiagnoseResultData) error {
+func (s *Storage) UpdateItemSessionDiagnoseResult(ctx context.Context, id string, result backlogdto.DiagnoseResultData) error {
 	return s.Repo.UpdateItemSessionDiagnoseResult(ctx, id, result)
 }
 
@@ -1856,7 +1857,7 @@ func (s *Storage) UpdateItemSessionGitActivity(ctx context.Context, id string, s
 
 // ListOpenJulesItemSessions returns every not-yet-ended jules_work ItemSession
 // across all backlog items. See EntRepository.ListOpenJulesItemSessions.
-func (s *Storage) ListOpenJulesItemSessions(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+func (s *Storage) ListOpenJulesItemSessions(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	return s.Repo.ListOpenJulesItemSessions(ctx)
 }
 
@@ -1916,7 +1917,7 @@ func (s *Storage) AddHeadlessCostBySessionUUID(ctx context.Context, sessionUUID 
 
 // GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
 // Returns ErrNotFound if no matching record exists.
-func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (ItemSessionSummary, error) {
+func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (backlogdto.ItemSessionSummary, error) {
 	return s.Repo.GetItemSessionBySessionAndItem(ctx, sessionUUID, itemID)
 }
 
@@ -1935,12 +1936,12 @@ func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID 
 
 // GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for itemID,
 // most recent first. Returns nil (not an error) when the repo isn't ent-backed.
-func (s *Storage) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]ReviewVerdictSummary, error) {
+func (s *Storage) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]backlogdto.ReviewVerdictSummary, error) {
 	return s.Repo.GetRecentReviewVerdictSummaries(ctx, itemID, limit)
 }
 
 // SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.
-func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) error {
+func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict backlogdto.ReviewVerdictData) error {
 	return s.Repo.SaveReviewVerdict(ctx, itemSessionID, verdict)
 }
 
@@ -2064,7 +2065,7 @@ func (s *Storage) AppendProgressNote(ctx context.Context, itemID string, criteri
 
 // ListProgressNotesForItem returns the full append-only history of report_progress
 // calls for a backlog item, ordered by created_at ascending.
-func (s *Storage) ListProgressNotesForItem(ctx context.Context, itemID string) ([]ProgressNoteData, error) {
+func (s *Storage) ListProgressNotesForItem(ctx context.Context, itemID string) ([]backlogdto.ProgressNoteData, error) {
 	return s.Repo.ListProgressNotesForItem(ctx, itemID)
 }
 
@@ -2132,29 +2133,29 @@ func (s *Storage) ListFlowMarkersForItem(ctx context.Context, itemID string, kin
 
 // ListActivityNotesForItem returns the full append-only activity-note history for
 // a backlog item, ordered by created_at ascending.
-func (s *Storage) ListActivityNotesForItem(ctx context.Context, itemID string) ([]ActivityNoteData, error) {
+func (s *Storage) ListActivityNotesForItem(ctx context.Context, itemID string) ([]backlogdto.ActivityNoteData, error) {
 	return s.Repo.ListActivityNotesForItem(ctx, itemID)
 }
 
 // CreateItemSession creates a new ItemSession linked to a BacklogItem.
-func (s *Storage) CreateItemSession(ctx context.Context, data ItemSessionData) (ItemSessionSummary, error) {
+func (s *Storage) CreateItemSession(ctx context.Context, data backlogdto.ItemSessionData) (backlogdto.ItemSessionSummary, error) {
 	return s.Repo.CreateItemSession(ctx, data)
 }
 
 // CreateItemSessionWithVerdict atomically creates an ItemSession and its initial
 // ReviewVerdict in a single transaction. Falls back gracefully if the backend is
 // not ent-based.
-func (s *Storage) CreateItemSessionWithVerdict(ctx context.Context, isData ItemSessionData, verdict ReviewVerdictData) (ItemSessionSummary, error) {
+func (s *Storage) CreateItemSessionWithVerdict(ctx context.Context, isData backlogdto.ItemSessionData, verdict backlogdto.ReviewVerdictData) (backlogdto.ItemSessionSummary, error) {
 	return s.Repo.CreateItemSessionWithVerdict(ctx, isData, verdict)
 }
 
 // ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
-func (s *Storage) ListItemSessions(ctx context.Context, itemID string) ([]ItemSessionSummary, error) {
+func (s *Storage) ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error) {
 	return s.Repo.ListItemSessions(ctx, itemID)
 }
 
 // ListItemSessionsForItems batches ListItemSessions across UUID-shaped item IDs.
-func (s *Storage) ListItemSessionsForItems(ctx context.Context, itemIDs []string) (map[string][]ItemSessionSummary, error) {
+func (s *Storage) ListItemSessionsForItems(ctx context.Context, itemIDs []string) (map[string][]backlogdto.ItemSessionSummary, error) {
 	return s.Repo.ListItemSessionsForItems(ctx, itemIDs)
 }
 
@@ -2165,13 +2166,13 @@ func (s *Storage) UpdateItemSessionSessionUUID(ctx context.Context, id string, s
 
 // GetAllItemSessionsWithBacklogInfo returns all item sessions joined with backlog item metadata.
 // Delegates to EntRepository; returns an error for non-ent backends.
-func (s *Storage) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]ItemSessionBacklogEntry, error) {
+func (s *Storage) GetAllItemSessionsWithBacklogInfo(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	return s.Repo.GetAllItemSessionsWithBacklogInfo(ctx)
 }
 
 // GetDeletedItemSessionCostLedger returns the durable deleted-item cost
 // ledger. Delegates to EntRepository; returns an error for non-ent backends.
-func (s *Storage) GetDeletedItemSessionCostLedger(ctx context.Context) ([]DeletedItemSessionCostEntry, error) {
+func (s *Storage) GetDeletedItemSessionCostLedger(ctx context.Context) ([]backlogdto.DeletedItemSessionCostEntry, error) {
 	return s.Repo.GetDeletedItemSessionCostLedger(ctx)
 }
 

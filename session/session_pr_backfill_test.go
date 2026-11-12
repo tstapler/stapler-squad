@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
@@ -41,7 +42,7 @@ func addLegacyItem(t *testing.T, repo *EntRepository, title, status string, numb
 
 func attachItemSession(t *testing.T, repo *EntRepository, itemID, sessionUUID string) {
 	t.Helper()
-	_, err := repo.CreateItemSession(context.Background(), ItemSessionData{ItemID: itemID, SessionUUID: sessionUUID, SessionRole: SessionRoleWork})
+	_, err := repo.CreateItemSession(context.Background(), backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: sessionUUID, SessionRole: SessionRoleWork})
 	require.NoError(t, err)
 }
 

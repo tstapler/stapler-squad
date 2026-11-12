@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 )
@@ -27,9 +28,9 @@ func TestResolveBacklogItemLookup_should_RouteToPublicIdBranch_When_BlPrefixedSt
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "public id lookup target"})
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "public id lookup target"})
 	require.NoError(t, err)
-	require.True(t, IsBacklogItemIDShape(created.PublicIDRaw), "CreateBacklogItem must mint a bl_-prefixed public id (Story 1.1 AC)")
+	require.True(t, backlogdto.IsBacklogItemIDShape(created.PublicIDRaw), "CreateBacklogItem must mint a bl_-prefixed public id (Story 1.1 AC)")
 
 	wantID, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
@@ -88,7 +89,7 @@ func TestGetBacklogItem_should_ResolveByEitherLegacyUUIDOrPublicId_When_BothForm
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "dual-id lookup target"})
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "dual-id lookup target"})
 	require.NoError(t, err)
 
 	byUUID, err := repo.GetBacklogItem(ctx, created.ID)
@@ -140,8 +141,8 @@ func TestBackfillBacklogItemPublicIDs_should_PopulateAllRows_When_RunOnUnbackfil
 	for _, id := range ids {
 		row, err := repo.Client.BacklogItem.Get(ctx, id)
 		require.NoError(t, err)
-		require.True(t, IsBacklogItemIDShape(row.PublicID), "row %s must have a bl_-prefixed public id after backfill, got %q", id, row.PublicID)
-		_, err = ParseBacklogItemID(row.PublicID)
+		require.True(t, backlogdto.IsBacklogItemIDShape(row.PublicID), "row %s must have a bl_-prefixed public id after backfill, got %q", id, row.PublicID)
+		_, err = backlogdto.ParseBacklogItemID(row.PublicID)
 		require.NoError(t, err, "backfilled public id must parse cleanly")
 		assert.False(t, seen[row.PublicID], "public id %q assigned to more than one row", row.PublicID)
 		seen[row.PublicID] = true
@@ -164,7 +165,7 @@ func TestBackfillBacklogItemPublicIDs_should_BeNoOp_When_RunTwiceOnAlreadyBackfi
 
 	before, err := repo.Client.BacklogItem.Get(ctx, id)
 	require.NoError(t, err)
-	require.True(t, IsBacklogItemIDShape(before.PublicID), "precondition: first backfill run must have populated a public id")
+	require.True(t, backlogdto.IsBacklogItemIDShape(before.PublicID), "precondition: first backfill run must have populated a public id")
 
 	require.NoError(t, repo.BackfillBacklogItemPublicIDs(ctx))
 
@@ -215,7 +216,7 @@ func TestBackfillBacklogItemPublicIDs_should_NotDoubleAssign_When_TwoInstancesRa
 	for _, id := range ids {
 		row, err := repo1.Client.BacklogItem.Get(ctx, id)
 		require.NoError(t, err)
-		require.True(t, IsBacklogItemIDShape(row.PublicID), "row %s must have exactly one valid public id after the race, got %q", id, row.PublicID)
+		require.True(t, backlogdto.IsBacklogItemIDShape(row.PublicID), "row %s must have exactly one valid public id after the race, got %q", id, row.PublicID)
 		assert.False(t, seen[row.PublicID], "public id %q assigned to more than one row after the race", row.PublicID)
 		seen[row.PublicID] = true
 	}
@@ -234,7 +235,7 @@ func newTestJulesItemSession(t *testing.T, storage *Storage, role, sessionUUID s
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "jules test item " + sessionUUID})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules test item " + sessionUUID})
 	require.NoError(t, err)
 
 	parsedItemID, err := uuid.Parse(item.ID)
@@ -264,9 +265,9 @@ func TestListOpenJulesItemSessions_should_ReturnOnlyUnfinishedJulesRows_When_Mix
 
 	openItemID, _ := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/open", 0)
 
-	workItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "unrelated open work item"})
+	workItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "unrelated open work item"})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      workItem.ID,
 		SessionUUID: "tmux-work-session",
 		SessionRole: SessionRoleWork,
