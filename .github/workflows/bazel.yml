@@ -156,7 +156,7 @@ jobs:
       # Full graph on a clean checkout: no generation step precedes it (Task 2.6a). Failures left are
       # Epic 3/4 items listed in tools/bzl/test-exclusions.yaml.
       # One invocation, not `build //...` then `test //...`: tests start as soon as their own deps are built instead of
-      # waiting for the ~15 min woven-binary action (OtelWeaveHermetic, 928s in the profile), and the test BEP/profile now
+      # waiting for the woven-binary actions (OtelWeaveHermetic: three actions of 218-355s, 218s on the critical path), and the test BEP/profile now
       # cover tests too. docs/explanation/bazel-parallelism.md has the profile numbers.
       - name: Build and test the full graph
         run: |

@@ -26,15 +26,15 @@ Profile of the 28 min full-graph build (2 CPUs, 3 GB): `action resource lock` sp
 a 4-vCPU `ubuntu-latest` ran two actions at once. `build:ci` now sets `cpu=HOST_CPUS` and `memory=HOST_RAM*.75` (#1592), so the cap
 is 4 CPUs and about 12 GB. Tests take their parallelism from the same CPU budget (`--local_test_jobs` defaults to it).
 
-The largest single actions, from the same profile (seconds): `OtelWeaveHermetic stapler-squad` 928, `GoCompilePkg server/server.a` 392,
-`Copying directory web-app/dist` 359, `OtelModcache` 138. One 928 s action is a floor that more CPUs cannot lower; the
-only lever for it is to overlap other work with it.
+The largest single actions, from the same profile (seconds): `OtelWeaveHermetic stapler-squad` 928 in total across three separate actions (218-355 each; 218 on the critical path), `GoCompilePkg server/server.a` 392,
+`Copying directory web-app/dist` 359, `OtelModcache` 138. The longest single action (the web dist copy, 353-359 s, or one weave, up to 355 s) is the floor that more CPUs cannot lower; the three weave actions are independent and can overlap. Beyond that, the levers are to shorten those
+actions or overlap other work with them, not to add parallelism flags.
 
 ## Changes and reasoning
 
 - **One `bazel test //...` instead of `bazel build //...` then `bazel test //...`** (`.github/workflows/bazel.yml`). Step timings
   from run 43118980774: build 1438 s, test 508 s (run 43117190237: 1643 s and 550 s). With two invocations no test could start
-  until the whole graph, including the 928 s weave, finished. In one invocation Bazel starts each test as its deps complete,
+  until the whole graph, including the three weave actions (928 s combined), finished. In one invocation Bazel starts each test as its deps complete,
   so the 508 s of tests overlap the weave. `--keep_going` keeps the old semantics (all failures reported). The BEP and profile
   now include test results, which also gives per-test durations for shard tuning (the old BEP came from the build step only).
   `bazel-trend` reads `buildMetrics` from the BEP, which is still present. Not measured locally (a full-graph run is not allowed on the dev host).
@@ -50,7 +50,7 @@ only lever for it is to overlap other work with it.
 
 ## What is not parallelizable
 
-- `OtelWeaveHermetic` is a single 928 s action (weave plus build of the instrumented binary). It is the critical path floor.
+- `OtelWeaveHermetic` runs three times (218-355 s each, 928 s combined; weave plus build of an instrumented binary variant). One of them (218 s) is on the critical path; the three are independent actions, so more CPUs let them overlap, and removing or sharing the work between them is the real lever (see the slow-actions work).
 - The "Freshness gates" step (about 101 s) runs before the main invocation; it needs a gazelle run and a `go mod tidy` check and only shares the Bazel server.
 - `actions/checkout` with `fetch-depth: 0` took 143-195 s. It exists for `affected-targets -base`; a shallow clone plus fetching the base SHA
   would save most of that, but history may be used by other steps, so it is recommended and not done here.
