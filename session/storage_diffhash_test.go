@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -62,10 +63,10 @@ func TestComputeCurrentDiffHash_should_returnNonEmptyHash_When_CompletedWorkSess
 	require.NoError(t, err)
 	headSHA := addCommitForDiffHashTest(t, gitRepo, "foo.go", "add foo.go")
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "diffhash item", RepoPath: repoPath})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "diffhash item", RepoPath: repoPath})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "work-1", SessionRole: SessionRoleWork})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "work-1", SessionRole: SessionRoleWork})
 	require.NoError(t, err)
 	require.NoError(t, storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA))
 	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, is.ID, headSHA, "add foo.go", time.Now(), 1))
@@ -87,7 +88,7 @@ func TestComputeCurrentDiffHash_should_returnEmptyString_When_NoCompletedWorkSes
 	ctx := context.Background()
 
 	repoPath, _ := setupDiffHashTestRepo(t)
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "no session item", RepoPath: repoPath})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "no session item", RepoPath: repoPath})
 	require.NoError(t, err)
 
 	hash := storage.ComputeCurrentDiffHash(ctx, item.ID)
@@ -106,13 +107,13 @@ func TestGetRecentReviewVerdictSummaries_should_roundTripDiffHash_When_VerdictSa
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "round trip item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "round trip item"})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: "review-1", SessionRole: SessionRoleReview})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "review-1", SessionRole: SessionRoleReview})
 	require.NoError(t, err)
 
-	require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, ReviewVerdictData{
+	require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
 		OverallOutcome: ReviewOutcomeFail,
 		Summary:        "diff hash round trip",
 		DiffHash:       "deadbeef",

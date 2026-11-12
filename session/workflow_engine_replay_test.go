@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -28,7 +29,7 @@ func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, Sta
 	ctx := context.Background()
 	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.GetEntClient()))
 	for range ideaItems {
-		_, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "replay item", Status: string(BacklogStatusIdea)})
+		_, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "replay item", Status: string(BacklogStatusIdea)})
 		require.NoError(t, err)
 	}
 	if mutate != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
@@ -30,11 +31,11 @@ func denBlock(t *testing.T, h *gateHarness, from, to BacklogStatus) {
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, from, to, GateKindHumanApproval, nil)
 }
 
-func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []OpenStuckStateData {
+func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []backlogdto.OpenStuckStateData {
 	t.Helper()
 	rows, err := h.storage.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	var out []OpenStuckStateData
+	var out []backlogdto.OpenStuckStateData
 	for _, r := range rows {
 		if r.ItemID == itemID && r.Reason == reason {
 			out = append(out, r)
@@ -59,11 +60,11 @@ func sessDisableGates(t *testing.T, h *gateHarness) {
 // long as no other active session exists. If withActiveWorkSession is true, a
 // second ItemSession (role=work, EndedAt nil) is attached, simulating rework
 // still in progress — this should exclude the item from FindStuckReviewItems.
-func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome ReviewOutcome, endReviewSession, withActiveWorkSession bool) *BacklogItemData {
+func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome ReviewOutcome, endReviewSession, withActiveWorkSession bool) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Stuck review test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -71,11 +72,11 @@ func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome ReviewOutcom
 	})
 	require.NoError(t, err)
 
-	reviewIS, err := storage.CreateItemSessionWithVerdict(ctx, ItemSessionData{
+	reviewIS, err := storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-review-" + uuid.New().String(),
 		SessionRole: SessionRoleReview,
-	}, ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        "no diff available",
 	})
@@ -86,7 +87,7 @@ func newStuckReviewTestItem(t *testing.T, storage *Storage, outcome ReviewOutcom
 	}
 
 	if withActiveWorkSession {
-		_, err := storage.CreateItemSession(ctx, ItemSessionData{
+		_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: uuid.New().String(),
 			SessionRole: SessionRoleWork,
@@ -208,7 +209,7 @@ type recordingReporter struct {
 	panics  bool
 }
 
-func (r *recordingReporter) Report(ctx context.Context, item *BacklogItemData, caller TransitionCaller, from, to BacklogStatus, reason string, denyErr error) {
+func (r *recordingReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller TransitionCaller, from, to BacklogStatus, reason string, denyErr error) {
 	cur, _ := r.storage.GetBacklogItem(ctx, item.ID)
 	r.mu.Lock()
 	r.calls = append(r.calls, reportedDenial{item.ID, caller, from, to, reason, denyErr, cur.Status})
@@ -249,9 +250,9 @@ func newGateHarness(t *testing.T, mode EngineMode) *gateHarness {
 	return &gateHarness{storage: storage, repo: repo, cfg: cfg, sel: sel, rep: rep}
 }
 
-func (h *gateHarness) newItem(t *testing.T, status BacklogStatus) *BacklogItemData {
+func (h *gateHarness) newItem(t *testing.T, status BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := h.storage.CreateBacklogItem(context.Background(), BacklogItemData{Title: "gate item", Status: string(status)})
+	item, err := h.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status)})
 	require.NoError(t, err)
 	return item
 }
@@ -271,12 +272,12 @@ func (h *gateHarness) moveRaw(t *testing.T, id string, to BacklogStatus) {
 }
 
 // newStuckInProgressItem is an in_progress item whose only work session ended.
-func (h *gateHarness) newStuckInProgressItem(t *testing.T) *BacklogItemData {
+func (h *gateHarness) newStuckInProgressItem(t *testing.T) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
-	item, err := h.storage.CreateBacklogItem(ctx, BacklogItemData{Title: "stuck item", Status: string(BacklogStatusInProgress), Notes: "existing notes"})
+	item, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stuck item", Status: string(BacklogStatusInProgress), Notes: "existing notes"})
 	require.NoError(t, err)
-	is, err := h.storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
+	is, err := h.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: SessionRoleWork})
 	require.NoError(t, err)
 	require.NoError(t, h.storage.UpdateItemSessionEnded(ctx, is.ID, time.Now().Add(-time.Minute)))
 	return item

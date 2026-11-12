@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -968,7 +969,7 @@ func TestSetBacklogItemPRAndTransition_should_TransitionAndPersistPR_When_ItemIn
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Ship it",
 		Status: string(BacklogStatusReview),
 	})
@@ -992,14 +993,14 @@ func TestSetBacklogItemPRAndTransition_should_NoOp_When_AlreadyPRPendingSamePR(t
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Already shipped",
 		Status: string(BacklogStatusPRPending),
 	})
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/55"
 	prNum := 55
-	updated, err := storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
+	updated, err := storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNum}, nil)
 	require.NoError(t, err)
 
 	err = storage.RawSetBacklogItemPRAndTransition(ctx, updated, prURL, prNum, "Implemented the feature.", nil)
@@ -1024,7 +1025,7 @@ func TestSetBacklogItemPRAndTransition_should_ReturnError_When_StorageWriteFails
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Ship it",
 		Status: string(BacklogStatusReview),
 	})
@@ -1045,7 +1046,7 @@ func TestSetBacklogItemPRAndTransition_should_RejectPrecondition_When_ObservedSt
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Not ready for a PR yet",
 		Status: string(BacklogStatusIdea),
 	})
@@ -1071,7 +1072,7 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Ship it",
 		Status: string(BacklogStatusReview),
 	})
@@ -1082,7 +1083,7 @@ func TestSetBacklogItemPRAndTransition_should_RejectStaleObserved_When_Concurren
 	// updated_at (ent's UpdateDefault), which is enough to invalidate a
 	// pinned-snapshot CAS.
 	title := "Retitled by a concurrent winner"
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{Title: &title}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{Title: &title}, nil)
 	require.NoError(t, err)
 
 	err = storage.RawSetBacklogItemPRAndTransition(ctx, item /* stale */, "https://github.com/tstapler/stapler-squad/pull/55", 55, "Implemented the feature.", nil)

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // A second connection opened on a test repository's DSN (as
@@ -34,7 +35,7 @@ func TestNewTestEntRepository_RepositoriesAreIsolatedFromEachOtherAndTheTemplate
 	storageB, err := NewStorageWithRepository(NewTestEntRepository(t))
 	require.NoError(t, err)
 
-	item, err := storageA.CreateBacklogItem(t.Context(), BacklogItemData{Title: "only in A", Status: "ready"})
+	item, err := storageA.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "only in A", Status: "ready"})
 	require.NoError(t, err)
 	_, err = storageB.GetBacklogItem(t.Context(), item.ID)
 	assert.Error(t, err, "a write to one test repository must not appear in another")

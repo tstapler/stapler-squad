@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -221,7 +222,7 @@ func replayEdges(spec TransitionCallerSpec) []SystemEdge {
 // replayAnswer is the enforced decision for caller on edge, Default guards off
 // (the recorded reasons are the graph and Configured gates).
 func replayAnswer(sel *SwitchableWorkflowEngine, spec TransitionCallerSpec, edge SystemEdge) string {
-	item := &BacklogItemData{ID: "replay-item", Status: string(edge.From)}
+	item := &backlogdto.BacklogItemData{ID: "replay-item", Status: string(edge.From)}
 	v := decideTransition(sel.ForClass(spec.Class, GuardsNone), item, TransitionRequest{Caller: spec.Name, To: edge.To})
 	if v.Err == nil {
 		return "allowed"
