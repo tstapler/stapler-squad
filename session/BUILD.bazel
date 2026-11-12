@@ -810,6 +810,7 @@ go_test(
         "//session/backlog:go_sources",
         "//session/detection:testdata",
         "//session/domain:go_sources",
+        "//session/domain/backlogdto:go_sources",
         "//session/prpoller:pr_status_poller.go",
         "//session/testdata:all",
         "//session/tokens:testdata",
