@@ -172,8 +172,8 @@ var bypassInventory = []bypassSite{
 	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.reconcilePRPendingItem", 1, "GatedTransition as lifecycle_reconcile_pr_pending"),
 	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.recoverDriftedPRItem", 1, "GatedTransition as lifecycle_recover_drifted_pr"),
 	gated("session/backlog/backlog_lifecycle_pr.go", "BacklogLifecycleListener.resolveToPRPending", 1, "GatedTransition as lifecycle_resolve_to_pr_pending"),
-	gated("session/jules_session_poller.go", "JulesSessionPoller.failJulesSession", 1, "GatedTransition as jules_fail_session"),
-	gated("session/jules_session_poller.go", "JulesSessionPoller.applyCompletedState", 3, "GatedTransition twice and GatedSetPRAndTransition as jules_apply_completed"),
+	gated("session/jules/session_poller.go", "JulesSessionPoller.failJulesSession", 1, "GatedTransition as jules_fail_session"),
+	gated("session/jules/session_poller.go", "JulesSessionPoller.applyCompletedState", 3, "GatedTransition twice and GatedSetPRAndTransition as jules_apply_completed"),
 	gated("session/backlog_sync.go", "SyncLoop.transitionBackward", 1, "GatedTransition as sync_loop_backward"),
 }
 

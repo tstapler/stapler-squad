@@ -54,7 +54,7 @@ go_test(
 
 exports_files(
     ["types.go"],
-    visibility = ["//session:__pkg__"],
+    visibility = ["//session/jules:__pkg__"],
 )
 
 forbidden_deps_test(

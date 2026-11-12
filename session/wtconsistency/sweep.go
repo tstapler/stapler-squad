@@ -1,4 +1,4 @@
-package session
+package wtconsistency
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -95,8 +96,8 @@ type WorktreeConsistencyFinding struct {
 // IssueMissingWorktreeRow case. Built once per sweep tick (pitfalls.md §1
 // "snapshot-once-per-cycle").
 type SessionWorktreeCandidate struct {
-	Data     InstanceData
-	Worktree *GitWorktreeData
+	Data     session.InstanceData
+	Worktree *session.GitWorktreeData
 }
 
 // creatingGracePeriod excludes Status == Creating sessions younger than this (measured
@@ -110,9 +111,9 @@ const creatingGracePeriod = 5 * time.Minute
 // ent row should exist for this session — the shared predicate Epic 1.1's candidate filter
 // and Epic 1.2's issue classification both depend on (single source of truth, avoids
 // duplicated logic across the two files this project touches).
-func ExpectsWorktree(data InstanceData) bool {
-	isWorktreeSession := data.SessionType == SessionTypeNewWorktree ||
-		data.SessionType == SessionTypeExistingWorktree ||
+func ExpectsWorktree(data session.InstanceData) bool {
+	isWorktreeSession := data.SessionType == session.SessionTypeNewWorktree ||
+		data.SessionType == session.SessionTypeExistingWorktree ||
 		data.IsWorktree
 	return isWorktreeSession && data.Branch != ""
 }
@@ -129,7 +130,7 @@ func ExpectsWorktree(data InstanceData) bool {
 // specific call today (a pre-existing limitation this project doesn't fix). ctx is still
 // accepted and threaded through here for Epic 1.2's classifyIssues, which does perform
 // cancellable I/O per candidate.
-func listConsistencyCandidates(ctx context.Context, storage *Storage) ([]SessionWorktreeCandidate, error) {
+func listConsistencyCandidates(ctx context.Context, storage *session.Storage) ([]SessionWorktreeCandidate, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -146,7 +147,7 @@ func listConsistencyCandidates(ctx context.Context, storage *Storage) ([]Session
 		if !ExpectsWorktree(data) {
 			continue
 		}
-		if data.Status == Creating && time.Since(data.CreationProgressUpdatedAt) < creatingGracePeriod {
+		if data.Status == session.Creating && time.Since(data.CreationProgressUpdatedAt) < creatingGracePeriod {
 			continue
 		}
 
@@ -221,7 +222,7 @@ func classifyIssues(candidate SessionWorktreeCandidate, entries []git.NativeWork
 	}
 
 	var findings []WorktreeConsistencyFinding
-	if candidate.Data.Status != Paused {
+	if candidate.Data.Status != session.Paused {
 		if f, ok := classifyRepoPathUnresolvable(candidate); ok {
 			findings = append(findings, f)
 		}
@@ -449,7 +450,7 @@ func buildRepairMessage(finding WorktreeConsistencyFinding) (title, message stri
 // fatal). Mirrors the 3-step pattern used elsewhere in this codebase (e.g.
 // server/services/autonomous_orchestration_service.go, session/backlog_lifecycle_pr.go's
 // RecordPRCreatedOutOfBand): GetItemSessionBySessionUUID, then GetBacklogItem.
-func lookupBacklogLinkage(ctx context.Context, repo *EntRepository, sessionID string) (itemID string, item *backlogdto.BacklogItemData) {
+func lookupBacklogLinkage(ctx context.Context, repo *session.EntRepository, sessionID string) (itemID string, item *backlogdto.BacklogItemData) {
 	is, err := repo.GetItemSessionBySessionUUID(ctx, sessionID)
 	if err != nil || is.BacklogItemID == "" {
 		return "", nil
@@ -483,7 +484,7 @@ type notifyRequest struct {
 // argument into metadata["item_id"], which would corrupt every consumer keyed on that
 // field for a session with no linked item). Gated by backoff (Story 1.2.4) so a
 // still-unresolved finding doesn't re-notify every tick.
-func notifyLinkageAware(notifier Notifier, backoff *notifyBackoff, req notifyRequest) {
+func notifyLinkageAware(notifier session.Notifier, backoff *notifyBackoff, req notifyRequest) {
 	if !backoff.shouldNotify(notifyBackoffKey{SessionID: req.SessionID, IssueKind: req.IssueKind}) {
 		return
 	}
@@ -499,12 +500,12 @@ func notifyLinkageAware(notifier Notifier, backoff *notifyBackoff, req notifyReq
 // mirrors notifyIfActiveWorkSessionStale's dual-write pattern
 // (server/services/backlog_service_triage.go): a storage error or a status precondition
 // mismatch is logged, never propagated or allowed to block the caller's notification.
-func markStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID string, item *backlogdto.BacklogItemData, detail string) {
-	if itemID == "" || item == nil || IsTerminalStatus(BacklogStatus(item.Status)) {
+func markStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepository, itemID string, item *backlogdto.BacklogItemData, detail string) {
+	if itemID == "" || item == nil || session.IsTerminalStatus(session.BacklogStatus(item.Status)) {
 		return
 	}
 	stuckContext := fmt.Sprintf("worktree consistency sweep: %s", detail)
-	if applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonWorktreeInconsistent, BacklogStatus(item.Status), stuckContext); err != nil {
+	if applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonWorktreeInconsistent, session.BacklogStatus(item.Status), stuckContext); err != nil {
 		log.Warn("worktree consistency sweep: MarkStuck failed", "item_id", itemID, "err", err)
 	} else if !applied {
 		log.Info("worktree consistency sweep: MarkStuck skipped — status precondition no longer holds", "item_id", itemID)
@@ -520,8 +521,8 @@ func markStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID s
 // MarkStuck'd) on one tick, then successfully repaired on a later tick, left its
 // BacklogItem visibly "stuck" forever — undermining this sweep's own self-healing premise
 // (BLOCKER). A storage error is logged, never propagated.
-func resolveStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemID string, item *backlogdto.BacklogItemData) {
-	if itemID == "" || item == nil || IsTerminalStatus(BacklogStatus(item.Status)) {
+func resolveStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepository, itemID string, item *backlogdto.BacklogItemData) {
+	if itemID == "" || item == nil || session.IsTerminalStatus(session.BacklogStatus(item.Status)) {
 		return
 	}
 	if _, err := repo.ResolveStuck(ctx, itemID, domain.StuckReasonWorktreeInconsistent); err != nil {
@@ -533,8 +534,8 @@ func resolveStuckIfLinkedAndLive(ctx context.Context, repo *EntRepository, itemI
 // resolveFindingDeps' existing precedent above (golang-development's Concrete-First Design
 // checklist) so finishNotify's own parameter list stays short.
 type notifyGlueDeps struct {
-	Repo     *EntRepository
-	Notifier Notifier
+	Repo     *session.EntRepository
+	Notifier session.Notifier
 	Backoff  *notifyBackoff
 }
 
@@ -584,7 +585,7 @@ func finishNotify(ctx context.Context, deps notifyGlueDeps, finding *WorktreeCon
 // finding.Resolution = ResolutionFlagged, always notifies (Notify when a BacklogItem is
 // linked, else NotifySession), and opportunistically dual-writes MarkStuck when the
 // linked item is live (non-terminal).
-func flagAndNotify(ctx context.Context, repo *EntRepository, notifier Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) {
+func flagAndNotify(ctx context.Context, repo *session.EntRepository, notifier session.Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) {
 	finding.Resolution = ResolutionFlagged
 	if finding.Severity == "" {
 		finding.Severity = SeverityWarning
@@ -621,15 +622,15 @@ var errBaseCommitShaUnresolved = errors.New("base_commit_sha could not be derive
 // worktree itself couldn't be read at all." NewGitWorktreeFromExisting derives
 // BaseCommitSHA from the worktree's current HEAD and leaves it "" (without erroring the
 // whole call) when HEAD can't be read — e.g. a corrupted or dangling symbolic ref.
-func deriveRepairedWorktreeData(candidate SessionWorktreeCandidate, match *git.NativeWorktreeEntry) (GitWorktreeData, error) {
+func deriveRepairedWorktreeData(candidate SessionWorktreeCandidate, match *git.NativeWorktreeEntry) (session.GitWorktreeData, error) {
 	wt, err := git.NewGitWorktreeFromExisting(match.WorktreePath, candidate.Data.Title)
 	if err != nil {
-		return GitWorktreeData{}, fmt.Errorf("deriveRepairedWorktreeData: %w", err)
+		return session.GitWorktreeData{}, fmt.Errorf("deriveRepairedWorktreeData: %w", err)
 	}
 	if wt.GetBaseCommitSHA() == "" {
-		return GitWorktreeData{}, fmt.Errorf("%w (worktree at %q)", errBaseCommitShaUnresolved, match.WorktreePath)
+		return session.GitWorktreeData{}, fmt.Errorf("%w (worktree at %q)", errBaseCommitShaUnresolved, match.WorktreePath)
 	}
-	return GitWorktreeData{
+	return session.GitWorktreeData{
 		RepoPath:      wt.GetRepoPath(),
 		WorktreePath:  wt.GetWorktreePath(),
 		SessionName:   candidate.Data.Title,
@@ -649,7 +650,7 @@ func deriveRepairedWorktreeData(candidate SessionWorktreeCandidate, match *git.N
 // the Worktree edge. created reports whether this call actually wrote the row; created ==
 // false with a nil error means the row already existed (the guard fired) — the caller
 // falls through to the flag path in that case, per Task 1.2.3b.
-func repairWorktreeRow(ctx context.Context, repo *EntRepository, sessionUUID string, wt GitWorktreeData) (created bool, err error) {
+func repairWorktreeRow(ctx context.Context, repo *session.EntRepository, sessionUUID string, wt session.GitWorktreeData) (created bool, err error) {
 	tx, err := repo.Client.Tx(ctx)
 	if err != nil {
 		return false, fmt.Errorf("repairWorktreeRow: begin transaction: %w", err)
@@ -693,7 +694,7 @@ func repairWorktreeRow(ctx context.Context, repo *EntRepository, sessionUUID str
 // value still doesn't resolve", per that const's doc comment) rather than the default
 // SeverityWarning every other flagged finding gets — this is the one flagged case where a
 // repair genuinely was attempted first.
-func repairAndNotify(ctx context.Context, repo *EntRepository, notifier Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) error {
+func repairAndNotify(ctx context.Context, repo *session.EntRepository, notifier session.Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) error {
 	candidate := finding.Candidate
 	match := finding.Match
 	if match == nil {
@@ -753,8 +754,8 @@ func repairAndNotify(ctx context.Context, repo *EntRepository, notifier Notifier
 // mirroring notifyRequest's existing precedent above (golang-development's Concrete-First
 // Design checklist).
 type resolveFindingDeps struct {
-	Repo     *EntRepository
-	Notifier Notifier
+	Repo     *session.EntRepository
+	Notifier session.Notifier
 	// Backoff may be nil — see notifyBackoff.shouldNotify's doc comment.
 	Backoff *notifyBackoff
 	// IsIsolated hard-restricts the repair branch to non-isolated instances (Story
@@ -894,7 +895,7 @@ func resolveCandidate(ctx context.Context, candidate SessionWorktreeCandidate, e
 // can be flipped off mid-run with no restart — when off, this returns before making any
 // storage or git call (Story 1.3.1's AC). storage.repo is read directly (same package)
 // since resolveFinding needs the raw *EntRepository, not the *Storage wrapper.
-func sweep(ctx context.Context, storage *Storage, notifier Notifier, cfgFn func() *config.Config, backoff *notifyBackoff) {
+func sweep(ctx context.Context, storage *session.Storage, notifier session.Notifier, cfgFn func() *config.Config, backoff *notifyBackoff) {
 	if !cfgFn().GetFeatureFlagWithDefault(FeatureFlagWorktreeConsistencySweep, false) {
 		return
 	}
@@ -936,7 +937,7 @@ func sweep(ctx context.Context, storage *Storage, notifier Notifier, cfgFn func(
 // threaded through every tick's resolveFinding calls, so Story 1.2.4's 24h suppression
 // window persists across ticks within this process (resets on restart, by design — see
 // notifyBackoff's doc comment).
-func StartWorktreeConsistencySweeper(ctx context.Context, storage *Storage, notifier Notifier, cfgFn func() *config.Config) {
+func StartWorktreeConsistencySweeper(ctx context.Context, storage *session.Storage, notifier session.Notifier, cfgFn func() *config.Config) {
 	backoff := newNotifyBackoff()
 
 	log.Info("worktree consistency sweeper started", "check_interval", worktreeConsistencySweepInterval)

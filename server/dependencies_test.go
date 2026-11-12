@@ -33,6 +33,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/wtconsistency"
 )
 
 // TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
@@ -368,7 +369,7 @@ func TestReconcileTicker_should_KeepRunningReconcileStuck_When_QuotaGateReconcil
 }
 
 // TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow
-// is Task 1.3.2b's wiring smoke test for the session.StartWorktreeConsistencySweeper call
+// is Task 1.3.2b's wiring smoke test for the wtconsistency.StartWorktreeConsistencySweeper call
 // added alongside the 60s reconcile ticker above (server/dependencies.go): confirms the
 // sweeper goroutine starts and returns cleanly on ctx cancellation. Deliberately builds a
 // narrow session/events/config dependency set rather than calling server.BuildDependencies()
@@ -387,7 +388,7 @@ func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_Wh
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		session.StartWorktreeConsistencySweeper(ctx, storage, notifier, config.LoadConfig)
+		wtconsistency.StartWorktreeConsistencySweeper(ctx, storage, notifier, config.LoadConfig)
 		close(done)
 	}()
 

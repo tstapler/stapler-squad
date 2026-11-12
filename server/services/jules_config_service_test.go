@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -49,7 +50,7 @@ func (f *fakeJulesKeyManager) DeleteJulesAPIKey(_ context.Context) error {
 
 // fakeJulesPollerStorage is a minimal fake session.julesPollerStorage (an
 // unexported interface — satisfied structurally) so a real
-// *session.JulesSessionPoller can be exercised here without a real
+// *sessionjules.JulesSessionPoller can be exercised here without a real
 // *session.Storage. Only ListOpenJulesItemSessions/GetItemSessionBySessionUUID
 // carry test-controlled data; every write is a no-op success.
 type fakeJulesPollerStorage struct {
@@ -196,12 +197,12 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 		}},
 		summary: backlogdto.ItemSessionSummary{ID: "is-1", SessionUUID: "jules-sessions/xyz", Role: session.SessionRoleJulesWork},
 	}
-	pollerCfg := session.JulesSessionPollerConfig{
+	pollerCfg := sessionjules.JulesSessionPollerConfig{
 		PollInterval:  5 * time.Millisecond,
 		CallTimeout:   time.Second,
 		MaxSessionAge: time.Hour,
 	}
-	poller := session.NewJulesSessionPoller(client, storage, pollerCfg)
+	poller := sessionjules.NewJulesSessionPoller(client, storage, pollerCfg)
 	svc := NewJulesConfigService(nil, nil, poller)
 
 	poller.Start(t.Context())

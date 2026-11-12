@@ -1,25 +1,25 @@
-package session
+package jules
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/tstapler/stapler-squad/jules"
+	julesapi "github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // julesSessionUUIDPrefix marks every jules_work ItemSession's session_uuid —
-// both the pre-CreateSession reservation form (julesPendingUUIDPrefix,
+// both the pre-CreateSession reservation form (session.JulesPendingUUIDPrefix,
 // already declared package-locally in storage_backlog.go by Epic 2.1 — NOT
-// redeclared here, since a second `const julesPendingUUIDPrefix = ...` in
+// redeclared here, since a second `const session.JulesPendingUUIDPrefix = ...` in
 // this same package would be a duplicate-declaration compile error) and the
 // confirmed "jules-sessions/{id}" form once CreateSession succeeds.
 // julesSessionUUIDPrefix itself mirrors the constant Epic 2.2's
@@ -43,10 +43,10 @@ const (
 	julesAuthRestoredNote = "Jules reconnected — resuming normal polling."
 )
 
-// julesStatusClient is the narrow slice of *jules.Client the poller needs —
+// julesStatusClient is the narrow slice of *julesapi.Client the poller needs —
 // declared locally so tests can fake it without a real HTTP round trip.
 type julesStatusClient interface {
-	GetSession(ctx context.Context, name jules.JulesSessionName) (*jules.JulesSession, error)
+	GetSession(ctx context.Context, name julesapi.JulesSessionName) (*julesapi.JulesSession, error)
 	IsLimited() bool
 }
 
@@ -84,11 +84,11 @@ type julesPollerStorage interface {
 	TouchItemSessionProgress(ctx context.Context, id string, at time.Time) error
 	UpdateItemSessionEndedWithReason(ctx context.Context, id string, endedAt time.Time, reason string) error
 	AppendProgressNote(ctx context.Context, itemID string, criterionIndex int, note, status string) error
-	GatedSetPRAndTransition(ctx context.Context, req TransitionRequest, pr PRAssociation) error
-	GatedTransition(ctx context.Context, req TransitionRequest) (*backlogdto.BacklogItemData, error)
+	GatedSetPRAndTransition(ctx context.Context, req session.TransitionRequest, pr session.PRAssociation) error
+	GatedTransition(ctx context.Context, req session.TransitionRequest) (*backlogdto.BacklogItemData, error)
 	// AttachItemPRLink records one Outputs[] PR as an item-direct link; attached is
 	// false when the item tombstoned that PR.
-	AttachItemPRLink(ctx context.Context, itemID, prURL string, source AttachSource) (attached bool, err error)
+	AttachItemPRLink(ctx context.Context, itemID, prURL string, source session.AttachSource) (attached bool, err error)
 }
 
 // JulesSessionPollerConfig controls polling cadence and staleness thresholds.
@@ -154,7 +154,7 @@ type JulesSessionPoller struct {
 	// note. Reset on process restart — acceptable per the plan (at most one
 	// duplicate note per session across a restart).
 	lastStateMu sync.Mutex
-	lastState   map[string]jules.JulesSessionState
+	lastState   map[string]julesapi.JulesSessionState
 
 	startOnce sync.Once
 	cancel    context.CancelFunc
@@ -170,7 +170,7 @@ func NewJulesSessionPoller(client julesStatusClient, storage julesPollerStorage,
 		storage:          storage,
 		config:           cfg,
 		authBlockedItems: make(map[string]bool),
-		lastState:        make(map[string]jules.JulesSessionState),
+		lastState:        make(map[string]julesapi.JulesSessionState),
 		nowFn:            time.Now,
 	}
 }
@@ -314,7 +314,7 @@ func (p *JulesSessionPoller) processEntry(ctx context.Context, entry backlogdto.
 
 	// Abandoned-reservation sweep: a row still carrying the pre-CreateSession
 	// placeholder UUID has no real Jules session to poll at all.
-	if strings.HasPrefix(entry.SessionUUID, julesPendingUUIDPrefix) {
+	if strings.HasPrefix(entry.SessionUUID, session.JulesPendingUUIDPrefix) {
 		if p.now().Sub(row.CreatedAt) > julesPendingReservationMaxAge {
 			p.failJulesSession(ctx, entry, row.ID, "dispatch_incomplete",
 				"Jules dispatch did not complete — check jules.google.com in case a session was created but not recorded here, then retry dispatch if needed.")
@@ -358,10 +358,10 @@ func (p *JulesSessionPoller) processEntry(ctx context.Context, entry backlogdto.
 // or the generic transient/logged-and-swallowed path.
 func (p *JulesSessionPoller) handleGetSessionError(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, err error) {
 	switch {
-	case errors.Is(err, jules.ErrJulesRateLimited):
+	case errors.Is(err, julesapi.ErrJulesRateLimited):
 		p.incAPIRateLimited()
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
-	case errors.Is(err, jules.ErrJulesNotConfigured):
+	case errors.Is(err, julesapi.ErrJulesNotConfigured):
 		// Account-wide: the key itself is invalid, not this session
 		// specifically. Do not end the session, transition the item, or
 		// touch progress — a stale key is not evidence the task failed.
@@ -369,7 +369,7 @@ func (p *JulesSessionPoller) handleGetSessionError(ctx context.Context, entry ba
 		p.authReconnectRequired.Store(true)
 		p.appendAuthBlockedNoteOnce(ctx, entry.ItemID)
 		log.Warn("jules session auth invalid", "jules_session", entry.SessionUUID, "item_id", entry.ItemID)
-	case errors.Is(err, jules.ErrJulesSessionNotFound):
+	case errors.Is(err, julesapi.ErrJulesSessionNotFound):
 		p.incAPIError()
 		p.failJulesSession(ctx, entry, row.ID, "jules_session_missing",
 			"Jules no longer reports this session — it may have expired or been removed on Jules' side. Check jules.google.com, then retry from here if the work still needs doing.")
@@ -396,7 +396,7 @@ func (p *JulesSessionPoller) maybeRecoverAuth(ctx context.Context) {
 	p.authBlockedMu.Unlock()
 
 	for _, id := range items {
-		if err := p.storage.AppendProgressNote(ctx, id, -1, julesAuthRestoredNote, string(BacklogStatusInProgress)); err != nil {
+		if err := p.storage.AppendProgressNote(ctx, id, -1, julesAuthRestoredNote, string(session.BacklogStatusInProgress)); err != nil {
 			log.Warn("jules poll failed", "item_id", id, "error", err)
 		}
 	}
@@ -432,35 +432,35 @@ func (p *JulesSessionPoller) failJulesSession(ctx context.Context, entry backlog
 	if err := p.storage.UpdateItemSessionEndedWithReason(ctx, sessionID, now, reason); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
-	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: note}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: note}
 	// Tolerated: an abandoned reservation's item may never have left "ready" (the
 	// move to in_progress happens only after CreateSession confirms), so a lost
 	// precondition is a harmless no-op, and a gate denial is reported by the gate.
-	if _, err := p.storage.GatedTransition(ctx, TransitionRequest{
-		Caller: CallerJulesFailSession, ItemID: entry.ItemID, To: BacklogStatusReady, Precondition: precondition, TriggeredBy: TriggeredBySystem,
+	if _, err := p.storage.GatedTransition(ctx, session.TransitionRequest{
+		Caller: session.CallerJulesFailSession, ItemID: entry.ItemID, To: session.BacklogStatusReady, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
-	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(BacklogStatusReady)); err != nil {
+	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(session.BacklogStatusReady)); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 }
 
 // applyJulesState is the one exhaustive mapper from a Jules session's
 // reported state to a backlog effect (Story 2.3.2). Every declared
-// jules.JulesSessionState constant gets its own named branch — no default
+// julesapi.JulesSessionState constant gets its own named branch — no default
 // that silently succeeds — so a new alpha-API enum value fails loudly
 // (applyUnknownState) instead of leaving an item stuck in in_progress
 // forever. See TestApplyJulesState_should_HandleEveryDeclaredState_When_StatesEnumerated.
-func (p *JulesSessionPoller) applyJulesState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, s *jules.JulesSession) error {
+func (p *JulesSessionPoller) applyJulesState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, s *julesapi.JulesSession) error {
 	switch s.State {
-	case jules.JulesStateQueued, jules.JulesStatePlanning, jules.JulesStateAwaitingPlanApproval, jules.JulesStateInProgress:
+	case julesapi.JulesStateQueued, julesapi.JulesStatePlanning, julesapi.JulesStateAwaitingPlanApproval, julesapi.JulesStateInProgress:
 		return p.applyNonTerminalState(ctx, entry, row, s.State)
-	case jules.JulesStateCompleted:
+	case julesapi.JulesStateCompleted:
 		return p.applyCompletedState(ctx, entry, row, s)
-	case jules.JulesStateFailed:
+	case julesapi.JulesStateFailed:
 		return p.applyFailedState(ctx, entry, row, s)
-	case jules.JulesStateUnknown:
+	case julesapi.JulesStateUnknown:
 		return p.applyUnknownState(ctx, entry, row, s)
 	default:
 		// Any raw wire value IsKnown() doesn't recognize (e.g. a new
@@ -471,7 +471,7 @@ func (p *JulesSessionPoller) applyJulesState(ctx context.Context, entry backlogd
 
 // applyNonTerminalState touches progress and, only on an actual state
 // change, appends a visible note (Story 2.3.2b's dedup).
-func (p *JulesSessionPoller) applyNonTerminalState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, state jules.JulesSessionState) error {
+func (p *JulesSessionPoller) applyNonTerminalState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, state julesapi.JulesSessionState) error {
 	if err := p.storage.TouchItemSessionProgress(ctx, row.ID, p.now()); err != nil {
 		return fmt.Errorf("touch progress: %w", err)
 	}
@@ -481,7 +481,7 @@ func (p *JulesSessionPoller) applyNonTerminalState(ctx context.Context, entry ba
 
 // noteStateChangeIfNeeded appends a progress note only when state differs
 // from the last state observed for this session (Story 2.3.2b).
-func (p *JulesSessionPoller) noteStateChangeIfNeeded(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, state jules.JulesSessionState) {
+func (p *JulesSessionPoller) noteStateChangeIfNeeded(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, state julesapi.JulesSessionState) {
 	p.lastStateMu.Lock()
 	prev, seen := p.lastState[entry.SessionUUID]
 	changed := !seen || prev != state
@@ -493,7 +493,7 @@ func (p *JulesSessionPoller) noteStateChangeIfNeeded(ctx context.Context, entry 
 	}
 
 	note := fmt.Sprintf("Jules session is now %s.", julesStateNoteLabel(state))
-	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(BacklogStatusInProgress)); err != nil {
+	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(session.BacklogStatusInProgress)); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 	log.Info("jules session state changed", "jules_session", entry.SessionUUID, "from", string(prev), "to", string(state))
@@ -506,7 +506,7 @@ func (p *JulesSessionPoller) noteStateChangeIfNeeded(ctx context.Context, entry 
 // which sits in "in_progress" for the session's entire lifetime, Story
 // 2.1.3 — is first moved in_progress -> review here, mirroring what
 // request_review does for a local agent session, before either branch runs.
-func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, s *jules.JulesSession) error {
+func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, s *julesapi.JulesSession) error {
 	p.incSessionCompleted()
 	prURLs := completedSessionPRURLs(s)
 	prURL := ""
@@ -522,19 +522,19 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 		note := fmt.Sprintf("Jules finished this session but did not open a pull request. Check the session at %s.", julesSessionWebURL(s))
 		// Best-effort status advance: the progress note below still records the no-PR
 		// outcome, and the session row is already closed so no sweep retries this.
-		if _, err := p.storage.GatedTransition(ctx, TransitionRequest{
-			Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, To: BacklogStatusReview,
-			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: note}, TriggeredBy: TriggeredBySystem,
+		if _, err := p.storage.GatedTransition(ctx, session.TransitionRequest{
+			Caller: session.CallerJulesApplyCompleted, ItemID: entry.ItemID, To: session.BacklogStatusReview,
+			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: note}, TriggeredBy: session.TriggeredBySystem,
 		}); err != nil {
 			log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 		}
-		if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(BacklogStatusReview)); err != nil {
+		if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(session.BacklogStatusReview)); err != nil {
 			log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 		}
 		return nil
 	}
 
-	prNumber, err := ParsePRNumberFromURL(prURL)
+	prNumber, err := session.ParsePRNumberFromURL(prURL)
 	if err != nil {
 		return fmt.Errorf("parse PR number from %q: %w", prURL, err)
 	}
@@ -542,7 +542,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 	// Links first: an upsert is idempotent, so a failure here retries cleanly on the
 	// next poll before any transition has happened.
 	for _, u := range prURLs {
-		attached, linkErr := p.storage.AttachItemPRLink(ctx, entry.ItemID, u, AttachSourceJules)
+		attached, linkErr := p.storage.AttachItemPRLink(ctx, entry.ItemID, u, session.AttachSourceJules)
 		if linkErr != nil {
 			return fmt.Errorf("attach jules pr %s: %w", u, linkErr)
 		}
@@ -551,9 +551,9 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 		}
 	}
 
-	reviewItem, err := p.storage.GatedTransition(ctx, TransitionRequest{
-		Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, To: BacklogStatusReview,
-		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBy: TriggeredBySystem,
+	reviewItem, err := p.storage.GatedTransition(ctx, session.TransitionRequest{
+		Caller: session.CallerJulesApplyCompleted, ItemID: entry.ItemID, To: session.BacklogStatusReview,
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBy: session.TriggeredBySystem,
 	})
 	if err != nil {
 		return fmt.Errorf("transition to review: %w", err)
@@ -561,8 +561,8 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 
 	summary := fmt.Sprintf("Jules opened pull request %s.", prURL)
 	if err := p.storage.GatedSetPRAndTransition(ctx,
-		TransitionRequest{Caller: CallerJulesApplyCompleted, ItemID: entry.ItemID, Observed: reviewItem, TriggeredBy: TriggeredBySystem},
-		PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Source: AttachSourceJules}); err != nil {
+		session.TransitionRequest{Caller: session.CallerJulesApplyCompleted, ItemID: entry.ItemID, Observed: reviewItem, TriggeredBy: session.TriggeredBySystem},
+		session.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Source: session.AttachSourceJules}); err != nil {
 		return fmt.Errorf("record PR: %w", err)
 	}
 	if err := p.storage.UpdateItemSessionEndedWithReason(ctx, row.ID, now, "jules_completed"); err != nil {
@@ -573,7 +573,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 
 // applyFailedState ends the session and returns the item to ready, quoting
 // Jules' own failure text and session URL (Story 2.3.3).
-func (p *JulesSessionPoller) applyFailedState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, s *jules.JulesSession) error {
+func (p *JulesSessionPoller) applyFailedState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, s *julesapi.JulesSession) error {
 	reasonText := s.Title
 	if reasonText == "" {
 		reasonText = "Jules reported no further detail."
@@ -586,7 +586,7 @@ func (p *JulesSessionPoller) applyFailedState(ctx context.Context, entry backlog
 // applyUnknownState is the alpha-API-drift alarm (Story 2.3.2): logs loudly
 // at Error, still touches progress so the session isn't independently swept
 // as stale, and makes no transition.
-func (p *JulesSessionPoller) applyUnknownState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, s *jules.JulesSession) error {
+func (p *JulesSessionPoller) applyUnknownState(ctx context.Context, entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary, s *julesapi.JulesSession) error {
 	log.Error("jules unknown session state", "jules_session", entry.SessionUUID, "raw_state", s.State.Raw())
 	if err := p.storage.TouchItemSessionProgress(ctx, row.ID, p.now()); err != nil {
 		return fmt.Errorf("touch progress: %w", err)
@@ -602,7 +602,7 @@ func (p *JulesSessionPoller) applyUnknownState(ctx context.Context, entry backlo
 // an <a href> in GitHubBadge.tsx, so a value that isn't actually an
 // https://github.com/... URL is rejected here rather than stored; a bare
 // trailing-path regex match (e.g. "javascript:alert(1)//pull/1") is not enough.
-func completedSessionPRURLs(s *jules.JulesSession) []string {
+func completedSessionPRURLs(s *julesapi.JulesSession) []string {
 	var urls []string
 	seen := map[string]bool{}
 	for _, out := range s.Outputs {
@@ -623,20 +623,21 @@ func completedSessionPRURLs(s *jules.JulesSession) []string {
 
 // isValidGitHubPRURL reports whether rawURL is a genuine
 // https://github.com/.../pull/<n> URL — scheme and host anchored, not just
-// matched against the trailing /pull/(\d+)/? shape prNumberFromURLRe checks.
+// matched against the trailing /pull/(\d+)/? shape session.ParsePRNumberFromURL checks.
 // Anchoring only the suffix would accept e.g. "javascript:alert(1)//pull/1",
-// which prNumberFromURLRe alone matches.
+// which the PR-number parse alone accepts.
 func isValidGitHubPRURL(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "https" || u.Host != "github.com" {
 		return false
 	}
-	return prNumberFromURLRe.MatchString(rawURL)
+	_, err = session.ParsePRNumberFromURL(rawURL)
+	return err == nil
 }
 
 // julesSessionWebURL returns s.URL, or a generic pointer to the Jules web UI
 // if the API response didn't carry one.
-func julesSessionWebURL(s *jules.JulesSession) string {
+func julesSessionWebURL(s *julesapi.JulesSession) string {
 	if s.URL != "" {
 		return s.URL
 	}
@@ -645,15 +646,15 @@ func julesSessionWebURL(s *jules.JulesSession) string {
 
 // julesStateNoteLabel renders a non-terminal state as the lowercase
 // participle used in "Jules session is now <label>." progress notes.
-func julesStateNoteLabel(state jules.JulesSessionState) string {
+func julesStateNoteLabel(state julesapi.JulesSessionState) string {
 	switch state {
-	case jules.JulesStateQueued:
+	case julesapi.JulesStateQueued:
 		return "queued"
-	case jules.JulesStatePlanning:
+	case julesapi.JulesStatePlanning:
 		return "planning"
-	case jules.JulesStateAwaitingPlanApproval:
+	case julesapi.JulesStateAwaitingPlanApproval:
 		return "awaiting plan approval"
-	case jules.JulesStateInProgress:
+	case julesapi.JulesStateInProgress:
 		return "in progress"
 	default:
 		return strings.ToLower(state.String())
@@ -661,23 +662,8 @@ func julesStateNoteLabel(state jules.JulesSessionState) string {
 }
 
 // julesSessionNameFromUUID converts a stored session_uuid ("jules-sessions/xyz")
-// into the wire-format jules.JulesSessionName GetSession expects ("sessions/xyz").
-func julesSessionNameFromUUID(sessionUUID string) (jules.JulesSessionName, error) {
+// into the wire-format julesapi.JulesSessionName GetSession expects ("sessions/xyz").
+func julesSessionNameFromUUID(sessionUUID string) (julesapi.JulesSessionName, error) {
 	raw := strings.TrimPrefix(sessionUUID, julesSessionUUIDPrefix)
-	return jules.ParseJulesSessionName(raw)
-}
-
-// ParsePRNumberFromURL extracts the trailing PR number from a GitHub PR URL,
-// reusing the same regex BackfillMissingPRNumbers already uses
-// (session/storage_backlog.go:1040) so both parses agree exactly.
-func ParsePRNumberFromURL(prURL string) (int, error) {
-	m := prNumberFromURLRe.FindStringSubmatch(prURL)
-	if m == nil {
-		return 0, fmt.Errorf("no PR number found in %q", prURL)
-	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil {
-		return 0, fmt.Errorf("parsing PR number from %q: %w", prURL, err)
-	}
-	return n, nil
+	return julesapi.ParseJulesSessionName(raw)
 }

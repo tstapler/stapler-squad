@@ -98,7 +98,7 @@ const (
 	fileSessLifeArch = "session/backlog/backlog_lifecycle_archive.go"
 	fileSessLifePR   = "session/backlog/backlog_lifecycle_pr.go"
 	fileSessSync     = "session/backlog_sync.go"
-	fileJulesPoller  = "session/jules_session_poller.go"
+	fileJulesPoller  = "session/jules/session_poller.go"
 )
 
 // Registered caller names. Typed constants keep the gate's callers and the

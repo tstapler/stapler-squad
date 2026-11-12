@@ -301,7 +301,7 @@ func TestCountJulesItemSessionsSince_should_RespectWindow_When_RowsSpanBoundary(
 
 // TestCountJulesItemSessionsSince_should_ExcludePendingReservationsAndDispatchFailedRows_When_MixedOutcomesInWindow
 // guards pre-mortem P2 #5: a still-reserved row (session_uuid carrying
-// julesPendingUUIDPrefix) and a row that ended dispatch_failed were never billed by
+// JulesPendingUUIDPrefix) and a row that ended dispatch_failed were never billed by
 // Jules, so neither should consume the daily dispatch cap — only the confirmed row
 // (session_uuid starting "jules-sessions/") counts.
 func TestCountJulesItemSessionsSince_should_ExcludePendingReservationsAndDispatchFailedRows_When_MixedOutcomesInWindow(t *testing.T) {
@@ -311,7 +311,7 @@ func TestCountJulesItemSessionsSince_should_ExcludePendingReservationsAndDispatc
 	ctx := context.Background()
 
 	newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/confirmed", 2*time.Hour)
-	newTestJulesItemSession(t, storage, SessionRoleJulesWork, julesPendingUUIDPrefix+"reservation", 1*time.Hour)
+	newTestJulesItemSession(t, storage, SessionRoleJulesWork, JulesPendingUUIDPrefix+"reservation", 1*time.Hour)
 	_, failedID := newTestJulesItemSession(t, storage, SessionRoleJulesWork, "jules-sessions/failed-attempt", 30*time.Minute)
 	require.NoError(t, storage.UpdateItemSessionEndedWithReason(ctx, failedID, time.Now(), julesDispatchFailedEndReason))
 

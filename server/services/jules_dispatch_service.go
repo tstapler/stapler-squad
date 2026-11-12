@@ -371,7 +371,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *backlo
 
 // recordAPIFailure classifies a failed Jules API call (Task 4.1.1a) into
 // jules.api.rate_limited (429) vs jules.api.error (everything else), mirroring
-// the same classification session.JulesSessionPoller applies to poll errors.
+// the same classification sessionjules.JulesSessionPoller applies to poll errors.
 func (s *JulesDispatchService) recordAPIFailure(err error) {
 	if s.usage == nil {
 		return

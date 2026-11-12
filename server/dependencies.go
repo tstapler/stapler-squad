@@ -38,6 +38,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
+	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
@@ -49,6 +50,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
+	"github.com/tstapler/stapler-squad/session/wtconsistency"
 )
 
 // Delays before the startup transcript backfill begins (live file changes are
@@ -115,7 +117,7 @@ type ServerDependencies struct {
 	// JulesSessionPoller polls open Jules sessions (google-jules-integration
 	// Epic 2.3/2.4). Nil unless config.Config.Jules.Enabled and the API key
 	// resolves at startup — see BuildRuntimeDeps' jules wiring block.
-	JulesSessionPoller *session.JulesSessionPoller
+	JulesSessionPoller *sessionjules.JulesSessionPoller
 
 	// GitHub user PR cache and service. Nil when no GitHub token is available.
 	UserPRCache       *githubpkg.UserPRCache
@@ -609,7 +611,7 @@ type RuntimeDeps struct {
 
 	// JulesSessionPoller (see the identically-named field on ServerDependencies
 	// for its full doc comment).
-	JulesSessionPoller *session.JulesSessionPoller
+	JulesSessionPoller *sessionjules.JulesSessionPoller
 
 	// GitHub user PR cache and service.
 	UserPRCache       *githubpkg.UserPRCache
@@ -1675,7 +1677,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// against live `git worktree` state, gated by FeatureFlagWorktreeConsistencySweep
 	// (default off). config.LoadConfig is passed directly, not a closure over cfg, so
 	// the flag can be flipped live with no restart (matches quotaGate/julesDispatchSvc).
-	go session.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
+	go wtconsistency.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
 
 	// Per-item /backlog/* commands live in session worktrees only; a user-scope copy is stale
 	// scaffolding from an old build and shadows the real ones with a wrong item ID.
@@ -2108,7 +2110,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// server/services/credentials.go's SetJulesTokenSource.
 	sessionService.SetJulesKeyringTokenSource(julesKeys)
 	var julesSourceRegistry *jules.JulesSourceRegistry
-	var julesPoller *session.JulesSessionPoller
+	var julesPoller *sessionjules.JulesSessionPoller
 	switch {
 	case !cfg.Jules.Enabled:
 		log.Info("jules disabled", "reason", "feature not enabled")
@@ -2129,12 +2131,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			julesDispatchSvc := services.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, config.LoadConfig)
 			julesDispatchSvc.SetUsageCounter(julesUsage)
 			backlogSvc.SetJulesDispatcher(julesDispatchSvc)
-			julesPoller = session.NewJulesSessionPoller(julesClient, storage, session.DefaultJulesSessionPollerConfig())
+			julesPoller = sessionjules.NewJulesSessionPoller(julesClient, storage, sessionjules.DefaultJulesSessionPollerConfig())
 			julesPoller.SetUsageCounter(julesUsage)
 		}
 	}
 	// Passed as separate nil literals (not the possibly-nil *jules.JulesSourceRegistry/
-	// *session.JulesSessionPoller pointers directly) when unconfigured, to avoid handing
+	// *sessionjules.JulesSessionPoller pointers directly) when unconfigured, to avoid handing
 	// SetJulesConfigDependencies a non-nil interface wrapping a nil pointer — its own
 	// nil checks (julesConfigToProto, TestJulesConnection) compare the interface itself
 	// to nil, which a typed-nil pointer would defeat.
