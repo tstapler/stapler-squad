@@ -13,13 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // createTestBacklogItemForGuidance creates a minimal BacklogItem to link a
 // backlog-item-scoped GuidanceRequest against, returning its parsed UUID.
 func createTestBacklogItemForGuidance(t *testing.T, repo *EntRepository) uuid.UUID {
 	t.Helper()
-	created, err := repo.CreateBacklogItem(context.Background(), BacklogItemData{Title: "guidance test item"})
+	created, err := repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "guidance test item"})
 	require.NoError(t, err)
 	id, err := uuid.Parse(created.ID)
 	require.NoError(t, err)
@@ -510,7 +511,7 @@ func TestGetBacklogItem_HasPendingGuidanceRequests_TracksOpenRequest(t *testing.
 	require.NoError(t, err)
 	assert.True(t, pending.HasPendingGuidanceRequests)
 
-	listed, err := repo.ListBacklogItems(ctx, BacklogItemFilter{})
+	listed, err := repo.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.True(t, listed[0].HasPendingGuidanceRequests)
@@ -529,7 +530,7 @@ type flagRecordingPublisher struct {
 	flags []bool
 }
 
-func (p *flagRecordingPublisher) PublishItemChanged(item *BacklogItemData, _ BacklogItemChange) {
+func (p *flagRecordingPublisher) PublishItemChanged(item *backlogdto.BacklogItemData, _ BacklogItemChange) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.flags = append(p.flags, item.HasPendingGuidanceRequests)
@@ -557,7 +558,7 @@ func TestGuidanceLifecycle_RepublishesItemWithFlag_OnCreateAndCancel(t *testing.
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	summaries, err := repo.ListBacklogItemSummaries(ctx, BacklogItemFilter{})
+	summaries, err := repo.ListBacklogItemSummaries(ctx, backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	for _, s := range summaries {
 		assert.False(t, s.HasPendingGuidanceRequests)

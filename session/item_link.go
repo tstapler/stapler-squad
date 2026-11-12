@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ItemLinkErrorCode classifies why ResolveItemLink failed, so a
@@ -69,13 +70,13 @@ const ItemNotFoundRemediation = "This item id does not exist — do not retry an
 // maintaining two copies that could drift — see
 // project_plans/durable-guidance-request/implementation/plan.md's Pattern
 // Decisions "Ownership check" row.
-func ResolveItemLink(ctx context.Context, storage *Storage, callerUUID, itemID string) (ItemSessionSummary, *ItemLinkError) {
+func ResolveItemLink(ctx context.Context, storage *Storage, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *ItemLinkError) {
 	itemSession, linkErr := storage.GetItemSessionBySessionAndItem(ctx, callerUUID, itemID)
 	if linkErr == nil {
 		return itemSession, nil
 	}
 	if !errors.Is(linkErr, domain.ErrNotFound) {
-		return ItemSessionSummary{}, &ItemLinkError{
+		return backlogdto.ItemSessionSummary{}, &ItemLinkError{
 			Code:    ItemLinkInternalError,
 			Message: fmt.Sprintf("link check failed: %v", linkErr),
 		}
@@ -84,13 +85,13 @@ func ResolveItemLink(ctx context.Context, storage *Storage, callerUUID, itemID s
 	// Disambiguate: does the item itself exist?
 	if _, itemErr := storage.GetBacklogItem(ctx, itemID); itemErr != nil {
 		if errors.Is(itemErr, domain.ErrNotFound) {
-			return ItemSessionSummary{}, &ItemLinkError{
+			return backlogdto.ItemSessionSummary{}, &ItemLinkError{
 				Code:        ItemLinkNotFound,
 				Message:     fmt.Sprintf("backlog item %q not found", itemID),
 				Remediation: ItemNotFoundRemediation,
 			}
 		}
-		return ItemSessionSummary{}, &ItemLinkError{
+		return backlogdto.ItemSessionSummary{}, &ItemLinkError{
 			Code:    ItemLinkInternalError,
 			Message: fmt.Sprintf("get backlog item: %v", itemErr),
 		}
@@ -101,7 +102,7 @@ func ResolveItemLink(ctx context.Context, storage *Storage, callerUUID, itemID s
 	if prior, priorErr := storage.GetItemSessionBySessionUUID(ctx, callerUUID); priorErr == nil && prior.BacklogItemID != "" && prior.BacklogItemID != itemID {
 		remediation = fmt.Sprintf("This session is currently linked to a different item (%s). Call link_session_to_item with item_id=%s to relink, or use item_id=%s if that's what you meant. %s", prior.BacklogItemID, itemID, prior.BacklogItemID, otherBacklogToolsWarning)
 	}
-	return ItemSessionSummary{}, &ItemLinkError{
+	return backlogdto.ItemSessionSummary{}, &ItemLinkError{
 		Code:        ItemLinkPermissionDenied,
 		Message:     fmt.Sprintf("session %s is not linked to backlog item %s", callerUUID, itemID),
 		Remediation: remediation,

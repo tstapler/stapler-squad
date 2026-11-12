@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -18,7 +19,7 @@ import (
 // as the parent of BacklogStuckState rows under test.
 func createStuckTestItem(t *testing.T, repo *EntRepository, ctx context.Context, status BacklogStatus) string {
 	t.Helper()
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "stuck-state test item",
 		Status: string(status),
 	})

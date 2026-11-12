@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 type fakeGateSource struct {
@@ -44,8 +45,8 @@ func (f *fakeGateSource) FindInstanceDataByID(id string) (*InstanceData, error) 
 	return nil, ErrInstanceDataNotFound
 }
 
-func workSession(uuid, item string) ItemSessionSummary {
-	return ItemSessionSummary{ID: uuid, SessionUUID: uuid, BacklogItemID: item, Role: SessionRoleWork, CreatedAt: prTestEpoch}
+func workSession(uuid, item string) backlogdto.ItemSessionSummary {
+	return backlogdto.ItemSessionSummary{ID: uuid, SessionUUID: uuid, BacklogItemID: item, Role: SessionRoleWork, CreatedAt: prTestEpoch}
 }
 
 func gateWith(src *fakeGateSource, probe LiveWorkProbe, live bool) *PRCleanupGate {
@@ -78,7 +79,7 @@ func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *test
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			b, blocked := gateWith(tt.src, nil, false).Blocked(context.Background(), []ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
+			b, blocked := gateWith(tt.src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
 			if tt.wantReason == "" {
 				assert.False(t, blocked, b.Reason)
 				return
@@ -93,22 +94,22 @@ func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *test
 func TestPRCleanupGate_Blocked_ShouldIgnoreNonWorkSessions_AndSupersededRoundStillHolds(t *testing.T) {
 	t.Parallel()
 	src := &fakeGateSource{views: map[string][]PRView{"s1": {prRow(t, 30, PRStateOpen, "")}}}
-	review := ItemSessionSummary{ID: "r", SessionUUID: "s1", BacklogItemID: "i1", Role: SessionRoleReview}
-	_, blocked := gateWith(src, nil, false).Blocked(context.Background(), []ItemSessionSummary{review}, GateOptions{})
+	review := backlogdto.ItemSessionSummary{ID: "r", SessionUUID: "s1", BacklogItemID: "i1", Role: SessionRoleReview}
+	_, blocked := gateWith(src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{review}, GateOptions{})
 	assert.False(t, blocked, "only work-role links count")
 
-	b, blocked := gateWith(src, nil, false).Blocked(context.Background(), []ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
+	b, blocked := gateWith(src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
 	require.True(t, blocked, "round 1's open #30 holds s1 even though the item verdict ignores it")
 	assert.Contains(t, b.Reason, "session s1")
 	src.views = map[string][]PRView{}
-	_, blocked = gateWith(src, nil, false).Blocked(context.Background(), []ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
+	_, blocked = gateWith(src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
 	assert.False(t, blocked, "after DeleteSessionPR the next attempt is clear")
 }
 
 func TestPRCleanupGate_Blocked_ShouldHoldWhileCurrentRoundSessionLive_OnlyWithScopeAndProbe(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	sessions := []ItemSessionSummary{workSession("s1", "i1")}
+	sessions := []backlogdto.ItemSessionSummary{workSession("s1", "i1")}
 	b, blocked := gateWith(&fakeGateSource{}, &fakeProbe{live: map[string]bool{"s1": true}}, true).Blocked(ctx, sessions, GateOptions{})
 	require.True(t, blocked)
 	assert.True(t, b.LiveOnly)
@@ -131,7 +132,7 @@ func TestPRCleanupGate_Blocked_ShouldHoldWhileCurrentRoundSessionLive_OnlyWithSc
 func TestPRCleanupGate_Blocked_ShouldBlockOnPRClausesOnlyOnReworkPath_WhenJustSpawnedSessionIsLive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	prior := []ItemSessionSummary{workSession("old", "i1")}
+	prior := []backlogdto.ItemSessionSummary{workSession("old", "i1")}
 	probe := &fakeProbe{live: map[string]bool{"old": true, "fresh": true}}
 
 	_, blocked := gateWith(&fakeGateSource{}, probe, true).Blocked(ctx, prior, GateOptions{IgnoreLive: true})
@@ -147,7 +148,7 @@ func TestPRCleanupGate_Blocked_ShouldBlockOnPRClausesOnlyOnReworkPath_WhenJustSp
 func TestPRCleanupGate_Blocked_ShouldReportPRBlockNotLive_WhenBothHold(t *testing.T) {
 	t.Parallel()
 	src := &fakeGateSource{views: map[string][]PRView{"s1": {prRow(t, 22, PRStateOpen, "")}}}
-	b, blocked := gateWith(src, &fakeProbe{live: map[string]bool{"s1": true}}, true).Blocked(context.Background(), []ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
+	b, blocked := gateWith(src, &fakeProbe{live: map[string]bool{"s1": true}}, true).Blocked(context.Background(), []backlogdto.ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
 	require.True(t, blocked)
 	assert.False(t, b.LiveOnly, "a PR hold settles for the TTL; only a pure live hold stays unsettled")
 }

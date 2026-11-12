@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // CleanupStatus is the result class of one terminal-item cleanup attempt.
@@ -113,7 +115,7 @@ func (g *PRCleanupGate) Probe() LiveWorkProbe { return g.probe }
 
 // Blocked reports whether removal must be withheld for sessions, with the reason
 // naming each holding owner. Any lookup error blocks (fail closed).
-func (g *PRCleanupGate) Blocked(ctx context.Context, sessions []ItemSessionSummary, opts GateOptions) (CleanupBlock, bool) {
+func (g *PRCleanupGate) Blocked(ctx context.Context, sessions []backlogdto.ItemSessionSummary, opts GateOptions) (CleanupBlock, bool) {
 	if reasons := g.prReasons(ctx, sessions); len(reasons) > 0 {
 		return CleanupBlock{Reason: strings.Join(reasons, "; ")}, true
 	}
@@ -132,7 +134,7 @@ func (g *PRCleanupGate) Blocked(ctx context.Context, sessions []ItemSessionSumma
 	return CleanupBlock{}, false
 }
 
-func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []ItemSessionSummary) []string {
+func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []backlogdto.ItemSessionSummary) []string {
 	var uuids []string
 	itemIDs := map[string]struct{}{}
 	for _, s := range sessions {

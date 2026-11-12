@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 type fakeSnapshotSource map[string]*InstanceSnapshot
@@ -148,18 +149,18 @@ func TestLiveWorkHoldStart_ShouldUseFirstMerge_ThenLastPolled_ThenFirstObserved(
 func TestSplitLiveCurrentRound_ShouldSkipOnlyTheLiveNewestWorkSession_AndTreatErrorAsLive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	older := ItemSessionSummary{ID: "1", SessionUUID: "old", Role: SessionRoleWork, CreatedAt: prTestEpoch}
-	newest := ItemSessionSummary{ID: "2", SessionUUID: "new", Role: SessionRoleWork, CreatedAt: prTestEpoch.Add(time.Hour)}
-	review := ItemSessionSummary{ID: "3", SessionUUID: "rev", Role: SessionRoleReview, CreatedAt: prTestEpoch.Add(2 * time.Hour)}
-	all := []ItemSessionSummary{older, newest, review}
+	older := backlogdto.ItemSessionSummary{ID: "1", SessionUUID: "old", Role: SessionRoleWork, CreatedAt: prTestEpoch}
+	newest := backlogdto.ItemSessionSummary{ID: "2", SessionUUID: "new", Role: SessionRoleWork, CreatedAt: prTestEpoch.Add(time.Hour)}
+	review := backlogdto.ItemSessionSummary{ID: "3", SessionUUID: "rev", Role: SessionRoleReview, CreatedAt: prTestEpoch.Add(2 * time.Hour)}
+	all := []backlogdto.ItemSessionSummary{older, newest, review}
 
 	arch, skipped := SplitLiveCurrentRound(ctx, &fakeProbe{live: map[string]bool{"new": true}}, prTestEpoch, all)
 	assert.True(t, skipped)
-	assert.Equal(t, []ItemSessionSummary{older, review}, arch)
+	assert.Equal(t, []backlogdto.ItemSessionSummary{older, review}, arch)
 
 	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{err: errors.New("boom")}, prTestEpoch, all)
 	assert.True(t, skipped, "a probe error counts as live")
-	assert.Equal(t, []ItemSessionSummary{older, review}, arch)
+	assert.Equal(t, []backlogdto.ItemSessionSummary{older, review}, arch)
 
 	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{}, prTestEpoch, all)
 	assert.False(t, skipped)

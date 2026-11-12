@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // LiveSnapshotSource returns the lock-free Snapshot() of a session that is live in
@@ -126,8 +127,8 @@ func liveWorkFactsFromData(d *InstanceData) LiveWorkFacts {
 // session. (The PR round walk skips sessions with no link or tombstone, which is
 // right for attributing PRs and wrong for liveness: the agent still working has
 // usually not opened a PR yet.)
-func CurrentRoundWorkSessions(sessions []ItemSessionSummary) []ItemSessionSummary {
-	var newest *ItemSessionSummary
+func CurrentRoundWorkSessions(sessions []backlogdto.ItemSessionSummary) []backlogdto.ItemSessionSummary {
+	var newest *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		s := sessions[i]
 		if s.Role != SessionRoleWork || s.SessionUUID == "" {
@@ -140,12 +141,12 @@ func CurrentRoundWorkSessions(sessions []ItemSessionSummary) []ItemSessionSummar
 	if newest == nil {
 		return nil
 	}
-	return []ItemSessionSummary{*newest}
+	return []backlogdto.ItemSessionSummary{*newest}
 }
 
 // NewestWorkSession returns the live-work subject of an item as a slice: its newest
 // work session, or none.
-func NewestWorkSession(sessions []ItemSessionSummary) []ItemSessionSummary {
+func NewestWorkSession(sessions []backlogdto.ItemSessionSummary) []backlogdto.ItemSessionSummary {
 	return CurrentRoundWorkSessions(sessions)
 }
 
@@ -154,7 +155,7 @@ func NewestWorkSession(sessions []ItemSessionSummary) []ItemSessionSummary {
 // (RULE L). A nil probe, or a flag-off caller passing nil, skips nothing. A probe
 // error counts as live. skippedLive tells the sweep to leave the item unsettled
 // so it retries every pass.
-func SplitLiveCurrentRound(ctx context.Context, probe LiveWorkProbe, now time.Time, sessions []ItemSessionSummary) (archivable []ItemSessionSummary, skippedLive bool) {
+func SplitLiveCurrentRound(ctx context.Context, probe LiveWorkProbe, now time.Time, sessions []backlogdto.ItemSessionSummary) (archivable []backlogdto.ItemSessionSummary, skippedLive bool) {
 	if probe == nil {
 		return sessions, false
 	}

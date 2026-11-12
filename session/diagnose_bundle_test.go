@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func fixtureDiagnosticBundleInput() DiagnosticBundleInput {
@@ -16,7 +17,7 @@ func fixtureDiagnosticBundleInput() DiagnosticBundleInput {
 		ItemDescription: "The thing is broken.",
 		ItemStatus:      "in_progress",
 		AcCriteria:      []AcCriterion{{Index: 0, Text: "It works", Status: "pending"}},
-		ActivityHistory: []ActivityNoteData{{Message: "started work", AuthorSessionTitle: "work-1", CreatedAt: time.Now()}},
+		ActivityHistory: []backlogdto.ActivityNoteData{{Message: "started work", AuthorSessionTitle: "work-1", CreatedAt: time.Now()}},
 		ReviewVerdicts:  []DiagnosticReviewVerdict{{Outcome: "FAIL", Summary: "no commits", CreatedAt: time.Now()}},
 		LinkedSessions: []DiagnosticLinkedSession{{
 			SessionUUID:  "sess-1",

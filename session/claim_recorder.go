@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -48,7 +49,7 @@ func (r *ClaimIndexRecorder) ForeignClaim(externalURL string) (hostclaim.ClaimRe
 // BacklogItemDeepLinkPath is the host-less deep link path for item, using the
 // public ID when one exists and the row ID otherwise. ClaimIndexRecorder
 // prefixes it with "ssq://<host>".
-func BacklogItemDeepLinkPath(item *BacklogItemData) string {
+func BacklogItemDeepLinkPath(item *backlogdto.BacklogItemData) string {
 	id := item.ID
 	if publicID, ok := item.PublicID(); ok {
 		id = publicID.String()

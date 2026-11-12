@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // newTestStorageForItemLink returns a *Storage backed by a fresh in-memory
@@ -29,11 +30,11 @@ func TestResolveItemLink_should_ReturnOK_When_CallerSessionOwnsItem(t *testing.T
 	storage := newTestStorageForItemLink(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "linked item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "linked item"})
 	require.NoError(t, err)
 
 	callerUUID := uuid.New().String()
-	createdIS, err := storage.CreateItemSession(ctx, ItemSessionData{
+	createdIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: callerUUID,
 		SessionRole: "work",
@@ -53,7 +54,7 @@ func TestResolveItemLink_should_ReturnPermissionDenied_When_CallerSessionNotLink
 	storage := newTestStorageForItemLink(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "unlinked item"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "unlinked item"})
 	require.NoError(t, err)
 
 	callerUUID := uuid.New().String()
@@ -89,7 +90,7 @@ func TestResolveItemLink_should_ProduceIdenticalErrorShape_When_CalledWithSameFi
 	storage := newTestStorageForItemLink(t)
 	ctx := context.Background()
 
-	linkedItem, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "parity linked item"})
+	linkedItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "parity linked item"})
 	require.NoError(t, err)
 	unlinkedCaller := uuid.New().String()
 
