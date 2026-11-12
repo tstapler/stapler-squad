@@ -79,5 +79,6 @@ filegroup(
         "//server/services:__pkg__",
         "//server/services/insights:__pkg__",
         "//session:__pkg__",
+        "//session/summaries:__pkg__",
     ],
 )

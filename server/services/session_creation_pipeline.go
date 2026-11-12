@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -319,7 +320,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		s.backlogLifecycleListener.WireToInstance(p.instance)
 	}
 	if s.sessionSummaryGenerator != nil {
-		session.WireSessionSummaryListener(s.sessionSummaryGenerator, p.instance)
+		summaries.WireSessionSummaryListener(s.sessionSummaryGenerator, p.instance)
 	}
 
 	// Wire the status manager and start the controller AFTER Start() returns so the

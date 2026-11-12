@@ -11,8 +11,8 @@ import (
 // stage_liveness_definitions row. LivenessRepository's methods return this
 // type (never *ent.StageLivenessDefinition directly) so server/services can
 // consume them without importing session/ent — mirrors
-// session.HandoffSummary/fromEntHandoffSummary's established pattern
-// (session/handoff_summary_service.go) for the same no_ent_in_services lint
+// summaries.HandoffSummary/fromEntHandoffSummary's established pattern
+// (session/summaries/handoff_summary_service.go) for the same no_ent_in_services lint
 // rule (.golangci.yml).
 type LivenessDefinitionRecord struct {
 	ID        uuid.UUID

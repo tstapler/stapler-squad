@@ -407,7 +407,7 @@ Always end your output with a '## Active Task' heading naming the concrete next 
 // session package's ClaudeConversationMessage type here: session already
 // imports session/headless (e.g. session/backlog_lifecycle.go), so the
 // reverse import would be a cycle. Callers in package session pass in their
-// session.TranscriptWindow's Head/Middle/Tail slices converted to this
+// summaries.TranscriptWindow's Head/Middle/Tail slices converted to this
 // structurally-equivalent (Role, Content) shape.
 type HandoffTranscriptMessage struct {
 	Role    string
@@ -442,7 +442,7 @@ func renderHandoffMessages(messages []HandoffTranscriptMessage, placeholder stri
 // Tail-derived "## Active Task" section is still needed either way.
 //
 // Takes head/middle/tail as []HandoffTranscriptMessage rather than a
-// session.TranscriptWindow: see HandoffTranscriptMessage's doc comment for
+// summaries.TranscriptWindow: see HandoffTranscriptMessage's doc comment for
 // why (import cycle — session already imports session/headless).
 //
 // The returned string always begins with referenceOnlyPrefix, verbatim, so a

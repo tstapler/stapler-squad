@@ -1,4 +1,4 @@
-package session
+package summaries
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
 	"github.com/tstapler/stapler-squad/session/ent/hook"
@@ -26,8 +27,7 @@ import (
 // tests).
 func newTestHandoffSummaryGenerator(t *testing.T) (*HandoffSummaryGenerator, *ent.Client, *fakePoolClient) {
 	t.Helper()
-	repo, cleanup := createTestEntRepository(t)
-	t.Cleanup(cleanup)
+	repo := session.NewTestEntRepository(t)
 
 	pool := &fakePoolClient{response: "This session made progress on the task.\n\n## Active Task\nImplement the remaining validation logic."}
 	gen := NewHandoffSummaryGenerator(repo.Client, pool)
@@ -166,8 +166,7 @@ func TestGenerateAndPersist_DedupsConcurrentCallsForSameSession(t *testing.T) {
 	roles, contents := defaultFixtureMessages()
 	writeHandoffConversationFixture(t, sessionID, roles, contents)
 
-	repo, cleanup := createTestEntRepository(t)
-	defer cleanup()
+	repo := session.NewTestEntRepository(t)
 
 	pool := newBlockingPoolClient()
 	gen := NewHandoffSummaryGenerator(repo.Client, pool)
@@ -235,8 +234,7 @@ func TestGenerateAndPersist_DedupsConcurrentCallsForSameSession(t *testing.T) {
 // invoke.
 func TestBeginGeneration_ReleasesGuardAndReturnsError_When_InterimWriteFails(t *testing.T) {
 	sessionID := "sess-begin-write-failure"
-	repo, cleanup := createTestEntRepository(t)
-	defer cleanup()
+	repo := session.NewTestEntRepository(t)
 
 	writeErr := errors.New("simulated interim write failure")
 	repo.Client.HandoffSummary.Use(func(next ent.Mutator) ent.Mutator {
@@ -534,8 +532,7 @@ func TestGenerateAndPersist_TruncatesOversizedHeadAndTailMessages(t *testing.T) 
 	}
 	writeHandoffConversationFixture(t, sessionID, roles, contents)
 
-	repo, cleanup := createTestEntRepository(t)
-	defer cleanup()
+	repo := session.NewTestEntRepository(t)
 
 	pool := &capturingPoolClient{fakePoolClient: fakePoolClient{response: "A narrative.\n\n## Active Task\nnext step"}}
 	gen := NewHandoffSummaryGenerator(repo.Client, pool)
@@ -631,8 +628,7 @@ func TestHandoffReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentG
 
 func TestHandoffSummarySchema_should_DefaultStatusToPending_When_CreatedWithoutExplicitStatus(t *testing.T) {
 	t.Parallel()
-	repo, cleanup := createTestEntRepository(t)
-	defer cleanup()
+	repo := session.NewTestEntRepository(t)
 	ctx := context.Background()
 
 	created, err := repo.Client.HandoffSummary.Create().
@@ -657,11 +653,15 @@ func TestHandoffSummarySchema_should_DefaultStatusToPending_When_CreatedWithoutE
 
 func TestHandoffSummarySchema_should_SurviveSessionDeletion_When_NoEdgeExists(t *testing.T) {
 	t.Parallel()
-	repo, cleanup := createTestEntRepository(t)
-	defer cleanup()
+	repo := session.NewTestEntRepository(t)
 	ctx := context.Background()
 
-	sessionData := createTestSession("handoff-fk-test-session")
+	now := time.Now()
+	sessionData := session.InstanceData{
+		Title: "handoff-fk-test-session", Path: "/home/user/project", WorkingDir: "/home/user/project",
+		Branch: "main", Status: session.Paused, Height: 24, Width: 80,
+		CreatedAt: now, UpdatedAt: now, Program: "claude", Category: "Test", Tags: []string{},
+	}
 	if err := repo.Create(ctx, sessionData); err != nil {
 		t.Fatalf("failed to create session: %v", err)
 	}

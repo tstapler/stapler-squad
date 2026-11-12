@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -92,7 +93,7 @@ func writeHandoffConversationFixture(t *testing.T, sessionID string) {
 func TestGetHandoffSummary_ReturnsNilWhenNoRowExists(t *testing.T) {
 	t.Parallel()
 	entClient := newTestHandoffSummaryEntClient(t)
-	gen := session.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
+	gen := summaries.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
 	svc := NewHandoffSummaryService(gen)
 
 	resp, err := svc.GetHandoffSummary(context.Background(), connect.NewRequest(&sessionv1.GetHandoffSummaryRequest{SessionId: "does-not-exist"}))
@@ -103,7 +104,7 @@ func TestGetHandoffSummary_ReturnsNilWhenNoRowExists(t *testing.T) {
 func TestGetHandoffSummary_ReconcilesStaleGeneratingRowToError_When_PastStaleTimeout(t *testing.T) {
 	t.Parallel()
 	entClient := newTestHandoffSummaryEntClient(t)
-	gen := session.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
+	gen := summaries.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
 	svc := NewHandoffSummaryService(gen)
 
 	sessionID := "sess-stale"
@@ -112,7 +113,7 @@ func TestGetHandoffSummary_ReconcilesStaleGeneratingRowToError_When_PastStaleTim
 		SetID("row-stale").
 		SetSessionID(sessionID).
 		SetSessionTitle("stale title").
-		SetStatus(string(session.HandoffSummaryStatusGenerating)).
+		SetStatus(string(summaries.HandoffSummaryStatusGenerating)).
 		SetGenerationStartedAt(staleStart).
 		Save(context.Background())
 	require.NoError(t, err)
@@ -126,14 +127,14 @@ func TestGetHandoffSummary_ReconcilesStaleGeneratingRowToError_When_PastStaleTim
 
 	// Confirm the write actually landed, not just the in-memory response.
 	row := getHandoffRow(t, entClient, sessionID)
-	require.Equal(t, string(session.HandoffSummaryStatusError), row.Status)
+	require.Equal(t, string(summaries.HandoffSummaryStatusError), row.Status)
 	require.Equal(t, "stale", row.ErrorStage)
 }
 
 func TestGetHandoffSummary_LeavesFreshGeneratingRowUnchanged(t *testing.T) {
 	t.Parallel()
 	entClient := newTestHandoffSummaryEntClient(t)
-	gen := session.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
+	gen := summaries.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
 	svc := NewHandoffSummaryService(gen)
 
 	sessionID := "sess-fresh-generating"
@@ -141,7 +142,7 @@ func TestGetHandoffSummary_LeavesFreshGeneratingRowUnchanged(t *testing.T) {
 		SetID("row-fresh").
 		SetSessionID(sessionID).
 		SetSessionTitle("fresh title").
-		SetStatus(string(session.HandoffSummaryStatusGenerating)).
+		SetStatus(string(summaries.HandoffSummaryStatusGenerating)).
 		SetGenerationStartedAt(time.Now()).
 		Save(context.Background())
 	require.NoError(t, err)
@@ -161,7 +162,7 @@ func TestTriggerHandoffSummary_ReturnsFailedPreconditionWhenDisabled(t *testing.
 	require.NoError(t, os.WriteFile(configPath, []byte(`{"handoff_summary": {"enabled": false}}`), 0600))
 
 	entClient := newTestHandoffSummaryEntClient(t)
-	gen := session.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
+	gen := summaries.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
 	svc := NewHandoffSummaryService(gen)
 
 	sessionID := "sess-disabled"
@@ -190,7 +191,7 @@ func TestTriggerHandoffSummary_DispatchesAsyncAndReturnsGeneratingRow(t *testing
 
 	entClient := newTestHandoffSummaryEntClient(t)
 	pool := &fakePoolClient{block: true, started: make(chan struct{}, 1)}
-	gen := session.NewHandoffSummaryGenerator(entClient, pool)
+	gen := summaries.NewHandoffSummaryGenerator(entClient, pool)
 	svc := NewHandoffSummaryService(gen)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -260,7 +261,7 @@ func TestTriggerHandoffSummary_ReturnsGeneratingResponse_When_NoRowExistsYet(t *
 	svctest.WithFakeHomePath(t, tempHome)
 
 	entClient := newTestHandoffSummaryEntClient(t)
-	gen := session.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
+	gen := summaries.NewHandoffSummaryGenerator(entClient, &fakePoolClient{})
 	svc := NewHandoffSummaryService(gen)
 
 	sessionID := "sess-no-prior-row"
@@ -272,6 +273,6 @@ func TestTriggerHandoffSummary_ReturnsGeneratingResponse_When_NoRowExistsYet(t *
 
 	wait.RequireEventually(t, func() bool {
 		row, findErr := gen.FindRowBySessionID(context.Background(), sessionID)
-		return findErr == nil && row.Status == string(session.HandoffSummaryStatusError)
+		return findErr == nil && row.Status == string(summaries.HandoffSummaryStatusError)
 	}, 2*time.Second, 10*time.Millisecond, "timed out waiting for the dispatched generation to reach a terminal state")
 }

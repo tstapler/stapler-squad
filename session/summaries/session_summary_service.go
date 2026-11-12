@@ -1,4 +1,4 @@
-package session
+package summaries
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
@@ -76,7 +77,7 @@ type SessionSummaryGenerator struct {
 }
 
 // compile-time check that *SessionSummaryGenerator satisfies summaryGenerator
-// (session/session_summary_listener.go) structurally — no explicit "implements"
+// (session/summaries/session_summary_listener.go) structurally — no explicit "implements"
 // declaration needed, per the `interface-pollution-checklist` skill.
 var _ summaryGenerator = (*SessionSummaryGenerator)(nil)
 
@@ -264,7 +265,7 @@ func (g *SessionSummaryGenerator) ReconcileStaleness(ctx context.Context, row *e
 // BuildDiffSnapshot's FilesChanged derivation depends on diff Content, which isn't
 // persisted). diffContent is the raw diff text forwarded into the LLM narrative
 // prompt — empty when unavailable (e.g. the no-live-instance fallback).
-func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *SessionGoalData, reason string) {
+func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *session.SessionGoalData, reason string) {
 	release, ok := g.tryAcquire(sessionUUID)
 	if !ok {
 		return
@@ -349,61 +350,14 @@ func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessio
 
 	decisions, err := BuildDecisionsSnapshot(ctx, sessionUUID, g.notificationLister(), g.reviewLookup)
 	if err != nil {
-		if upsertErr := g.entClient.SessionSummary.Create().
-			SetID(uuid.New().String()).
-			SetSessionID(sessionUUID).
-			SetSessionTitle(sessionTitle).
-			SetStatus(string(SessionSummaryStatusError)).
-			SetGenerationStartedAt(now).
-			OnConflictColumns(sessionsummary.FieldSessionID).
-			Update(func(u *ent.SessionSummaryUpsert) {
-				u.SetStatus(string(SessionSummaryStatusError))
-				u.SetErrorStage("decisions")
-				u.SetErrorMessage(err.Error())
-				u.SetGenerationStartedAt(now)
-				u.SetDiffFilesChanged(incomingDiff.FilesChanged)
-				u.SetDiffAdded(incomingDiff.Added)
-				u.SetDiffRemoved(incomingDiff.Removed)
-				u.SetSessionStartedAt(timeline.StartedAt)
-				u.SetSessionStoppedAt(timeline.StoppedAt)
-				u.SetDurationMs(timeline.Duration().Milliseconds())
-			}).
-			Exec(ctx); upsertErr != nil {
-			log.ForSession(sessionUUID).Error("[SessionSummary] failed to persist decisions-stage error row", "err", upsertErr)
-		}
+		g.persistDecisionsError(ctx, sessionUUID, sessionTitle, now, incomingDiff, timeline, err)
 		log.ForSession(sessionUUID).Warn("[SessionSummary] GENERATING -> ERROR (decisions stage)", "err", err)
 		return
 	}
 
 	cost := BuildCostSnapshot(sessionUUID, g.currentTokenStore())
 
-	var narrative string
-	var fallbackUsed bool
-	if isTrivialSession(incomingDiff, decisions, timeline.Duration()) {
-		narrative = narrativeFallbackTrivial
-		fallbackUsed = true
-		log.ForSession(sessionUUID).Info("[SessionSummary] skipping LLM narrative call: trivial session")
-	} else {
-		goalText := ""
-		if sessionGoal != nil {
-			goalText = sessionGoal.Goal
-		}
-		narrCtx, cancel := context.WithTimeout(ctx, llmNarrativeTimeout)
-		text, narrCostUSD, narrErr := headless.GenerateSessionCompletionNarrative(narrCtx, g.pool, sessionTitle, goalText, diffContent, formatDecisionsSummary(decisions))
-		cancel()
-		// Folded into the same EstimatedCostUSD the token-usage-log snapshot above
-		// populates: this narrative call is a separate cost channel (a headless pool
-		// call, not part of the interactive session's own JSONL token log) that would
-		// otherwise never be counted anywhere.
-		cost.EstimatedCostUSD += narrCostUSD
-		if narrErr != nil {
-			log.ForSession(sessionUUID).Warn("[SessionSummary] narrative generation failed, using fallback", "err", narrErr)
-			narrative = narrativeFallbackLLMFailure
-			fallbackUsed = true
-		} else {
-			narrative = text
-		}
-	}
+	narrative, fallbackUsed := g.buildNarrative(ctx, sessionUUID, sessionTitle, sessionGoal, diffContent, incomingDiff, decisions, timeline, &cost)
 
 	diffLink := fmt.Sprintf("/sessions/%s/summary", sessionUUID)
 	markdown := RenderSessionSummaryMarkdown(sessionTitle, narrative, fallbackUsed, incomingDiff, decisions, timeline, cost, diffLink)
@@ -493,4 +447,62 @@ func formatDecisionsSummary(d DecisionsSnapshot) string {
 	}
 	return fmt.Sprintf("%d auto-approved, %d manually approved, %d denied, %d review-queue items resolved, %d still open",
 		d.AutoApproved, d.ManuallyApproved, d.Denied, d.ReviewQueueResolved, d.StillOpen)
+}
+
+// persistDecisionsError upserts the ERROR row for a failed decisions stage, keeping
+// the diff and timeline columns already derived for this generation.
+func (g *SessionSummaryGenerator) persistDecisionsError(ctx context.Context, sessionUUID, sessionTitle string, now time.Time, incomingDiff DiffSnapshot, timeline TimelineSnapshot, cause error) {
+	if upsertErr := g.entClient.SessionSummary.Create().
+		SetID(uuid.New().String()).
+		SetSessionID(sessionUUID).
+		SetSessionTitle(sessionTitle).
+		SetStatus(string(SessionSummaryStatusError)).
+		SetGenerationStartedAt(now).
+		OnConflictColumns(sessionsummary.FieldSessionID).
+		Update(func(u *ent.SessionSummaryUpsert) {
+			u.SetStatus(string(SessionSummaryStatusError))
+			u.SetErrorStage("decisions")
+			u.SetErrorMessage(cause.Error())
+			u.SetGenerationStartedAt(now)
+			u.SetDiffFilesChanged(incomingDiff.FilesChanged)
+			u.SetDiffAdded(incomingDiff.Added)
+			u.SetDiffRemoved(incomingDiff.Removed)
+			u.SetSessionStartedAt(timeline.StartedAt)
+			u.SetSessionStoppedAt(timeline.StoppedAt)
+			u.SetDurationMs(timeline.Duration().Milliseconds())
+		}).
+		Exec(ctx); upsertErr != nil {
+		log.ForSession(sessionUUID).Error("[SessionSummary] failed to persist decisions-stage error row", "err", upsertErr)
+	}
+}
+
+// buildNarrative returns the session narrative (LLM-generated, or a fallback for a
+// trivial session or an LLM failure) and adds the narrative call's cost to cost.
+func (g *SessionSummaryGenerator) buildNarrative(ctx context.Context, sessionUUID, sessionTitle string, sessionGoal *session.SessionGoalData, diffContent string, incomingDiff DiffSnapshot, decisions DecisionsSnapshot, timeline TimelineSnapshot, cost *CostSnapshot) (narrative string, fallbackUsed bool) {
+	if isTrivialSession(incomingDiff, decisions, timeline.Duration()) {
+		narrative = narrativeFallbackTrivial
+		fallbackUsed = true
+		log.ForSession(sessionUUID).Info("[SessionSummary] skipping LLM narrative call: trivial session")
+	} else {
+		goalText := ""
+		if sessionGoal != nil {
+			goalText = sessionGoal.Goal
+		}
+		narrCtx, cancel := context.WithTimeout(ctx, llmNarrativeTimeout)
+		text, narrCostUSD, narrErr := headless.GenerateSessionCompletionNarrative(narrCtx, g.pool, sessionTitle, goalText, diffContent, formatDecisionsSummary(decisions))
+		cancel()
+		// Folded into the same EstimatedCostUSD the token-usage-log snapshot above
+		// populates: this narrative call is a separate cost channel (a headless pool
+		// call, not part of the interactive session's own JSONL token log) that would
+		// otherwise never be counted anywhere.
+		cost.EstimatedCostUSD += narrCostUSD
+		if narrErr != nil {
+			log.ForSession(sessionUUID).Warn("[SessionSummary] narrative generation failed, using fallback", "err", narrErr)
+			narrative = narrativeFallbackLLMFailure
+			fallbackUsed = true
+		} else {
+			narrative = text
+		}
+	}
+	return narrative, fallbackUsed
 }

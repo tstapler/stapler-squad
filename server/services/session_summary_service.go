@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -37,12 +38,12 @@ type liveInstanceFinder interface {
 // no_ent_in_services/forbidigo rules) — ent access stays confined to the session
 // package, translated to the domain.ErrNotFound sentinel at the boundary.
 type SessionSummaryService struct {
-	generator *session.SessionSummaryGenerator
+	generator *summaries.SessionSummaryGenerator
 	instances liveInstanceFinder
 }
 
 // NewSessionSummaryService creates a SessionSummaryService.
-func NewSessionSummaryService(generator *session.SessionSummaryGenerator, instances liveInstanceFinder) *SessionSummaryService {
+func NewSessionSummaryService(generator *summaries.SessionSummaryGenerator, instances liveInstanceFinder) *SessionSummaryService {
 	return &SessionSummaryService{generator: generator, instances: instances}
 }
 
@@ -103,7 +104,7 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 	var (
 		sessionTitle string
 		createdAt    time.Time
-		diffSnapshot session.DiffSnapshot
+		diffSnapshot summaries.DiffSnapshot
 		diffContent  string
 		sessionGoal  *session.SessionGoalData
 	)
@@ -120,7 +121,7 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 		sessionTitle = liveInst.Title
 		createdAt = liveInst.CreatedAt
 		diffStats := liveInst.GetDiffStats()
-		diffSnapshot = session.BuildDiffSnapshot(diffStats)
+		diffSnapshot = summaries.BuildDiffSnapshot(diffStats)
 		if diffStats != nil {
 			diffContent = diffStats.Content
 		}
@@ -131,7 +132,7 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 		// store the goal itself, only its effect on a prior narrative).
 		//
 		// diffSnapshot is built directly from the row's three persisted diff
-		// columns rather than via session.BuildDiffSnapshot(&git.DiffStats{...}):
+		// columns rather than via summaries.BuildDiffSnapshot(&git.DiffStats{...}):
 		// the raw diff Content isn't persisted (and shouldn't be re-fetched from a
 		// possibly-gone worktree), so deriving FilesChanged from an empty Content
 		// string would silently zero it even though DiffAdded/DiffRemoved are
@@ -141,7 +142,7 @@ func (s *SessionSummaryService) RegenerateSessionSummary(
 		if row.SessionStartedAt != nil {
 			createdAt = *row.SessionStartedAt
 		}
-		diffSnapshot = session.DiffSnapshot{
+		diffSnapshot = summaries.DiffSnapshot{
 			FilesChanged: row.DiffFilesChanged,
 			Added:        row.DiffAdded,
 			Removed:      row.DiffRemoved,
@@ -232,14 +233,14 @@ func toSessionSummaryProto(row *ent.SessionSummary) *sessionv1.SessionSummaryPro
 // panicking (defensive against a future status value the proto hasn't caught up to
 // yet).
 func toSessionSummaryStatusProto(status string) sessionv1.SessionSummaryStatus {
-	switch session.SessionSummaryStatus(status) {
-	case session.SessionSummaryStatusPending:
+	switch summaries.SessionSummaryStatus(status) {
+	case summaries.SessionSummaryStatusPending:
 		return sessionv1.SessionSummaryStatus_SESSION_SUMMARY_STATUS_PENDING
-	case session.SessionSummaryStatusGenerating:
+	case summaries.SessionSummaryStatusGenerating:
 		return sessionv1.SessionSummaryStatus_SESSION_SUMMARY_STATUS_GENERATING
-	case session.SessionSummaryStatusReady:
+	case summaries.SessionSummaryStatusReady:
 		return sessionv1.SessionSummaryStatus_SESSION_SUMMARY_STATUS_READY
-	case session.SessionSummaryStatusError:
+	case summaries.SessionSummaryStatusError:
 		return sessionv1.SessionSummaryStatus_SESSION_SUMMARY_STATUS_ERROR
 	default:
 		return sessionv1.SessionSummaryStatus_SESSION_SUMMARY_STATUS_UNSPECIFIED

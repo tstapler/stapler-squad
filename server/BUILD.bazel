@@ -129,6 +129,7 @@ go_library(
         "//session/search",
         "//session/sshremote",
         "//session/streamhub",
+        "//session/summaries",
         "//session/tcc",
         "//session/tmux",
         "//session/tokens",
