@@ -1,6 +1,6 @@
-package session
+package gitwt
 
-// git_worktree_watcher_test.go covers Epic 2.1 (WorktreeChangeDetector):
+// watcher_test.go covers Epic 2.1 (WorktreeChangeDetector):
 //  - Story 2.1.1: construct/start/stop, .git-watch-unavailable fallback,
 //    edge-triggered firing, panic isolation between OnChange callbacks.
 //  - Story 2.1.2: activeFunc gating of the periodic tick's real work.

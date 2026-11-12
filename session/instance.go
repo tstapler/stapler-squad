@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -652,7 +653,7 @@ type Instance struct {
 	trustStoreMu         sync.Mutex
 	claudeTrustStoreImpl claudeTrustStore
 	// gitManager owns the git worktree and diff stats.
-	GitManager GitWorktreeManager
+	GitManager gitwt.Manager
 	// vncManager owns the Xvfb + x11vnc lifecycle for this session.
 	// Always non-nil after NewInstance() — on unsupported platforms or missing deps,
 	// a no-op manager is returned. VNCManager() returns it for external access.
@@ -1441,7 +1442,7 @@ func (i *Instance) ReclassifyTagsAfterCreate() {
 // depends on — lives in exactly one place.
 //
 // setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc comment /
-// git_worktree_manager.go:22-26) — by the time it returns here, startMu is fully released on
+// gitwt/manager.go:22-26) — by the time it returns here, startMu is fully released on
 // this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock() below never nests under
 // startMu. No lock-ordering cycle is possible between the two on this or any other path
 // (pre-mortem.md Failure #5, P3).

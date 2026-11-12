@@ -12,7 +12,7 @@ import (
 
 // TestPause_should_skipGitOps_When_IsWorktreeIsFalse verifies that Pause() on a
 // non-worktree session does not call git operations. If the IsWorktree guard were
-// absent, IsDirty() on an uninitialized GitWorktreeManager would return
+// absent, IsDirty() on an uninitialized gitwt.Manager would return
 // "git worktree not initialized", which would propagate into the error chain.
 func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 	t.Parallel()
@@ -35,7 +35,7 @@ func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 
 // TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized verifies
 // that the IsWorktree=true path does attempt git operations. An uninitialized
-// GitWorktreeManager returns an error, confirming the guard condition is honored.
+// gitwt.Manager returns an error, confirming the guard condition is honored.
 func TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{

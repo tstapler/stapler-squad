@@ -1,6 +1,6 @@
 //go:build !darwin && !linux
 
-package session
+package gitwt
 
 import (
 	"context"

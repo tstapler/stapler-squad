@@ -606,7 +606,7 @@ func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
 }
 
 // RecordVCSStatusRequest marks this instance's worktree as recently active
-// for WorktreeChangeDetector's idle-gating (Story 2.2.2) -- called by
+// for gitwt.WorktreeChangeDetector idle-gating (Story 2.2.2) -- called by
 // WorkspaceService.GetVCSStatus on every call (hit or miss) so a workdir
 // being polled only via GetVCSStatus (never GetSessionDiff) still counts as
 // active for the periodic tick's activeFunc check. No-op if there's no

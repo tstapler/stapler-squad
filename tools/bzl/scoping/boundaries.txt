@@ -19,6 +19,7 @@ session/claudectl/claudectltest !server
 session/jules !server
 session/wtconsistency !server
 session/cmdexec !server
+session/gitwt !server
 session/itemsources !server
 session/migrations !github
 session/migrations !server

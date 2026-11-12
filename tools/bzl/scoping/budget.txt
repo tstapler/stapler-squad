@@ -1,7 +1,7 @@
 # Per-package caps (ADR-010 Story 13.6): non-test files, non-test LOC, direct imports of other module packages.
 # Values are the measured tree rounded up by 3% (`scoping budget --init <pkgs>`). A cap may only be lowered; raising one
 # needs a `scoping-budget-raise: <reason>` line in a commit message (`scoping budget --base origin/main`).
-session files=267 loc=72050 imports=101
+session files=264 loc=71500 imports=100
 session/claudectl files=3 loc=1400 imports=9
 session/claudectl/claudectltest files=1 loc=45 imports=3
 session/panereply files=6 loc=1303 imports=7
@@ -11,6 +11,7 @@ session/dialogpresence files=1 loc=149 imports=0
 session/summaries files=8 loc=1539 imports=12
 session/migrations files=9 loc=572 imports=5
 session/cmdexec files=4 loc=1418 imports=4
+session/gitwt files=5 loc=913 imports=9
 session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
 session/importer files=13 loc=2173 imports=7

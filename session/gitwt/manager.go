@@ -1,4 +1,4 @@
-package session
+package gitwt
 
 import (
 	"context"
@@ -14,18 +14,18 @@ import (
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 )
 
-// GitWorktreeManager owns the git worktree and diff-stats state that were
+// Manager owns the git worktree and diff-stats state that were
 // previously bare fields on Instance.
 //
-// Instance keeps thin wrapper methods that delegate here. GitWorktreeManager
+// Instance keeps thin wrapper methods that delegate here. Manager
 // itself has no knowledge of Instance lifecycle; it only manages the worktree
 // and diff operations.
 //
 // worktree/diffStats are guarded by mu, not by Instance.stateMutex: setup
 // (setupFirstTimeWorktree, called under Instance.startMu) and read-side
 // callers (e.g. GetEffectiveRootDir) don't consistently hold stateMutex, so
-// GitWorktreeManager protects its own fields directly.
-type GitWorktreeManager struct {
+// Manager protects its own fields directly.
+type Manager struct {
 	mu              deadlock.RWMutex
 	Worktree        *git.GitWorktree
 	diffStats       *git.DiffStats
@@ -78,7 +78,7 @@ const coldActivityThreshold = diffStatsCacheTTLWithChangeDetection
 // the applicable TTL -- diffStatsCacheTTL normally, or the wider
 // diffStatsCacheTTLWithChangeDetection when a WorktreeChangeDetector is
 // actively invalidating this worktree's cache on real changes.
-func (gm *GitWorktreeManager) DiffStatsFresh() bool {
+func (gm *Manager) DiffStatsFresh() bool {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	if gm.diffStatsAt.IsZero() {
@@ -92,7 +92,7 @@ func (gm *GitWorktreeManager) DiffStatsFresh() bool {
 }
 
 // SetDirBaseSHA sets the base commit SHA for directory-mode diff computation.
-func (gm *GitWorktreeManager) SetDirBaseSHA(sha string) {
+func (gm *Manager) SetDirBaseSHA(sha string) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 	gm.dirBaseSHA = sha
@@ -103,21 +103,21 @@ func (gm *GitWorktreeManager) SetDirBaseSHA(sha string) {
 // redesign, session/instance_worktree.go) started calling it on every
 // WorkspaceService.GetVCSStatus RPC — a much hotter concurrent-read path than
 // this field previously saw, turning a latent race into a realistic one.
-func (gm *GitWorktreeManager) GetDirBaseSHA() string {
+func (gm *Manager) GetDirBaseSHA() string {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	return gm.dirBaseSHA
 }
 
 // HasWorktree reports whether a git worktree has been initialized.
-func (gm *GitWorktreeManager) HasWorktree() bool {
+func (gm *Manager) HasWorktree() bool {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	return gm.Worktree != nil
 }
 
 // GetWorktree returns the underlying GitWorktree (may be nil before Setup).
-func (gm *GitWorktreeManager) GetWorktree() *git.GitWorktree {
+func (gm *Manager) GetWorktree() *git.GitWorktree {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	return gm.Worktree
@@ -125,7 +125,7 @@ func (gm *GitWorktreeManager) GetWorktree() *git.GitWorktree {
 
 // SetWorktree replaces the underlying GitWorktree. Used during session start
 // and by tests.
-func (gm *GitWorktreeManager) SetWorktree(wt *git.GitWorktree) {
+func (gm *Manager) SetWorktree(wt *git.GitWorktree) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 	gm.Worktree = wt
@@ -135,7 +135,7 @@ func (gm *GitWorktreeManager) SetWorktree(wt *git.GitWorktree) {
 // timestamp to a random point in [now-IsDirtyCacheTTL, now). Call this when
 // adding a session to the poller so sessions added in a burst don't all run
 // git-status subprocesses simultaneously when their caches expire.
-func (gm *GitWorktreeManager) PrimeDirtyCacheJitter() {
+func (gm *Manager) PrimeDirtyCacheJitter() {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return
@@ -145,7 +145,7 @@ func (gm *GitWorktreeManager) PrimeDirtyCacheJitter() {
 }
 
 // GetWorktreePath returns the worktree path or "" if no worktree.
-func (gm *GitWorktreeManager) GetWorktreePath() string {
+func (gm *Manager) GetWorktreePath() string {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return ""
@@ -154,7 +154,7 @@ func (gm *GitWorktreeManager) GetWorktreePath() string {
 }
 
 // GetRepoPath returns the repo root path or "" if no worktree.
-func (gm *GitWorktreeManager) GetRepoPath() string {
+func (gm *Manager) GetRepoPath() string {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return ""
@@ -163,7 +163,7 @@ func (gm *GitWorktreeManager) GetRepoPath() string {
 }
 
 // GetRepoName returns the repository name or "" if no worktree.
-func (gm *GitWorktreeManager) GetRepoName() string {
+func (gm *Manager) GetRepoName() string {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return ""
@@ -172,7 +172,7 @@ func (gm *GitWorktreeManager) GetRepoName() string {
 }
 
 // GetBranchName returns the branch name or "" if no worktree.
-func (gm *GitWorktreeManager) GetBranchName() string {
+func (gm *Manager) GetBranchName() string {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return ""
@@ -181,7 +181,7 @@ func (gm *GitWorktreeManager) GetBranchName() string {
 }
 
 // GetBaseCommitSHA returns the base commit SHA or "" if no worktree.
-func (gm *GitWorktreeManager) GetBaseCommitSHA() string {
+func (gm *Manager) GetBaseCommitSHA() string {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return ""
@@ -198,7 +198,7 @@ func WorktreeChangeDetectionEnabled() bool {
 // Setup prepares the worktree (creates directories, checks out branch, etc.),
 // then -- when worktreeChangeDetectionFlagName is on -- starts a
 // WorktreeChangeDetector for it (see startChangeDetector).
-func (gm *GitWorktreeManager) Setup() error {
+func (gm *Manager) Setup() error {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return fmt.Errorf("git worktree not initialized")
@@ -213,17 +213,17 @@ func (gm *GitWorktreeManager) Setup() error {
 }
 
 // startChangeDetector constructs and starts a WorktreeChangeDetector,
-// registering GitWorktreeManager's own diff-stats-clearing callback before
+// registering Manager's own diff-stats-clearing callback before
 // any external subscriber (e.g. WorkspaceService) gets a chance to register
 // its own -- order doesn't affect correctness here (both callbacks are
 // independent, idempotent invalidations) but matches architecture.md's
 // documented ordering.
 //
 // Setup() (this method's only caller) is safe to call repeatedly on the same
-// GitWorktreeManager -- see restartForRetry in retry_state.go -- so this must
+// Manager -- see restartForRetry in retry_state.go -- so this must
 // stop any already-running detector first, or a repeated Setup() call leaks
 // the orphaned detector's goroutine and fsnotify watcher.
-func (gm *GitWorktreeManager) startChangeDetector(wt *git.GitWorktree) {
+func (gm *Manager) startChangeDetector(wt *git.GitWorktree) {
 	gm.stopChangeDetector()
 
 	detector := NewWorktreeChangeDetector(wt.GetWorktreePath(), func() (bool, string, error) {
@@ -252,7 +252,7 @@ func (gm *GitWorktreeManager) startChangeDetector(wt *git.GitWorktree) {
 
 // Cleanup removes the worktree from the filesystem and git metadata.
 // Returns nil if no worktree is set.
-func (gm *GitWorktreeManager) Cleanup() error {
+func (gm *Manager) Cleanup() error {
 	gm.stopChangeDetector()
 	wt := gm.GetWorktree()
 	if wt == nil {
@@ -262,7 +262,7 @@ func (gm *GitWorktreeManager) Cleanup() error {
 }
 
 // Remove removes the worktree from git without pruning.
-func (gm *GitWorktreeManager) Remove() error {
+func (gm *Manager) Remove() error {
 	gm.stopChangeDetector()
 	wt := gm.GetWorktree()
 	if wt == nil {
@@ -276,7 +276,7 @@ func (gm *GitWorktreeManager) Remove() error {
 // call site already funnels through one of these two methods, so hooking in
 // here covers every teardown path with no per-call-site duplication. No-op if
 // no detector was ever started.
-func (gm *GitWorktreeManager) stopChangeDetector() {
+func (gm *Manager) stopChangeDetector() {
 	gm.mu.Lock()
 	detector := gm.changeDetector
 	gm.changeDetector = nil
@@ -291,7 +291,7 @@ func (gm *GitWorktreeManager) stopChangeDetector() {
 // currently running for this worktree (flag on and Setup() succeeded in
 // starting one) -- the signal WorkspaceService needs to decide its own
 // cache's TTL, and CreateDebugSnapshot surfaces for troubleshooting.
-func (gm *GitWorktreeManager) WorktreeChangeDetectionActive() bool {
+func (gm *Manager) WorktreeChangeDetectionActive() bool {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	return gm.changeDetectionActive
@@ -300,7 +300,7 @@ func (gm *GitWorktreeManager) WorktreeChangeDetectionActive() bool {
 // GitWatchActive reports whether the .git fsnotify sub-watch specifically is
 // running (observability-only -- see WorktreeChangeDetector.GitWatchActive's
 // doc comment for why this doesn't gate TTL widening).
-func (gm *GitWorktreeManager) GitWatchActive() bool {
+func (gm *Manager) GitWatchActive() bool {
 	gm.mu.RLock()
 	detector := gm.changeDetector
 	gm.mu.RUnlock()
@@ -311,7 +311,7 @@ func (gm *GitWorktreeManager) GitWatchActive() bool {
 // fires. No-op if change detection isn't active for this worktree -- the
 // caller (WorkspaceService) doesn't need to check WorktreeChangeDetectionActive
 // itself first.
-func (gm *GitWorktreeManager) OnChange(fn func()) {
+func (gm *Manager) OnChange(fn func()) {
 	gm.mu.RLock()
 	detector := gm.changeDetector
 	gm.mu.RUnlock()
@@ -324,7 +324,7 @@ func (gm *GitWorktreeManager) OnChange(fn func()) {
 // asked for this worktree's state -- factored out so UpdateDiffStats and
 // RecordRequest share the same mutex/time.Now() pair rather than duplicating
 // it.
-func (gm *GitWorktreeManager) touchRequestedAt() {
+func (gm *Manager) touchRequestedAt() {
 	gm.mu.Lock()
 	gm.lastRequestedAt = time.Now()
 	gm.mu.Unlock()
@@ -335,7 +335,7 @@ func (gm *GitWorktreeManager) touchRequestedAt() {
 // Instance.RecordVCSStatusRequest on every GetVCSStatus call (hit or miss),
 // since that RPC's own cache lives in a different package (WorkspaceService)
 // and never calls UpdateDiffStats itself.
-func (gm *GitWorktreeManager) RecordRequest() {
+func (gm *Manager) RecordRequest() {
 	gm.touchRequestedAt()
 }
 
@@ -347,14 +347,14 @@ func (gm *GitWorktreeManager) RecordRequest() {
 // diffStatsAt (the cached *value* is stale) but must not zero
 // lastRequestedAt (the fact that someone is *asking* is unrelated to
 // whether the last answer given is still valid).
-func (gm *GitWorktreeManager) hasRecentActivity() bool {
+func (gm *Manager) hasRecentActivity() bool {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	return !gm.lastRequestedAt.IsZero() && time.Since(gm.lastRequestedAt) < coldActivityThreshold
 }
 
 // Prune cleans up stale worktree references.
-func (gm *GitWorktreeManager) Prune() error {
+func (gm *Manager) Prune() error {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return fmt.Errorf("git worktree not initialized")
@@ -363,7 +363,7 @@ func (gm *GitWorktreeManager) Prune() error {
 }
 
 // IsDirty reports whether the worktree has uncommitted changes.
-func (gm *GitWorktreeManager) IsDirty() (bool, error) {
+func (gm *Manager) IsDirty() (bool, error) {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return false, fmt.Errorf("git worktree not initialized")
@@ -373,7 +373,7 @@ func (gm *GitWorktreeManager) IsDirty() (bool, error) {
 
 // IsDirtyUncached is IsDirty without the TTL cache. Use it where a stale "clean"
 // would be destructive (pause/stop remove the worktree).
-func (gm *GitWorktreeManager) IsDirtyUncached() (bool, error) {
+func (gm *Manager) IsDirtyUncached() (bool, error) {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return false, fmt.Errorf("git worktree not initialized")
@@ -384,7 +384,7 @@ func (gm *GitWorktreeManager) IsDirtyUncached() (bool, error) {
 // InvalidateDirtyCache clears the IsDirty TTL cache so the next call re-runs git status.
 // Call after transitions that may change worktree dirty state (Resume, Stop).
 // No-op if no worktree is set.
-func (gm *GitWorktreeManager) InvalidateDirtyCache() {
+func (gm *Manager) InvalidateDirtyCache() {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return
@@ -393,7 +393,7 @@ func (gm *GitWorktreeManager) InvalidateDirtyCache() {
 }
 
 // CommitChanges stages all changes and creates a commit.
-func (gm *GitWorktreeManager) CommitChanges(commitMsg string) error {
+func (gm *Manager) CommitChanges(commitMsg string) error {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return fmt.Errorf("git worktree not initialized")
@@ -402,7 +402,7 @@ func (gm *GitWorktreeManager) CommitChanges(commitMsg string) error {
 }
 
 // PushChanges commits and pushes the worktree branch.
-func (gm *GitWorktreeManager) PushChanges(commitMsg string, open bool) error {
+func (gm *Manager) PushChanges(commitMsg string, open bool) error {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return fmt.Errorf("git worktree not initialized")
@@ -411,7 +411,7 @@ func (gm *GitWorktreeManager) PushChanges(commitMsg string, open bool) error {
 }
 
 // IsBranchCheckedOut reports whether the branch is currently checked out.
-func (gm *GitWorktreeManager) IsBranchCheckedOut() (bool, error) {
+func (gm *Manager) IsBranchCheckedOut() (bool, error) {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return false, fmt.Errorf("git worktree not initialized")
@@ -420,7 +420,7 @@ func (gm *GitWorktreeManager) IsBranchCheckedOut() (bool, error) {
 }
 
 // OpenBranchURL opens the branch URL in the browser.
-func (gm *GitWorktreeManager) OpenBranchURL() error {
+func (gm *Manager) OpenBranchURL() error {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return fmt.Errorf("git worktree not initialized")
@@ -432,7 +432,7 @@ func (gm *GitWorktreeManager) OpenBranchURL() error {
 // Returns (stats, needsPause) where needsPause is true if the worktree directory is missing.
 // This method performs I/O and should be called WITHOUT holding Instance.mu.
 // Returns (nil, false) if no worktree is set.
-func (gm *GitWorktreeManager) ComputeDiffIfReady() (stats *git.DiffStats, needsPause bool) {
+func (gm *Manager) ComputeDiffIfReady() (stats *git.DiffStats, needsPause bool) {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return nil, false
@@ -447,7 +447,7 @@ func (gm *GitWorktreeManager) ComputeDiffIfReady() (stats *git.DiffStats, needsP
 
 // ComputeDiff runs git diff and returns the result without storing it.
 // Returns nil if no worktree is set.
-func (gm *GitWorktreeManager) ComputeDiff() *git.DiffStats {
+func (gm *Manager) ComputeDiff() *git.DiffStats {
 	wt := gm.GetWorktree()
 	if wt == nil {
 		return nil
@@ -457,7 +457,7 @@ func (gm *GitWorktreeManager) ComputeDiff() *git.DiffStats {
 
 // UpdateDiffStats computes a new diff and stores it.
 // Returns nil and clears stats if worktree is not ready.
-func (gm *GitWorktreeManager) UpdateDiffStats() {
+func (gm *Manager) UpdateDiffStats() {
 	gm.touchRequestedAt() // every call is evidence someone is polling, hit or miss
 	wt := gm.GetWorktree()
 	if wt == nil {
@@ -475,7 +475,7 @@ func (gm *GitWorktreeManager) UpdateDiffStats() {
 }
 
 // GetDiffStats returns the most recently computed diff stats (may be nil).
-func (gm *GitWorktreeManager) GetDiffStats() *git.DiffStats {
+func (gm *Manager) GetDiffStats() *git.DiffStats {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	return gm.diffStats
@@ -484,12 +484,12 @@ func (gm *GitWorktreeManager) GetDiffStats() *git.DiffStats {
 // SetDiffStats directly replaces the diff stats — used both during
 // deserialization and as the final step of Instance.UpdateDiffStats's own
 // orchestration (worktree and directory-mode paths alike). Stamping
-// diffStatsAt here, rather than only in GitWorktreeManager.UpdateDiffStats
+// diffStatsAt here, rather than only in Manager.UpdateDiffStats
 // (which Instance's real hot path bypasses), is what makes DiffStatsFresh
 // accurate for every caller that sets a genuinely fresh value — including a
 // deserialized one, which is fresh as of process startup and no less valid
 // than any other cache entry for diffStatsCacheTTL's short window.
-func (gm *GitWorktreeManager) SetDiffStats(stats *git.DiffStats) {
+func (gm *Manager) SetDiffStats(stats *git.DiffStats) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 	gm.diffStats = stats
@@ -497,7 +497,7 @@ func (gm *GitWorktreeManager) SetDiffStats(stats *git.DiffStats) {
 }
 
 // ClearDiffStats sets diffStats to nil.
-func (gm *GitWorktreeManager) ClearDiffStats() {
+func (gm *Manager) ClearDiffStats() {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 	gm.diffStats = nil
@@ -507,7 +507,7 @@ func (gm *GitWorktreeManager) ClearDiffStats() {
 
 // GetHasCommitsAhead returns the most recently computed "has commits ahead of
 // base" signal (see SetHasCommitsAhead).
-func (gm *GitWorktreeManager) GetHasCommitsAhead() bool {
+func (gm *Manager) GetHasCommitsAhead() bool {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	return gm.hasCommitsAhead
@@ -515,59 +515,16 @@ func (gm *GitWorktreeManager) GetHasCommitsAhead() bool {
 
 // SetHasCommitsAhead directly replaces the cached "has commits ahead of base"
 // signal, refreshed on the same cadence as diff stats (see UpdateDiffStats).
-func (gm *GitWorktreeManager) SetHasCommitsAhead(v bool) {
+func (gm *Manager) SetHasCommitsAhead(v bool) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
 	gm.hasCommitsAhead = v
 }
 
-// GitManager is the interface satisfied by *GitWorktreeManager.
-// It covers all git worktree operations used by Instance and can be implemented
-// by test doubles to avoid requiring a real git repository.
-type GitManager interface {
-	HasWorktree() bool
-	GetWorktree() *git.GitWorktree
-	SetWorktree(*git.GitWorktree)
-	GetWorktreePath() string
-	GetRepoPath() string
-	GetRepoName() string
-	GetBranchName() string
-	GetBaseCommitSHA() string
-	Setup() error
-	Cleanup() error
-	Remove() error
-	Prune() error
-	IsDirty() (bool, error)
-	IsDirtyUncached() (bool, error)
-	InvalidateDirtyCache()
-	CommitChanges(commitMsg string) error
-	PushChanges(commitMsg string, open bool) error
-	IsBranchCheckedOut() (bool, error)
-	OpenBranchURL() error
-	ComputeDiffIfReady() (stats *git.DiffStats, needsPause bool)
-	ComputeDiff() *git.DiffStats
-	UpdateDiffStats()
-	DiffStatsFresh() bool
-	GetDiffStats() *git.DiffStats
-	SetDiffStats(*git.DiffStats)
-	ClearDiffStats()
-	GetHasCommitsAhead() bool
-	SetHasCommitsAhead(bool)
-	GetCurrentCommitSHA() (string, error)
-	PrimeDirtyCacheJitter()
-	WorktreeChangeDetectionActive() bool
-	GitWatchActive() bool
-	OnChange(fn func())
-	RecordRequest()
-}
-
-// compile-time check that *GitWorktreeManager satisfies GitManager.
-var _ GitManager = (*GitWorktreeManager)(nil)
-
 // GetCurrentCommitSHA returns the current HEAD commit SHA for the worktree.
 // Returns an empty string (not an error) if no worktree is set or the repo
 // has no commits yet — this is safe to use in checkpoint creation.
-func (gm *GitWorktreeManager) GetCurrentCommitSHA() (string, error) {
+func (gm *Manager) GetCurrentCommitSHA() (string, error) {
 	dir := gm.GetWorktreePath()
 	if dir == "" {
 		dir = gm.GetRepoPath()

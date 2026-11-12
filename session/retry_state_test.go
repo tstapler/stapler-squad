@@ -388,7 +388,7 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFaile
 // fail identically forever on every "Retry now" click, since Start(false) —
 // the warm-restart path restartForRetry takes for PermanentlyFailed/Stopped
 // — never recreates a worktree the way first-time setup does. restartForRetry
-// must detect the missing directory and call GitWorktreeManager.Setup() to
+// must detect the missing directory and call gitwt.Manager.Setup() to
 // recreate it before Start() runs.
 func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted(t *testing.T) {
 	t.Parallel()
@@ -425,7 +425,7 @@ func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted
 }
 
 // TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails covers the
-// converse of the test above: if GitWorktreeManager.Setup() itself fails
+// converse of the test above: if gitwt.Manager.Setup() itself fails
 // (e.g. the repo backing the worktree is gone too), restartForRetry must
 // fail immediately rather than still calling Start(false) against a
 // directory it just failed to recreate — that would just repeat the
