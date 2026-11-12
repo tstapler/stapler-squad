@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // question_answer_sequence.go routes a multi-question answer to the stepwise
@@ -42,7 +43,7 @@ func EncodeSequencePicks(picks [][]string) string {
 
 // sequenceQuestions returns the questions of the durable row when it is a shape
 // with a recorded key sequence; any other row falls through to the single-digit path.
-func (r *AnswerRouter) sequenceQuestions(ctx context.Context, questionID string) ([]session.TabbedQuestion, bool) {
+func (r *AnswerRouter) sequenceQuestions(ctx context.Context, questionID string) ([]panereply.TabbedQuestion, bool) {
 	if r.rows == nil {
 		return nil, false
 	}
@@ -57,26 +58,26 @@ func (r *AnswerRouter) sequenceQuestions(ctx context.Context, questionID string)
 	return tabbedFromRow(row)
 }
 
-func tabbedQuestions(p domain.QuestionPayload) []session.TabbedQuestion {
+func tabbedQuestions(p domain.QuestionPayload) []panereply.TabbedQuestion {
 	src := p.Questions()
-	out := make([]session.TabbedQuestion, len(src))
+	out := make([]panereply.TabbedQuestion, len(src))
 	for i, q := range src {
 		labels := make([]string, len(q.Options))
 		for j, o := range q.Options {
 			labels[j] = o.Label
 		}
-		out[i] = session.TabbedQuestion{Text: q.Text, Header: q.Header, Labels: labels, MultiSelect: q.MultiSelect}
+		out[i] = panereply.TabbedQuestion{Text: q.Text, Header: q.Header, Labels: labels, MultiSelect: q.MultiSelect}
 	}
 	return out
 }
 
 // liveSequence types a multi-question answer into a visible session's dialog.
-func (r *AnswerRouter) liveSequence(ctx context.Context, s routedSession, in QuestionAnswer, qs []session.TabbedQuestion) (ActionResult, error) {
+func (r *AnswerRouter) liveSequence(ctx context.Context, s routedSession, in QuestionAnswer, qs []panereply.TabbedQuestion) (ActionResult, error) {
 	picks, err := DecodeSequencePicks(in.OptionLabel)
 	if err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}
-	steps, err := session.PlanTabbedAnswer(qs, picks)
+	steps, err := panereply.PlanTabbedAnswer(qs, picks)
 	if err != nil {
 		return outcome(sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, err.Error()), nil
 	}

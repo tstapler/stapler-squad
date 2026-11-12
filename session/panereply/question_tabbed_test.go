@@ -1,4 +1,4 @@
-package session
+package panereply
 
 import (
 	"strings"

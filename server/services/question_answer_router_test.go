@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -78,7 +79,7 @@ func (e *routerEnv) addVisible(title string, tweak ...func(*session.Instance)) (
 }
 
 // hookRow stores a hook-mirrored row for dialog d and registers it as pending.
-func (e *routerEnv) hookRow(inst *session.Instance, d session.QuestionDialog) string {
+func (e *routerEnv) hookRow(inst *session.Instance, d panereply.QuestionDialog) string {
 	e.t.Helper()
 	opts := make([]domain.Option, len(d.Labels))
 	for i, l := range d.Labels {
@@ -397,7 +398,7 @@ func TestAnswerRouter_ShouldRefuseAnAnswerOutsideTheOptions_WhenSessionIsStopped
 func TestAnswerRouter_ShouldReturnStaleAndWriteNothing_WhenTheRouteChangedAfterTheTierGate(t *testing.T) {
 	e := newRouterEnv(t)
 	inst, pm := e.addVisible("route-flip")
-	d := session.QuestionDialog{Question: "Pick a colour", Labels: []string{"Red", replyColorLabel, "Blue"}}
+	d := panereply.QuestionDialog{Question: "Pick a colour", Labels: []string{"Red", replyColorLabel, "Blue"}}
 	qid := e.hookRow(inst, d)
 	gated := routeDurableRecord // the dispatcher gated this call as a Tier A record, then the session went live
 

@@ -9,7 +9,7 @@
   "tested": true,
   "testIds": [
     "server/services/hidden_question_reply_test.go",
-    "session/pane_reply_test.go",
+    "session/panereply/pane_reply_test.go",
     "server/services/pending_question_store_test.go",
     "server/services/approval_question_test.go",
     "tests/e2e/hidden-session-reply.spec.ts"

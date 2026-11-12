@@ -14,14 +14,15 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // Story 3.5 against the Spike S1c captures: Q1 single (Redis/Memcached/None),
 // Q2 multi (A/B/C), answered Redis + [A, B] by the recorded 9-key sequence.
 
 var recordedAnswerKeys = []string{
-	session.KeyEnter, session.KeyEnter, session.KeyDown, session.KeyEnter, session.KeyDown,
-	session.KeyDown, session.KeyDown, session.KeyEnter, session.KeyEnter,
+	panereply.KeyEnter, panereply.KeyEnter, panereply.KeyDown, panereply.KeyEnter, panereply.KeyDown,
+	panereply.KeyDown, panereply.KeyDown, panereply.KeyEnter, panereply.KeyEnter,
 }
 
 const closedComposer = "\n────────────────────────────────────────\n❯ \n────────────────────────────────────────\n  ? for shortcuts\n"
@@ -127,7 +128,7 @@ func TestSequence_should_abortWithStaleAndNoFurtherWrites_When_dialogMatchFailsA
 	assert.Equal(t, outStale, res.Outcome)
 	assert.Equal(t, partialStaleAt, res.StaleReason)
 	assert.Equal(t, "1 of 9 keys sent", res.Detail)
-	assert.Equal(t, []string{session.KeyEnter}, pm.writes(), "no write after the failed check")
+	assert.Equal(t, []string{panereply.KeyEnter}, pm.writes(), "no write after the failed check")
 	row := e.row(qid)
 	assert.Equal(t, domain.DeliveryStateAbortedPartial, row.DeliveryState)
 	assert.Nil(t, row.AnsweredAt, "the row stays unanswered, so it stays in Needs you")

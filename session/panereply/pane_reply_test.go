@@ -1,4 +1,4 @@
-package session
+package panereply
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // The fixtures under testdata/reply_dialogs are verbatim `tmux capture-pane -p`
@@ -19,7 +21,7 @@ import (
 // lines trimmed), taken for T-RP-45.
 func loadDialogFixture(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("testdata", "reply_dialogs", name))
+	b, err := os.ReadFile(filepath.Join("..", "testdata", "reply_dialogs", name))
 	require.NoError(t, err)
 	return string(b)
 }
@@ -191,10 +193,10 @@ func (f *fakeReplyPane) writtenBytes() []string {
 
 const replyOwner = "reply-pane-owner"
 
-func replyInstanceAndLease(t *testing.T) (*Instance, *HeldLease) {
+func replyInstanceAndLease(t *testing.T) (*session.Instance, *session.HeldLease) {
 	t.Helper()
-	inst := &Instance{UUID: replyOwner}
-	l, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+	inst := &session.Instance{UUID: replyOwner}
+	l, ok := inst.TryTerminalWriteLease(session.LeaseWriterReply)
 	require.True(t, ok)
 	return inst, l
 }
@@ -219,7 +221,7 @@ func TestSubmitReplyOnce_ShouldWriteExactlyOneDigitAndNoEnterAndReportClosed_Whe
 		require.NoError(t, err)
 		assert.Equal(t, StageDialogClosed, stage)
 		assert.Equal(t, []string{string([]byte{digit})}, pane.writtenBytes(), "one digit, no \\r, no \\n, no second byte")
-		AssertLeaseFree(t, inst)
+		session.AssertLeaseFree(t, inst)
 	}
 }
 
@@ -238,7 +240,7 @@ func TestSubmitReplyOnce_ShouldReportDialogStillOpenWithNoSecondByte_WhenPaneNev
 	assert.Equal(t, StageDialogStillOpen, stage)
 	assert.Equal(t, []string{"2"}, pane.writtenBytes())
 	assert.Equal(t, int(ReplyClosedWindow/ReplyClosedPollEvery), polls, "2s window at 100ms polls, driven by the injected timer")
-	AssertLeaseFree(t, inst)
+	session.AssertLeaseFree(t, inst)
 }
 
 func TestSubmitReplyOnce_ShouldClassifyByteCountOfAFailedWrite(t *testing.T) {
@@ -257,7 +259,7 @@ func TestSubmitReplyOnce_ShouldClassifyByteCountOfAFailedWrite(t *testing.T) {
 			stage, err := SubmitReplyOnce(context.Background(), pane, lease, '1', ReplyOptions{Dialog: colorQuestion, After: readyAfter})
 			require.Error(t, err)
 			assert.Equal(t, tc.wantStage, stage)
-			AssertLeaseFree(t, inst)
+			session.AssertLeaseFree(t, inst)
 		})
 	}
 }
@@ -272,7 +274,7 @@ func TestSubmitReplyOnce_ShouldWriteNothingAndReleaseTheLease_WhenARefusalHappen
 		require.Error(t, err)
 		assert.Equal(t, StageNotStarted, stage)
 		assert.Empty(t, pane.writtenBytes())
-		AssertLeaseFree(t, inst)
+		session.AssertLeaseFree(t, inst)
 	})
 	t.Run("bad digit", func(t *testing.T) {
 		for _, d := range []byte{'0', 'a', '\r', '\n', 0x1b} {
@@ -282,20 +284,20 @@ func TestSubmitReplyOnce_ShouldWriteNothingAndReleaseTheLease_WhenARefusalHappen
 			assert.ErrorIs(t, err, ErrReplyDigit)
 			assert.Equal(t, StageNotStarted, stage)
 			assert.Empty(t, pane.writtenBytes())
-			AssertLeaseFree(t, inst)
+			session.AssertLeaseFree(t, inst)
 		}
 	})
 	t.Run("nil and foreign lease", func(t *testing.T) {
 		pane := &fakeReplyPane{owner: replyOwner, captures: []string{"x"}}
 		_, err := SubmitReplyOnce(context.Background(), pane, nil, '1', ReplyOptions{})
-		assert.ErrorIs(t, err, ErrNoLease)
-		other := &Instance{UUID: "someone-else"}
-		l, ok := other.TryTerminalWriteLease(LeaseWriterReply)
+		assert.ErrorIs(t, err, session.ErrNoLease)
+		other := &session.Instance{UUID: "someone-else"}
+		l, ok := other.TryTerminalWriteLease(session.LeaseWriterReply)
 		require.True(t, ok)
 		_, err = SubmitReplyOnce(context.Background(), pane, l, '1', ReplyOptions{})
-		assert.ErrorIs(t, err, ErrLeaseMismatch)
+		assert.ErrorIs(t, err, session.ErrLeaseMismatch)
 		assert.Empty(t, pane.writtenBytes())
-		AssertLeaseFree(t, other)
+		session.AssertLeaseFree(t, other)
 	})
 	t.Run("context already done", func(t *testing.T) {
 		inst, lease := replyInstanceAndLease(t)
@@ -306,7 +308,7 @@ func TestSubmitReplyOnce_ShouldWriteNothingAndReleaseTheLease_WhenARefusalHappen
 		require.Error(t, err)
 		assert.Equal(t, StageNotStarted, stage)
 		assert.Empty(t, pane.writtenBytes())
-		AssertLeaseFree(t, inst)
+		session.AssertLeaseFree(t, inst)
 	})
 }
 
@@ -343,12 +345,12 @@ func TestSubmitReplyOnce_ShouldIssueZeroFurtherWritesAndHoldTheLease_WhenFirstWr
 	require.ErrorIs(t, r.err, ErrReplyTimeout)
 
 	// The caller returned; the abandoned goroutine still holds the lease.
-	_, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+	_, ok := inst.TryTerminalWriteLease(session.LeaseWriterReply)
 	assert.False(t, ok, "lease must be held until the abandoned writer exits")
 
 	close(pane.block)
 	require.Eventually(t, func() bool {
-		l, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
+		l, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
 		if ok {
 			l.Release()
 		}
@@ -389,7 +391,7 @@ func TestSubmitReplyOnce_ShouldNeverWrite_WhenCallerTimesOutBeforeTheWriteStarts
 	require.ErrorIs(t, outErr, ErrReplyTimeout)
 	close(gate) // the goroutine now finds the state aborted
 	require.Eventually(t, func() bool {
-		l, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
+		l, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
 		if ok {
 			l.Release()
 		}
@@ -401,7 +403,7 @@ func TestSubmitReplyOnce_ShouldNeverWrite_WhenCallerTimesOutBeforeTheWriteStarts
 // T-RP-52: an instance that is not started provably wrote nothing, so a Reply to
 // it is not-sent and the claim can be released.
 func TestSendKeysN_ShouldReturnZeroBytesAndAnError_WhenInstanceNotStarted(t *testing.T) {
-	n, err := (&Instance{UUID: replyOwner}).SendKeysN("1")
+	n, err := (&session.Instance{UUID: replyOwner}).SendKeysN("1")
 	require.Error(t, err)
 	assert.Zero(t, n)
 }
