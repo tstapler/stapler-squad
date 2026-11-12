@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 
 	"github.com/google/uuid"
@@ -95,7 +96,7 @@ func TestEntFlowReader_should_ReadOnlySystemWrittenMarkers_When_AgentNoteCarries
 	t.Parallel()
 	repo, clk := newMarkerTestRepo(t)
 	ctx := context.Background()
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "forgery"})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "forgery"})
 	require.NoError(t, err)
 
 	repo.RecordFlowMarker(ctx, item.ID, FlowMarkerPRFixOutcome, PRFixOutcomeSteered, 5)
@@ -267,10 +268,10 @@ func TestRecordManualNudgeForSession_should_RecordOnlyForBacklogSessionsAndDedup
 	storage, err := NewStorageWithRepository(repo)
 	require.NoError(t, err)
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "nudged"})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "nudged"})
 	require.NoError(t, err)
 	sessionUUID := uuid.NewString()
-	_, err = storage.CreateItemSession(ctx, ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
 	require.NoError(t, err)
 	t0 := clk.Now()
 

@@ -14,6 +14,7 @@ import (
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -41,8 +42,8 @@ func (f *fakeSyncPlugin) Fetch(ctx context.Context, config PluginConfig, cursor 
 	return f.items, f.newCursor, nil
 }
 
-func (f *fakeSyncPlugin) MapToBacklogItem(item ExternalItem, sourceID string) BacklogItemData {
-	return BacklogItemData{
+func (f *fakeSyncPlugin) MapToBacklogItem(item ExternalItem, sourceID string) backlogdto.BacklogItemData {
+	return backlogdto.BacklogItemData{
 		Title:       item.Title,
 		Description: item.Description,
 		Priority:    item.Priority,
@@ -62,7 +63,7 @@ func newTestSyncSetup(t *testing.T, plugin ItemSourcePlugin) (*Storage, func(), 
 	registry.Register(plugin)
 	sl := NewSyncLoop(storage, registry)
 
-	src, err := storage.CreateItemSource(context.Background(), ItemSourceData{
+	src, err := storage.CreateItemSource(context.Background(), backlogdto.ItemSourceData{
 		PluginID:    plugin.PluginID(),
 		DisplayName: "Test Source",
 		Enabled:     true,
@@ -84,7 +85,7 @@ func newTestBackwardSyncSetup(t *testing.T, plugin ItemSourcePlugin, backwardSyn
 	registry.Register(plugin)
 	sl := NewSyncLoop(storage, registry)
 
-	src, err := storage.CreateItemSource(context.Background(), ItemSourceData{
+	src, err := storage.CreateItemSource(context.Background(), backlogdto.ItemSourceData{
 		PluginID:            plugin.PluginID(),
 		DisplayName:         "Test Source",
 		Enabled:             true,
@@ -141,7 +142,7 @@ func TestListSourceSyncEvents_ReportsTruncatedWhenOverCap(t *testing.T) {
 	ctx := context.Background()
 	er := storage.Repo
 
-	src, err := storage.CreateItemSource(ctx, ItemSourceData{
+	src, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{
 		PluginID:    "fake_source",
 		DisplayName: "Chatty Source",
 		Enabled:     true,
@@ -169,7 +170,7 @@ func TestListSourceSyncEvents_NotTruncatedAtOrUnderCap(t *testing.T) {
 	ctx := context.Background()
 	er := storage.Repo
 
-	src, err := storage.CreateItemSource(ctx, ItemSourceData{
+	src, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{
 		PluginID:    "fake_source",
 		DisplayName: "Exactly At Cap",
 		Enabled:     true,
@@ -199,7 +200,7 @@ func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "Local Title",
 		Description: "Remote Desc",
 		Priority:    1,
@@ -248,7 +249,7 @@ func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "Local",
 		Description: "Local",
 		Priority:    2,
@@ -314,7 +315,7 @@ func TestSyncOne_DecryptsEncryptedConfigTokenBeforeFetch(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	src, err := storage.CreateItemSource(ctx, ItemSourceData{
+	src, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{
 		PluginID:    "fake",
 		DisplayName: "Encrypted Source",
 		Enabled:     true,
@@ -370,9 +371,9 @@ func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
 	registry.Register(pluginB)
 	sl := NewSyncLoop(storage, registry)
 
-	srcA, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-a", DisplayName: "Repo A", Enabled: true})
+	srcA, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "fake-a", DisplayName: "Repo A", Enabled: true})
 	require.NoError(t, err)
-	srcB, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-b", DisplayName: "Repo B", Enabled: true})
+	srcB, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "fake-b", DisplayName: "Repo B", Enabled: true})
 	require.NoError(t, err)
 
 	require.NoError(t, sl.SyncByID(ctx, srcA.ID))
@@ -407,16 +408,16 @@ func TestGetBacklogItemsByExternalIDs_ScopesToSourceAndIgnoresMissing(t *testing
 	ctx := context.Background()
 	er := storage.Repo
 
-	srcA, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-a", DisplayName: "Repo A", Enabled: true})
+	srcA, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "fake-a", DisplayName: "Repo A", Enabled: true})
 	require.NoError(t, err)
-	srcB, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-b", DisplayName: "Repo B", Enabled: true})
+	srcB, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "fake-b", DisplayName: "Repo B", Enabled: true})
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(ctx, BacklogItemData{Title: "A1", Status: string(BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "1"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "A1", Status: string(BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "1"})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, BacklogItemData{Title: "A2", Status: string(BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "2"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "A2", Status: string(BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "2"})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, BacklogItemData{Title: "B1", Status: string(BacklogStatusIdea), SourceID: srcB.ID, ExternalID: "1"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "B1", Status: string(BacklogStatusIdea), SourceID: srcB.ID, ExternalID: "1"})
 	require.NoError(t, err)
 
 	// "3" doesn't exist at all; "1" exists on both sources but this query is
@@ -470,7 +471,7 @@ func TestSyncOne_ConcurrentSyncsOfSameSourceDoNotDuplicateItems(t *testing.T) {
 
 	require.Equal(t, 2, plugin.fetchCalled, "both goroutines should have run (sequentially, not concurrently)")
 
-	items, err := storage.ListBacklogItems(ctx, BacklogItemFilter{})
+	items, err := storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	matching := 0
 	for _, it := range items {
@@ -495,7 +496,7 @@ func TestSyncByID_SyncsEvenWhenSourceDisabled(t *testing.T) {
 	sl := NewSyncLoop(storage, registry)
 
 	ctx := context.Background()
-	src, err := storage.CreateItemSource(ctx, ItemSourceData{
+	src, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{
 		PluginID:    "fake",
 		DisplayName: "Disabled Source",
 		Enabled:     false,
@@ -587,7 +588,7 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "Original Title",
 		Description: "Remote Desc",
 		Priority:    1,
@@ -603,7 +604,7 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 	merged, err := MergeUserModifiedFields(created.UserModifiedFields, "title")
 	require.NoError(t, err)
 	newTitle := "User Edited Title"
-	_, err = storage.UpdateBacklogItem(ctx, created.ID, BacklogItemUpdate{
+	_, err = storage.UpdateBacklogItem(ctx, created.ID, backlogdto.BacklogItemUpdate{
 		Title:              &newTitle,
 		UserModifiedFields: &merged,
 	}, nil)
@@ -667,7 +668,7 @@ func TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusReady),
 		ExternalID: "ext-1",
@@ -702,7 +703,7 @@ func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusInProgress),
 		ExternalID: "ext-1",
@@ -752,7 +753,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusInProgress),
 		ExternalID: "ext-1",
@@ -800,7 +801,7 @@ func TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusReady),
 		ExternalID: "ext-1",
@@ -835,7 +836,7 @@ func TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusDone),
 		ExternalID: "ext-1",
@@ -871,7 +872,7 @@ func TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp(t *testing.T) 
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusArchived),
 		ExternalID: "ext-1",
@@ -906,7 +907,7 @@ func TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusIdea),
 		ExternalID: "ext-1",
@@ -940,7 +941,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusIdea),
 		ExternalID: "ext-1",
@@ -982,7 +983,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled(t *testing.T) 
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusIdea),
 		ExternalID: "ext-1",
@@ -1017,7 +1018,7 @@ func TestSyncOne_BackfillsLabelsOnExistingItemWithNoLabels(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "Local Title",
 		Description: "Local Desc",
 		Priority:    1,
@@ -1062,7 +1063,7 @@ func TestSyncOne_BackfillsLabelsRespectsUserModifiedFieldsGate(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusIdea),
 		ExternalID: "ext-1",
@@ -1105,7 +1106,7 @@ func TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified(t *te
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "Local Title",
 		Description: "Local Desc",
 		Priority:    1,
@@ -1151,7 +1152,7 @@ func TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark(t *t
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusDone),
 		ExternalID: "ext-1",
@@ -1190,7 +1191,7 @@ func TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed(t *
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:                      "Issue",
 		Status:                     string(BacklogStatusInProgress),
 		ExternalID:                 "ext-1",
@@ -1227,7 +1228,7 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:                      "Issue",
 		Status:                     string(BacklogStatusReady),
 		ExternalID:                 "ext-1",
@@ -1291,7 +1292,7 @@ func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testin
 	sl.workflowEngine = alwaysDenyWorkflowEngine{}
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusReady),
 		ExternalID: "ext-1",
@@ -1340,7 +1341,7 @@ func TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile(t *testi
 
 	ctx := context.Background()
 	existingWatermark := time.Now().Add(-1 * time.Hour)
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:                      "Issue",
 		Status:                     string(BacklogStatusReady),
 		ExternalID:                 "ext-1",
@@ -1384,7 +1385,7 @@ func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testin
 	defer cleanup()
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
 		Status:     string(BacklogStatusReady),
 		ExternalID: "ext-1",
@@ -1530,9 +1531,9 @@ func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testi
 	registry.Register(plugin)
 	sl := NewSyncLoop(h.storage, registry)
 	sl.SetWorkflowEngine(h.sel)
-	src, err := h.storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake", DisplayName: "s", Enabled: true, BackwardSyncEnabled: true})
+	src, err := h.storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "fake", DisplayName: "s", Enabled: true, BackwardSyncEnabled: true})
 	require.NoError(t, err)
-	created, err := h.storage.CreateBacklogItem(ctx, BacklogItemData{Title: "Issue", Status: string(BacklogStatusIdea), ExternalID: "ext-1", SourceID: src.ID})
+	created, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Issue", Status: string(BacklogStatusIdea), ExternalID: "ext-1", SourceID: src.ID})
 	require.NoError(t, err)
 	entSrc, err := h.storage.Repo.GetItemSourceByID(ctx, src.ID)
 	require.NoError(t, err)

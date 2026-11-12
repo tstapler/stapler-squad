@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 )
@@ -537,7 +538,7 @@ func TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaShar
 
 	from, to := newCustomTransitionWithGates(t, client, engine, []GateKind{GateKindAutomatedReview}, []bool{true})
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "real transition path ItemID regression",
 		Status: string(from),
 	})
@@ -620,7 +621,7 @@ func TestPendingGates_should_ReturnNilNil_When_CacheMissAndFallbackDoesNotContai
 // TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIsDeletedAfterTransition
 // asserts against. Returns the engine, the item's (from,to) BacklogStatus
 // pair, and the item reloaded post-deletion (for BuildStageConfigSnapshotFallback).
-func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine, from, to BacklogStatus, reloaded *BacklogItemData) {
+func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine, from, to BacklogStatus, reloaded *backlogdto.BacklogItemData) {
 	t.Helper()
 	repo := NewTestEntRepository(t)
 	ctx := context.Background()
@@ -638,7 +639,7 @@ func newDeletedStageItemFixture(t *testing.T) (engine *ConfiguredWorkflowEngine,
 	engine, err = NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "e2e item entering a stage that will be deleted",
 		Status: string(BacklogStatusIdea),
 	})

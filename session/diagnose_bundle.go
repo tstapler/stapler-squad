@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // diagnosticTagEscaper neutralizes the two characters that could otherwise
@@ -96,7 +98,7 @@ type DiagnosticBundleInput struct {
 	ItemDescription  string
 	ItemStatus       string
 	AcCriteria       []AcCriterion
-	ActivityHistory  []ActivityNoteData
+	ActivityHistory  []backlogdto.ActivityNoteData
 	ReviewVerdicts   []DiagnosticReviewVerdict
 	LinkedSessions   []DiagnosticLinkedSession
 	GitDiff          string
@@ -233,7 +235,7 @@ func renderItemSection(in DiagnosticBundleInput) string {
 	return wrapDiagnosticSection("item", sb.String())
 }
 
-func renderActivityHistory(notes []ActivityNoteData) string {
+func renderActivityHistory(notes []backlogdto.ActivityNoteData) string {
 	if len(notes) == 0 {
 		return "(no activity history)"
 	}

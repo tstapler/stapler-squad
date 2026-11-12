@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/guidancerequest"
@@ -586,7 +587,7 @@ func (r *EntRepository) pendingGuidanceItemIDs(ctx context.Context, itemIDs []st
 
 // attachPendingGuidance sets HasPendingGuidanceRequests on item. Best-effort:
 // a lookup failure is logged and leaves the flag false.
-func (r *EntRepository) attachPendingGuidance(ctx context.Context, item *BacklogItemData) {
+func (r *EntRepository) attachPendingGuidance(ctx context.Context, item *backlogdto.BacklogItemData) {
 	if item == nil || item.ID == "" {
 		return
 	}
@@ -642,7 +643,7 @@ func (r *EntRepository) applyPendingGuidance(ctx context.Context, ids []string, 
 	}
 }
 
-func (r *EntRepository) applyPendingGuidanceToData(ctx context.Context, items []BacklogItemData) {
+func (r *EntRepository) applyPendingGuidanceToData(ctx context.Context, items []backlogdto.BacklogItemData) {
 	ids := make([]string, len(items))
 	for i := range items {
 		ids[i] = items[i].ID
@@ -650,7 +651,7 @@ func (r *EntRepository) applyPendingGuidanceToData(ctx context.Context, items []
 	r.applyPendingGuidance(ctx, ids, func(i int, p bool) { items[i].HasPendingGuidanceRequests = p })
 }
 
-func (r *EntRepository) applyPendingGuidanceToSummaries(ctx context.Context, items []BacklogItemSummary) {
+func (r *EntRepository) applyPendingGuidanceToSummaries(ctx context.Context, items []backlogdto.BacklogItemSummary) {
 	ids := make([]string, len(items))
 	for i := range items {
 		ids[i] = items[i].ID

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // Workflow suggestion action types accepted by suggest_workflow_action.
@@ -34,10 +35,10 @@ var (
 )
 
 // ParseDiagnoseResult decodes an ItemSessionSummary.DiagnoseResult column; ok is false when empty or invalid.
-func ParseDiagnoseResult(raw string) (DiagnoseResultData, bool) {
-	var d DiagnoseResultData
+func ParseDiagnoseResult(raw string) (backlogdto.DiagnoseResultData, bool) {
+	var d backlogdto.DiagnoseResultData
 	if raw == "" || json.Unmarshal([]byte(raw), &d) != nil {
-		return DiagnoseResultData{}, false
+		return backlogdto.DiagnoseResultData{}, false
 	}
 	return d, true
 }
@@ -56,7 +57,7 @@ func ParseWorkflowSuggestions(raw string) []WorkflowSuggestionData {
 }
 
 // UpdateItemSessionDiagnoseResult stores the structured diagnose outcome on an ItemSession.
-func (r *EntRepository) UpdateItemSessionDiagnoseResult(ctx context.Context, id string, result DiagnoseResultData) error {
+func (r *EntRepository) UpdateItemSessionDiagnoseResult(ctx context.Context, id string, result backlogdto.DiagnoseResultData) error {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid id %q: %w", id, err)

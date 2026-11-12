@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	_ "modernc.org/sqlite" // SQLite driver, for the raw-connection schema surgery below
 )
@@ -28,7 +29,7 @@ func TestEntRepositoryBacklog_should_RoundTripPipelineMode_When_ItemCreatedWithN
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "item using quick mode",
 		PipelineMode: "quick",
 	})
@@ -49,7 +50,7 @@ func TestEntRepositoryBacklog_should_DefaultPipelineModeToEmptyString_When_NotSp
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item using default pipeline",
 	})
 	require.NoError(t, err)
@@ -74,7 +75,7 @@ func TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFie
 	// Assertion 1: a pre-existing row (created without setting any of the 6 new
 	// fields, simulating a row created before this migration landed) reads back
 	// all 6 fields at their nil/zero-value default.
-	preExisting, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	preExisting, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item created before ship-snapshot fields existed",
 	})
 	require.NoError(t, err)
@@ -98,7 +99,7 @@ func TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFie
 	snapshotAt := time.Now().UTC().Truncate(time.Second)
 	approvedCount := 2
 	captureFailed := true
-	_, err = repo.UpdateBacklogItem(ctx, preExisting.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, preExisting.ID, backlogdto.BacklogItemUpdate{
 		ShippedSnapshotAt:            &snapshotAt,
 		ShippedApprovedCount:         &approvedCount,
 		ShippedSnapshotCaptureFailed: &captureFailed,
@@ -117,7 +118,7 @@ func TestMigrationShouldBeReversible_WhenBacklogItemGainsOptionalShipSnapshotFie
 	// Assertion 3: a brand-new item created with none of the 6 fields explicitly
 	// set persists successfully with no NOT NULL constraint violation, confirming
 	// Optional() is honored end-to-end through the generated client.
-	fresh, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	fresh, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "brand-new item, no ship-snapshot fields set",
 	})
 	require.NoError(t, err)
@@ -134,7 +135,7 @@ func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedS
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item for full snapshot round-trip",
 	})
 	require.NoError(t, err)
@@ -146,7 +147,7 @@ func TestUpdateBacklogItem_ShouldRoundTripAllSixSnapshotFields_ThroughEntBackedS
 	fileStats := `[{"path":"foo.go","status":1,"additions":5,"deletions":2}]`
 	captureFailed := false
 
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		ShippedCheckConclusion:       &checkConclusion,
 		ShippedApprovedCount:         &approvedCount,
 		ShippedChangesReqCount:       &changesReqCount,
@@ -179,7 +180,7 @@ func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item for pr-feedback-watermark round-trip",
 	})
 	require.NoError(t, err)
@@ -189,7 +190,7 @@ func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.
 	assert.Nil(t, fetchedPre.PrFeedbackAddressedAt)
 
 	watermark := time.Now().UTC().Truncate(time.Second)
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		PrFeedbackAddressedAt: &watermark,
 	}, nil)
 	require.NoError(t, err)
@@ -201,7 +202,7 @@ func TestEntRepositoryBacklog_PrFeedbackAddressedAt_should_RoundTrip(t *testing.
 
 	// Clearing must be explicit via ClearPrFeedbackAddressedAt, not achievable
 	// by passing a nil pointer (which means "leave untouched").
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		ClearPrFeedbackAddressedAt: true,
 	}, nil)
 	require.NoError(t, err)
@@ -221,7 +222,7 @@ func TestEntRepositoryBacklog_CostBudgetThresholdUsd_should_RoundTrip(t *testing
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item for cost-budget-threshold round-trip",
 	})
 	require.NoError(t, err)
@@ -231,7 +232,7 @@ func TestEntRepositoryBacklog_CostBudgetThresholdUsd_should_RoundTrip(t *testing
 	assert.Nil(t, fetchedPre.CostBudgetThresholdUsd)
 
 	threshold := 5.00
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		CostBudgetThresholdUsd: &threshold,
 	}, nil)
 	require.NoError(t, err)
@@ -243,7 +244,7 @@ func TestEntRepositoryBacklog_CostBudgetThresholdUsd_should_RoundTrip(t *testing
 
 	// 0.0 is a legitimate configured threshold, not "unset".
 	zero := 0.0
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		CostBudgetThresholdUsd: &zero,
 	}, nil)
 	require.NoError(t, err)
@@ -316,7 +317,7 @@ func TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible(
 	preUpdateTitle := fetchedPre.Title
 	reason := "Please also handle the mobile navigation case."
 	rejectedAt := time.Now().UTC().Truncate(time.Second)
-	_, err = repo.UpdateBacklogItem(ctx, preExisting.ID.String(), BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, preExisting.ID.String(), backlogdto.BacklogItemUpdate{
 		PlanRejectionReason: &reason,
 		PlanRejectedAt:      &rejectedAt,
 	}, nil)
@@ -335,7 +336,7 @@ func TestBacklogItemSchema_PlanRejectionFields_AreAdditiveAndBackwardCompatible(
 	// both columns are genuinely optional end-to-end through the generated
 	// client (fresh schema creation via createTestEntRepository already
 	// exercises the auto-migration path itself).
-	fresh, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	fresh, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "brand-new item, no plan-rejection fields set",
 	})
 	require.NoError(t, err)
@@ -355,7 +356,7 @@ func TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip(t *tes
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item for github-synced-issue-updated-at watermark round-trip",
 	})
 	require.NoError(t, err)
@@ -365,7 +366,7 @@ func TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip(t *tes
 	assert.Nil(t, fetchedPre.GitHubSyncedIssueUpdatedAt)
 
 	watermark := time.Now().UTC().Truncate(time.Second)
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		GitHubSyncedIssueUpdatedAt: &watermark,
 	}, nil)
 	require.NoError(t, err)
@@ -377,7 +378,7 @@ func TestEntRepositoryBacklog_GitHubSyncedIssueUpdatedAt_should_RoundTrip(t *tes
 
 	// Clearing must be explicit via ClearGitHubSyncedIssueUpdatedAt, not
 	// achievable by passing a nil pointer (which means "leave untouched").
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, BacklogItemUpdate{
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		ClearGitHubSyncedIssueUpdatedAt: true,
 	}, nil)
 	require.NoError(t, err)
@@ -396,15 +397,15 @@ func TestUnresolvedBlockerItemIDs_should_ReportStillBlocked_When_BlockerNotYetRe
 	defer cleanup()
 	ctx := context.Background()
 
-	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
+	blocker, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker item"})
 	require.NoError(t, err)
-	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked item"})
+	blocked, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocked item"})
 	require.NoError(t, err)
 
 	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusInProgress, nil, "test")
 	require.NoError(t, err)
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: blocker.ID,
 		BlockedID: blocked.ID,
 	})
@@ -424,12 +425,12 @@ func TestUnresolvedBlockerItemIDs_should_ResolveDependency_When_BlockerReachesDo
 	defer cleanup()
 	ctx := context.Background()
 
-	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
+	blocker, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker item"})
 	require.NoError(t, err)
-	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked item"})
+	blocked, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocked item"})
 	require.NoError(t, err)
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: blocker.ID,
 		BlockedID: blocked.ID,
 	})
@@ -458,12 +459,12 @@ func TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_Blo
 	defer cleanup()
 	ctx := context.Background()
 
-	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
+	blocker, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker item"})
 	require.NoError(t, err)
-	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked item"})
+	blocked, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocked item"})
 	require.NoError(t, err)
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: blocker.ID,
 		BlockedID: blocked.ID,
 	})
@@ -489,14 +490,14 @@ func TestAddBacklogItemDependency_should_RejectSelfDependency_When_BlockerEquals
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "solo item"})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "solo item"})
 	require.NoError(t, err)
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: item.ID,
 		BlockedID: item.ID,
 	})
-	require.ErrorIs(t, err, ErrDependencyCycle)
+	require.ErrorIs(t, err, backlogdto.ErrDependencyCycle)
 }
 
 // TestAddBacklogItemDependency_should_RejectCycle_When_TwoNodeCycleWouldClose
@@ -508,15 +509,15 @@ func TestAddBacklogItemDependency_should_RejectCycle_When_TwoNodeCycleWouldClose
 	defer cleanup()
 	ctx := context.Background()
 
-	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "a"})
+	a, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "a"})
 	require.NoError(t, err)
-	b, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "b"})
+	b, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "b"})
 	require.NoError(t, err)
 
-	require.NoError(t, repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
+	require.NoError(t, repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: b.ID, BlockedID: a.ID})
-	require.ErrorIs(t, err, ErrDependencyCycle)
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: b.ID, BlockedID: a.ID})
+	require.ErrorIs(t, err, backlogdto.ErrDependencyCycle)
 }
 
 // TestAddBacklogItemDependency_should_RejectCycle_When_LongerCycleWouldClose
@@ -528,18 +529,18 @@ func TestAddBacklogItemDependency_should_RejectCycle_When_LongerCycleWouldClose(
 	defer cleanup()
 	ctx := context.Background()
 
-	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "a"})
+	a, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "a"})
 	require.NoError(t, err)
-	b, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "b"})
+	b, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "b"})
 	require.NoError(t, err)
-	c, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "c"})
+	c, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "c"})
 	require.NoError(t, err)
 
-	require.NoError(t, repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
-	require.NoError(t, repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: b.ID, BlockedID: c.ID}))
+	require.NoError(t, repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
+	require.NoError(t, repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: b.ID, BlockedID: c.ID}))
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: c.ID, BlockedID: a.ID})
-	require.ErrorIs(t, err, ErrDependencyCycle)
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: c.ID, BlockedID: a.ID})
+	require.ErrorIs(t, err, backlogdto.ErrDependencyCycle)
 }
 
 // TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDeleted
@@ -557,12 +558,12 @@ func TestAddBacklogItemDependency_should_UnblockDependent_When_BlockerIsHardDele
 	defer cleanup()
 	ctx := context.Background()
 
-	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker item"})
+	blocker, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker item"})
 	require.NoError(t, err)
-	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked item"})
+	blocked, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocked item"})
 	require.NoError(t, err)
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: blocker.ID,
 		BlockedID: blocked.ID,
 	})
@@ -592,12 +593,12 @@ func TestAddBacklogItemDependency_should_NoOp_When_SamePairAddedTwice(t *testing
 	defer cleanup()
 	ctx := context.Background()
 
-	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker"})
+	blocker, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker"})
 	require.NoError(t, err)
-	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked"})
+	blocked, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocked"})
 	require.NoError(t, err)
 
-	edge := BacklogItemDependencyEdge{BlockerID: blocker.ID, BlockedID: blocked.ID}
+	edge := backlogdto.BacklogItemDependencyEdge{BlockerID: blocker.ID, BlockedID: blocked.ID}
 	require.NoError(t, repo.AddBacklogItemDependency(ctx, edge))
 	require.NoError(t, repo.AddBacklogItemDependency(ctx, edge))
 }
@@ -614,10 +615,10 @@ func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockerDoesNotExist
 	defer cleanup()
 	ctx := context.Background()
 
-	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked"})
+	blocked, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocked"})
 	require.NoError(t, err)
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: uuid.New().String(),
 		BlockedID: blocked.ID,
 	})
@@ -632,10 +633,10 @@ func TestAddBacklogItemDependency_should_ReturnNotFound_When_BlockedDoesNotExist
 	defer cleanup()
 	ctx := context.Background()
 
-	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker"})
+	blocker, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker"})
 	require.NoError(t, err)
 
-	err = repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: blocker.ID,
 		BlockedID: uuid.New().String(),
 	})
@@ -664,7 +665,7 @@ func TestNewEntRepository_should_MigrateExistingDatabaseSuccessfully_When_Backlo
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	preExisting, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	preExisting, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item created before dependency table existed",
 	})
 	require.NoError(t, err)
@@ -712,7 +713,7 @@ func TestBacklogActivityNote_should_CascadeDelete_When_ParentItemDeleted(t *test
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item with an activity note"})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item with an activity note"})
 	require.NoError(t, err)
 
 	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "", "", "a note"))
@@ -737,7 +738,7 @@ func TestAppendActivityNote_should_PersistAndBeListable_When_Called(t *testing.T
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for activity-note list test"})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item for activity-note list test"})
 	require.NoError(t, err)
 
 	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "session-uuid-1", "worker-1", "first note"))
@@ -770,7 +771,7 @@ func TestGetBacklogItem_should_ReturnActivityNotes_When_ItemHasThem(t *testing.T
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for eager-load test"})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item for eager-load test"})
 	require.NoError(t, err)
 
 	require.NoError(t, repo.AppendActivityNote(ctx, item.ID, "", "", "first"))
@@ -943,7 +944,7 @@ func TestMigrationShouldBeReversible_WhenBacklogItemPublicIdColumnAddedThenRemov
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	unsetItem, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	unsetItem, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item predating the public_id column",
 	})
 	require.NoError(t, err)
@@ -1069,7 +1070,7 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "item with a reused session uuid",
 	})
 	require.NoError(t, err)
@@ -1099,7 +1100,7 @@ func TestGetAllItemSessionsWithBacklogInfo_MultipleSessionsPerUUID_OrdersNewestF
 	entries, err := repo.GetAllItemSessionsWithBacklogInfo(ctx)
 	require.NoError(t, err)
 
-	var matches []ItemSessionBacklogEntry
+	var matches []backlogdto.ItemSessionBacklogEntry
 	for _, e := range entries {
 		if e.SessionUUID == sharedSessionUUID {
 			matches = append(matches, e)
@@ -1126,7 +1127,7 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 	defer cleanup()
 	ctx := context.Background()
 
-	created, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item stuck in a transition crash-loop",
 		Status: string(BacklogStatusIdea),
 	})
@@ -1146,7 +1147,7 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 		})
 	}
 
-	data := &BacklogItemData{ID: created.ID}
+	data := &backlogdto.BacklogItemData{ID: created.ID}
 	repo.attachStatusEventsForPublish(ctx, data)
 
 	require.Len(t, data.StatusEvents, maxPublishedStatusEvents,
@@ -1165,11 +1166,11 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 
 // newTestItemSessionForCost creates a backlog item and an ItemSession for it,
 // for Epic 2.5's UpdateItemSessionCost/cost_priced tests below.
-func newTestItemSessionForCost(t *testing.T, repo *EntRepository, ctx context.Context) ItemSessionSummary {
+func newTestItemSessionForCost(t *testing.T, repo *EntRepository, ctx context.Context) backlogdto.ItemSessionSummary {
 	t.Helper()
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "item for cost bookkeeping test"})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item for cost bookkeeping test"})
 	require.NoError(t, err)
-	is, err := repo.CreateItemSession(ctx, ItemSessionData{
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "cost-test-" + item.ID,
 		SessionRole: SessionRoleTriage,
@@ -1247,11 +1248,11 @@ func TestRemoveBacklogItemDependency_should_DeleteEdge_When_EdgeExists(t *testin
 	defer cleanup()
 	ctx := context.Background()
 
-	blocker, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocker"})
+	blocker, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocker"})
 	require.NoError(t, err)
-	blocked, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "blocked"})
+	blocked, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocked"})
 	require.NoError(t, err)
-	edge := BacklogItemDependencyEdge{BlockerID: blocker.ID, BlockedID: blocked.ID}
+	edge := backlogdto.BacklogItemDependencyEdge{BlockerID: blocker.ID, BlockedID: blocked.ID}
 	require.NoError(t, repo.AddBacklogItemDependency(ctx, edge))
 
 	require.NoError(t, repo.RemoveBacklogItemDependency(ctx, edge))
@@ -1267,12 +1268,12 @@ func TestRemoveBacklogItemDependency_should_Succeed_When_EdgeDoesNotExist(t *tes
 	defer cleanup()
 	ctx := context.Background()
 
-	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "a"})
+	a, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "a"})
 	require.NoError(t, err)
-	b, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "b"})
+	b, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "b"})
 	require.NoError(t, err)
 
-	require.NoError(t, repo.RemoveBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
+	require.NoError(t, repo.RemoveBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
 }
 
 func TestRemoveBacklogItemDependency_should_ReturnNotFound_When_ItemMissing(t *testing.T) {
@@ -1281,10 +1282,10 @@ func TestRemoveBacklogItemDependency_should_ReturnNotFound_When_ItemMissing(t *t
 	defer cleanup()
 	ctx := context.Background()
 
-	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "a"})
+	a, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "a"})
 	require.NoError(t, err)
 
-	err = repo.RemoveBacklogItemDependency(ctx, BacklogItemDependencyEdge{
+	err = repo.RemoveBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
 		BlockerID: a.ID,
 		BlockedID: "00000000-0000-0000-0000-000000000000",
 	})
@@ -1297,14 +1298,14 @@ func TestListBacklogItemDependencies_should_ReturnBothDirections_When_EdgesExist
 	defer cleanup()
 	ctx := context.Background()
 
-	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "A"})
+	a, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "A"})
 	require.NoError(t, err)
-	b, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "B"})
+	b, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "B"})
 	require.NoError(t, err)
-	c, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "C"})
+	c, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "C"})
 	require.NoError(t, err)
-	require.NoError(t, repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
-	require.NoError(t, repo.AddBacklogItemDependency(ctx, BacklogItemDependencyEdge{BlockerID: b.ID, BlockedID: c.ID}))
+	require.NoError(t, repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: a.ID, BlockedID: b.ID}))
+	require.NoError(t, repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{BlockerID: b.ID, BlockedID: c.ID}))
 
 	blockedBy, blocking, err := repo.ListBacklogItemDependencies(ctx, b.ID)
 	require.NoError(t, err)
@@ -1322,7 +1323,7 @@ func TestListBacklogItemDependencies_should_ReturnEmpty_When_NoEdges(t *testing.
 	defer cleanup()
 	ctx := context.Background()
 
-	a, err := repo.CreateBacklogItem(ctx, BacklogItemData{Title: "solo"})
+	a, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "solo"})
 	require.NoError(t, err)
 
 	blockedBy, blocking, err := repo.ListBacklogItemDependencies(ctx, a.ID)

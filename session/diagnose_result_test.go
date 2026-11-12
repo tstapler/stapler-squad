@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestParseDiagnoseResult(t *testing.T) {
@@ -53,7 +54,7 @@ func TestParseWorkflowSuggestions(t *testing.T) {
 func newSuggestionItem(t *testing.T) (*EntRepository, string) {
 	t.Helper()
 	repo := NewTestEntRepository(t)
-	item, err := repo.CreateBacklogItem(context.Background(), BacklogItemData{Title: "x", Status: string(BacklogStatusIdea)})
+	item, err := repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "x", Status: string(BacklogStatusIdea)})
 	require.NoError(t, err)
 	return repo, item.ID
 }

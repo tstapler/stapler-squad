@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadyShippedSinceReview
@@ -32,7 +33,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already-shipped item",
 		Status: string(BacklogStatusReview),
 	})
@@ -46,11 +47,11 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	// Meanwhile, the item's real review session's PASS verdict ships it all
 	// the way to "done" — a different call path than the stale reopen in
 	// flight, with no knowledge of it.
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, &BacklogItemPrecondition{
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusReview),
 	}, TriggeredBySystem)
 	require.NoError(t, err)
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &BacklogItemPrecondition{
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(BacklogStatusPRPending),
 	}, TriggeredBySystem)
 	require.NoError(t, err)
@@ -58,7 +59,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	// The stale reopen attempt finally executes, using the precondition it
 	// captured before any of the above happened. It must be rejected — not
 	// silently applied on top of the now-shipped item.
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus:    string(BacklogStatusReview),
 		ExpectedUpdatedAt: &staleUpdatedAt,
 		Note:              "auto-reopened after failed review verdict",
@@ -84,7 +85,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "racing writers item",
 		Status: string(BacklogStatusReview),
 	})
@@ -98,7 +99,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 	race := func(toStatus BacklogStatus) {
 		defer wg.Done()
 		startBarrier.Wait()
-		_, txErr := repo.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, &BacklogItemPrecondition{
+		_, txErr := repo.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, &backlogdto.BacklogItemPrecondition{
 			ExpectedStatus: string(BacklogStatusReview),
 		}, TriggeredBySystem)
 		results <- txErr
@@ -153,7 +154,7 @@ func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "utc timestamp regression item",
 		Status: string(BacklogStatusReview),
 	})
@@ -163,7 +164,7 @@ func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t
 	// The exact scenario that broke: a caller builds a CAS precondition from
 	// a protobuf-Timestamp round trip (always UTC, e.g. timestamppb.New(t).AsTime()).
 	utcPrecondition := item.UpdatedAt.UTC()
-	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &BacklogItemPrecondition{
+	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus:    string(BacklogStatusReview),
 		ExpectedUpdatedAt: &utcPrecondition,
 	}, TriggeredByUser)

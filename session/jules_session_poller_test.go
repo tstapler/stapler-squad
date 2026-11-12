@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // --- fakes ---
@@ -119,8 +120,8 @@ type fakePRRecord struct {
 type fakeJulesPollerStorage struct {
 	mu sync.Mutex
 
-	entries        []ItemSessionBacklogEntry
-	sessionsByUUID map[string]ItemSessionSummary
+	entries        []backlogdto.ItemSessionBacklogEntry
+	sessionsByUUID map[string]backlogdto.ItemSessionSummary
 
 	touched     []string
 	ended       map[string]string
@@ -136,32 +137,32 @@ type fakeJulesPollerStorage struct {
 
 func newFakeJulesPollerStorage() *fakeJulesPollerStorage {
 	return &fakeJulesPollerStorage{
-		sessionsByUUID: make(map[string]ItemSessionSummary),
+		sessionsByUUID: make(map[string]backlogdto.ItemSessionSummary),
 		ended:          make(map[string]string),
 	}
 }
 
-func (f *fakeJulesPollerStorage) addOpenSession(entry ItemSessionBacklogEntry, row ItemSessionSummary) {
+func (f *fakeJulesPollerStorage) addOpenSession(entry backlogdto.ItemSessionBacklogEntry, row backlogdto.ItemSessionSummary) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.entries = append(f.entries, entry)
 	f.sessionsByUUID[entry.SessionUUID] = row
 }
 
-func (f *fakeJulesPollerStorage) ListOpenJulesItemSessions(_ context.Context) ([]ItemSessionBacklogEntry, error) {
+func (f *fakeJulesPollerStorage) ListOpenJulesItemSessions(_ context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]ItemSessionBacklogEntry, len(f.entries))
+	out := make([]backlogdto.ItemSessionBacklogEntry, len(f.entries))
 	copy(out, f.entries)
 	return out, nil
 }
 
-func (f *fakeJulesPollerStorage) GetItemSessionBySessionUUID(_ context.Context, sessionUUID string) (ItemSessionSummary, error) {
+func (f *fakeJulesPollerStorage) GetItemSessionBySessionUUID(_ context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	row, ok := f.sessionsByUUID[sessionUUID]
 	if !ok {
-		return ItemSessionSummary{}, fmt.Errorf("%w: %s", domain.ErrNotFound, sessionUUID)
+		return backlogdto.ItemSessionSummary{}, fmt.Errorf("%w: %s", domain.ErrNotFound, sessionUUID)
 	}
 	return row, nil
 }
@@ -205,7 +206,7 @@ func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, itemID, prU
 	return true, nil
 }
 
-func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, req TransitionRequest) (*BacklogItemData, error) {
+func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, req TransitionRequest) (*backlogdto.BacklogItemData, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	expected := ""
@@ -214,7 +215,7 @@ func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, req Transiti
 	}
 	f.transitions = append(f.transitions, fakeTransition{req.ItemID, req.To, expected})
 	f.gatedCallers = append(f.gatedCallers, req.Caller)
-	return &BacklogItemData{ID: req.ItemID, Status: string(req.To), UpdatedAt: time.Now()}, nil
+	return &backlogdto.BacklogItemData{ID: req.ItemID, Status: string(req.To), UpdatedAt: time.Now()}, nil
 }
 
 func (f *fakeJulesPollerStorage) notesFor(itemID string) []fakeNote {
@@ -237,8 +238,8 @@ func (f *fakeJulesPollerStorage) noteCount() int {
 
 // --- test helpers ---
 
-func testEntry(itemID, sessionUUID string) ItemSessionBacklogEntry {
-	return ItemSessionBacklogEntry{
+func testEntry(itemID, sessionUUID string) backlogdto.ItemSessionBacklogEntry {
+	return backlogdto.ItemSessionBacklogEntry{
 		SessionUUID: sessionUUID,
 		SessionRole: SessionRoleJulesWork,
 		ItemID:      itemID,
@@ -247,8 +248,8 @@ func testEntry(itemID, sessionUUID string) ItemSessionBacklogEntry {
 	}
 }
 
-func testRow(id string, startedAt *time.Time, createdAt time.Time) ItemSessionSummary {
-	return ItemSessionSummary{
+func testRow(id string, startedAt *time.Time, createdAt time.Time) backlogdto.ItemSessionSummary {
+	return backlogdto.ItemSessionSummary{
 		ID:          id,
 		SessionUUID: "",
 		StartedAt:   startedAt,
@@ -458,11 +459,11 @@ func TestApplyJulesState_should_RecordPRAndHandOffToReconcilePRPending_When_Comp
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "jules completed item", Status: string(BacklogStatusInProgress)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules completed item", Status: string(BacklogStatusInProgress)})
 	require.NoError(t, err)
 
 	sessionUUID := julesSessionUUIDPrefix + "sessions/xyz"
-	is, err := storage.CreateItemSession(ctx, ItemSessionData{
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: SessionRoleJulesWork,
@@ -836,7 +837,7 @@ func TestJulesSessionPoller_tick_should_FailAbandonedReservation_When_PendingOld
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, BacklogItemData{Title: "jules pending item", Status: string(BacklogStatusInProgress)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules pending item", Status: string(BacklogStatusInProgress)})
 	require.NoError(t, err)
 
 	pendingUUID := julesPendingUUIDPrefix + "reservation-1"

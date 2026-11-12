@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // denyAllEngine answers every transition question with "no"; it proves the
@@ -32,7 +33,7 @@ func TestSyncLoop_SetWorkflowEngine_UsesInjectedEngineForBackwardSync(t *testing
 	require.Same(t, WorkflowEngine(denier), sl.WorkflowEngine())
 
 	ctx := context.Background()
-	created, err := storage.CreateBacklogItem(ctx, BacklogItemData{
+	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "Issue", Status: string(BacklogStatusReady), ExternalID: "ext-1", SourceID: sourceID,
 	})
 	require.NoError(t, err)
