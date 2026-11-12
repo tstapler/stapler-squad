@@ -1,4 +1,4 @@
-package session
+package summaries
 
 import (
 	"strings"
@@ -8,16 +8,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session"
 )
 
-func makeTestMessages(n int) []ClaudeConversationMessage {
-	msgs := make([]ClaudeConversationMessage, n)
+func makeTestMessages(n int) []session.ClaudeConversationMessage {
+	msgs := make([]session.ClaudeConversationMessage, n)
 	for i := 0; i < n; i++ {
 		role := "user"
 		if i%2 == 1 {
 			role = "assistant"
 		}
-		msgs[i] = ClaudeConversationMessage{
+		msgs[i] = session.ClaudeConversationMessage{
 			Role:    role,
 			Content: strings.Repeat("x", 10) + "-msg-" + string(rune('0'+i)),
 		}
@@ -71,10 +72,10 @@ func TestPruneExcerptText_LeavesContentUnchanged_When_UnderByteCap(t *testing.T)
 // bytes each (60000 total) so pruneExcerptText leaves each message's content
 // unchanged (it truncates only when strictly over the cap), isolating the
 // applySummaryBudget drop behavior from single-message truncation.
-func buildBudgetTestMiddle() []ClaudeConversationMessage {
-	middle := make([]ClaudeConversationMessage, 15)
+func buildBudgetTestMiddle() []session.ClaudeConversationMessage {
+	middle := make([]session.ClaudeConversationMessage, 15)
 	for i := range middle {
-		middle[i] = ClaudeConversationMessage{
+		middle[i] = session.ClaudeConversationMessage{
 			Role:    "user",
 			Content: strings.Repeat("m", maxExcerptMessageBytes),
 		}
@@ -95,7 +96,7 @@ func TestApplySummaryBudget_CapsAtByteBudgetWithoutSplittingAMessage(t *testing.
 	}
 }
 
-func totalContentLen(msgs []ClaudeConversationMessage) int {
+func totalContentLen(msgs []session.ClaudeConversationMessage) int {
 	total := 0
 	for _, msg := range msgs {
 		total += len(msg.Content)
@@ -123,7 +124,7 @@ func TestApplySummaryBudget_DropsOldestMiddleMessagesFirst(t *testing.T) {
 // pruneExcerptText's behavior) while never dropping a message -- Head/Tail
 // must stay verbatim in count.
 func TestPruneMessages_TruncatesOversizedMessageContent_PreservingMessageCount(t *testing.T) {
-	messages := []ClaudeConversationMessage{
+	messages := []session.ClaudeConversationMessage{
 		{Role: "user", Content: strings.Repeat("a", 100)},
 		{Role: "assistant", Content: strings.Repeat("b", 20000)},
 	}
@@ -169,7 +170,7 @@ func TestNewSummaryBudget_ScalesProportionallyToTranscriptSize(t *testing.T) {
 // newSummaryBudget's call site uses to compute totalTranscriptBytes from the
 // raw (pre-pruning, pre-windowing) messages slice.
 func TestSumContentBytes_SumsAllMessageContentLengths(t *testing.T) {
-	messages := []ClaudeConversationMessage{
+	messages := []session.ClaudeConversationMessage{
 		{Role: "user", Content: strings.Repeat("a", 100)},
 		{Role: "assistant", Content: strings.Repeat("b", 250)},
 	}

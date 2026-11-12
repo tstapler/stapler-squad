@@ -1,9 +1,11 @@
-package session
+package summaries
 
 import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // fakeSummaryGenerator is a test double satisfying the summaryGenerator interface.
@@ -17,7 +19,7 @@ func newFakeSummaryGenerator() *fakeSummaryGenerator {
 	return &fakeSummaryGenerator{calls: make(chan string, 4)}
 }
 
-func (f *fakeSummaryGenerator) GenerateAndPersist(_ context.Context, sessionUUID, _ string, _ time.Time, _ DiffSnapshot, _ string, _ *SessionGoalData, _ string) {
+func (f *fakeSummaryGenerator) GenerateAndPersist(_ context.Context, sessionUUID, _ string, _ time.Time, _ DiffSnapshot, _ string, _ *session.SessionGoalData, _ string) {
 	f.calls <- sessionUUID
 }
 
@@ -25,17 +27,17 @@ func TestOnLifecycleEvent_should_DispatchGenerateAndPersist_When_EventExitedOrEv
 	t.Parallel()
 	tests := []struct {
 		name  string
-		event LifecycleEvent
+		event session.LifecycleEvent
 	}{
-		{"EventExited", EventExited},
-		{"EventStopped", EventStopped},
+		{"session.EventExited", session.EventExited},
+		{"session.EventStopped", session.EventStopped},
 	}
 	for _, tc := range tests {
 		event := tc.event
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			gen := newFakeSummaryGenerator()
-			inst := &Instance{Title: "test-session", UUID: "sess-123", CreatedAt: time.Now()}
+			inst := &session.Instance{Title: "test-session", UUID: "sess-123", CreatedAt: time.Now()}
 			l := &sessionSummaryListener{generator: gen, instance: inst}
 
 			l.OnLifecycleEvent(event, "pty-eof")
@@ -55,10 +57,10 @@ func TestOnLifecycleEvent_should_DispatchGenerateAndPersist_When_EventExitedOrEv
 func TestOnLifecycleEvent_should_NotDispatch_When_ReasonIsReconcileSessionMissing(t *testing.T) {
 	t.Parallel()
 	gen := newFakeSummaryGenerator()
-	inst := &Instance{Title: "test-session", UUID: "sess-456", CreatedAt: time.Now()}
+	inst := &session.Instance{Title: "test-session", UUID: "sess-456", CreatedAt: time.Now()}
 	l := &sessionSummaryListener{generator: gen, instance: inst}
 
-	l.OnLifecycleEvent(EventExited, reasonReconcileSessionMissing)
+	l.OnLifecycleEvent(session.EventExited, reasonReconcileSessionMissing)
 
 	select {
 	case uuid := <-gen.calls:
@@ -71,10 +73,10 @@ func TestOnLifecycleEvent_should_NotDispatch_When_ReasonIsReconcileSessionMissin
 func TestOnLifecycleEvent_should_NotDispatch_When_EventStarted(t *testing.T) {
 	t.Parallel()
 	gen := newFakeSummaryGenerator()
-	inst := &Instance{Title: "test-session", UUID: "sess-789", CreatedAt: time.Now()}
+	inst := &session.Instance{Title: "test-session", UUID: "sess-789", CreatedAt: time.Now()}
 	l := &sessionSummaryListener{generator: gen, instance: inst}
 
-	l.OnLifecycleEvent(EventStarted, "")
+	l.OnLifecycleEvent(session.EventStarted, "")
 
 	select {
 	case uuid := <-gen.calls:

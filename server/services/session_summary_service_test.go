@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -106,7 +107,7 @@ func getRow(t *testing.T, client *ent.Client, sessionID string) *ent.SessionSumm
 // one of the wanted statuses before the goroutine being waited on runs — otherwise
 // it can match a stale prior row instead of the new write; use
 // waitForNewGeneratedRow for the "regenerating an already-READY row" case.
-func waitForStatus(t *testing.T, client *ent.Client, sessionID string, timeout time.Duration, want ...session.SessionSummaryStatus) *ent.SessionSummary {
+func waitForStatus(t *testing.T, client *ent.Client, sessionID string, timeout time.Duration, want ...summaries.SessionSummaryStatus) *ent.SessionSummary {
 	t.Helper()
 	var found *ent.SessionSummary
 	wait.RequireEventually(t, func() bool {
@@ -135,7 +136,7 @@ func waitForNewGeneratedRow(t *testing.T, client *ent.Client, sessionID string, 
 	var found *ent.SessionSummary
 	wait.RequireEventually(t, func() bool {
 		row, err := client.SessionSummary.Query().Where(sessionsummary.SessionID(sessionID)).Only(context.Background())
-		if err == nil && row.Status == string(session.SessionSummaryStatusReady) && row.GeneratedAt != nil && row.GeneratedAt.After(after) {
+		if err == nil && row.Status == string(summaries.SessionSummaryStatusReady) && row.GeneratedAt != nil && row.GeneratedAt.After(after) {
 			found = row
 			return true
 		}
@@ -149,7 +150,7 @@ func waitForNewGeneratedRow(t *testing.T, client *ent.Client, sessionID string, 
 func TestGetSessionSummary_should_ReturnNilSummary_When_NoRowExists(t *testing.T) {
 	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
-	gen := session.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, nil)
 
 	resp, err := svc.GetSessionSummary(context.Background(), connect.NewRequest(&sessionv1.GetSessionSummaryRequest{SessionId: "does-not-exist"}))
@@ -161,12 +162,12 @@ func TestGetSessionSummary_should_ReturnRow_When_Found(t *testing.T) {
 	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	pool := &fakePoolClient{response: "A narrative."}
-	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, nil)
 
 	sessionID := "sess-found"
 	diffStats := &git.DiffStats{Added: 5, Removed: 1, Content: "diff --git a/foo.go b/foo.go\n"}
-	gen.GenerateAndPersist(context.Background(), sessionID, "my title", time.Now(), session.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
+	gen.GenerateAndPersist(context.Background(), sessionID, "my title", time.Now(), summaries.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 
 	resp, err := svc.GetSessionSummary(context.Background(), connect.NewRequest(&sessionv1.GetSessionSummaryRequest{SessionId: sessionID}))
 	require.NoError(t, err)
@@ -181,7 +182,7 @@ func TestGetSessionSummary_should_ReturnRow_When_Found(t *testing.T) {
 func TestGetSessionSummary_should_ReconcileStaleGeneratingRowToError_When_GuardNotHeld(t *testing.T) {
 	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
-	gen := session.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, nil)
 
 	sessionID := "sess-stale"
@@ -190,7 +191,7 @@ func TestGetSessionSummary_should_ReconcileStaleGeneratingRowToError_When_GuardN
 		SetID("row-stale").
 		SetSessionID(sessionID).
 		SetSessionTitle("stale title").
-		SetStatus(string(session.SessionSummaryStatusGenerating)).
+		SetStatus(string(summaries.SessionSummaryStatusGenerating)).
 		SetGenerationStartedAt(staleStart).
 		Save(context.Background())
 	require.NoError(t, err)
@@ -203,7 +204,7 @@ func TestGetSessionSummary_should_ReconcileStaleGeneratingRowToError_When_GuardN
 
 	// Confirm the write actually landed, not just the in-memory response.
 	row := getRow(t, entClient, sessionID)
-	require.Equal(t, string(session.SessionSummaryStatusError), row.Status)
+	require.Equal(t, string(summaries.SessionSummaryStatusError), row.Status)
 }
 
 func TestGetSessionSummary_should_LeaveStaleGeneratingRowUnchanged_When_GuardHeld(t *testing.T) {
@@ -213,7 +214,7 @@ func TestGetSessionSummary_should_LeaveStaleGeneratingRowUnchanged_When_GuardHel
 	defer cancel()
 
 	pool := &fakePoolClient{block: true, started: make(chan struct{}, 1)}
-	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, nil)
 
 	sessionID := "sess-in-flight"
@@ -223,7 +224,7 @@ func TestGetSessionSummary_should_LeaveStaleGeneratingRowUnchanged_When_GuardHel
 		// Non-trivial + non-empty diff so the LLM (blocking) path is taken, and an
 		// old CreatedAt so isTrivialSession's duration check doesn't skip the LLM call.
 		diffStats := &git.DiffStats{Added: 1, Removed: 0, Content: "diff --git a/foo.go b/foo.go\n"}
-		gen.GenerateAndPersist(ctx, sessionID, "title", time.Now().Add(-time.Hour), session.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
+		gen.GenerateAndPersist(ctx, sessionID, "title", time.Now().Add(-time.Hour), summaries.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 	}()
 
 	select {
@@ -254,7 +255,7 @@ func TestGetSessionSummary_should_LeaveStaleGeneratingRowUnchanged_When_GuardHel
 func TestRegenerateSessionSummary_should_ReturnNotFound_When_NoRowAndNoLiveInstance(t *testing.T) {
 	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
-	gen := session.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, &fakePoolClient{}, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, &fakeLiveInstanceFinder{})
 
 	_, err := svc.RegenerateSessionSummary(context.Background(), connect.NewRequest(&sessionv1.RegenerateSessionSummaryRequest{SessionId: "nope"}))
@@ -269,7 +270,7 @@ func TestRegenerateSessionSummary_should_NotTriggerSecondPipeline_When_AlreadyGe
 	defer cancel()
 
 	pool := &fakePoolClient{block: true, started: make(chan struct{}, 1)}
-	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
 	svc := NewSessionSummaryService(gen, &fakeLiveInstanceFinder{})
 
 	sessionID := "sess-dedup"
@@ -277,7 +278,7 @@ func TestRegenerateSessionSummary_should_NotTriggerSecondPipeline_When_AlreadyGe
 	go func() {
 		defer close(firstDone)
 		diffStats := &git.DiffStats{Added: 1, Content: "diff --git a/foo.go b/foo.go\n"}
-		gen.GenerateAndPersist(ctx, sessionID, "title", time.Now().Add(-time.Hour), session.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
+		gen.GenerateAndPersist(ctx, sessionID, "title", time.Now().Add(-time.Hour), summaries.BuildDiffSnapshot(diffStats), diffStats.Content, nil, "pty-eof")
 	}()
 
 	select {
@@ -305,12 +306,12 @@ func TestRegenerateSessionSummary_should_RefreshDiffAndGoalFromLiveInstance_When
 	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	pool := &fakePoolClient{response: "A narrative."}
-	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
 
 	sessionID := "sess-live"
 	// Seed a prior generation with a different title, well past the regenerate cooldown.
 	priorDiffStats := &git.DiffStats{Added: 42, Removed: 7}
-	gen.GenerateAndPersist(context.Background(), sessionID, "stale persisted title", time.Now(), session.BuildDiffSnapshot(priorDiffStats), priorDiffStats.Content, nil, "pty-eof")
+	gen.GenerateAndPersist(context.Background(), sessionID, "stale persisted title", time.Now(), summaries.BuildDiffSnapshot(priorDiffStats), priorDiffStats.Content, nil, "pty-eof")
 	priorRow := getRow(t, entClient, sessionID)
 	_, err := entClient.SessionSummary.UpdateOne(priorRow).SetGeneratedAt(time.Now().Add(-time.Hour)).Save(context.Background())
 	require.NoError(t, err)
@@ -338,7 +339,7 @@ func TestRegenerateSessionSummary_should_FallBackToPersistedFieldsWithNilGoal_Wh
 	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	pool := &fakePoolClient{response: "A narrative."}
-	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
 
 	sessionID := "sess-no-live"
 	// Two "diff --git" header lines so DiffFilesChanged is unambiguously non-zero
@@ -346,7 +347,7 @@ func TestRegenerateSessionSummary_should_FallBackToPersistedFieldsWithNilGoal_Wh
 	// where the no-live-instance fallback re-derived FilesChanged from an empty
 	// Content string instead of carrying over the persisted row's count.
 	priorDiffStats := &git.DiffStats{Added: 42, Removed: 7, Content: "diff --git a/foo.go b/foo.go\ndiff --git a/bar.go b/bar.go\n"}
-	gen.GenerateAndPersist(context.Background(), sessionID, "persisted title", time.Now(), session.BuildDiffSnapshot(priorDiffStats), priorDiffStats.Content, nil, "pty-eof")
+	gen.GenerateAndPersist(context.Background(), sessionID, "persisted title", time.Now(), summaries.BuildDiffSnapshot(priorDiffStats), priorDiffStats.Content, nil, "pty-eof")
 	priorRow := getRow(t, entClient, sessionID)
 	require.Equal(t, 1, pool.callCount())
 	require.Equal(t, 2, priorRow.DiffFilesChanged, "sanity check: prior generation persisted a non-zero files-changed count")
@@ -373,7 +374,7 @@ func TestRegenerateSessionSummary_should_DispatchWithBackgroundContext_When_Requ
 	t.Parallel()
 	entClient := newTestSessionSummaryEntClient(t)
 	pool := &fakePoolClient{response: "A narrative."}
-	gen := session.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
+	gen := summaries.NewSessionSummaryGenerator(entClient, pool, nil, nil, nil)
 
 	sessionID := "sess-detached-ctx"
 	liveInst := &session.Instance{Title: "t", UUID: sessionID, CreatedAt: time.Now()}
@@ -394,6 +395,6 @@ func TestRegenerateSessionSummary_should_DispatchWithBackgroundContext_When_Requ
 	// writes would fail against the now-cancelled reqCtx and the row would never
 	// reach READY — so reaching READY here is proof the pipeline is running on an
 	// independent, uncancelled context.
-	finalRow := waitForStatus(t, entClient, sessionID, 2*time.Second, session.SessionSummaryStatusReady, session.SessionSummaryStatusError)
-	require.Equal(t, string(session.SessionSummaryStatusReady), finalRow.Status, "expected the async pipeline to complete successfully despite the request ctx being cancelled")
+	finalRow := waitForStatus(t, entClient, sessionID, 2*time.Second, summaries.SessionSummaryStatusReady, summaries.SessionSummaryStatusError)
+	require.Equal(t, string(summaries.SessionSummaryStatusReady), finalRow.Status, "expected the async pipeline to complete successfully despite the request ctx being cancelled")
 }

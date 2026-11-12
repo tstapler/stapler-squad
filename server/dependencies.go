@@ -41,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tcc"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -195,12 +196,12 @@ type ServerDependencies struct {
 	// Nil when storage is not ent-backed. Its NotificationDecisionLister/TokenStore
 	// dependencies are wired later via SetNotificationLister/SetTokenStore (see
 	// server.go's RunServer) — see the comment on SetNotificationLister for why.
-	SessionSummaryGenerator *session.SessionSummaryGenerator
+	SessionSummaryGenerator *summaries.SessionSummaryGenerator
 
 	// HandoffSummaryGenerator drives async restart-handoff-summary generation
 	// (Story 2.2.1). Nil when storage is not ent-backed, mirroring
 	// SessionSummaryGenerator.
-	HandoffSummaryGenerator *session.HandoffSummaryGenerator
+	HandoffSummaryGenerator *summaries.HandoffSummaryGenerator
 
 	// BacklogLifecycleListener drives backlog item state transitions and, via its
 	// TriggerPRFixForEvent method, satisfies services.PRFixEventRouter for the
@@ -682,11 +683,11 @@ type RuntimeDeps struct {
 
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed.
-	SessionSummaryGenerator *session.SessionSummaryGenerator
+	SessionSummaryGenerator *summaries.SessionSummaryGenerator
 
 	// HandoffSummaryGenerator drives async restart-handoff-summary generation
 	// (Story 2.2.1). Nil when storage is not ent-backed.
-	HandoffSummaryGenerator *session.HandoffSummaryGenerator
+	HandoffSummaryGenerator *summaries.HandoffSummaryGenerator
 
 	// BacklogLifecycleListener satisfies services.PRFixEventRouter for the
 	// pr-event-webhooks feature — see the identical field's doc comment on
@@ -704,8 +705,8 @@ type RuntimeDeps struct {
 }
 
 // reviewQueueLookupAdapter adapts session.Storage's ItemSession/ReviewVerdict
-// queries to session.ReviewQueueLookup, which BuildDecisionsSnapshot
-// (session/session_summary_snapshot.go) needs. A session's resolved/still-open
+// queries to summaries.ReviewQueueLookup, which BuildDecisionsSnapshot
+// (session/summaries/session_summary_snapshot.go) needs. A session's resolved/still-open
 // review counts are derived from every ItemSession attached to the same backlog
 // item as this session's own ItemSession (siblings included) — the backlog item,
 // not just this one session, is the natural "review queue" scope, mirroring how
@@ -715,7 +716,7 @@ type reviewQueueLookupAdapter struct {
 	storage *session.Storage
 }
 
-// ReviewQueueResolvedCount implements session.ReviewQueueLookup.
+// ReviewQueueResolvedCount implements summaries.ReviewQueueLookup.
 func (a *reviewQueueLookupAdapter) ReviewQueueResolvedCount(ctx context.Context, sessionID string) (resolved, stillOpen int, err error) {
 	itemSession, err := a.storage.GetItemSessionBySessionUUID(ctx, sessionID)
 	if err != nil {
@@ -1017,9 +1018,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// "Set* called long after construction" ordering constraint SetHeadlessPool used
 	// to have (see the comment above backlogLifecycleListener). Nil when storage isn't
 	// ent-backed.
-	var sessionSummaryGenerator *session.SessionSummaryGenerator
+	var sessionSummaryGenerator *summaries.SessionSummaryGenerator
 	if entClient := storage.GetEntClient(); entClient != nil {
-		sessionSummaryGenerator = session.NewSessionSummaryGenerator(
+		sessionSummaryGenerator = summaries.NewSessionSummaryGenerator(
 			entClient,
 			llmClient,
 			nil, // NotificationDecisionLister — wired later via SetNotificationLister
@@ -1036,9 +1037,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// wiring onto sessionService needed: unlike SessionSummaryGenerator, nothing
 	// in the live-instance lifecycle dispatches handoff-summary generation —
 	// it's only triggered on demand via HandoffSummaryService's RPC handlers.
-	var handoffSummaryGenerator *session.HandoffSummaryGenerator
+	var handoffSummaryGenerator *summaries.HandoffSummaryGenerator
 	if entClient := storage.GetEntClient(); entClient != nil {
-		handoffSummaryGenerator = session.NewHandoffSummaryGenerator(entClient, llmClient)
+		handoffSummaryGenerator = summaries.NewHandoffSummaryGenerator(entClient, llmClient)
 	} else {
 		log.Warn("handoff summary generation unavailable: storage is not ent-backed")
 	}
@@ -1073,7 +1074,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		inst.SetStatusManager(statusManager)
 		backlogLifecycleListener.WireToInstance(inst)
 		if sessionSummaryGenerator != nil {
-			session.WireSessionSummaryListener(sessionSummaryGenerator, inst)
+			summaries.WireSessionSummaryListener(sessionSummaryGenerator, inst)
 		}
 	}
 
@@ -1348,7 +1349,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 		backlogLifecycleListener.WireToInstance(instance)
 		if sessionSummaryGenerator != nil {
-			session.WireSessionSummaryListener(sessionSummaryGenerator, instance)
+			summaries.WireSessionSummaryListener(sessionSummaryGenerator, instance)
 		}
 		log.Info("added external session to review queue poller, PR status poller, and history linker", "session", instance.Title)
 	})

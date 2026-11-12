@@ -39,6 +39,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -320,9 +321,9 @@ type SessionService struct {
 	// sessionSummaryGenerator is wired to each newly created session (alongside
 	// backlogLifecycleListener, at the same call sites) so that session-completion-
 	// summary generation fires on exit/stop. Nil until SetSessionSummaryGenerator is
-	// called (session/session_summary_service.go's ent-client/headless-pool wiring
+	// called (session/summaries/session_summary_service.go's ent-client/headless-pool wiring
 	// happens after SessionService construction).
-	sessionSummaryGenerator *session.SessionSummaryGenerator
+	sessionSummaryGenerator *summaries.SessionSummaryGenerator
 
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor

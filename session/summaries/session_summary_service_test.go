@@ -1,4 +1,4 @@
-package session
+package summaries
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -44,8 +45,7 @@ func (f *fakePoolClient) CallBlocking(ctx context.Context, _ headless.FeatureKey
 
 func newTestSessionSummaryGenerator(t *testing.T) (*SessionSummaryGenerator, *ent.Client, *fakePoolClient) {
 	t.Helper()
-	repo, cleanup := createTestEntRepository(t)
-	t.Cleanup(cleanup)
+	repo := session.NewTestEntRepository(t)
 
 	pool := &fakePoolClient{response: "A narrative."}
 	gen := NewSessionSummaryGenerator(
@@ -277,8 +277,7 @@ func TestReconcileStaleness_should_NotStompFreshReadyRow_When_ConcurrentGenerati
 
 func TestGenerateAndPersist_should_RecoverFromPanicAndReleaseGuard_When_BuilderPanics(t *testing.T) {
 	t.Parallel()
-	repo, cleanup := createTestEntRepository(t)
-	defer cleanup()
+	repo := session.NewTestEntRepository(t)
 	sessionUUID := "sess-panic"
 
 	gen := NewSessionSummaryGenerator(

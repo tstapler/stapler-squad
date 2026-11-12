@@ -1,4 +1,4 @@
-package session
+package summaries
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
@@ -212,7 +213,7 @@ func (g *HandoffSummaryGenerator) ReconcileStaleness(ctx context.Context, row *H
 // helper, not a shared type, because session/headless cannot import session
 // (session already imports session/headless — see
 // headless.HandoffTranscriptMessage's doc comment).
-func toHandoffMessages(messages []ClaudeConversationMessage) []headless.HandoffTranscriptMessage {
+func toHandoffMessages(messages []session.ClaudeConversationMessage) []headless.HandoffTranscriptMessage {
 	out := make([]headless.HandoffTranscriptMessage, len(messages))
 	for i, msg := range messages {
 		out[i] = headless.HandoffTranscriptMessage{
@@ -356,7 +357,7 @@ func (g *HandoffSummaryGenerator) GenerateAndPersist(ctx context.Context, source
 		}
 	}()
 
-	history, err := NewClaudeSessionHistoryFromClaudeDir()
+	history, err := session.NewClaudeSessionHistoryFromClaudeDir()
 	if err != nil {
 		g.failStage(ctx, sourceSessionID, sourceSessionTitle, "transcript", err, now, false)
 		return

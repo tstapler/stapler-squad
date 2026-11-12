@@ -1,17 +1,19 @@
-package session
+package summaries
 
 import (
 	"context"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // summaryGenerator is the narrow consumer-side interface sessionSummaryListener needs
 // from a session summary generator. Defined here, next to its only consumer, per
 // the `interface-pollution-checklist` skill's "define the interface where it's
-// consumed" — *SessionSummaryGenerator (session/session_summary_service.go) satisfies
+// consumed" — *SessionSummaryGenerator (session/summaries/session_summary_service.go) satisfies
 // this structurally, with no explicit "implements" declaration.
 type summaryGenerator interface {
-	GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *SessionGoalData, reason string)
+	GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *session.SessionGoalData, reason string)
 }
 
 // reasonReconcileSessionMissing is the lifecycle-event reason used by the reconciler
@@ -21,22 +23,22 @@ type summaryGenerator interface {
 const reasonReconcileSessionMissing = "reconcile-session-missing"
 
 // sessionSummaryListener is a per-instance LifecycleListener shim that captures the
-// live *Instance pointer at WireToInstance time, mirroring instanceBacklogListener
+// live *session.Instance pointer at WireToInstance time, mirroring instanceBacklogListener
 // (session/backlog_lifecycle.go). OnLifecycleEvent performs one fast, synchronous,
 // in-memory-only read (GetDiffStats/GetSessionGoal — no I/O) before dispatching the
 // expensive work (LLM call, ent writes) to a goroutine, keeping this callback
 // non-blocking per the LifecycleListener contract (session/instance.go:90-95).
 type sessionSummaryListener struct {
 	generator summaryGenerator
-	instance  *Instance
+	instance  *session.Instance
 }
 
 // OnLifecycleEvent implements LifecycleListener. It fires on both EventExited and
 // EventStopped (natural exit and explicit stop dispatch identically — ADR-002),
 // excluding reconciler-driven spurious exits.
-func (l *sessionSummaryListener) OnLifecycleEvent(event LifecycleEvent, reason string) {
+func (l *sessionSummaryListener) OnLifecycleEvent(event session.LifecycleEvent, reason string) {
 	switch event {
-	case EventExited, EventStopped:
+	case session.EventExited, session.EventStopped:
 	default:
 		return
 	}
@@ -63,6 +65,6 @@ func (l *sessionSummaryListener) OnLifecycleEvent(event LifecycleEvent, reason s
 // Takes the summaryGenerator interface type (not a concrete *SessionSummaryGenerator) so
 // callers can pass any type that structurally satisfies it — a real *SessionSummaryGenerator
 // does so for free.
-func WireSessionSummaryListener(generator summaryGenerator, inst *Instance) {
+func WireSessionSummaryListener(generator summaryGenerator, inst *session.Instance) {
 	inst.RegisterLifecycleListener(&sessionSummaryListener{generator: generator, instance: inst})
 }
