@@ -141,6 +141,15 @@ linters:
             - $gostd
             - github.com/tstapler/stapler-squad/session/domain
             - golang.org/x/sync/singleflight
+        # session/domain/backlogdto is the volatile backlog DTO layer: stdlib and the stable session/domain only.
+        isolate_backlogdto:
+          list-mode: strict
+          files:
+            - "**/session/domain/backlogdto/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/session/domain
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict

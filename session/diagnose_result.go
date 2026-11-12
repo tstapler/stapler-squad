@@ -12,14 +12,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-// DiagnoseResultData is the JSON stored in item_sessions.diagnose_result.
-type DiagnoseResultData struct {
-	Outcome     string    `json:"outcome"`
-	Summary     string    `json:"summary"`
-	FiledItemID string    `json:"filed_item_id,omitempty"`
-	DiagnosedAt time.Time `json:"diagnosed_at"`
-}
-
 // Workflow suggestion action types accepted by suggest_workflow_action.
 var WorkflowSuggestionActionTypes = []string{"transition_status", "set_config", "operator_note"}
 
