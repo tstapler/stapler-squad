@@ -25,7 +25,6 @@ go_library(
         "background_models_service.go",
         "backlog_attachment_upload_handler.go",
         "backlog_debug_mutate_handler.go",
-        "backlog_debug_seed_handler.go",
         "backlog_flow_mapper.go",
         "backlog_flow_observer.go",
         "backlog_flow_service.go",

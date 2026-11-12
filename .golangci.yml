@@ -91,6 +91,7 @@ linters:
             - "**/services/sessionbundle/**"
             - "**/services/devtools/**"
             - "**/services/insights/**"
+            - "**/services/debugseed/**"
             - "!**/*_test.go"
           deny:
             - pkg: "github.com/tstapler/stapler-squad/session/ent"

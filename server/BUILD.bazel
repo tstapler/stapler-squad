@@ -96,6 +96,7 @@ go_library(
         "//server/reviewqueue",
         "//server/services",
         "//server/services/backlogsvc",
+        "//server/services/debugseed",
         "//server/services/devtools",
         "//server/services/insights",
         "//server/services/sessionbundle",
