@@ -1,4 +1,4 @@
-package session
+package panereply
 
 import (
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"

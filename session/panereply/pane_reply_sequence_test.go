@@ -1,4 +1,4 @@
-package session
+package panereply
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // seqAfter fires every poll timer at once and never the overall budget, so
@@ -44,7 +46,7 @@ func TestSubmitReplySequence_ShouldWriteTheRecordedKeysAndReportClosed_WhenTheDi
 	assert.False(t, res.Partial())
 	assert.Equal(t, recordedKeys(t), sim.written())
 	assert.Equal(t, [3]bool{true, true, false}, sim.checked, "the simulator ended with A and B toggled")
-	l, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+	l, ok := inst.TryTerminalWriteLease(session.LeaseWriterReply)
 	require.True(t, ok, "the lease is released after the sequence")
 	l.Release()
 }
@@ -136,12 +138,12 @@ func TestSubmitReplySequence_ShouldRefuseEmptyStepsAndForeignLease(t *testing.T)
 	res := SubmitReplySequence(context.Background(), sim, lease, nil, seqOpts())
 	assert.ErrorIs(t, res.Err, ErrSequenceEmpty)
 	res = SubmitReplySequence(context.Background(), sim, nil, recordedSteps(t), seqOpts())
-	assert.ErrorIs(t, res.Err, ErrNoLease)
+	assert.ErrorIs(t, res.Err, session.ErrNoLease)
 	other := &tabbedSim{owner: "someone-else"}
-	l, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+	l, ok := inst.TryTerminalWriteLease(session.LeaseWriterReply)
 	require.True(t, ok)
 	res = SubmitReplySequence(context.Background(), other, l, recordedSteps(t), seqOpts())
-	assert.ErrorIs(t, res.Err, ErrLeaseMismatch)
+	assert.ErrorIs(t, res.Err, session.ErrLeaseMismatch)
 	assert.Empty(t, sim.written())
 	assert.Empty(t, other.written())
 }
@@ -176,7 +178,7 @@ func TestSubmitReplySequence_ShouldReportIndeterminateAndStopWriting_When_Cancel
 	require.Error(t, res.Err)
 	close(g.gate) // the in-flight key lands, then the goroutine sees the abort
 	require.Eventually(t, func() bool {
-		l, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
+		l, ok := inst.TryTerminalWriteLease(session.LeaseWriterReply)
 		if ok {
 			l.Release()
 		}

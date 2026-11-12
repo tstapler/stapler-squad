@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // guidance_ack_detector.go decides whether a keystroke answer reached the agent
@@ -173,7 +174,7 @@ func (e *ackEntry) presence(capture string, err error) (own bool, p dialogpresen
 	if e.Matches != nil {
 		return e.Matches(capture), dialogpresence.PaneShowsDialog(capture)
 	}
-	return session.DialogMatch(capture, e.Dialog), dialogpresence.PaneShowsDialog(capture)
+	return panereply.DialogMatch(capture, e.Dialog), dialogpresence.PaneShowsDialog(capture)
 }
 
 func (a *GuidanceAckDetector) sample(ctx context.Context, e ackEntry) {

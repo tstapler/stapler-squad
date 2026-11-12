@@ -11,6 +11,7 @@ server/services/wsconn !server/web
 session/ptyio !server
 session/hostclaim !server
 session/dialogpresence !server
+session/panereply !server
 session/cmdexec !server
 session/itemsources !server
 session/migrations !github

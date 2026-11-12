@@ -77,9 +77,9 @@ func (f *LeaseFlag) SetEnabled(on bool) { f.off.Store(!on) }
 // injected with SetLeaseFlag.
 var DefaultLeaseFlag = &LeaseFlag{}
 
-// leaseOwner is satisfied by *Instance and by the pane fakes in tests, so a
+// LeaseOwner is satisfied by *Instance and by the pane fakes in tests, so a
 // primitive can compare a lease's instance with the pane it is about to write.
-type leaseOwner interface {
+type LeaseOwner interface {
 	LeaseOwnerUUID() string
 }
 
@@ -131,9 +131,9 @@ func (l *HeldLease) Release() {
 	})
 }
 
-// check refuses a nil, zero-value or foreign lease. It has no side effects, so
+// Check refuses a nil, zero-value or foreign lease. It has no side effects, so
 // a refused primitive performs 0 writes.
-func (l *HeldLease) check(target leaseOwner) error {
+func (l *HeldLease) Check(target LeaseOwner) error {
 	if l == nil || l.owner == "" {
 		return ErrNoLease
 	}

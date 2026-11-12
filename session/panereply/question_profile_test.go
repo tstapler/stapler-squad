@@ -1,4 +1,4 @@
-package session
+package panereply
 
 import (
 	"os"
@@ -15,7 +15,7 @@ import (
 
 func paneFixture(t *testing.T, harness, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("testdata", "panes", harness, name))
+	b, err := os.ReadFile(filepath.Join("..", "testdata", "panes", harness, name))
 	require.NoError(t, err)
 	return string(b)
 }

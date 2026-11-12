@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 func testQuestion(sessionUUID, id string, labels ...string) PendingQuestion {
@@ -18,7 +18,7 @@ func testQuestion(sessionUUID, id string, labels ...string) PendingQuestion {
 	}
 	return PendingQuestion{
 		QuestionID: id, SessionUUID: sessionUUID,
-		Dialog: session.QuestionDialog{Question: "Q " + id + "?", Header: "H", Labels: labels},
+		Dialog: panereply.QuestionDialog{Question: "Q " + id + "?", Header: "H", Labels: labels},
 	}
 }
 
@@ -44,7 +44,7 @@ func TestPendingQuestionStore_ShouldRegisterBoundEvictAndExpire_WhenQuestionsAre
 	assert.True(t, ok)
 
 	// A same-question registration replaces the live entry (one card, not two).
-	s.Register(PendingQuestion{QuestionID: "q9b", SessionUUID: "s1", Dialog: session.QuestionDialog{Question: "Q q9?", Header: "H", Labels: []string{"L9"}}})
+	s.Register(PendingQuestion{QuestionID: "q9b", SessionUUID: "s1", Dialog: panereply.QuestionDialog{Question: "Q q9?", Header: "H", Labels: []string{"L9"}}})
 	_, ok = s.Peek(QuestionKey{"s1", "q9"})
 	assert.False(t, ok)
 	_, ok = s.Peek(QuestionKey{"s1", "q9b"})
