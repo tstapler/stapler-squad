@@ -85,3 +85,35 @@ jobs:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           GITHUB_REPO_NAME: ${{ github.event.repository.name }}
           # GITHUB_REPOSITORY (owner/repo) is set automatically by GitHub Actions
+
+      # GoReleaser's `brews:` publisher commits Formula/stapler-squad.rb to this repo's main (it
+      # cannot use a GitHub App token). Mirror that same file into the central tap as well, with
+      # the tstapler-homebrew-tap-writer app. Skipped with a notice if the app credentials are
+      # missing, and non-blocking: the release and this repo's own formula are already published.
+      - name: Check for the tap app credentials
+        id: tap-gate
+        env:
+          APP_CLIENT_ID: ${{ vars.HOMEBREW_TAP_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_CLIENT_ID" ] && [ -n "$APP_PRIVATE_KEY" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::HOMEBREW_TAP_APP_CLIENT_ID / HOMEBREW_TAP_APP_PRIVATE_KEY are not set; skipping the central Homebrew tap"; fi
+
+      - name: Check out main to read the formula GoReleaser just committed
+        if: steps.tap-gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: released-main
+          persist-credentials: false
+
+      - name: Publish the formula to the central Homebrew tap
+        if: steps.tap-gate.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: tstapler/gha-actions/publish-homebrew-formula@dcc4013f1e0c983a6926d22b1cb9acf3aba9a489 # gha-actions main, includes publish-homebrew-formula (#2)
+        with:
+          client-id: ${{ vars.HOMEBREW_TAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          files: released-main/Formula/stapler-squad.rb:Formula/stapler-squad.rb
+          commit-message: stapler-squad ${{ needs.release-please.outputs.tag_name }}
+
