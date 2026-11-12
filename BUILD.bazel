@@ -166,6 +166,12 @@ otel_weave_hermetic(
 )
 
 otel_weave_hermetic(
+    name = "otelc_bin",
+    modcache = ":otel_modcache",
+    mode = "otelc",
+)
+
+otel_weave_hermetic(
     name = "stapler-squad",
     ent = ["//tools/bzl/ent:ent_gen"],
     gen = ["//proto/session/v1:gen_go"],
@@ -182,6 +188,7 @@ otel_weave_hermetic(
         "//instrumentation/otelc/safeexec",
     ],
     modcache = ":otel_modcache",
+    otelc = ":otelc_bin",
     # On a macOS target the weave also stages macos/Info.plist and links it with -sectcreate (Task 5.1b).
     stage = select({
         ":embed_tmux_and_tymux": [
