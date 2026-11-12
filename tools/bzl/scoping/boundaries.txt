@@ -19,3 +19,5 @@ session/itemsources !server
 session/migrations !github
 session/migrations !server
 session/domain/backlogdto !server
+server/services/insights !server/web
+server/services/debugseed !server/web

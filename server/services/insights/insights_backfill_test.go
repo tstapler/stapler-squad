@@ -1,4 +1,4 @@
-package services
+package insights
 
 import (
 	"context"

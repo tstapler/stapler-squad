@@ -558,10 +558,10 @@ var createInventory = []createSite{
 	{"session/backlog_sync.go", "SyncLoop.SyncOne", 1, classCreateForwarder, "item comes from the source plugin's MapToBacklogItem (not resolvable here): the GitHub plugins set idea and the Jira and Linear plugins set no status"},
 
 	{"server/services/backlog_debug_mutate_handler.go", "BacklogDebugMutateHandler.handleCreate", 1, classCreateDebug, debugCreateReason},
-	{"server/services/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.createSimpleBacklogItem", 1, classCreateDebug, debugCreateReason},
-	{"server/services/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeed", 1, classCreateDebug, debugCreateReason},
-	{"server/services/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedQueued", 1, classCreateDebug, debugCreateReason},
-	{"server/services/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedWorkSessionWithWorktree", 1, classCreateDebug, debugCreateReason},
+	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.createSimpleBacklogItem", 1, classCreateDebug, debugCreateReason},
+	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeed", 1, classCreateDebug, debugCreateReason},
+	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedQueued", 1, classCreateDebug, debugCreateReason},
+	{"server/services/debugseed/backlog_debug_seed_handler.go", "BacklogDebugSeedHandler.handleSeedWorkSessionWithWorktree", 1, classCreateDebug, debugCreateReason},
 }
 
 // createCallName is the unqualified name of a creator call, or "".

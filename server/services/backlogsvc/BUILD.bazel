@@ -50,6 +50,7 @@ go_library(
         "//server/events",
         "//server/middleware",
         "//server/services",
+        "//server/services/internal/streammetrics",
         "//server/workflows",
         "//session",
         "//session/backlog",

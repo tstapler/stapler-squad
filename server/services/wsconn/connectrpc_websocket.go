@@ -18,6 +18,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -977,7 +979,7 @@ func (h *ConnectRPCWebSocketHandler) serveTimedTerminalStream(conn streamConn, m
 	// Call StreamTerminal, then send EndStream while the WebSocket is still open.
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
 	// it is always sent regardless of which code path streamTerminal takes.
-	streamDone := services.TrackOpenStream("StreamTerminal")
+	streamDone := streammetrics.TrackOpenStream("StreamTerminal")
 	err := h.streamTerminal(stream)
 	streamDone()
 	if err != nil {

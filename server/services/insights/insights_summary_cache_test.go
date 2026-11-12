@@ -1,4 +1,4 @@
-package services
+package insights
 
 import (
 	"context"
@@ -34,10 +34,15 @@ func newCachedFixture(t *testing.T) (*InsightsService, *countingStore, *fakeCloc
 		svctest.NewResult("u1", "claude-sonnet-4-5", "/proj", 1000, 500, 0, time.Now().UTC()),
 	}}}
 	svc := NewInsightsService(store, tokens.DefaultPricingTable(), nil, nil)
-	clk := &fakeClock{t: time.Unix(1_700_000_000, 0)} // pi_extension_health_test.go
+	clk := &fakeClock{t: time.Unix(1_700_000_000, 0)}
 	svc.summaries.now = clk.Now
 	return svc, store, clk
 }
+
+type fakeClock struct{ t time.Time }
+
+func (c *fakeClock) Now() time.Time          { return c.t }
+func (c *fakeClock) Advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func notLoading() bool { return false }
 
