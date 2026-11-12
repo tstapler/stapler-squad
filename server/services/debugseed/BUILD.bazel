@@ -23,3 +23,13 @@ alias(
     actual = ":debugseed",
     visibility = ["//visibility:public"],
 )
+
+# Read by session and server/services tests that scan handler sources for path-keyed guards.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

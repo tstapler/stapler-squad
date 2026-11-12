@@ -789,6 +789,7 @@ go_test(
         "//scripts:ssq-notify",
         "//server/mcp:go_sources",
         "//server/services/backlogsvc:go_sources",
+        "//server/services/debugseed:go_sources",
         "//server/services/wsconn:go_sources",
         "//session:go_sources",
         "//session/backlog:go_sources",
