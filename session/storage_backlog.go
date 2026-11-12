@@ -1120,6 +1120,20 @@ func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogI
 // e.g. "https://github.com/owner/repo/pull/148" -> 148.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 
+// ParsePRNumberFromURL extracts the trailing PR number from a GitHub PR URL,
+// sharing the regex BackfillMissingPRNumbers uses so both parses agree.
+func ParsePRNumberFromURL(prURL string) (int, error) {
+	m := prNumberFromURLRe.FindStringSubmatch(prURL)
+	if m == nil {
+		return 0, fmt.Errorf("no PR number found in %q", prURL)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, fmt.Errorf("parsing PR number from %q: %w", prURL, err)
+	}
+	return n, nil
+}
+
 // BackfillMissingPRNumbers finds pr_pending items with a pr_url but no
 // pr_number (pr_number == 0) and parses the number out of the URL. Such items
 // are otherwise permanently invisible to FindPRPendingItems' PrNumberGT(0)

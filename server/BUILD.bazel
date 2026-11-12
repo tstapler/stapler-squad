@@ -119,6 +119,7 @@ go_library(
         "//session/hostclaim",
         "//session/importer",
         "//session/itemsources",
+        "//session/jules",
         "//session/memory",
         "//session/prpoller",
         "//session/scanqueue",

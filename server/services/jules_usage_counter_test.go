@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -254,7 +255,7 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 
 	pollClient := &fakeUsageCycleClient{}
 	storageSpy := &julesPollerStorageDoneSignal{Storage: storage, done: make(chan struct{})}
-	poller := session.NewJulesSessionPoller(pollClient, storageSpy, session.JulesSessionPollerConfig{
+	poller := sessionjules.NewJulesSessionPoller(pollClient, storageSpy, sessionjules.JulesSessionPollerConfig{
 		PollInterval:  2 * time.Millisecond,
 		CallTimeout:   time.Second,
 		MaxSessionAge: time.Hour,
@@ -320,7 +321,7 @@ func TestJulesUsageCounter_Snapshot_should_IncrementDispatchedAndAPIErrorExactly
 	require.NoError(t, err)
 
 	pollClient := &fakeUsagePollErrorClient{}
-	poller := session.NewJulesSessionPoller(pollClient, storage, session.JulesSessionPollerConfig{
+	poller := sessionjules.NewJulesSessionPoller(pollClient, storage, sessionjules.JulesSessionPollerConfig{
 		PollInterval:  2 * time.Millisecond,
 		CallTimeout:   time.Second,
 		MaxSessionAge: time.Hour,

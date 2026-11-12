@@ -44,11 +44,11 @@ type julesSourceResolver interface {
 	Resolve(ctx context.Context, owner, repo string) (jules.JulesSourceName, error)
 }
 
-// julesAuthReconnectReporter is the narrow slice of *session.JulesSessionPoller
+// julesAuthReconnectReporter is the narrow slice of *sessionjules.JulesSessionPoller
 // GetJulesConfig needs — declared locally (rather than importing the
 // session package's concrete type into a request-scoped field) so a nil
 // dependency (feature off / poller not started) is trivially representable
-// and a test can fake it without a real poller. *session.JulesSessionPoller
+// and a test can fake it without a real poller. *sessionjules.JulesSessionPoller
 // satisfies this structurally.
 type julesAuthReconnectReporter interface {
 	AuthReconnectRequired() bool
