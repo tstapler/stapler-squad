@@ -35,3 +35,10 @@ go_test(
     ],
     embed = [":backlogdto"],
 )
+
+# Read by session tests that scan the item PR readers (legacy_item_pr_readers_test.go).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//session:__pkg__"],
+)
