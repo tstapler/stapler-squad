@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const twoHostIssueURL = "https://github.com/acme/widgets/issues/42"
@@ -96,7 +97,7 @@ func (n *twoHostNode) checkClaim(t *testing.T, localOnly bool) *sessionv1.CheckC
 
 func (n *twoHostNode) itemCount(t *testing.T) int {
 	t.Helper()
-	items, err := n.storage.ListBacklogItems(context.Background(), session.BacklogItemFilter{})
+	items, err := n.storage.ListBacklogItems(context.Background(), backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
 	return len(items)
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -922,7 +923,7 @@ func TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled(t *testing.T) {
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/42"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "auto-create-pr item",
 		Status:       string(session.BacklogStatusInProgress),
 		Priority:     3,
@@ -934,7 +935,7 @@ func TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled(t *testing.T) {
 
 	const sessionTitle = "widgets-work-session"
 	const sessionUUID = "cccc1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -983,7 +984,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled(t *testing.T) {
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/99"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "manual-pr item",
 		Status:   string(session.BacklogStatusInProgress),
 		Priority: 3,
@@ -995,7 +996,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled(t *testing.T) {
 
 	const sessionTitle = "manual-work-session"
 	const sessionUUID = "dddd1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1076,7 +1077,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_PRAlreadyExists(t *testing.T) {
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/2"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "already-has-pr item",
 		Status:       string(session.BacklogStatusInProgress),
 		Priority:     3,
@@ -1088,7 +1089,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_PRAlreadyExists(t *testing.T) {
 
 	const sessionTitle = "already-has-pr-session"
 	const sessionUUID = "ffff1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1120,7 +1121,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_ReasonNotTaskComplete(t *testing.T) 
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/3"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "not-yet-complete item",
 		Status:       string(session.BacklogStatusInProgress),
 		Priority:     3,
@@ -1132,7 +1133,7 @@ func TestMaybeAutoCreatePR_DoesNothing_When_ReasonNotTaskComplete(t *testing.T) 
 
 	const sessionTitle = "not-yet-complete-session"
 	const sessionUUID = "aaaa2222-3333-4444-5555-666677778888"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1172,7 +1173,7 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/4"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "reason-changes-while-queued item",
 		Status:       string(session.BacklogStatusInProgress),
 		Priority:     3,
@@ -1184,7 +1185,7 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 
 	const sessionTitle = "reason-changes-while-queued-session"
 	const sessionUUID = "bbbb2222-3333-4444-5555-666677778888"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1243,7 +1244,7 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "hidden-session backlog item",
 		Status:   string(session.BacklogStatusInProgress),
 		Priority: 3,
@@ -1253,7 +1254,7 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 	}
 
 	const sessionUUID = "aaaa1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "review",
@@ -1304,7 +1305,7 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t 
 		t.Run(tc.name, func(t *testing.T) {
 			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 				Title:    "hidden-session backlog item " + tc.name,
 				Status:   string(session.BacklogStatusInProgress),
 				Priority: 3,
@@ -1314,7 +1315,7 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t 
 			}
 
 			const sessionUUID = "aaaa1111-2222-3333-4444-555566667777"
-			if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+			if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: sessionUUID,
 				SessionRole: "review",
@@ -1360,7 +1361,7 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t 
 func TestOnItemAdded_PublishesNotification_When_SessionNotHidden_EvenIfBacklogLinked(t *testing.T) {
 	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "visible-session backlog item",
 		Status:   string(session.BacklogStatusInProgress),
 		Priority: 3,
@@ -1371,7 +1372,7 @@ func TestOnItemAdded_PublishesNotification_When_SessionNotHidden_EvenIfBacklogLi
 
 	const sessionTitle = "widgets-work-session"
 	const sessionUUID = "bbbb1111-2222-3333-4444-555566667777"
-	if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+	if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -1443,7 +1444,7 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 		t.Run(tc.name, func(t *testing.T) {
 			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 				Title:    "hidden-session-with-problem backlog item " + tc.name,
 				Status:   string(session.BacklogStatusInProgress),
 				Priority: 3,
@@ -1453,7 +1454,7 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 			}
 
 			const sessionUUID = "cccc9999-2222-3333-4444-555566667777"
-			if _, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+			if _, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: sessionUUID,
 				SessionRole: "review",
@@ -1787,12 +1788,12 @@ func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) 
 			mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 			fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/42"}
 			mgr.SetOneShotRunner(fake)
-			item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 				Title: "auto-create item", Status: string(session.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
 			})
 			require.NoError(t, err)
 			sessionUUID := fmt.Sprintf("dddd1111-2222-3333-4444-55556666777%d", i)
-			_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+			_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
 			require.NoError(t, err)
 
 			inst := &session.Instance{Title: "multi-pr-session", UUID: sessionUUID, Branch: "feat-b", GitHubOwner: "acme", GitHubRepo: "widgets"}
@@ -1831,11 +1832,11 @@ func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID strin
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/1"}
 	mgr.SetOneShotRunner(fake)
 
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title: "empty-branch item", Status: string(session.BacklogStatusInProgress), Priority: 3, AutoCreatePR: true,
 	})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: "work"})
 	require.NoError(t, err)
 
 	dir := t.TempDir()

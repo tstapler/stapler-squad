@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestParseHeadlessTriageResult_ValidJSON(t *testing.T) {
@@ -225,21 +226,21 @@ func TestParseHeadlessTriageResult_StrayUnmatchedOpeningBrace(t *testing.T) {
 
 func TestBuildHeadlessTriagePrompt_ContainsTitle(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{Title: "My Feature", ID: "abc-123"}
+	item := &backlogdto.BacklogItemData{Title: "My Feature", ID: "abc-123"}
 	prompt := BuildHeadlessTriagePrompt(item, "/tmp/artifacts")
 	assert.Contains(t, prompt, "My Feature")
 }
 
 func TestBuildHeadlessTriagePrompt_ContainsArtifactPath(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{Title: "Test", ID: "id-1"}
+	item := &backlogdto.BacklogItemData{Title: "Test", ID: "id-1"}
 	prompt := BuildHeadlessTriagePrompt(item, "/repo/docs/tasks/test")
 	assert.Contains(t, prompt, "/repo/docs/tasks/test")
 }
 
 func TestBuildHeadlessTriagePrompt_InstructsJSONOutput(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{Title: "Test", ID: "id-1"}
+	item := &backlogdto.BacklogItemData{Title: "Test", ID: "id-1"}
 	prompt := BuildHeadlessTriagePrompt(item, "/tmp/art")
 	// Headless mode must instruct JSON output, not call an MCP tool.
 	assert.Contains(t, prompt, "output ONLY a JSON object",
@@ -250,7 +251,7 @@ func TestBuildHeadlessTriagePrompt_IncludesAcceptanceCriteria(t *testing.T) {
 	t.Parallel()
 	// ParseAcCriteria expects JSON-encoded criteria.
 	acJSON := session.AcCriteriaJSON(`[{"index":1,"text":"User can log in","status":"pending"},{"index":2,"text":"User can log out","status":"pending"}]`)
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		Title:              "AC Test",
 		ID:                 "id-2",
 		AcceptanceCriteria: acJSON,
@@ -261,14 +262,14 @@ func TestBuildHeadlessTriagePrompt_IncludesAcceptanceCriteria(t *testing.T) {
 
 func TestBuildHeadlessTriagePrompt_NoAcSection_WhenEmpty(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{Title: "No AC", ID: "id-3"}
+	item := &backlogdto.BacklogItemData{Title: "No AC", ID: "id-3"}
 	prompt := BuildHeadlessTriagePrompt(item, "/tmp")
 	assert.NotContains(t, prompt, "Acceptance Criteria")
 }
 
 func TestBuildHeadlessRetriagePrompt_ContainsPriorResultAndFeedback(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{Title: "My Feature", ID: "abc-123"}
+	item := &backlogdto.BacklogItemData{Title: "My Feature", ID: "abc-123"}
 	prior := HeadlessTriageResult{
 		Iteration: 1,
 		Summary:   "Original plan summary.",
@@ -284,7 +285,7 @@ func TestBuildHeadlessRetriagePrompt_ContainsPriorResultAndFeedback(t *testing.T
 
 func TestBuildHeadlessRetriagePrompt_ReferencesExistingArtifacts(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{Title: "My Feature", ID: "abc-123"}
+	item := &backlogdto.BacklogItemData{Title: "My Feature", ID: "abc-123"}
 	prompt := BuildHeadlessRetriagePrompt(item, "/tmp/artifacts", HeadlessTriageResult{}, "feedback text")
 	assert.Contains(t, prompt, "/tmp/artifacts/plan.md")
 	assert.Contains(t, prompt, "do not start from scratch")

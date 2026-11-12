@@ -20,6 +20,7 @@ go_library(
         "//linear",
         "//log",
         "//session",
+        "//session/domain/backlogdto",
         "@org_golang_x_sync//errgroup",
     ],
 )

@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // SetNoopDispatchThresholdFn overrides the consecutive no-op work-session
@@ -34,7 +35,7 @@ func (l *BacklogLifecycleListener) noopDispatchThreshold() int {
 // resolves the row once a session commits again. Status exits and confirmed or
 // archived duplicates are resolved by selfHealStuck.
 func (l *BacklogLifecycleListener) reconcileRepeatedNoopDispatch(ctx context.Context, er *session.EntRepository) {
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress), string(session.BacklogStatusReview)},
 	})
 	if err != nil {

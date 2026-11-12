@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -91,7 +92,7 @@ func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNu
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	n := 21
 	url := "https://github.com/tstapler/stapler-squad/pull/21"
-	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
 	require.NoError(t, err)
 	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
@@ -119,7 +120,7 @@ func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNu
 func pendingItemWithPR21(t *testing.T, storage *session.Storage, itemID string) {
 	t.Helper()
 	n, url := 21, "https://github.com/tstapler/stapler-squad/pull/21"
-	_, err := storage.UpdateBacklogItem(context.Background(), itemID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	_, err := storage.UpdateBacklogItem(context.Background(), itemID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
 	require.NoError(t, err)
 	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
@@ -334,7 +335,7 @@ func TestReportPRCreated_ShouldNameUnparseableTrackedURL_WhenAdditive(t *testing
 	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)
 	n, bad := 21, "not a url"
-	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &bad}, nil)
+	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &bad}, nil)
 	require.NoError(t, err)
 	h := additiveHandler(storage, true)
 	result, err := callReportPR(h, WithSessionUUID(context.Background(), sessionUUID), makeToolReq(reportPRArgs(item.ID, nil)))

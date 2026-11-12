@@ -12,14 +12,15 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func (r *toolRig) linkedItem(sessionUUID string) string {
 	r.t.Helper()
 	ctx := context.Background()
-	item, err := r.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "owner action", Status: string(session.BacklogStatusInProgress)})
+	item, err := r.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "owner action", Status: string(session.BacklogStatusInProgress)})
 	require.NoError(r.t, err)
-	_, err = r.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+	_, err = r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
 	require.NoError(r.t, err)
 	return item.ID
 }
@@ -55,7 +56,7 @@ func TestRequestOwnerAction_should_Reject_When_NotLinkedArchivedOrBadArgs(t *tes
 	r := newToolRig(t)
 	sid := uuid.New().String()
 	itemID := r.linkedItem(sid)
-	other, err := r.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "other", Status: string(session.BacklogStatusReady)})
+	other, err := r.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "other", Status: string(session.BacklogStatusReady)})
 	require.NoError(t, err)
 
 	assert.Equal(t, ErrPermissionDenied, resultCode(r.call(as(sid), toolRequestOwnerAction, ownerActionArgs(other.ID))), "not linked")
@@ -87,14 +88,14 @@ func TestRequestOwnerAction_should_ReturnCapExceeded_AtFivthPendingRequest(t *te
 
 func TestUnmetAcCriteriaError_should_TreatWaivedAsSatisfied(t *testing.T) {
 	t.Parallel()
-	mk := func(statuses ...session.AcStatus) *session.BacklogItemData {
+	mk := func(statuses ...session.AcStatus) *backlogdto.BacklogItemData {
 		cs := make([]session.AcCriterion, len(statuses))
 		for i, s := range statuses {
 			cs[i] = session.AcCriterion{Index: i, Text: "c", Status: s}
 		}
 		raw, err := session.SerializeAcCriteria(cs)
 		require.NoError(t, err)
-		return &session.BacklogItemData{AcceptanceCriteria: raw}
+		return &backlogdto.BacklogItemData{AcceptanceCriteria: raw}
 	}
 	assert.NoError(t, unmetAcCriteriaError(mk(session.AcStatusDone, session.AcStatusWaived)))
 	assert.Error(t, unmetAcCriteriaError(mk(session.AcStatusWaived, session.AcStatusPending)))
@@ -106,13 +107,13 @@ func TestWaiveAcCriterion_should_RequireReason_AndSurviveAgentProgressUpdates(t 
 	ctx := context.Background()
 	raw, err := session.SerializeAcCriteria([]session.AcCriterion{{Index: 0, Text: "mac proof", Status: session.AcStatusPending}})
 	require.NoError(t, err)
-	item, err := r.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "w", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: raw})
+	item, err := r.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "w", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: raw})
 	require.NoError(t, err)
 
-	require.ErrorIs(t, r.storage.WaiveAcCriterion(ctx, item.ID, 0, "  "), session.ErrWaiverReasonRequired)
+	require.ErrorIs(t, r.storage.WaiveAcCriterion(ctx, item.ID, 0, "  "), backlogdto.ErrWaiverReasonRequired)
 	require.NoError(t, r.storage.WaiveAcCriterion(ctx, item.ID, 0, "no mac hardware"))
-	require.ErrorIs(t, r.storage.UpdateAcCriterionStatus(ctx, item.ID, 0, "done", ""), session.ErrAcCriterionWaived)
-	require.ErrorIs(t, r.storage.WaiveAcCriterion(ctx, item.ID, 5, "x"), session.ErrAcCriterionOutOfRange)
+	require.ErrorIs(t, r.storage.UpdateAcCriterionStatus(ctx, item.ID, 0, "done", ""), backlogdto.ErrAcCriterionWaived)
+	require.ErrorIs(t, r.storage.WaiveAcCriterion(ctx, item.ID, 5, "x"), backlogdto.ErrAcCriterionOutOfRange)
 
 	got, err := r.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -161,7 +162,7 @@ func TestSubmitTriageResult_should_KeepOwnerWaiver_When_AgentRewritesWaivedCrite
 	itemID, sessUUID := setupTriageSession(t, storage)
 	ac, err := session.SerializeAcCriteria([]session.AcCriterion{{Index: 0, Text: "orig", Status: session.AcStatusPending}})
 	require.NoError(t, err)
-	_, err = storage.UpdateBacklogItem(context.Background(), itemID, session.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
+	_, err = storage.UpdateBacklogItem(context.Background(), itemID, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
 	require.NoError(t, err)
 	require.NoError(t, storage.WaiveAcCriterion(context.Background(), itemID, 0, "owner call"))
 	h := &backlogHandlers{storage: storage}
@@ -187,9 +188,9 @@ func itemWithCriteria(t *testing.T, r *toolRig, sid string, statuses ...session.
 	}
 	raw, err := session.SerializeAcCriteria(cs)
 	require.NoError(t, err)
-	item, err := r.storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "w", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: raw})
+	item, err := r.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "w", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: raw})
 	require.NoError(t, err)
-	_, err = r.storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: sid, SessionRole: session.SessionRoleWork})
+	_, err = r.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sid, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	return item.ID
 }

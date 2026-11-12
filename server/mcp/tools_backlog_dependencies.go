@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const errBacklogSvcNotWired = "backlog service not wired"
@@ -58,14 +59,14 @@ func requireUUIDArg(args map[string]any, name string) (string, *mcpgo.CallToolRe
 type dependencyOp struct {
 	tool  string
 	verb  string
-	apply func(session.BacklogItemDependencyEdge) error
+	apply func(backlogdto.BacklogItemDependencyEdge) error
 }
 
 func (h *backlogHandlers) addBacklogItemDependency(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return h.mutateDependency(ctx, req, dependencyOp{
 		tool: "add_backlog_item_dependency",
 		verb: "Added",
-		apply: func(e session.BacklogItemDependencyEdge) error {
+		apply: func(e backlogdto.BacklogItemDependencyEdge) error {
 			_, err := h.backlogSvc.AddBacklogItemDependency(ctx, connect.NewRequest(&sessionv1.AddBacklogItemDependencyRequest{
 				BlockerItemId: e.BlockerID,
 				BlockedItemId: e.BlockedID,
@@ -79,7 +80,7 @@ func (h *backlogHandlers) removeBacklogItemDependency(ctx context.Context, req m
 	return h.mutateDependency(ctx, req, dependencyOp{
 		tool: "remove_backlog_item_dependency",
 		verb: "Removed (or already absent)",
-		apply: func(e session.BacklogItemDependencyEdge) error {
+		apply: func(e backlogdto.BacklogItemDependencyEdge) error {
 			_, err := h.backlogSvc.RemoveBacklogItemDependency(ctx, connect.NewRequest(&sessionv1.RemoveBacklogItemDependencyRequest{
 				BlockerItemId: e.BlockerID,
 				BlockedItemId: e.BlockedID,
@@ -105,7 +106,7 @@ func (h *backlogHandlers) mutateDependency(_ context.Context, req mcpgo.CallTool
 	if bad != nil {
 		return bad, nil
 	}
-	if err := op.apply(session.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: blocked}); err != nil {
+	if err := op.apply(backlogdto.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: blocked}); err != nil {
 		return connectErrResult(op.tool, err), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("%s dependency: %s is blocked by %s.", op.verb, blocked, blocker)), nil
@@ -265,7 +266,7 @@ func (h *backlogHandlers) writeDependenciesSection(ctx context.Context, sb *stri
 		return
 	}
 	sb.WriteString("## Dependencies\n")
-	writeRefs := func(label string, refs []session.BacklogItemDependencyRef) {
+	writeRefs := func(label string, refs []backlogdto.BacklogItemDependencyRef) {
 		if len(refs) == 0 {
 			return
 		}

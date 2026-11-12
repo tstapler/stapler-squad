@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/linear"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 const linearIssuesPerPage = 50
@@ -264,7 +265,7 @@ func linearPriorityToBacklog(p int) int {
 }
 
 // MapToBacklogItem converts a Linear ExternalItem to a BacklogItemData.
-func (l *LinearPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
+func (l *LinearPlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) backlogdto.BacklogItemData {
 	return mapExternalToBacklogItem(item, sourceID)
 }
 

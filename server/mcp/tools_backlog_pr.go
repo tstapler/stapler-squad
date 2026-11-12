@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // --- report_pr_created ---
@@ -129,7 +130,7 @@ const prProvenanceStampTimeout = 10 * time.Second
 // the PR so any host can trace it back (webhook read-back: handlePRFixEvent).
 // Best-effort: the PR/item transition already succeeded, so a failure is logged
 // and never returned.
-func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *session.BacklogItemData, ref githubpkg.RepoRef, prNumber int) {
+func (h *backlogHandlers) stampPRProvenance(ctx context.Context, item *backlogdto.BacklogItemData, ref githubpkg.RepoRef, prNumber int) {
 	body, ok := h.storage.PRProvenanceComment(item)
 	if !ok {
 		return
@@ -423,9 +424,9 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// just accepted with forceOverride=true, which requires
 	// verification.Author == callerLogin. nil when this isn't a
 	// reassignment — SetBacklogItemPRAndTransition ignores it in that case.
-	var guard *session.PRReassignmentGuard
+	var guard *backlogdto.PRReassignmentGuard
 	if isReassignment {
-		guard = &session.PRReassignmentGuard{
+		guard = &backlogdto.PRReassignmentGuard{
 			OverrideReason:      overrideReason,
 			CurrentPRMerged:     false,
 			NewPRAuthorVerified: true,
@@ -446,7 +447,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 			// report_duplicate's identical CAS-failure message).
 			return errResult(ErrInternalError, "item state changed since your last read (another action already resolved it, or a concurrent report_pr_created call won first) — call get_backlog_item to see its current status", ""), nil
 		}
-		if errors.Is(setErr, session.ErrPRReassignmentNotAllowed) {
+		if errors.Is(setErr, backlogdto.ErrPRReassignmentNotAllowed) {
 			// Should be unreachable — this handler always constructs a valid
 			// guard whenever isReassignment is true — but surfaces distinctly
 			// rather than as a generic internal error if storage's own
@@ -494,7 +495,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 // itemAnchorRepo is the repository a reported PR must live in: the repo of the
 // PR the item already tracks, else the session's own repo. An error means no
 // anchor could be resolved, which callers treat as "not in the item's repo".
-func (h *backlogHandlers) itemAnchorRepo(ctx context.Context, item *session.BacklogItemData, sessionUUID string) (githubpkg.RepoRef, error) {
+func (h *backlogHandlers) itemAnchorRepo(ctx context.Context, item *backlogdto.BacklogItemData, sessionUUID string) (githubpkg.RepoRef, error) {
 	if item.PrURL != "" {
 		cur, err := session.ParseGitHubURLWithHosts(normalizeReportedPRURL(item.PrURL), h.enterpriseHosts())
 		if err != nil {

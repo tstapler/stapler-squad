@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -126,14 +127,14 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
 	fx.repo.SetChainFirer(cf)
 
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "chained item ac9",
 		Status: string(session.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
 	wfID := wf.ID
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 
 	// The firer is still blocked on `unblock` here, so the transition can only
@@ -142,7 +143,7 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 	transitionDone := make(chan error, 1)
 	go func() {
 		_, transitionErr := fx.repo.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone,
-			&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}, session.TriggeredBySystem)
+			&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}, session.TriggeredBySystem)
 		transitionDone <- transitionErr
 	}()
 	select {
@@ -182,7 +183,7 @@ func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_DepthAtOrAboveMax(t
 	firer := &countingTriggerFirer{}
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
 
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already deep chain",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -190,7 +191,7 @@ func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_DepthAtOrAboveMax(t
 
 	wfID := wf.ID
 	depth := maxChainDepth
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		NextWorkflowID:        &wfID,
 		TriggeredByChainDepth: &depth,
 	}, nil)
@@ -229,7 +230,7 @@ func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_WaitExceedsMaxChain
 	firer := &countingTriggerFirer{}
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
 
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "long-waiting chain",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -237,7 +238,7 @@ func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_WaitExceedsMaxChain
 
 	wfID := wf.ID
 	longAgo := time.Now().Add(-(maxChainWaitDuration + time.Hour))
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		NextWorkflowID: &wfID,
 		ChainedAt:      &longAgo,
 	}, nil)
@@ -276,7 +277,7 @@ func TestChainFirer_Fire_should_createSessionAndMarkChainFired_When_ValidChainCo
 	firer := &countingTriggerFirer{}
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
 
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "valid chain item",
 		Status: string(session.BacklogStatusDone),
 	})
@@ -284,7 +285,7 @@ func TestChainFirer_Fire_should_createSessionAndMarkChainFired_When_ValidChainCo
 
 	wfID := wf.ID
 	depth := 2
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{
 		NextWorkflowID:        &wfID,
 		TriggeredByChainDepth: &depth,
 	}, nil)
@@ -331,13 +332,13 @@ func TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHas
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
 	reconciler := NewTriggerChainReconciler(cf)
 
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "crashed before fire",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	wfID := wf.ID
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 
 	// Note: no ChainFirer was ever wired to fx.repo (SetChainFirer not
@@ -389,13 +390,13 @@ func TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneIte
 	// The one item with a pending, unfired chain — created (and its
 	// NextWorkflowID set) BEFORE the noise batch below, so its updated_at is
 	// the oldest of the bunch.
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "the pending chain item",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	wfID := wf.ID
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 
 	// 1000 "done" items with no pending chain, bulk-inserted (for test speed)
@@ -445,13 +446,13 @@ func TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameI
 	firer := &countingTriggerFirer{}
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, enabledCfg())
 
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "racing chain item",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	wfID := wf.ID
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 
 	latest, err := fx.repo.GetBacklogItem(ctx, item.ID)
@@ -501,13 +502,13 @@ func TestChainFirer_Dispatch_should_noOp_When_FeatureFlagDisabled(t *testing.T) 
 	firer := &countingTriggerFirer{}
 	cf := NewChainFirer(fx.repo, fx.workflows, fx.fireEvents, firer, &config.Config{FeatureFlags: map[string]bool{"webhook_triggers": false}})
 
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "flag off item",
 		Status: string(session.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	wfID := wf.ID
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 
 	latest, err := fx.repo.GetBacklogItem(ctx, item.ID)
@@ -540,13 +541,13 @@ func TestWireChainFirer_should_RegisterTheFirerOnTheStorageRepository_And_FireOn
 	assert.Same(t, cf, fx.repo.ChainFirer, "WireChainFirer must register the ChainFirer as the repository's dispatcher")
 
 	wf := fx.createWorkflow(t, "wire-chain-next")
-	item, err := fx.repo.CreateBacklogItem(ctx, session.BacklogItemData{Title: "wired chain item", Status: string(session.BacklogStatusReview)})
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "wired chain item", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
 	wfID := wf.ID
-	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
+	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 	_, err = fx.repo.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone,
-		&session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}, session.TriggeredBySystem)
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	wait.RequireEventually(t, func() bool { return firer.callCount() == 1 }, 5*time.Second, 5*time.Millisecond,

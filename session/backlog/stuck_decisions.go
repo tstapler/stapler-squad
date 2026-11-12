@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // Pure, DB-independent decision functions backing the stuck-item detectors in
@@ -118,7 +119,7 @@ func multiReasonEscalationNotifyReady(firstDetected, now time.Time) bool {
 // environment fault can otherwise burn through the entire rework cap in
 // minutes without ever changing outcome. Exported: called from
 // server/services across the package boundary (AutoReopenAfterFailedReview).
-func IsRepeatedFailure(recent []session.ReviewVerdictSummary) bool {
+func IsRepeatedFailure(recent []backlogdto.ReviewVerdictSummary) bool {
 	if len(recent) < 2 {
 		return false
 	}
@@ -202,7 +203,7 @@ const RepeatedFailureParkThreshold = 3
 // recent is empty or its head is a PASS or empty-summary verdict — an empty
 // summary carries no comparable signal, matching IsRepeatedFailure's own
 // requirement that Summary != "".
-func ReviewFailureStreakLen(recent []session.ReviewVerdictSummary) int {
+func ReviewFailureStreakLen(recent []backlogdto.ReviewVerdictSummary) int {
 	if len(recent) == 0 {
 		return 0
 	}
@@ -255,7 +256,7 @@ func NoVerdictStreakLen(hadVerdict []bool) int {
 // automated one can look identical to a flip-flop but is actually a human
 // correction, not model variance. OverrideBy isn't part of
 // []ReviewVerdictSummary today, so it can't be excluded here.
-func IsFlakyVerdictFlipFlop(recent []session.ReviewVerdictSummary) bool {
+func IsFlakyVerdictFlipFlop(recent []backlogdto.ReviewVerdictSummary) bool {
 	if len(recent) < 2 {
 		return false
 	}
@@ -343,7 +344,7 @@ func IsTestOnlyReworkCycle(fileListsByAttempt [][]string) bool {
 // stuck-item reconciler to build IsTestOnlyReworkCycle's per-attempt file
 // lists. Only considers completed sessions — reading a still-in-progress
 // session's commit range risks racing an in-flight write (see validation.md).
-func MostRecentCompletedWorkSession(sessions []session.ItemSessionSummary) *session.ItemSessionSummary {
+func MostRecentCompletedWorkSession(sessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
 	for i := len(sessions) - 1; i >= 0; i-- {
 		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt != nil {
 			return &sessions[i]
@@ -390,7 +391,7 @@ const DefaultNoopDispatchThreshold = 3
 
 // isNoopWorkSession reports whether is is a finished work session that
 // produced no commits (nothing beyond its spawn-time base).
-func isNoopWorkSession(is session.ItemSessionSummary) bool {
+func isNoopWorkSession(is backlogdto.ItemSessionSummary) bool {
 	if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
 		return false
 	}
@@ -400,8 +401,8 @@ func isNoopWorkSession(is session.ItemSessionSummary) bool {
 // consecutiveNoopWorkSessions counts the unbroken run of finished no-op work
 // sessions, newest first. Non-work sessions and still-running work sessions are
 // skipped; the first finished work session that committed ends the run.
-func consecutiveNoopWorkSessions(sessions []session.ItemSessionSummary) int {
-	sorted := append([]session.ItemSessionSummary(nil), sessions...)
+func consecutiveNoopWorkSessions(sessions []backlogdto.ItemSessionSummary) int {
+	sorted := append([]backlogdto.ItemSessionSummary(nil), sessions...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].CreatedAt.After(sorted[j].CreatedAt) })
 	n := 0
 	for _, is := range sorted {
@@ -426,8 +427,8 @@ func isRepeatedNoopDispatch(noopCount, threshold int, hasPass bool) bool {
 // report_duplicate claim recorded in sessions' VerificationNotes, or "" when
 // none. Callers gate on the item still being in review: the claim only awaits
 // confirmation while the item has not left review.
-func PendingDuplicateRef(sessions []session.ItemSessionSummary) string {
-	sorted := append([]session.ItemSessionSummary(nil), sessions...)
+func PendingDuplicateRef(sessions []backlogdto.ItemSessionSummary) string {
+	sorted := append([]backlogdto.ItemSessionSummary(nil), sessions...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].CreatedAt.After(sorted[j].CreatedAt) })
 	for _, is := range sorted {
 		lines := strings.Split(is.VerificationNotes, "\n")
@@ -449,12 +450,12 @@ func PendingDuplicateRef(sessions []session.ItemSessionSummary) string {
 // either SHA is empty (unknown), either diff was truncated (the reviewer saw
 // only part of the change), either verdict is a manual override (a human
 // decision, not a deadlock), or either verdict is a PASS.
-func IsNoProgressReview(recent []session.ReviewVerdictSummary) bool {
+func IsNoProgressReview(recent []backlogdto.ReviewVerdictSummary) bool {
 	if len(recent) < 2 {
 		return false
 	}
 	latest, prior := recent[0], recent[1]
-	for _, v := range []session.ReviewVerdictSummary{latest, prior} {
+	for _, v := range []backlogdto.ReviewVerdictSummary{latest, prior} {
 		if v.OverallOutcome == string(session.ReviewVerdictPass) || v.DiffTruncated || v.OverrideBy != "" || v.ReviewedCommitSha == "" {
 			return false
 		}

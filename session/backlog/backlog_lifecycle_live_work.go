@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // liveWorkState is the listener's live-work wiring and per-item hold bookkeeping.
@@ -77,7 +78,7 @@ func (l *BacklogLifecycleListener) heldByLiveWork(ctx context.Context, itemID st
 	return true, false
 }
 
-func (l *BacklogLifecycleListener) anyLive(ctx context.Context, probe session.LiveWorkProbe, itemID string, now time.Time, work []session.ItemSessionSummary) bool {
+func (l *BacklogLifecycleListener) anyLive(ctx context.Context, probe session.LiveWorkProbe, itemID string, now time.Time, work []backlogdto.ItemSessionSummary) bool {
 	for _, s := range work {
 		live, err := probe.IsLive(ctx, s.SessionUUID, now)
 		if err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -38,7 +39,7 @@ func TestFindPRPendingItemForEvent_should_ReturnItemAndTrue_When_PrNumberAndRepo
 
 	repoPath := newTestRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -48,7 +49,7 @@ func TestFindPRPendingItemForEvent_should_ReturnItemAndTrue_When_PrNumberAndRepo
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/189"
 	prNumber := 189
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	got, found := findPRPendingItemForEvent(ctx, storage.Repo, "tstapler/stapler-squad", 189)
@@ -64,7 +65,7 @@ func TestFindPRPendingItemForEvent_should_ReturnNilFalse_When_PrNumberMatchesBut
 
 	repoPath := newTestRepoWithRemote(t, "https://github.com/someone-else/unrelated-fork.git")
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -74,7 +75,7 @@ func TestFindPRPendingItemForEvent_should_ReturnNilFalse_When_PrNumberMatchesBut
 	require.NoError(t, err)
 	prURL := "https://github.com/someone-else/unrelated-fork/pull/189"
 	prNumber := 189
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	_, found := findPRPendingItemForEvent(ctx, storage.Repo, "tstapler/stapler-squad", 189)
@@ -99,7 +100,7 @@ func TestTriggerPRFixForEvent_should_ReconcileItemAndReturnMatchedTrue_When_Item
 
 	repoPath := newTestRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -109,7 +110,7 @@ func TestTriggerPRFixForEvent_should_ReconcileItemAndReturnMatchedTrue_When_Item
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/189"
 	prNumber := 189
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/trigger-pr-fix-event", "")
@@ -140,7 +141,7 @@ func TestTriggerPRFixForEvent_should_ReturnFalseNilWithoutQuerying_When_Listener
 
 	repoPath := newTestRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -150,7 +151,7 @@ func TestTriggerPRFixForEvent_should_ReturnFalseNilWithoutQuerying_When_Listener
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/189"
 	prNumber := 189
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage) // enabled defaults to false
@@ -195,7 +196,7 @@ func TestTriggerPRFixForEvent_should_TagFixAttemptLogAsWebhookTriggered(t *testi
 	ctx := context.Background()
 
 	repoPath := newTestRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -205,7 +206,7 @@ func TestTriggerPRFixForEvent_should_TagFixAttemptLogAsWebhookTriggered(t *testi
 	require.NoError(t, err)
 	prURL := "https://github.com/tstapler/stapler-squad/pull/189"
 	prNumber := 189
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &prURL, PrNumber: &prNumber}, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -252,7 +253,7 @@ func TestReconcilePRPending_should_SteerOnEveryTick_When_ActiveSessionPresentEve
 	overridePRPendingChecker(t, listener, &fakePRPendingChecker{
 		status: &git.PRStatus{HasConflicts: true, FeedbackText: "## Merge conflict\nconflict details\n"},
 	})
-	fakeSpawner := &fakePRFixSpawner{hasActiveWorkSession: &session.ItemSessionSummary{SessionUUID: "active-work-uuid"}}
+	fakeSpawner := &fakePRFixSpawner{hasActiveWorkSession: &backlogdto.ItemSessionSummary{SessionUUID: "active-work-uuid"}}
 	listener.SetPRFixSpawner(fakeSpawner)
 
 	er := storage.Repo

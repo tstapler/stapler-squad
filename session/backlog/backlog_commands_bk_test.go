@@ -12,12 +12,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // makeTestBacklogItemWithID creates a *BacklogItemData with a specific string ID.
-func makeTestBacklogItemWithID(id, title, acJSON string) *session.BacklogItemData {
-	return &session.BacklogItemData{
+func makeTestBacklogItemWithID(id, title, acJSON string) *backlogdto.BacklogItemData {
+	return &backlogdto.BacklogItemData{
 		ID:                 id,
 		Title:              title,
 		Description:        "Test description",
@@ -363,7 +364,7 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "test-item-id-2",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
@@ -407,7 +408,7 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 func TestWriteBacklogContextFile_ConcurrentCallsToSameWorktree_NeverLeaveFileMissingOrTruncated(t *testing.T) {
 	t.Parallel()
 	worktree := t.TempDir()
-	item := &session.BacklogItemData{ID: "concurrent-test-item", Title: "Concurrent Test", Status: "ready"}
+	item := &backlogdto.BacklogItemData{ID: "concurrent-test-item", Title: "Concurrent Test", Status: "ready"}
 
 	const n = 20
 	var wg sync.WaitGroup
@@ -447,7 +448,7 @@ func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
 	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "test-item-id-3",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
@@ -479,7 +480,7 @@ func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
 	t.Parallel()
 	worktree := t.TempDir()
 	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "test-item-id-4",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
@@ -488,7 +489,7 @@ func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
 		Priority:           2,
 	}
 	ended := time.Now().Add(-time.Hour)
-	priorSessions := []session.ItemSessionSummary{
+	priorSessions := []backlogdto.ItemSessionSummary{
 		{
 			Role:                  "work",
 			EndedAt:               &ended,

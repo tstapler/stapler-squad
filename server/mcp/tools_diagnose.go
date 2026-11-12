@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // diagnoseHandlers implements the Diagnose & Nudge MCP tools (backlog item
@@ -172,21 +173,21 @@ func (dh *diagnoseHandlers) resetRemediation(ctx context.Context, req mcpgo.Call
 // is a small free-function duplicate calling the same
 // session.ResolveItemLink — mirrors submitReviewVerdict's own
 // resolveItemLink-then-role-check shape for SessionRoleReview.
-func resolveDiagnoseItemLink(ctx context.Context, storage *session.Storage, callerUUID, itemID string) (session.ItemSessionSummary, *mcpgo.CallToolResult) {
+func resolveDiagnoseItemLink(ctx context.Context, storage *session.Storage, callerUUID, itemID string) (backlogdto.ItemSessionSummary, *mcpgo.CallToolResult) {
 	itemSession, linkErr := session.ResolveItemLink(ctx, storage, callerUUID, itemID)
 	if linkErr == nil {
 		if itemSession.Role != session.SessionRoleDiagnose {
-			return session.ItemSessionSummary{}, errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only %q may call this tool", itemSession.Role, session.SessionRoleDiagnose), "")
+			return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, fmt.Sprintf("session role is %q — only %q may call this tool", itemSession.Role, session.SessionRoleDiagnose), "")
 		}
 		return itemSession, nil
 	}
 	switch linkErr.Code {
 	case session.ItemLinkNotFound:
-		return session.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
+		return backlogdto.ItemSessionSummary{}, errResult(ErrItemNotFound, linkErr.Message, linkErr.Remediation)
 	case session.ItemLinkPermissionDenied:
-		return session.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
+		return backlogdto.ItemSessionSummary{}, errResult(ErrPermissionDenied, linkErr.Message, linkErr.Remediation)
 	default:
-		return session.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
+		return backlogdto.ItemSessionSummary{}, errResult(ErrInternalError, linkErr.Message, "")
 	}
 }
 
@@ -230,7 +231,7 @@ func (dh *diagnoseHandlers) submitDiagnosisResult(ctx context.Context, req mcpgo
 			return errResult(ErrItemNotFound, fmt.Sprintf("filed_item_id %s: %v", filedItemID, getErr), ""), nil
 		}
 	}
-	if resErr := dh.storage.UpdateItemSessionDiagnoseResult(ctx, itemSession.ID, session.DiagnoseResultData{
+	if resErr := dh.storage.UpdateItemSessionDiagnoseResult(ctx, itemSession.ID, backlogdto.DiagnoseResultData{
 		Outcome: outcome, Summary: summary, FiledItemID: filedItemID, DiagnosedAt: time.Now().UTC(),
 	}); resErr != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("record structured diagnosis result: %v", resErr), ""), nil

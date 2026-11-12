@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestRenderTemplateAndValidatePipelineModeContent_should_AgreeOnEveryToken_When_TableDrivenOverAllPlaceholdersPlusOneBogusToken
@@ -21,7 +22,7 @@ func TestRenderTemplateAndValidatePipelineModeContent_should_AgreeOnEveryToken_W
 	tokens = append(tokens, session.RecognizedPlaceholders...)
 	tokens = append(tokens, "made_up_placeholder")
 
-	item := &session.BacklogItemData{ID: "item-1", Title: "Title", Description: "Desc", RepoPath: "/repo"}
+	item := &backlogdto.BacklogItemData{ID: "item-1", Title: "Title", Description: "Desc", RepoPath: "/repo"}
 	placeholders := itemPlaceholders(item)
 	placeholders["criteria_index"] = "1"
 	placeholders["criteria_count"] = "3"

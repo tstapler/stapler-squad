@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
@@ -37,7 +38,7 @@ const backlogCommandsDir = ".claude/commands/backlog"
 // backlog_service_sync.go's AttachSessionToItem) must pass the SAME shared engine
 // instance (BacklogService.pipelineEngine) — passing two different engines would
 // reintroduce the "2 independent callers can drift" regression this seam closes.
-func WriteSlashCommands(engine PipelineEngine, item *session.BacklogItemData, worktreePath string) error {
+func WriteSlashCommands(engine PipelineEngine, item *backlogdto.BacklogItemData, worktreePath string) error {
 	// Writing into $HOME would create ~/.claude/commands/backlog/, which Claude Code loads as
 	// user-scope commands for EVERY session — a later item's sessions then see this item's ID.
 	if isUserHomeDir(worktreePath) {
@@ -211,7 +212,7 @@ func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
 // pipeline, Epic 1.3) — extracted unchanged so CachingPipelineEngine's
 // default-mode short-circuit (session/pipeline_engine.go) and this on-disk
 // writer share one source of truth with zero behavior drift.
-func buildDefaultSlashCommandSet(item *session.BacklogItemData) (map[string]string, error) {
+func buildDefaultSlashCommandSet(item *backlogdto.BacklogItemData) (map[string]string, error) {
 	itemID := item.ID
 	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
 	if err != nil {
@@ -310,7 +311,7 @@ func CleanupSlashCommands(worktreePath string) error {
 // to .backlog-context.md in the worktree root. Appends a fallback instructions block.
 // priorSessions must match what was passed to the live CLI prompt (BuildTokenBudgetedPrompt)
 // so the on-disk fallback the agent re-reads after context compaction doesn't lose history.
-func WriteBacklogContextFile(item *session.BacklogItemData, priorSessions []session.ItemSessionSummary, worktreePath string) error {
+func WriteBacklogContextFile(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary, worktreePath string) error {
 	// Self-heal before writing: see WriteSlashCommands' identical call for why.
 	selfHealWorktreeScaffolding(worktreePath)
 

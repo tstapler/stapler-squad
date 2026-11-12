@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -249,7 +250,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_ShortCircuitCacheAndDB_Whe
 	// is the "spy that fails the test if Get is invoked" mechanism.
 	engine := &CachingPipelineEngine{}
 
-	item := &session.BacklogItemData{ID: "abc-123", Title: "Fix bug", AcceptanceCriteria: ""}
+	item := &backlogdto.BacklogItemData{ID: "abc-123", Title: "Fix bug", AcceptanceCriteria: ""}
 
 	got, err := engine.SlashCommandSet(item)
 	if err != nil {
@@ -277,7 +278,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	}
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "abc-123",
 		Title:              "Fix bug",
 		AcceptanceCriteria: "",
@@ -393,13 +394,13 @@ func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_Whe
 		t.Fatalf("expected a startup Warn log naming the cache.Load failure, got: %q", buf.String())
 	}
 
-	defaultItem := &session.BacklogItemData{ID: "default-item"}
+	defaultItem := &backlogdto.BacklogItemData{ID: "default-item"}
 	if _, err := engine.SlashCommandSet(defaultItem); err != nil {
 		t.Fatalf("default item SlashCommandSet: %v", err)
 	}
 
 	buf.Reset()
-	nonDefaultItem := &session.BacklogItemData{ID: "nd-item", PipelineMode: "quick"}
+	nonDefaultItem := &backlogdto.BacklogItemData{ID: "nd-item", PipelineMode: "quick"}
 	got, err := engine.SlashCommandSet(nonDefaultItem)
 	if err != nil {
 		t.Fatalf("SlashCommandSet: %v", err)
@@ -468,7 +469,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_RenderModeTemplates_When_M
 	}
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:                 "abc-123",
 		Title:              "Fix bug",
 		RepoPath:           "/repo/path",
@@ -527,7 +528,7 @@ func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTem
 	}
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 
-	item := &session.BacklogItemData{
+	item := &backlogdto.BacklogItemData{
 		ID:           "abc-123",
 		Title:        "Fix bug",
 		PipelineMode: "quick",
@@ -572,7 +573,7 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 	// through the full ent Create path (session/ent_repository_backlog.go's
 	// SetPipelineMode call), exactly like a direct SQL write bypassing any
 	// RPC/UI would.
-	created, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{
+	created, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:        "SQL-injected unresolvable mode item",
 		PipelineMode: "nonexistent-slug-via-sql",
 	})
@@ -620,7 +621,7 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault(t *testing.T) {
 	t.Parallel()
 	engine := &CachingPipelineEngine{cache: &pipelineModeCache{}}
-	item := &session.BacklogItemData{ID: "item-default-no-warn", PipelineMode: ""}
+	item := &backlogdto.BacklogItemData{ID: "item-default-no-warn", PipelineMode: ""}
 
 	buf := captureWarningLog(t)
 	program, model := engine.ExecutorFor(item, session.StageRoleWork)
@@ -644,7 +645,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_Pip
 		t.Fatalf("Load: %v", err)
 	}
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
-	item := &session.BacklogItemData{ID: "item-unresolved", PipelineMode: "does-not-exist"}
+	item := &backlogdto.BacklogItemData{ID: "item-unresolved", PipelineMode: "does-not-exist"}
 
 	buf := captureWarningLog(t)
 	program, model := engine.ExecutorFor(item, session.StageRoleTriage)
@@ -672,7 +673,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnConfiguredModel_When_Rol
 		t.Fatalf("Load: %v", err)
 	}
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
-	item := &session.BacklogItemData{ID: "item-override", PipelineMode: "cheap-triage"}
+	item := &backlogdto.BacklogItemData{ID: "item-override", PipelineMode: "cheap-triage"}
 
 	program, model := engine.ExecutorFor(item, session.StageRoleTriage)
 	if program != "" || model != "claude-haiku-4-5" {
@@ -700,7 +701,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ResolvedModeH
 		t.Fatalf("Load: %v", err)
 	}
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
-	item := &session.BacklogItemData{ID: "item-no-override", PipelineMode: "cheap-triage"}
+	item := &backlogdto.BacklogItemData{ID: "item-no-override", PipelineMode: "cheap-triage"}
 
 	program, model := engine.ExecutorFor(item, session.StageRoleReview)
 	if program != "" || model != "" {

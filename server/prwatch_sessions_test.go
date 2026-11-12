@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 type fakeSessionView struct {
@@ -37,13 +38,13 @@ func newTestPRWatchSessions(snaps []*session.InstanceSnapshot, store prwatchBack
 
 type noBacklog struct{}
 
-func (noBacklog) ListItemSessionsBySessionUUIDs(context.Context, []string) (map[string]session.ItemSessionSummary, error) {
-	return map[string]session.ItemSessionSummary{}, nil
+func (noBacklog) ListItemSessionsBySessionUUIDs(context.Context, []string) (map[string]backlogdto.ItemSessionSummary, error) {
+	return map[string]backlogdto.ItemSessionSummary{}, nil
 }
-func (noBacklog) GetItemSessionBySessionUUID(context.Context, string) (session.ItemSessionSummary, error) {
-	return session.ItemSessionSummary{}, domain.ErrNotFound
+func (noBacklog) GetItemSessionBySessionUUID(context.Context, string) (backlogdto.ItemSessionSummary, error) {
+	return backlogdto.ItemSessionSummary{}, domain.ErrNotFound
 }
-func (noBacklog) GetBacklogItem(context.Context, string) (*session.BacklogItemData, error) {
+func (noBacklog) GetBacklogItem(context.Context, string) (*backlogdto.BacklogItemData, error) {
 	return nil, domain.ErrNotFound
 }
 
@@ -90,11 +91,11 @@ type countingStore struct {
 	failItems          bool
 }
 
-func (c *countingStore) ListItemSessionsBySessionUUIDs(ctx context.Context, u []string) (map[string]session.ItemSessionSummary, error) {
+func (c *countingStore) ListItemSessionsBySessionUUIDs(ctx context.Context, u []string) (map[string]backlogdto.ItemSessionSummary, error) {
 	c.batches++
 	return c.prwatchBacklogStore.ListItemSessionsBySessionUUIDs(ctx, u)
 }
-func (c *countingStore) GetBacklogItem(ctx context.Context, id string) (*session.BacklogItemData, error) {
+func (c *countingStore) GetBacklogItem(ctx context.Context, id string) (*backlogdto.BacklogItemData, error) {
 	c.itemReads++
 	if c.failItems {
 		return nil, errors.New("boom")
@@ -109,14 +110,14 @@ func TestBacklogLinkLookup_should_UseBatchedLinkQueryAndOneItemReadPerDistinctIt
 	require.NoError(t, err)
 
 	mkItem := func(status session.BacklogStatus) string {
-		it, err := storage.CreateBacklogItemForDebug(ctx, session.BacklogItemData{Title: "i", AcceptanceCriteria: `[]`, Priority: 1, Status: string(status)})
+		it, err := storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{Title: "i", AcceptanceCriteria: `[]`, Priority: 1, Status: string(status)})
 		require.NoError(t, err)
 		return it.ID
 	}
 	pendingItem, doneItem, progressItem := mkItem(session.BacklogStatusPRPending), mkItem(session.BacklogStatusDone), mkItem(session.BacklogStatusInProgress)
 	link := func(item string) string {
 		id := uuid.New().String()
-		_, err := storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item, SessionUUID: id, SessionRole: "work"})
+		_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item, SessionUUID: id, SessionRole: "work"})
 		require.NoError(t, err)
 		return id
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -93,7 +94,7 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 // acceptance criterion describing something an owner decision already ruled
 // out or made impossible, with the item's own AC text never reconciled to
 // match (see backlog item 242f8195-f15c-4b8a-a525-72b61d90c44b).
-func writeAcceptanceCriteria(sb *strings.Builder, item *session.BacklogItemData) {
+func writeAcceptanceCriteria(sb *strings.Builder, item *backlogdto.BacklogItemData) {
 	criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria)
 	if parseErr != nil || len(criteria) == 0 {
 		return
@@ -186,7 +187,7 @@ func orDash(s string) string {
 // scripts/backlog-stuck-report.py's analyze_failing_check into a built-in
 // diagnostic any session can call directly, instead of shelling out to a
 // standalone script.
-func (h *backlogHandlers) writeCICrossCheck(ctx context.Context, sb *strings.Builder, item *session.BacklogItemData) {
+func (h *backlogHandlers) writeCICrossCheck(ctx context.Context, sb *strings.Builder, item *backlogdto.BacklogItemData) {
 	factory := h.prCheckerFactory
 	if factory == nil {
 		factory = defaultStuckReportPRChecker
@@ -299,7 +300,7 @@ func (h *backlogHandlers) backlogReaderEnabled() bool {
 // actions that release it. An item detach alone filters the verdict, but a session
 // link still holds that session's worktree, so both detaches are named when a
 // session also holds the PR.
-func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.Builder, item *session.BacklogItemData) {
+func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.Builder, item *backlogdto.BacklogItemData) {
 	if !h.backlogReaderEnabled() {
 		return
 	}

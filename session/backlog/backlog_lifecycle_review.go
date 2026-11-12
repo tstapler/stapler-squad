@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // ReviewGateSpawner can create a short-lived review session for a backlog item.
@@ -16,7 +17,7 @@ import (
 type ReviewGateSpawner interface {
 	// SpawnReviewSession creates a one-shot review session for item using prompt.
 	// itemSessionID is the UUID of the work ItemSession being reviewed.
-	SpawnReviewSession(ctx context.Context, item *session.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error)
+	SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error)
 }
 
 // AutoReopenSpawner can automatically reopen a backlog item for rework after a
@@ -67,7 +68,7 @@ const maxConcurrentReviewGates = 8
 // — that test's fixture has no worktree recorded at all, so it exercises
 // shipViaAgentOrFallback -> pushAndCreatePR's pre-existing, unchanged
 // fallbackToDone("no worktree") branch; this fix does not touch that branch.
-func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context, reviewIS session.ItemSessionSummary, forcePush bool) {
+func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context, reviewIS backlogdto.ItemSessionSummary, forcePush bool) {
 	item, err := l.storage.GetBacklogItem(ctx, reviewIS.BacklogItemID)
 	if err != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] handleReviewSessionExited GetBacklogItem item=%s: %v", reviewIS.BacklogItemID, err)
@@ -85,8 +86,8 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 	// Scan oldest-first: find the review ItemSession matching this exited
 	// session, and keep overwriting workEntry so it ends up as the most recent
 	// work session — the one whose worktree needs to be pushed on a PASS verdict.
-	var reviewEntry *session.ItemSessionSummary
-	var workEntry *session.ItemSessionSummary
+	var reviewEntry *backlogdto.ItemSessionSummary
+	var workEntry *backlogdto.ItemSessionSummary
 	for i := range sessions {
 		s := &sessions[i]
 		if s.SessionUUID == reviewIS.SessionUUID && s.Role == session.SessionRoleReview {
@@ -319,7 +320,7 @@ func (l *BacklogLifecycleListener) triggerReviewForSession(workSessionUUID strin
 //	FAIL / UNVERIFIABLE → unchanged (stay "pending")
 //
 // Best-effort: errors are logged but do not block the caller.
-func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *session.BacklogItemData, acSnapshot []session.AcCriterion, verdicts []session.CriterionVerdict) {
+func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, verdicts []session.CriterionVerdict) {
 	if len(verdicts) == 0 || len(acSnapshot) == 0 {
 		return
 	}
@@ -362,7 +363,7 @@ func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *ses
 		return
 	}
 	acj := newJSON
-	if _, err := storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &acj}, nil); err != nil {
+	if _, err := storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &acj}, nil); err != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] applyVerdictsToACs update item=%s: %v", item.ID, err)
 		return
 	}
@@ -378,7 +379,7 @@ func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *ses
 // Every automatic spawn path funnels through here, so this is where the
 // per-item check-then-reserve lives. The reservation is held until Run
 // returns, i.e. past the review ItemSession row being persisted.
-func (l *BacklogLifecycleListener) spawnReviewGate(gateContext GateContext, item *session.BacklogItemData, is session.ItemSessionSummary) {
+func (l *BacklogLifecycleListener) spawnReviewGate(gateContext GateContext, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
 	release, ok := l.ReserveReview(l.shutdownCtx, item.ID)
 	if !ok {
 		log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate: skipping duplicate review spawn item=%s (reviewer already in flight or open)", item.ID)
@@ -610,7 +611,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		// never poll again, so it must make forward progress regardless. See
 		// handleReviewSessionExited's doc comment and
 		// TestReconcileUnprocessedReviewVerdicts_should_applyPassVerdict_When_ReviewSessionDiedButWorkSessionStillAlive.
-		l.handleReviewSessionExited(ctx, session.ItemSessionSummary{
+		l.handleReviewSessionExited(ctx, backlogdto.ItemSessionSummary{
 			ID:            latest.ID.String(),
 			BacklogItemID: item.ID.String(),
 			SessionUUID:   latest.SessionUUID,

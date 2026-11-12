@@ -7,13 +7,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // Polling for a review verdict re-reads the whole context on every wake; the
 // app steers the session instead (BacklogService.StartVerdictSteering).
 func TestPostReviewPrompts_DoNotRecommendPolling(t *testing.T) {
 	t.Parallel()
-	item := &session.BacklogItemData{ID: uuid.New().String(), Title: "T"}
+	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
 	files, err := buildDefaultSlashCommandSet(item)
 	require.NoError(t, err)
 

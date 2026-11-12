@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 type fakeBacklog struct {
@@ -99,7 +100,7 @@ func verdictEvent(item string) *events.Event {
 	return &events.Event{
 		Type: events.EventBacklogItemChanged,
 		BacklogItemPayload: &events.BacklogItemEventPayload{
-			Kind: events.BacklogChangeVerdictRecorded, Item: &session.BacklogItemData{ID: item},
+			Kind: events.BacklogChangeVerdictRecorded, Item: &backlogdto.BacklogItemData{ID: item},
 		},
 	}
 }

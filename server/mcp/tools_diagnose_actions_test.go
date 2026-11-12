@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestSubmitDiagnosisResult_should_PopulateItemSessionDiagnoseResult(t *testing.T) {
@@ -21,7 +22,7 @@ func TestSubmitDiagnosisResult_should_PopulateItemSessionDiagnoseResult(t *testi
 	itemID, sessUUID := setupDiagnoseSession(t, storage)
 	dh := &diagnoseHandlers{storage: storage}
 	ctx := WithSessionUUID(context.Background(), sessUUID)
-	fi, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "filed", Status: string(session.BacklogStatusIdea)})
+	fi, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "filed", Status: string(session.BacklogStatusIdea)})
 	require.NoError(t, err)
 	filed := fi.ID
 
@@ -117,9 +118,9 @@ func TestReportHarnessGap_should_CreateTaggedBlockedItem_ForAnyCaller(t *testing
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
-	items, err := storage.ListBacklogItems(context.Background(), session.BacklogItemFilter{})
+	items, err := storage.ListBacklogItems(context.Background(), backlogdto.BacklogItemFilter{})
 	require.NoError(t, err)
-	var filed *session.BacklogItemData
+	var filed *backlogdto.BacklogItemData
 	for i := range items {
 		if items[i].Title == "Harness drops nudges" {
 			filed = &items[i]

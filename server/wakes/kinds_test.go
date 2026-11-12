@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // constValuesOfType lists the string values of every const of typeName in file,
@@ -136,7 +136,7 @@ func TestBacklogEventKinds_should_TranslateBusEventsToSpecKinds(t *testing.T) {
 	t.Parallel()
 	attached := &events.BacklogItemEventPayload{
 		Kind: events.BacklogChangeSessionAttached, SessionID: "s1",
-		Item: &session.BacklogItemData{ID: itemX, ItemSessions: []session.ItemSessionSummary{{SessionUUID: "s1", Role: "review"}}},
+		Item: &backlogdto.BacklogItemData{ID: itemX, ItemSessions: []backlogdto.ItemSessionSummary{{SessionUUID: "s1", Role: "review"}}},
 	}
 	assert.Equal(t, []string{"session_attached:review"}, backlogEventKinds(attached))
 	assert.Equal(t, []string{"status_reached:review"}, backlogEventKinds(&events.BacklogItemEventPayload{Kind: events.BacklogChangeStatusTransition, NewStatus: "review"}))

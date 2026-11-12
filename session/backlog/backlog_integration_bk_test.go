@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // IT-002: in_progress → review via onSessionExited (lifecycle listener)
@@ -21,7 +22,7 @@ func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T)
 	ctx := context.Background()
 
 	// 1. Create item (status "in_progress"), create ItemSession (role "work")
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Refactor database",
 		Description:        "Improve query performance",
 		AcceptanceCriteria: `[{"index":0,"text":"Queries run in <100ms","status":"pending"}]`,
@@ -33,7 +34,7 @@ func TestBacklogIntegration_IT002_InProgressToReviewViaSessionExit(t *testing.T)
 	require.NoError(t, err)
 
 	sessionUUID := uuid.New().String()
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -71,7 +72,7 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 	ctx := context.Background()
 
 	// 1. Create item with SkipReviewGate=true
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Quick fix",
 		Description:        "Minor bug fix",
 		AcceptanceCriteria: `[{"index":0,"text":"Fix is deployed","status":"pending"}]`,
@@ -84,7 +85,7 @@ func TestBacklogIntegration_IT003_SkipReviewGateTransitionsToDone(t *testing.T) 
 
 	// 2. Create ItemSession
 	sessionUUID := uuid.New().String()
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -118,7 +119,7 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 	ctx := context.Background()
 
 	// 1. Create item (status "in_progress")
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Stuck task",
 		Description:        "This task is stuck in progress",
 		AcceptanceCriteria: `[{"index":0,"text":"Complete work","status":"pending"}]`,
@@ -131,7 +132,7 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 
 	// 2. Create ItemSession (role "work")
 	sessionUUID := uuid.New().String()
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "work",
@@ -175,7 +176,7 @@ func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.
 	ctx := context.Background()
 
 	// 1. Create item (status "review")
-	itemData := session.BacklogItemData{
+	itemData := backlogdto.BacklogItemData{
 		Title:              "Under review",
 		Description:        "Item awaiting review",
 		AcceptanceCriteria: `[{"index":0,"text":"Code reviewed","status":"pending"}]`,
@@ -187,7 +188,7 @@ func TestBacklogIntegration_IT006_ReviewSessionExitDoesNotTransition(t *testing.
 
 	// 2. Create ItemSession with role "review"
 	sessionUUID := uuid.New().String()
-	isData := session.ItemSessionData{
+	isData := backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
 		SessionRole: "review",

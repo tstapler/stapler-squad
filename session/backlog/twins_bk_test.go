@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
@@ -29,11 +30,11 @@ func denBlock(t *testing.T, h *gateHarness, from, to session.BacklogStatus) {
 	addGateToSeededEdge(t, h.repo.Client, h.cfg, from, to, session.GateKindHumanApproval, nil)
 }
 
-func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []session.OpenStuckStateData {
+func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []backlogdto.OpenStuckStateData {
 	t.Helper()
 	rows, err := h.storage.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	var out []session.OpenStuckStateData
+	var out []backlogdto.OpenStuckStateData
 	for _, r := range rows {
 		if r.ItemID == itemID && r.Reason == reason {
 			out = append(out, r)
@@ -58,11 +59,11 @@ func sessDisableGates(t *testing.T, h *gateHarness) {
 // long as no other active session exists. If withActiveWorkSession is true, a
 // second ItemSession (role=work, EndedAt nil) is attached, simulating rework
 // still in progress — this should exclude the item from FindStuckReviewItems.
-func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome session.ReviewOutcome, endReviewSession, withActiveWorkSession bool) *session.BacklogItemData {
+func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome session.ReviewOutcome, endReviewSession, withActiveWorkSession bool) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "Stuck review test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
@@ -70,11 +71,11 @@ func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome sess
 	})
 	require.NoError(t, err)
 
-	reviewIS, err := storage.CreateItemSessionWithVerdict(ctx, session.ItemSessionData{
+	reviewIS, err := storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-review-" + uuid.New().String(),
 		SessionRole: session.SessionRoleReview,
-	}, session.ReviewVerdictData{
+	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        "no diff available",
 	})
@@ -85,7 +86,7 @@ func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome sess
 	}
 
 	if withActiveWorkSession {
-		_, err := storage.CreateItemSession(ctx, session.ItemSessionData{
+		_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: uuid.New().String(),
 			SessionRole: session.SessionRoleWork,
@@ -187,7 +188,7 @@ type recordingReporter struct {
 	panics  bool
 }
 
-func (r *recordingReporter) Report(ctx context.Context, item *session.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+func (r *recordingReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
 	cur, _ := r.storage.GetBacklogItem(ctx, item.ID)
 	r.mu.Lock()
 	r.calls = append(r.calls, reportedDenial{item.ID, caller, from, to, reason, denyErr, cur.Status})
@@ -228,9 +229,9 @@ func newGateHarness(t *testing.T, mode session.EngineMode) *gateHarness {
 	return &gateHarness{storage: storage, repo: repo, cfg: cfg, sel: sel, rep: rep}
 }
 
-func (h *gateHarness) newItem(t *testing.T, status session.BacklogStatus) *session.BacklogItemData {
+func (h *gateHarness) newItem(t *testing.T, status session.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
-	item, err := h.storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "gate item", Status: string(status)})
+	item, err := h.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status)})
 	require.NoError(t, err)
 	return item
 }

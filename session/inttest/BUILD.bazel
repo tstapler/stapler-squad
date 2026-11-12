@@ -20,6 +20,7 @@ go_test(
         "//server/services/backlogsvc",
         "//session",
         "//session/domain",
+        "//session/domain/backlogdto",
         "//session/hostclaim",
         "//session/internal/peeraddr",
         "@com_connectrpc_connect//:connect",

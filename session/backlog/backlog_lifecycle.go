@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
@@ -1065,7 +1066,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	}
 
 	updatedAt := item.UpdatedAt
-	precondition := &session.BacklogItemPrecondition{
+	precondition := &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus:    string(session.BacklogStatusInProgress),
 		ExpectedUpdatedAt: &updatedAt,
 	}
@@ -1237,7 +1238,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 
 	// stale_work: in_progress items whose active work session has gone quiet
 	// past maxWorkSessionStaleness.
-	inProgressItems, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	inProgressItems, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress)},
 	})
 	if err != nil {
@@ -1249,7 +1250,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 				log.Warn("[BacklogLifecycle] BackfillStuckStates ListItemSessions failed", "item", item.ID, "error", sessErr)
 				continue
 			}
-			var active *session.ItemSessionSummary
+			var active *backlogdto.ItemSessionSummary
 			for i := range sessions {
 				if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
 					active = &sessions[i]
@@ -1318,7 +1319,7 @@ func (l *BacklogLifecycleListener) runStuckDetector(name string, okNames, panick
 // (Story 1.5.8): true, with a Debug line, while item's status has an open
 // transition_denied row the engine still refuses. detector names the caller in
 // the log.
-func (l *BacklogLifecycleListener) heldByTransitionDenial(ctx context.Context, item *session.BacklogItemData, detector string) bool {
+func (l *BacklogLifecycleListener) heldByTransitionDenial(ctx context.Context, item *backlogdto.BacklogItemData, detector string) bool {
 	if !l.storage.TransitionDenialHolds(ctx, item) {
 		return false
 	}
@@ -1337,7 +1338,7 @@ func (l *BacklogLifecycleListener) respawnReviewGatesWithoutGate(ctx context.Con
 		return
 	}
 	for _, item := range items {
-		var workSession *session.ItemSessionSummary
+		var workSession *backlogdto.ItemSessionSummary
 		if len(item.Edges.ItemSessions) > 0 {
 			s := session.ItemSessionToSummary(item.Edges.ItemSessions[0])
 			workSession = &s
@@ -1352,7 +1353,7 @@ func (l *BacklogLifecycleListener) respawnReviewGatesWithoutGate(ctx context.Con
 		}
 		log.Info("[BacklogLifecycle] ReconcileStuckReviewGates: re-spawning review gate", "item", item.ID)
 		isCopy := *workSession
-		go func(itemCopy *session.BacklogItemData, isCopy session.ItemSessionSummary) {
+		go func(itemCopy *backlogdto.BacklogItemData, isCopy backlogdto.ItemSessionSummary) {
 			select {
 			case l.reviewSem <- struct{}{}:
 			case <-l.shutdownCtx.Done():
@@ -1495,7 +1496,7 @@ func (l *BacklogLifecycleListener) resolveBouncingAndCapExhausted(ctx context.Co
 // skipped entirely when the tip has not moved, so an idle session costs one
 // HEAD read per tick and no DB write or change event.
 func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Context) {
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{
 			string(session.BacklogStatusInProgress),
 			string(session.BacklogStatusReview),
@@ -1516,7 +1517,7 @@ func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Con
 			log.Warn("[BacklogLifecycle] refreshWorkSessionGitActivity ListItemSessions failed", "item", item.ID, "error", sessErr)
 			continue
 		}
-		var lastWork *session.ItemSessionSummary
+		var lastWork *backlogdto.ItemSessionSummary
 		for i := range sessions {
 			// Ascending by CreatedAt (ListItemSessions' query order) — keep
 			// overwriting so this ends up holding the *most recent* work session.
@@ -1585,7 +1586,7 @@ const planApprovalStaleness = 5 * time.Minute
 // the gate even correct for the "default" pipeline mode?) is a product/
 // architecture question out of scope for this fix; see BUG-038.
 func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Context, er *session.EntRepository) {
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusQueued)},
 	})
 	if err != nil {
@@ -1704,14 +1705,14 @@ func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, err
 // (see session/domain/backlog.go's validTransitions and TransitionGuard, and
 // the guarded RPC path in server/services/backlog_service_lifecycle.go that
 // this internal caller was bypassing).
-func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Context, item session.BacklogItemData, verdictSummary string) error {
+func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Context, item backlogdto.BacklogItemData, verdictSummary string) error {
 	if _, err := recordTerminalReviewVerdict(l.storage, item.ID, item.AcceptanceCriteria, "bounce-reconcile-"+uuid.New().String(), session.ReviewVerdictPass, verdictSummary); err != nil {
 		return fmt.Errorf("record PASS verdict: %w", err)
 	}
 
 	status := item.Status
 	if status == string(session.BacklogStatusInProgress) {
-		precondition := &session.BacklogItemPrecondition{ExpectedStatus: status}
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: status}
 		if _, err := l.storage.GatedTransition(ctx, session.TransitionRequest{
 			Caller: session.CallerBouncingToDone, ItemID: item.ID, To: session.BacklogStatusReview, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); err != nil {
@@ -1720,7 +1721,7 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 		status = string(session.BacklogStatusReview)
 	}
 
-	precondition := &session.BacklogItemPrecondition{ExpectedStatus: status}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: status}
 	if _, err := l.storage.GatedTransition(ctx, session.TransitionRequest{
 		Caller: session.CallerBouncingToDone, ItemID: item.ID, To: session.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
@@ -1775,7 +1776,7 @@ func (l *BacklogLifecycleListener) liveHoldFromRows(ctx context.Context, er *ses
 func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, er *session.EntRepository) { //nolint:gocognit,gocyclo // moved verbatim by the package split; simplification is a separate change
 	// Scan items in the two statuses a bouncing cycle spans; a converged item
 	// (done) is handled by the self-heal sweep, not re-flagged here.
-	items, err := l.storage.ListBacklogItems(ctx, session.BacklogItemFilter{
+	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress), string(session.BacklogStatusReview)},
 	})
 	if err != nil {
@@ -2176,7 +2177,7 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Co
 		return
 	}
 
-	byItem := make(map[string][]session.OpenStuckStateData)
+	byItem := make(map[string][]backlogdto.OpenStuckStateData)
 	for _, row := range open {
 		byItem[row.ItemID] = append(byItem[row.ItemID], row)
 	}
@@ -2190,8 +2191,8 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalation(ctx context.Co
 // that reconcileMultiReasonEscalation needs to decide whether the
 // multi-reason escalation should be raised, cleared, or left alone.
 type multiReasonRowSet struct {
-	nonEscalation      []session.OpenStuckStateData
-	bouncingRow        session.OpenStuckStateData
+	nonEscalation      []backlogdto.OpenStuckStateData
+	bouncingRow        backlogdto.OpenStuckStateData
 	hasBouncing        bool
 	hasAbandonedReview bool
 }
@@ -2203,7 +2204,7 @@ type multiReasonRowSet struct {
 // isWaitingStuckReason names) and tracks whether a
 // bouncing/abandoned-review pair is present for the structural-coupling
 // exclusion below.
-func categorizeOpenStuckRows(rows []session.OpenStuckStateData) multiReasonRowSet {
+func categorizeOpenStuckRows(rows []backlogdto.OpenStuckStateData) multiReasonRowSet {
 	var set multiReasonRowSet
 	for _, row := range rows {
 		if row.Reason == domain.StuckReasonMultipleReasons || row.Reason == domain.StuckReasonBounceCapExhausted {
@@ -2243,13 +2244,13 @@ func isWaitingStuckReason(reason domain.StuckReason) bool {
 // already in hand. Mirrors RemediationBlocked's own decision set
 // (session/backlog_remediation.go): blocked iff the gate is parked or
 // mid-backoff, not eligible/granted.
-func excludeStructurallyCoupledAbandonedReview(set multiReasonRowSet) []session.OpenStuckStateData {
+func excludeStructurallyCoupledAbandonedReview(set multiReasonRowSet) []backlogdto.OpenStuckStateData {
 	if !set.hasBouncing || !set.hasAbandonedReview {
 		return set.nonEscalation
 	}
 	switch session.EvaluateRemediation(set.bouncingRow, time.Now(), session.ServerStartTime) {
 	case session.RemediationSkippedParked, session.RemediationSkippedNotDue:
-		filtered := make([]session.OpenStuckStateData, 0, len(set.nonEscalation))
+		filtered := make([]backlogdto.OpenStuckStateData, 0, len(set.nonEscalation))
 		for _, row := range set.nonEscalation {
 			if row.Reason != domain.StuckReasonAbandonedReview {
 				filtered = append(filtered, row)
@@ -2286,7 +2287,7 @@ func (l *BacklogLifecycleListener) deescalateMultiReasonIfNeeded(ctx context.Con
 // one it reopens from a resolved state), so the pre-fetched values are still
 // accurate post-MarkStuck. A freshly-created row (no existingRow) was just
 // opened this tick, so it is never notify-ready yet.
-func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx context.Context, er *session.EntRepository, itemID, itemTitle, contextString string, nonEscalationCount int, existingRow session.OpenStuckStateData, hasExistingRow bool) {
+func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx context.Context, er *session.EntRepository, itemID, itemTitle, contextString string, nonEscalationCount int, existingRow backlogdto.OpenStuckStateData, hasExistingRow bool) {
 	if !hasExistingRow {
 		return
 	}
@@ -2313,7 +2314,7 @@ func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx contex
 // to keep the per-item decision tree — categorize, exclude structurally
 // coupled rows, de-escalate-or-escalate, notify — independently readable and
 // under the complexity gate.
-func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx context.Context, er *session.EntRepository, itemID string, rows []session.OpenStuckStateData) {
+func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx context.Context, er *session.EntRepository, itemID string, rows []backlogdto.OpenStuckStateData) {
 	set := categorizeOpenStuckRows(rows)
 	nonEscalation := excludeStructurallyCoupledAbandonedReview(set)
 
@@ -2349,7 +2350,7 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx con
 // around) used by recoverDriftedPRItem/reconcileDriftedPRItems to avoid
 // stealing an item away from a still-legitimately-running session, mirroring
 // AutoReopenForPRFix's/AutoRespawnReview's identical guard.
-func hasActiveSession(sessions []session.ItemSessionSummary) bool {
+func hasActiveSession(sessions []backlogdto.ItemSessionSummary) bool {
 	for _, s := range sessions {
 		if s.EndedAt == nil && (s.Role == session.SessionRoleWork || s.Role == session.SessionRoleReview) {
 			return true

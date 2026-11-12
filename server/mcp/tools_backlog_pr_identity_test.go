@@ -11,6 +11,7 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // asVerified marks the unverified caller already on ctx as verified, as the
@@ -22,7 +23,7 @@ func asVerified(ctx context.Context) context.Context {
 
 // reportPRIdentityRig registers the real tool set and returns report_pr_created's
 // registered handler, so a regression in registration is caught too.
-func reportPRIdentityRig(t *testing.T) (mcpserver.ToolHandlerFunc, *session.Storage, *session.BacklogItemData, string) {
+func reportPRIdentityRig(t *testing.T) (mcpserver.ToolHandlerFunc, *session.Storage, *backlogdto.BacklogItemData, string) {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
 	item, workUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
@@ -86,7 +87,7 @@ func TestReportPRCreatedIdentity_should_OnlyTrustTheVerifiedCredential(t *testin
 func TestReportPRCreatedIdentity_should_RejectVerifiedCallerLinkedToAnotherItem(t *testing.T) {
 	t.Parallel()
 	handler, storage, _, workUUID := reportPRIdentityRig(t)
-	other, err := storage.CreateBacklogItem(context.Background(), session.BacklogItemData{Title: "Other", Status: string(session.BacklogStatusReview)})
+	other, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "Other", Status: string(session.BacklogStatusReview)})
 	require.NoError(t, err)
 	res, err := handler(asVerified(WithSessionUUID(context.Background(), workUUID)), makeToolReq(map[string]interface{}{
 		"item_id": other.ID, "pr_url": "https://github.com/tstapler/stapler-squad/pull/42",

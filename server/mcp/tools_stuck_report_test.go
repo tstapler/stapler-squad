@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -71,7 +72,7 @@ func TestGetBacklogStuckReport_RendersAcceptanceCriteriaTimelineSessionsAndNotes
 	storage := newTestBacklogStorage(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:              "test: app shell coverage",
 		AcceptanceCriteria: `[{"index":0,"text":"History cap boundary covered","status":"fail"}]`,
 		Priority:           3,
@@ -88,7 +89,7 @@ func TestGetBacklogStuckReport_RendersAcceptanceCriteriaTimelineSessionsAndNotes
 	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatusReview, "stop_reason=max_turns")
 	require.NoError(t, err)
 
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "11111111-1111-1111-1111-111111111111",
 		SessionRole: "work",
@@ -150,14 +151,14 @@ func TestGetBacklogStuckReport_CICrossCheck_FlagsOutOfDiffFailureAndSuggestsReru
 	storage := newTestBacklogStorage(t)
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "test: app shell coverage",
 		Priority: 3,
 		Status:   string(session.BacklogStatusPRPending),
 		RepoPath: "/repo",
 	})
 	require.NoError(t, err)
-	_, err = storage.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PrNumber: intPtr(425), PrURL: strPtr("https://github.com/tstapler/stelekit/pull/425")}, nil)
+	_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrNumber: intPtr(425), PrURL: strPtr("https://github.com/tstapler/stelekit/pull/425")}, nil)
 	require.NoError(t, err)
 
 	ref := git.CheckRunRef{RunID: "38730353308", JobID: "116420909053"}
@@ -212,10 +213,10 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, session.BacklogItemData{Title: "multi pr", Status: string(session.BacklogStatusPRPending)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "multi pr", Status: string(session.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	sessUUID := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, session.ItemSessionData{ItemID: item.ID, SessionUUID: sessUUID, SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessUUID, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 
 	ref := func(n int) session.PRRef {
@@ -255,12 +256,12 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 func TestStuckReport_ShouldListBlockedCleanupWithHolder_WhenGateWithholdsWorktree(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
-	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{Title: "blocked cleanup", Status: string(session.BacklogStatusDone)})
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "blocked cleanup", Status: string(session.BacklogStatusDone)})
 	require.NoError(t, err)
-	_, err = storage.CreateItemSession(t.Context(), session.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	n, url := 5, ""
-	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, session.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
+	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
 	require.NoError(t, err)
 	outcome := svc.CleanupTerminalItem(t.Context(), item.ID)
 	require.Equal(t, session.CleanupBlocked, outcome.Status, "pr_number=5 with no link fails closed")

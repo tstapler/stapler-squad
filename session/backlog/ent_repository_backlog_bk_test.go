@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassignedAfterSessionStart
@@ -45,13 +46,13 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 	require.True(t, ok)
 	require.NotEmpty(t, spawnTimeHash)
 
-	item, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "item spawning under quick mode",
 		PipelineMode: "quick",
 	})
 	require.NoError(t, err)
 
-	createdIS, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	createdIS, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              "snapshot-freeze-test-session",
 		SessionRole:              session.SessionRoleWork,
@@ -62,7 +63,7 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 
 	// Case (a): reassign the item's live pipeline_mode to "full".
 	newMode := "full"
-	_, err = repo.UpdateBacklogItem(ctx, item.ID, session.BacklogItemUpdate{PipelineMode: &newMode}, nil)
+	_, err = repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PipelineMode: &newMode}, nil)
 	require.NoError(t, err)
 
 	// Case (b): edit "quick"'s own content, changing its live content hash.
@@ -136,13 +137,13 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 	assert.Equal(t, "{}", preExistingMode.StageExecutorsJSON)
 	assert.Empty(t, parsedExecutors)
 
-	preExistingItem, err := repo.CreateBacklogItem(ctx, session.BacklogItemData{
+	preExistingItem, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "item for pre-existing item-session stage-executor fields",
 		PipelineMode: preExistingMode.Slug,
 	})
 	require.NoError(t, err)
 
-	preExistingSession, err := repo.CreateItemSession(ctx, session.ItemSessionData{
+	preExistingSession, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      preExistingItem.ID,
 		SessionUUID: "pre-existing-stage-executor-session",
 		SessionRole: session.SessionRoleWork,
@@ -165,7 +166,7 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 
 	engine, err := NewPipelineEngine(pipelineModeRepo)
 	require.NoError(t, err)
-	itemOnPreExistingMode := &session.BacklogItemData{ID: preExistingItem.ID, PipelineMode: preExistingMode.Slug}
+	itemOnPreExistingMode := &backlogdto.BacklogItemData{ID: preExistingItem.ID, PipelineMode: preExistingMode.Slug}
 
 	for _, role := range []session.StageRole{session.StageRoleTriage, session.StageRoleReview, session.StageRoleWork} {
 		program, model := engine.ExecutorFor(itemOnPreExistingMode, role)

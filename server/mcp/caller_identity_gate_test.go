@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 var newToolNames = []string{toolScheduleWake, toolListWakes, toolCancelWake, toolRequestHelp, toolAnswerHelp, toolRequestOwnerAction}
@@ -114,8 +115,8 @@ func TestRoleOfItemSession_should_MapHiddenRolesAndDefaultToWork(t *testing.T) {
 func TestRoleLookupFrom_should_FailClosedOnTransientError_And_DefaultToWorkOnNotFound(t *testing.T) {
 	t.Parallel()
 	lookup := func(err error, role string) callerRoleLookup {
-		return roleLookupFrom(func(context.Context, string) (session.ItemSessionSummary, error) {
-			return session.ItemSessionSummary{Role: role}, err
+		return roleLookupFrom(func(context.Context, string) (backlogdto.ItemSessionSummary, error) {
+			return backlogdto.ItemSessionSummary{Role: role}, err
 		})
 	}
 	ctx := context.Background()
