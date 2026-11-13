@@ -269,7 +269,7 @@ func (r *ReviewGateRunner) Run(
 		return
 	}
 
-	log.InfoLog().Printf("[PipelineEngine] item=%s stage=review mode=%q", item.ID, ResolvedModeLabel(item.PipelineMode))
+	log.InfoLog().Printf("[PipelineEngine] item=%s stage=review mode=%q", item.ID, backlogdto.ResolvedModeLabel(item.PipelineMode))
 
 	// Get the committed diff from the session's dedicated worktree (preferred) or
 	// fall back to the item's repo path (directory-mode / worktree gone) — but
@@ -428,7 +428,7 @@ func (r *ReviewGateRunner) Run(
 	// server/services/backlog_service_triage.go), but wrong here: this session is
 	// a real, tool-using Claude Code agent that must call the submit_review_verdict
 	// MCP tool, not print JSON, so handleReviewSessionExited has a verdict to read
-	// once it exits. PipelineModeDefault (or a nil pipelineEngine) still renders
+	// once it exits. backlogdto.PipelineModeDefault (or a nil pipelineEngine) still renders
 	// BuildReviewPrompt directly, so this is behavior-preserving for every item
 	// that hasn't opted into a custom PipelineMode.
 	sessionCreator := r.getSessionCreator()

@@ -42,7 +42,7 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 
 	engine, err := NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
-	spawnTimeHash, ok := engine.ContentHashFor(PipelineMode("quick"))
+	spawnTimeHash, ok := engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	require.True(t, ok)
 	require.NotEmpty(t, spawnTimeHash)
 
@@ -75,7 +75,7 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 
 	// Sanity: "quick"'s live content hash has actually changed (proves the edit was real).
 	require.NoError(t, engine.InvalidateCache(ctx))
-	liveHash, ok := engine.ContentHashFor(PipelineMode("quick"))
+	liveHash, ok := engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	require.True(t, ok)
 	require.NotEqual(t, spawnTimeHash, liveHash, "setup: the edit must have changed quick's live content hash")
 

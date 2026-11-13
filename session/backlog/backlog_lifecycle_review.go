@@ -7,6 +7,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -189,7 +191,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 // fresh attempt every few minutes once a "bouncing" BacklogStuckState row is
 // open. When no such row exists yet (this reason hasn't been detected as
 // stuck), RemediationDue reports due=true unconditionally — the first few
-// reopen attempts, before reconcileBouncingItems' bounceThreshold trips,
+// reopen attempts, before reconcileBouncingItems' stuck.BounceThreshold trips,
 // behave exactly as they did before this gate existed. Best-effort: gate
 // query/write errors are logged, never returned, and fail OPEN (still
 // attempts the reopen) rather than silently stranding the item.
@@ -622,7 +624,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 
 // markAbandonedReview writes/refreshes the durable abandoned_review row for
 // itemID and, once the condition has held past the 15-minute grace
-// (abandonedReview pure fn, Story 2.1.0), notifies AND auto-respawns a review
+// (stuck.AbandonedReview pure fn, Story 2.1.0), notifies AND auto-respawns a review
 // pass via the injected ReviewRespawner (if wired) — gives the 60s reconcile
 // one or more ticks to re-spawn a review gate before flagging, avoiding a
 // false positive on an item that just entered review. The row itself is
@@ -665,7 +667,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 	if !found {
 		lastReviewAt = row.FirstDetectedAt
 	}
-	if !abandonedReview(lastReviewAt, time.Now()) {
+	if !stuck.AbandonedReview(lastReviewAt, time.Now()) {
 		return
 	}
 
@@ -767,13 +769,13 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 
 // reviewVerdictIdleThreshold bounds how long reconcileUnprocessedReviewVerdicts
 // trusts SessionLivenessChecker's "alive" verdict once a review session has
-// actually saved a verdict. Set to maxWorkSessionStaleness's value rather than
-// abandonedReview's much shorter 15-minute grace: a reviewer doing legitimately
+// actually saved a verdict. Set to liveness.MaxWorkSessionStaleness's value rather than
+// stuck.AbandonedReview's much shorter 15-minute grace: a reviewer doing legitimately
 // slow verification (large diff, running a full test suite) must not be reaped
 // mid-review, so this errs conservative — same order of magnitude as the other
 // "is this session still doing real work" threshold in this file, not the much
-// tighter "did anything ever start" grace period abandonedReview enforces.
-const reviewVerdictIdleThreshold = maxWorkSessionStaleness
+// tighter "did anything ever start" grace period stuck.AbandonedReview enforces.
+const reviewVerdictIdleThreshold = liveness.MaxWorkSessionStaleness
 
 // reconcileRespawnBlockedActiveResolution is the resolve-only counterpart to
 // notifyRespawnBlockedByActiveSession (server/services/backlog_service_triage.go),

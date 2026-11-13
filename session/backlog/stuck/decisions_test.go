@@ -1,4 +1,4 @@
-package backlog
+package stuck
 
 import (
 	"testing"
@@ -13,14 +13,14 @@ import (
 func TestStuckPRReady_should_returnTrue_When_GreenMergeablePast30Min(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.True(t, stuckPRReady(now.Add(-31*time.Minute), now))
+	assert.True(t, PRReady(now.Add(-31*time.Minute), now))
 }
 
 func TestStuckPRReady_should_returnFalse_When_WithinThreshold(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.False(t, stuckPRReady(now.Add(-30*time.Minute), now), "exactly 30m must not flag")
-	assert.False(t, stuckPRReady(now.Add(-29*time.Minute), now), "29m must not flag")
+	assert.False(t, PRReady(now.Add(-30*time.Minute), now), "exactly 30m must not flag")
+	assert.False(t, PRReady(now.Add(-29*time.Minute), now), "29m must not flag")
 }
 
 func TestPrReadyToMergeSolo_should_returnTrue_When_GreenMergeableUnapproved(t *testing.T) {
@@ -33,7 +33,7 @@ func TestPrReadyToMergeSolo_should_returnTrue_When_GreenMergeableUnapproved(t *t
 		Mergeable:             "MERGEABLE",
 		ApprovedCount:         0, // flagship single-user case: no approval, still ready
 	}
-	assert.True(t, prReadyToMergeSolo(info), "unapproved but green+mergeable PR must be ready-to-merge-solo")
+	assert.True(t, PRReadyToMergeSolo(info), "unapproved but green+mergeable PR must be ready-to-merge-solo")
 }
 
 func TestPrReadyToMergeSolo_should_returnFalse_When_BlockedOrConflictingOrFailing(t *testing.T) {
@@ -51,91 +51,91 @@ func TestPrReadyToMergeSolo_should_returnFalse_When_BlockedOrConflictingOrFailin
 
 	changesRequested := base()
 	changesRequested.ChangesRequestedCount = 1
-	assert.False(t, prReadyToMergeSolo(changesRequested), "changes requested must block")
+	assert.False(t, PRReadyToMergeSolo(changesRequested), "changes requested must block")
 
 	ciFailing := base()
 	ciFailing.CheckConclusion = "failure"
-	assert.False(t, prReadyToMergeSolo(ciFailing), "failing CI must block")
+	assert.False(t, PRReadyToMergeSolo(ciFailing), "failing CI must block")
 
 	draft := base()
 	draft.IsDraft = true
-	assert.False(t, prReadyToMergeSolo(draft), "draft must block")
+	assert.False(t, PRReadyToMergeSolo(draft), "draft must block")
 
 	conflicting := base()
 	conflicting.Mergeable = "CONFLICTING"
-	assert.False(t, prReadyToMergeSolo(conflicting), "conflicting must block")
+	assert.False(t, PRReadyToMergeSolo(conflicting), "conflicting must block")
 
-	assert.False(t, prReadyToMergeSolo(nil), "nil info must not be ready")
+	assert.False(t, PRReadyToMergeSolo(nil), "nil info must not be ready")
 
 	merged := base()
 	merged.State = "MERGED"
-	assert.False(t, prReadyToMergeSolo(merged), "merged state must not be ready (handled elsewhere)")
+	assert.False(t, PRReadyToMergeSolo(merged), "merged state must not be ready (handled elsewhere)")
 
 	closed := base()
 	closed.State = "CLOSED"
-	assert.False(t, prReadyToMergeSolo(closed), "closed state must not be ready")
+	assert.False(t, PRReadyToMergeSolo(closed), "closed state must not be ready")
 }
 
 func TestAbandonedReview_should_returnTrue_When_LastReviewOlderThan15Min(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.True(t, abandonedReview(now.Add(-16*time.Minute), now))
+	assert.True(t, AbandonedReview(now.Add(-16*time.Minute), now))
 }
 
 func TestAbandonedReview_should_returnFalse_When_WithinGrace(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.False(t, abandonedReview(now.Add(-15*time.Minute), now), "exactly 15m must not flag")
-	assert.False(t, abandonedReview(now.Add(-5*time.Minute), now), "5m must not flag")
+	assert.False(t, AbandonedReview(now.Add(-15*time.Minute), now), "exactly 15m must not flag")
+	assert.False(t, AbandonedReview(now.Add(-5*time.Minute), now), "5m must not flag")
 }
 
 func TestStaleWork_should_returnTrue_When_LastProgressOlderThan2h(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.True(t, staleWork(now.Add(-3*time.Hour), now, maxWorkSessionStaleness))
+	assert.True(t, StaleWork(now.Add(-3*time.Hour), now, 2*time.Hour))
 }
 
 func TestStaleWork_should_returnFalse_When_ProgressWithin2h(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.False(t, staleWork(now.Add(-1*time.Hour), now, maxWorkSessionStaleness))
+	assert.False(t, StaleWork(now.Add(-1*time.Hour), now, 2*time.Hour))
 }
 
 func TestIsBouncing_should_returnTrue_When_ThreeCyclesNoPass(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isBouncing(3, bounceThreshold, false))
+	assert.True(t, IsBouncing(3, BounceThreshold, false))
 }
 
 func TestIsBouncing_should_returnFalse_When_TwoCyclesOrHasPass(t *testing.T) {
 	t.Parallel()
-	assert.False(t, isBouncing(2, bounceThreshold, false), "below threshold must not flag")
-	assert.False(t, isBouncing(3, bounceThreshold, true), "a recorded PASS must not flag even at/above threshold")
+	assert.False(t, IsBouncing(2, BounceThreshold, false), "below threshold must not flag")
+	assert.False(t, IsBouncing(3, BounceThreshold, true), "a recorded PASS must not flag even at/above threshold")
 }
 
 func TestIsMultiReasonEscalated_should_returnTrue_When_CountAtOrAboveThreshold(t *testing.T) {
 	t.Parallel()
-	assert.True(t, isMultiReasonEscalated(2), "exactly at threshold must flag")
-	assert.True(t, isMultiReasonEscalated(3), "above threshold must flag")
+	assert.True(t, IsMultiReasonEscalated(2), "exactly at threshold must flag")
+	assert.True(t, IsMultiReasonEscalated(3), "above threshold must flag")
 }
 
 func TestIsMultiReasonEscalated_should_returnFalse_When_CountBelowThreshold(t *testing.T) {
 	t.Parallel()
-	assert.False(t, isMultiReasonEscalated(1), "below threshold must not flag")
-	assert.False(t, isMultiReasonEscalated(0), "zero must not flag")
+	assert.False(t, IsMultiReasonEscalated(1), "below threshold must not flag")
+	assert.False(t, IsMultiReasonEscalated(0), "zero must not flag")
 }
 
 func TestMultiReasonEscalationNotifyReady_should_returnTrue_When_DwellElapsed(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.True(t, multiReasonEscalationNotifyReady(now.Add(-61*time.Second), now))
-	assert.True(t, multiReasonEscalationNotifyReady(now.Add(-60*time.Second), now), "exactly 60s must flag (>=)")
+	assert.True(t, MultiReasonEscalationNotifyReady(now.Add(-61*time.Second), now))
+	assert.True(t, MultiReasonEscalationNotifyReady(now.Add(-60*time.Second), now), "exactly 60s must flag (>=)")
 }
 
 func TestMultiReasonEscalationNotifyReady_should_returnFalse_When_WithinDwell(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.False(t, multiReasonEscalationNotifyReady(now.Add(-30*time.Second), now), "30s must not flag")
-	assert.False(t, multiReasonEscalationNotifyReady(now, now), "0s must not flag")
+	assert.False(t, MultiReasonEscalationNotifyReady(now.Add(-30*time.Second), now), "30s must not flag")
+	assert.False(t, MultiReasonEscalationNotifyReady(now, now), "0s must not flag")
 }
 
 func TestIsRepeatedFailure_should_returnTrue_When_LastTwoVerdictsIdentical(t *testing.T) {
@@ -298,8 +298,8 @@ func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_DiffHashesDiffer(t *test
 func TestIsTestOnlyReworkCycle_should_returnTrue_When_AllAttemptsTouchOnlyTestFiles(t *testing.T) {
 	t.Parallel()
 	attempts := [][]string{
-		{"session/stuck_decisions_test.go"},
-		{"web-app/src/lib/omnibar/detector.test.ts", "session/stuck_decisions_test.go"},
+		{"session/stuck/decisions_test.go"},
+		{"web-app/src/lib/omnibar/detector.test.ts", "session/stuck/decisions_test.go"},
 	}
 	assert.True(t, IsTestOnlyReworkCycle(attempts))
 }
@@ -307,13 +307,13 @@ func TestIsTestOnlyReworkCycle_should_returnTrue_When_AllAttemptsTouchOnlyTestFi
 func TestIsTestOnlyReworkCycle_should_returnFalse_When_FewerThanMinAttempts(t *testing.T) {
 	t.Parallel()
 	assert.False(t, IsTestOnlyReworkCycle(nil))
-	assert.False(t, IsTestOnlyReworkCycle([][]string{{"session/stuck_decisions_test.go"}}), "only one attempt of history — not enough to call it a cycle")
+	assert.False(t, IsTestOnlyReworkCycle([][]string{{"session/stuck/decisions_test.go"}}), "only one attempt of history — not enough to call it a cycle")
 }
 
 func TestIsTestOnlyReworkCycle_should_returnFalse_When_AnyCycleHasNoFileData(t *testing.T) {
 	t.Parallel()
 	attempts := [][]string{
-		{"session/stuck_decisions_test.go"},
+		{"session/stuck/decisions_test.go"},
 		{},
 	}
 	assert.False(t, IsTestOnlyReworkCycle(attempts), "no file data for an attempt is no signal, not a match")
@@ -322,8 +322,8 @@ func TestIsTestOnlyReworkCycle_should_returnFalse_When_AnyCycleHasNoFileData(t *
 func TestIsTestOnlyReworkCycle_should_returnFalse_When_AnyCycleTouchesNonTestFile(t *testing.T) {
 	t.Parallel()
 	attempts := [][]string{
-		{"session/stuck_decisions_test.go"},
-		{"session/stuck_decisions.go", "session/stuck_decisions_test.go"},
+		{"session/stuck/decisions_test.go"},
+		{"session/backlog/stuck/decisions.go", "session/stuck/decisions_test.go"},
 	}
 	assert.False(t, IsTestOnlyReworkCycle(attempts), "a production file in any attempt breaks the test-only cycle")
 }

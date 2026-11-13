@@ -1,4 +1,4 @@
-package backlog
+package liveness
 
 import (
 	"fmt"
@@ -14,10 +14,10 @@ type LivenessKind string
 const (
 	// LivenessKindDurationBudget is Shape A: a bounded call's own timeout plus a
 	// staleness buffer (see StalenessThreshold). Replaces server/services.triageCallBudget
-	// and session.maxHeadlessTriageSessionStaleness.
+	// and session.MaxHeadlessTriageSessionStaleness.
 	LivenessKindDurationBudget LivenessKind = "duration_budget"
 	// LivenessKindHeartbeat is Shape B: a no-progress ceiling for an item with an
-	// active work session. Replaces session.maxWorkSessionStaleness.
+	// active work session. Replaces session.MaxWorkSessionStaleness.
 	LivenessKindHeartbeat LivenessKind = "heartbeat"
 	// LivenessKindCycleFrequency is Shape C: a max transition-cycle count within a
 	// lookback window. Replaces session.bounceThreshold / session.bounceLookback.
@@ -40,12 +40,12 @@ type LivenessDefinition struct {
 	// StalenessMargin is a Shape-A field: the buffer added to ExpectedDuration.
 	// Never independently editable as an absolute threshold — see
 	// StalenessThreshold. Together with ExpectedDuration this reproduces what
-	// session.maxHeadlessTriageSessionStaleness (35m = 30m + 5m) is today.
+	// session.MaxHeadlessTriageSessionStaleness (35m = 30m + 5m) is today.
 	StalenessMargin time.Duration
 
 	// MaxNoProgressDuration is a Shape-B (LivenessKindHeartbeat) field: the
 	// no-progress ceiling for an item with an active work session — what
-	// session.maxWorkSessionStaleness (2h) is today.
+	// session.MaxWorkSessionStaleness (2h) is today.
 	MaxNoProgressDuration time.Duration
 
 	// CycleThreshold is a Shape-C (LivenessKindCycleFrequency) field: the
@@ -62,7 +62,7 @@ type LivenessDefinition struct {
 // (LivenessKindDurationBudget) LivenessDefinition. This is the BUG-055
 // structural fix: a UI/RPC never accepts a raw threshold, only the two inputs
 // it's derived from, so the two values can never independently drift out of
-// the required triageCallBudget < maxHeadlessTriageSessionStaleness ordering.
+// the required triageCallBudget < MaxHeadlessTriageSessionStaleness ordering.
 //
 // It panics for any other LivenessKind rather than returning a zero value or
 // an error: calling StalenessThreshold on a non-Shape-A definition is always a

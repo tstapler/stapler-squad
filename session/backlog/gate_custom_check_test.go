@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -90,10 +91,10 @@ func TestInvokeCustomGateCheck_should_BlockTransitionFailClosed_When_SkillNotInP
 	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	gateID := newCustomCheckTestGate(t, storage)
 
-	livenessDef := LivenessDefinition{Kind: LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
+	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
 	_, err := InvokeCustomGateCheck(context.Background(), caller, repo, item, gateID,
-		session.CustomCheckConfig{SkillID: "not-a-real-skill"}, livenessDef, session.BacklogStatusReady, PipelineModeDefault)
+		session.CustomCheckConfig{SkillID: "not-a-real-skill"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
 
 	require.Error(t, err, "an unregistered skill must be rejected")
 	assert.False(t, caller.called, "the headless call must never be attempted for an unregistered skill")
@@ -121,10 +122,10 @@ func TestInvokeCustomGateCheck_should_BlockAndLogWarn_When_SpawnFailsSynchronous
 	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	gateID := newCustomCheckTestGate(t, storage)
 
-	livenessDef := LivenessDefinition{Kind: LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
+	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
 	_, err := InvokeCustomGateCheck(context.Background(), caller, repo, item, gateID,
-		session.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, PipelineModeDefault)
+		session.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
 
 	require.Error(t, err, "a synchronous spawn failure must block the transition immediately")
 	assert.True(t, caller.called)
@@ -148,10 +149,10 @@ func TestInvokeCustomGateCheck_should_RecordPassVerdict_When_SkillReportsPass(t 
 	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	gateID := newCustomCheckTestGate(t, storage)
 
-	livenessDef := LivenessDefinition{Kind: LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
+	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
 	outcome, err := InvokeCustomGateCheck(context.Background(), caller, repo, item, gateID,
-		session.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, PipelineModeDefault)
+		session.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, session.ReviewOutcomePass, outcome.Outcome)

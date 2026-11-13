@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
@@ -18,12 +19,12 @@ import (
 // claim: a BacklogStuckState row parked BEFORE Milestone 1 ships (under the
 // old hardcoded 35m orphaned_triage threshold) recovers via the existing
 // RemediationDue cold-retry heartbeat (BUG-083) once the sdd-mode
-// LivenessDefinition override is created — with ZERO code change to
+// liveness.LivenessDefinition override is created — with ZERO code change to
 // RemediationDue/evaluateRemediation (backlog_remediation.go). This proves
 // BUG-083's "write-side fixed (Epic 1.4's reconcile* sweeps now consult
-// LivenessEngine), recovery-side untested" pattern doesn't repeat here: the
+// liveness.LivenessEngine), recovery-side untested" pattern doesn't repeat here: the
 // write side and the pre-existing cold-retry heartbeat compose correctly with
-// no glue code, because RemediationDue never references LivenessEngine at
+// no glue code, because RemediationDue never references liveness.LivenessEngine at
 // all — it gates purely on remediation_attempts/next_remediation_at, which is
 // exactly why creating the override cannot require touching it.
 func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivenessOverrideWithZeroCodeChange(t *testing.T) {
@@ -68,31 +69,31 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 	// Epic 1.3 repository (the same path CreateLivenessDefinition's RPC
 	// handler drives), raising the idea-stage/sdd-mode expected duration well
 	// past the old flat 35m constant.
-	livenessRepo := NewEntLivenessRepository(storage.GetEntClient())
+	livenessRepo := liveness.NewEntLivenessRepository(storage.GetEntClient())
 	sddMode := "sdd"
-	_, err = livenessRepo.Create(ctx, LivenessCreateInput{
+	_, err = livenessRepo.Create(ctx, liveness.LivenessCreateInput{
 		StageSlug:    string(session.BacklogStatusIdea),
 		PipelineMode: &sddMode,
-		Definition: LivenessDefinition{
-			Kind:             LivenessKindDurationBudget,
+		Definition: liveness.LivenessDefinition{
+			Kind:             liveness.LivenessKindDurationBudget,
 			ExpectedDuration: 45 * time.Minute,
 			StalenessMargin:  10 * time.Minute,
 		},
 	})
 	require.NoError(t, err)
-	engine, err := NewCachingLivenessEngine(livenessRepo)
+	engine, err := liveness.NewCachingLivenessEngine(livenessRepo)
 	require.NoError(t, err)
 
-	// Prove the override actually resolves through LivenessEngine — the
+	// Prove the override actually resolves through liveness.LivenessEngine — the
 	// "write side" this test composes against, so a failure here (rather than
 	// below) would mean the fixture is wrong, not that RemediationDue broke.
-	resolved, err := engine.LivenessFor(session.BacklogStatusIdea, PipelineMode("sdd"))
+	resolved, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 	require.NoError(t, err)
-	require.Equal(t, LivenessKindDurationBudget, resolved.Kind)
+	require.Equal(t, liveness.LivenessKindDurationBudget, resolved.Kind)
 	assert.Equal(t, 55*time.Minute, resolved.StalenessThreshold(), "sdd-mode override must resolve to the new 55m derived threshold, not the old 35m default")
 
 	// The actual regression assertion: RemediationDue — completely unaware
-	// that a LivenessEngine or any override even exists — still reports this
+	// that a liveness.LivenessEngine or any override even exists — still reports this
 	// parked row as due, purely because its own cold-retry deadline elapsed.
 	// No call to ResetStuckRemediation/BulkResetStuckRemediation anywhere in
 	// this test.

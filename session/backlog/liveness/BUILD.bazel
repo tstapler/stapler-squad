@@ -1,0 +1,50 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "liveness",
+    srcs = [
+        "cache.go",
+        "definition.go",
+        "engine.go",
+        "ent_repository.go",
+        "repository.go",
+        "staleness.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/backlog/liveness",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session",
+        "//session/backlog/stuck",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:stagelivenessdefinition",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":liveness",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "liveness_test",
+    srcs = [
+        "cache_test.go",
+        "definition_test.go",
+        "engine_test.go",
+    ],
+    embed = [":liveness"],
+    deps = [
+        "//log",
+        "//session",
+        "//session/backlog/stuck",
+        "//session/domain/backlogdto",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

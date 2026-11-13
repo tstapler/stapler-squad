@@ -246,7 +246,7 @@ func TestBuildSessionInitialPrompt_OlderPriorAttempts_OmitFullEvidence(t *testin
 // is the regression test for docs/tasks/backlog-feature-improvement.md's "no
 // escalation, no awareness that the last N attempts failed the same way"
 // finding: on the escalated retry AutoReopenAfterFailedReview now grants
-// after a streak of exactly RepeatedFailureEscalationThreshold (2) identical
+// after a streak of exactly stuck.RepeatedFailureEscalationThreshold (2) identical
 // review failures, the respawned session's own prompt must explicitly say
 // so and nudge toward a different approach — not silently repeat the same
 // "Prior Attempts" framing every earlier retry already got. No new
@@ -305,7 +305,7 @@ func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_OnlyOneRevie
 // TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_ThreeIdenticalReviewFailures
 // is the far-side negative case: AutoReopenAfterFailedReview never respawns
 // (and so never builds this prompt at all) once the streak reaches
-// RepeatedFailureParkThreshold (3) — it parks instead. The notice is
+// stuck.RepeatedFailureParkThreshold (3) — it parks instead. The notice is
 // deliberately scoped to fire only at streak == 2 (see escalationNotice's
 // doc comment), so this asserts it does not also fire at streak == 3, which
 // would render a stale "second attempt" framing on a prompt that in
@@ -335,7 +335,7 @@ func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_ThreeIdentic
 // TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTwoNoVerdictReviews
 // is the no-verdict-shape companion: two consecutive review sessions that
 // exited without ever writing a verdict must trigger the same escalation
-// framing, via a different signal (NoVerdictStreakLen) than the
+// framing, via a different signal (stuck.NoVerdictStreakLen) than the
 // identical-summary streak above.
 func TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTwoNoVerdictReviews(t *testing.T) {
 	t.Parallel()

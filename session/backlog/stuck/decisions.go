@@ -1,4 +1,4 @@
-package backlog
+package stuck
 
 import (
 	"sort"
@@ -17,96 +17,96 @@ import (
 // flagged as a rabbit hole) is exhaustively table-driven-testable without a
 // DB. Reconcilers call these instead of inlining the comparisons.
 
-// prReadyThreshold is how long a pr_pending item's PR must have been
-// green-and-mergeable (per prReadyToMergeSolo) before it is flagged
+// PRReadyThreshold is how long a pr_pending item's PR must have been
+// green-and-mergeable (per PRReadyToMergeSolo) before it is flagged
 // pr_ready_unmerged. See plan.md "Unresolved Questions" #1.
-const prReadyThreshold = 30 * time.Minute
+const PRReadyThreshold = 30 * time.Minute
 
-// abandonedReviewGrace is how long a review-status item's most recent
+// AbandonedReviewGrace is how long a review-status item's most recent
 // to_status="review" BacklogStatusEvent must be in the past, with nothing
 // active in flight, before it is flagged abandoned_review. Gives the 60s
 // reconcile one or more ticks to re-spawn a review gate before flagging.
-const abandonedReviewGrace = 15 * time.Minute
+const AbandonedReviewGrace = 15 * time.Minute
 
-// bounceThreshold is the minimum number of in_progress->review round trips
-// within bounceLookback (with no PASS verdict) that flags an item bouncing.
+// BounceThreshold is the minimum number of in_progress->review round trips
+// within BounceLookback (with no PASS verdict) that flags an item bouncing.
 // Chosen to match server/services/backlog_service_triage.go's default rework
 // cap (3), but is an independent constant, NOT read from config.Config — the
 // rework cap is now user-configurable (Settings → Defaults) while this one
 // isn't, so the two can drift. Session-package reconcilers have no config.Config
 // plumbed in today; wire that through if this ever needs to move in lockstep.
-const bounceThreshold = 3
+const BounceThreshold = 3
 
-// bounceLookback bounds the bouncing detector to *active* thrashing.
-const bounceLookback = 24 * time.Hour
+// BounceLookback bounds the bouncing detector to *active* thrashing.
+const BounceLookback = 24 * time.Hour
 
-// multiReasonThreshold is the minimum count of simultaneously open
+// MultiReasonThreshold is the minimum count of simultaneously open
 // *non-escalation* stuck reasons on one item before it is escalated to
 // domain.StuckReasonMultipleReasons. Fixed per plan.md's Pattern Decisions
 // table (requirements.md's own live-data-informed default: "≥2 would have
 // caught both" of this project's motivating live cases) — not a tunable
 // scoring rubric.
-const multiReasonThreshold = 2
+const MultiReasonThreshold = 2
 
-// multiReasonNotifyDwell is how long domain.StuckReasonMultipleReasons' row
+// MultiReasonNotifyDwell is how long domain.StuckReasonMultipleReasons' row
 // must have been open (FirstDetectedAt) before its notification fires, so a
 // single-tick threshold crossing doesn't notify immediately — the same
-// one-reconcile-tick-width debounce shape as prReadyThreshold/
-// abandonedReviewGrace, sized to the reconcile ticker's period. Independent
+// one-reconcile-tick-width debounce shape as PRReadyThreshold/
+// AbandonedReviewGrace, sized to the reconcile ticker's period. Independent
 // constant, NOT read from server/dependencies.go's ticker constant: the
 // session package cannot import server, matching bounceMainBranch's existing
 // precedent for duplicating a cross-package constant.
-const multiReasonNotifyDwell = 60 * time.Second
+const MultiReasonNotifyDwell = 60 * time.Second
 
-// stuckPRReady reports whether a pr_ready_unmerged condition first observed
-// at firstDetected has held long enough (> prReadyThreshold) as of now to be
+// PRReady reports whether a pr_ready_unmerged condition first observed
+// at firstDetected has held long enough (> PRReadyThreshold) as of now to be
 // notification-worthy. Exact-threshold and under-threshold both return false
 // (no premature flag).
-func stuckPRReady(firstDetected, now time.Time) bool {
-	return now.Sub(firstDetected) > prReadyThreshold
+func PRReady(firstDetected, now time.Time) bool {
+	return now.Sub(firstDetected) > PRReadyThreshold
 }
 
-// abandonedReview reports whether a review-status item's most recent
+// AbandonedReview reports whether a review-status item's most recent
 // to_status="review" transition at lastReviewAt is old enough (> 15m) as of
 // now to be flagged abandoned_review.
-func abandonedReview(lastReviewAt, now time.Time) bool {
-	return now.Sub(lastReviewAt) > abandonedReviewGrace
+func AbandonedReview(lastReviewAt, now time.Time) bool {
+	return now.Sub(lastReviewAt) > AbandonedReviewGrace
 }
 
-// staleWork reports whether an in_progress item's active work session has
+// StaleWork reports whether an in_progress item's active work session has
 // gone quiet longer than maxNoProgress to be flagged stale_work. maxNoProgress
 // is resolved by the caller (session/backlog_lifecycle_stale.go's
 // reconcileStaleWorkSessions) — from LivenessEngine when wired, falling back
 // to maxWorkSessionStaleness otherwise (Epic 1.4, Story 1.4.3).
-func staleWork(lastProgress, now time.Time, maxNoProgress time.Duration) bool {
+func StaleWork(lastProgress, now time.Time, maxNoProgress time.Duration) bool {
 	return now.Sub(lastProgress) > maxNoProgress
 }
 
-// isBouncing reports whether cycleCount in_progress->review round trips
+// IsBouncing reports whether cycleCount in_progress->review round trips
 // within the lookback window, with no recorded PASS verdict, constitute a
 // non-converging "bouncing" cycle (>= cycleThreshold and !hasPass).
 // cycleThreshold is resolved by the caller (session/backlog_lifecycle.go's
 // reconcileBouncingItems) — from LivenessEngine when wired, falling back to
-// bounceThreshold otherwise (Epic 1.4, Story 1.4.3).
-func isBouncing(cycleCount, cycleThreshold int, hasPass bool) bool {
+// BounceThreshold otherwise (Epic 1.4, Story 1.4.3).
+func IsBouncing(cycleCount, cycleThreshold int, hasPass bool) bool {
 	return cycleCount >= cycleThreshold && !hasPass
 }
 
-// isMultiReasonEscalated reports whether openNonEscalationCount — the number
+// IsMultiReasonEscalated reports whether openNonEscalationCount — the number
 // of simultaneously open, non-escalation stuck reasons on one item — meets or
-// exceeds multiReasonThreshold, i.e. the item should carry an open
+// exceeds MultiReasonThreshold, i.e. the item should carry an open
 // domain.StuckReasonMultipleReasons row.
-func isMultiReasonEscalated(openNonEscalationCount int) bool {
-	return openNonEscalationCount >= multiReasonThreshold
+func IsMultiReasonEscalated(openNonEscalationCount int) bool {
+	return openNonEscalationCount >= MultiReasonThreshold
 }
 
-// multiReasonEscalationNotifyReady reports whether a
+// MultiReasonEscalationNotifyReady reports whether a
 // domain.StuckReasonMultipleReasons row first observed at firstDetected has
-// held long enough (>= multiReasonNotifyDwell) as of now to be
-// notification-worthy — mirrors stuckPRReady/abandonedReview's "don't notify
+// held long enough (>= MultiReasonNotifyDwell) as of now to be
+// notification-worthy — mirrors PRReady/AbandonedReview's "don't notify
 // on the very tick that created the row" shape.
-func multiReasonEscalationNotifyReady(firstDetected, now time.Time) bool {
-	return now.Sub(firstDetected) >= multiReasonNotifyDwell
+func MultiReasonEscalationNotifyReady(firstDetected, now time.Time) bool {
+	return now.Sub(firstDetected) >= MultiReasonNotifyDwell
 }
 
 // IsRepeatedFailure reports whether the two most recent review verdicts (most
@@ -114,7 +114,7 @@ func multiReasonEscalationNotifyReady(firstDetected, now time.Time) bool {
 // non-PASS outcome paired with an identical summary — i.e. the last rework
 // attempt changed nothing about why the item failed. This catches a
 // fast-looping non-converging cycle (e.g. an infrastructure error like a
-// missing diff, reproduced on every attempt) well before bounceThreshold's
+// missing diff, reproduced on every attempt) well before BounceThreshold's
 // 3-cycles-in-24h window would, since a broken-worktree or similar
 // environment fault can otherwise burn through the entire rework cap in
 // minutes without ever changing outcome. Exported: called from
@@ -170,7 +170,7 @@ func IsRepeatedNoVerdictFailure(hadVerdict []bool) bool {
 // ReviewFailureStreakLen/NoVerdictStreakLen) at which AutoReopenAfterFailedReview
 // grants ONE escalated retry instead of an identical one — matches
 // IsRepeatedFailure's/IsRepeatedNoVerdictFailure's own "two in a row" trip
-// point (bounceThreshold's "flip twice" precedent, reused here).
+// point (BounceThreshold's "flip twice" precedent, reused here).
 const RepeatedFailureEscalationThreshold = 2
 
 // RepeatedFailureParkThreshold is the streak length at which
@@ -353,7 +353,7 @@ func MostRecentCompletedWorkSession(sessions []backlogdto.ItemSessionSummary) *b
 	return nil
 }
 
-// prReadyToMergeSolo is the solo-operator PR readiness predicate (ADR-001
+// PRReadyToMergeSolo is the solo-operator PR readiness predicate (ADR-001
 // "Single-user readiness"). It applies every blocking-exclusion
 // github.DerivePRPriority uses (draft, changes-requested, CI-failure, not
 // mergeable, terminal state) but deliberately DROPS the ApprovedCount > 0
@@ -362,7 +362,7 @@ func MostRecentCompletedWorkSession(sessions []backlogdto.ItemSessionSummary) *b
 // so PRPriorityReady never fires there and the flagship motivating case (PR
 // #148) would never surface. Do NOT replace this with
 // DerivePRPriority(info)==PRPriorityReady — see pre-mortem F1.
-func prReadyToMergeSolo(info *github.PRInfo) bool {
+func PRReadyToMergeSolo(info *github.PRInfo) bool {
 	if info == nil {
 		return false
 	}
@@ -398,10 +398,10 @@ func isNoopWorkSession(is backlogdto.ItemSessionSummary) bool {
 	return is.CommitCountSinceSpawn == 0 && (is.LastCommitSha == "" || is.LastCommitSha == is.BaseCommitSha)
 }
 
-// consecutiveNoopWorkSessions counts the unbroken run of finished no-op work
+// ConsecutiveNoopWorkSessions counts the unbroken run of finished no-op work
 // sessions, newest first. Non-work sessions and still-running work sessions are
 // skipped; the first finished work session that committed ends the run.
-func consecutiveNoopWorkSessions(sessions []backlogdto.ItemSessionSummary) int {
+func ConsecutiveNoopWorkSessions(sessions []backlogdto.ItemSessionSummary) int {
 	sorted := append([]backlogdto.ItemSessionSummary(nil), sessions...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].CreatedAt.After(sorted[j].CreatedAt) })
 	n := 0
@@ -417,9 +417,9 @@ func consecutiveNoopWorkSessions(sessions []backlogdto.ItemSessionSummary) int {
 	return n
 }
 
-// isRepeatedNoopDispatch reports whether an item with a PASS verdict has had
+// IsRepeatedNoopDispatch reports whether an item with a PASS verdict has had
 // at least threshold consecutive work sessions end with no new commits.
-func isRepeatedNoopDispatch(noopCount, threshold int, hasPass bool) bool {
+func IsRepeatedNoopDispatch(noopCount, threshold int, hasPass bool) bool {
 	return hasPass && threshold > 0 && noopCount >= threshold
 }
 

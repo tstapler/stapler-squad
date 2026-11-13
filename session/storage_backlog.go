@@ -1323,7 +1323,7 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 // given BacklogItem UUID, most recent first. Reuses the existing
 // ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome,
 // Summary, and DiffHash are populated, since that's all callers
-// (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck_decisions.go) need.
+// (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck/decisions.go) need.
 func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]backlogdto.ReviewVerdictSummary, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {

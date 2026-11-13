@@ -1950,7 +1950,7 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 // queries, not GetBacklogItem/ListItemSessions' unbounded eager-loaded
 // fetch) and returns a content hash of that diff (git.DiffHashBetween), for
 // stamping onto a review verdict's DiffHash at save time — see
-// stuck_decisions.go's IsFlakyVerdictFlipFlop, which the hash feeds.
+// stuck/decisions.go's IsFlakyVerdictFlipFlop, which the hash feeds.
 //
 // Best-effort: any resolution failure (item/session lookup, missing SHAs, a
 // git error) returns "" rather than propagating an error, matching this

@@ -7,13 +7,15 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // StaleWorkRemediator can clean up and respawn an in_progress backlog item
 // whose active work session has gone stale (StuckReasonStaleWork — no
-// progress reported for over maxWorkSessionStaleness) but is NOT a zombie:
+// progress reported for over liveness.MaxWorkSessionStaleness) but is NOT a zombie:
 // the underlying tmux session and pane process are still alive
 // (Instance.TmuxAlive/PaneProcessDead), so the generic tmux health check
 // never flags it — the agent inside simply finished its own work and is
@@ -58,11 +60,6 @@ type ReworkBlockStaleResolver interface {
 	ResolveReworkBlockedStaleIfRecovered(ctx context.Context, itemID string) error
 }
 
-// maxWorkSessionStaleness is the longest an in_progress work session can go without
-// reporting progress before ReconcileStuck flags it as stale. Mirrors the order of
-// magnitude of maxTriageSessionAge (server/services/backlog_service_triage.go).
-const maxWorkSessionStaleness = 2 * time.Hour
-
 func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Context, er *session.EntRepository) { //nolint:gocognit // moved verbatim by the package split; simplification is a separate change
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress)},
@@ -95,16 +92,16 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 			lastProgress = *active.LastProgressAt
 		}
 
-		// Shape B (LivenessKindHeartbeat), keyed BacklogStatusInProgress — Epic 1.4,
+		// Shape B (liveness.LivenessKindHeartbeat), keyed BacklogStatusInProgress — Epic 1.4,
 		// Story 1.4.3. Nil-guarded: an unwired/unresolvable engine falls back to the
-		// literal maxWorkSessionStaleness constant, unchanged from before.
-		maxNoProgress := maxWorkSessionStaleness
+		// literal liveness.MaxWorkSessionStaleness constant, unchanged from before.
+		maxNoProgress := liveness.MaxWorkSessionStaleness
 		if l.livenessEngine != nil {
-			if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusInProgress, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+			if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusInProgress, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 				maxNoProgress = def.MaxNoProgressDuration
 			}
 		}
-		if !staleWork(lastProgress, time.Now(), maxNoProgress) {
+		if !stuck.StaleWork(lastProgress, time.Now(), maxNoProgress) {
 			continue
 		}
 		stillStale[item.ID] = true
@@ -285,7 +282,7 @@ func (l *BacklogLifecycleListener) reconcileBlockedByDependencyResolution(ctx co
 //
 // Deliberately does NOT add a second liveness check before dispatching
 // (e.g. re-querying Instance.TmuxAlive/PaneProcessDead here) — the caller
-// (reconcileStaleWorkSessions) already reconfirmed staleWork() true this
+// (reconcileStaleWorkSessions) already reconfirmed stuck.StaleWork() true this
 // tick, and RemediationDue's own backoff (minimum 30 minutes after the
 // first notification) has independently elapsed by the time due=true. A
 // second, independently-computed liveness heuristic here could disagree

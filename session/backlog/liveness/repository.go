@@ -1,10 +1,11 @@
-package backlog
+package liveness
 
 import (
 	"context"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // LivenessDefinitionRecord is an ent-free DTO representation of a persisted
@@ -52,13 +53,13 @@ type LivenessRepository interface {
 	Update(ctx context.Context, id uuid.UUID, in LivenessUpdateInput) (*LivenessDefinitionRecord, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	// GetByStageAndMode returns the row matching stageSlug and mode exactly:
-	// mode == PipelineModeDefault ("") queries for pipeline_mode IS NULL (the
+	// mode == backlogdto.PipelineModeDefault ("") queries for pipeline_mode IS NULL (the
 	// mode-less row itself, not "any mode"); any other mode queries for
 	// pipeline_mode = mode. Returns ErrNotFound if no such row exists,
 	// regardless of its enabled state — callers needing an "enabled only"
 	// check (e.g. CreateLivenessDefinition's duplicate-pair rejection) inspect
 	// the returned row's Enabled field themselves.
-	GetByStageAndMode(ctx context.Context, stageSlug string, mode PipelineMode) (*LivenessDefinitionRecord, error)
+	GetByStageAndMode(ctx context.Context, stageSlug string, mode backlogdto.PipelineMode) (*LivenessDefinitionRecord, error)
 	ListAll(ctx context.Context) ([]*LivenessDefinitionRecord, error)
 }
 

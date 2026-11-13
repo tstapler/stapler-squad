@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -1946,13 +1947,13 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 
 	if !prStatus.CIFailing && !prStatus.HasBlockingReviews && !prStatus.HasConflicts && !hasNewFeedback {
 		// PR is open and healthy — wait for merge. Story 2.1.1: flag it
-		// pr_ready_unmerged once it's been solo-ready (prReadyToMergeSolo)
+		// pr_ready_unmerged once it's been solo-ready (stuck.PRReadyToMergeSolo)
 		// past the threshold, using ONLY the already-fetched prStatus — no
 		// second GitHub API call. Deliberately NOT gated on
 		// github.DerivePRPriority(info)==PRPriorityReady, which requires
 		// ApprovedCount>0 and is a permanent false-negative on a
 		// self-authored single-user PR (pre-mortem F1; see
-		// session/stuck_decisions.go prReadyToMergeSolo doc).
+		// session/backlog/stuck/decisions.go stuck.PRReadyToMergeSolo doc).
 		info := &github.PRInfo{
 			State:                 "open",
 			IsDraft:               prStatus.IsDraft,
@@ -1963,11 +1964,11 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 		if prStatus.CIFailing {
 			info.CheckConclusion = "failure"
 		} else if prStatus.CIPending {
-			// "" means "no CI configured" to prReadyToMergeSolo; running CI is not ready.
+			// "" means "no CI configured" to stuck.PRReadyToMergeSolo; running CI is not ready.
 			info.CheckConclusion = "pending"
 		}
 
-		if prReadyToMergeSolo(info) {
+		if stuck.PRReadyToMergeSolo(info) {
 			l.markPRReadyUnmerged(ctx, er, item.ID.String(), item.Title)
 		} else {
 			l.resolveStuckLogged(ctx, er, item.ID.String(), domain.StuckReasonPRReadyUnmerged, "ReconcilePRPending")
@@ -2522,8 +2523,8 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 }
 
 // markPRReadyUnmerged marks/refreshes the durable pr_ready_unmerged row for
-// itemID and notifies once it has been solo-ready (stuckPRReady) past
-// prReadyThreshold — DB-backed notify-once dedup via notified_at, and
+// itemID and notifies once it has been solo-ready (stuck.PRReady) past
+// stuck.PRReadyThreshold — DB-backed notify-once dedup via notified_at, and
 // first_detected_at survives restarts (unlike a process-uptime timer).
 // Best-effort: errors are logged, never returned.
 func (l *BacklogLifecycleListener) markPRReadyUnmerged(ctx context.Context, er *session.EntRepository, itemID, itemTitle string) {
@@ -2542,13 +2543,13 @@ func (l *BacklogLifecycleListener) markPRReadyUnmerged(ctx context.Context, er *
 		return
 	}
 	row, ok := session.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonPRReadyUnmerged)
-	if !ok || row.NotifiedAt != nil || !stuckPRReady(row.FirstDetectedAt, time.Now()) {
+	if !ok || row.NotifiedAt != nil || !stuck.PRReady(row.FirstDetectedAt, time.Now()) {
 		return
 	}
 	log.InfoLog().Printf("[BacklogLifecycle] item %s PR #%d ready to merge (unmerged past threshold)", itemID, row.PrNumber)
 	l.notify(itemID,
 		"PR ready to merge",
-		fmt.Sprintf("%s — PR #%d is green, mergeable, and has been ready to merge for over %s. Merge it on GitHub.", itemTitle, row.PrNumber, prReadyThreshold),
+		fmt.Sprintf("%s — PR #%d is green, mergeable, and has been ready to merge for over %s. Merge it on GitHub.", itemTitle, row.PrNumber, stuck.PRReadyThreshold),
 		8,          // sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING
 		true, true, // urgent, important — green and mergeable but sitting past the ready threshold; a real, actionable nudge
 	)

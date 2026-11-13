@@ -971,7 +971,7 @@ func newStuckReviewTestItemWithVerdictAge(t *testing.T, storage *session.Storage
 // TestReconcileStuckReviewItems_NotifiesOncePerItem verifies the ReconcileStuck
 // safety net surfaces abandoned review items via a notification (fixing their
 // total invisibility to both the human operator and every other reconciler),
-// once the 15-minute grace (Story 2.1.3, abandonedReview pure fn) has
+// once the 15-minute grace (Story 2.1.3, stuck.AbandonedReview pure fn) has
 // elapsed, and that repeat ticks do not re-notify for the same item.
 func TestReconcileStuckReviewItems_NotifiesOncePerItem(t *testing.T) {
 	t.Parallel()
@@ -3845,7 +3845,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 // this fix — RemediationDue's own ungated-until-first-detected default means
 // the reopen genuinely gets attempted here too), then a "bouncing" row opens
 // mid-backoff in between ticks (the shape reconcileBouncingItems produces once
-// its own bounceThreshold trips, mirroring TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue's
+// its own stuck.BounceThreshold trips, mirroring TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue's
 // identical seed for the live DB state BUG-043 found on this same item), then
 // tick 2 reprocesses the SAME dead SessionUUID with the gate now blocked.
 // Pre-fix, tick 2 notifies again regardless of the gate; post-fix it must not.
@@ -3880,7 +3880,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 		"tick 1 is a fresh detection and must notify")
 
 	// Between ticks: a "bouncing" stuck row opens mid-backoff — mirrors
-	// reconcileBouncingItems tripping its own bounceThreshold independently,
+	// reconcileBouncingItems tripping its own stuck.BounceThreshold independently,
 	// the live DB state BUG-043 found on this exact item.
 	_, err := er.MarkStuck(ctx, reviewIS.BacklogItemID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bounced previously")
 	require.NoError(t, err)
