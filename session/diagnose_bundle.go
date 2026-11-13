@@ -98,7 +98,7 @@ type DiagnosticBundleInput struct {
 	ItemTitle        string
 	ItemDescription  string
 	ItemStatus       string
-	AcCriteria       []AcCriterion
+	AcCriteria       []domain.AcCriterion
 	ActivityHistory  []backlogdto.ActivityNoteData
 	ReviewVerdicts   []DiagnosticReviewVerdict
 	LinkedSessions   []DiagnosticLinkedSession

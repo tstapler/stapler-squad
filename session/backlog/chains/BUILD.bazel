@@ -14,6 +14,7 @@ go_library(
         "//log",
         "//session",
         "//session/backlog/pipeline",
+        "//session/domain",
         "//session/domain/backlogdto",
         "//tools/bzl/ent",
         "@com_github_google_uuid//:uuid",
@@ -36,6 +37,7 @@ go_test(
     deps = [
         "//config",
         "//session",
+        "//session/domain",
         "//session/domain/backlogdto",
         "//testutil/wait",
         "//tools/bzl/ent",

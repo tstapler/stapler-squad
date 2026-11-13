@@ -456,7 +456,7 @@ func reviewVerdictDataToProto(v *backlogdto.ReviewVerdictData, occurredAt time.T
 		p.OverrideAt = timestamppb.New(*v.OverrideAt)
 	}
 	if v.PerCriterion != "" {
-		var cvs []session.CriterionVerdict
+		var cvs []domain.CriterionVerdict
 		if err := json.Unmarshal([]byte(v.PerCriterion), &cvs); err == nil {
 			p.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 			for i, cv := range cvs {

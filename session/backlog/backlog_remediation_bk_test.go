@@ -42,13 +42,13 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 	// BUG-083 cold-retry deadline already elapsed).
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "parked orphaned-triage item (sdd mode)",
-		Status:       string(session.BacklogStatusIdea),
+		Status:       string(domain.BacklogStatusIdea),
 		PipelineMode: "sdd",
 	})
 	require.NoError(t, err)
 	itemID := item.ID
 
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonOrphanedTriage, session.BacklogStatusIdea, "orphaned triage")
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonOrphanedTriage, domain.BacklogStatusIdea, "orphaned triage")
 	require.NoError(t, err)
 
 	sevenDaysAgo := time.Now().Add(-7*24*time.Hour - time.Hour)
@@ -72,7 +72,7 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 	livenessRepo := liveness.NewEntLivenessRepository(storage.GetEntClient())
 	sddMode := "sdd"
 	_, err = livenessRepo.Create(ctx, liveness.LivenessCreateInput{
-		StageSlug:    string(session.BacklogStatusIdea),
+		StageSlug:    string(domain.BacklogStatusIdea),
 		PipelineMode: &sddMode,
 		Definition: liveness.LivenessDefinition{
 			Kind:             liveness.LivenessKindDurationBudget,
@@ -87,7 +87,7 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 	// Prove the override actually resolves through liveness.LivenessEngine — the
 	// "write side" this test composes against, so a failure here (rather than
 	// below) would mean the fixture is wrong, not that RemediationDue broke.
-	resolved, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
+	resolved, err := engine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 	require.NoError(t, err)
 	require.Equal(t, liveness.LivenessKindDurationBudget, resolved.Kind)
 	assert.Equal(t, 55*time.Minute, resolved.StalenessThreshold(), "sdd-mode override must resolve to the new 55m derived threshold, not the old 35m default")

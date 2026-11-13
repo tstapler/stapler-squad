@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -250,7 +250,7 @@ func TestBuildHeadlessTriagePrompt_InstructsJSONOutput(t *testing.T) {
 func TestBuildHeadlessTriagePrompt_IncludesAcceptanceCriteria(t *testing.T) {
 	t.Parallel()
 	// ParseAcCriteria expects JSON-encoded criteria.
-	acJSON := session.AcCriteriaJSON(`[{"index":1,"text":"User can log in","status":"pending"},{"index":2,"text":"User can log out","status":"pending"}]`)
+	acJSON := domain.AcCriteriaJSON(`[{"index":1,"text":"User can log in","status":"pending"},{"index":2,"text":"User can log out","status":"pending"}]`)
 	item := &backlogdto.BacklogItemData{
 		Title:              "AC Test",
 		ID:                 "id-2",

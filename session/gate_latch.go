@@ -20,7 +20,7 @@ const latchedGateDescription = "previously satisfied (stateful gate latched)"
 
 // evaluateStructuralOrLatched evaluates a structural gate fresh, except that an
 // effectively-stateful one answers from its latch record when present.
-func (e *ConfiguredWorkflowEngine) evaluateStructuralOrLatched(g resolvedGate, item BacklogItemTransitionInput) domain.GateStatus {
+func (e *ConfiguredWorkflowEngine) evaluateStructuralOrLatched(g resolvedGate, item domain.BacklogItemTransitionInput) domain.GateStatus {
 	if g.effectiveStateful() && e.isLatched(g, item.ItemID) {
 		return domain.GateStatus{GateID: g.ID.String(), Kind: domain.GateKindStructural, Satisfied: true, Description: latchedGateDescription}
 	}
@@ -51,7 +51,7 @@ func (e *ConfiguredWorkflowEngine) latchKey(itemID string) (uuid.UUID, bool) {
 // it only after the transition committed and outside any transaction. A failed
 // write is logged and never undoes the committed transition; the gate then
 // stays unlatched and is simply re-evaluated next time.
-func (e *ConfiguredWorkflowEngine) RecordLatchesAfterCommit(item BacklogItemTransitionInput, to BacklogStatus) {
+func (e *ConfiguredWorkflowEngine) RecordLatchesAfterCommit(item domain.BacklogItemTransitionInput, to domain.BacklogStatus) {
 	itemUUID, ok := e.latchKey(item.ItemID)
 	if !ok {
 		return
@@ -79,7 +79,7 @@ type gateLatchClearer interface {
 // ClearLatches removes the latch of each effectively-stateful structural gate on
 // the from->to edge, so an undone transition does not leave the gate answering
 // "previously satisfied". A failure is logged; the stale latch then stays.
-func (e *ConfiguredWorkflowEngine) ClearLatches(itemID string, from, to BacklogStatus) {
+func (e *ConfiguredWorkflowEngine) ClearLatches(itemID string, from, to domain.BacklogStatus) {
 	itemUUID, ok := e.latchKey(itemID)
 	clearer, canClear := e.gateSatisfactionRepo.(gateLatchClearer)
 	if !ok || !canClear {
@@ -110,7 +110,7 @@ func (e *ConfiguredWorkflowEngine) lookupTimeout() time.Duration {
 
 // ClearLatches undoes RecordLatchesAfterCommit for the from->to edge; a no-op
 // without a usable Configured engine.
-func (s *SwitchableWorkflowEngine) ClearLatches(itemID string, from, to BacklogStatus) {
+func (s *SwitchableWorkflowEngine) ClearLatches(itemID string, from, to domain.BacklogStatus) {
 	if cfg, _ := s.Enf.usableConfigured(); cfg != nil {
 		cfg.ClearLatches(itemID, from, to)
 	}
@@ -138,13 +138,13 @@ func (e *ConfiguredWorkflowEngine) recordLatch(itemID, gateID uuid.UUID) error {
 // commitObserver is implemented by the class-aware view so the gate can latch
 // one-shot gates after a transition commits.
 type commitObserver interface {
-	TransitionCommitted(item BacklogItemTransitionInput, to BacklogStatus)
+	TransitionCommitted(item domain.BacklogItemTransitionInput, to domain.BacklogStatus)
 }
 
 // TransitionCommitted latches the edge's stateful structural gates, but only
 // where the Configured gates actually decided: Enforce mode, usable config, and
 // no operator override.
-func (v engineView) TransitionCommitted(item BacklogItemTransitionInput, to BacklogStatus) {
+func (v engineView) TransitionCommitted(item domain.BacklogItemTransitionInput, to domain.BacklogStatus) {
 	if v.mode() != ModeEnforce || v.pol.bypassesOperatorGates(item) {
 		return
 	}
@@ -153,7 +153,7 @@ func (v engineView) TransitionCommitted(item BacklogItemTransitionInput, to Back
 	}
 }
 
-func notifyTransitionCommitted(view domain.WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) {
+func notifyTransitionCommitted(view domain.WorkflowEngine, item domain.BacklogItemTransitionInput, to domain.BacklogStatus) {
 	if o, ok := view.(commitObserver); ok {
 		o.TransitionCommitted(item, to)
 	}

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -70,9 +70,9 @@ const characterizationArtifactAbsPath = "/artifacts/char-fixture"
 // inputs BuildHeadlessReviewPrompt/ReviewPromptFor need. acSnapshot is derived
 // from the fixture item's own AcceptanceCriteria so the review prompt's
 // "## Acceptance Criteria" section matches the fixture's shape (0/1/2+).
-func characterizationReviewParams(t *testing.T, item *backlogdto.BacklogItemData) (acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) {
+func characterizationReviewParams(t *testing.T, item *backlogdto.BacklogItemData) (acSnapshot []domain.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) {
 	t.Helper()
-	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if err != nil {
 		t.Fatalf("ParseAcCriteria(%s): %v", item.ID, err)
 	}

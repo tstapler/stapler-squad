@@ -223,7 +223,7 @@ func (l *prwatchBacklogLinks) Pending(ctx context.Context, uuids []string) (pend
 			case gerr != nil || item == nil:
 				v.failed = true
 			default:
-				v.pending = item.Status == string(session.BacklogStatusPRPending)
+				v.pending = item.Status == string(domain.BacklogStatusPRPending)
 			}
 			byItem[itemID] = v
 		}

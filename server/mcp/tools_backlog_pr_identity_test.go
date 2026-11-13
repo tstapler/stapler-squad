@@ -11,6 +11,7 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -26,7 +27,7 @@ func asVerified(ctx context.Context) context.Context {
 func reportPRIdentityRig(t *testing.T) (mcpserver.ToolHandlerFunc, *session.Storage, *backlogdto.BacklogItemData, string) {
 	t.Helper()
 	storage := newTestBacklogStorage(t)
-	item, workUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, workUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	h := &backlogHandlers{
 		storage:            storage,
 		resolveSessionRepo: testSessionRepo, resolveSessionBranch: func(context.Context, string) (string, error) { return "backlog/ship-it", nil },
@@ -87,7 +88,7 @@ func TestReportPRCreatedIdentity_should_OnlyTrustTheVerifiedCredential(t *testin
 func TestReportPRCreatedIdentity_should_RejectVerifiedCallerLinkedToAnotherItem(t *testing.T) {
 	t.Parallel()
 	handler, storage, _, workUUID := reportPRIdentityRig(t)
-	other, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "Other", Status: string(session.BacklogStatusReview)})
+	other, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "Other", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	res, err := handler(asVerified(WithSessionUUID(context.Background(), workUUID)), makeToolReq(map[string]interface{}{
 		"item_id": other.ID, "pr_url": "https://github.com/tstapler/stapler-squad/pull/42",

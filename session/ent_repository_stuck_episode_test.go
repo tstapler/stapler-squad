@@ -166,7 +166,7 @@ func episodesFor(t *testing.T, repo *EntRepository, itemID string) []*ent.Backlo
 
 func markEpisodeItem(t *testing.T, repo *EntRepository, itemID string) {
 	t.Helper()
-	applied, err := repo.MarkStuck(context.Background(), itemID, episodeReason, BacklogStatusPRPending, "ctx")
+	applied, err := repo.MarkStuck(context.Background(), itemID, episodeReason, domain.BacklogStatusPRPending, "ctx")
 	require.NoError(t, err)
 	require.True(t, applied)
 }
@@ -176,7 +176,7 @@ func TestMarkStuck_should_OpenOneEpisodeAndSecondOnRecurrence_When_ResolvedThenM
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 
 	markEpisodeItem(t, repo, itemID)
 	markEpisodeItem(t, repo, itemID) // idempotent refresh: no second episode
@@ -205,7 +205,7 @@ func TestMarkStuck_should_CreateExactlyOneOpenEpisode_When_8GoroutinesMarkConcur
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 
 	const workers = 8
 	start := make(chan struct{})
@@ -216,7 +216,7 @@ func TestMarkStuck_should_CreateExactlyOneOpenEpisode_When_8GoroutinesMarkConcur
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := repo.MarkStuck(ctx, itemID, episodeReason, BacklogStatusPRPending, "ctx")
+			_, err := repo.MarkStuck(ctx, itemID, episodeReason, domain.BacklogStatusPRPending, "ctx")
 			errs <- err
 		}()
 	}
@@ -235,13 +235,13 @@ func TestMarkStuckResolveStuck_should_NotHang_When_WriterPoolOneConnection2sTime
 	repo, err := NewEntRepository(WithDatabasePath(filepath.Join(t.TempDir(), "sessions.db")))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = repo.Close() })
-	itemID := createStuckTestItem(t, repo, context.Background(), BacklogStatusPRPending)
+	itemID := createStuckTestItem(t, repo, context.Background(), domain.BacklogStatusPRPending)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		if _, err := repo.MarkStuck(ctx, itemID, episodeReason, BacklogStatusPRPending, "ctx"); err != nil {
+		if _, err := repo.MarkStuck(ctx, itemID, episodeReason, domain.BacklogStatusPRPending, "ctx"); err != nil {
 			done <- fmt.Errorf("mark: %w", err)
 			return
 		}
@@ -267,7 +267,7 @@ func TestResolveStuck_should_CloseOnlyOpenEpisodeAtomically_When_StateUpdateAffe
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 
 	markEpisodeItem(t, repo, itemID)
 	_, err := repo.ResolveStuck(ctx, itemID, episodeReason)
@@ -285,7 +285,7 @@ func TestResolveStuck_should_CloseOnlyOpenEpisodeAtomically_When_StateUpdateAffe
 	require.NotNil(t, eps[1].ResolvedAt)
 
 	// Zero-row state UPDATE (already resolved) touches no episode.
-	orphanItem := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	orphanItem := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 	orphan := uuid.MustParse(orphanItem)
 	require.NoError(t, insertOpenEpisode(ctx, repo, orphan, string(episodeReason)))
 	resolved, err = repo.ResolveStuck(ctx, orphanItem, episodeReason)
@@ -304,7 +304,7 @@ func TestMarkStuck_should_CommitStateAndLogWarning_When_EpisodeTableMissing(t *t
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 	episodeExec(t, repo, "DROP TABLE backlog_stuck_episodes")
 
 	var buf bytes.Buffer
@@ -313,7 +313,7 @@ func TestMarkStuck_should_CommitStateAndLogWarning_When_EpisodeTableMissing(t *t
 	l.SetOutput(&buf)
 	defer l.SetOutput(prev)
 
-	applied, err := repo.MarkStuck(ctx, itemID, episodeReason, BacklogStatusPRPending, "ctx")
+	applied, err := repo.MarkStuck(ctx, itemID, episodeReason, domain.BacklogStatusPRPending, "ctx")
 	require.NoError(t, err)
 	assert.True(t, applied)
 	state, err := repo.Client.BacklogStuckState.Query().Only(ctx)
@@ -367,7 +367,7 @@ func TestResolveStuck_should_OpenNoTransaction_When_NothingToResolve(t *testing.
 	repo, cleanup := createTestEntRepository(t)
 	defer cleanup()
 	ctx := context.Background()
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 	drv := &flowMarkerCountingDriver{Driver: repo.driver}
 	repo.Client = ent.NewClient(ent.Driver(drv))
 

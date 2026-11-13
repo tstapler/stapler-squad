@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/flow"
@@ -82,7 +83,7 @@ func TestEntFlowReader_should_ReturnBuiltInStagesInPipelineOrder_When_DefaultEng
 	got, err := NewEntFlowReader(nil).Stages(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, BuiltInStageOrder, got)
-	require.Contains(t, got, BacklogStatusRefining)
+	require.Contains(t, got, domain.BacklogStatusRefining)
 }
 
 func TestPipelineStages_should_PlaceCustomStageAtConfiguredPosition_When_ConfiguredEngine(t *testing.T) {
@@ -95,19 +96,19 @@ func TestPipelineStages_should_PlaceCustomStageAtConfiguredPosition_When_Configu
 		_, err := client.StageTransition.Create().SetFromStageID(from.ID).SetToStageID(to.ID).SetEnabled(true).Save(ctx)
 		require.NoError(t, err)
 	}
-	stage := func(s BacklogStatus) *ent.BacklogStage {
+	stage := func(s domain.BacklogStatus) *ent.BacklogStage {
 		st, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(s))).Only(ctx)
 		require.NoError(t, err)
 		return st
 	}
-	edge(stage(BacklogStatusReview), qa)
-	edge(qa, stage(BacklogStatusPRPending))
+	edge(stage(domain.BacklogStatusReview), qa)
+	edge(qa, stage(domain.BacklogStatusPRPending))
 	require.NoError(t, engine.InvalidateCache(ctx))
 
 	got := PipelineStages(engine)
-	want := []BacklogStatus{
-		BacklogStatusIdea, BacklogStatusRefining, BacklogStatusReady, BacklogStatusQueued, BacklogStatusInProgress,
-		BacklogStatusReview, "qa", BacklogStatusPRPending, BacklogStatusDone, BacklogStatusArchived,
+	want := []domain.BacklogStatus{
+		domain.BacklogStatusIdea, domain.BacklogStatusRefining, domain.BacklogStatusReady, domain.BacklogStatusQueued, domain.BacklogStatusInProgress,
+		domain.BacklogStatusReview, "qa", domain.BacklogStatusPRPending, domain.BacklogStatusDone, domain.BacklogStatusArchived,
 	}
 	require.Equal(t, want, got)
 }

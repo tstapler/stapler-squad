@@ -11,37 +11,37 @@ func TestGuardedTransitionAllowed(t *testing.T) {
 
 	tests := []struct {
 		name string
-		item BacklogItemTransitionInput
-		to   BacklogStatus
+		item domain.BacklogItemTransitionInput
+		to   domain.BacklogStatus
 		want bool
 	}{
 		{
 			name: "idea to archived is a valid edge with no gate",
-			item: BacklogItemTransitionInput{Status: BacklogStatusIdea},
-			to:   BacklogStatusArchived,
+			item: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea},
+			to:   domain.BacklogStatusArchived,
 			want: true,
 		},
 		{
 			name: "in_progress to archived has no such edge",
-			item: BacklogItemTransitionInput{Status: BacklogStatusInProgress},
-			to:   BacklogStatusArchived,
+			item: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusInProgress},
+			to:   domain.BacklogStatusArchived,
 			want: false,
 		},
 		{
 			name: "review to done with a passing verdict",
-			item: BacklogItemTransitionInput{
-				Status:         BacklogStatusReview,
-				OverallOutcome: ReviewOutcomePass,
+			item: domain.BacklogItemTransitionInput{
+				Status:         domain.BacklogStatusReview,
+				OverallOutcome: domain.ReviewOutcomePass,
 			},
-			to:   BacklogStatusDone,
+			to:   domain.BacklogStatusDone,
 			want: true,
 		},
 		{
 			name: "review to done with no verdict fails ErrVerdictRequired gate",
-			item: BacklogItemTransitionInput{
-				Status: BacklogStatusReview,
+			item: domain.BacklogItemTransitionInput{
+				Status: domain.BacklogStatusReview,
 			},
-			to:   BacklogStatusDone,
+			to:   domain.BacklogStatusDone,
 			want: false,
 		},
 	}
@@ -67,7 +67,7 @@ func TestDefaultWorkflowEngine_PendingGates_should_TranslateTransitionGuard_When
 	t.Parallel()
 	engine := NewDefaultWorkflowEngine()
 
-	statuses, err := engine.PendingGates(BacklogItemTransitionInput{Status: BacklogStatusReview}, BacklogStatusDone, nil)
+	statuses, err := engine.PendingGates(domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview}, domain.BacklogStatusDone, nil)
 	if err != nil {
 		t.Fatalf("PendingGates returned error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestDefaultWorkflowEngine_PendingGates_should_TranslateTransitionGuard_When
 		t.Errorf("expected GateKindStructural, got %v", statuses[0].Kind)
 	}
 
-	statuses, err = engine.PendingGates(BacklogItemTransitionInput{Status: BacklogStatusIdea}, BacklogStatusArchived, nil)
+	statuses, err = engine.PendingGates(domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}, domain.BacklogStatusArchived, nil)
 	if err != nil {
 		t.Fatalf("PendingGates returned error: %v", err)
 	}
@@ -91,15 +91,15 @@ func TestDefaultWorkflowEngine_PendingGates_should_TranslateTransitionGuard_When
 
 	// review->done WITH a passing verdict must report Satisfied: true, and
 	// ValidateGates (the thin wrapper) must agree.
-	passingItem := BacklogItemTransitionInput{Status: BacklogStatusReview, OverallOutcome: ReviewOutcomePass}
-	statuses, err = engine.PendingGates(passingItem, BacklogStatusDone, nil)
+	passingItem := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
+	statuses, err = engine.PendingGates(passingItem, domain.BacklogStatusDone, nil)
 	if err != nil {
 		t.Fatalf("PendingGates returned error: %v", err)
 	}
 	if len(statuses) != 1 || !statuses[0].Satisfied {
 		t.Fatalf("expected review->done with a passing verdict to be satisfied, got %+v", statuses)
 	}
-	if err := engine.ValidateGates(passingItem, BacklogStatusDone, nil); err != nil {
+	if err := engine.ValidateGates(passingItem, domain.BacklogStatusDone, nil); err != nil {
 		t.Errorf("ValidateGates should agree with PendingGates and return nil, got %v", err)
 	}
 }

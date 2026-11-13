@@ -135,13 +135,13 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 	newBouncingFixture := func(title string) *backlogdto.BacklogItemData {
 		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  title,
-			Status: string(session.BacklogStatusInProgress),
+			Status: string(domain.BacklogStatusInProgress),
 		})
 		require.NoError(t, err)
 		for i := 0; i < stuck.BounceThreshold; i++ {
-			_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
+			_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReview, nil, session.TriggeredBySystem)
 			require.NoError(t, err)
-			_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 			require.NoError(t, err)
 		}
 		return item

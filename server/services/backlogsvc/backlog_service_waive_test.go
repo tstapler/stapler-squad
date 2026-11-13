@@ -9,20 +9,20 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func newWaiveService(t *testing.T) (*BacklogService, string) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
-	ac, err := session.SerializeAcCriteria([]session.AcCriterion{
-		{Index: 0, Text: "needs macOS proof", Status: session.AcStatusPending},
+	ac, err := domain.SerializeAcCriteria([]domain.AcCriterion{
+		{Index: 0, Text: "needs macOS proof", Status: domain.AcStatusPending},
 	})
 	require.NoError(t, err)
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:              "waive item",
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		AcceptanceCriteria: ac,
 	})
 	require.NoError(t, err)
@@ -39,7 +39,7 @@ func TestWaiveAcceptanceCriterion_should_RecordWaiverAndReturnItem_When_ReasonGi
 
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Item.AcceptanceCriteria, 1)
-	assert.Equal(t, string(session.AcStatusWaived), resp.Msg.Item.AcceptanceCriteria[0].Status)
+	assert.Equal(t, string(domain.AcStatusWaived), resp.Msg.Item.AcceptanceCriteria[0].Status)
 	assert.Equal(t, "owner accepts", resp.Msg.Item.AcceptanceCriteria[0].WaiverReason)
 }
 

@@ -47,7 +47,7 @@ func (f *fakeSyncPlugin) MapToBacklogItem(item ExternalItem, sourceID string) ba
 		Title:       item.Title,
 		Description: item.Description,
 		Priority:    item.Priority,
-		Status:      string(BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
 		SourceID:    sourceID,
 		ExternalURL: item.URL,
@@ -204,7 +204,7 @@ func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
 		Title:       "Local Title",
 		Description: "Remote Desc",
 		Priority:    1,
-		Status:      string(BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  "ext-1",
 		SourceID:    sourceID,
 	})
@@ -253,7 +253,7 @@ func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
 		Title:       "Local",
 		Description: "Local",
 		Priority:    2,
-		Status:      string(BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  "ext-1",
 		SourceID:    sourceID,
 	})
@@ -413,11 +413,11 @@ func TestGetBacklogItemsByExternalIDs_ScopesToSourceAndIgnoresMissing(t *testing
 	srcB, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "fake-b", DisplayName: "Repo B", Enabled: true})
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "A1", Status: string(BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "1"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "A1", Status: string(domain.BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "1"})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "A2", Status: string(BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "2"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "A2", Status: string(domain.BacklogStatusIdea), SourceID: srcA.ID, ExternalID: "2"})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "B1", Status: string(BacklogStatusIdea), SourceID: srcB.ID, ExternalID: "1"})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "B1", Status: string(domain.BacklogStatusIdea), SourceID: srcB.ID, ExternalID: "1"})
 	require.NoError(t, err)
 
 	// "3" doesn't exist at all; "1" exists on both sources but this query is
@@ -592,7 +592,7 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 		Title:       "Original Title",
 		Description: "Remote Desc",
 		Priority:    1,
-		Status:      string(BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  "ext-1",
 		SourceID:    sourceID,
 	})
@@ -627,19 +627,19 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 func TestDetermineBackwardSyncTarget_ReturnsArchivedForPreWorkStatuses_And_NoTargetOtherwise(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		current    BacklogStatus
-		wantTarget BacklogStatus
+		current    domain.BacklogStatus
+		wantTarget domain.BacklogStatus
 		wantOK     bool
 	}{
-		{BacklogStatusIdea, BacklogStatusArchived, true},
-		{BacklogStatusRefining, BacklogStatusArchived, true},
-		{BacklogStatusReady, BacklogStatusArchived, true},
-		{BacklogStatusQueued, BacklogStatusArchived, true},
-		{BacklogStatusInProgress, "", false},
-		{BacklogStatusReview, "", false},
-		{BacklogStatusPRPending, "", false},
-		{BacklogStatusDone, "", false},
-		{BacklogStatusArchived, "", false},
+		{domain.BacklogStatusIdea, domain.BacklogStatusArchived, true},
+		{domain.BacklogStatusRefining, domain.BacklogStatusArchived, true},
+		{domain.BacklogStatusReady, domain.BacklogStatusArchived, true},
+		{domain.BacklogStatusQueued, domain.BacklogStatusArchived, true},
+		{domain.BacklogStatusInProgress, "", false},
+		{domain.BacklogStatusReview, "", false},
+		{domain.BacklogStatusPRPending, "", false},
+		{domain.BacklogStatusDone, "", false},
+		{domain.BacklogStatusArchived, "", false},
 	}
 
 	for _, tt := range tests {
@@ -670,7 +670,7 @@ func TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem(t *testing.T) {
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusReady),
+		Status:     string(domain.BacklogStatusReady),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 	})
@@ -683,7 +683,7 @@ func TestSyncOne_BackwardSync_ClosedIssueArchivesReadyItem(t *testing.T) {
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusArchived), refetched.Status)
+	require.Equal(t, string(domain.BacklogStatusArchived), refetched.Status)
 	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt)
 	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(issueUpdatedAt))
 }
@@ -705,7 +705,7 @@ func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusInProgress),
+		Status:     string(domain.BacklogStatusInProgress),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 	})
@@ -718,7 +718,7 @@ func TestSyncOne_BackwardSync_ClosedIssueSkipsInProgressItem(t *testing.T) {
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusInProgress), refetched.Status, "no valid target for in_progress under ADR-002")
+	require.Equal(t, string(domain.BacklogStatusInProgress), refetched.Status, "no valid target for in_progress under ADR-002")
 	// Regression guard: nothing changed locally on this skip branch, so the
 	// loop-prevention watermark must NOT advance — otherwise a later manual
 	// revert to a pre-work status (with no further GitHub-side change) would
@@ -755,7 +755,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusInProgress),
+		Status:     string(domain.BacklogStatusInProgress),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 	})
@@ -769,12 +769,12 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusInProgress), refetched.Status)
+	require.Equal(t, string(domain.BacklogStatusInProgress), refetched.Status)
 	require.Nil(t, refetched.GitHubSyncedIssueUpdatedAt)
 
 	// Simulate a manual revert to a pre-work status (e.g. the in-progress
 	// session was abandoned) — no GitHub-side change accompanies this.
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, created.ID, BacklogStatusReady, nil, TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, created.ID, domain.BacklogStatusReady, nil, TriggeredBySystem)
 	require.NoError(t, err)
 
 	// Tick 2: same closed issue, same IssueUpdatedAt. If the watermark had
@@ -783,7 +783,7 @@ func TestSyncOne_BackwardSync_NoValidTargetSkipAllowsLaterReprocessing(t *testin
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
 	refetched, err = storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusArchived), refetched.Status, "tick 2 must still reprocess and archive")
+	require.Equal(t, string(domain.BacklogStatusArchived), refetched.Status, "tick 2 must still reprocess and archive")
 }
 
 // TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled proves the master
@@ -803,7 +803,7 @@ func TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled(t *testing.T) {
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusReady),
+		Status:     string(domain.BacklogStatusReady),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 	})
@@ -816,7 +816,7 @@ func TestSyncOne_BackwardSync_NoOpWhenBackwardSyncDisabled(t *testing.T) {
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusReady), refetched.Status, "backward sync disabled — no transition")
+	require.Equal(t, string(domain.BacklogStatusReady), refetched.Status, "backward sync disabled — no transition")
 	require.Nil(t, refetched.GitHubSyncedIssueUpdatedAt, "watermark must not advance when backward sync is disabled")
 }
 
@@ -838,7 +838,7 @@ func TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem(t *testing.T) {
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusDone),
+		Status:     string(domain.BacklogStatusDone),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 	})
@@ -851,7 +851,7 @@ func TestSyncOne_BackwardSync_DoesNotReArchiveAlreadyDoneItem(t *testing.T) {
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusDone), refetched.Status, "done items are never auto-archived")
+	require.Equal(t, string(domain.BacklogStatusDone), refetched.Status, "done items are never auto-archived")
 }
 
 // TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp pins ADR-002's
@@ -874,7 +874,7 @@ func TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp(t *testing.T) 
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusArchived),
+		Status:     string(domain.BacklogStatusArchived),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 	})
@@ -887,7 +887,7 @@ func TestSyncOne_BackwardSync_ReopenedIssueOnArchivedItemLogsNoOp(t *testing.T) 
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusArchived), refetched.Status, "reopen is log-only; no automatic re-triage")
+	require.Equal(t, string(domain.BacklogStatusArchived), refetched.Status, "reopen is log-only; no automatic re-triage")
 	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt, "watermark must advance so the reopen isn't re-logged every tick")
 	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(issueUpdatedAt))
 }
@@ -909,7 +909,7 @@ func TestSyncOne_BackwardSync_UpdatesLabelsWhenNotUserLocked(t *testing.T) {
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusIdea),
+		Status:     string(domain.BacklogStatusIdea),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 		Labels:     []string{"bug"},
@@ -943,7 +943,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenUserLocked(t *testing.T) {
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusIdea),
+		Status:     string(domain.BacklogStatusIdea),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 		Labels:     []string{"bug"},
@@ -985,7 +985,7 @@ func TestSyncOne_BackwardSync_SkipsLabelsWhenBackwardSyncDisabled(t *testing.T) 
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusIdea),
+		Status:     string(domain.BacklogStatusIdea),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 		Labels:     []string{"bug"},
@@ -1022,7 +1022,7 @@ func TestSyncOne_BackfillsLabelsOnExistingItemWithNoLabels(t *testing.T) {
 		Title:       "Local Title",
 		Description: "Local Desc",
 		Priority:    1,
-		Status:      string(BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  "ext-1",
 		SourceID:    sourceID,
 		Labels:      nil,
@@ -1065,7 +1065,7 @@ func TestSyncOne_BackfillsLabelsRespectsUserModifiedFieldsGate(t *testing.T) {
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusIdea),
+		Status:     string(domain.BacklogStatusIdea),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 		Labels:     nil,
@@ -1110,7 +1110,7 @@ func TestSyncOne_BackfillsExternalURLEvenWhenAllOtherFieldsAreUserModified(t *te
 		Title:       "Local Title",
 		Description: "Local Desc",
 		Priority:    1,
-		Status:      string(BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  "ext-1",
 		SourceID:    sourceID,
 		ExternalURL: "",
@@ -1154,7 +1154,7 @@ func TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark(t *t
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusDone),
+		Status:     string(domain.BacklogStatusDone),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 		// GitHubSyncedIssueUpdatedAt deliberately left nil.
@@ -1169,7 +1169,7 @@ func TestSyncOne_BackwardSync_DoneItemClosedIssueIsNoOpEvenWithoutWatermark(t *t
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusDone), refetched.Status, "done→archived self-edge must never fire, watermark or not")
+	require.Equal(t, string(domain.BacklogStatusDone), refetched.Status, "done→archived self-edge must never fire, watermark or not")
 }
 
 // TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed
@@ -1193,7 +1193,7 @@ func TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed(t *
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:                      "Issue",
-		Status:                     string(BacklogStatusInProgress),
+		Status:                     string(domain.BacklogStatusInProgress),
 		ExternalID:                 "ext-1",
 		SourceID:                   sourceID,
 		GitHubSyncedIssueUpdatedAt: &t1,
@@ -1207,7 +1207,7 @@ func TestSyncOne_BackwardSync_ManualReopenAfterForwardSyncCloseIsNotReClosed(t *
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusInProgress), refetched.Status, "exact-echo of an already-reconciled watermark must not re-trigger a transition")
+	require.Equal(t, string(domain.BacklogStatusInProgress), refetched.Status, "exact-echo of an already-reconciled watermark must not re-trigger a transition")
 }
 
 // TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed is AC7's
@@ -1230,7 +1230,7 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:                      "Issue",
-		Status:                     string(BacklogStatusReady),
+		Status:                     string(domain.BacklogStatusReady),
 		ExternalID:                 "ext-1",
 		SourceID:                   sourceID,
 		GitHubSyncedIssueUpdatedAt: &t1,
@@ -1244,7 +1244,7 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusArchived), refetched.Status, "genuinely newer external state must be processed")
+	require.Equal(t, string(domain.BacklogStatusArchived), refetched.Status, "genuinely newer external state must be processed")
 	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt)
 	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(t2))
 }
@@ -1259,16 +1259,16 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 // determineBackwardSyncTarget-returns-false branch, a different code path.
 type alwaysDenyWorkflowEngine struct{}
 
-func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ *domain.StageConfigSnapshot) bool {
+func (alwaysDenyWorkflowEngine) CanTransition(from, to domain.BacklogStatus, _ *domain.StageConfigSnapshot) bool {
 	return false
 }
-func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (alwaysDenyWorkflowEngine) PendingGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, _ *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	return nil, nil
 }
-func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *domain.StageConfigSnapshot) error {
+func (alwaysDenyWorkflowEngine) ValidateGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, _ *domain.StageConfigSnapshot) error {
 	return nil
 }
-func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *domain.StageConfigSnapshot) []BacklogStatus {
+func (alwaysDenyWorkflowEngine) AllowedTransitions(from domain.BacklogStatus, _ *domain.StageConfigSnapshot) []domain.BacklogStatus {
 	return nil
 }
 
@@ -1294,7 +1294,7 @@ func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testin
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusReady),
+		Status:     string(domain.BacklogStatusReady),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 	})
@@ -1307,7 +1307,7 @@ func TestSyncOne_BackwardSync_GuardDeniedTransitionIsSkippedNotApplied(t *testin
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusReady), refetched.Status, "a guard-denied transition must never be applied")
+	require.Equal(t, string(domain.BacklogStatusReady), refetched.Status, "a guard-denied transition must never be applied")
 
 	// Note: ItemsUpdated can still be non-zero here — Title/Description/
 	// Priority field-sync (unconditional, separate from the backward-sync
@@ -1343,7 +1343,7 @@ func TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile(t *testi
 	existingWatermark := time.Now().Add(-1 * time.Hour)
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:                      "Issue",
-		Status:                     string(BacklogStatusReady),
+		Status:                     string(domain.BacklogStatusReady),
 		ExternalID:                 "ext-1",
 		SourceID:                   sourceID,
 		GitHubSyncedIssueUpdatedAt: &existingWatermark,
@@ -1357,7 +1357,7 @@ func TestSyncOne_BackwardSync_ZeroIssueUpdatedAtDoesNotFalselyReconcile(t *testi
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusReady), refetched.Status, "a zero IssueUpdatedAt must not falsely short-circuit as already-reconciled or apply any transition")
+	require.Equal(t, string(domain.BacklogStatusReady), refetched.Status, "a zero IssueUpdatedAt must not falsely short-circuit as already-reconciled or apply any transition")
 	require.NotNil(t, refetched.GitHubSyncedIssueUpdatedAt)
 	require.True(t, refetched.GitHubSyncedIssueUpdatedAt.Equal(existingWatermark), "the real existing watermark must not be overwritten with the zero value")
 }
@@ -1387,7 +1387,7 @@ func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testin
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:      "Issue",
-		Status:     string(BacklogStatusReady),
+		Status:     string(domain.BacklogStatusReady),
 		ExternalID: "ext-1",
 		SourceID:   sourceID,
 	})
@@ -1410,7 +1410,7 @@ func TestSyncOne_BackwardSync_ClosedIssueTransitionCountsAsUpdatedOnce(t *testin
 
 	refetched, err := storage.GetBacklogItem(ctx, created.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(BacklogStatusArchived), refetched.Status)
+	require.Equal(t, string(domain.BacklogStatusArchived), refetched.Status)
 
 	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
 	require.NoError(t, err)
@@ -1494,19 +1494,19 @@ func TestTransitionBackward_GateOutcomes(t *testing.T) {
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
 	sl := &SyncLoop{storage: h.storage}
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, domain.GateKindHumanApproval, nil)
-	item := h.newItem(t, BacklogStatusIdea)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusIdea, domain.BacklogStatusArchived, domain.GateKindHumanApproval, nil)
+	item := h.newItem(t, domain.BacklogStatusIdea)
 
-	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
-	require.Equal(t, string(BacklogStatusIdea), h.status(t, item.ID))
+	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, domain.BacklogStatusIdea, domain.BacklogStatusArchived))
+	require.Equal(t, string(domain.BacklogStatusIdea), h.status(t, item.ID))
 	require.Len(t, h.rep.snapshot(), 1)
 	require.Equal(t, domain.CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
 
 	sessDisableGates(t, h)
-	require.Equal(t, backwardSyncOutcome{updated: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
-	require.Equal(t, string(BacklogStatusArchived), h.status(t, item.ID))
+	require.Equal(t, backwardSyncOutcome{updated: 1}, sl.transitionBackward(ctx, item.ID, domain.BacklogStatusIdea, domain.BacklogStatusArchived))
+	require.Equal(t, string(domain.BacklogStatusArchived), h.status(t, item.ID))
 
-	require.Equal(t, backwardSyncOutcome{errored: 1}, sl.transitionBackward(ctx, "no-such-item", BacklogStatusIdea, BacklogStatusArchived))
+	require.Equal(t, backwardSyncOutcome{errored: 1}, sl.transitionBackward(ctx, "no-such-item", domain.BacklogStatusIdea, domain.BacklogStatusArchived))
 }
 
 func TestTransitionBackward_StaleFromLosesCAS_ItemNotArchived(t *testing.T) {
@@ -1514,18 +1514,18 @@ func TestTransitionBackward_StaleFromLosesCAS_ItemNotArchived(t *testing.T) {
 	ctx := context.Background()
 	h := newGateHarness(t, ModeOff)
 	sl := &SyncLoop{storage: h.storage}
-	item := h.newItem(t, BacklogStatusReady)
-	h.moveRaw(t, item.ID, BacklogStatusInProgress)
+	item := h.newItem(t, domain.BacklogStatusReady)
+	h.moveRaw(t, item.ID, domain.BacklogStatusInProgress)
 
-	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusReady, BacklogStatusArchived))
-	require.Equal(t, string(BacklogStatusInProgress), h.status(t, item.ID))
+	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, domain.BacklogStatusReady, domain.BacklogStatusArchived))
+	require.Equal(t, string(domain.BacklogStatusInProgress), h.status(t, item.ID))
 }
 
 func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, domain.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusIdea, domain.BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	plugin := &fakeSyncPlugin{id: "fake", items: []ExternalItem{{ExternalID: "ext-1", Title: "Issue", State: "closed", IssueUpdatedAt: time.Now()}}}
 	registry := NewPluginRegistry()
 	registry.Register(plugin)
@@ -1533,13 +1533,13 @@ func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testi
 	sl.SetWorkflowEngine(h.sel)
 	src, err := h.storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "fake", DisplayName: "s", Enabled: true, BackwardSyncEnabled: true})
 	require.NoError(t, err)
-	created, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Issue", Status: string(BacklogStatusIdea), ExternalID: "ext-1", SourceID: src.ID})
+	created, err := h.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Issue", Status: string(domain.BacklogStatusIdea), ExternalID: "ext-1", SourceID: src.ID})
 	require.NoError(t, err)
 	entSrc, err := h.storage.Repo.GetItemSourceByID(ctx, src.ID)
 	require.NoError(t, err)
 
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
-	require.Equal(t, string(BacklogStatusIdea), h.status(t, created.ID))
+	require.Equal(t, string(domain.BacklogStatusIdea), h.status(t, created.ID))
 	require.Len(t, h.rep.snapshot(), 1, "the gate, not the pre-check, must deny and report")
 	require.Equal(t, domain.CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
 }

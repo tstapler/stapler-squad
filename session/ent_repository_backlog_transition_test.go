@@ -35,7 +35,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already-shipped item",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -47,20 +47,20 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 	// Meanwhile, the item's real review session's PASS verdict ships it all
 	// the way to "done" — a different call path than the stale reopen in
 	// flight, with no knowledge of it.
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus: string(BacklogStatusReview),
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusReview),
 	}, TriggeredBySystem)
 	require.NoError(t, err)
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus: string(BacklogStatusPRPending),
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusPRPending),
 	}, TriggeredBySystem)
 	require.NoError(t, err)
 
 	// The stale reopen attempt finally executes, using the precondition it
 	// captured before any of the above happened. It must be rejected — not
 	// silently applied on top of the now-shipped item.
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus:    string(BacklogStatusReview),
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus:    string(domain.BacklogStatusReview),
 		ExpectedUpdatedAt: &staleUpdatedAt,
 		Note:              "auto-reopened after failed review verdict",
 	}, TriggeredBySystem)
@@ -68,7 +68,7 @@ func TestTransitionBacklogItemStatus_should_rejectStaleReopen_When_ItemAlreadySh
 
 	final, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusDone), final.Status, "item must remain done, not bounce back to in_progress")
+	assert.Equal(t, string(domain.BacklogStatusDone), final.Status, "item must remain done, not bounce back to in_progress")
 }
 
 // TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoWritersRaceConcurrently
@@ -87,7 +87,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "racing writers item",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -96,18 +96,18 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 	startBarrier.Add(1)
 	results := make(chan error, 2)
 
-	race := func(toStatus BacklogStatus) {
+	race := func(toStatus domain.BacklogStatus) {
 		defer wg.Done()
 		startBarrier.Wait()
 		_, txErr := repo.RawTransitionBacklogItemStatus(ctx, item.ID, toStatus, &backlogdto.BacklogItemPrecondition{
-			ExpectedStatus: string(BacklogStatusReview),
+			ExpectedStatus: string(domain.BacklogStatusReview),
 		}, TriggeredBySystem)
 		results <- txErr
 	}
 
 	wg.Add(2)
-	go race(BacklogStatusDone)
-	go race(BacklogStatusInProgress)
+	go race(domain.BacklogStatusDone)
+	go race(domain.BacklogStatusInProgress)
 	startBarrier.Done()
 	wg.Wait()
 	close(results)
@@ -128,7 +128,7 @@ func TestTransitionBacklogItemStatus_should_letExactlyOneWinnerThrough_When_TwoW
 
 	final, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Contains(t, []string{string(BacklogStatusDone), string(BacklogStatusInProgress)}, final.Status,
+	assert.Contains(t, []string{string(domain.BacklogStatusDone), string(domain.BacklogStatusInProgress)}, final.Status,
 		"final status must be exactly one writer's intended toStatus, not a third bounced state")
 }
 
@@ -156,7 +156,7 @@ func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "utc timestamp regression item",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, time.UTC, item.UpdatedAt.Location(), "a freshly created item's updated_at must be stored in UTC")
@@ -164,8 +164,8 @@ func TestBacklogItem_UpdatedAt_should_BeStoredInUTC_When_CreatedOrTransitioned(t
 	// The exact scenario that broke: a caller builds a CAS precondition from
 	// a protobuf-Timestamp round trip (always UTC, e.g. timestamppb.New(t).AsTime()).
 	utcPrecondition := item.UpdatedAt.UTC()
-	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus:    string(BacklogStatusReview),
+	updated, err := repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus:    string(domain.BacklogStatusReview),
 		ExpectedUpdatedAt: &utcPrecondition,
 	}, TriggeredByUser)
 	require.NoError(t, err, "a UTC-derived expected_updated_at must match the stored value's CAS check")

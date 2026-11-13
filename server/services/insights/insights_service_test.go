@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -1433,7 +1434,7 @@ func TestGetInsightsSummary_WhenBacklogItemArchived_ExpectSessionRoleAndTagsPopu
 	}
 	associator := tokens.NewAssociator(&fakeSessionStorage{records: sessionRecords})
 	backlogReader := &svctest.FakeBacklogReader{Entries: []backlogdto.ItemSessionBacklogEntry{
-		{SessionUUID: "sess-archived", SessionRole: session.SessionRoleTriage, ItemStatus: string(session.BacklogStatusArchived)},
+		{SessionUUID: "sess-archived", SessionRole: session.SessionRoleTriage, ItemStatus: string(domain.BacklogStatusArchived)},
 	}}
 	svc := NewInsightsService(&svctest.FakeTokenStore{Results: results}, tokens.DefaultPricingTable(), associator, backlogReader)
 

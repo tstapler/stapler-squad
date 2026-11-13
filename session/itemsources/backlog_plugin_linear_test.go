@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/linear"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Relies on TestMain in integration_test.go calling keyring.MockInit().
@@ -86,7 +87,7 @@ func TestLinearPlugin_Fetch_should_MapIssuesAndAdvanceCursor(t *testing.T) {
 	require.Equal(t, "ENG-1", items[0].ExternalID)
 	require.Equal(t, []string{"bug"}, items[0].Labels)
 	require.Equal(t, 5, items[0].Priority)
-	require.Equal(t, session.DefaultBacklogPriority, items[1].Priority)
+	require.Equal(t, domain.DefaultBacklogPriority, items[1].Priority)
 	require.False(t, items[0].IssueUpdatedAt.IsZero())
 
 	filter := gotVars["filter"].(map[string]any)
@@ -174,7 +175,7 @@ func TestLinearPlugin_Fetch_should_ClassifyErrors(t *testing.T) {
 
 func TestLinearPlugin_MapToBacklogItem_should_MapPriorityTable(t *testing.T) {
 	t.Parallel()
-	want := map[int]int{0: session.DefaultBacklogPriority, 1: 5, 2: 4, 3: 3, 4: 2}
+	want := map[int]int{0: domain.DefaultBacklogPriority, 1: 5, 2: 4, 3: 3, 4: 2}
 	for native, backlog := range want {
 		require.Equal(t, backlog, linearPriorityToBacklog(native), "native %d", native)
 	}
@@ -182,7 +183,7 @@ func TestLinearPlugin_MapToBacklogItem_should_MapPriorityTable(t *testing.T) {
 	require.Equal(t, "ENG-123", got.ExternalID)
 	require.Equal(t, "https://linear.app/o/issue/ENG-123", got.ExternalURL)
 	require.Equal(t, "src1", got.SourceID)
-	require.Equal(t, string(session.BacklogStatusIdea), got.Status)
+	require.Equal(t, string(domain.BacklogStatusIdea), got.Status)
 }
 
 func TestParseLinearIssueRef(t *testing.T) {

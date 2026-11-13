@@ -914,7 +914,7 @@ func TestEntRepository_Delete_StampsConversationUUIDOnItemSessions(t *testing.T)
 	data.UUID = "sess-uuid-1"
 	data.ClaudeSession.ConversationUUID = "conv-uuid-1"
 	require.NoError(t, repo.Create(ctx, data))
-	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stamp item", Status: string(BacklogStatusInProgress)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stamp item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	_, err = repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "sess-uuid-1", SessionRole: SessionRoleWork})
 	require.NoError(t, err)
@@ -937,7 +937,7 @@ func TestEntRepository_DeleteBacklogItem_PreservesCostInLedger(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "ledger item", Status: string(BacklogStatusInProgress)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "ledger item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:           item.ID,
@@ -977,7 +977,7 @@ func TestEntRepository_DeleteBacklogItem_RollsBackOnMidSequenceFailure(t *testin
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "rollback item", Status: string(BacklogStatusInProgress)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "rollback item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:           item.ID,
@@ -1048,7 +1048,7 @@ func TestEntRepository_UpdateItemSessionConversationUUID_RoundTrips(t *testing.T
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "conv item", Status: string(BacklogStatusInProgress)})
+	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "conv item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-x", SessionRole: SessionRoleTriage})
 	require.NoError(t, err)

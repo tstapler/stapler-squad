@@ -812,7 +812,7 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 	ctx := context.Background()
 	item, err := backlogStorage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Backlog item behind this session",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	_, err = backlogStorage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -836,6 +836,6 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 
 	updated, err := backlogStorage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), updated.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), updated.Status,
 		"RecordPRCreatedOutOfBand must be called unconditionally and transition the linked item to pr_pending")
 }

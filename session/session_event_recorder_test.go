@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 func TestSessionEventKind_Should_NameEveryKindExhaustively_When_Enumerated(t *testing.T) {
@@ -33,8 +34,8 @@ func TestNoopSessionEventRecorder_Should_NotPanic_When_NilOrNoop(t *testing.T) {
 	t.Parallel()
 	r := orNoopRecorder(nil)
 	r.RecordTurnEnded("demo", domain.TurnEnded{})
-	r.RecordAttentionRaised("demo", ReasonTaskComplete)
-	r.RecordAttentionCleared("demo", ReasonTaskComplete)
+	r.RecordAttentionRaised("demo", queue.ReasonTaskComplete)
+	r.RecordAttentionCleared("demo", queue.ReasonTaskComplete)
 	r.RecordStatusChanged("demo", domain.Active, domain.Stopped)
 	r.RecordAcknowledged("demo", false)
 	r.RecordLifecycle("demo", domain.EventStarted)
@@ -46,7 +47,7 @@ func TestNoopSessionEventRecorder_Should_NotPanic_When_NilOrNoop(t *testing.T) {
 type attentionCall struct {
 	kind   SessionEventKind
 	title  string
-	reason AttentionReason
+	reason queue.AttentionReason
 }
 
 type attentionRecorder struct {
@@ -61,17 +62,17 @@ func (r *attentionRecorder) add(c attentionCall) {
 	r.calls = append(r.calls, c)
 }
 
-func (r *attentionRecorder) RecordAttentionRaised(title string, reason AttentionReason) {
+func (r *attentionRecorder) RecordAttentionRaised(title string, reason queue.AttentionReason) {
 	r.add(attentionCall{SessionEventAttentionRaised, title, reason})
 }
 
-func (r *attentionRecorder) RecordAttentionCleared(title string, reason AttentionReason) {
+func (r *attentionRecorder) RecordAttentionCleared(title string, reason queue.AttentionReason) {
 	r.add(attentionCall{SessionEventAttentionCleared, title, reason})
 }
 
 func TestPoller_Should_InvokeRecordAttentionRaisedAndCleared_When_ItemAddedThenRemoved(t *testing.T) {
 	t.Parallel()
-	add := chainAdd(PriorityMedium, ReasonTaskComplete)
+	add := chainAdd(queue.PriorityMedium, queue.ReasonTaskComplete)
 	poller, inst := pollerFor(add, func(*Instance) {})
 	rec := &attentionRecorder{}
 	poller.SetEventRecorder(rec)
@@ -81,8 +82,8 @@ func TestPoller_Should_InvokeRecordAttentionRaisedAndCleared_When_ItemAddedThenR
 	poller.checkSession(inst, nil)
 
 	want := []attentionCall{
-		{SessionEventAttentionRaised, "demo", ReasonTaskComplete},
-		{SessionEventAttentionCleared, "demo", ReasonTaskComplete},
+		{SessionEventAttentionRaised, "demo", queue.ReasonTaskComplete},
+		{SessionEventAttentionCleared, "demo", queue.ReasonTaskComplete},
 	}
 	assert.Equal(t, want, rec.calls)
 	_, queued := poller.queue.Get("demo")
@@ -91,7 +92,7 @@ func TestPoller_Should_InvokeRecordAttentionRaisedAndCleared_When_ItemAddedThenR
 
 func TestPoller_Should_RecordRaisedOnce_When_SameReasonIsReAdded(t *testing.T) {
 	t.Parallel()
-	poller, inst := pollerFor(chainAdd(PriorityMedium, ReasonTaskComplete), func(*Instance) {})
+	poller, inst := pollerFor(chainAdd(queue.PriorityMedium, queue.ReasonTaskComplete), func(*Instance) {})
 	rec := &attentionRecorder{}
 	poller.SetEventRecorder(rec)
 

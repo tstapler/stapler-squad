@@ -63,7 +63,7 @@ func StartBacklogGitHubProgressSyncSubscriber(ctx context.Context, bus *events.E
 				if payload == nil || payload.Kind != events.BacklogChangeStatusTransition {
 					continue
 				}
-				if payload.NewStatus != string(session.BacklogStatusInProgress) && payload.NewStatus != string(session.BacklogStatusReview) {
+				if payload.NewStatus != string(domain.BacklogStatusInProgress) && payload.NewStatus != string(domain.BacklogStatusReview) {
 					continue
 				}
 				if !flagEnabled() {
@@ -99,9 +99,9 @@ func handleProgressComment(ctx context.Context, registry *session.PluginRegistry
 
 	var body string
 	switch newStatus {
-	case string(session.BacklogStatusInProgress):
+	case string(domain.BacklogStatusInProgress):
 		body = progressStartedComment(current.ClaimingHostID)
-	case string(session.BacklogStatusReview):
+	case string(domain.BacklogStatusReview):
 		urls := progressPRLines(ctx, storage, current)
 		if len(urls) == 0 {
 			return
@@ -139,7 +139,7 @@ func progressCommentAlreadyPosted(lastPosted, newStatus string) bool {
 	if lastPosted == "" {
 		return false
 	}
-	return newStatus == string(session.BacklogStatusInProgress) || lastPosted == newStatus
+	return newStatus == string(domain.BacklogStatusInProgress) || lastPosted == newStatus
 }
 
 // progressCommentTimeout bounds the network I/O done on the subscriber goroutine.

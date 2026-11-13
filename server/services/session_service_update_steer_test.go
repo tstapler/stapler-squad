@@ -88,7 +88,7 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 
 	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Awaiting review",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	_, err = fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{

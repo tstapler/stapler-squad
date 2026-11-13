@@ -9,12 +9,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-func verdictsJSON(t *testing.T, vs ...session.CriterionVerdict) string {
+func verdictsJSON(t *testing.T, vs ...domain.CriterionVerdict) string {
 	t.Helper()
 	b, err := json.Marshal(vs)
 	require.NoError(t, err)
@@ -23,15 +22,15 @@ func verdictsJSON(t *testing.T, vs ...session.CriterionVerdict) string {
 
 func TestFlaggedForOwner_should_SkipCriteriaAlreadyDoneOrWaived(t *testing.T) {
 	t.Parallel()
-	criteria := []session.AcCriterion{
-		{Index: 0, Status: session.AcStatusWaived},
-		{Index: 1, Status: session.AcStatusPending},
-		{Index: 2, Status: session.AcStatusPending},
+	criteria := []domain.AcCriterion{
+		{Index: 0, Status: domain.AcStatusWaived},
+		{Index: 1, Status: domain.AcStatusPending},
+		{Index: 2, Status: domain.AcStatusPending},
 	}
 	raw := verdictsJSON(t,
-		session.CriterionVerdict{CriterionIndex: 0, Outcome: session.ReviewVerdictFail, FailureClass: domain.FailureClassUnattainable},
-		session.CriterionVerdict{CriterionIndex: 1, Outcome: session.ReviewVerdictFail, FailureClass: domain.FailureClassEnvironmental},
-		session.CriterionVerdict{CriterionIndex: 2, Outcome: session.ReviewVerdictFail},
+		domain.CriterionVerdict{CriterionIndex: 0, Outcome: domain.ReviewVerdictFail, FailureClass: domain.FailureClassUnattainable},
+		domain.CriterionVerdict{CriterionIndex: 1, Outcome: domain.ReviewVerdictFail, FailureClass: domain.FailureClassEnvironmental},
+		domain.CriterionVerdict{CriterionIndex: 2, Outcome: domain.ReviewVerdictFail},
 	)
 	got := flaggedForOwner(raw, criteria)
 	require.Len(t, got, 1)
@@ -42,11 +41,11 @@ func TestEscalateVerdictToOwner_should_AskOnce_And_HonourTheAnswer(t *testing.T)
 	t.Parallel()
 	svc, storage, _ := newTestBacklogServiceWithBus(t)
 	ctx := context.Background()
-	raw, err := session.SerializeAcCriteria([]session.AcCriterion{{Index: 0, Text: "c", Status: session.AcStatusPending}})
+	raw, err := domain.SerializeAcCriteria([]domain.AcCriterion{{Index: 0, Text: "c", Status: domain.AcStatusPending}})
 	require.NoError(t, err)
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "t", Status: string(session.BacklogStatusReview), AcceptanceCriteria: raw})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "t", Status: string(domain.BacklogStatusReview), AcceptanceCriteria: raw})
 	require.NoError(t, err)
-	flagged := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewVerdictFail, FailureClass: domain.FailureClassUnattainable, Evidence: "cannot reproduce"}}
+	flagged := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewVerdictFail, FailureClass: domain.FailureClassUnattainable, Evidence: "cannot reproduce"}}
 
 	require.True(t, svc.escalateVerdictToOwner(ctx, item, flagged), "first call parks and raises a request")
 	require.True(t, svc.escalateVerdictToOwner(ctx, item, flagged), "a pending request keeps it parked")

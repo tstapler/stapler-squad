@@ -22,6 +22,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -120,7 +121,7 @@ func TestCreateStageTransition_should_InvokeGraphValidatorBeforeCommitting_When_
 
 	_, err = svc.CreateStageTransition(ctx, connect.NewRequest(&sessionv1.CreateStageTransitionRequest{
 		FromStageSlug: "orphan",
-		ToStageSlug:   string(session.BacklogStatusDone),
+		ToStageSlug:   string(domain.BacklogStatusDone),
 		Enabled:       true,
 	}))
 	require.Error(t, err)
@@ -155,7 +156,7 @@ func TestUpdateStageTransition_should_ReturnFailedPreconditionAndPersistNothing_
 	require.NoError(t, err)
 	edgeResp, err := svc.CreateStageTransition(ctx, connect.NewRequest(&sessionv1.CreateStageTransitionRequest{
 		FromStageSlug: "design-review",
-		ToStageSlug:   string(session.BacklogStatusReady),
+		ToStageSlug:   string(domain.BacklogStatusReady),
 		Enabled:       true,
 	}))
 	require.NoError(t, err)
@@ -192,7 +193,7 @@ func TestUpdateStageTransition_should_Succeed_When_DisablingEdgeForStageWithZero
 	require.NoError(t, err)
 	edgeResp, err := svc.CreateStageTransition(ctx, connect.NewRequest(&sessionv1.CreateStageTransitionRequest{
 		FromStageSlug: "design-review-2",
-		ToStageSlug:   string(session.BacklogStatusReady),
+		ToStageSlug:   string(domain.BacklogStatusReady),
 		Enabled:       true,
 	}))
 	require.NoError(t, err)
@@ -220,7 +221,7 @@ func TestDeleteStageTransition_should_ReturnFailedPreconditionAndPersistNothing_
 	require.NoError(t, err)
 	edgeResp, err := svc.CreateStageTransition(ctx, connect.NewRequest(&sessionv1.CreateStageTransitionRequest{
 		FromStageSlug: "design-review-delete",
-		ToStageSlug:   string(session.BacklogStatusReady),
+		ToStageSlug:   string(domain.BacklogStatusReady),
 		Enabled:       true,
 	}))
 	require.NoError(t, err)
@@ -255,7 +256,7 @@ func TestDeleteStageTransition_should_Succeed_When_DeletingEdgeForStageWithZeroL
 	require.NoError(t, err)
 	edgeResp, err := svc.CreateStageTransition(ctx, connect.NewRequest(&sessionv1.CreateStageTransitionRequest{
 		FromStageSlug: "design-review-delete-2",
-		ToStageSlug:   string(session.BacklogStatusReady),
+		ToStageSlug:   string(domain.BacklogStatusReady),
 		Enabled:       true,
 	}))
 	require.NoError(t, err)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
@@ -273,11 +274,11 @@ func TestDeleteSession_RemovesFromReviewQueue(t *testing.T) {
 
 	// Add session to review queue
 	reviewQueue := svc.GetReviewQueueInstance()
-	reviewItem := &session.ReviewItem{
+	reviewItem := &queue.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
-		Reason:      session.ReasonIdle,
-		Priority:    session.PriorityLow,
+		Reason:      queue.ReasonIdle,
+		Priority:    queue.PriorityLow,
 	}
 	reviewQueue.Add(reviewItem)
 
@@ -790,7 +791,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T)
 	}
 	require.NoError(t, storage.AddInstance(testInst))
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	poller.SetInstances([]*session.Instance{testInst})
@@ -980,7 +981,7 @@ func TestDeleteSession_LiveInstance_LogsWarningOnSlowCleanupButStillWaits(t *tes
 	}
 	require.NoError(t, storage.AddInstance(testInst))
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	poller.SetInstances([]*session.Instance{testInst})
@@ -4072,7 +4073,7 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Rate limit metadata test item",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 

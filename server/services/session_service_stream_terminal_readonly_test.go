@@ -16,6 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -52,7 +53,7 @@ func paneContains(inst *session.Instance, marker string) func() bool {
 
 func TestStreamTerminal_ShouldDropInputAndResizeForHiddenAndApplyForVisible_WhenFramesSent(t *testing.T) {
 	svc, srv := newBidiStreamTestServer(t)
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	svc.SetReviewQueuePoller(poller)
 	svc.SetRegistry(session.NewRegistry(nil, svc.WireInstanceCallbacks))
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)

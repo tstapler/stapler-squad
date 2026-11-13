@@ -55,7 +55,7 @@ func notificationMessages(evs []*events.Event) []string {
 
 // OBS-1: plain summary first, key=value part after, secret never stored.
 func TestOnAutonomousDriverComplete_StopDetailRedacted(t *testing.T) {
-	f := newCharFixture(t, "stop-detail-redacted", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "stop-detail-redacted", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	f.svc.SetAutonomousStuckRespawner(newSignalingRespawner())
 
 	f.complete(stallWith(domain.StopReasonOrchestratorError, 2, "building...\npassword=hunter2\n"))
@@ -84,7 +84,7 @@ func TestOnAutonomousDriverComplete_LogsExactlyOneStoppedLine(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			title := "stall-" + strings.ReplaceAll(t.Name(), "/", "-")
-			f := newCharFixture(t, title, session.SessionRoleWork, session.BacklogStatusInProgress)
+			f := newCharFixture(t, title, session.SessionRoleWork, domain.BacklogStatusInProgress)
 			f.svc.SetAutonomousStuckRespawner(newSignalingRespawner())
 			buf := svctest.CaptureLogs(t)
 
@@ -120,7 +120,7 @@ func TestNotification_StartupTimeoutNeverSaysStoppedAfterZeroTurns(t *testing.T)
 // OBS-6: a canary secret in the tail is absent from row, notification and logs.
 func TestCanary_AbsentFromRowNotificationAndLogs(t *testing.T) {
 	title := "stall-canary"
-	f := newCharFixture(t, title, session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, title, session.SessionRoleWork, domain.BacklogStatusInProgress)
 	f.svc.SetAutonomousStuckRespawner(newSignalingRespawner())
 	buf := svctest.CaptureLogs(t)
 

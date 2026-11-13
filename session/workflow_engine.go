@@ -9,15 +9,15 @@ import (
 // DefaultWorkflowEngine implements WorkflowEngine using the hardcoded
 // validTransitions map and TransitionGuard function from backlog.go.
 type DefaultWorkflowEngine struct {
-	transitions map[BacklogStatus]map[BacklogStatus]bool
+	transitions map[domain.BacklogStatus]map[domain.BacklogStatus]bool
 }
 
 // NewDefaultWorkflowEngine constructs an engine backed by the static
 // validTransitions map. The map is deep-copied to avoid shared mutable state.
 func NewDefaultWorkflowEngine() *DefaultWorkflowEngine {
-	t := make(map[BacklogStatus]map[BacklogStatus]bool, len(validTransitions))
+	t := make(map[domain.BacklogStatus]map[domain.BacklogStatus]bool, len(validTransitions))
 	for from, targets := range validTransitions {
-		inner := make(map[BacklogStatus]bool, len(targets))
+		inner := make(map[domain.BacklogStatus]bool, len(targets))
 		for to, v := range targets {
 			inner[to] = v
 		}
@@ -29,7 +29,7 @@ func NewDefaultWorkflowEngine() *DefaultWorkflowEngine {
 // CanTransition implements WorkflowEngine. fallback is unused: the built-in
 // stage graph is static and never deleted, so there is never a stage for a
 // per-item snapshot to fall back for.
-func (e *DefaultWorkflowEngine) CanTransition(from, to BacklogStatus, _ *domain.StageConfigSnapshot) bool {
+func (e *DefaultWorkflowEngine) CanTransition(from, to domain.BacklogStatus, _ *domain.StageConfigSnapshot) bool {
 	targets, ok := e.transitions[from]
 	if !ok {
 		return false
@@ -46,12 +46,12 @@ func (e *DefaultWorkflowEngine) CanTransition(from, to BacklogStatus, _ *domain.
 // guards) branch. fallback is unused: the built-in stage graph is static and
 // never deleted, so there is never a stage for a per-item snapshot to fall
 // back for — see CanTransition's identical fallback doc comment above.
-func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (e *DefaultWorkflowEngine) PendingGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, _ *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	id, description, ok := builtInGuardGate(item.Status, to)
 	if !ok {
 		return nil, nil
 	}
-	satisfied := TransitionGuard(item, to) == nil
+	satisfied := domain.TransitionGuard(item, to) == nil
 	hint := ""
 	if !satisfied {
 		hint = "resolve the blocking condition, or supply an override reason where supported"
@@ -72,18 +72,18 @@ func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to
 // the single source of truth for pass/fail logic; PendingGates calls it
 // directly for the Satisfied bool, so behavior stays identical to the
 // pre-Epic-2.3 direct-delegation ValidateGates implementation.
-func builtInGuardGate(from, to BacklogStatus) (id, description string, ok bool) {
+func builtInGuardGate(from, to domain.BacklogStatus) (id, description string, ok bool) {
 	switch {
-	case from == BacklogStatusIdea && to == BacklogStatusReady:
+	case from == domain.BacklogStatusIdea && to == domain.BacklogStatusReady:
 		return "builtin:idea->ready:ac_required", "acceptance criteria required before marking ready", true
-	case from == BacklogStatusReady && to == BacklogStatusInProgress,
-		from == BacklogStatusQueued && to == BacklogStatusInProgress:
+	case from == domain.BacklogStatusReady && to == domain.BacklogStatusInProgress,
+		from == domain.BacklogStatusQueued && to == domain.BacklogStatusInProgress:
 		return "builtin:->in_progress:plan_and_blockers", "no unresolved blockers, and plan approved (or skipped) with artifacts recorded", true
-	case from == BacklogStatusRefining && to == BacklogStatusReady:
+	case from == domain.BacklogStatusRefining && to == domain.BacklogStatusReady:
 		return "builtin:refining->ready:ac_required", "acceptance criteria required before marking ready", true
-	case (from == BacklogStatusReview || from == BacklogStatusPRPending) && to == BacklogStatusReady:
+	case (from == domain.BacklogStatusReview || from == domain.BacklogStatusPRPending) && to == domain.BacklogStatusReady:
 		return "builtin:->ready:verdict_clear", "a recorded PASS verdict must be cleared (or overridden) before returning to ready", true
-	case to == BacklogStatusDone:
+	case to == domain.BacklogStatusDone:
 		return "builtin:->done:verdict_and_shipped", "a PASS verdict and shipped code are required before marking done", true
 	default:
 		return "", "", false
@@ -96,14 +96,14 @@ func builtInGuardGate(from, to BacklogStatus) (id, description string, ok bool) 
 // callers matching on TransitionGuard's specific sentinel errors (ErrACRequired,
 // ErrVerdictRequired, etc. — session/domain/backlog.go) keep seeing the exact
 // same error values as before this method became a wrapper.
-func (e *DefaultWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *domain.StageConfigSnapshot) error {
+func (e *DefaultWorkflowEngine) ValidateGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, _ *domain.StageConfigSnapshot) error {
 	statuses, err := e.PendingGates(item, to, nil)
 	if err != nil {
 		return err
 	}
 	for _, s := range statuses {
 		if !s.Satisfied {
-			return TransitionGuard(item, to)
+			return domain.TransitionGuard(item, to)
 		}
 	}
 	return nil
@@ -111,12 +111,12 @@ func (e *DefaultWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, t
 
 // AllowedTransitions implements WorkflowEngine. fallback is unused — see
 // CanTransition's doc comment above.
-func (e *DefaultWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *domain.StageConfigSnapshot) []BacklogStatus {
+func (e *DefaultWorkflowEngine) AllowedTransitions(from domain.BacklogStatus, _ *domain.StageConfigSnapshot) []domain.BacklogStatus {
 	targets, ok := e.transitions[from]
 	if !ok {
-		return []BacklogStatus{}
+		return []domain.BacklogStatus{}
 	}
-	result := make([]BacklogStatus, 0, len(targets))
+	result := make([]domain.BacklogStatus, 0, len(targets))
 	for to, allowed := range targets {
 		if allowed {
 			result = append(result, to)
@@ -131,7 +131,7 @@ func (e *DefaultWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *domain
 // WITHOUT executing it — the read-only counterpart to transitionWithGuard
 // (server/services/backlog_service_triage.go), for callers in package
 // session (like SyncOne) that cannot import server/services.
-func GuardedTransitionAllowed(engine domain.WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) bool {
+func GuardedTransitionAllowed(engine domain.WorkflowEngine, item domain.BacklogItemTransitionInput, to domain.BacklogStatus) bool {
 	if !engine.CanTransition(item.Status, to, nil) {
 		return false
 	}

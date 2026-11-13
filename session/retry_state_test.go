@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // fakeLivenessProcessManager reuses stuckDialogProcessManager's full
@@ -559,8 +560,8 @@ func TestRestartForRetry_should_PreventConcurrentRestart_When_TwoCallersRaceRetr
 
 // newCrashLoopInstance builds the Instance/ReviewQueue/notifier fixture shared
 // by the crash-loop test's escalating-retry and exhaustion phases.
-func newCrashLoopInstance() (*Instance, *ReviewQueue, *sessiontest.FakeNotifier) {
-	rq := NewReviewQueue()
+func newCrashLoopInstance() (*Instance, *queue.ReviewQueue, *sessiontest.FakeNotifier) {
+	rq := queue.NewReviewQueue()
 	notifier := &sessiontest.FakeNotifier{}
 	inst := &Instance{
 		Title:       "crash-loop",

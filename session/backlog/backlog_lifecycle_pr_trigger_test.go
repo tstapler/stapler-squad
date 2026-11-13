@@ -10,7 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -43,7 +43,7 @@ func TestFindPRPendingItemForEvent_should_ReturnItemAndTrue_When_PrNumberAndRepo
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           repoPath,
 	})
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func TestFindPRPendingItemForEvent_should_ReturnNilFalse_When_PrNumberMatchesBut
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           repoPath,
 	})
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestTriggerPRFixForEvent_should_ReconcileItemAndReturnMatchedTrue_When_Item
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           repoPath,
 	})
 	require.NoError(t, err)
@@ -130,7 +130,7 @@ func TestTriggerPRFixForEvent_should_ReconcileItemAndReturnMatchedTrue_When_Item
 	// "completed" — poll for the done transition rather than asserting immediately.
 	wait.RequireEventually(t, func() bool {
 		refreshed, refreshErr := storage.GetBacklogItem(ctx, item.ID)
-		return refreshErr == nil && refreshed.Status == string(session.BacklogStatusDone)
+		return refreshErr == nil && refreshed.Status == string(domain.BacklogStatusDone)
 	}, 2*time.Second, 20*time.Millisecond, "reconcilePRPendingItem should have run for the matched item (merged PR -> done)")
 }
 
@@ -145,7 +145,7 @@ func TestTriggerPRFixForEvent_should_ReturnFalseNilWithoutQuerying_When_Listener
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           repoPath,
 	})
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestTriggerPRFixForEvent_should_ReturnFalseNilWithoutQuerying_When_Listener
 
 	refreshed, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), refreshed.Status, "disabled listener must not touch the item")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), refreshed.Status, "disabled listener must not touch the item")
 }
 
 func TestTriggerPRFixForEvent_should_ReturnFalseNil_When_NoPrPendingItemMatches(t *testing.T) {
@@ -200,7 +200,7 @@ func TestTriggerPRFixForEvent_should_TagFixAttemptLogAsWebhookTriggered(t *testi
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           repoPath,
 	})
 	require.NoError(t, err)

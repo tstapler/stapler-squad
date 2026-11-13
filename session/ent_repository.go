@@ -1521,7 +1521,7 @@ func nilIfEmpty(s string) *string {
 
 // nilIfEmptyJSON returns nil if j is empty, otherwise a *string containing the JSON.
 // Used at the ent boundary where AcceptanceCriteria is stored as a plain string.
-func nilIfEmptyJSON(j AcCriteriaJSON) *string {
+func nilIfEmptyJSON(j domain.AcCriteriaJSON) *string {
 	if j == "" {
 		return nil
 	}

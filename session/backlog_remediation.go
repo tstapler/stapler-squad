@@ -470,7 +470,7 @@ func TransitionDenialAnchored(row backlogdto.OpenStuckStateData) bool {
 
 // OpenTransitionDenial returns the open, un-snoozed transition_denied denial
 // whose recorded "from" equals status.
-func (s *Storage) OpenTransitionDenial(ctx context.Context, itemID string, status BacklogStatus) (domain.TransitionDenial, bool, error) {
+func (s *Storage) OpenTransitionDenial(ctx context.Context, itemID string, status domain.BacklogStatus) (domain.TransitionDenial, bool, error) {
 	row, ok, err := s.findOpenStuckStateForReason(ctx, itemID, domain.StuckReasonTransitionDenied)
 	if err != nil || !ok {
 		return domain.TransitionDenial{}, false, err
@@ -485,7 +485,7 @@ func (s *Storage) OpenTransitionDenial(ctx context.Context, itemID string, statu
 // HasOpenTransitionDenied is the shared predicate behind every spawn-point and
 // detector-local guard (ADR-007 D12): true iff an open transition_denied row
 // exists whose recorded "from" equals status, the item's current status.
-func (s *Storage) HasOpenTransitionDenied(ctx context.Context, itemID string, status BacklogStatus) (bool, error) {
+func (s *Storage) HasOpenTransitionDenied(ctx context.Context, itemID string, status domain.BacklogStatus) (bool, error) {
 	_, ok, err := s.OpenTransitionDenial(ctx, itemID, status)
 	return ok, err
 }
@@ -496,7 +496,7 @@ func (s *Storage) HasOpenTransitionDenied(ctx context.Context, itemID string, st
 // longer enforced) is resolved here, so the held action proceeds on this call.
 // A read error fails open, as before the denial existed.
 func (s *Storage) TransitionDenialHolds(ctx context.Context, item *backlogdto.BacklogItemData) bool {
-	d, ok, err := s.OpenTransitionDenial(ctx, item.ID, BacklogStatus(item.Status))
+	d, ok, err := s.OpenTransitionDenial(ctx, item.ID, domain.BacklogStatus(item.Status))
 	if err != nil {
 		log.Debug("[TransitionDenialHolds] denial lookup failed; not holding", "item", item.ID, "error", err)
 		return false
@@ -534,7 +534,7 @@ func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d do
 	if err != nil {
 		return backlogdto.GateVerdict{}, true // unknown: keep holding, retry next tick
 	}
-	v := backlogdto.DecideTransition(g.engine.ForClassQuiet(spec.Class, domain.GuardsNone), item, backlogdto.TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
+	v := backlogdto.DecideTransition(g.engine.ForClassQuiet(spec.Class, domain.GuardsNone), item, backlogdto.TransitionRequest{Caller: spec.Name, To: domain.BacklogStatus(d.To)})
 	return v, v.Err != nil
 }
 
@@ -586,7 +586,7 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 		_, err := s.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller:       caller,
 			ItemID:       itemID,
-			To:           BacklogStatus(d.To),
+			To:           domain.BacklogStatus(d.To),
 			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: d.From},
 			TriggeredBy:  TriggeredBySystem,
 		})
@@ -611,5 +611,5 @@ func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d doma
 	if err != nil {
 		return
 	}
-	g.reporter.Report(ctx, item, domain.TransitionCaller(d.Caller), BacklogStatus(d.From), BacklogStatus(d.To), v.Reason, v.Err)
+	g.reporter.Report(ctx, item, domain.TransitionCaller(d.Caller), domain.BacklogStatus(d.From), domain.BacklogStatus(d.To), v.Reason, v.Err)
 }

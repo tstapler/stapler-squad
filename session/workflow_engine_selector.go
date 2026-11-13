@@ -103,7 +103,7 @@ type ClassedShadowRecorder interface {
 type ShadowObservation struct {
 	Method           EngineMethod
 	Path             CallPath
-	From, To         BacklogStatus
+	From, To         domain.BacklogStatus
 	ItemHash         string
 	Class            DivergenceClass // empty: no divergence
 	Config           string
@@ -264,22 +264,22 @@ func (s *SwitchableWorkflowEngine) EnforceDeniedTotal(src DenialSource) int64 {
 func (s *SwitchableWorkflowEngine) ShadowErrorsTotal() int64 { return s.shadowErrors.Load() }
 
 // CanTransition implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) CanTransition(from, to BacklogStatus, snap *domain.StageConfigSnapshot) bool {
+func (s *SwitchableWorkflowEngine) CanTransition(from, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	return s.operatorView().CanTransition(from, to, snap)
 }
 
 // AllowedTransitions implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) AllowedTransitions(from BacklogStatus, snap *domain.StageConfigSnapshot) []BacklogStatus {
+func (s *SwitchableWorkflowEngine) AllowedTransitions(from domain.BacklogStatus, snap *domain.StageConfigSnapshot) []domain.BacklogStatus {
 	return s.operatorView().AllowedTransitions(from, snap)
 }
 
 // PendingGates implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (s *SwitchableWorkflowEngine) PendingGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	return s.operatorView().PendingGates(item, to, snap)
 }
 
 // ValidateGates implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) error {
+func (s *SwitchableWorkflowEngine) ValidateGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	return s.operatorView().ValidateGates(item, to, snap)
 }
 
@@ -349,7 +349,7 @@ func (v engineView) Quiet() domain.WorkflowEngine {
 
 // NoteGraphDenied counts a graph denial that the caller confirmed after
 // evaluating quietly (no operator override freed it).
-func (v engineView) NoteGraphDenied(from, to BacklogStatus) {
+func (v engineView) NoteGraphDenied(from, to domain.BacklogStatus) {
 	if v.quiet || v.mode() != ModeEnforce {
 		return
 	}
@@ -360,18 +360,18 @@ var _ domain.WorkflowEngine = engineView{}
 
 func (v engineView) mode() EngineMode { return v.s.ModeFor(v.pol.Class) }
 
-func (v engineView) legacyCan(from, to BacklogStatus, snap *domain.StageConfigSnapshot) bool {
+func (v engineView) legacyCan(from, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	return v.unchecked || v.s.def.CanTransition(from, to, snap)
 }
 
-func (v engineView) legacyGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (v engineView) legacyGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	if v.unchecked {
 		return nil, nil
 	}
 	return v.s.def.PendingGates(item, to, snap)
 }
 
-func (v engineView) legacyValidate(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) error {
+func (v engineView) legacyValidate(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	if v.unchecked {
 		return nil
 	}
@@ -379,7 +379,7 @@ func (v engineView) legacyValidate(item BacklogItemTransitionInput, to BacklogSt
 }
 
 // CanTransition implements WorkflowEngine.
-func (v engineView) CanTransition(from, to BacklogStatus, snap *domain.StageConfigSnapshot) bool {
+func (v engineView) CanTransition(from, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -410,7 +410,7 @@ func (v engineView) CanTransition(from, to BacklogStatus, snap *domain.StageConf
 // authority; Off and Shadow keep the legacy answer. Only the operator
 // transition RPC qualifies: other operator writers (OverrideVerdict) always
 // carry a reason for a different purpose and must still honor a disabled edge.
-func (v engineView) OverridesGraph(overrideReason string, to BacklogStatus) bool {
+func (v engineView) OverridesGraph(overrideReason string, to domain.BacklogStatus) bool {
 	if v.caller != domain.CallerOperatorTransitionRPC || v.mode() != ModeEnforce || !v.s.Enf.bypassesGraph(v.pol, overrideReason, to) {
 		return false
 	}
@@ -420,7 +420,7 @@ func (v engineView) OverridesGraph(overrideReason string, to BacklogStatus) bool
 
 // AllowedTransitions implements WorkflowEngine. It is a read: Default answers
 // in Off and Shadow whatever the caller's legacy policy.
-func (v engineView) AllowedTransitions(from BacklogStatus, snap *domain.StageConfigSnapshot) []BacklogStatus {
+func (v engineView) AllowedTransitions(from domain.BacklogStatus, snap *domain.StageConfigSnapshot) []domain.BacklogStatus {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -444,7 +444,7 @@ func (v engineView) AllowedTransitions(from BacklogStatus, snap *domain.StageCon
 }
 
 // PendingGates implements WorkflowEngine.
-func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (v engineView) PendingGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -468,7 +468,7 @@ func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStat
 }
 
 // ValidateGates implements WorkflowEngine.
-func (v engineView) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) error {
+func (v engineView) ValidateGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -544,7 +544,7 @@ func (v engineView) recordNotCompared(r NotComparedReason) {
 // shadow runs compare under recover, records the call, and records the
 // divergence class compare returns ("" means none). Read-path calls are
 // sampled. Nothing in here may alter the caller's answer.
-func (v engineView) shadow(m EngineMethod, p CallPath, from, to BacklogStatus, itemID string, compare func() shadowResult) {
+func (v engineView) shadow(m EngineMethod, p CallPath, from, to domain.BacklogStatus, itemID string, compare func() shadowResult) {
 	s := v.s
 	if p == PathRead && !s.sampleRead() {
 		return
@@ -678,7 +678,7 @@ func (f *FlagClassModeSource) ModeFor(class domain.CallerClass) EngineMode {
 	return ModeOff
 }
 
-func (s *SwitchableWorkflowEngine) noteDenied(from, to BacklogStatus, src DenialSource) {
+func (s *SwitchableWorkflowEngine) noteDenied(from, to domain.BacklogStatus, src DenialSource) {
 	s.denials.Inc(src)
 	s.infof("[SwitchableWorkflowEngine] enforce denied from=%s to=%s reason=%s", from, to, src)
 }

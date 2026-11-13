@@ -134,7 +134,7 @@ func (r *completionReviewer) loop(ctx context.Context, ch <-chan *events.Event) 
 				continue
 			}
 			p := event.BacklogItemPayload
-			if p == nil || p.Item == nil || p.Kind != events.BacklogChangeStatusTransition || p.NewStatus != string(session.BacklogStatusDone) {
+			if p == nil || p.Item == nil || p.Kind != events.BacklogChangeStatusTransition || p.NewStatus != string(domain.BacklogStatusDone) {
 				continue
 			}
 			if !r.enabled() || r.call == nil || r.memory == nil {
@@ -193,7 +193,7 @@ func hasNonTrivialCompletionReviewContent(item *backlogdto.BacklogItemData) bool
 	if item == nil || strings.TrimSpace(item.Description) == "" {
 		return false
 	}
-	criteria, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	return len(criteria) > 0
 }
 

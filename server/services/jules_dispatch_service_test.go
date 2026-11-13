@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -24,7 +25,7 @@ import (
 // assertion.
 type fakeJulesTransitionCall struct {
 	itemID                string
-	to                    session.BacklogStatus
+	to                    domain.BacklogStatus
 	triggeredBy           string
 	hasUnresolvedBlockers bool
 }
@@ -44,7 +45,7 @@ func (f *fakeJulesTransitionGuard) HasUnresolvedBlockers(_ context.Context, _ st
 	return f.hasBlockers, f.hasBlockersErr
 }
 
-func (f *fakeJulesTransitionGuard) TransitionWithGuard(_ context.Context, item *backlogdto.BacklogItemData, to session.BacklogStatus, _ *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error) {
+func (f *fakeJulesTransitionGuard) TransitionWithGuard(_ context.Context, item *backlogdto.BacklogItemData, to domain.BacklogStatus, _ *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error) {
 	f.mu.Lock()
 	f.transitionCalls = append(f.transitionCalls, fakeJulesTransitionCall{
 		itemID: item.ID, to: to, triggeredBy: triggeredBy, hasUnresolvedBlockers: hasUnresolvedBlockers,
@@ -99,7 +100,7 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 	require.Equal(t, 1, guard.callCount())
 	call := guard.transitionCalls[0]
 	assert.Equal(t, item.ID, call.itemID)
-	assert.Equal(t, session.BacklogStatusInProgress, call.to)
+	assert.Equal(t, domain.BacklogStatusInProgress, call.to)
 	assert.Equal(t, session.TriggeredByUser, call.triggeredBy)
 	assert.False(t, call.hasUnresolvedBlockers, "must be sourced from the real hasUnresolvedBlockers check, not a hardcoded literal")
 }
@@ -189,7 +190,7 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithErrUnresolvedBloc
 
 	_, err = svc.DispatchToJules(ctx, item, req)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, session.ErrUnresolvedBlockers)
+	assert.ErrorIs(t, err, domain.ErrUnresolvedBlockers)
 	assert.Equal(t, 0, client.CallCount())
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
@@ -223,7 +224,7 @@ func TestJulesDispatchService_DispatchToJules_should_EndReservationWithDispatchF
 
 	refreshed, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReady), refreshed.Status, "item must stay in ready")
+	assert.Equal(t, string(domain.BacklogStatusReady), refreshed.Status, "item must stay in ready")
 
 	notes, err := storage.ListProgressNotesForItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -240,7 +241,7 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithConcurrencyCapMes
 	for i := 0; i < 2; i++ {
 		other, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "other item",
-			Status: string(session.BacklogStatusInProgress),
+			Status: string(domain.BacklogStatusInProgress),
 		})
 		require.NoError(t, err)
 		_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -338,7 +339,7 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithDailyCapMessage_W
 	for i := 0; i < dailyLimit; i++ {
 		other, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "completed jules item",
-			Status: string(session.BacklogStatusDone),
+			Status: string(domain.BacklogStatusDone),
 		})
 		require.NoError(t, err)
 		is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{

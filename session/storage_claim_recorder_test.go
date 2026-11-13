@@ -10,6 +10,7 @@ import (
 	"time"
 
 	ssqlog "github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -37,7 +38,7 @@ func createItemWithURL(t *testing.T, storage *Storage, externalURL string) *back
 	t.Helper()
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:       "claim recorder test",
-		Status:      string(BacklogStatusInProgress),
+		Status:      string(domain.BacklogStatusInProgress),
 		ExternalURL: externalURL,
 	})
 	if err != nil {

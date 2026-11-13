@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -141,8 +142,8 @@ func TestMultiReasonEscalationNotifyReady_should_returnFalse_When_WithinDwell(t 
 func TestIsRepeatedFailure_should_returnTrue_When_LastTwoVerdictsIdentical(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
 	}
 	assert.True(t, IsRepeatedFailure(recent))
 }
@@ -150,14 +151,14 @@ func TestIsRepeatedFailure_should_returnTrue_When_LastTwoVerdictsIdentical(t *te
 func TestIsRepeatedFailure_should_returnFalse_When_FewerThanTwoVerdicts(t *testing.T) {
 	t.Parallel()
 	assert.False(t, IsRepeatedFailure(nil))
-	assert.False(t, IsRepeatedFailure([]backlogdto.ReviewVerdictSummary{{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "x"}}))
+	assert.False(t, IsRepeatedFailure([]backlogdto.ReviewVerdictSummary{{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "x"}}))
 }
 
 func TestIsRepeatedFailure_should_returnFalse_When_LatestIsPass(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{OverallOutcome: string(session.ReviewOutcomePass), Summary: "diff computation failed"},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomePass), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
 	}
 	assert.False(t, IsRepeatedFailure(recent), "a PASS must never be treated as a repeated failure")
 }
@@ -165,8 +166,8 @@ func TestIsRepeatedFailure_should_returnFalse_When_LatestIsPass(t *testing.T) {
 func TestIsRepeatedFailure_should_returnFalse_When_SummariesDiffer(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "missing acceptance criterion 2"},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "missing acceptance criterion 2"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
 	}
 	assert.False(t, IsRepeatedFailure(recent), "different failure reasons must not trip the breaker")
 }
@@ -174,8 +175,8 @@ func TestIsRepeatedFailure_should_returnFalse_When_SummariesDiffer(t *testing.T)
 func TestIsRepeatedFailure_should_returnFalse_When_SummariesAreBothEmpty(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: ""},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: ""},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: ""},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: ""},
 	}
 	assert.False(t, IsRepeatedFailure(recent), "two empty summaries carry no signal and must not trip the breaker")
 }
@@ -202,9 +203,9 @@ func TestIsRepeatedNoVerdictFailure_should_returnFalse_When_EitherReviewHadAVerd
 func TestReviewFailureStreakLen_should_returnStreakLength_When_ConsecutiveIdenticalFailures(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
 	}
 	assert.Equal(t, 3, ReviewFailureStreakLen(recent))
 	assert.Equal(t, 2, ReviewFailureStreakLen(recent[:2]))
@@ -214,10 +215,10 @@ func TestReviewFailureStreakLen_should_returnStreakLength_When_ConsecutiveIdenti
 func TestReviewFailureStreakLen_should_stopAtFirstDifference_When_StreakBreaks(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "missing acceptance criterion 2"},
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "missing acceptance criterion 2"},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: "diff computation failed"},
 	}
 	assert.Equal(t, 2, ReviewFailureStreakLen(recent), "the streak must stop at the first non-matching entry, not skip over it")
 }
@@ -226,10 +227,10 @@ func TestReviewFailureStreakLen_should_returnZero_When_EmptyOrLatestIsPassOrUnla
 	t.Parallel()
 	assert.Equal(t, 0, ReviewFailureStreakLen(nil))
 	assert.Equal(t, 0, ReviewFailureStreakLen([]backlogdto.ReviewVerdictSummary{
-		{OverallOutcome: string(session.ReviewOutcomePass), Summary: "looks good"},
+		{OverallOutcome: string(domain.ReviewOutcomePass), Summary: "looks good"},
 	}))
 	assert.Equal(t, 0, ReviewFailureStreakLen([]backlogdto.ReviewVerdictSummary{
-		{OverallOutcome: string(session.ReviewOutcomeFail), Summary: ""},
+		{OverallOutcome: string(domain.ReviewOutcomeFail), Summary: ""},
 	}), "an empty summary carries no signal")
 }
 
@@ -244,8 +245,8 @@ func TestNoVerdictStreakLen_should_returnStreakLength_When_ConsecutiveNoVerdictR
 func TestIsFlakyVerdictFlipFlop_should_returnTrue_When_SameDiffHashDifferentOutcome(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{DiffHash: "abc123", OverallOutcome: string(session.ReviewOutcomePass)},
-		{DiffHash: "abc123", OverallOutcome: string(session.ReviewOutcomeFail)},
+		{DiffHash: "abc123", OverallOutcome: string(domain.ReviewOutcomePass)},
+		{DiffHash: "abc123", OverallOutcome: string(domain.ReviewOutcomeFail)},
 	}
 	assert.True(t, IsFlakyVerdictFlipFlop(recent), "identical diff, different outcome is the definition of a flip-flop")
 }
@@ -253,26 +254,26 @@ func TestIsFlakyVerdictFlipFlop_should_returnTrue_When_SameDiffHashDifferentOutc
 func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_FewerThanTwoVerdicts(t *testing.T) {
 	t.Parallel()
 	assert.False(t, IsFlakyVerdictFlipFlop(nil))
-	assert.False(t, IsFlakyVerdictFlipFlop([]backlogdto.ReviewVerdictSummary{{DiffHash: "abc123", OverallOutcome: string(session.ReviewOutcomeFail)}}))
+	assert.False(t, IsFlakyVerdictFlipFlop([]backlogdto.ReviewVerdictSummary{{DiffHash: "abc123", OverallOutcome: string(domain.ReviewOutcomeFail)}}))
 }
 
 func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_EitherDiffHashEmpty(t *testing.T) {
 	t.Parallel()
 	latestEmpty := []backlogdto.ReviewVerdictSummary{
-		{DiffHash: "", OverallOutcome: string(session.ReviewOutcomePass)},
-		{DiffHash: "abc123", OverallOutcome: string(session.ReviewOutcomeFail)},
+		{DiffHash: "", OverallOutcome: string(domain.ReviewOutcomePass)},
+		{DiffHash: "abc123", OverallOutcome: string(domain.ReviewOutcomeFail)},
 	}
 	assert.False(t, IsFlakyVerdictFlipFlop(latestEmpty), "an unknown (empty) diff hash must never be treated as a match")
 
 	priorEmpty := []backlogdto.ReviewVerdictSummary{
-		{DiffHash: "abc123", OverallOutcome: string(session.ReviewOutcomePass)},
-		{DiffHash: "", OverallOutcome: string(session.ReviewOutcomeFail)},
+		{DiffHash: "abc123", OverallOutcome: string(domain.ReviewOutcomePass)},
+		{DiffHash: "", OverallOutcome: string(domain.ReviewOutcomeFail)},
 	}
 	assert.False(t, IsFlakyVerdictFlipFlop(priorEmpty), "an unknown (empty) diff hash must never be treated as a match")
 
 	bothEmpty := []backlogdto.ReviewVerdictSummary{
-		{DiffHash: "", OverallOutcome: string(session.ReviewOutcomePass)},
-		{DiffHash: "", OverallOutcome: string(session.ReviewOutcomeFail)},
+		{DiffHash: "", OverallOutcome: string(domain.ReviewOutcomePass)},
+		{DiffHash: "", OverallOutcome: string(domain.ReviewOutcomeFail)},
 	}
 	assert.False(t, IsFlakyVerdictFlipFlop(bothEmpty), "two unknowns carry no signal")
 }
@@ -280,8 +281,8 @@ func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_EitherDiffHashEmpty(t *t
 func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_OutcomesAgree(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{DiffHash: "abc123", OverallOutcome: string(session.ReviewOutcomeFail)},
-		{DiffHash: "abc123", OverallOutcome: string(session.ReviewOutcomeFail)},
+		{DiffHash: "abc123", OverallOutcome: string(domain.ReviewOutcomeFail)},
+		{DiffHash: "abc123", OverallOutcome: string(domain.ReviewOutcomeFail)},
 	}
 	assert.False(t, IsFlakyVerdictFlipFlop(recent), "matching outcomes is IsRepeatedFailure's job, not this one")
 }
@@ -289,8 +290,8 @@ func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_OutcomesAgree(t *testing
 func TestIsFlakyVerdictFlipFlop_should_returnFalse_When_DiffHashesDiffer(t *testing.T) {
 	t.Parallel()
 	recent := []backlogdto.ReviewVerdictSummary{
-		{DiffHash: "abc123", OverallOutcome: string(session.ReviewOutcomePass)},
-		{DiffHash: "def456", OverallOutcome: string(session.ReviewOutcomeFail)},
+		{DiffHash: "abc123", OverallOutcome: string(domain.ReviewOutcomePass)},
+		{DiffHash: "def456", OverallOutcome: string(domain.ReviewOutcomeFail)},
 	}
 	assert.False(t, IsFlakyVerdictFlipFlop(recent), "a genuinely different diff explains a different outcome — not flaky")
 }
@@ -354,8 +355,8 @@ func TestMostRecentCompletedWorkSession_should_returnNil_When_NoCompletedWorkSes
 
 func TestIsNoProgressReview(t *testing.T) {
 	t.Parallel()
-	fail := string(session.ReviewOutcomeFail)
-	pass := string(session.ReviewOutcomePass)
+	fail := string(domain.ReviewOutcomeFail)
+	pass := string(domain.ReviewOutcomePass)
 	tests := []struct {
 		name   string
 		recent []backlogdto.ReviewVerdictSummary

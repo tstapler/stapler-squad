@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // newStaleTestInstance builds a bare *session.Instance for StaleSessionNotifier tests.
@@ -45,7 +46,7 @@ func setLastMeaningfulOutput(inst *session.Instance, t time.Time) {
 // StaleSessionNotifier tests that only need GetInstances() -- never Start()ed, so no
 // polling goroutine or tmux/status-manager dependency is required.
 func newTestNotifierPoller(instances ...*session.Instance) *session.ReviewQueuePoller {
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), nil, nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), nil, nil)
 	poller.SetInstances(instances)
 	return poller
 }

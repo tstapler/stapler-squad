@@ -75,7 +75,7 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeDirectoryNoLo
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "done item, worktree cleaned up",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
@@ -112,7 +112,7 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeStillExists(t
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item still in progress",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	attachWorkSessionWithRange(t, storage, repo, item.ID, "live-work", repoPath, repoPath, "feature", baseSHA, sha)
@@ -151,7 +151,7 @@ func TestGetBacklogItemDiff_should_ShowRealChanges_When_LastCommitShaNeverRefres
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "review item with a real Gate Verdict",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -198,7 +198,7 @@ func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessi
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "reopened item, rework session made no commits",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 

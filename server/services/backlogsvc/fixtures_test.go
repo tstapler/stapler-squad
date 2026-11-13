@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // The fixtures below are the backlogsvc copies of server/services' in-package test helpers of the same names: those
@@ -70,7 +71,7 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 	t.Cleanup(func() { bus.Close() })
 	t.Cleanup(func() { svc.Shutdown() })
 
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	svc.SetReviewQueuePoller(poller)
 	// Registered after Shutdown's cleanup so it runs first: no created session may leave its SessionDriver polling.
 	t.Cleanup(func() { svctest.StopPollerSessionDrivers(poller) })
@@ -88,7 +89,7 @@ type charFixture struct {
 	ch      <-chan *events.Event
 }
 
-func newCharFixture(t *testing.T, title string, role string, itemStatus session.BacklogStatus) *charFixture {
+func newCharFixture(t *testing.T, title string, role string, itemStatus domain.BacklogStatus) *charFixture {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	ctx, cancel := context.WithCancel(context.Background())

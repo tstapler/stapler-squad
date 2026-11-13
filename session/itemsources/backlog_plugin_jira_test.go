@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/jira"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func jiraIssueJSON(key, updated, prio, desc string) string {
@@ -110,7 +111,7 @@ func TestJiraPlugin_Fetch_should_FollowNextPageToken_AcrossAllPages(t *testing.T
 	require.Equal(t, []string{"", "p2", "p3"}, tokens)
 	require.Len(t, items, 3)
 	require.Equal(t, "2026-08-03 10:30", cursor)
-	require.Equal(t, []int{4, session.DefaultBacklogPriority, 1}, []int{items[0].Priority, items[1].Priority, items[2].Priority})
+	require.Equal(t, []int{4, domain.DefaultBacklogPriority, 1}, []int{items[0].Priority, items[1].Priority, items[2].Priority})
 	require.Equal(t, ts.URL+"/browse/ENG-1", items[0].URL)
 }
 

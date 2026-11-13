@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -58,7 +59,7 @@ func setupForkTestFixture(t testing.TB) *forkTestFixture {
 	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire the ReviewQueuePoller so findInstance() can resolve instances.
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)

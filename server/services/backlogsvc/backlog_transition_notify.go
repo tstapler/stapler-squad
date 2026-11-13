@@ -28,7 +28,7 @@ func (s *BacklogService) notifyTransitionDenied(ctx context.Context, item *backl
 	}
 
 	stuckCtx := domain.FormatTransitionDeniedContext(d, denyErr.Error())
-	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonTransitionDenied, session.BacklogStatus(d.From), stuckCtx)
+	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonTransitionDenied, domain.BacklogStatus(d.From), stuckCtx)
 	if err != nil {
 		log.Warn("[notifyTransitionDenied] MarkStuck failed", "item", item.ID, "error", err)
 		return false
@@ -89,7 +89,7 @@ func (s *BacklogService) TransitionDeniedReporter() backlogdto.TransitionDeniedR
 }
 
 // Report implements session.TransitionDeniedReporter.
-func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to domain.BacklogStatus, reason string, denyErr error) {
 	r.svc.notifyTransitionDenied(ctx, item, domain.TransitionDenial{
 		Caller: string(caller),
 		From:   string(from),
@@ -139,7 +139,7 @@ func (s *BacklogService) transitionDenialHoldError(ctx context.Context, itemID s
 	if err != nil {
 		return nil
 	}
-	d, open, err := s.storage.OpenTransitionDenial(ctx, itemID, session.BacklogStatus(item.Status))
+	d, open, err := s.storage.OpenTransitionDenial(ctx, itemID, domain.BacklogStatus(item.Status))
 	if err != nil || !open || !s.storage.TransitionDenialHolds(ctx, item) {
 		return nil
 	}

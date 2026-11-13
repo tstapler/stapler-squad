@@ -195,7 +195,7 @@ type GateContext struct {
 	GateID string
 	// TargetTransition names the to-status this review verdict, once
 	// recorded, unblocks. Purely descriptive/for logging today.
-	TargetTransition session.BacklogStatus
+	TargetTransition domain.BacklogStatus
 	// RequiresDiff, true for the built-in review gate, means Run computes and
 	// hands the reviewer a real diff via runDiffPreChecks (worktree lookup,
 	// identity/branch-drift checks, diff computation). false skips all of
@@ -240,7 +240,7 @@ const (
 // by other callers — server/services/backlog_service_triage.go's headless
 // review path in particular — that this Epic does not touch). A no-op when
 // the substring isn't present, e.g. a custom PipelineMode's own template.
-func (r *ReviewGateRunner) reviewPromptFor(gateContext GateContext, item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+func (r *ReviewGateRunner) reviewPromptFor(gateContext GateContext, item *backlogdto.BacklogItemData, acSnapshot []domain.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
 	effectiveItem := item
 	if gateContext.PipelineMode != "" && gateContext.PipelineMode != item.PipelineMode {
 		clone := *item
@@ -346,7 +346,7 @@ func (r *ReviewGateRunner) Run(
 	if committedDiffEmpty && !isDup {
 		summary := "Review blocked: no committed changes were found for this session. " +
 			"There is nothing to review — the work session ended without shipping any commits."
-		emptyDiffIS, createErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), session.ReviewVerdictFail, summary)
+		emptyDiffIS, createErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), domain.ReviewVerdictFail, summary)
 		if createErr != nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (empty diff) item=%s: %v", item.ID, createErr)
 			return
@@ -383,7 +383,7 @@ func (r *ReviewGateRunner) Run(
 		// Record a failed review ItemSession with a FAIL verdict so the gate verdict
 		// is visible in the UI and operators can act (override or re-review).
 		summary := fmt.Sprintf("Review blocked by security check: %v. Override required to proceed.", secErr)
-		secIS, secCreateErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "review-blocked-"+uuid.New().String(), session.ReviewVerdictFail, summary)
+		secIS, secCreateErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "review-blocked-"+uuid.New().String(), domain.ReviewVerdictFail, summary)
 		if secCreateErr != nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (security block) item=%s: %v", item.ID, secCreateErr)
 			return
@@ -420,8 +420,8 @@ func (r *ReviewGateRunner) Run(
 	// report_progress after the ItemSession's AcSnapshot was captured at spawn
 	// time — otherwise the reviewer sees a stale snapshot missing self-reported
 	// progress notes. See MergeLiveCriterionNotes.
-	acSnapshot, _ := session.ParseAcCriteria(is.AcSnapshot)
-	liveAC, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
+	acSnapshot, _ := domain.ParseAcCriteria(is.AcSnapshot)
+	liveAC, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if len(acSnapshot) == 0 {
 		acSnapshot = liveAC
 	} else {
@@ -669,7 +669,7 @@ func (r *ReviewGateRunner) blockReviewWithTerminalVerdict(
 	is backlogdto.ItemSessionSummary,
 	verdictKeyPrefix, reason, summary, notifyTitle, notifyBody string,
 ) (string, bool, string, bool) {
-	blockedIS, createErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, verdictKeyPrefix+"-"+uuid.New().String(), session.ReviewVerdictFail, summary)
+	blockedIS, createErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, verdictKeyPrefix+"-"+uuid.New().String(), domain.ReviewVerdictFail, summary)
 	if createErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (%s) item=%s: %v", reason, item.ID, createErr)
 		return "", false, "", true

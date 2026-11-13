@@ -138,7 +138,7 @@ func (o wakeOwners) itemTerminal(ctx context.Context, sessionUUID string) bool {
 	if err != nil {
 		return false
 	}
-	return item.Status == string(session.BacklogStatusDone) || item.Status == string(session.BacklogStatusArchived)
+	return item.Status == string(domain.BacklogStatusDone) || item.Status == string(domain.BacklogStatusArchived)
 }
 
 // wakeBacklogState reads the persisted item state reconcile predicates use.
@@ -154,7 +154,7 @@ func (b wakeBacklogState) ItemState(ctx context.Context, itemID string) (wakes.I
 	}
 	st := wakes.ItemState{
 		Exists:   true,
-		Archived: item.ArchivedAt != nil || item.Status == string(session.BacklogStatusArchived),
+		Archived: item.ArchivedAt != nil || item.Status == string(domain.BacklogStatusArchived),
 		Status:   item.Status,
 	}
 	for _, s := range item.ItemSessions {

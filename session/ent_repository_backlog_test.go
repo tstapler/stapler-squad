@@ -402,7 +402,7 @@ func TestUnresolvedBlockerItemIDs_should_ReportStillBlocked_When_BlockerNotYetRe
 	blocked, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "blocked item"})
 	require.NoError(t, err)
 
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusInProgress, nil, "test")
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, domain.BacklogStatusInProgress, nil, "test")
 	require.NoError(t, err)
 
 	err = repo.AddBacklogItemDependency(ctx, backlogdto.BacklogItemDependencyEdge{
@@ -440,7 +440,7 @@ func TestUnresolvedBlockerItemIDs_should_ResolveDependency_When_BlockerReachesDo
 	require.NoError(t, err)
 	assert.True(t, unresolved[blocked.ID], "expected blocked item to be unresolved before blocker ships")
 
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusDone, nil, "test")
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, domain.BacklogStatusDone, nil, "test")
 	require.NoError(t, err)
 
 	unresolved, err = repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})
@@ -474,7 +474,7 @@ func TestUnresolvedBlockerItemIDs_should_TreatArchivedBlockerAsResolved_When_Blo
 	require.NoError(t, err)
 	assert.True(t, unresolved[blocked.ID], "expected blocked item to be unresolved before blocker is archived")
 
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, BacklogStatusArchived, nil, "test")
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, blocker.ID, domain.BacklogStatusArchived, nil, "test")
 	require.NoError(t, err)
 
 	unresolved, err = repo.UnresolvedBlockerItemIDs(ctx, []string{blocked.ID})
@@ -1129,7 +1129,7 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 
 	created, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item stuck in a transition crash-loop",
-		Status: string(BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 	itemID, err := repo.resolveBacklogItemLookup(ctx, created.ID)
@@ -1140,8 +1140,8 @@ func TestAttachStatusEventsForPublish_CapsAtMaxPublishedStatusEvents(t *testing.
 		recordStatusEvent(ctx, statusEventInput{
 			evClient:    repo.Client.BacklogStatusEvent,
 			itemID:      itemID,
-			fromStatus:  string(BacklogStatusIdea),
-			toStatus:    string(BacklogStatusIdea),
+			fromStatus:  string(domain.BacklogStatusIdea),
+			toStatus:    string(domain.BacklogStatusIdea),
 			triggeredBy: TriggeredBySystem,
 			note:        fmt.Sprintf("retry #%d", i),
 		})

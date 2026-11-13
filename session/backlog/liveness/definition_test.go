@@ -1,7 +1,7 @@
 package liveness
 
 import (
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"strings"
 	"testing"
@@ -173,7 +173,7 @@ func TestNewLivenessDefinition_should_RejectMismatchedFields_When_KindAndFieldsD
 // caught the same way the original two-constant regression was.
 func TestLivenessDefinition_should_HaveStalenessThresholdGreaterThanExpectedDuration_When_KindIsDurationBudget(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
-	stages := []session.BacklogStatus{session.BacklogStatusIdea, session.BacklogStatusInProgress, session.BacklogStatusReview}
+	stages := []domain.BacklogStatus{domain.BacklogStatusIdea, domain.BacklogStatusInProgress, domain.BacklogStatusReview}
 
 	checked := 0
 	for _, stage := range stages {

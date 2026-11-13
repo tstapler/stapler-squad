@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -32,7 +33,7 @@ func newSiteSessionID(prefix string) string { return prefix + "-" + uuid.NewStri
 // session_service_stream_terminal.go: needs a real tmux-backed session, like the read-only test next to it.
 func TestInputSites_ShouldRecordReceivedAndForwarded_When_PermittedWriterAtStreamSite(t *testing.T) {
 	svc, srv := newBidiStreamTestServer(t)
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	svc.SetReviewQueuePoller(poller)
 	svc.SetRegistry(session.NewRegistry(nil, svc.WireInstanceCallbacks))
 	client := sessionv1connect.NewSessionServiceClient(srv.Client(), srv.URL)

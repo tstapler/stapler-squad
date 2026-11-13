@@ -56,12 +56,12 @@ func (s *BacklogService) AttachSessionToItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	if item.Status != string(session.BacklogStatusIdea) &&
-		item.Status != string(session.BacklogStatusReady) &&
-		item.Status != string(session.BacklogStatusInProgress) {
+	if item.Status != string(domain.BacklogStatusIdea) &&
+		item.Status != string(domain.BacklogStatusReady) &&
+		item.Status != string(domain.BacklogStatusInProgress) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item must be in %q, %q, or %q status to attach a session, got %q",
-				session.BacklogStatusIdea, session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status))
+				domain.BacklogStatusIdea, domain.BacklogStatusReady, domain.BacklogStatusInProgress, item.Status))
 	}
 
 	// 3. Reject attaching a session whose working directory is the item's own
@@ -158,9 +158,9 @@ func (s *BacklogService) AttachSessionToItem(
 
 	// 7. Transition item to in_progress (only if the state machine permits it; a
 	// non-edge is a silent skip, not a denial, so it is checked before the gate).
-	if s.engine.CanTransition(session.BacklogStatus(item.Status), session.BacklogStatusInProgress, backlogdto.BuildStageConfigSnapshotFallback(item)) {
+	if s.engine.CanTransition(domain.BacklogStatus(item.Status), domain.BacklogStatusInProgress, backlogdto.BuildStageConfigSnapshotFallback(item)) {
 		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-			Caller: domain.CallerAttachSessionToItem, ItemID: item.ID, To: session.BacklogStatusInProgress,
+			Caller: domain.CallerAttachSessionToItem, ItemID: item.ID, To: domain.BacklogStatusInProgress,
 			TriggeredBy: session.TriggeredBySystem, Unconditional: true,
 		}); transErr != nil {
 			log.ErrorLog().Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
@@ -322,8 +322,8 @@ func (s *BacklogService) ImportGitHubIssue(ctx context.Context, req *connect.Req
 	created, err := s.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        issue.Title,
 		Description:  issue.Body,
-		Priority:     session.DefaultBacklogPriority,
-		Status:       string(session.BacklogStatusIdea),
+		Priority:     domain.DefaultBacklogPriority,
+		Status:       string(domain.BacklogStatusIdea),
 		RepoPath:     repoPath,
 		Notes:        fmt.Sprintf("Imported from %s", issue.URL),
 		ExternalID:   strconv.Itoa(ref.IssueNumber),

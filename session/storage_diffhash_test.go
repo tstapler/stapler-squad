@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
 )
@@ -114,7 +115,7 @@ func TestGetRecentReviewVerdictSummaries_should_roundTripDiffHash_When_VerdictSa
 	require.NoError(t, err)
 
 	require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
-		OverallOutcome: ReviewOutcomeFail,
+		OverallOutcome: domain.ReviewOutcomeFail,
 		Summary:        "diff hash round trip",
 		DiffHash:       "deadbeef",
 	}))

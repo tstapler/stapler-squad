@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -19,7 +20,7 @@ func TestListBacklogItems_should_CarryAndFilterBySourcePluginID(t *testing.T) {
 	ghSrc, err := storage.CreateItemSource(ctx, backlogdto.ItemSourceData{PluginID: "github_issues", DisplayName: "G", Config: `{}`, Enabled: true})
 	require.NoError(t, err)
 	mk := func(title, srcID, ext string) {
-		_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: title, Status: string(BacklogStatusReady), SourceID: srcID, ExternalID: ext})
+		_, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: title, Status: string(domain.BacklogStatusReady), SourceID: srcID, ExternalID: ext})
 		require.NoError(t, err)
 	}
 	mk("lin", linearSrc.ID, "ENG-1")

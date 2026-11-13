@@ -217,7 +217,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 	// fetch them for every such item in one batch instead of per row.
 	var reviewIDs []string
 	for _, row := range rows {
-		if row.ItemStatus == session.BacklogStatusReview {
+		if row.ItemStatus == domain.BacklogStatusReview {
 			reviewIDs = append(reviewIDs, row.ItemID)
 		}
 	}

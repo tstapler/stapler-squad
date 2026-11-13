@@ -166,7 +166,7 @@ func (s *BacklogService) waitForSteerReady(ctx context.Context, sessionUUID stri
 func buildVerdictSteerMessage(itemID string, v *backlogdto.ReviewVerdictData) string {
 	summary := truncateUTF8Bytes(strings.TrimSpace(v.Summary), maxVerdictSummaryBytes)
 	var next string
-	if v.OverallOutcome == session.ReviewOutcomePass {
+	if v.OverallOutcome == domain.ReviewOutcomePass {
 		next = "Run /backlog/ship now to open the pull request yourself."
 	} else {
 		next = fmt.Sprintf("Fix the noted gaps in this same session and call request_review again (at most %d review attempts per session; after that run /backlog/ship to hand off to a human).", domain.MaxSameSessionReviewAttempts)
@@ -186,7 +186,7 @@ func buildVerdictSteerMessage(itemID string, v *backlogdto.ReviewVerdictData) st
 // identical literal-constant precedent.
 func (s *BacklogService) notifyVerdictSteerFailed(ctx context.Context, itemID, itemTitle, sessionUUID, reason string) {
 	if s.storage != nil {
-		if _, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonVerdictUndelivered, session.BacklogStatusReview,
+		if _, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonVerdictUndelivered, domain.BacklogStatusReview,
 			fmt.Sprintf("session %s did not receive its review verdict (%s)", sessionUUID, reason)); err != nil {
 			log.WarningLog().Printf("[VerdictSteer] MarkStuck(verdict_undelivered) item=%s: %v", itemID, err)
 		}

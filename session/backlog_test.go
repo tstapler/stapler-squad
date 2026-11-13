@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 )
 
@@ -85,24 +86,24 @@ func TestIsTmuxBackedSessionRole_should_CoverEveryDeclaredRole_When_RolesEnumera
 func TestCanTransition_AllValidPaths(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		from BacklogStatus
-		to   BacklogStatus
+		from domain.BacklogStatus
+		to   domain.BacklogStatus
 	}{
-		{BacklogStatusIdea, BacklogStatusReady},
-		{BacklogStatusIdea, BacklogStatusArchived},
-		{BacklogStatusReady, BacklogStatusInProgress},
-		{BacklogStatusReady, BacklogStatusIdea},
-		{BacklogStatusReady, BacklogStatusArchived},
-		{BacklogStatusInProgress, BacklogStatusReview},
-		{BacklogStatusInProgress, BacklogStatusReady},
-		{BacklogStatusReview, BacklogStatusDone},
-		{BacklogStatusReview, BacklogStatusInProgress},
-		{BacklogStatusDone, BacklogStatusReview},
-		{BacklogStatusDone, BacklogStatusArchived},
-		{BacklogStatusArchived, BacklogStatusIdea},
+		{domain.BacklogStatusIdea, domain.BacklogStatusReady},
+		{domain.BacklogStatusIdea, domain.BacklogStatusArchived},
+		{domain.BacklogStatusReady, domain.BacklogStatusInProgress},
+		{domain.BacklogStatusReady, domain.BacklogStatusIdea},
+		{domain.BacklogStatusReady, domain.BacklogStatusArchived},
+		{domain.BacklogStatusInProgress, domain.BacklogStatusReview},
+		{domain.BacklogStatusInProgress, domain.BacklogStatusReady},
+		{domain.BacklogStatusReview, domain.BacklogStatusDone},
+		{domain.BacklogStatusReview, domain.BacklogStatusInProgress},
+		{domain.BacklogStatusDone, domain.BacklogStatusReview},
+		{domain.BacklogStatusDone, domain.BacklogStatusArchived},
+		{domain.BacklogStatusArchived, domain.BacklogStatusIdea},
 	}
 	for _, tc := range cases {
-		if !CanTransitionBacklog(tc.from, tc.to) {
+		if !domain.CanTransitionBacklog(tc.from, tc.to) {
 			t.Errorf("CanTransitionBacklog(%q, %q) = false; want true", tc.from, tc.to)
 		}
 	}
@@ -112,15 +113,15 @@ func TestCanTransition_AllValidPaths(t *testing.T) {
 func TestCanTransition_AllInvalidPaths(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		from BacklogStatus
-		to   BacklogStatus
+		from domain.BacklogStatus
+		to   domain.BacklogStatus
 	}{
-		{BacklogStatusIdea, BacklogStatusDone},
-		{BacklogStatusReady, BacklogStatusDone},
-		{BacklogStatusArchived, BacklogStatusReview},
+		{domain.BacklogStatusIdea, domain.BacklogStatusDone},
+		{domain.BacklogStatusReady, domain.BacklogStatusDone},
+		{domain.BacklogStatusArchived, domain.BacklogStatusReview},
 	}
 	for _, tc := range cases {
-		if CanTransitionBacklog(tc.from, tc.to) {
+		if domain.CanTransitionBacklog(tc.from, tc.to) {
 			t.Errorf("CanTransitionBacklog(%q, %q) = true; want false", tc.from, tc.to)
 		}
 	}
@@ -130,16 +131,16 @@ func TestCanTransition_AllInvalidPaths(t *testing.T) {
 // reopen path from archived, and that archived→ready (for example) is not permitted.
 func TestCanTransition_ArchivedToIdeaIsExplicit(t *testing.T) {
 	t.Parallel()
-	if !CanTransitionBacklog(BacklogStatusArchived, BacklogStatusIdea) {
+	if !domain.CanTransitionBacklog(domain.BacklogStatusArchived, domain.BacklogStatusIdea) {
 		t.Error("CanTransition(archived, idea) = false; want true")
 	}
-	if CanTransitionBacklog(BacklogStatusArchived, BacklogStatusReady) {
+	if domain.CanTransitionBacklog(domain.BacklogStatusArchived, domain.BacklogStatusReady) {
 		t.Error("CanTransition(archived, ready) = true; want false")
 	}
-	if CanTransitionBacklog(BacklogStatusArchived, BacklogStatusInProgress) {
+	if domain.CanTransitionBacklog(domain.BacklogStatusArchived, domain.BacklogStatusInProgress) {
 		t.Error("CanTransition(archived, in_progress) = true; want false")
 	}
-	if CanTransitionBacklog(BacklogStatusArchived, BacklogStatusDone) {
+	if domain.CanTransitionBacklog(domain.BacklogStatusArchived, domain.BacklogStatusDone) {
 		t.Error("CanTransition(archived, done) = true; want false")
 	}
 }
@@ -148,25 +149,25 @@ func TestCanTransition_ArchivedToIdeaIsExplicit(t *testing.T) {
 func TestTransitionGuard_IdeaToReady_RequiresAC(t *testing.T) {
 	t.Parallel()
 	// Empty AC JSON → error
-	item := BacklogItemTransitionInput{
-		Status:     BacklogStatusIdea,
+	item := domain.BacklogItemTransitionInput{
+		Status:     domain.BacklogStatusIdea,
 		AcCriteria: "",
 	}
-	if err := TransitionGuard(item, BacklogStatusReady); err != ErrACRequired {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusReady); err != domain.ErrACRequired {
 		t.Errorf("TransitionGuard with empty AC = %v; want ErrACRequired", err)
 	}
 
 	// Empty JSON array → error
 	item.AcCriteria = "[]"
-	if err := TransitionGuard(item, BacklogStatusReady); err != ErrACRequired {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusReady); err != domain.ErrACRequired {
 		t.Errorf("TransitionGuard with [] AC = %v; want ErrACRequired", err)
 	}
 
 	// Valid AC with one criterion → nil
-	criteria := []AcCriterion{{Index: 0, Text: "must work", Status: "pending"}}
+	criteria := []domain.AcCriterion{{Index: 0, Text: "must work", Status: "pending"}}
 	raw, _ := json.Marshal(criteria)
-	item.AcCriteria = AcCriteriaJSON(raw)
-	if err := TransitionGuard(item, BacklogStatusReady); err != nil {
+	item.AcCriteria = domain.AcCriteriaJSON(raw)
+	if err := domain.TransitionGuard(item, domain.BacklogStatusReady); err != nil {
 		t.Errorf("TransitionGuard with 1 AC = %v; want nil", err)
 	}
 }
@@ -176,31 +177,31 @@ func TestTransitionGuard_IdeaToReady_RequiresAC(t *testing.T) {
 func TestTransitionGuard_ReviewToDone_RequiresPassOrOverride(t *testing.T) {
 	t.Parallel()
 	// FAIL outcome with no override → error
-	item := BacklogItemTransitionInput{
-		Status:         BacklogStatusReview,
-		OverallOutcome: ReviewVerdictFail,
+	item := domain.BacklogItemTransitionInput{
+		Status:         domain.BacklogStatusReview,
+		OverallOutcome: domain.ReviewVerdictFail,
 	}
-	if err := TransitionGuard(item, BacklogStatusDone); err != ErrVerdictRequired {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusDone); err != domain.ErrVerdictRequired {
 		t.Errorf("TransitionGuard FAIL/no override = %v; want ErrVerdictRequired", err)
 	}
 
 	// PARTIAL outcome with no override → error
-	item.OverallOutcome = ReviewVerdictPartial
-	if err := TransitionGuard(item, BacklogStatusDone); err != ErrVerdictRequired {
+	item.OverallOutcome = domain.ReviewVerdictPartial
+	if err := domain.TransitionGuard(item, domain.BacklogStatusDone); err != domain.ErrVerdictRequired {
 		t.Errorf("TransitionGuard PARTIAL/no override = %v; want ErrVerdictRequired", err)
 	}
 
 	// PASS outcome → nil
-	item.OverallOutcome = ReviewVerdictPass
+	item.OverallOutcome = domain.ReviewVerdictPass
 	item.OverrideReason = ""
-	if err := TransitionGuard(item, BacklogStatusDone); err != nil {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusDone); err != nil {
 		t.Errorf("TransitionGuard PASS = %v; want nil", err)
 	}
 
 	// FAIL outcome but override_reason set → nil
-	item.OverallOutcome = ReviewVerdictFail
+	item.OverallOutcome = domain.ReviewVerdictFail
 	item.OverrideReason = "customer accepted as-is"
-	if err := TransitionGuard(item, BacklogStatusDone); err != nil {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusDone); err != nil {
 		t.Errorf("TransitionGuard FAIL+override = %v; want nil", err)
 	}
 }
@@ -209,11 +210,11 @@ func TestTransitionGuard_ReviewToDone_RequiresPassOrOverride(t *testing.T) {
 // PASS verdict blocks the review->ready backward edge unless override_reason is set.
 func TestTransitionGuard_ReviewToReady_BlocksWithPassVerdictAndNoOverride(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{
-		Status:         BacklogStatusReview,
-		OverallOutcome: ReviewOutcomePass,
+	item := domain.BacklogItemTransitionInput{
+		Status:         domain.BacklogStatusReview,
+		OverallOutcome: domain.ReviewOutcomePass,
 	}
-	if err := TransitionGuard(item, BacklogStatusReady); err != ErrVerdictClearRequiredForReady {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusReady); err != domain.ErrVerdictClearRequiredForReady {
 		t.Errorf("TransitionGuard review->ready PASS/no override = %v; want ErrVerdictClearRequiredForReady", err)
 	}
 }
@@ -222,11 +223,11 @@ func TestTransitionGuard_ReviewToReady_BlocksWithPassVerdictAndNoOverride(t *tes
 // same guard applies to the pr_pending->ready backward edge.
 func TestTransitionGuard_PRPendingToReady_BlocksWithPassVerdictAndNoOverride(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{
-		Status:         BacklogStatusPRPending,
-		OverallOutcome: ReviewOutcomePass,
+	item := domain.BacklogItemTransitionInput{
+		Status:         domain.BacklogStatusPRPending,
+		OverallOutcome: domain.ReviewOutcomePass,
 	}
-	if err := TransitionGuard(item, BacklogStatusReady); err != ErrVerdictClearRequiredForReady {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusReady); err != domain.ErrVerdictClearRequiredForReady {
 		t.Errorf("TransitionGuard pr_pending->ready PASS/no override = %v; want ErrVerdictClearRequiredForReady", err)
 	}
 }
@@ -235,13 +236,13 @@ func TestTransitionGuard_PRPendingToReady_BlocksWithPassVerdictAndNoOverride(t *
 // override_reason clears the guard for both backward edges even with a PASS verdict.
 func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithOverrideReason(t *testing.T) {
 	t.Parallel()
-	for _, from := range []BacklogStatus{BacklogStatusReview, BacklogStatusPRPending} {
-		item := BacklogItemTransitionInput{
+	for _, from := range []domain.BacklogStatus{domain.BacklogStatusReview, domain.BacklogStatusPRPending} {
+		item := domain.BacklogItemTransitionInput{
 			Status:         from,
-			OverallOutcome: ReviewOutcomePass,
+			OverallOutcome: domain.ReviewOutcomePass,
 			OverrideReason: "re-triaging, PR needs rework",
 		}
-		if err := TransitionGuard(item, BacklogStatusReady); err != nil {
+		if err := domain.TransitionGuard(item, domain.BacklogStatusReady); err != nil {
 			t.Errorf("TransitionGuard %s->ready PASS+override = %v; want nil", from, err)
 		}
 	}
@@ -251,13 +252,13 @@ func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithOverrideReason(t *t
 // the guard doesn't fire when there's no PASS verdict, override_reason or not.
 func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithoutPassVerdict(t *testing.T) {
 	t.Parallel()
-	for _, from := range []BacklogStatus{BacklogStatusReview, BacklogStatusPRPending} {
-		for _, outcome := range []ReviewOutcome{"", ReviewOutcomeFail, ReviewOutcomePartial, ReviewOutcomeUnverifiable} {
-			item := BacklogItemTransitionInput{
+	for _, from := range []domain.BacklogStatus{domain.BacklogStatusReview, domain.BacklogStatusPRPending} {
+		for _, outcome := range []domain.ReviewOutcome{"", domain.ReviewOutcomeFail, domain.ReviewOutcomePartial, domain.ReviewOutcomeUnverifiable} {
+			item := domain.BacklogItemTransitionInput{
 				Status:         from,
 				OverallOutcome: outcome,
 			}
-			if err := TransitionGuard(item, BacklogStatusReady); err != nil {
+			if err := domain.TransitionGuard(item, domain.BacklogStatusReady); err != nil {
 				t.Errorf("TransitionGuard %s->ready outcome=%q = %v; want nil", from, outcome, err)
 			}
 		}
@@ -269,11 +270,11 @@ func TestTransitionGuard_ReviewOrPRPendingToReady_AllowedWithoutPassVerdict(t *t
 // done->ready backward edge, even with a PASS verdict and no override.
 func TestTransitionGuard_DoneToReady_UnaffectedByVerdictClearGuard(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{
-		Status:         BacklogStatusDone,
-		OverallOutcome: ReviewOutcomePass,
+	item := domain.BacklogItemTransitionInput{
+		Status:         domain.BacklogStatusDone,
+		OverallOutcome: domain.ReviewOutcomePass,
 	}
-	if err := TransitionGuard(item, BacklogStatusReady); err != nil {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusReady); err != nil {
 		t.Errorf("TransitionGuard done->ready PASS/no override = %v; want nil (guard scoped to review/pr_pending only)", err)
 	}
 }
@@ -281,10 +282,10 @@ func TestTransitionGuard_DoneToReady_UnaffectedByVerdictClearGuard(t *testing.T)
 // UT-006: TestTransitionGuard_InProgressToReview_AlwaysAllowed checks that no guard fires.
 func TestTransitionGuard_InProgressToReview_AlwaysAllowed(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{
-		Status: BacklogStatusInProgress,
+	item := domain.BacklogItemTransitionInput{
+		Status: domain.BacklogStatusInProgress,
 	}
-	if err := TransitionGuard(item, BacklogStatusReview); err != nil {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusReview); err != nil {
 		t.Errorf("TransitionGuard in_progress→review = %v; want nil", err)
 	}
 }
@@ -294,31 +295,31 @@ func TestTransitionGuard_InProgressToReview_AlwaysAllowed(t *testing.T) {
 func TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning(t *testing.T) {
 	t.Parallel()
 	// Neither approved nor skip → error
-	item := BacklogItemTransitionInput{
-		Status:       BacklogStatusReady,
+	item := domain.BacklogItemTransitionInput{
+		Status:       domain.BacklogStatusReady,
 		PlanApproved: false,
 		SkipPlanning: false,
 	}
-	if err := TransitionGuard(item, BacklogStatusInProgress); err != ErrPlanRequired {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusInProgress); err != domain.ErrPlanRequired {
 		t.Errorf("TransitionGuard no plan approval = %v; want ErrPlanRequired", err)
 	}
 
 	// plan_approved=true with no artifacts path → ErrPlanArtifactsRequired
 	item.PlanApproved = true
-	if err := TransitionGuard(item, BacklogStatusInProgress); err != ErrPlanArtifactsRequired {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusInProgress); err != domain.ErrPlanArtifactsRequired {
 		t.Errorf("TransitionGuard plan_approved=true no artifacts = %v; want ErrPlanArtifactsRequired", err)
 	}
 
 	// plan_approved=true with artifacts path → nil
 	item.PlanArtifactsPath = "/some/path"
-	if err := TransitionGuard(item, BacklogStatusInProgress); err != nil {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusInProgress); err != nil {
 		t.Errorf("TransitionGuard plan_approved=true with artifacts = %v; want nil", err)
 	}
 
 	// skip_planning=true → nil
 	item.PlanApproved = false
 	item.SkipPlanning = true
-	if err := TransitionGuard(item, BacklogStatusInProgress); err != nil {
+	if err := domain.TransitionGuard(item, domain.BacklogStatusInProgress); err != nil {
 		t.Errorf("TransitionGuard skip_planning=true = %v; want nil", err)
 	}
 }
@@ -326,15 +327,15 @@ func TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning(t 
 // UT-007: TestAcCriterion_JSONRoundTrip verifies serialize → parse produces identical data.
 func TestAcCriterion_JSONRoundTrip(t *testing.T) {
 	t.Parallel()
-	original := []AcCriterion{
+	original := []domain.AcCriterion{
 		{Index: 0, Text: "must compile", Status: "pending"},
 		{Index: 1, Text: "tests pass", Status: "done"},
 	}
-	raw, err := SerializeAcCriteria(original)
+	raw, err := domain.SerializeAcCriteria(original)
 	if err != nil {
 		t.Fatalf("SerializeAcCriteria error: %v", err)
 	}
-	parsed, err := ParseAcCriteria(raw)
+	parsed, err := domain.ParseAcCriteria(raw)
 	if err != nil {
 		t.Fatalf("ParseAcCriteria error: %v", err)
 	}
@@ -352,37 +353,37 @@ func TestAcCriterion_JSONRoundTrip(t *testing.T) {
 // UT-008: TestAggregateOutcome_AllPass verifies PASS only when every verdict is PASS.
 func TestAggregateOutcome_AllPass(t *testing.T) {
 	t.Parallel()
-	verdicts := []CriterionVerdict{
-		{CriterionIndex: 0, Outcome: ReviewVerdictPass},
-		{CriterionIndex: 1, Outcome: ReviewVerdictPass},
-		{CriterionIndex: 2, Outcome: ReviewVerdictPass},
+	verdicts := []domain.CriterionVerdict{
+		{CriterionIndex: 0, Outcome: domain.ReviewVerdictPass},
+		{CriterionIndex: 1, Outcome: domain.ReviewVerdictPass},
+		{CriterionIndex: 2, Outcome: domain.ReviewVerdictPass},
 	}
-	if got := AggregateOutcome(verdicts); got != ReviewVerdictPass {
-		t.Errorf("AggregateOutcome([PASS,PASS,PASS]) = %q; want %q", got, ReviewVerdictPass)
+	if got := domain.AggregateOutcome(verdicts); got != domain.ReviewVerdictPass {
+		t.Errorf("AggregateOutcome([PASS,PASS,PASS]) = %q; want %q", got, domain.ReviewVerdictPass)
 	}
 
 	// FAIL dominates over PASS
-	verdicts[2].Outcome = ReviewVerdictFail
-	if got := AggregateOutcome(verdicts); got != ReviewVerdictFail {
-		t.Errorf("AggregateOutcome([PASS,PASS,FAIL]) = %q; want %q", got, ReviewVerdictFail)
+	verdicts[2].Outcome = domain.ReviewVerdictFail
+	if got := domain.AggregateOutcome(verdicts); got != domain.ReviewVerdictFail {
+		t.Errorf("AggregateOutcome([PASS,PASS,FAIL]) = %q; want %q", got, domain.ReviewVerdictFail)
 	}
 
 	// PARTIAL dominates PASS
-	verdicts = []CriterionVerdict{
-		{CriterionIndex: 0, Outcome: ReviewVerdictPass},
-		{CriterionIndex: 1, Outcome: ReviewVerdictPartial},
+	verdicts = []domain.CriterionVerdict{
+		{CriterionIndex: 0, Outcome: domain.ReviewVerdictPass},
+		{CriterionIndex: 1, Outcome: domain.ReviewVerdictPartial},
 	}
-	if got := AggregateOutcome(verdicts); got != ReviewVerdictPartial {
-		t.Errorf("AggregateOutcome([PASS,PARTIAL]) = %q; want %q", got, ReviewVerdictPartial)
+	if got := domain.AggregateOutcome(verdicts); got != domain.ReviewVerdictPartial {
+		t.Errorf("AggregateOutcome([PASS,PARTIAL]) = %q; want %q", got, domain.ReviewVerdictPartial)
 	}
 
 	// FAIL dominates PARTIAL
-	verdicts = []CriterionVerdict{
-		{CriterionIndex: 0, Outcome: ReviewVerdictFail},
-		{CriterionIndex: 1, Outcome: ReviewVerdictPartial},
+	verdicts = []domain.CriterionVerdict{
+		{CriterionIndex: 0, Outcome: domain.ReviewVerdictFail},
+		{CriterionIndex: 1, Outcome: domain.ReviewVerdictPartial},
 	}
-	if got := AggregateOutcome(verdicts); got != ReviewVerdictFail {
-		t.Errorf("AggregateOutcome([FAIL,PARTIAL]) = %q; want %q", got, ReviewVerdictFail)
+	if got := domain.AggregateOutcome(verdicts); got != domain.ReviewVerdictFail {
+		t.Errorf("AggregateOutcome([FAIL,PARTIAL]) = %q; want %q", got, domain.ReviewVerdictFail)
 	}
 }
 
@@ -391,30 +392,30 @@ func TestAggregateOutcome_AllPass(t *testing.T) {
 func TestAggregateOutcome_PartialAndUnverifiable(t *testing.T) {
 	t.Parallel()
 	// Single UNVERIFIABLE
-	verdicts := []CriterionVerdict{
-		{CriterionIndex: 0, Outcome: ReviewVerdictUnverifiable},
+	verdicts := []domain.CriterionVerdict{
+		{CriterionIndex: 0, Outcome: domain.ReviewVerdictUnverifiable},
 	}
-	if got := AggregateOutcome(verdicts); got != ReviewVerdictUnverifiable {
-		t.Errorf("AggregateOutcome([UNVERIFIABLE]) = %q; want %q", got, ReviewVerdictUnverifiable)
+	if got := domain.AggregateOutcome(verdicts); got != domain.ReviewVerdictUnverifiable {
+		t.Errorf("AggregateOutcome([UNVERIFIABLE]) = %q; want %q", got, domain.ReviewVerdictUnverifiable)
 	}
 
 	// PARTIAL beats UNVERIFIABLE
-	verdicts = []CriterionVerdict{
-		{CriterionIndex: 0, Outcome: ReviewVerdictPartial},
-		{CriterionIndex: 1, Outcome: ReviewVerdictUnverifiable},
+	verdicts = []domain.CriterionVerdict{
+		{CriterionIndex: 0, Outcome: domain.ReviewVerdictPartial},
+		{CriterionIndex: 1, Outcome: domain.ReviewVerdictUnverifiable},
 	}
-	if got := AggregateOutcome(verdicts); got != ReviewVerdictPartial {
-		t.Errorf("AggregateOutcome([PARTIAL,UNVERIFIABLE]) = %q; want %q", got, ReviewVerdictPartial)
+	if got := domain.AggregateOutcome(verdicts); got != domain.ReviewVerdictPartial {
+		t.Errorf("AggregateOutcome([PARTIAL,UNVERIFIABLE]) = %q; want %q", got, domain.ReviewVerdictPartial)
 	}
 
 	// FAIL beats both
-	verdicts = []CriterionVerdict{
-		{CriterionIndex: 0, Outcome: ReviewVerdictFail},
-		{CriterionIndex: 1, Outcome: ReviewVerdictPartial},
-		{CriterionIndex: 2, Outcome: ReviewVerdictUnverifiable},
+	verdicts = []domain.CriterionVerdict{
+		{CriterionIndex: 0, Outcome: domain.ReviewVerdictFail},
+		{CriterionIndex: 1, Outcome: domain.ReviewVerdictPartial},
+		{CriterionIndex: 2, Outcome: domain.ReviewVerdictUnverifiable},
 	}
-	if got := AggregateOutcome(verdicts); got != ReviewVerdictFail {
-		t.Errorf("AggregateOutcome([FAIL,PARTIAL,UNVERIFIABLE]) = %q; want %q", got, ReviewVerdictFail)
+	if got := domain.AggregateOutcome(verdicts); got != domain.ReviewVerdictFail {
+		t.Errorf("AggregateOutcome([FAIL,PARTIAL,UNVERIFIABLE]) = %q; want %q", got, domain.ReviewVerdictFail)
 	}
 }
 
@@ -423,14 +424,14 @@ func TestMergeAcCriteria(t *testing.T) {
 	t.Parallel()
 	type tc struct {
 		name     string
-		existing []AcCriterion
-		incoming []AcCriterion
+		existing []domain.AcCriterion
+		incoming []domain.AcCriterion
 		// wantErr: if true, expect a non-nil error and skip result checks.
 		wantErr bool
 		// wantIndices: expected index order in the result (nil means skip check).
 		wantIndices []int
 		// wantStatuses: expected status per position in result (aligned with wantIndices).
-		wantStatuses []AcStatus
+		wantStatuses []domain.AcStatus
 		// wantTexts: expected text per position in result.
 		wantTexts []string
 	}
@@ -439,50 +440,50 @@ func TestMergeAcCriteria(t *testing.T) {
 		{
 			name:         "empty_existing_non_empty_incoming",
 			existing:     nil,
-			incoming:     []AcCriterion{{Index: 0, Text: "first", Status: AcStatusPending}, {Index: 1, Text: "second", Status: AcStatusDone}},
+			incoming:     []domain.AcCriterion{{Index: 0, Text: "first", Status: domain.AcStatusPending}, {Index: 1, Text: "second", Status: domain.AcStatusDone}},
 			wantErr:      false,
 			wantIndices:  []int{0, 1},
-			wantStatuses: []AcStatus{AcStatusPending, AcStatusDone},
+			wantStatuses: []domain.AcStatus{domain.AcStatusPending, domain.AcStatusDone},
 			wantTexts:    []string{"first", "second"},
 		},
 		{
 			name:         "update_existing_criterion",
-			existing:     []AcCriterion{{Index: 0, Text: "initial", Status: AcStatusPending}},
-			incoming:     []AcCriterion{{Index: 0, Text: "initial", Status: AcStatusDone}},
+			existing:     []domain.AcCriterion{{Index: 0, Text: "initial", Status: domain.AcStatusPending}},
+			incoming:     []domain.AcCriterion{{Index: 0, Text: "initial", Status: domain.AcStatusDone}},
 			wantErr:      false,
 			wantIndices:  []int{0},
-			wantStatuses: []AcStatus{AcStatusDone},
+			wantStatuses: []domain.AcStatus{domain.AcStatusDone},
 			wantTexts:    []string{"initial"},
 		},
 		{
 			name: "preserve_unmentioned_criteria",
-			existing: []AcCriterion{
-				{Index: 0, Text: "a", Status: AcStatusPending},
-				{Index: 1, Text: "b", Status: AcStatusPending},
-				{Index: 2, Text: "c", Status: AcStatusPending},
+			existing: []domain.AcCriterion{
+				{Index: 0, Text: "a", Status: domain.AcStatusPending},
+				{Index: 1, Text: "b", Status: domain.AcStatusPending},
+				{Index: 2, Text: "c", Status: domain.AcStatusPending},
 			},
 			// Only update index 1; indices 0 and 2 must survive unchanged.
-			incoming:     []AcCriterion{{Index: 1, Text: "b-updated", Status: AcStatusDone}},
+			incoming:     []domain.AcCriterion{{Index: 1, Text: "b-updated", Status: domain.AcStatusDone}},
 			wantErr:      false,
 			wantIndices:  []int{0, 1, 2},
-			wantStatuses: []AcStatus{AcStatusPending, AcStatusDone, AcStatusPending},
+			wantStatuses: []domain.AcStatus{domain.AcStatusPending, domain.AcStatusDone, domain.AcStatusPending},
 			wantTexts:    []string{"a", "b-updated", "c"},
 		},
 		{
 			name:         "append_new_criterion_with_gap_in_indices",
-			existing:     []AcCriterion{{Index: 0, Text: "zero", Status: AcStatusDone}},
-			incoming:     []AcCriterion{{Index: 5, Text: "five", Status: AcStatusPending}},
+			existing:     []domain.AcCriterion{{Index: 0, Text: "zero", Status: domain.AcStatusDone}},
+			incoming:     []domain.AcCriterion{{Index: 5, Text: "five", Status: domain.AcStatusPending}},
 			wantErr:      false,
 			wantIndices:  []int{0, 5},
-			wantStatuses: []AcStatus{AcStatusDone, AcStatusPending},
+			wantStatuses: []domain.AcStatus{domain.AcStatusDone, domain.AcStatusPending},
 			wantTexts:    []string{"zero", "five"},
 		},
 		{
 			name:     "duplicate_index_in_incoming_returns_error",
 			existing: nil,
-			incoming: []AcCriterion{
-				{Index: 0, Text: "first", Status: AcStatusPending},
-				{Index: 0, Text: "dup", Status: AcStatusDone},
+			incoming: []domain.AcCriterion{
+				{Index: 0, Text: "first", Status: domain.AcStatusPending},
+				{Index: 0, Text: "dup", Status: domain.AcStatusDone},
 			},
 			wantErr: true,
 		},
@@ -499,7 +500,7 @@ func TestMergeAcCriteria(t *testing.T) {
 				return
 			}
 
-			result, parseErr := ParseAcCriteria(got)
+			result, parseErr := domain.ParseAcCriteria(got)
 			if parseErr != nil {
 				t.Fatalf("ParseAcCriteria(result) error: %v", parseErr)
 			}
@@ -529,11 +530,11 @@ func FuzzMergeAcCriteria(f *testing.F) {
 		[]byte(`[{"index":0,"text":"done","status":"done"}]`),
 	)
 	f.Fuzz(func(t *testing.T, existingJSON, incomingJSON []byte) {
-		var existing []AcCriterion
+		var existing []domain.AcCriterion
 		if err := json.Unmarshal(existingJSON, &existing); err != nil {
 			return // skip unparseable input
 		}
-		var incoming []AcCriterion
+		var incoming []domain.AcCriterion
 		if err := json.Unmarshal(incomingJSON, &incoming); err != nil {
 			return // skip unparseable input
 		}
@@ -548,8 +549,8 @@ func FuzzMergeAcCriteria(f *testing.F) {
 func TestIsValidBacklogCategory_should_ReturnTrue_When_KnownOrEmpty(t *testing.T) {
 	t.Parallel()
 	for _, c := range []string{
-		string(BacklogCategoryBugfix), string(BacklogCategoryFeature),
-		string(BacklogCategoryChore), string(BacklogCategoryRefactor), "",
+		string(domain.BacklogCategoryBugfix), string(domain.BacklogCategoryFeature),
+		string(domain.BacklogCategoryChore), string(domain.BacklogCategoryRefactor), "",
 	} {
 		if !IsValidBacklogCategory(c) {
 			t.Errorf("IsValidBacklogCategory(%q) = false, want true", c)

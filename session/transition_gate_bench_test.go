@@ -22,8 +22,8 @@ func BenchmarkGatedTransitionDecision(b *testing.B) {
 		b.Fatal(err)
 	}
 	def := NewDefaultWorkflowEngine()
-	item := &backlogdto.BacklogItemData{ID: "00000000-0000-0000-0000-000000000001", Status: string(BacklogStatusIdea)}
-	req := backlogdto.TransitionRequest{Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: BacklogStatusRefining}
+	item := &backlogdto.BacklogItemData{ID: "00000000-0000-0000-0000-000000000001", Status: string(domain.BacklogStatusIdea)}
+	req := backlogdto.TransitionRequest{Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: domain.BacklogStatusRefining}
 	spec, ok := domain.LookupTransitionCaller(req.Caller)
 	if !ok {
 		b.Fatal("caller not registered")

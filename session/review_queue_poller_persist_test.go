@@ -8,6 +8,7 @@ import (
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // countLastAddedToQueueWrites counts session mutations that set
@@ -39,8 +40,8 @@ func TestAddDetectedItem_Should_PersistLastAddedToQueueOnce_When_EntryUnchanged(
 	require.NoError(t, storage.AddInstance(inst))
 	writes := countLastAddedToQueueWrites(t, storage)
 
-	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), storage)
-	result := DetectionResult{Action: DetectionActionAdd, Reason: ReasonIdle, Priority: PriorityMedium, Context: "idle"}
+	rqp := NewReviewQueuePoller(queue.NewReviewQueue(), NewInstanceStatusManager(), storage)
+	result := DetectionResult{Action: DetectionActionAdd, Reason: queue.ReasonIdle, Priority: queue.PriorityMedium, Context: "idle"}
 	snap := inst.Snapshot()
 
 	for i := 0; i < 5; i++ {

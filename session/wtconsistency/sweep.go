@@ -501,11 +501,11 @@ func notifyLinkageAware(notifier domain.Notifier, backoff *notifyBackoff, req no
 // (server/services/backlog_service_triage.go): a storage error or a status precondition
 // mismatch is logged, never propagated or allowed to block the caller's notification.
 func markStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepository, itemID string, item *backlogdto.BacklogItemData, detail string) {
-	if itemID == "" || item == nil || session.IsTerminalStatus(session.BacklogStatus(item.Status)) {
+	if itemID == "" || item == nil || session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 		return
 	}
 	stuckContext := fmt.Sprintf("worktree consistency sweep: %s", detail)
-	if applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonWorktreeInconsistent, session.BacklogStatus(item.Status), stuckContext); err != nil {
+	if applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonWorktreeInconsistent, domain.BacklogStatus(item.Status), stuckContext); err != nil {
 		log.Warn("worktree consistency sweep: MarkStuck failed", "item_id", itemID, "err", err)
 	} else if !applied {
 		log.Info("worktree consistency sweep: MarkStuck skipped — status precondition no longer holds", "item_id", itemID)
@@ -522,7 +522,7 @@ func markStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepository, 
 // BacklogItem visibly "stuck" forever — undermining this sweep's own self-healing premise
 // (BLOCKER). A storage error is logged, never propagated.
 func resolveStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepository, itemID string, item *backlogdto.BacklogItemData) {
-	if itemID == "" || item == nil || session.IsTerminalStatus(session.BacklogStatus(item.Status)) {
+	if itemID == "" || item == nil || session.IsTerminalStatus(domain.BacklogStatus(item.Status)) {
 		return
 	}
 	if _, err := repo.ResolveStuck(ctx, itemID, domain.StuckReasonWorktreeInconsistent); err != nil {

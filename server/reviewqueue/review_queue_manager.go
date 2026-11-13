@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -39,7 +40,7 @@ type CallbackDispatchWiring interface {
 // ReactiveQueueManager needs. Defined here — the consumer — per this repo's
 // anti-interface-pollution convention (mirrors OneShotPRCreator above).
 type SlackNotifierWiring interface {
-	NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string)
+	NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *queue.ReviewItem, dashboardURL string)
 	MaybeNotifyQueueDepthThreshold(ctx context.Context, cfg *config.Config, depth, threshold int, dashboardURL string) bool
 }
 
@@ -78,7 +79,7 @@ const (
 // It listens to interaction events and immediately re-evaluates the queue instead of waiting
 // for the next poll cycle, providing <100ms feedback to users.
 type ReactiveQueueManager struct {
-	queue         *session.ReviewQueue
+	queue         *queue.ReviewQueue
 	poller        *session.ReviewQueuePoller
 	eventBus      *events.EventBus
 	statusManager *session.InstanceStatusManager
@@ -152,8 +153,8 @@ type reviewQueueStreamClient struct {
 
 // WatchReviewQueueFilters contains filters for review queue event streaming
 type WatchReviewQueueFilters struct {
-	PriorityFilter    []session.Priority
-	ReasonFilter      []session.AttentionReason
+	PriorityFilter    []queue.Priority
+	ReasonFilter      []queue.AttentionReason
 	SessionIDs        []string
 	IncludeStatistics bool
 	InitialSnapshot   bool
@@ -161,7 +162,7 @@ type WatchReviewQueueFilters struct {
 
 // NewReactiveQueueManager creates a new reactive queue manager.
 func NewReactiveQueueManager(
-	queue *session.ReviewQueue,
+	queue *queue.ReviewQueue,
 	poller *session.ReviewQueuePoller,
 	eventBus *events.EventBus,
 	statusManager *session.InstanceStatusManager,
@@ -418,7 +419,7 @@ func (rqm *ReactiveQueueManager) handleApprovalResponse(event *events.Event) {
 // ReviewQueueObserver implementation - publishes events to streaming clients
 
 // OnItemAdded is called when an item is added to the queue.
-func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
+func (rqm *ReactiveQueueManager) OnItemAdded(item *queue.ReviewItem) {
 	event := &sessionv1.ReviewQueueEvent{
 		Timestamp: timestamppb.Now(),
 		Event: &sessionv1.ReviewQueueEvent_ItemAdded{
@@ -471,7 +472,7 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	// broadcasts a richer notification (with the actual command preview and approval UUID)
 	// when the HTTP hook fires. Publishing again here would create a duplicate card in the
 	// notification panel because APPROVAL_NEEDED records are never deduplicated server-side.
-	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending {
+	if rqm.eventBus != nil && item.Reason != queue.ReasonApprovalPending {
 		notifID := fmt.Sprintf("review-queue-%s-%d", item.SessionID, item.DetectedAt.UnixMilli())
 		title := fmt.Sprintf("%s: %s", item.Reason.String(), item.SessionName)
 		message := item.Context
@@ -545,11 +546,11 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 // exists==false branch, so relying on OnItemAdded alone silently misses this
 // transition). Safe to call repeatedly/redundantly for the same item — the
 // in-flight guard and GitHubPRURL re-check below make it idempotent.
-func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *session.ReviewItem) {
+func (rqm *ReactiveQueueManager) maybeAutoCreatePR(item *queue.ReviewItem) {
 	if rqm.oneShotRunner == nil || rqm.storage == nil || rqm.poller == nil {
 		return
 	}
-	if item.Reason != session.ReasonTaskComplete {
+	if item.Reason != queue.ReasonTaskComplete {
 		return
 	}
 
@@ -638,7 +639,7 @@ func (rqm *ReactiveQueueManager) baseContext() context.Context {
 }
 
 // OnItemRemoved is called when an item is removed from the queue.
-func (rqm *ReactiveQueueManager) OnItemRemoved(sessionID string, info session.RemovalInfo) {
+func (rqm *ReactiveQueueManager) OnItemRemoved(sessionID string, info queue.RemovalInfo) {
 	itemRemoved := &sessionv1.ReviewQueueItemRemovedEvent{
 		SessionId: sessionID,
 		Reason:    info.Reason(),
@@ -656,7 +657,7 @@ func (rqm *ReactiveQueueManager) OnItemRemoved(sessionID string, info session.Re
 }
 
 // OnQueueUpdated is called when the queue is updated.
-func (rqm *ReactiveQueueManager) OnQueueUpdated(items []*session.ReviewItem) {
+func (rqm *ReactiveQueueManager) OnQueueUpdated(items []*queue.ReviewItem) {
 	// AutoCreatePR: catch the transition-while-queued case OnItemAdded misses
 	// (see maybeAutoCreatePR's doc comment) — a session already in the queue
 	// for a different reason (e.g. ReasonIdle) that later reaches
@@ -664,7 +665,7 @@ func (rqm *ReactiveQueueManager) OnQueueUpdated(items []*session.ReviewItem) {
 	// for every TASK_COMPLETE item on every update: maybeAutoCreatePR's
 	// in-flight guard and GitHubPRURL check make repeated calls idempotent.
 	for _, item := range items {
-		if item.Reason == session.ReasonTaskComplete {
+		if item.Reason == queue.ReasonTaskComplete {
 			rqm.maybeAutoCreatePR(item)
 		}
 	}
@@ -687,8 +688,8 @@ func (rqm *ReactiveQueueManager) OnQueueUpdated(items []*session.ReviewItem) {
 
 // FilterProvider is an interface that provides filter values for type-safe conversion
 type FilterProvider interface {
-	GetPriorityFilter() []session.Priority
-	GetReasonFilter() []session.AttentionReason
+	GetPriorityFilter() []queue.Priority
+	GetReasonFilter() []queue.AttentionReason
 	GetSessionIDs() []string
 	GetIncludeStatistics() bool
 	GetInitialSnapshot() bool
@@ -918,53 +919,53 @@ func (rqm *ReactiveQueueManager) generateClientID() string {
 
 // Helper methods to convert between internal types and proto types
 
-func (rqm *ReactiveQueueManager) reviewItemToProto(item *session.ReviewItem) *sessionv1.ReviewItem {
+func (rqm *ReactiveQueueManager) reviewItemToProto(item *queue.ReviewItem) *sessionv1.ReviewItem {
 	return adapters.ReviewItemToProto(item, nil)
 }
 
-func (rqm *ReactiveQueueManager) priorityToProto(p session.Priority) sessionv1.Priority {
+func (rqm *ReactiveQueueManager) priorityToProto(p queue.Priority) sessionv1.Priority {
 	switch p {
-	case session.PriorityUrgent:
+	case queue.PriorityUrgent:
 		return sessionv1.Priority_PRIORITY_URGENT
-	case session.PriorityHigh:
+	case queue.PriorityHigh:
 		return sessionv1.Priority_PRIORITY_HIGH
-	case session.PriorityMedium:
+	case queue.PriorityMedium:
 		return sessionv1.Priority_PRIORITY_MEDIUM
-	case session.PriorityLow:
+	case queue.PriorityLow:
 		return sessionv1.Priority_PRIORITY_LOW
 	default:
 		return sessionv1.Priority_PRIORITY_UNSPECIFIED
 	}
 }
 
-func (rqm *ReactiveQueueManager) reasonToProto(r session.AttentionReason) sessionv1.AttentionReason {
+func (rqm *ReactiveQueueManager) reasonToProto(r queue.AttentionReason) sessionv1.AttentionReason {
 	switch r {
-	case session.ReasonApprovalPending:
+	case queue.ReasonApprovalPending:
 		return sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING
-	case session.ReasonInputRequired:
+	case queue.ReasonInputRequired:
 		return sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED
-	case session.ReasonErrorState:
+	case queue.ReasonErrorState:
 		return sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE
-	case session.ReasonIdleTimeout:
+	case queue.ReasonIdleTimeout:
 		return sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT
-	case session.ReasonTaskComplete:
+	case queue.ReasonTaskComplete:
 		return sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE
-	case session.ReasonUncommittedChanges:
+	case queue.ReasonUncommittedChanges:
 		return sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES
-	case session.ReasonIdle:
+	case queue.ReasonIdle:
 		return sessionv1.AttentionReason_ATTENTION_REASON_IDLE
-	case session.ReasonStale:
+	case queue.ReasonStale:
 		return sessionv1.AttentionReason_ATTENTION_REASON_STALE
-	case session.ReasonWaitingForUser:
+	case queue.ReasonWaitingForUser:
 		return sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER
-	case session.ReasonTestsFailing:
+	case queue.ReasonTestsFailing:
 		return sessionv1.AttentionReason_ATTENTION_REASON_TESTS_FAILING
 	default:
 		return sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED
 	}
 }
 
-func (rqm *ReactiveQueueManager) priorityMapToProto(m map[session.Priority]int) map[int32]int32 {
+func (rqm *ReactiveQueueManager) priorityMapToProto(m map[queue.Priority]int) map[int32]int32 {
 	result := make(map[int32]int32)
 	for k, v := range m {
 		result[int32(rqm.priorityToProto(k))] = int32(v) //#nosec G115 -- review-queue item count, bounded by live session count
@@ -972,7 +973,7 @@ func (rqm *ReactiveQueueManager) priorityMapToProto(m map[session.Priority]int) 
 	return result
 }
 
-func (rqm *ReactiveQueueManager) reasonMapToProto(m map[session.AttentionReason]int) map[int32]int32 {
+func (rqm *ReactiveQueueManager) reasonMapToProto(m map[queue.AttentionReason]int) map[int32]int32 {
 	result := make(map[int32]int32)
 	for k, v := range m {
 		result[int32(rqm.reasonToProto(k))] = int32(v) //#nosec G115 -- review-queue item count, bounded by live session count
@@ -982,22 +983,22 @@ func (rqm *ReactiveQueueManager) reasonMapToProto(m map[session.AttentionReason]
 
 // mapReviewItemToNotification maps a review item's attention reason and priority
 // to notification type and priority int32 values (matching sessionv1 enums).
-func (rqm *ReactiveQueueManager) mapReviewItemToNotification(item *session.ReviewItem) (int32, int32) {
+func (rqm *ReactiveQueueManager) mapReviewItemToNotification(item *queue.ReviewItem) (int32, int32) {
 	var notifType int32
 	switch item.Reason {
-	case session.ReasonApprovalPending:
+	case queue.ReasonApprovalPending:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED)
-	case session.ReasonInputRequired, session.ReasonWaitingForUser:
+	case queue.ReasonInputRequired, queue.ReasonWaitingForUser:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED)
-	case session.ReasonErrorState:
+	case queue.ReasonErrorState:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR)
-	case session.ReasonTestsFailing:
+	case queue.ReasonTestsFailing:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE)
-	case session.ReasonTaskComplete:
+	case queue.ReasonTaskComplete:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE)
-	case session.ReasonUncommittedChanges:
+	case queue.ReasonUncommittedChanges:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE)
-	case session.ReasonIdle, session.ReasonStale, session.ReasonIdleTimeout:
+	case queue.ReasonIdle, queue.ReasonStale, queue.ReasonIdleTimeout:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO)
 	default:
 		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO)
@@ -1005,13 +1006,13 @@ func (rqm *ReactiveQueueManager) mapReviewItemToNotification(item *session.Revie
 
 	var notifPriority int32
 	switch item.Priority {
-	case session.PriorityUrgent:
+	case queue.PriorityUrgent:
 		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT)
-	case session.PriorityHigh:
+	case queue.PriorityHigh:
 		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH)
-	case session.PriorityMedium:
+	case queue.PriorityMedium:
 		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM)
-	case session.PriorityLow:
+	case queue.PriorityLow:
 		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW)
 	default:
 		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM)

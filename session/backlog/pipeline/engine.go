@@ -51,7 +51,7 @@ type PipelineEngine interface {
 	// TriagePromptFor builds the headless-triage prompt for item.
 	TriagePromptFor(item *backlogdto.BacklogItemData, artifactAbsPath string) string
 	// ReviewPromptFor builds the headless-review prompt for item.
-	ReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string
+	ReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []domain.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string
 	// InteractiveReviewPromptFor builds the tool-call-style review prompt used
 	// by the automatic review gate's real, hidden session.Instance (see
 	// ReviewGateRunner.Run) — the review path most items actually go through.
@@ -61,7 +61,7 @@ type PipelineEngine interface {
 	// renders the same ReviewPromptTemplate field ReviewPromptFor uses — mode
 	// authors must include verdict-tool-call instructions in that template if
 	// they want it to drive the real review gate too.
-	InteractiveReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string
+	InteractiveReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []domain.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string
 	// InitialPromptFor builds the interactive/autonomous session's initial
 	// prompt (inst.Prompt).
 	InitialPromptFor(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary) string
@@ -336,7 +336,7 @@ func (e *CachingPipelineEngine) SlashCommandSet(item *backlogdto.BacklogItemData
 		return buildDefaultSlashCommandSet(item)
 	}
 
-	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if err != nil {
 		return nil, fmt.Errorf("CachingPipelineEngine.SlashCommandSet: failed to parse AC criteria: %w", err)
 	}
@@ -390,7 +390,7 @@ func (e *CachingPipelineEngine) TriagePromptFor(item *backlogdto.BacklogItemData
 // TriggerReReview) always populate it — dropping it silently would have been
 // a real behavior regression on the default path, not just an interface
 // nicety. Epic 1.5's call sites should pass their real extras value here.
-func (e *CachingPipelineEngine) ReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string {
+func (e *CachingPipelineEngine) ReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []domain.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string {
 	mode := backlogdto.PipelineMode(item.PipelineMode)
 	if mode == backlogdto.PipelineModeDefault {
 		return BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
@@ -418,7 +418,7 @@ func (e *CachingPipelineEngine) ReviewPromptFor(item *backlogdto.BacklogItemData
 // for the two paths. Custom-mode authors who want their template to drive
 // the real review gate (this method) must include submit_review_verdict
 // call instructions themselves — see the interface doc comment.
-func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
+func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []domain.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
 	mode := backlogdto.PipelineMode(item.PipelineMode)
 	if mode == backlogdto.PipelineModeDefault {
 		return BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)

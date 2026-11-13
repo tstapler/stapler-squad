@@ -32,7 +32,7 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 	}))
 	require.NoError(t, err)
 	itemID := created.Msg.Item.Id
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, itemID, domain.BacklogStatusReady, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	ref := func(n int) domain.PRRef {

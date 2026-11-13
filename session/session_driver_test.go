@@ -14,6 +14,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -433,7 +434,7 @@ func TestMarkSessionNeedsAttention_NilReviewQueue(t *testing.T) {
 // RetryState already at its resolved cap).
 func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 	inst := &Instance{
 		Title:       "test-second-failure",
 		UUID:        "test-uuid-second-fail",
@@ -461,8 +462,8 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	if item.SessionID != inst.UUID {
 		t.Errorf("ReviewItem.SessionID = %q, want %q", item.SessionID, inst.UUID)
 	}
-	if item.Reason != ReasonStale {
-		t.Errorf("ReviewItem.Reason = %q, want %q", item.Reason, ReasonStale)
+	if item.Reason != queue.ReasonStale {
+		t.Errorf("ReviewItem.Reason = %q, want %q", item.Reason, queue.ReasonStale)
 	}
 }
 
@@ -1320,7 +1321,7 @@ func newDialogGiveUpEscalationInstance(fakePM *stuckDialogProcessManager) (*Inst
 		UUID:           "test-uuid-give-up-escalation",
 		Status:         domain.Active,
 		processManager: fakePM,
-		reviewQueue:    NewReviewQueue(),
+		reviewQueue:    queue.NewReviewQueue(),
 	}
 	inst.started.Store(true)
 	inst.RetryAttempt = 1
@@ -1417,7 +1418,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 		UUID:           "test-uuid-concurrent-stop",
 		Status:         domain.Active,
 		processManager: fakePM,
-		reviewQueue:    NewReviewQueue(),
+		reviewQueue:    queue.NewReviewQueue(),
 	}
 	inst.started.Store(true)
 

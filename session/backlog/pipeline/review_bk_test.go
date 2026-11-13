@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
@@ -28,11 +29,11 @@ func TestParseHeadlessVerdictResult_ValidJSON(t *testing.T) {
 	text := `{"overall":"PASS","summary":"all good","verdicts":[{"criterion_index":0,"outcome":"PASS","evidence":"line 42"}]}`
 	overall, verdicts, summary := ParseHeadlessVerdictResult(text)
 
-	assert.Equal(t, session.ReviewVerdictPass, overall)
+	assert.Equal(t, domain.ReviewVerdictPass, overall)
 	assert.Equal(t, "all good", summary)
 	require.Len(t, verdicts, 1)
 	assert.Equal(t, 0, verdicts[0].CriterionIndex)
-	assert.Equal(t, session.ReviewOutcomePass, verdicts[0].Outcome)
+	assert.Equal(t, domain.ReviewOutcomePass, verdicts[0].Outcome)
 }
 
 // TestParseHeadlessVerdictResult_JSONBuriedInProse verifies extraction when JSON
@@ -44,10 +45,10 @@ func TestParseHeadlessVerdictResult_JSONBuriedInProse(t *testing.T) {
 		"\nEnd of review."
 	overall, verdicts, summary := ParseHeadlessVerdictResult(text)
 
-	assert.Equal(t, session.ReviewVerdictFail, overall)
+	assert.Equal(t, domain.ReviewVerdictFail, overall)
 	assert.Equal(t, "missing test", summary)
 	require.Len(t, verdicts, 1)
-	assert.Equal(t, session.ReviewOutcomeFail, verdicts[0].Outcome)
+	assert.Equal(t, domain.ReviewOutcomeFail, verdicts[0].Outcome)
 }
 
 // TestParseHeadlessVerdictResult_InvalidJSON returns FAIL with a diagnostic summary.
@@ -55,7 +56,7 @@ func TestParseHeadlessVerdictResult_InvalidJSON(t *testing.T) {
 	t.Parallel()
 	overall, verdicts, summary := ParseHeadlessVerdictResult("{not valid json}")
 
-	assert.Equal(t, session.ReviewVerdictFail, overall)
+	assert.Equal(t, domain.ReviewVerdictFail, overall)
 	assert.Nil(t, verdicts)
 	assert.NotEmpty(t, summary)
 }
@@ -65,7 +66,7 @@ func TestParseHeadlessVerdictResult_EmptyString(t *testing.T) {
 	t.Parallel()
 	overall, verdicts, summary := ParseHeadlessVerdictResult("")
 
-	assert.Equal(t, session.ReviewVerdictFail, overall)
+	assert.Equal(t, domain.ReviewVerdictFail, overall)
 	assert.Nil(t, verdicts)
 	assert.NotEmpty(t, summary)
 }
@@ -78,7 +79,7 @@ func TestParseHeadlessVerdictResult_UnknownOverall(t *testing.T) {
 	overall, _, _ := ParseHeadlessVerdictResult(text)
 
 	// AggregateOutcome of [PASS] should return PASS.
-	assert.Equal(t, session.ReviewVerdictPass, overall)
+	assert.Equal(t, domain.ReviewVerdictPass, overall)
 }
 
 // TestParseHeadlessVerdictResult_CaseInsensitiveOverall accepts lowercase outcome values.
@@ -86,7 +87,7 @@ func TestParseHeadlessVerdictResult_CaseInsensitiveOverall(t *testing.T) {
 	t.Parallel()
 	text := `{"overall":"pass","summary":"ok","verdicts":[]}`
 	overall, _, _ := ParseHeadlessVerdictResult(text)
-	assert.Equal(t, session.ReviewVerdictPass, overall)
+	assert.Equal(t, domain.ReviewVerdictPass, overall)
 }
 
 // TestParseHeadlessVerdictResult_PartialAndUnverifiable verifies those outcomes round-trip.
@@ -95,7 +96,7 @@ func TestParseHeadlessVerdictResult_PartialAndUnverifiable(t *testing.T) {
 	for _, outcome := range []string{"PARTIAL", "UNVERIFIABLE"} {
 		text := `{"overall":"` + outcome + `","summary":"","verdicts":[]}`
 		overall, _, _ := ParseHeadlessVerdictResult(text)
-		assert.Equal(t, session.ReviewOutcome(outcome), overall)
+		assert.Equal(t, domain.ReviewOutcome(outcome), overall)
 	}
 }
 
@@ -107,7 +108,7 @@ func TestBuildHeadlessReviewPrompt_ContainsExpectedSections(t *testing.T) {
 		Title:       "Add OAuth2 login",
 		Description: "Users should be able to log in via Google.",
 	}
-	acSnapshot := []session.AcCriterion{
+	acSnapshot := []domain.AcCriterion{
 		{Index: 0, Text: "Google OAuth button visible on login page"},
 		{Index: 1, Text: "Session is created on successful login"},
 	}
@@ -249,7 +250,7 @@ func TestBuildReviewPrompt_VerificationNotes_TruncatedBeyond4000Chars(t *testing
 func TestBuildReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
 	t.Parallel()
 	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
+	ac := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
 	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
 
 	assert.Contains(t, prompt, "Note (self-reported by work session via report_progress): implemented via foo.go, verified with go test")
@@ -260,7 +261,7 @@ func TestBuildReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
 func TestBuildReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
 	t.Parallel()
 	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing"}}
+	ac := []domain.AcCriterion{{Index: 0, Text: "Do the thing"}}
 	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
 
 	assert.NotContains(t, prompt, "Note (self-reported by work session")
@@ -272,7 +273,7 @@ func TestBuildReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
 func TestBuildReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
 	t.Parallel()
 	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
+	ac := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
 	prompt := BuildReviewPrompt(item, ac, "diff content", false, uuid.New().String(), "")
 
 	assert.Contains(t, prompt, "[truncated]")
@@ -284,7 +285,7 @@ func TestBuildReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
 func TestBuildHeadlessReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.T) {
 	t.Parallel()
 	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
+	ac := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Note: "implemented via foo.go, verified with go test"}}
 	prompt := BuildHeadlessReviewPrompt(item, ac, "diff --git a/foo.go b/foo.go\n+added line", false, "", ReviewContextExtras{})
 
 	assert.Contains(t, prompt, "Note (self-reported by work session via report_progress): implemented via foo.go, verified with go test")
@@ -295,7 +296,7 @@ func TestBuildHeadlessReviewPrompt_CriterionNote_IncludedWhenPresent(t *testing.
 func TestBuildHeadlessReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) {
 	t.Parallel()
 	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing"}}
+	ac := []domain.AcCriterion{{Index: 0, Text: "Do the thing"}}
 	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "", ReviewContextExtras{})
 
 	assert.NotContains(t, prompt, "Note (self-reported by work session")
@@ -306,7 +307,7 @@ func TestBuildHeadlessReviewPrompt_CriterionNote_OmittedWhenEmpty(t *testing.T) 
 func TestBuildHeadlessReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *testing.T) {
 	t.Parallel()
 	item := &backlogdto.BacklogItemData{ID: uuid.New().String(), Title: "T"}
-	ac := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
+	ac := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Note: strings.Repeat("a", 600)}}
 	prompt := BuildHeadlessReviewPrompt(item, ac, "diff content", false, "", ReviewContextExtras{})
 
 	assert.Contains(t, prompt, "[truncated]")
@@ -315,9 +316,9 @@ func TestBuildHeadlessReviewPrompt_CriterionNote_TruncatedBeyond500Chars(t *test
 // perCriterionJSONFixture builds the []CriterionVerdict JSON stored in
 // ReviewVerdictSummary.PerCriterion for a single non-PASS criterion, matching the shape
 // parsePerCriterionVerdicts expects.
-func perCriterionJSONFixture(t *testing.T, idx int, outcome session.ReviewOutcome, evidence string) string {
+func perCriterionJSONFixture(t *testing.T, idx int, outcome domain.ReviewOutcome, evidence string) string {
 	t.Helper()
-	b, err := json.Marshal([]session.CriterionVerdict{{CriterionIndex: idx, Outcome: outcome, Evidence: evidence}})
+	b, err := json.Marshal([]domain.CriterionVerdict{{CriterionIndex: idx, Outcome: outcome, Evidence: evidence}})
 	require.NoError(t, err)
 	return string(b)
 }
@@ -333,9 +334,9 @@ func TestBuildHeadlessReviewPrompt_EmptyDiff_PriorReviewAttempts_Rendered(t *tes
 			{
 				Role: session.SessionRoleReview,
 				ReviewVerdict: &backlogdto.ReviewVerdictSummary{
-					OverallOutcome: string(session.ReviewVerdictUnverifiable),
+					OverallOutcome: string(domain.ReviewVerdictUnverifiable),
 					Summary:        "could not locate satisfying code",
-					PerCriterion:   perCriterionJSONFixture(t, 1, session.ReviewOutcomeFail, "no evidence found in auth.go"),
+					PerCriterion:   perCriterionJSONFixture(t, 1, domain.ReviewOutcomeFail, "no evidence found in auth.go"),
 				},
 			},
 		},
@@ -358,7 +359,7 @@ func TestBuildHeadlessReviewPrompt_NonEmptyDiff_PriorReviewAttempts_Omitted(t *t
 			{
 				Role: session.SessionRoleReview,
 				ReviewVerdict: &backlogdto.ReviewVerdictSummary{
-					OverallOutcome: string(session.ReviewVerdictUnverifiable),
+					OverallOutcome: string(domain.ReviewVerdictUnverifiable),
 					Summary:        "could not locate satisfying code",
 				},
 			},
@@ -494,14 +495,14 @@ func TestBuildHeadlessReviewPrompt_NonEmptyDiff_SessionTranscript_Omitted(t *tes
 // criterion's Note and Status are overlaid onto the matching snapshot entry.
 func TestMergeLiveCriterionNotes_OverlaysNoteAndStatusByIndex(t *testing.T) {
 	t.Parallel()
-	snapshot := []session.AcCriterion{{Index: 0, Text: "Do the thing", Status: session.AcStatusPending}}
-	live := []session.AcCriterion{{Index: 0, Text: "Do the thing", Status: session.AcStatusDone, Note: "finished via report_progress"}}
+	snapshot := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Status: domain.AcStatusPending}}
+	live := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Status: domain.AcStatusDone, Note: "finished via report_progress"}}
 
 	merged := MergeLiveCriterionNotes(snapshot, live)
 
 	require.Len(t, merged, 1)
 	assert.Equal(t, "finished via report_progress", merged[0].Note)
-	assert.Equal(t, session.AcStatusDone, merged[0].Status)
+	assert.Equal(t, domain.AcStatusDone, merged[0].Status)
 	assert.Equal(t, "Do the thing", merged[0].Text)
 }
 
@@ -509,7 +510,7 @@ func TestMergeLiveCriterionNotes_OverlaysNoteAndStatusByIndex(t *testing.T) {
 // snapshot falls back to the live criteria unchanged.
 func TestMergeLiveCriterionNotes_SnapshotEmpty_ReturnsLive(t *testing.T) {
 	t.Parallel()
-	live := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: "live note"}}
+	live := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Note: "live note"}}
 
 	merged := MergeLiveCriterionNotes(nil, live)
 
@@ -521,14 +522,14 @@ func TestMergeLiveCriterionNotes_SnapshotEmpty_ReturnsLive(t *testing.T) {
 // report_progress call that only updates status doesn't erase an earlier note).
 func TestMergeLiveCriterionNotes_LiveNoteEmpty_KeepsSnapshotNote(t *testing.T) {
 	t.Parallel()
-	snapshot := []session.AcCriterion{{Index: 0, Text: "Do the thing", Note: "snapshot note", Status: session.AcStatusInProgress}}
-	live := []session.AcCriterion{{Index: 0, Text: "Do the thing", Status: session.AcStatusDone}}
+	snapshot := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Note: "snapshot note", Status: domain.AcStatusInProgress}}
+	live := []domain.AcCriterion{{Index: 0, Text: "Do the thing", Status: domain.AcStatusDone}}
 
 	merged := MergeLiveCriterionNotes(snapshot, live)
 
 	require.Len(t, merged, 1)
 	assert.Equal(t, "snapshot note", merged[0].Note)
-	assert.Equal(t, session.AcStatusDone, merged[0].Status)
+	assert.Equal(t, domain.AcStatusDone, merged[0].Status)
 }
 
 // TestSanitizeDiff_ReplacesTripleBacktick ensures fence injection is neutralised.
@@ -901,10 +902,10 @@ func TestVerifyToolReadsExist_ExtraRoot_AllowsEvidenceOutsideWorkDir(t *testing.
 // tool access) is never touched by the degrade logic.
 func TestDegradeIfUnverified_DiffPath_NoOp(t *testing.T) {
 	t.Parallel()
-	verdicts := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewOutcomePass, Evidence: "line 1"}}
-	overall, gotVerdicts, summary, path := DegradeIfUnverified("diff", session.ReviewOutcomePass, verdicts, "all good", nil, "/some/dir")
+	verdicts := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewOutcomePass, Evidence: "line 1"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("diff", domain.ReviewOutcomePass, verdicts, "all good", nil, "/some/dir")
 
-	assert.Equal(t, session.ReviewOutcomePass, overall)
+	assert.Equal(t, domain.ReviewOutcomePass, overall)
 	assert.Equal(t, verdicts, gotVerdicts)
 	assert.Equal(t, "all good", summary)
 	assert.Equal(t, "diff", path)
@@ -918,10 +919,10 @@ func TestDegradeIfUnverified_CodebaseReadPath_NonEmptyToolReads_AllPathsExist_No
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "foo.go"), []byte("package foo"), 0o644))
 
-	verdicts := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewOutcomePass, Evidence: "foo.go:1 — package foo"}}
-	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", session.ReviewOutcomePass, verdicts, "found it", []string{"foo.go"}, dir)
+	verdicts := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewOutcomePass, Evidence: "foo.go:1 — package foo"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", domain.ReviewOutcomePass, verdicts, "found it", []string{"foo.go"}, dir)
 
-	assert.Equal(t, session.ReviewOutcomePass, overall)
+	assert.Equal(t, domain.ReviewOutcomePass, overall)
 	assert.Equal(t, verdicts, gotVerdicts)
 	assert.Equal(t, "found it", summary)
 	assert.Equal(t, "codebase-read-verified", path)
@@ -932,12 +933,12 @@ func TestDegradeIfUnverified_CodebaseReadPath_NonEmptyToolReads_AllPathsExist_No
 // of tool use must never be trusted.
 func TestDegradeIfUnverified_CodebaseReadPath_EmptyToolReadsOnPass_DowngradesToUnverifiable(t *testing.T) {
 	t.Parallel()
-	verdicts := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewOutcomePass, Evidence: "trust me"}}
-	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", session.ReviewOutcomePass, verdicts, "all good", nil, "/some/dir")
+	verdicts := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewOutcomePass, Evidence: "trust me"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", domain.ReviewOutcomePass, verdicts, "all good", nil, "/some/dir")
 
-	assert.Equal(t, session.ReviewOutcomeUnverifiable, overall)
+	assert.Equal(t, domain.ReviewOutcomeUnverifiable, overall)
 	require.Len(t, gotVerdicts, 1)
-	assert.Equal(t, session.ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
+	assert.Equal(t, domain.ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
 	assert.Contains(t, summary, "Degraded to UNVERIFIABLE")
 	assert.Contains(t, summary, "all good")
 	assert.Equal(t, "codebase-read-degraded", path)
@@ -949,12 +950,12 @@ func TestDegradeIfUnverified_CodebaseReadPath_EmptyToolReadsOnPass_DowngradesToU
 // PASS (never mis-labeled FAIL per ADR-001).
 func TestDegradeIfUnverified_CodebaseReadPath_EmptyToolReadsOnFail_DowngradesToUnverifiable(t *testing.T) {
 	t.Parallel()
-	verdicts := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewOutcomeFail, Evidence: "couldn't find it"}}
-	overall, gotVerdicts, _, path := DegradeIfUnverified("codebase-read", session.ReviewOutcomeFail, verdicts, "not found", nil, "/some/dir")
+	verdicts := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewOutcomeFail, Evidence: "couldn't find it"}}
+	overall, gotVerdicts, _, path := DegradeIfUnverified("codebase-read", domain.ReviewOutcomeFail, verdicts, "not found", nil, "/some/dir")
 
-	assert.Equal(t, session.ReviewOutcomeUnverifiable, overall)
+	assert.Equal(t, domain.ReviewOutcomeUnverifiable, overall)
 	require.Len(t, gotVerdicts, 1)
-	assert.Equal(t, session.ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
+	assert.Equal(t, domain.ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
 	assert.Equal(t, "codebase-read-degraded", path)
 }
 
@@ -963,10 +964,10 @@ func TestDegradeIfUnverified_CodebaseReadPath_EmptyToolReadsOnFail_DowngradesToU
 // logging but its summary is not double-wrapped with another "Degraded to..." prefix.
 func TestDegradeIfUnverified_CodebaseReadPath_AlreadyUnverifiable_LabeledDegradedNotDoubleWrapped(t *testing.T) {
 	t.Parallel()
-	verdicts := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewOutcomeUnverifiable, Evidence: "n/a"}}
-	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", session.ReviewOutcomeUnverifiable, verdicts, "could not verify", nil, "/some/dir")
+	verdicts := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewOutcomeUnverifiable, Evidence: "n/a"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", domain.ReviewOutcomeUnverifiable, verdicts, "could not verify", nil, "/some/dir")
 
-	assert.Equal(t, session.ReviewOutcomeUnverifiable, overall)
+	assert.Equal(t, domain.ReviewOutcomeUnverifiable, overall)
 	assert.Equal(t, verdicts, gotVerdicts)
 	assert.Equal(t, "could not verify", summary, "summary must not be re-wrapped when already UNVERIFIABLE")
 	assert.Equal(t, "codebase-read-degraded", path)
@@ -979,12 +980,12 @@ func TestDegradeIfUnverified_ToolReadsPathDoesNotExist_ForcesUnverifiable(t *tes
 	t.Parallel()
 	dir := t.TempDir()
 
-	verdicts := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewOutcomePass, Evidence: "fabricated"}}
-	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", session.ReviewOutcomePass, verdicts, "all good", []string{"does-not-exist.go"}, dir)
+	verdicts := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewOutcomePass, Evidence: "fabricated"}}
+	overall, gotVerdicts, summary, path := DegradeIfUnverified("codebase-read", domain.ReviewOutcomePass, verdicts, "all good", []string{"does-not-exist.go"}, dir)
 
-	assert.Equal(t, session.ReviewOutcomeUnverifiable, overall)
+	assert.Equal(t, domain.ReviewOutcomeUnverifiable, overall)
 	require.Len(t, gotVerdicts, 1)
-	assert.Equal(t, session.ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
+	assert.Equal(t, domain.ReviewOutcomeUnverifiable, gotVerdicts[0].Outcome)
 	assert.Contains(t, summary, "does-not-exist.go", "summary must name the specific offending path, not just the directory")
 	assert.Contains(t, summary, "does not exist or escapes")
 	assert.Equal(t, "codebase-read-degraded", path)
@@ -998,10 +999,10 @@ func TestDegradeIfUnverified_ToolReadsOnePathMissingAmongMultiple_ForcesUnverifi
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.go"), []byte("package real"), 0o644))
 
-	verdicts := []session.CriterionVerdict{{CriterionIndex: 0, Outcome: session.ReviewOutcomePass, Evidence: "mixed"}}
-	overall, _, _, path := DegradeIfUnverified("codebase-read", session.ReviewOutcomePass, verdicts, "all good", []string{"real.go", "fabricated.go"}, dir)
+	verdicts := []domain.CriterionVerdict{{CriterionIndex: 0, Outcome: domain.ReviewOutcomePass, Evidence: "mixed"}}
+	overall, _, _, path := DegradeIfUnverified("codebase-read", domain.ReviewOutcomePass, verdicts, "all good", []string{"real.go", "fabricated.go"}, dir)
 
-	assert.Equal(t, session.ReviewOutcomeUnverifiable, overall)
+	assert.Equal(t, domain.ReviewOutcomeUnverifiable, overall)
 	assert.Equal(t, "codebase-read-degraded", path)
 }
 

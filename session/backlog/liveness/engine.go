@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -27,7 +27,7 @@ type LivenessEngine interface {
 	// default, never a zero/infinite threshold) — error is reserved for
 	// implementations backed by a real repository (Epic 1.3) whose lookup
 	// itself can fail (e.g. a DB error), not for "no override configured."
-	LivenessFor(stage session.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error)
+	LivenessFor(stage domain.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error)
 }
 
 // NoTimeoutLiveness is the sentinel LivenessDefinition value for a stage with
@@ -73,7 +73,7 @@ const defaultTriageExpectedDuration = 3 * time.Hour
 // resolvable — see that same doc's §6 "Migration safety" fail-closed
 // requirement.
 type DefaultLivenessEngine struct {
-	table map[session.BacklogStatus]LivenessDefinition
+	table map[domain.BacklogStatus]LivenessDefinition
 }
 
 // NewDefaultLivenessEngine builds the built-in stage table. Each entry is
@@ -130,10 +130,10 @@ func NewDefaultLivenessEngine() *DefaultLivenessEngine {
 	}
 
 	return &DefaultLivenessEngine{
-		table: map[session.BacklogStatus]LivenessDefinition{
-			session.BacklogStatusIdea:       *orphanedTriage,
-			session.BacklogStatusInProgress: *staleWorkDef,
-			session.BacklogStatusReview:     *bouncingDef,
+		table: map[domain.BacklogStatus]LivenessDefinition{
+			domain.BacklogStatusIdea:       *orphanedTriage,
+			domain.BacklogStatusInProgress: *staleWorkDef,
+			domain.BacklogStatusReview:     *bouncingDef,
 		},
 	}
 }
@@ -147,7 +147,7 @@ func NewDefaultLivenessEngine() *DefaultLivenessEngine {
 // NoTimeoutLiveness, never an error: an unresolvable stage must fail closed to
 // "no timeout enforced," not to a zero/infinite threshold or a hard error that
 // would abort a reconcile* sweep tick.
-func (e *DefaultLivenessEngine) LivenessFor(stage session.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error) {
+func (e *DefaultLivenessEngine) LivenessFor(stage domain.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error) {
 	def := e.resolve(stage)
 	log.InfoLog().Printf("[LivenessEngine] resolved liveness for stage=%s mode=%s kind=%s", stage, backlogdto.ResolvedModeLabel(string(mode)), def.Kind)
 	return def, nil
@@ -158,7 +158,7 @@ func (e *DefaultLivenessEngine) LivenessFor(stage session.BacklogStatus, mode ba
 // can reuse it without triggering this type's own Info log line a second
 // time — CachingLivenessEngine.LivenessFor logs its own single Info line for
 // the resolution it ultimately returns, whichever engine supplied it.
-func (e *DefaultLivenessEngine) resolve(stage session.BacklogStatus) LivenessDefinition {
+func (e *DefaultLivenessEngine) resolve(stage domain.BacklogStatus) LivenessDefinition {
 	if def, ok := e.table[stage]; ok {
 		return def
 	}
@@ -217,7 +217,7 @@ func (e *CachingLivenessEngine) InvalidateCache(ctx context.Context) error {
 
 // LivenessFor implements LivenessEngine, applying the two-level fallback
 // described in this type's doc comment.
-func (e *CachingLivenessEngine) LivenessFor(stage session.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error) {
+func (e *CachingLivenessEngine) LivenessFor(stage domain.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error) {
 	modeLabel := backlogdto.ResolvedModeLabel(string(mode))
 
 	if rd, ok := e.cache.Get(string(stage), mode); ok {

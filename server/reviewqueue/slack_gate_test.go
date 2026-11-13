@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // T-PS-08 (Slack cell of the delivery matrix): through the real
@@ -17,14 +18,14 @@ import (
 // the manager's queue-item gate rather than the publish filter.
 func TestSlackNotifier_ShouldReceiveZeroRoutine_WhenHiddenReviewItemAdded(t *testing.T) {
 	cases := []struct {
-		reason    session.AttentionReason
+		reason    queue.AttentionReason
 		wantSlack int
 	}{
-		{session.ReasonTaskComplete, 0},
-		{session.ReasonIdle, 0},
-		{session.ReasonStale, 0},
-		{session.ReasonTestsFailing, 1},
-		{session.ReasonErrorState, 1},
+		{queue.ReasonTaskComplete, 0},
+		{queue.ReasonIdle, 0},
+		{queue.ReasonStale, 0},
+		{queue.ReasonTestsFailing, 1},
+		{queue.ReasonErrorState, 1},
 	}
 	for _, c := range cases {
 		c := c
@@ -44,9 +45,9 @@ func TestSlackNotifier_ShouldReceiveZeroRoutine_WhenHiddenReviewItemAdded(t *tes
 			mgr.SetSlackNotifier(fake)
 			poller.SetInstances([]*session.Instance{{Title: "review:slack", UUID: "slack-hidden-uuid", Hidden: true}})
 
-			mgr.OnItemAdded(&session.ReviewItem{
+			mgr.OnItemAdded(&queue.ReviewItem{
 				SessionID: "review:slack", SessionName: "review:slack",
-				Reason: c.reason, Priority: session.PriorityHigh, DetectedAt: time.Now(),
+				Reason: c.reason, Priority: queue.PriorityHigh, DetectedAt: time.Now(),
 			})
 
 			if notify, _ := fake.counts(); notify != c.wantSlack {
@@ -79,13 +80,13 @@ func (r *recordingDispatcher) count() int {
 // off: everything delivered).
 func TestQueueItemSends_ShouldFollowGate_ForHiddenSession(t *testing.T) {
 	cases := []struct {
-		reason session.AttentionReason
+		reason queue.AttentionReason
 		want   int
 	}{
-		{session.ReasonTaskComplete, 0},
-		{session.ReasonIdle, 0},
-		{session.ReasonTestsFailing, 1},
-		{session.ReasonErrorState, 1},
+		{queue.ReasonTaskComplete, 0},
+		{queue.ReasonIdle, 0},
+		{queue.ReasonTestsFailing, 1},
+		{queue.ReasonErrorState, 1},
 	}
 	for _, flagOn := range []bool{true, false} {
 		for _, c := range cases {
@@ -106,9 +107,9 @@ func TestQueueItemSends_ShouldFollowGate_ForHiddenSession(t *testing.T) {
 				mgr.SetCallbackDispatcher(hook)
 				poller.SetInstances([]*session.Instance{{Title: "review:gate", UUID: "gate-hidden-uuid", Hidden: true}})
 
-				mgr.OnItemAdded(&session.ReviewItem{
+				mgr.OnItemAdded(&queue.ReviewItem{
 					SessionID: "review:gate", SessionName: "review:gate",
-					Reason: c.reason, Priority: session.PriorityHigh, DetectedAt: time.Now(),
+					Reason: c.reason, Priority: queue.PriorityHigh, DetectedAt: time.Now(),
 				})
 
 				want := c.want

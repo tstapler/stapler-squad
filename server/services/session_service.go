@@ -36,6 +36,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/prompts"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
@@ -790,7 +791,7 @@ func testModeGitHubResolver() func(ctx context.Context, input string, enterprise
 // a separate, larger mechanical refactor — out of scope here; this seam exists so new or
 // updated tests can opt in without waiting on that migration.
 func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *events.EventBus, searchEngine *search.SearchEngine) *SessionService {
-	reviewQueue := session.NewReviewQueue()
+	reviewQueue := queue.NewReviewQueue()
 
 	// concStorage is the concrete backing store used by sub-services that haven't migrated to
 	// InstanceStore yet (ReviewQueueService, GitHubService, WorkspaceService). In tests using a

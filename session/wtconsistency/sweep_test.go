@@ -623,7 +623,7 @@ func TestResolveFinding_should_CallMarkStuck_When_LiveNonTerminalBacklogItemLink
 		Title:              "worktree inconsistency test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -715,7 +715,7 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 		Title:              "resolve-stuck-on-repair test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)

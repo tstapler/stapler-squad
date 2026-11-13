@@ -23,7 +23,7 @@ func setupDiagnoseSession(t *testing.T, storage *session.Storage) (itemID, sessi
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Diagnose me",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -131,7 +131,7 @@ func TestNudgeSession_should_Refuse_When_NudgeCapAlreadyReached(t *testing.T) {
 	itemID, sessUUID := setupDiagnoseSession(t, storage)
 	ctx := context.Background()
 
-	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bouncing")
+	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusReview, "bouncing")
 	require.NoError(t, err)
 	require.True(t, applied, "MarkStuck's expectedStatus must match setupDiagnoseSession's item status (review)")
 	const maxAttempts = int32(3)
@@ -265,7 +265,7 @@ func TestResetRemediation_should_ReArmParkedRow_ThenRefuseDuringCooldown(t *test
 	ctx := context.Background()
 	reason := domain.StuckReasonBouncing
 
-	applied, err := repo.MarkStuck(ctx, itemID, reason, session.BacklogStatusReview, "bouncing")
+	applied, err := repo.MarkStuck(ctx, itemID, reason, domain.BacklogStatusReview, "bouncing")
 	require.NoError(t, err)
 	require.True(t, applied)
 	parkedAt := time.Now().Add(time.Hour)

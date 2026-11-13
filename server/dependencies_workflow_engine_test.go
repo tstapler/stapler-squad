@@ -113,7 +113,7 @@ func TestBuildServerDependencies_ClassModesFollowTheirOwnFlags(t *testing.T) {
 	// write (idea->done has no edge) is allowed until the agent class enforces.
 	spec, ok := domain.LookupTransitionCaller(domain.CallerMCPResumeWork)
 	require.True(t, ok)
-	require.True(t, rt.WorkflowEngine.Engine.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil))
+	require.True(t, rt.WorkflowEngine.Engine.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil))
 }
 
 func TestTransitionGateStartupLine_ReportsUnwiredStorage(t *testing.T) {

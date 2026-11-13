@@ -16,8 +16,8 @@ import (
 // return (session/domain/backlog.go), plus a passing control.
 type gateFixture struct {
 	name  string
-	input BacklogItemTransitionInput
-	to    BacklogStatus
+	input domain.BacklogItemTransitionInput
+	to    domain.BacklogStatus
 	want  error // sentinel the Default engine must return; nil for the control
 }
 
@@ -27,15 +27,15 @@ func oneAcCriterion() domain.AcCriteriaJSON {
 
 func gateFixtureCorpus() []gateFixture {
 	return []gateFixture{
-		{name: "ErrACRequired", input: BacklogItemTransitionInput{Status: BacklogStatusIdea}, to: BacklogStatusReady, want: domain.ErrACRequired},
-		{name: "ErrUnresolvedBlockers", input: BacklogItemTransitionInput{Status: BacklogStatusReady, SkipPlanning: true, HasUnresolvedBlockers: true}, to: BacklogStatusInProgress, want: domain.ErrUnresolvedBlockers},
-		{name: "ErrPlanRequired", input: BacklogItemTransitionInput{Status: BacklogStatusReady}, to: BacklogStatusInProgress, want: domain.ErrPlanRequired},
-		{name: "ErrPlanArtifactsRequired", input: BacklogItemTransitionInput{Status: BacklogStatusReady, PlanApproved: true}, to: BacklogStatusInProgress, want: domain.ErrPlanArtifactsRequired},
-		{name: "ErrPlanArtifactsMissing", input: BacklogItemTransitionInput{Status: BacklogStatusReady, PlanApproved: true, PlanArtifactsPath: "/gone", PlanArtifactsPathMissing: true}, to: BacklogStatusInProgress, want: domain.ErrPlanArtifactsMissing},
-		{name: "ErrVerdictClearRequiredForReady", input: BacklogItemTransitionInput{Status: BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}, to: BacklogStatusReady, want: domain.ErrVerdictClearRequiredForReady},
-		{name: "ErrVerdictRequired", input: BacklogItemTransitionInput{Status: BacklogStatusReview}, to: BacklogStatusDone, want: domain.ErrVerdictRequired},
-		{name: "ErrCodeNotOnMain", input: BacklogItemTransitionInput{Status: BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass, HasUnshippedCode: true}, to: BacklogStatusDone, want: domain.ErrCodeNotOnMain},
-		{name: "control_no_guard_fires", input: BacklogItemTransitionInput{Status: BacklogStatusIdea, AcCriteria: oneAcCriterion()}, to: BacklogStatusReady, want: nil},
+		{name: "ErrACRequired", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}, to: domain.BacklogStatusReady, want: domain.ErrACRequired},
+		{name: "ErrUnresolvedBlockers", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady, SkipPlanning: true, HasUnresolvedBlockers: true}, to: domain.BacklogStatusInProgress, want: domain.ErrUnresolvedBlockers},
+		{name: "ErrPlanRequired", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady}, to: domain.BacklogStatusInProgress, want: domain.ErrPlanRequired},
+		{name: "ErrPlanArtifactsRequired", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady, PlanApproved: true}, to: domain.BacklogStatusInProgress, want: domain.ErrPlanArtifactsRequired},
+		{name: "ErrPlanArtifactsMissing", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady, PlanApproved: true, PlanArtifactsPath: "/gone", PlanArtifactsPathMissing: true}, to: domain.BacklogStatusInProgress, want: domain.ErrPlanArtifactsMissing},
+		{name: "ErrVerdictClearRequiredForReady", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}, to: domain.BacklogStatusReady, want: domain.ErrVerdictClearRequiredForReady},
+		{name: "ErrVerdictRequired", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview}, to: domain.BacklogStatusDone, want: domain.ErrVerdictRequired},
+		{name: "ErrCodeNotOnMain", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass, HasUnshippedCode: true}, to: domain.BacklogStatusDone, want: domain.ErrCodeNotOnMain},
+		{name: "control_no_guard_fires", input: domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea, AcCriteria: oneAcCriterion()}, to: domain.BacklogStatusReady, want: nil},
 	}
 }
 
@@ -46,17 +46,17 @@ type engineDiff struct {
 	Gates []string
 }
 
-func allStatusPairs() [][2]BacklogStatus {
-	pairs := make([][2]BacklogStatus, 0, len(BuiltInStageOrder)*len(BuiltInStageOrder))
+func allStatusPairs() [][2]domain.BacklogStatus {
+	pairs := make([][2]domain.BacklogStatus, 0, len(BuiltInStageOrder)*len(BuiltInStageOrder))
 	for _, from := range BuiltInStageOrder {
 		for _, to := range BuiltInStageOrder {
-			pairs = append(pairs, [2]BacklogStatus{from, to})
+			pairs = append(pairs, [2]domain.BacklogStatus{from, to})
 		}
 	}
 	return pairs
 }
 
-func unsatisfiedGateKeys(t *testing.T, e domain.WorkflowEngine, in BacklogItemTransitionInput, to BacklogStatus) []string {
+func unsatisfiedGateKeys(t *testing.T, e domain.WorkflowEngine, in domain.BacklogItemTransitionInput, to domain.BacklogStatus) []string {
 	t.Helper()
 	statuses, err := e.PendingGates(in, to, nil)
 	require.NoError(t, err)
@@ -136,10 +136,10 @@ func TestRawConfiguredGateGap_ReportedAsInformation_NotFailure(t *testing.T) {
 	t.Parallel()
 	configured, _ := newSeededConfiguredWorkflowEngine(t)
 	def := NewDefaultWorkflowEngine()
-	idea := BacklogItemTransitionInput{Status: BacklogStatusIdea}
+	idea := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}
 
-	require.ErrorIs(t, def.ValidateGates(idea, BacklogStatusReady, nil), domain.ErrACRequired)
-	pending, err := configured.PendingGates(idea, BacklogStatusReady, nil)
+	require.ErrorIs(t, def.ValidateGates(idea, domain.BacklogStatusReady, nil), domain.ErrACRequired)
+	pending, err := configured.PendingGates(idea, domain.BacklogStatusReady, nil)
 	require.NoError(t, err)
 	require.Empty(t, pending, "raw Configured has no gate on idea->ready")
 

@@ -26,7 +26,7 @@ func TestGetPendingGates_should_ReturnNotFound_When_ItemDoesNotExist(t *testing.
 
 	_, err := svc.GetPendingGates(ctx, connect.NewRequest(&sessionv1.GetPendingGatesRequest{
 		ItemId:   "00000000-0000-0000-0000-000000000000",
-		ToStatus: string(session.BacklogStatusRefining),
+		ToStatus: string(domain.BacklogStatusRefining),
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
@@ -47,13 +47,13 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "an item",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	resp, err := svc.GetPendingGates(ctx, connect.NewRequest(&sessionv1.GetPendingGatesRequest{
 		ItemId:   item.ID,
-		ToStatus: string(session.BacklogStatusRefining),
+		ToStatus: string(domain.BacklogStatusRefining),
 	}))
 	require.NoError(t, err)
 	assert.Empty(t, resp.Msg.Gates, "the built-in idea->refining edge has no configured gates")
@@ -104,8 +104,8 @@ func TestGetPendingGates_should_ReturnPopulatedGateStatus_When_TransitionHasConf
 	require.NoError(t, err)
 	require.NoError(t, engine.InvalidateCache(ctx))
 
-	criteria, err := session.SerializeAcCriteria([]session.AcCriterion{
-		{Index: 0, Text: "criterion one", Status: session.AcStatusPending},
+	criteria, err := domain.SerializeAcCriteria([]domain.AcCriterion{
+		{Index: 0, Text: "criterion one", Status: domain.AcStatusPending},
 	})
 	require.NoError(t, err)
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{

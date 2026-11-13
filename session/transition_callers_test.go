@@ -77,7 +77,7 @@ func TestTransitionCallerAudit_ForwardingIsExactlyTheMCPDelegateAndContributesNo
 	}
 	require.Equal(t, []domain.TransitionCaller{domain.CallerMCPTransitionDelegate}, forwarding,
 		"a second generic forwarder needs a deliberate registry change")
-	require.False(t, IsSystemRequired(BacklogStatusDone, BacklogStatusRefining), "delegate-reachable edges stay disableable")
+	require.False(t, IsSystemRequired(domain.BacklogStatusDone, domain.BacklogStatusRefining), "delegate-reachable edges stay disableable")
 }
 
 func TestTransitionCallerAudit_EveryAgentAndSystemEdgeIsSystemRequired(t *testing.T) {
@@ -143,7 +143,7 @@ func TestTransitionCallerAudit_OffGraphEdgesAreExactlyTheDecidedOnes(t *testing.
 	for _, c := range domain.TransitionCallers() {
 		for _, d := range c.Edges {
 			for _, e := range expandEdge(d) {
-				if !valid[e.From][e.To] && e.To != BacklogStatusArchived {
+				if !valid[e.From][e.To] && e.To != domain.BacklogStatusArchived {
 					got[fmt.Sprintf("%s: %s", c.Name, edgeKey(e.From, e.To))] = true
 				}
 			}
@@ -169,7 +169,7 @@ func TestTransitionCallerAudit_ArchiveWildcardOnlyTargetsArchived(t *testing.T) 
 	for _, c := range domain.TransitionCallers() {
 		for _, e := range c.Edges {
 			if e.From == domain.AnyStatus {
-				require.Equalf(t, BacklogStatusArchived, e.To, "%s", c.Name)
+				require.Equalf(t, domain.BacklogStatusArchived, e.To, "%s", c.Name)
 			}
 		}
 	}
@@ -179,7 +179,7 @@ func TestTransitionCallerAudit_AutonomousCompleteEdgeSetIsIdeaToReady(t *testing
 	t.Parallel()
 	c, ok := domain.LookupTransitionCaller(domain.CallerAutonomousComplete)
 	require.True(t, ok)
-	require.Equal(t, []domain.SystemEdge{{From: BacklogStatusIdea, To: BacklogStatusReady}}, c.Edges)
+	require.Equal(t, []domain.SystemEdge{{From: domain.BacklogStatusIdea, To: domain.BacklogStatusReady}}, c.Edges)
 	require.Equal(t, domain.ClassSystem, c.Class)
 }
 

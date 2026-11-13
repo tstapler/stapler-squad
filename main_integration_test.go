@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -35,7 +36,7 @@ func TestMainWiring_should_StartClaimIndexAndClaimGossiperAlongsideAdvertiser_Wh
 	const issue = "https://github.com/o/r/issues/1"
 	if _, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:       "wiring test",
-		Status:      string(session.BacklogStatusInProgress),
+		Status:      string(domain.BacklogStatusInProgress),
 		ExternalURL: issue,
 	}); err != nil {
 		t.Fatalf("CreateBacklogItem: %v", err)

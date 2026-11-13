@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -21,7 +21,7 @@ import (
 func TestDefaultLivenessEngine_should_ReturnThreeHourFifteenMinuteThreshold_When_StageIsIdeaDefaultMode(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineModeDefault)
+	def, err := engine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindDurationBudget, def.Kind)
@@ -36,7 +36,7 @@ func TestDefaultLivenessEngine_should_ReturnThreeHourFifteenMinuteThreshold_When
 func TestDefaultLivenessEngine_should_ReturnTwoHourHeartbeat_When_StageIsInProgressDefaultMode(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatusInProgress, backlogdto.PipelineModeDefault)
+	def, err := engine.LivenessFor(domain.BacklogStatusInProgress, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindHeartbeat, def.Kind)
@@ -51,7 +51,7 @@ func TestDefaultLivenessEngine_should_ReturnTwoHourHeartbeat_When_StageIsInProgr
 func TestDefaultLivenessEngine_should_ReturnCycleFrequencyThreeInTwentyFourHours_When_StageIsReviewDefaultMode(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatusReview, backlogdto.PipelineModeDefault)
+	def, err := engine.LivenessFor(domain.BacklogStatusReview, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindCycleFrequency, def.Kind)
@@ -69,7 +69,7 @@ func TestDefaultLivenessEngine_should_ReturnCycleFrequencyThreeInTwentyFourHours
 func TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageHasNoTimeoutConcept(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatusQueued, backlogdto.PipelineModeDefault)
+	def, err := engine.LivenessFor(domain.BacklogStatusQueued, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.True(t, def.IsNoTimeout())
@@ -85,7 +85,7 @@ func TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageHasNoTim
 func TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageIsCompletelyUnmapped(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatus("some_future_custom_stage"), backlogdto.PipelineModeDefault)
+	def, err := engine.LivenessFor(domain.BacklogStatus("some_future_custom_stage"), backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.True(t, def.IsNoTimeout())
@@ -99,9 +99,9 @@ func TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageIsComple
 func TestDefaultLivenessEngine_should_IgnorePipelineMode_When_NoOverrideTableExists(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	defDefault, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineModeDefault)
+	defDefault, err := engine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineModeDefault)
 	require.NoError(t, err)
-	defSDD, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
+	defSDD, err := engine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 	require.NoError(t, err)
 
 	assert.Equal(t, defDefault, defSDD)
@@ -138,7 +138,7 @@ func TestLivenessFor_should_EmitExactlyOneWarnLine_When_FallingBackToDefaultEngi
 	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
 	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
-	got, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
+	got, err := engine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindDurationBudget, got.Kind)
@@ -168,7 +168,7 @@ func TestLivenessFor_should_NotEmitDuplicateWarnLines_When_CalledRepeatedlyForSa
 
 	const calls = 3
 	for i := 0; i < calls; i++ {
-		_, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
+		_, err := engine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 		require.NoError(t, err)
 	}
 

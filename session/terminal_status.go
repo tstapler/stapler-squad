@@ -1,5 +1,7 @@
 package session
 
+import "github.com/tstapler/stapler-squad/session/domain"
+
 // terminalStatusChecker, when non-nil, augments IsTerminalStatus so an
 // operator-configured custom stage marked IsTerminal:true is recognized
 // alongside the two built-in terminal statuses. Epic 2.3's
@@ -9,12 +11,12 @@ package session
 // count. See the "BacklogStatus becomes the open stage-slug type" decision
 // (project_plans/backlog-custom-workflow-stages/implementation/plan.md,
 // Epic 2.1).
-var terminalStatusChecker func(BacklogStatus) bool
+var terminalStatusChecker func(domain.BacklogStatus) bool
 
 // SetTerminalStatusChecker wires a ConfiguredWorkflowEngine-backed terminal
 // lookup into IsTerminalStatus. Pass nil to revert to the built-in-only
 // fallback (e.g. in tests).
-func SetTerminalStatusChecker(checker func(BacklogStatus) bool) {
+func SetTerminalStatusChecker(checker func(domain.BacklogStatus) bool) {
 	terminalStatusChecker = checker
 }
 
@@ -25,8 +27,8 @@ func SetTerminalStatusChecker(checker func(BacklogStatus) bool) {
 // marked IsTerminal. Replaces the repeated `status == BacklogStatusDone ||
 // status == BacklogStatusArchived` literal that used to appear at every call
 // site (Epic 2.1, Story 2.1.3).
-func IsTerminalStatus(status BacklogStatus) bool {
-	if status == BacklogStatusDone || status == BacklogStatusArchived {
+func IsTerminalStatus(status domain.BacklogStatus) bool {
+	if status == domain.BacklogStatusDone || status == domain.BacklogStatusArchived {
 		return true
 	}
 	return terminalStatusChecker != nil && terminalStatusChecker(status)
@@ -40,5 +42,5 @@ func IsTerminalStatus(status BacklogStatus) bool {
 // the repository layer — out of scope for Epic 2.1 (see IsTerminalStatus's
 // doc comment for the single-status equivalent, which custom stages do get).
 func TerminalStatusStrings() []string {
-	return []string{string(BacklogStatusDone), string(BacklogStatusArchived)}
+	return []string{string(domain.BacklogStatusDone), string(domain.BacklogStatusArchived)}
 }

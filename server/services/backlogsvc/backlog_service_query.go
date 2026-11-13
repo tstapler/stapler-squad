@@ -245,7 +245,7 @@ func (s *BacklogService) SuggestNextItem(
 
 	// Load ready items ordered by priority (lower number = higher priority).
 	items, err := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusReady)},
+		Statuses: []string{string(domain.BacklogStatusReady)},
 		SortBy:   "priority",
 	})
 	if err != nil {
@@ -604,7 +604,7 @@ func (s *BacklogService) GetSessionBacklogIndex(
 // item from the item sessions ListBacklogItemSummaries already batch-loaded, so
 // no per-item query is needed. Only review items can be pending.
 func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []backlogdto.ItemSessionSummary) {
-	if p.Status != string(session.BacklogStatusReview) {
+	if p.Status != string(domain.BacklogStatusReview) {
 		return
 	}
 	if ref := stuck.PendingDuplicateRef(sessions); ref != "" {

@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -116,7 +117,7 @@ func highestRiskApproval(approvals []domain.ApprovalMetadata) domain.ApprovalMet
 // ReviewQueuePoller automatically monitors sessions and adds them to the review queue
 // when they become idle or need attention.
 type ReviewQueuePoller struct {
-	queue            *ReviewQueue
+	queue            *queue.ReviewQueue
 	statusManager    StatusProvider
 	storage          *Storage
 	instances        []*Instance
@@ -183,13 +184,13 @@ func (p *pollerContentProvider) EvictInstance(title string) {
 
 // NewReviewQueuePoller creates a new poller for automatically managing the review queue.
 // The storage parameter is optional (can be nil) but required for persisting LastAddedToQueue timestamps.
-func NewReviewQueuePoller(queue *ReviewQueue, statusManager StatusProvider, storage *Storage) *ReviewQueuePoller {
+func NewReviewQueuePoller(queue *queue.ReviewQueue, statusManager StatusProvider, storage *Storage) *ReviewQueuePoller {
 	return NewReviewQueuePollerWithConfig(queue, statusManager, storage, DefaultReviewQueuePollerConfig())
 }
 
 // NewReviewQueuePollerWithConfig creates a poller with custom configuration.
 // The storage parameter is optional (can be nil) but required for persisting LastAddedToQueue timestamps.
-func NewReviewQueuePollerWithConfig(queue *ReviewQueue, statusManager StatusProvider, storage *Storage, config ReviewQueuePollerConfig) *ReviewQueuePoller {
+func NewReviewQueuePollerWithConfig(queue *queue.ReviewQueue, statusManager StatusProvider, storage *Storage, config ReviewQueuePollerConfig) *ReviewQueuePoller {
 	return &ReviewQueuePoller{
 		queue:            queue,
 		statusManager:    statusManager,
@@ -881,7 +882,7 @@ func (rqp *ReviewQueuePoller) removeFromQueue(title string) {
 
 // addToQueue is the poller's single add path; it records AttentionRaised when the item is
 // new or its reason differs from the queued one.
-func (rqp *ReviewQueuePoller) addToQueue(item, prior *ReviewItem) {
+func (rqp *ReviewQueuePoller) addToQueue(item, prior *queue.ReviewItem) {
 	rqp.queue.Add(item)
 	if prior == nil || prior.Reason != item.Reason {
 		rqp.eventRecorder().RecordAttentionRaised(item.SessionID, item.Reason)
@@ -935,7 +936,7 @@ func (rqp *ReviewQueuePoller) evaluateSession(inst *Instance, paneActivity map[s
 
 	// If the determiner saw a clean worktree, remove any stale UncommittedChanges entry.
 	if result.CleanWorktree {
-		if existing, exists := rqp.queue.Get(snap.Title); exists && existing.Reason == ReasonUncommittedChanges {
+		if existing, exists := rqp.queue.Get(snap.Title); exists && existing.Reason == queue.ReasonUncommittedChanges {
 			log.Debug("changes committed, removing UncommittedChanges entry", "session", snap.Title)
 			rqp.removeFromQueue(snap.Title)
 		}
@@ -986,7 +987,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *domain.Insta
 	detectedAt := time.Now()
 	isUpdate := false
 	unchanged := false
-	var prior *ReviewItem
+	var prior *queue.ReviewItem
 	if existingItem, exists := rqp.queue.Get(snap.Title); exists {
 		isUpdate = true
 		prior = existingItem
@@ -1009,7 +1010,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *domain.Insta
 		lastActivity = snap.CreatedAt
 	}
 
-	item := &ReviewItem{
+	item := &queue.ReviewItem{
 		SessionID:   snap.Title,
 		SessionName: snap.Title,
 		Reason:      reason,
@@ -1053,11 +1054,11 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *domain.Insta
 // ApprovalHandler.resolveSessionID stores PendingApproval.SessionID as the session's stable
 // ID (UUID when present, Title only as a fallback), but ReviewItem is keyed by Title, so
 // look up by UUID first and fall back to Title for sessions without a UUID.
-func (rqp *ReviewQueuePoller) enrichApprovalMetadata(item *ReviewItem, snap *domain.InstanceSnapshot) {
+func (rqp *ReviewQueuePoller) enrichApprovalMetadata(item *queue.ReviewItem, snap *domain.InstanceSnapshot) {
 	rqp.mu.RLock()
 	provider := rqp.approvalProvider
 	rqp.mu.RUnlock()
-	if item.Reason != ReasonApprovalPending || provider == nil {
+	if item.Reason != queue.ReasonApprovalPending || provider == nil {
 		return
 	}
 	approvals := provider.GetApprovalMetadataBySession(snap.UUID)

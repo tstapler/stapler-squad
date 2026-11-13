@@ -101,7 +101,7 @@ type fakeNote struct {
 
 type fakeTransition struct {
 	itemID         string
-	toStatus       session.BacklogStatus
+	toStatus       domain.BacklogStatus
 	expectedStatus string
 }
 
@@ -245,7 +245,7 @@ func testEntry(itemID, sessionUUID string) backlogdto.ItemSessionBacklogEntry {
 		SessionRole: session.SessionRoleJulesWork,
 		ItemID:      itemID,
 		ItemTitle:   "test item " + itemID,
-		ItemStatus:  string(session.BacklogStatusInProgress),
+		ItemStatus:  string(domain.BacklogStatusInProgress),
 	}
 }
 
@@ -444,7 +444,7 @@ func TestApplyJulesState_should_AppendExactlyOneNote_When_StateChangesThenRepeat
 	last := afterFirst[len(afterFirst)-1]
 	assert.Equal(t, -1, last.criterionIndex)
 	assert.Equal(t, "Jules session is now planning.", last.note)
-	assert.Equal(t, string(session.BacklogStatusInProgress), last.status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), last.status)
 
 	countAfterFirstPlanning := storage.noteCount()
 	require.NoError(t, p.applyJulesState(context.Background(), entry, row, newSession("sessions/a", julesapi.JulesStatePlanning)))
@@ -460,7 +460,7 @@ func TestApplyJulesState_should_RecordPRAndHandOffToReconcilePRPending_When_Comp
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules completed item", Status: string(session.BacklogStatusInProgress)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules completed item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 
 	sessionUUID := julesSessionUUIDPrefix + "sessions/xyz"
@@ -488,7 +488,7 @@ func TestApplyJulesState_should_RecordPRAndHandOffToReconcilePRPending_When_Comp
 
 	updated, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), updated.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), updated.Status)
 	assert.Equal(t, 700, updated.PrNumber)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/700", updated.PrURL)
 
@@ -766,8 +766,8 @@ func TestApplyJulesState_should_ReturnItemToReadyWithJulesMessage_When_StateIsFa
 	assert.Equal(t, "jules_failed", storage.ended["row-1"])
 	require.NotEmpty(t, storage.transitions)
 	lastTransition := storage.transitions[len(storage.transitions)-1]
-	assert.Equal(t, session.BacklogStatusReady, lastTransition.toStatus)
-	assert.Equal(t, string(session.BacklogStatusInProgress), lastTransition.expectedStatus)
+	assert.Equal(t, domain.BacklogStatusReady, lastTransition.toStatus)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), lastTransition.expectedStatus)
 	assert.Equal(t, []domain.TransitionCaller{domain.CallerJulesFailSession}, storage.gatedCallers, "the failure write goes through the gate as jules_fail_session")
 
 	notes := storage.notesFor("item-1")
@@ -793,7 +793,7 @@ func TestJulesSessionPoller_tick_should_EndSessionAsSessionMissing_When_GetSessi
 	require.Contains(t, storage.ended, "row-1")
 	assert.Equal(t, "jules_session_missing", storage.ended["row-1"])
 	require.NotEmpty(t, storage.transitions)
-	assert.Equal(t, session.BacklogStatusReady, storage.transitions[len(storage.transitions)-1].toStatus)
+	assert.Equal(t, domain.BacklogStatusReady, storage.transitions[len(storage.transitions)-1].toStatus)
 }
 
 // TestJulesSessionPoller_tick_should_TimeOutSession_When_StartedAtExceedsMaxSessionAge
@@ -838,7 +838,7 @@ func TestJulesSessionPoller_tick_should_FailAbandonedReservation_When_PendingOld
 	defer cleanup()
 	ctx := context.Background()
 
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules pending item", Status: string(session.BacklogStatusInProgress)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "jules pending item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 
 	pendingUUID := session.JulesPendingUUIDPrefix + "reservation-1"
@@ -867,7 +867,7 @@ func TestJulesSessionPoller_tick_should_FailAbandonedReservation_When_PendingOld
 
 	updated, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReady), updated.Status)
+	assert.Equal(t, string(domain.BacklogStatusReady), updated.Status)
 
 	notes, err := storage.ListProgressNotesForItem(ctx, item.ID)
 	require.NoError(t, err)

@@ -15,7 +15,6 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//log",
-        "//session",
         "//session/backlog/stuck",
         "//session/domain",
         "//session/domain/backlogdto",
@@ -43,6 +42,7 @@ go_test(
         "//log",
         "//session",
         "//session/backlog/stuck",
+        "//session/domain",
         "//session/domain/backlogdto",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

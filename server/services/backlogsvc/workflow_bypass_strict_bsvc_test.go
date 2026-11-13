@@ -9,10 +9,10 @@ import (
 )
 
 func TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers(t *testing.T) {
-	statuses := []session.BacklogStatus{
-		session.BacklogStatusIdea, session.BacklogStatusRefining, session.BacklogStatusReady, session.BacklogStatusQueued,
-		session.BacklogStatusInProgress, session.BacklogStatusReview, session.BacklogStatusPRPending, session.BacklogStatusDone,
-		session.BacklogStatusArchived,
+	statuses := []domain.BacklogStatus{
+		domain.BacklogStatusIdea, domain.BacklogStatusRefining, domain.BacklogStatusReady, domain.BacklogStatusQueued,
+		domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.BacklogStatusDone,
+		domain.BacklogStatusArchived,
 	}
 	for _, to := range statuses {
 		for _, actor := range []string{session.TriggeredByUser, session.TriggeredByAgent, session.TriggeredBySystem, ""} {

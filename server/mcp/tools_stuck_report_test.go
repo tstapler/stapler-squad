@@ -76,17 +76,17 @@ func TestGetBacklogStuckReport_RendersAcceptanceCriteriaTimelineSessionsAndNotes
 		Title:              "test: app shell coverage",
 		AcceptanceCriteria: `[{"index":0,"text":"History cap boundary covered","status":"fail"}]`,
 		Priority:           3,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bounced 13 times in 24h")
+	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, domain.BacklogStatusReview, "bounced 13 times in 24h")
 	require.NoError(t, err)
 	resolved, err := storage.ResolveStuck(ctx, item.ID, domain.StuckReasonBouncing)
 	require.NoError(t, err)
 	require.True(t, resolved)
 
-	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatusReview, "stop_reason=max_turns")
+	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, domain.BacklogStatusReview, "stop_reason=max_turns")
 	require.NoError(t, err)
 
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -154,7 +154,7 @@ func TestGetBacklogStuckReport_CICrossCheck_FlagsOutOfDiffFailureAndSuggestsReru
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "test: app shell coverage",
 		Priority: 3,
-		Status:   string(session.BacklogStatusPRPending),
+		Status:   string(domain.BacklogStatusPRPending),
 		RepoPath: "/repo",
 	})
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "multi pr", Status: string(session.BacklogStatusPRPending)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "multi pr", Status: string(domain.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	sessUUID := uuid.New().String()
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessUUID, SessionRole: session.SessionRoleWork})
@@ -256,7 +256,7 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 func TestStuckReport_ShouldListBlockedCleanupWithHolder_WhenGateWithholdsWorktree(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
-	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "blocked cleanup", Status: string(session.BacklogStatusDone)})
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "blocked cleanup", Status: string(domain.BacklogStatusDone)})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)

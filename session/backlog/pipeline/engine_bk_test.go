@@ -13,6 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -534,7 +535,7 @@ func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTem
 		Title:        "Fix bug",
 		PipelineMode: "quick",
 	}
-	acSnapshot := []session.AcCriterion{{Index: 0, Text: "first"}, {Index: 1, Text: "second"}}
+	acSnapshot := []domain.AcCriterion{{Index: 0, Text: "first"}, {Index: 1, Text: "second"}}
 
 	got := engine.InteractiveReviewPromptFor(item, acSnapshot, "diff content", false, "review-session-id", "notes")
 	want := "custom review for abc-123: Fix bug (2 criteria)"

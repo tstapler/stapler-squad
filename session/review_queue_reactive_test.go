@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -31,7 +32,7 @@ func (m *reactiveTestStatusProvider) GetController(title string) (*claudectl.Cla
 func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 	t.Parallel()
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusProvider := &reactiveTestStatusProvider{
 		statusByTitle: make(map[string]InstanceStatusInfo),
 	}
@@ -80,7 +81,7 @@ func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 	t.Parallel()
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusProvider := &reactiveTestStatusProvider{
 		statusByTitle: make(map[string]InstanceStatusInfo),
 	}
@@ -96,11 +97,11 @@ func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now()
 
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:    inst.Title,
 		SessionName:  inst.Title,
-		Reason:       ReasonIdleTimeout,
-		Priority:     PriorityLow,
+		Reason:       queuepkg.ReasonIdleTimeout,
+		Priority:     queuepkg.PriorityLow,
 		DetectedAt:   time.Now().Add(-1 * time.Minute),
 		LastActivity: time.Now().Add(-1 * time.Minute),
 	})

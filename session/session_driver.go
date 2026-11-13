@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // spinnerTimeRe matches the time/token suffix of an active Claude Code spinner,
@@ -1284,11 +1285,11 @@ func markSessionNeedsAttention(inst *Instance, reason string) {
 		)
 		return
 	}
-	rq.Add(&ReviewItem{
+	rq.Add(&queue.ReviewItem{
 		SessionID:    inst.UUID,
 		SessionName:  inst.Title,
-		Reason:       ReasonStale, // closest existing reason: "no output for extended period"
-		Priority:     PriorityMedium,
+		Reason:       queue.ReasonStale, // closest existing reason: "no output for extended period"
+		Priority:     queue.PriorityMedium,
 		DetectedAt:   time.Now(),
 		Context:      reason, // "inactivity timeout" or "unexpected exit" or "restart error: ..."
 		Tags:         inst.GetTags(),

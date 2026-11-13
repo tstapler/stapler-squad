@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // warnCollector is an injected slog handler that records messages (never the
@@ -75,7 +76,7 @@ func newGatedNotifFixture(t *testing.T, flagOn bool) *gatedNotifFixture {
 
 	hidden := &session.Instance{Title: "review-h", UUID: "uuid-hidden", Hidden: true}
 	visible := &session.Instance{Title: "work-v", UUID: "uuid-visible"}
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	poller.SetInstances([]*session.Instance{hidden, visible})
 	svc.SetReviewQueuePoller(poller)
 	gate.SeedFromInstances([]*session.Instance{hidden, visible})

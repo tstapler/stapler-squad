@@ -508,7 +508,7 @@ func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNew
 	rec.RecordShadowCallFor(domain.ClassAgent, session.MethodValidateGates, session.PathTransition)
 	rec.RecordDivergenceFor(domain.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
 	rec.RecordObservation(session.ShadowObservation{
-		Method: session.MethodValidateGates, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusInProgress,
+		Method: session.MethodValidateGates, Path: session.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusInProgress,
 		Class: session.ClassGuardNew, Config: session.ConfigSeeded, CallerClass: domain.ClassAgent, Caller: domain.CallerMCPResumeWork,
 	})
 	if err := rec.Flush(); err != nil {

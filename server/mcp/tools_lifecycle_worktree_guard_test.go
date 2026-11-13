@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -52,7 +53,7 @@ func newWorktreeGuardHandlers(t *testing.T, occupants ...*session.Instance) *lif
 	t.Cleanup(func() { bus.Close() })
 	t.Cleanup(func() { svc.Shutdown() })
 
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	poller.SetInstances(occupants)
 	svc.SetReviewQueuePoller(poller)
 

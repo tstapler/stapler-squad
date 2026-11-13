@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -124,7 +125,7 @@ func IsRepeatedFailure(recent []backlogdto.ReviewVerdictSummary) bool {
 		return false
 	}
 	latest, prior := recent[0], recent[1]
-	if latest.OverallOutcome == string(session.ReviewOutcomePass) {
+	if latest.OverallOutcome == string(domain.ReviewOutcomePass) {
 		return false
 	}
 	return latest.OverallOutcome == prior.OverallOutcome && latest.Summary != "" && latest.Summary == prior.Summary
@@ -208,7 +209,7 @@ func ReviewFailureStreakLen(recent []backlogdto.ReviewVerdictSummary) int {
 		return 0
 	}
 	head := recent[0]
-	if head.OverallOutcome == string(session.ReviewOutcomePass) || head.Summary == "" {
+	if head.OverallOutcome == string(domain.ReviewOutcomePass) || head.Summary == "" {
 		return 0
 	}
 	n := 1
@@ -456,7 +457,7 @@ func IsNoProgressReview(recent []backlogdto.ReviewVerdictSummary) bool {
 	}
 	latest, prior := recent[0], recent[1]
 	for _, v := range []backlogdto.ReviewVerdictSummary{latest, prior} {
-		if v.OverallOutcome == string(session.ReviewVerdictPass) || v.DiffTruncated || v.OverrideBy != "" || v.ReviewedCommitSha == "" {
+		if v.OverallOutcome == string(domain.ReviewVerdictPass) || v.DiffTruncated || v.OverrideBy != "" || v.ReviewedCommitSha == "" {
 			return false
 		}
 	}

@@ -47,7 +47,7 @@ const customCheckReviewFeasibilitySystemPrompt = `You are assessing whether a pr
 // through the same UI/verdict-aggregation code as an automated-review gate")
 // plus the raw detail text recorded for audit/UI display.
 type CustomCheckOutcome struct {
-	Outcome session.ReviewOutcome
+	Outcome domain.ReviewOutcome
 	Detail  string
 }
 
@@ -59,11 +59,11 @@ func parseCustomCheckOutcome(output string) CustomCheckOutcome {
 	upper := strings.ToUpper(output)
 	switch {
 	case strings.Contains(upper, "VERDICT: PASS"):
-		return CustomCheckOutcome{Outcome: session.ReviewOutcomePass, Detail: strings.TrimSpace(output)}
+		return CustomCheckOutcome{Outcome: domain.ReviewOutcomePass, Detail: strings.TrimSpace(output)}
 	case strings.Contains(upper, "VERDICT: FAIL"):
-		return CustomCheckOutcome{Outcome: session.ReviewOutcomeFail, Detail: strings.TrimSpace(output)}
+		return CustomCheckOutcome{Outcome: domain.ReviewOutcomeFail, Detail: strings.TrimSpace(output)}
 	default:
-		return CustomCheckOutcome{Outcome: session.ReviewOutcomeUnverifiable, Detail: strings.TrimSpace(output)}
+		return CustomCheckOutcome{Outcome: domain.ReviewOutcomeUnverifiable, Detail: strings.TrimSpace(output)}
 	}
 }
 
@@ -121,7 +121,7 @@ func InvokeCustomGateCheck(
 	gateID uuid.UUID,
 	cfg domain.CustomCheckConfig,
 	livenessDef liveness.LivenessDefinition,
-	targetStage session.BacklogStatus,
+	targetStage domain.BacklogStatus,
 	mode backlogdto.PipelineMode,
 ) (CustomCheckOutcome, error) {
 	if !domain.RegisteredCustomCheckSkills[cfg.SkillID] {
@@ -174,7 +174,7 @@ func InvokeCustomGateCheck(
 	}
 
 	outcome := parseCustomCheckOutcome(output)
-	satisfied := outcome.Outcome == session.ReviewOutcomePass
+	satisfied := outcome.Outcome == domain.ReviewOutcomePass
 	recordCustomCheckTerminalOutcome(repo, itemID, gateID, satisfied, map[string]interface{}{
 		"outcome": string(outcome.Outcome),
 		"detail":  outcome.Detail,

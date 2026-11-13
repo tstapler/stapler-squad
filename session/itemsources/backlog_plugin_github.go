@@ -482,7 +482,7 @@ func (g *GitHubIssuesPlugin) MapToBacklogItem(item session.ExternalItem, sourceI
 		Title:       title,
 		Description: desc,
 		Priority:    item.Priority,
-		Status:      string(session.BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
 		ExternalURL: item.URL,
 		Labels:      item.Labels,

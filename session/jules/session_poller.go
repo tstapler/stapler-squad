@@ -397,7 +397,7 @@ func (p *JulesSessionPoller) maybeRecoverAuth(ctx context.Context) {
 	p.authBlockedMu.Unlock()
 
 	for _, id := range items {
-		if err := p.storage.AppendProgressNote(ctx, id, -1, julesAuthRestoredNote, string(session.BacklogStatusInProgress)); err != nil {
+		if err := p.storage.AppendProgressNote(ctx, id, -1, julesAuthRestoredNote, string(domain.BacklogStatusInProgress)); err != nil {
 			log.Warn("jules poll failed", "item_id", id, "error", err)
 		}
 	}
@@ -433,16 +433,16 @@ func (p *JulesSessionPoller) failJulesSession(ctx context.Context, entry backlog
 	if err := p.storage.UpdateItemSessionEndedWithReason(ctx, sessionID, now, reason); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
-	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: note}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: note}
 	// Tolerated: an abandoned reservation's item may never have left "ready" (the
 	// move to in_progress happens only after CreateSession confirms), so a lost
 	// precondition is a harmless no-op, and a gate denial is reported by the gate.
 	if _, err := p.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerJulesFailSession, ItemID: entry.ItemID, To: session.BacklogStatusReady, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerJulesFailSession, ItemID: entry.ItemID, To: domain.BacklogStatusReady, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
-	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(session.BacklogStatusReady)); err != nil {
+	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(domain.BacklogStatusReady)); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 }
@@ -494,7 +494,7 @@ func (p *JulesSessionPoller) noteStateChangeIfNeeded(ctx context.Context, entry 
 	}
 
 	note := fmt.Sprintf("Jules session is now %s.", julesStateNoteLabel(state))
-	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(session.BacklogStatusInProgress)); err != nil {
+	if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(domain.BacklogStatusInProgress)); err != nil {
 		log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 	}
 	log.Info("jules session state changed", "jules_session", entry.SessionUUID, "from", string(prev), "to", string(state))
@@ -524,12 +524,12 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 		// Best-effort status advance: the progress note below still records the no-PR
 		// outcome, and the session row is already closed so no sweep retries this.
 		if _, err := p.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-			Caller: domain.CallerJulesApplyCompleted, ItemID: entry.ItemID, To: session.BacklogStatusReview,
-			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: note}, TriggeredBy: session.TriggeredBySystem,
+			Caller: domain.CallerJulesApplyCompleted, ItemID: entry.ItemID, To: domain.BacklogStatusReview,
+			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: note}, TriggeredBy: session.TriggeredBySystem,
 		}); err != nil {
 			log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 		}
-		if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(session.BacklogStatusReview)); err != nil {
+		if err := p.storage.AppendProgressNote(ctx, entry.ItemID, -1, note, string(domain.BacklogStatusReview)); err != nil {
 			log.Warn("jules poll failed", "jules_session", entry.SessionUUID, "error", err)
 		}
 		return nil
@@ -553,8 +553,8 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 	}
 
 	reviewItem, err := p.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-		Caller: domain.CallerJulesApplyCompleted, ItemID: entry.ItemID, To: session.BacklogStatusReview,
-		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerJulesApplyCompleted, ItemID: entry.ItemID, To: domain.BacklogStatusReview,
+		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: "Jules session completed"}, TriggeredBy: session.TriggeredBySystem,
 	})
 	if err != nil {
 		return fmt.Errorf("transition to review: %w", err)

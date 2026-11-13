@@ -109,12 +109,12 @@ func TestBacklogLinkLookup_should_UseBatchedLinkQueryAndOneItemReadPerDistinctIt
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
-	mkItem := func(status session.BacklogStatus) string {
+	mkItem := func(status domain.BacklogStatus) string {
 		it, err := storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{Title: "i", AcceptanceCriteria: `[]`, Priority: 1, Status: string(status)})
 		require.NoError(t, err)
 		return it.ID
 	}
-	pendingItem, doneItem, progressItem := mkItem(session.BacklogStatusPRPending), mkItem(session.BacklogStatusDone), mkItem(session.BacklogStatusInProgress)
+	pendingItem, doneItem, progressItem := mkItem(domain.BacklogStatusPRPending), mkItem(domain.BacklogStatusDone), mkItem(domain.BacklogStatusInProgress)
 	link := func(item string) string {
 		id := uuid.New().String()
 		_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item, SessionUUID: id, SessionRole: "work"})

@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -146,7 +147,7 @@ func (s *SessionService) GetEventBus() *events.EventBus {
 }
 
 // GetReviewQueueInstance returns the review queue instance for wiring up reactive components.
-func (s *SessionService) GetReviewQueueInstance() *session.ReviewQueue {
+func (s *SessionService) GetReviewQueueInstance() *queue.ReviewQueue {
 	return s.reviewQueueSvc.GetQueue()
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // matrixFlags mirrors the six attention-inbox flags (server/services.AttentionFlags).
@@ -97,7 +98,7 @@ type raisedRecorder struct {
 	raised []string
 }
 
-func (r *raisedRecorder) RecordAttentionRaised(title string, _ AttentionReason) {
+func (r *raisedRecorder) RecordAttentionRaised(title string, _ queue.AttentionReason) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.raised = append(r.raised, title)
@@ -142,7 +143,7 @@ func newMatrixHarness() *matrixHarness {
 		content: newFakeContentProvider(map[string]string{}),
 		rec:     &raisedRecorder{},
 	}
-	h.poller = NewReviewQueuePoller(NewReviewQueue(), h.status, nil)
+	h.poller = NewReviewQueuePoller(queue.NewReviewQueue(), h.status, nil)
 	h.poller.contentProvider = h.content
 	h.poller.statusDeterminer = idleClockDeterminer()
 	h.poller.SetOptionsSource(func() (DeterminerOptions, RuleOptions) { return h.flags.options() })

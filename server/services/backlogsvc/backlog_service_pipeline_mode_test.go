@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -370,7 +371,7 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 
 	_, err = svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "item referencing quick",
-		Status:       string(session.BacklogStatusIdea),
+		Status:       string(domain.BacklogStatusIdea),
 		PipelineMode: "quick",
 	})
 	require.NoError(t, err)
@@ -415,7 +416,7 @@ func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDe
 
 	item, err := svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "quick-mode item about to lose its mode",
-		Status:       string(session.BacklogStatusIdea),
+		Status:       string(domain.BacklogStatusIdea),
 		Priority:     3,
 		RepoPath:     t.TempDir(),
 		PipelineMode: "quick",

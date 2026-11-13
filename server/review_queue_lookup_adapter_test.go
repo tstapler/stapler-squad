@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -56,7 +57,7 @@ func TestReviewQueueLookupAdapter_should_BucketSiblingItemSessionsByOverallOutco
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "shared backlog item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	if err != nil {
 		t.Fatalf("CreateBacklogItem: %v", err)
@@ -67,13 +68,13 @@ func TestReviewQueueLookupAdapter_should_BucketSiblingItemSessionsByOverallOutco
 	queriedSessionUUID := uuid.NewString()
 	if _, err := storage.CreateItemSessionWithVerdict(ctx,
 		backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: queriedSessionUUID, SessionRole: "work"},
-		backlogdto.ReviewVerdictData{OverallOutcome: session.ReviewOutcomePass, Summary: "looks good"},
+		backlogdto.ReviewVerdictData{OverallOutcome: domain.ReviewOutcomePass, Summary: "looks good"},
 	); err != nil {
 		t.Fatalf("CreateItemSessionWithVerdict (queried session): %v", err)
 	}
 	if _, err := storage.CreateItemSessionWithVerdict(ctx,
 		backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: "review"},
-		backlogdto.ReviewVerdictData{OverallOutcome: session.ReviewOutcomeFail, Summary: "needs work"},
+		backlogdto.ReviewVerdictData{OverallOutcome: domain.ReviewOutcomeFail, Summary: "needs work"},
 	); err != nil {
 		t.Fatalf("CreateItemSessionWithVerdict (resolved sibling): %v", err)
 	}

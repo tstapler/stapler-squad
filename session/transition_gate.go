@@ -69,7 +69,7 @@ func (s *Storage) GatedTransition(ctx context.Context, req backlogdto.Transition
 // cleanup and link-session ending stay with the caller, after a successful
 // return.
 func (s *Storage) GatedArchive(ctx context.Context, req backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
-	if err := backlogdto.PinTarget(&req, BacklogStatusArchived); err != nil {
+	if err := backlogdto.PinTarget(&req, domain.BacklogStatusArchived); err != nil {
 		return nil, err
 	}
 	return s.gated(ctx, req, s.writeGatedArchive)
@@ -84,7 +84,7 @@ func (s *Storage) writeGatedArchive(ctx context.Context, req backlogdto.Transiti
 // status only (default: the observed status, which must be archived), so the
 // request cannot carry ExpectedUpdatedAt or a Note.
 func (s *Storage) GatedUnarchive(ctx context.Context, req backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
-	if err := backlogdto.PinTarget(&req, BacklogStatusIdea); err != nil {
+	if err := backlogdto.PinTarget(&req, domain.BacklogStatusIdea); err != nil {
 		return nil, err
 	}
 	if p := req.Precondition; p != nil && (p.ExpectedUpdatedAt != nil || p.Note != "") {
@@ -95,7 +95,7 @@ func (s *Storage) GatedUnarchive(ctx context.Context, req backlogdto.TransitionR
 
 func (s *Storage) writeGatedUnarchive(ctx context.Context, req backlogdto.TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	pre := backlogdto.GatePrecondition(req, spec, item)
-	if pre.ExpectedStatus != string(BacklogStatusArchived) {
+	if pre.ExpectedStatus != string(domain.BacklogStatusArchived) {
 		return nil, fmt.Errorf("%w: item is %q, not archived", domain.ErrPreconditionFailed, pre.ExpectedStatus)
 	}
 	return s.Repo.rawUnarchiveBacklogItem(ctx, req.ItemID, pre.ExpectedStatus)
@@ -111,14 +111,14 @@ func (s *Storage) GatedSetPRAndTransition(ctx context.Context, req backlogdto.Tr
 	if _, ok := domain.LookupTransitionCaller(req.Caller); !ok {
 		return fmt.Errorf("%w: %q", backlogdto.ErrUnregisteredTransitionCaller, req.Caller)
 	}
-	if err := backlogdto.PinTarget(&req, BacklogStatusPRPending); err != nil {
+	if err := backlogdto.PinTarget(&req, domain.BacklogStatusPRPending); err != nil {
 		return err
 	}
 	observed := req.Observed
 	if observed == nil || req.Precondition != nil {
 		return fmt.Errorf("%w: a PR transition needs Observed and no Precondition", backlogdto.ErrInvalidTransitionRequest)
 	}
-	if observed.Status == string(BacklogStatusPRPending) {
+	if observed.Status == string(domain.BacklogStatusPRPending) {
 		return s.setPRAndTransition(ctx, observed, pr)
 	}
 	_, err := s.gated(ctx, req, func(ctx context.Context, _ backlogdto.TransitionRequest, _ domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
@@ -144,8 +144,8 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 		_, err := s.gated(ctx, backlogdto.TransitionRequest{
 			Caller:       domain.CallerReconcileStuck,
 			ItemID:       c.ID,
-			To:           BacklogStatusReview,
-			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: "all work sessions ended"},
+			To:           domain.BacklogStatusReview,
+			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: "all work sessions ended"},
 			TriggeredBy:  TriggeredBySystem,
 		}, s.writeGatedReconcile)
 		switch {
@@ -237,7 +237,7 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *backlogdt
 	}
 	updated, err = c.write(ctx, req, c.spec, item)
 	if err == nil {
-		notifyTransitionCommitted(view, backlogdto.GuardInputFor(req, item, BacklogStatus(item.Status)), req.To)
+		notifyTransitionCommitted(view, backlogdto.GuardInputFor(req, item, domain.BacklogStatus(item.Status)), req.To)
 	}
 	return updated, errors.Is(err, domain.ErrPreconditionFailed), err
 }
@@ -251,7 +251,7 @@ func (c *gateCall) reportDenial(ctx context.Context, item *backlogdto.BacklogIte
 			log.WarningLog().Printf("[GatedTransition] denial reporter panicked for item %s caller %s: %v", item.ID, c.spec.Name, r)
 		}
 	}()
-	c.reporter.Report(ctx, item, c.spec.Name, BacklogStatus(item.Status), c.req.To, v.Reason, v.Err)
+	c.reporter.Report(ctx, item, c.spec.Name, domain.BacklogStatus(item.Status), c.req.To, v.Reason, v.Err)
 }
 
 // writeGated derives the CAS from the decided "from" and calls the raw writer.
@@ -265,7 +265,7 @@ func (s *Storage) writeGated(ctx context.Context, req backlogdto.TransitionReque
 // ExpectedStatus so it cannot overwrite a concurrent mover. It also clears the
 // stateful gate latches of the edge it undoes (to -> ExpectedStatus), since the
 // transition that latched them did not stick.
-func (s *Storage) Rollback(ctx context.Context, itemID string, to BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) Rollback(ctx context.Context, itemID string, to domain.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
 	if precondition == nil || precondition.ExpectedStatus == "" {
 		return nil, fmt.Errorf("%w: a rollback requires an ExpectedStatus", backlogdto.ErrInvalidTransitionRequest)
 	}
@@ -273,7 +273,7 @@ func (s *Storage) Rollback(ctx context.Context, itemID string, to BacklogStatus,
 	if err == nil {
 		RecordEngineBypass(backlogdto.CallerRollback)
 		if g := s.gate.Load(); g != nil {
-			g.engine.ClearLatches(itemID, to, BacklogStatus(precondition.ExpectedStatus))
+			g.engine.ClearLatches(itemID, to, domain.BacklogStatus(precondition.ExpectedStatus))
 		}
 	}
 	return updated, err
@@ -281,12 +281,12 @@ func (s *Storage) Rollback(ctx context.Context, itemID string, to BacklogStatus,
 
 // DebugForce writes any status for the operator-only debug endpoints. It is
 // never engine-checked, only counted.
-func (s *Storage) DebugForce(ctx context.Context, itemID string, to BacklogStatus, triggeredBy string) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) DebugForce(ctx context.Context, itemID string, to domain.BacklogStatus, triggeredBy string) (*backlogdto.BacklogItemData, error) {
 	var (
 		updated *backlogdto.BacklogItemData
 		err     error
 	)
-	if to == BacklogStatusArchived {
+	if to == domain.BacklogStatusArchived {
 		updated, err = s.Repo.rawArchiveBacklogItem(ctx, itemID, nil, triggeredBy, "")
 	} else {
 		updated, err = s.Repo.RawTransitionBacklogItemStatus(ctx, itemID, to, nil, triggeredBy)

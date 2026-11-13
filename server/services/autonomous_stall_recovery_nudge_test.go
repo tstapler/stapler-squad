@@ -72,7 +72,7 @@ type stallNudgeFixture struct {
 	restartFn func() error
 }
 
-func newStallNudgeFixture(t *testing.T, title string, itemStatus session.BacklogStatus, diagnoseOn, stallOn bool) *stallNudgeFixture {
+func newStallNudgeFixture(t *testing.T, title string, itemStatus domain.BacklogStatus, diagnoseOn, stallOn bool) *stallNudgeFixture {
 	t.Helper()
 	base := newUnlinkedCharFixtureWithStatus(t, title, domain.Active)
 	item, err := base.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
@@ -158,7 +158,7 @@ func stallIn(state domain.ObservedState, reason domain.StopReason) session.Auton
 }
 
 func TestStallRecovery_IdlePromptNudgesAndKeepsAutonomy(t *testing.T) {
-	f := newStallNudgeFixture(t, "nudge-happy", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "nudge-happy", domain.BacklogStatusInProgress, true, true)
 
 	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 
@@ -191,7 +191,7 @@ func TestStallRecovery_StateDecidesNudgeOrRespawn(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.state), func(t *testing.T) {
-			f := newStallNudgeFixture(t, "state-"+string(tc.state), session.BacklogStatusInProgress, true, true)
+			f := newStallNudgeFixture(t, "state-"+string(tc.state), domain.BacklogStatusInProgress, true, true)
 
 			f.complete(stallIn(tc.state, domain.StopReasonOrchestratorError))
 
@@ -210,15 +210,15 @@ func TestStallRecovery_NudgeNotChosen(t *testing.T) {
 		name       string
 		diagnose   bool
 		stall      bool
-		status     session.BacklogStatus
+		status     domain.BacklogStatus
 		reason     domain.StopReason
 		wantOutcom string
 	}{
-		{"diagnose flag off", false, true, session.BacklogStatusInProgress, domain.StopReasonOrchestratorError, "nudge_outcome=disabled"},
-		{"stall flag off", true, false, session.BacklogStatusInProgress, domain.StopReasonOrchestratorError, "nudge_outcome=disabled"},
-		{"both flags off", false, false, session.BacklogStatusInProgress, domain.StopReasonOrchestratorError, "nudge_outcome=disabled"},
-		{"item already in review", true, true, session.BacklogStatusReview, domain.StopReasonOrchestratorError, "nudge_outcome=n/a"},
-		{"turn cap", true, true, session.BacklogStatusInProgress, domain.StopReasonMaxTurns, "nudge_outcome=n/a"},
+		{"diagnose flag off", false, true, domain.BacklogStatusInProgress, domain.StopReasonOrchestratorError, "nudge_outcome=disabled"},
+		{"stall flag off", true, false, domain.BacklogStatusInProgress, domain.StopReasonOrchestratorError, "nudge_outcome=disabled"},
+		{"both flags off", false, false, domain.BacklogStatusInProgress, domain.StopReasonOrchestratorError, "nudge_outcome=disabled"},
+		{"item already in review", true, true, domain.BacklogStatusReview, domain.StopReasonOrchestratorError, "nudge_outcome=n/a"},
+		{"turn cap", true, true, domain.BacklogStatusInProgress, domain.StopReasonMaxTurns, "nudge_outcome=n/a"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,7 +250,7 @@ func TestStallRecovery_NudgeFailureFallsBackOrLeavesPane(t *testing.T) {
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newStallNudgeFixture(t, fmt.Sprintf("fail-%d", i), session.BacklogStatusInProgress, true, true)
+			f := newStallNudgeFixture(t, fmt.Sprintf("fail-%d", i), domain.BacklogStatusInProgress, true, true)
 			f.nudger.err = tc.err
 
 			f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
@@ -266,7 +266,7 @@ func TestStallRecovery_NudgeFailureFallsBackOrLeavesPane(t *testing.T) {
 }
 
 func TestStallRecovery_RestartFailureFallsBackToRespawn(t *testing.T) {
-	f := newStallNudgeFixture(t, "restart-fails", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "restart-fails", domain.BacklogStatusInProgress, true, true)
 	f.restartFn = func() error { return errors.New("pool unavailable") }
 
 	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
@@ -277,7 +277,7 @@ func TestStallRecovery_RestartFailureFallsBackToRespawn(t *testing.T) {
 }
 
 func TestStallRecovery_SecondStallInCooldownRespawns(t *testing.T) {
-	f := newStallNudgeFixture(t, "cooldown", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "cooldown", domain.BacklogStatusInProgress, true, true)
 	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 	f.requireNoRespawn(t)
 
@@ -288,7 +288,7 @@ func TestStallRecovery_SecondStallInCooldownRespawns(t *testing.T) {
 }
 
 func TestStallRecovery_ArchivedSessionIsNeverRecovered(t *testing.T) {
-	f := newStallNudgeFixture(t, "archived", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "archived", domain.BacklogStatusInProgress, true, true)
 	now := time.Now()
 	f.inst.SetArchivedAt(&now)
 
@@ -300,7 +300,7 @@ func TestStallRecovery_ArchivedSessionIsNeverRecovered(t *testing.T) {
 }
 
 func TestStallRecovery_StopDuringNudgeCancelsIt(t *testing.T) {
-	f := newStallNudgeFixture(t, "stop-mid-nudge", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "stop-mid-nudge", domain.BacklogStatusInProgress, true, true)
 	started := make(chan struct{})
 	var startedOnce sync.Once
 	f.nudger.preFn = func(ctx context.Context) error {
@@ -369,7 +369,7 @@ func TestClassifyNudgeError(t *testing.T) {
 // A session that is no longer restartable (autonomy turned off before the nudge)
 // must never fall through to a respawn, and a requested stop raises no alarm.
 func TestStallRecovery_NotRestartableLeavesPaneAndStaysQuiet(t *testing.T) {
-	f := newStallNudgeFixture(t, "not-restartable", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "not-restartable", domain.BacklogStatusInProgress, true, true)
 	f.inst.SetAutonomousMode(false, "")
 
 	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
@@ -386,7 +386,7 @@ func TestStallRecovery_NotRestartableLeavesPaneAndStaysQuiet(t *testing.T) {
 func TestStallRecovery_CancelledStopsNeverNudgeOrRestart(t *testing.T) {
 	for _, reason := range cancelledReasons {
 		t.Run(string(reason), func(t *testing.T) {
-			f := newStallNudgeFixture(t, "cancel-nudge-"+string(reason), session.BacklogStatusInProgress, true, true)
+			f := newStallNudgeFixture(t, "cancel-nudge-"+string(reason), domain.BacklogStatusInProgress, true, true)
 			out := cancelledOutcome(reason)
 			out.Snapshot = snapshotFor(domain.ObservedIdlePrompt)
 
@@ -401,7 +401,7 @@ func TestStallRecovery_CancelledStopsNeverNudgeOrRestart(t *testing.T) {
 
 // The flags are re-read at the claim: one turned off after planning falls back to respawn.
 func TestStallRecovery_FlagTurnedOffBeforeClaimRespawns(t *testing.T) {
-	f := newStallNudgeFixture(t, "flag-flips", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "flag-flips", domain.BacklogStatusInProgress, true, true)
 	var reads int
 	f.svc.AutonomousSvc.SetNudgeFlagReaders(func() bool { return true }, func() bool {
 		reads++
@@ -417,7 +417,7 @@ func TestStallRecovery_FlagTurnedOffBeforeClaimRespawns(t *testing.T) {
 
 // A stop landing between the last canRestart and driver registration must drop the new driver.
 func TestStallRecovery_StopDuringReattachDropsNewDriver(t *testing.T) {
-	f := newStallNudgeFixture(t, "stop-in-reattach", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "stop-in-reattach", domain.BacklogStatusInProgress, true, true)
 	svc := f.svc.AutonomousSvc
 	f.restartFn = func() error {
 		svc.registerDriver(f.title, session.NewAutonomousDriver(f.inst, nil, "goal", 1))
@@ -437,7 +437,7 @@ func TestStallRecovery_StopDuringReattachDropsNewDriver(t *testing.T) {
 
 // A delivered nudge followed by a stop before re-attach reports the delivery and attaches nothing.
 func TestStallRecovery_StopAfterDeliveryDetaches(t *testing.T) {
-	f := newStallNudgeFixture(t, "detached", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "detached", domain.BacklogStatusInProgress, true, true)
 	f.svc.AutonomousSvc.SetStallNudger(stopAfterNudge{inner: f.nudger, inst: f.inst})
 
 	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
@@ -462,7 +462,7 @@ func (n stopAfterNudge) NudgeStalledSession(ctx context.Context, inst *session.I
 
 // Stuck-row write failures fail open to the respawn body; a moved-on item status skips recovery.
 func TestStallRecovery_MarkStuckFailureFailsOpenToRespawn(t *testing.T) {
-	f := newStallNudgeFixture(t, "markstuck-fails", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "markstuck-fails", domain.BacklogStatusInProgress, true, true)
 	session.TestFailMarkStuckWrites(t, f.storage)
 
 	f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
@@ -473,13 +473,13 @@ func TestStallRecovery_MarkStuckFailureFailsOpenToRespawn(t *testing.T) {
 }
 
 func TestStallRecovery_ItemMovedOnBeforeMarkStuckSkipsRecovery(t *testing.T) {
-	f := newStallNudgeFixture(t, "item-moved", session.BacklogStatusInProgress, true, true)
+	f := newStallNudgeFixture(t, "item-moved", domain.BacklogStatusInProgress, true, true)
 	moved := false
 	// The flag reader runs during planning, after the item was loaded and before MarkStuck.
 	f.svc.AutonomousSvc.SetNudgeFlagReaders(func() bool {
 		if !moved {
 			moved = true
-			_, err := f.storage.RawTransitionBacklogItemStatus(context.Background(), f.itemID, session.BacklogStatusReview, nil, "test")
+			_, err := f.storage.RawTransitionBacklogItemStatus(context.Background(), f.itemID, domain.BacklogStatusReview, nil, "test")
 			require.NoError(t, err)
 		}
 		return true
@@ -494,7 +494,7 @@ func TestStallRecovery_ItemMovedOnBeforeMarkStuckSkipsRecovery(t *testing.T) {
 
 // A replaced driver's late completion callback must not stop, remove or rewrite the new run.
 func TestOnAutonomousDriverComplete_ReplacedDriverCallbackLeavesNewDriver(t *testing.T) {
-	f := newCharFixture(t, "replaced-driver", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "replaced-driver", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	svc := f.svc.AutonomousSvc

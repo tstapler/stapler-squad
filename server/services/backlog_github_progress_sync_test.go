@@ -47,7 +47,7 @@ func newProgressFixture(t *testing.T, fake *fakeProgressPlugin, prURL string) (*
 	sourceID := svctest.CreateForwardSyncTestSource(t, storage, fake.pluginID, false, "")
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:          "progress item",
-		Status:         string(session.BacklogStatusInProgress),
+		Status:         string(domain.BacklogStatusInProgress),
 		SourceID:       sourceID,
 		ExternalID:     "42",
 		ExternalURL:    "https://github.com/o/r/issues/42",
@@ -214,7 +214,7 @@ func TestForwardSyncClose_PostsCommentWithHostID(t *testing.T) {
 	storage := svctest.NewForwardSyncTestStorage(t)
 	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "fake_closer", true, "")
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
-		Title: "t", Status: string(session.BacklogStatusDone), SourceID: sourceID, ExternalID: "42", ClaimingHostID: "host-abc",
+		Title: "t", Status: string(domain.BacklogStatusDone), SourceID: sourceID, ExternalID: "42", ClaimingHostID: "host-abc",
 	})
 	require.NoError(t, err)
 	fake := &fakeForwardSyncCloserPlugin{pluginID: "fake_closer", closeUpdatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}

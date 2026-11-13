@@ -30,7 +30,7 @@ func holdKinds(item *sessionv1.BacklogItem) []sessionv1.PrHold_Kind {
 
 func TestGetBacklogItem_ShouldFillPullRequestsAndHolds_OnlyWhenBacklogScopeOn(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusPRPending)
+	h := newBlockerHarness(t, domain.BacklogStatusPRPending)
 	h.link(session.ItemPROwner(h.itemID), 21, domain.PRStateMerged)
 	h.link(session.ItemPROwner(h.itemID), 22, domain.PRStateOpen)
 	h.link(session.ItemPROwner(h.itemID), 23, domain.PRStateUnknown)
@@ -48,7 +48,7 @@ func TestGetBacklogItem_ShouldFillPullRequestsAndHolds_OnlyWhenBacklogScopeOn(t 
 
 func TestGetBacklogItem_ShouldNameSupersededRoundPR_AndLiveSession(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusDone)
+	h := newBlockerHarness(t, domain.BacklogStatusDone)
 	h.svc.cleanup.liveEnabled = func() bool { return true }
 	h.svc.SetLiveWorkProbe(&stubProbe{live: map[string]bool{"round-two": true}})
 	// Round 1 links open #30; round 2 (the newest, live) links merged #31, so #30 is no

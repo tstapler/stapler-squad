@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -225,7 +226,7 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	}
 
 	// Verify the StatusWaitingForAgent → SUB_STATUS_WAITING_FOR_AGENT mapping.
-	item := &session.ReviewItem{ClaudeStatus: detection.StatusWaitingForAgent}
+	item := &queue.ReviewItem{ClaudeStatus: detection.StatusWaitingForAgent}
 	gotSubStatus := subStatusFromItem(item)
 	if gotSubStatus != sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT {
 		t.Errorf("subStatusFromItem(StatusWaitingForAgent) = %v, want SUB_STATUS_WAITING_FOR_AGENT", gotSubStatus)
@@ -270,7 +271,7 @@ func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
 				t.Errorf("toProtoSubStatusFromInfo(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
 			}
 
-			item := &session.ReviewItem{ClaudeStatus: status}
+			item := &queue.ReviewItem{ClaudeStatus: status}
 			gotReviewQueue := subStatusFromItem(item)
 			if gotReviewQueue == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 				t.Errorf("subStatusFromItem(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)

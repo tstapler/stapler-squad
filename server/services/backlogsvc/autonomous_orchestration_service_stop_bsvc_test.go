@@ -13,12 +13,12 @@ import (
 
 // OBS-7: the operator read path returns the detail unchanged.
 func TestStuckRowContext_ReturnedByListStuckBacklogItems(t *testing.T) {
-	f := newCharFixture(t, "stop-detail-rpc", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "stop-detail-rpc", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	svc := NewBacklogService(f.storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 	detail := "stopped: idle_prompt after 2 turns (orchestrator_error)" // any detail string: the read path returns it unchanged
 
-	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, session.BacklogStatusInProgress, detail)
+	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, domain.BacklogStatusInProgress, detail)
 	require.NoError(t, err)
 	require.True(t, applied)
 

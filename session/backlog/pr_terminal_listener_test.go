@@ -40,7 +40,7 @@ func (b *blockingCleaner) snapshot() []string {
 	return append([]string(nil), b.items...)
 }
 
-func terminalFixture(t *testing.T, status session.BacklogStatus) (*BacklogLifecycleListener, *itemPRFixture, int) {
+func terminalFixture(t *testing.T, status domain.BacklogStatus) (*BacklogLifecycleListener, *itemPRFixture, int) {
 	t.Helper()
 	f := newItemPRFixture(t, 0)
 	_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(status)).Save(context.Background())
@@ -53,7 +53,7 @@ func terminalFixture(t *testing.T, status session.BacklogStatus) (*BacklogLifecy
 
 func TestPRTerminalListener_ShouldCleanDoneItemOfTerminalState_AndSkipOpenItems(t *testing.T) {
 	t.Parallel()
-	for status, want := range map[session.BacklogStatus]bool{session.BacklogStatusDone: true, session.BacklogStatusArchived: true, session.BacklogStatusInProgress: false, session.BacklogStatusPRPending: false} {
+	for status, want := range map[domain.BacklogStatus]bool{domain.BacklogStatusDone: true, domain.BacklogStatusArchived: true, domain.BacklogStatusInProgress: false, domain.BacklogStatusPRPending: false} {
 		status, want := status, want
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
@@ -75,7 +75,7 @@ func TestPRTerminalListener_ShouldCleanDoneItemOfTerminalState_AndSkipOpenItems(
 
 func TestPRTerminalListener_ShouldResolveSessionLinkOwnersToTheirItems(t *testing.T) {
 	t.Parallel()
-	l, f, _ := terminalFixture(t, session.BacklogStatusDone)
+	l, f, _ := terminalFixture(t, domain.BacklogStatusDone)
 	sess := f.session(session.SessionRoleWork)
 	f.link(session.SessionPROwner(sess), 30, domain.PRStateMerged)
 	v, err := f.repo.GetPullRequestState(context.Background(), testRef(30))
@@ -94,7 +94,7 @@ func TestPRTerminalListener_ShouldStartAtMostTwentyCleanups_WhenThreeHundredItem
 	ctx := context.Background()
 	var stateID int
 	for i := 0; i < 30; i++ {
-		item, err := f.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: fmt.Sprintf("done %d", i), Status: string(session.BacklogStatusDone)})
+		item, err := f.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: fmt.Sprintf("done %d", i), Status: string(domain.BacklogStatusDone)})
 		require.NoError(t, err)
 		f.link(session.ItemPROwner(item.ID), 22, domain.PRStateMerged)
 	}
@@ -112,7 +112,7 @@ func TestPRTerminalListener_ShouldStartAtMostTwentyCleanups_WhenThreeHundredItem
 
 func TestPRTerminalListener_ShouldReturnImmediately_WhenCleanupIsSlow(t *testing.T) {
 	t.Parallel()
-	l, f, stateID := terminalFixture(t, session.BacklogStatusDone)
+	l, f, stateID := terminalFixture(t, domain.BacklogStatusDone)
 	c := &blockingCleaner{release: make(chan struct{})}
 	l.SetWorktreeCleaner(c)
 	t.Cleanup(func() { close(c.release); l.Shutdown() })

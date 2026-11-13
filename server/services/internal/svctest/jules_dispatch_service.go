@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -118,7 +119,7 @@ func CreateTestJulesReadyItem(t *testing.T, ctx context.Context, storage *sessio
 	repoPath := NewTestJulesRepoWithRemote(t, "https://github.com/tstapler/stapler-squad.git")
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    title,
-		Status:   string(session.BacklogStatusReady),
+		Status:   string(domain.BacklogStatusReady),
 		RepoPath: repoPath,
 	})
 	require.NoError(t, err)

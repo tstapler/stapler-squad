@@ -311,10 +311,10 @@ func (s *BacklogService) TriggerTriage(
 	}
 
 	// 2. Status guard — triage is only valid for idea or ready items.
-	if item.Status != string(session.BacklogStatusIdea) && item.Status != string(session.BacklogStatusReady) {
+	if item.Status != string(domain.BacklogStatusIdea) && item.Status != string(domain.BacklogStatusReady) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item must be in %q or %q status to trigger triage, got %q",
-				session.BacklogStatusIdea, session.BacklogStatusReady, item.Status))
+				domain.BacklogStatusIdea, domain.BacklogStatusReady, item.Status))
 	}
 
 	// 3. Repo path required.
@@ -379,10 +379,10 @@ func (s *BacklogService) TriggerTriage(
 	// 3b. If re-triggering on a "ready" item, move it back to "idea".
 	// Use a precondition so a concurrent work-session spawn (ready→in_progress) that
 	// races with this re-triage doesn't drag the item backwards to idea.
-	if item.Status == string(session.BacklogStatusReady) {
-		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
+	if item.Status == string(domain.BacklogStatusReady) {
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}
 		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-			Caller: domain.CallerOperatorTriggerTriage, ItemID: req.Msg.ItemId, Observed: item, To: session.BacklogStatusIdea,
+			Caller: domain.CallerOperatorTriggerTriage, ItemID: req.Msg.ItemId, Observed: item, To: domain.BacklogStatusIdea,
 			Precondition: precondition, TriggeredBy: session.TriggeredByUser,
 		}); transErr != nil {
 			return nil, triageResetError(req.Msg.ItemId, transErr)
@@ -533,7 +533,7 @@ func (s *BacklogService) TriggerTriage(
 		// byte-for-byte unchanged from before.
 		callBudget := triageCallBudget
 		if s.livenessEngine != nil {
-			if def, defErr := s.livenessEngine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+			if def, defErr := s.livenessEngine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 				callBudget = def.ExpectedDuration
 			}
 		}
@@ -880,10 +880,10 @@ func (s *BacklogService) TriggerTriage(
 		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now()) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
 		s.triageInFlight.Delete(itemID)
 
-		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusIdea)}
 		statusAdvanced := true
 		if _, transErr := s.storage.GatedTransition(persistCtx, backlogdto.TransitionRequest{
-			Caller: domain.CallerTriageComplete, ItemID: itemID, To: session.BacklogStatusReady,
+			Caller: domain.CallerTriageComplete, ItemID: itemID, To: domain.BacklogStatusReady,
 			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			log.Error("[TriggerTriage] status transition idea→ready failed", "item", itemID, "error", transErr)
@@ -984,15 +984,15 @@ func applyTriageResultToUpdate(result *pipeline.HeadlessTriageResult, update *ba
 			result.AcceptanceCriteria[i].Index = i
 			// A model must never mint a waiver (nor smuggle waiver metadata); existing owner
 			// waivers are carried forward by the repository, matched on criterion text.
-			if result.AcceptanceCriteria[i].Status == session.AcStatusWaived {
-				result.AcceptanceCriteria[i].Status = session.AcStatusPending
+			if result.AcceptanceCriteria[i].Status == domain.AcStatusWaived {
+				result.AcceptanceCriteria[i].Status = domain.AcStatusPending
 			}
 			result.AcceptanceCriteria[i].WaiverReason, result.AcceptanceCriteria[i].WaivedBy, result.AcceptanceCriteria[i].WaivedAt = "", "", ""
 			if result.AcceptanceCriteria[i].Status == "" {
 				result.AcceptanceCriteria[i].Status = "pending"
 			}
 		}
-		if acJSON, marshalErr := session.SerializeAcCriteria(result.AcceptanceCriteria); marshalErr == nil {
+		if acJSON, marshalErr := domain.SerializeAcCriteria(result.AcceptanceCriteria); marshalErr == nil {
 			update.AcceptanceCriteria = &acJSON
 		}
 	}

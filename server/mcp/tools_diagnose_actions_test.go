@@ -22,7 +22,7 @@ func TestSubmitDiagnosisResult_should_PopulateItemSessionDiagnoseResult(t *testi
 	itemID, sessUUID := setupDiagnoseSession(t, storage)
 	dh := &diagnoseHandlers{storage: storage}
 	ctx := WithSessionUUID(context.Background(), sessUUID)
-	fi, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "filed", Status: string(session.BacklogStatusIdea)})
+	fi, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "filed", Status: string(domain.BacklogStatusIdea)})
 	require.NoError(t, err)
 	filed := fi.ID
 

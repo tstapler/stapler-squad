@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // TestDefaultStatusDeterminer_Determine verifies the pure detection logic of DefaultStatusDeterminer.
@@ -22,8 +23,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 		instSetup    func(inst *Instance) // optional additional setup on the instance
 		wantAction   DetectionAction
 		checkAction  bool // set to true to assert wantAction
-		wantReason   AttentionReason
-		wantPriority Priority
+		wantReason   queue.AttentionReason
+		wantPriority queue.Priority
 	}{
 		// --- Controller-active path ---
 		{
@@ -34,8 +35,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonApprovalPending,
-			wantPriority: PriorityHigh,
+			wantReason:   queue.ReasonApprovalPending,
+			wantPriority: queue.PriorityHigh,
 		},
 		{
 			name: "active_controller_needs_approval_via_pending_approvals_count",
@@ -46,8 +47,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonApprovalPending,
-			wantPriority: PriorityHigh,
+			wantReason:   queue.ReasonApprovalPending,
+			wantPriority: queue.PriorityHigh,
 		},
 		{
 			name: "active_controller_input_required",
@@ -57,8 +58,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonInputRequired,
-			wantPriority: PriorityMedium,
+			wantReason:   queue.ReasonInputRequired,
+			wantPriority: queue.PriorityMedium,
 		},
 		{
 			name: "active_controller_error",
@@ -68,8 +69,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonErrorState,
-			wantPriority: PriorityUrgent,
+			wantReason:   queue.ReasonErrorState,
+			wantPriority: queue.PriorityUrgent,
 		},
 		{
 			name: "active_controller_tests_failing",
@@ -79,8 +80,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonTestsFailing,
-			wantPriority: PriorityHigh,
+			wantReason:   queue.ReasonTestsFailing,
+			wantPriority: queue.PriorityHigh,
 		},
 		{
 			name: "active_controller_task_complete",
@@ -90,8 +91,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonTaskComplete,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonTaskComplete,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			name: "active_controller_idle_active_returns_remove",
@@ -112,8 +113,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonIdle,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonIdle,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			name: "active_controller_waiting_state_skips",
@@ -140,8 +141,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonApprovalPending,
-			wantPriority: PriorityHigh,
+			wantReason:   queue.ReasonApprovalPending,
+			wantPriority: queue.PriorityHigh,
 		},
 		{
 			name:    "no_controller_content_does_not_panic",
@@ -213,8 +214,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonIdle,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonIdle,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			name:    "no_controller_fresh_session_skip",
@@ -246,8 +247,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonStale,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonStale,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			// ADR-001 boundary case: 3 min since output must NOT be flagged stale
@@ -283,8 +284,8 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			},
 			checkAction:  true,
 			wantAction:   DetectionActionAdd,
-			wantReason:   ReasonStale,
-			wantPriority: PriorityLow,
+			wantReason:   queue.ReasonStale,
+			wantPriority: queue.PriorityLow,
 		},
 		{
 			name:    "acknowledged_stale_session_skips_stale",
@@ -372,7 +373,7 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add (approval takes priority over idle-active), got %v", result.Action)
 	}
-	if result.Reason != ReasonApprovalPending {
+	if result.Reason != queue.ReasonApprovalPending {
 		t.Errorf("expected ReasonApprovalPending, got %v", result.Reason)
 	}
 }
@@ -449,10 +450,10 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add, got %v", result.Action)
 	}
-	if result.Reason != ReasonInputRequired {
+	if result.Reason != queue.ReasonInputRequired {
 		t.Errorf("expected ReasonInputRequired, got %v", result.Reason)
 	}
-	if result.Priority != PriorityMedium {
+	if result.Priority != queue.PriorityMedium {
 		t.Errorf("expected PriorityMedium, got %v", result.Priority)
 	}
 }
@@ -478,10 +479,10 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add, got %v", result.Action)
 	}
-	if result.Reason != ReasonErrorState {
+	if result.Reason != queue.ReasonErrorState {
 		t.Errorf("expected ReasonErrorState, got %v", result.Reason)
 	}
-	if result.Priority != PriorityUrgent {
+	if result.Priority != queue.PriorityUrgent {
 		t.Errorf("expected PriorityUrgent, got %v", result.Priority)
 	}
 }
@@ -607,7 +608,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		if result.Action != DetectionActionAdd {
 			t.Errorf("expected Add for Hidden instance with ReasonErrorState (safety net), got %v", result.Action)
 		}
-		if result.Reason != ReasonErrorState {
+		if result.Reason != queue.ReasonErrorState {
 			t.Errorf("expected ReasonErrorState, got %v", result.Reason)
 		}
 	})
@@ -628,7 +629,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		if result.Action != DetectionActionAdd {
 			t.Errorf("expected Add for Hidden instance with ReasonTestsFailing (safety net), got %v", result.Action)
 		}
-		if result.Reason != ReasonTestsFailing {
+		if result.Reason != queue.ReasonTestsFailing {
 			t.Errorf("expected ReasonTestsFailing, got %v", result.Reason)
 		}
 	})
@@ -657,10 +658,10 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add for approval content without controller, got %v", result.Action)
 	}
-	if result.Reason != ReasonApprovalPending {
+	if result.Reason != queue.ReasonApprovalPending {
 		t.Errorf("expected ReasonApprovalPending, got %v", result.Reason)
 	}
-	if result.Priority != PriorityHigh {
+	if result.Priority != queue.PriorityHigh {
 		t.Errorf("expected PriorityHigh, got %v", result.Priority)
 	}
 }
@@ -727,7 +728,7 @@ func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughT
 	// are old enough to also cross the separate terminal-staleness threshold (5m default,
 	// checked later in Determine) — either reason confirms the fix: the session fell through
 	// to a time-based add instead of being unconditionally removed.
-	if result.Reason != ReasonIdle && result.Reason != ReasonStale {
+	if result.Reason != queue.ReasonIdle && result.Reason != queue.ReasonStale {
 		t.Errorf("expected ReasonIdle or ReasonStale from the time-based fallback, got %v", result.Reason)
 	}
 }
@@ -786,7 +787,7 @@ func TestDefaultStatusDeterminer_ControllerWaitingForAgent_Stale_FallsThroughToI
 	}
 	// Reason is ReasonIdle or ReasonStale depending on which threshold fires first — either
 	// confirms the fix: the session fell through instead of being unconditionally removed.
-	if result.Reason != ReasonIdle && result.Reason != ReasonStale {
+	if result.Reason != queue.ReasonIdle && result.Reason != queue.ReasonStale {
 		t.Errorf("expected ReasonIdle or ReasonStale from the fallback, got %v", result.Reason)
 	}
 }
@@ -828,7 +829,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput(t *te
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add once new output un-suppresses the session, got %v", result.Action)
 	}
-	if result.Reason != ReasonIdle {
+	if result.Reason != queue.ReasonIdle {
 		t.Errorf("expected ReasonIdle, got %v", result.Reason)
 	}
 }
@@ -873,7 +874,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_ControllerActive_StaysOutUnt
 	if result.Action != DetectionActionAdd {
 		t.Errorf("expected Add once new output un-suppresses the session, got %v", result.Action)
 	}
-	if result.Reason != ReasonIdle {
+	if result.Reason != queue.ReasonIdle {
 		t.Errorf("expected ReasonIdle, got %v", result.Reason)
 	}
 }
@@ -907,10 +908,10 @@ func TestDefaultStatusDeterminer_ApprovalPending_NeverReachesIdleSuppression(t *
 
 	result := determiner.Determine(inst, "", statusInfo, detector, DeterminerOptions{})
 
-	if result.Reason != ReasonApprovalPending {
+	if result.Reason != queue.ReasonApprovalPending {
 		t.Errorf("expected ReasonApprovalPending (idle-suppression branch must be unreachable), got %v", result.Reason)
 	}
-	if result.Priority != PriorityHigh {
+	if result.Priority != queue.PriorityHigh {
 		t.Errorf("expected PriorityHigh, got %v", result.Priority)
 	}
 	if result.Action != DetectionActionAdd {

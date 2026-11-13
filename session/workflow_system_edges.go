@@ -9,26 +9,26 @@ import (
 // automation callers first, then storage-direct writers kept for UI honesty.
 var systemRequiredCore = []domain.SystemEdge{
 	// Group 1: engine-checked automation.
-	{From: BacklogStatusReady, To: BacklogStatusQueued},
-	{From: BacklogStatusQueued, To: BacklogStatusInProgress},
-	{From: BacklogStatusReady, To: BacklogStatusInProgress},
+	{From: domain.BacklogStatusReady, To: domain.BacklogStatusQueued},
+	{From: domain.BacklogStatusQueued, To: domain.BacklogStatusInProgress},
+	{From: domain.BacklogStatusReady, To: domain.BacklogStatusInProgress},
 	// AttachSessionToItem moves any status that can reach in_progress there.
-	{From: BacklogStatusDone, To: BacklogStatusInProgress},
+	{From: domain.BacklogStatusDone, To: domain.BacklogStatusInProgress},
 	// Group 2: storage-direct writers.
-	{From: BacklogStatusInProgress, To: BacklogStatusReview},
-	{From: BacklogStatusReview, To: BacklogStatusDone},
-	{From: BacklogStatusReview, To: BacklogStatusPRPending},
-	{From: BacklogStatusPRPending, To: BacklogStatusDone},
-	{From: BacklogStatusReview, To: BacklogStatusInProgress},
-	{From: BacklogStatusPRPending, To: BacklogStatusInProgress},
-	{From: BacklogStatusInProgress, To: BacklogStatusReady},
-	{From: BacklogStatusIdea, To: BacklogStatusReady},
+	{From: domain.BacklogStatusInProgress, To: domain.BacklogStatusReview},
+	{From: domain.BacklogStatusReview, To: domain.BacklogStatusDone},
+	{From: domain.BacklogStatusReview, To: domain.BacklogStatusPRPending},
+	{From: domain.BacklogStatusPRPending, To: domain.BacklogStatusDone},
+	{From: domain.BacklogStatusReview, To: domain.BacklogStatusInProgress},
+	{From: domain.BacklogStatusPRPending, To: domain.BacklogStatusInProgress},
+	{From: domain.BacklogStatusInProgress, To: domain.BacklogStatusReady},
+	{From: domain.BacklogStatusIdea, To: domain.BacklogStatusReady},
 	// request_review re-requests from pr_pending (Task 1.5.1b audit).
-	{From: BacklogStatusPRPending, To: BacklogStatusReview},
+	{From: domain.BacklogStatusPRPending, To: domain.BacklogStatusReview},
 	// report_blocked from review.
-	{From: BacklogStatusReview, To: BacklogStatusReady},
+	{From: domain.BacklogStatusReview, To: domain.BacklogStatusReady},
 	// respawnTriage resets a queued item before retriage.
-	{From: BacklogStatusQueued, To: BacklogStatusIdea},
+	{From: domain.BacklogStatusQueued, To: domain.BacklogStatusIdea},
 }
 
 // systemRequiredOffGraph lists registered edges that validTransitions lacks
@@ -36,13 +36,13 @@ var systemRequiredCore = []domain.SystemEdge{
 // completion, the pushAndCreatePR fallback, and drift recovery to pr_pending.
 // Like the archive group they never reach the UI-facing allowed list.
 var systemRequiredOffGraph = []domain.SystemEdge{
-	{From: BacklogStatusInProgress, To: BacklogStatusDone},
-	{From: BacklogStatusReady, To: BacklogStatusDone},
-	{From: BacklogStatusIdea, To: BacklogStatusPRPending},
-	{From: BacklogStatusRefining, To: BacklogStatusPRPending},
-	{From: BacklogStatusReady, To: BacklogStatusPRPending},
-	{From: BacklogStatusQueued, To: BacklogStatusPRPending},
-	{From: BacklogStatusInProgress, To: BacklogStatusPRPending},
+	{From: domain.BacklogStatusInProgress, To: domain.BacklogStatusDone},
+	{From: domain.BacklogStatusReady, To: domain.BacklogStatusDone},
+	{From: domain.BacklogStatusIdea, To: domain.BacklogStatusPRPending},
+	{From: domain.BacklogStatusRefining, To: domain.BacklogStatusPRPending},
+	{From: domain.BacklogStatusReady, To: domain.BacklogStatusPRPending},
+	{From: domain.BacklogStatusQueued, To: domain.BacklogStatusPRPending},
+	{From: domain.BacklogStatusInProgress, To: domain.BacklogStatusPRPending},
 }
 
 // SystemRequiredEdges returns the enumerable system-required set: the core
@@ -55,7 +55,7 @@ func SystemRequiredEdges() []domain.SystemEdge {
 	edges = append(edges, systemRequiredCore...)
 	edges = append(edges, systemRequiredOffGraph...)
 	for _, from := range BuiltInStageOrder {
-		edges = append(edges, domain.SystemEdge{From: from, To: BacklogStatusArchived})
+		edges = append(edges, domain.SystemEdge{From: from, To: domain.BacklogStatusArchived})
 	}
 	sort.Slice(edges, func(i, j int) bool {
 		if edges[i].From != edges[j].From {
@@ -69,8 +69,8 @@ func SystemRequiredEdges() []domain.SystemEdge {
 // IsSystemRequired reports whether (from,to) is system-required. Any
 // transition into archived counts, so an item stranded on a custom or deleted
 // stage can still be archived.
-func IsSystemRequired(from, to BacklogStatus) bool {
-	if to == BacklogStatusArchived {
+func IsSystemRequired(from, to domain.BacklogStatus) bool {
+	if to == domain.BacklogStatusArchived {
 		return true
 	}
 	for _, group := range [][]domain.SystemEdge{systemRequiredCore, systemRequiredOffGraph} {
@@ -86,8 +86,8 @@ func IsSystemRequired(from, to BacklogStatus) bool {
 // systemRequiredTargets returns the non-archive system-required destinations
 // from from. The archive group is excluded so the UI-facing allowed list never
 // offers archive via the engine (Story 1.5.1 AC 3).
-func SystemRequiredTargets(from BacklogStatus) []BacklogStatus {
-	var out []BacklogStatus
+func SystemRequiredTargets(from domain.BacklogStatus) []domain.BacklogStatus {
+	var out []domain.BacklogStatus
 	for _, e := range systemRequiredCore {
 		if e.From == from {
 			out = append(out, e.To)

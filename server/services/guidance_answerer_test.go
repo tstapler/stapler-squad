@@ -108,12 +108,12 @@ func TestAnswerAs_should_WaiveCriterion_Only_When_OwnerPicksWaiveResponse(t *tes
 	storage := svctest.CreateTestStorage(t)
 	svc := NewGuidanceRequestService(storage, nil, nil)
 	ctx := context.Background()
-	raw, err := session.SerializeAcCriteria([]session.AcCriterion{
-		{Index: 0, Text: "a", Status: session.AcStatusPending},
-		{Index: 1, Text: "b", Status: session.AcStatusPending},
+	raw, err := domain.SerializeAcCriteria([]domain.AcCriterion{
+		{Index: 0, Text: "a", Status: domain.AcStatusPending},
+		{Index: 1, Text: "b", Status: domain.AcStatusPending},
 	})
 	require.NoError(t, err)
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "w", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: raw})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "w", Status: string(domain.BacklogStatusInProgress), AcceptanceCriteria: raw})
 	require.NoError(t, err)
 	itemID := uuid.MustParse(item.ID)
 	ask := func(idx int) string {
@@ -125,12 +125,12 @@ func TestAnswerAs_should_WaiveCriterion_Only_When_OwnerPicksWaiveResponse(t *tes
 		require.NoError(t, err)
 		return row.ID
 	}
-	statuses := func() []session.AcStatus {
+	statuses := func() []domain.AcStatus {
 		got, err := storage.GetBacklogItem(ctx, item.ID)
 		require.NoError(t, err)
-		cs, err := session.ParseAcCriteria(got.AcceptanceCriteria)
+		cs, err := domain.ParseAcCriteria(got.AcceptanceCriteria)
 		require.NoError(t, err)
-		out := make([]session.AcStatus, len(cs))
+		out := make([]domain.AcStatus, len(cs))
 		for i, c := range cs {
 			out[i] = c.Status
 		}
@@ -140,12 +140,12 @@ func TestAnswerAs_should_WaiveCriterion_Only_When_OwnerPicksWaiveResponse(t *tes
 	_, applied, err := svc.AnswerAs(ctx, ask(1), "Keep", HumanAnswerer())
 	require.NoError(t, err)
 	require.True(t, applied)
-	assert.Equal(t, []session.AcStatus{session.AcStatusPending, session.AcStatusPending}, statuses(), "other answers waive nothing")
+	assert.Equal(t, []domain.AcStatus{domain.AcStatusPending, domain.AcStatusPending}, statuses(), "other answers waive nothing")
 
 	_, applied, err = svc.AnswerAs(ctx, ask(1), domain.OwnerActionWaiveResponse, HumanAnswerer())
 	require.NoError(t, err)
 	require.True(t, applied)
-	assert.Equal(t, []session.AcStatus{session.AcStatusPending, session.AcStatusWaived}, statuses())
+	assert.Equal(t, []domain.AcStatus{domain.AcStatusPending, domain.AcStatusWaived}, statuses())
 
 	// A second waive of the same criterion is refused by storage; the answer still lands.
 	_, applied, err = svc.AnswerAs(ctx, ask(1), domain.OwnerActionWaiveResponse, HumanAnswerer())

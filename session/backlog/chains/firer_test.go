@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -129,7 +130,7 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "chained item ac9",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -142,8 +143,8 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 	// wall-clock latency bound flaked under load, so only hang-detect.
 	transitionDone := make(chan error, 1)
 	go func() {
-		_, transitionErr := fx.repo.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone,
-			&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}, session.TriggeredBySystem)
+		_, transitionErr := fx.repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone,
+			&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, session.TriggeredBySystem)
 		transitionDone <- transitionErr
 	}()
 	select {
@@ -185,7 +186,7 @@ func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_DepthAtOrAboveMax(t
 
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "already deep chain",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
@@ -232,7 +233,7 @@ func TestChainFirer_Fire_should_rejectAndMarkChainFired_When_WaitExceedsMaxChain
 
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "long-waiting chain",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
@@ -279,7 +280,7 @@ func TestChainFirer_Fire_should_createSessionAndMarkChainFired_When_ValidChainCo
 
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "valid chain item",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
@@ -334,7 +335,7 @@ func TestTriggerChainReconciler_should_completeInterruptedChain_When_DoneItemHas
 
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "crashed before fire",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	wfID := wf.ID
@@ -392,7 +393,7 @@ func TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneIte
 	// the oldest of the bunch.
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "the pending chain item",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	wfID := wf.ID
@@ -409,7 +410,7 @@ func TestTriggerChainReconciler_should_findPendingChain_When_MoreThan1000DoneIte
 	for i := 0; i < noise; i++ {
 		builders = append(builders, client.BacklogItem.Create().
 			SetTitle(fmt.Sprintf("noise done item %d", i)).
-			SetStatus(string(session.BacklogStatusDone)).
+			SetStatus(string(domain.BacklogStatusDone)).
 			SetPriority(3))
 	}
 	_, err = client.BacklogItem.CreateBulk(builders...).Save(ctx)
@@ -448,7 +449,7 @@ func TestChainFirer_should_fireExactlyOnce_When_DispatchAndReconcilerRaceOnSameI
 
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "racing chain item",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	wfID := wf.ID
@@ -504,7 +505,7 @@ func TestChainFirer_Dispatch_should_noOp_When_FeatureFlagDisabled(t *testing.T) 
 
 	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "flag off item",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	wfID := wf.ID
@@ -541,13 +542,13 @@ func TestWireChainFirer_should_RegisterTheFirerOnTheStorageRepository_And_FireOn
 	assert.Same(t, cf, fx.repo.ChainFirer, "WireChainFirer must register the ChainFirer as the repository's dispatcher")
 
 	wf := fx.createWorkflow(t, "wire-chain-next")
-	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "wired chain item", Status: string(session.BacklogStatusReview)})
+	item, err := fx.repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "wired chain item", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	wfID := wf.ID
 	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
-	_, err = fx.repo.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone,
-		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}, session.TriggeredBySystem)
+	_, err = fx.repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone,
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	wait.RequireEventually(t, func() bool { return firer.callCount() == 1 }, 5*time.Second, 5*time.Millisecond,

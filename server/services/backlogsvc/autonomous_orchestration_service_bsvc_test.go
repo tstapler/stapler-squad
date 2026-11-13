@@ -53,7 +53,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Autonomous work respawn test item",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -86,16 +86,16 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 }
 
 func TestOnAutonomousDriverComplete_should_LeaveIdeaAndRaiseOneDenial_When_SystemGateBlocksIdeaToReady(t *testing.T) {
-	f := newCharFixture(t, "autonomous-denied", session.SessionRoleTriage, session.BacklogStatusIdea)
+	f := newCharFixture(t, "autonomous-denied", session.SessionRoleTriage, domain.BacklogStatusIdea)
 	bs := NewBacklogService(f.storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, bs)
-	h.blockWithGate(t, session.BacklogStatusIdea, session.BacklogStatusReady)
+	h.blockWithGate(t, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 
 	f.complete(session.AutonomousDriverOutcome{Done: true, Reason: "done", Turns: 3})
 
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusIdea), item.Status)
+	assert.Equal(t, string(domain.BacklogStatusIdea), item.Status)
 	assert.Equal(t, []string{string(domain.CallerAutonomousComplete)}, deniedCallers(t, bs, f.itemID))
 	assert.Equal(t, []string{"Autonomous fix complete — status update failed"}, svctest.NotificationTitles(f.drain()), "the existing status-update-failed notification fires once")
 }

@@ -341,7 +341,7 @@ func newPreflightFixture(t *testing.T, storage *session.Storage) (*backlogdto.Ba
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title: "Preflight item", AcceptanceCriteria: `[]`, Priority: 1,
-		Status: string(session.BacklogStatusReview), RepoPath: repoDir,
+		Status: string(domain.BacklogStatusReview), RepoPath: repoDir,
 	})
 	require.NoError(t, err)
 	sessionUUID := uuid.New().String()
@@ -482,7 +482,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusPRPending, session.BacklogStatusDone, domain.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusPRPending, domain.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := newPRPendingTestItem(t, h.storage, 9701)
 	newTrackedWorkSession(t, h.storage, item.ID, item.RepoPath, "backlog/sess-gate-merge", "")
 
@@ -494,7 +494,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 
 	for tick := 1; tick <= 2; tick++ {
 		listener.ReconcilePRPending(ctx, h.repo)
-		require.Equal(t, string(session.BacklogStatusPRPending), h.status(t, item.ID), "tick %d", tick)
+		require.Equal(t, string(domain.BacklogStatusPRPending), h.status(t, item.ID), "tick %d", tick)
 	}
 	reports := h.rep.snapshot()
 	require.Len(t, reports, 2)
@@ -508,15 +508,15 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 
 	sessDisableGates(t, h)
 	listener.ReconcilePRPending(ctx, h.repo)
-	assert.Equal(t, string(session.BacklogStatusDone), h.status(t, item.ID))
+	assert.Equal(t, string(domain.BacklogStatusDone), h.status(t, item.ID))
 }
 
 func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusReview, session.BacklogStatusPRPending, domain.GateKindHumanApproval, nil)
-	item := h.newItem(t, session.BacklogStatusReview)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.GateKindHumanApproval, nil)
+	item := h.newItem(t, domain.BacklogStatusReview)
 	listener := NewBacklogLifecycleListener(h.storage)
 	pr := &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/77", Number: 77}
 
@@ -525,7 +525,7 @@ func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(
 	require.True(t, domain.IsGateDenial(err))
 	got, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), got.Status)
+	assert.Equal(t, string(domain.BacklogStatusReview), got.Status)
 	assert.Zero(t, got.PrNumber)
 	require.Len(t, h.rep.snapshot(), 1)
 	assert.Equal(t, domain.CallerOrphanedAgentPR, h.rep.snapshot()[0].caller)
@@ -534,20 +534,20 @@ func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(
 	require.NoError(t, listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found"))
 	got, err = h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), got.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), got.Status)
 	assert.Equal(t, 77, got.PrNumber)
 }
 
 func TestRecordOrphanedAgentPR_ItemNoLongerInReview_IsAPreconditionSkipNotAReassignment(t *testing.T) {
 	t.Parallel()
 	h := newGateHarness(t, session.ModeOff)
-	item := h.newItem(t, session.BacklogStatusInProgress)
+	item := h.newItem(t, domain.BacklogStatusInProgress)
 	listener := NewBacklogLifecycleListener(h.storage)
 
 	err := listener.recordOrphanedAgentPR(context.Background(), item.ID, &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/78", Number: 78}, "found")
 
 	require.ErrorIs(t, err, domain.ErrPreconditionFailed)
-	assert.Equal(t, string(session.BacklogStatusInProgress), h.status(t, item.ID))
+	assert.Equal(t, string(domain.BacklogStatusInProgress), h.status(t, item.ID))
 }
 
 func TestPRBodies_ClosingKeyword(t *testing.T) {

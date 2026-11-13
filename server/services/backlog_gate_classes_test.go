@@ -67,9 +67,9 @@ func clsEnforced(t *testing.T, sel *session.SwitchableWorkflowEngine, p clsModeP
 	require.True(t, ok)
 	view := sel.ForCaller(spec)
 	if p.class == domain.ClassOperator {
-		return view.CanTransition(session.BacklogStatusArchived, session.BacklogStatusArchived, nil)
+		return view.CanTransition(domain.BacklogStatusArchived, domain.BacklogStatusArchived, nil)
 	}
-	return !view.CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil)
+	return !view.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil)
 }
 
 func TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryClass(t *testing.T) {
@@ -80,7 +80,7 @@ func TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryC
 			sel := clsSelector(t, map[string]bool{config.WorkflowEngineShadowFeatureFlag: setting.(bool)}, session.WithShadowRecorder(rec))
 			spec, ok := domain.LookupTransitionCaller(p.caller)
 			require.True(t, ok)
-			sel.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusReady, nil)
+			sel.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)
 			return rec.calls.Load() > 0
 		}, false, true)
 	}

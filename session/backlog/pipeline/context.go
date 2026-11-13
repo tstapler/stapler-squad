@@ -175,7 +175,7 @@ func writePriorAttempts(sb *strings.Builder, priorSessions []backlogdto.ItemSess
 				continue
 			}
 			for _, v := range verdicts {
-				if v.Outcome == session.ReviewOutcomePass {
+				if v.Outcome == domain.ReviewOutcomePass {
 					continue
 				}
 				fmt.Fprintf(sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, domain.SanitizeField(v.Evidence, 300))
@@ -221,7 +221,7 @@ func buildSessionInitialPrompt(item *backlogdto.BacklogItemData, priorSessions [
 	WriteDescriptionSection(&sb, item.Description, descMaxLen)
 
 	sb.WriteString("## Acceptance Criteria\n")
-	criteria, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	sb.WriteString(domain.BuildAcChecklist(criteria))
 	sb.WriteString("\n")
 

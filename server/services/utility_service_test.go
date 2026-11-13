@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // --------------------------------------------------------------------------
@@ -25,7 +26,7 @@ func setupUtilityService() *UtilityService {
 func setupUtilityServiceWithPollerFixture() (*UtilityService, *session.ReviewQueuePoller) {
 	svc := setupUtilityService()
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)

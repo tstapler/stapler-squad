@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
@@ -206,7 +207,7 @@ func buildDiagnosePrompt(bundle session.DiagnosticBundle, nudgeTargetUUID, stuck
 // hands it to session.BuildDiagnosticBundle (the pure assembly/compaction
 // logic — see session/diagnose_bundle.go).
 func (d *DiagnosticService) buildBundle(ctx context.Context, item *backlogdto.BacklogItemData) (session.DiagnosticBundle, error) {
-	acCriteria, acErr := session.ParseAcCriteria(item.AcceptanceCriteria)
+	acCriteria, acErr := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if acErr != nil {
 		log.Warn("[DiagnosticService] ParseAcCriteria failed", "item", item.ID, "err", acErr)
 	}

@@ -48,7 +48,7 @@ func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug st
 		Title:              "Gate timeout test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusIdea),
+		Status:             string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
@@ -163,7 +163,7 @@ func TestResolveCustomCheckGateContext_should_ReturnNotOK_When_NoWorkflowEngineW
 	defer cleanup()
 
 	listener := NewBacklogLifecycleListener(storage)
-	_, _, ok := listener.resolveCustomCheckGateContext(session.BacklogStatusInProgress, session.BacklogStatusReview)
+	_, _, ok := listener.resolveCustomCheckGateContext(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	assert.False(t, ok)
 }
 
@@ -180,9 +180,9 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 	client := storage.GetEntClient()
 
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
-	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(session.BacklogStatusInProgress))).Only(ctx)
+	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusInProgress))).Only(ctx)
 	require.NoError(t, err)
-	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(session.BacklogStatusReview))).Only(ctx)
+	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusReview))).Only(ctx)
 	require.NoError(t, err)
 	transition, err := client.StageTransition.Query().
 		Where(stagetransition.FromStageID(fromStage.ID), stagetransition.ToStageID(toStage.ID)).
@@ -205,7 +205,7 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetWorkflowEngine(engine)
 
-	gateID, cfg, ok := listener.resolveCustomCheckGateContext(session.BacklogStatusInProgress, session.BacklogStatusReview)
+	gateID, cfg, ok := listener.resolveCustomCheckGateContext(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	require.True(t, ok)
 	assert.Equal(t, gate.ID, gateID)
 	assert.Equal(t, "review-feasibility", cfg.SkillID)
@@ -236,7 +236,7 @@ func TestRunCustomGateCheckWithCaller_should_InvokeCallerAndRecordOutcome_When_T
 	caller := &blktest.FakeCustomCheckCaller{Output: "Looks buildable.\n\nVERDICT: PASS"}
 	cfg := domain.CustomCheckConfig{SkillID: "review-feasibility"}
 
-	listener.runCustomGateCheckWithCaller(ctx, caller, gateID, cfg, session.BacklogStatusReady, item)
+	listener.runCustomGateCheckWithCaller(ctx, caller, gateID, cfg, domain.BacklogStatusReady, item)
 
 	assert.True(t, caller.Called, "InvokeCustomGateCheck must actually invoke the caller")
 
