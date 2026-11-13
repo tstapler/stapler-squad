@@ -1,7 +1,7 @@
 import React, { forwardRef, useImperativeHandle } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createFilesTestHarness } from "@/lib/files/__tests__/fixtures";
+import { createFilesTestHarness, warmFilesHarness } from "@/lib/files/__tests__/fixtures";
 import "@/lib/files/__tests__/fixtures/mockCodeEditor";
 import { FilesTab } from "../FilesTab";
 
@@ -39,8 +39,7 @@ function applyDevice(d: Device) {
   })) as never;
 }
 
-beforeEach(() => {
-  window.localStorage.clear();
+function installResizeObserver() {
   observers.length = 0;
   globalThis.ResizeObserver = class {
     cb: never;
@@ -49,6 +48,26 @@ beforeEach(() => {
     disconnect() {}
     unobserve() {}
   } as never;
+}
+
+// The first mount in a file pays one-time Connect/protobuf setup and the first render of the whole
+// Files tree. Paying it here keeps it out of the first test's 20 s budget, which a loaded CI shard
+// otherwise inflates by an order of magnitude.
+beforeAll(async () => {
+  await warmFilesHarness();
+  installResizeObserver();
+  applyDevice(TABLET);
+  const h = createFilesTestHarness({ flags: { "files:viewer-v2": true } });
+  const { unmount } = render(<FilesTab sessionId={h.sessionId} baseUrl="http://x" />, { wrapper: h.wrapper });
+  await userEvent.click(await screen.findByTestId("pick"));
+  await screen.findByRole("button", { name: "Quick open" });
+  unmount();
+  globalThis.ResizeObserver = originalRO;
+  window.matchMedia = originalMM;
+}, 60_000);
+beforeEach(() => {
+  window.localStorage.clear();
+  installResizeObserver();
 });
 afterEach(() => {
   globalThis.ResizeObserver = originalRO;
