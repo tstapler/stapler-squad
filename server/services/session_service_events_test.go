@@ -101,7 +101,7 @@ func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_When
 
 	inst.ExitReason = "pane exited 137"
 	inst.ForceStatus(domain.Crashed)
-	inst.FireLifecycleEventForTest(session.EventExited, "dead-pane-crashed")
+	inst.FireLifecycleEventForTest(domain.EventExited, "dead-pane-crashed")
 	// The publisher goroutine publishes session.updated then the FAILURE.
 	var seen []*events.Event
 	for len(notificationsOf(seen, failureType)) == 0 {
@@ -147,7 +147,7 @@ func TestSessionExitedPublisher_ShouldPublishOnlyWhenSnapshotStatusCrashed_WhenE
 	inst := instances[0]
 
 	inst.ForceStatus(domain.Active) // not Crashed when the publisher reads it
-	inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+	inst.FireLifecycleEventForTest(domain.EventExited, "pty-eof")
 	for { // wait for the publisher's session.updated, which precedes any crash publish
 		ev := <-e.ch
 		if ev.Type == events.EventSessionUpdated {
@@ -157,7 +157,7 @@ func TestSessionExitedPublisher_ShouldPublishOnlyWhenSnapshotStatusCrashed_WhenE
 	assert.Empty(t, notificationsOf(e.collect(t), failureType))
 
 	inst.ForceStatus(domain.Crashed)
-	inst.FireLifecycleEventForTest(session.EventExited, "dead-pane-crashed")
+	inst.FireLifecycleEventForTest(domain.EventExited, "dead-pane-crashed")
 	for { // the crash's own FAILURE arrives after its session.updated
 		ev := <-e.ch
 		if ev.Type == events.EventNotification && ev.NotificationType == failureType {
@@ -279,7 +279,7 @@ func TestSessionExitedPublisher_ShouldReadStatusViaSnapshot_WhenInstanceMutatedC
 		}
 	}()
 	for i := 0; i < exits; i++ {
-		inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+		inst.FireLifecycleEventForTest(domain.EventExited, "pty-eof")
 	}
 	<-done
 

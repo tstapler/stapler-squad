@@ -939,14 +939,14 @@ type instanceBacklogListener struct {
 	instanceUUID string
 }
 
-func (il *instanceBacklogListener) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
+func (il *instanceBacklogListener) OnLifecycleEvent(event domain.LifecycleEvent, _ string) {
 	if !il.parent.enabled.Load() {
 		return
 	}
 	switch event {
-	case session.EventStarted:
+	case domain.EventStarted:
 		go il.parent.onSessionStarted(il.instanceUUID)
-	case session.EventExited, session.EventStopped:
+	case domain.EventExited, domain.EventStopped:
 		// A deliberate operator stop (stop_session, DeleteSession, backlog
 		// stale-work remediation) ends the session exactly as much as an
 		// unexpected exit does — the ItemSession bookkeeping and downstream

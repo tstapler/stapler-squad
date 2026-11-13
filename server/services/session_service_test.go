@@ -1085,7 +1085,7 @@ func TestSessionExitedPublisher_PublishesUpdatedEvent(t *testing.T) {
 
 	// Simulate an unexpected exit (PTY EOF / process crash).
 	inst.ForceStatus(domain.Stopped)
-	inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+	inst.FireLifecycleEventForTest(domain.EventExited, "pty-eof")
 
 	select {
 	case evt := <-ch:
@@ -1126,7 +1126,7 @@ func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
 	ch, _ := eventBus.Subscribe(ctx)
 
 	inst.ForceStatus(domain.Stopped)
-	inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+	inst.FireLifecycleEventForTest(domain.EventExited, "pty-eof")
 
 	select {
 	case evt := <-ch:
@@ -1727,7 +1727,7 @@ func TestUpdateSession_Pause_NeverStartedActiveInstance_NoOpSuccessNotInternal(t
 		Path:        "/tmp/test",
 		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1756,7 +1756,7 @@ func TestUpdateSession_Pause_StoppedInstance_ReturnsFailedPrecondition(t *testin
 		Path:        "/tmp/test",
 		Status:      domain.Stopped,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1788,7 +1788,7 @@ func TestUpdateSession_Pause_PermissionDenied_ReturnsFailedPrecondition(t *testi
 		Path:        "/tmp/test",
 		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetExternalPermissions(false),
+		Permissions: domain.GetExternalPermissions(false),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1824,7 +1824,7 @@ func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *test
 		Path:        "/tmp/test",
 		Status:      domain.Paused,
 		Program:     "claude",
-		Permissions: session.GetExternalPermissions(false),
+		Permissions: domain.GetExternalPermissions(false),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1855,7 +1855,7 @@ func TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive(t *test
 		Path:        "/tmp/test",
 		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1888,7 +1888,7 @@ func TestUpdateSession_should_ForceStopBrokenWorktree_Only_When_ForceStopSet(t *
 		Status:      domain.Active,
 		Program:     "claude",
 		IsWorktree:  true,
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1919,7 +1919,7 @@ func TestUpdateSession_should_RejectForceStop_When_StatusIsNotStopped(t *testing
 	t.Cleanup(fix.cleanup)
 	inst := &session.Instance{
 		Title: "force-stop-bad-status", Path: "/tmp/test", Status: domain.Active, Program: "claude",
-		Permissions: session.GetManagedPermissions(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Permissions: domain.GetManagedPermissions(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	svctest.AddInstanceToPoller(fix.poller, inst)
 
@@ -1946,7 +1946,7 @@ func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) 
 		Path:        "/tmp/test",
 		Status:      domain.Restoring,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2000,7 +2000,7 @@ func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *tes
 		Path:        t.TempDir(),
 		Status:      domain.Paused,
 		Program:     "bash",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2038,7 +2038,7 @@ func TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_Returns
 		Path:        "/tmp/test",
 		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2079,7 +2079,7 @@ func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *tes
 		Path:           "/tmp/test",
 		Status:         domain.Active,
 		Program:        "claude",
-		Permissions:    session.GetManagedPermissions(),
+		Permissions:    domain.GetManagedPermissions(),
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
@@ -2111,7 +2111,7 @@ func TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError(t *t
 		Path:           "/tmp/test",
 		Status:         domain.Active,
 		Program:        "claude",
-		Permissions:    session.GetManagedPermissions(),
+		Permissions:    domain.GetManagedPermissions(),
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
@@ -2328,7 +2328,7 @@ func TestSessionService_SessionProgram_ReturnsProgramForLiveInstance(t *testing.
 	inst := &session.Instance{
 		Title:       "program-lookup-session",
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2378,7 +2378,7 @@ func TestSessionService_IsReadyForSteer_ReturnsFalse_When_StatusManagerNotWired(
 	inst := &session.Instance{
 		Title:       "no-status-manager-session",
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2402,7 +2402,7 @@ func TestSessionService_IsReadyForSteer_ReturnsFalse_When_ControllerNotRegistere
 	inst := &session.Instance{
 		Title:       "no-controller-session",
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2531,7 +2531,7 @@ func TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument(t *t
 		Path:        "/tmp/test",
 		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -4166,13 +4166,13 @@ func TestColdRestoreOutcomeListener_FiltersOnReason(t *testing.T) {
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	listener.OnLifecycleEvent(session.EventStarted, "")
+	listener.OnLifecycleEvent(domain.EventStarted, "")
 	assert.Empty(t, drainNotificationEvents(ch), "a normal start (empty reason) must not notify")
 
-	listener.OnLifecycleEvent(session.EventExited, session.ReasonColdRestoreLostHistory)
+	listener.OnLifecycleEvent(domain.EventExited, domain.ReasonColdRestoreLostHistory)
 	assert.Empty(t, drainNotificationEvents(ch), "the reason must only be honored on EventStarted")
 
-	listener.OnLifecycleEvent(session.EventStarted, session.ReasonColdRestoreLostHistory)
+	listener.OnLifecycleEvent(domain.EventStarted, domain.ReasonColdRestoreLostHistory)
 	notifs := drainNotificationEvents(ch)
 	require.Len(t, notifs, 1, "EventStarted with the lost-history reason must notify")
 }

@@ -403,7 +403,7 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 	}
 
 	inst := &Instance{Title: "diff-capture-test", UUID: "sess-diff-capture"}
-	inst.RegisterLifecycleListener(&funcLifecycleListener{fn: func(LifecycleEvent, string) {}})
+	inst.RegisterLifecycleListener(&funcLifecycleListener{fn: func(domain.LifecycleEvent, string) {}})
 	inst.SetGitWorktree(wt) // also sets started=true
 
 	if err := inst.ForceDestroy(); err != nil {
@@ -583,10 +583,10 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 	t.Parallel()
 	inst := &Instance{Title: "never-started-test", UUID: "sess-never-started"}
 
-	var gotEvent LifecycleEvent
+	var gotEvent domain.LifecycleEvent
 	fired := false
 	inst.RegisterLifecycleListener(&funcLifecycleListener{
-		fn: func(event LifecycleEvent, _ string) {
+		fn: func(event domain.LifecycleEvent, _ string) {
 			fired = true
 			gotEvent = event
 		},
@@ -596,7 +596,7 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 		t.Fatalf("Destroy() on a never-started instance should not error, got: %v", err)
 	}
 
-	if !fired || gotEvent != EventStopped {
+	if !fired || gotEvent != domain.EventStopped {
 		t.Fatalf("expected EventStopped to fire, fired=%v event=%v", fired, gotEvent)
 	}
 
@@ -870,7 +870,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoo
 		Program:         "sleep 300",
 		SessionType:     domain.SessionTypeNewWorktree,
 		Branch:          "existing-branch",
-		Permissions:     GetManagedPermissions(),
+		Permissions:     domain.GetManagedPermissions(),
 		ExecutionTarget: forceWorktreeAddFailureTarget{},
 	}
 
@@ -949,7 +949,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturn
 		Program:          "sleep 300",
 		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: repoDir,
-		Permissions:      GetManagedPermissions(),
+		Permissions:      domain.GetManagedPermissions(),
 	}
 	inst.SetPreSpawnCollisionGuard(func(string) error { return errors.New("forced collision") })
 

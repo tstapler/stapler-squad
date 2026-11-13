@@ -17,61 +17,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-// RetryAttemptRecord is one entry in RetryState.RetryHistory.
-type RetryAttemptRecord struct {
-	Attempt   int       `json:"attempt"`
-	Reason    string    `json:"reason"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// maxRetryHistoryEntries caps RetryState.RetryHistory so a long-lived,
-// repeatedly crash-looping session doesn't grow this slice unboundedly.
-const maxRetryHistoryEntries = 10
-
-// RetryState holds the automated crash/stall retry lifecycle for one session:
-// attempt count, resolved max, last failure reason, pending-retry timestamp,
-// and history. Embedded (by value) into Instance, mirroring ReviewState.
-// Protected by inst.mu.
-type RetryState struct {
-	// RetryAttempt is the number of automated retry attempts consumed so far in
-	// the current failure episode. Reset to 0 by RetryNow().
-	RetryAttempt int `json:"retry_attempt,omitempty"`
-	// RetryMaxAttempts is the policy-resolved cap, snapshotted at driver start
-	// (or by RetryNow) so a live config edit mid-cycle doesn't change the cap a
-	// session is already partway through.
-	RetryMaxAttempts int `json:"retry_max_attempts,omitempty"`
-	// LastFailureReason is the most recent classifyFailureReason result:
-	// "crashed", "stalled", or "tmux_exited".
-	LastFailureReason string `json:"last_failure_reason,omitempty"`
-	// NextRetryAt is when the next backed-off restart is due. Zero means no
-	// retry is pending.
-	NextRetryAt time.Time `json:"next_retry_at,omitempty"`
-	// RetryHistory records reason + timestamp per attempt, newest-last, capped
-	// at maxRetryHistoryEntries. Preserved across RetryNow() episodes (AC5 wants
-	// history to survive a manual retry, not just the automated ones).
-	RetryHistory []RetryAttemptRecord `json:"retry_history,omitempty"`
-}
-
-// recordAttempt appends a RetryAttemptRecord to RetryHistory, dropping the
-// oldest entry once maxRetryHistoryEntries is exceeded. Caller must hold
-// inst.mu.
-func (rs *RetryState) recordAttempt(attempt int, reason string, now time.Time) {
-	rs.RetryHistory = append(rs.RetryHistory, RetryAttemptRecord{Attempt: attempt, Reason: reason, Timestamp: now})
-	if len(rs.RetryHistory) > maxRetryHistoryEntries {
-		rs.RetryHistory = rs.RetryHistory[len(rs.RetryHistory)-maxRetryHistoryEntries:]
-	}
-}
-
-// reset clears the attempt/backoff bookkeeping back to a fresh episode, used
-// by RetryNow(). RetryHistory is deliberately preserved. Caller must hold
-// inst.mu.
-func (rs *RetryState) reset() {
-	rs.RetryAttempt = 0
-	rs.LastFailureReason = ""
-	rs.NextRetryAt = time.Time{}
-}
 
 // RetryPolicy is the resolved, already-defaulted retry policy — the output of
 // resolveRetryPolicy. Distinct from config.RetryPolicyConfig (the raw,
@@ -244,7 +191,7 @@ const (
 // package var directly) so tests can simulate "server booted recently"
 // without process-level tricks — matches evaluateRemediation's own bootTime
 // param.
-func evaluateSessionRetry(rs RetryState, policy RetryPolicy, reason string, now, bootTime time.Time) retryDecision {
+func evaluateSessionRetry(rs domain.RetryState, policy RetryPolicy, reason string, now, bootTime time.Time) retryDecision {
 	if !policy.Enabled {
 		return retryDecisionNotEligible
 	}
@@ -281,11 +228,11 @@ func (i *Instance) retryExhausted() bool {
 // conversion (server/adapters.InstanceToProto) and read-only UI consumers,
 // mirroring how GitHubPRState and its siblings are read directly rather than
 // through the InstanceSnapshot atomic pointer.
-func (i *Instance) RetrySnapshot() RetryState {
+func (i *Instance) RetrySnapshot() domain.RetryState {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	rs := i.RetryState
-	rs.RetryHistory = append([]RetryAttemptRecord(nil), i.RetryHistory...)
+	rs.RetryHistory = append([]domain.RetryAttemptRecord(nil), i.RetryHistory...)
 	return rs
 }
 
@@ -446,7 +393,7 @@ func (i *Instance) RetryNow(allowedPath string) error {
 	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, i.RetryPolicyOverride)
 
 	i.mu.Lock()
-	i.reset()
+	i.ResetEpisode()
 	i.RetryMaxAttempts = policy.MaxAttempts
 	i.mu.Unlock()
 

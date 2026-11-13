@@ -350,7 +350,7 @@ func TestSetGitHubResolution_ShouldAttachCreatedFromURL_WithoutOverwritingHeldPR
 	inst := newPRTestInstance(t)
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery, PRInitial{State: domain.PRStateOpen}))
 
-	inst.SetGitHubResolution(GitHubResolution{
+	inst.SetGitHubResolution(domain.GitHubResolution{
 		Path: inst.Snapshot().Path, Owner: "acme", Repo: "app",
 		PRNumber: 12, PRURL: "https://github.com/acme/app/pull/12",
 	})

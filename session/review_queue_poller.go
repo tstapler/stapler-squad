@@ -548,7 +548,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					})
 					cancel()
 					rqp.removeFromQueue(inst.Title)
-					inst.FireLifecycleEvent(EventExited, "reconcile-session-missing")
+					inst.FireLifecycleEvent(domain.EventExited, "reconcile-session-missing")
 				}
 			case domain.Stopped:
 				// Stopped but tmux session is alive — revive to Active only if
@@ -584,7 +584,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						}
 					})
 					cancel()
-					inst.FireLifecycleEvent(EventStarted, "reconcile-session-revived")
+					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-revived")
 				}
 			case domain.Hibernated:
 				// Hibernated sessions intentionally have no tmux session (Hibernate()
@@ -615,7 +615,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						}
 					})
 					cancel()
-					inst.FireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
+					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-hibernated-but-alive")
 				}
 			case domain.Crashed:
 				// Crashed sessions intentionally have no tmux session (MarkCrashed
@@ -639,7 +639,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						}
 					})
 					cancel()
-					inst.FireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
+					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-crashed-but-alive")
 				}
 			case domain.PermanentlyFailed:
 				// Deliberately not auto-revived even if tmux is alive, unlike

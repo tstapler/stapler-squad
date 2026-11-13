@@ -56,40 +56,6 @@ var ErrWorktreeResolutionFailed = errors.New("resolved to no real worktree")
 // Pipeline-level error classification matches on this sentinel via errors.Is.
 var ErrDirectoryCollision = errors.New("worktree already in use by another live session")
 
-// LifecycleEvent is a notification type emitted by an Instance when key state
-// transitions occur (e.g., the session starts, or the program exits unexpectedly).
-type LifecycleEvent int
-
-const (
-	// EventStarted fires at the end of start() when the instance has successfully
-	// transitioned to Running and the controller is up.
-	EventStarted LifecycleEvent = iota
-	// EventExited fires when the underlying program exits unexpectedly (not via an
-	// operator-initiated Kill/Stop). Callers may use this to drive auto-restart logic.
-	EventExited
-	// EventStopped fires when Destroy() tears down the instance via an explicit
-	// operator-initiated Kill/Stop (e.g. the stop_session MCP tool, DeleteSession
-	// RPC, or backlog stale-work remediation). Kept distinct from EventExited so a
-	// future auto-restart listener can still ignore deliberate stops, while
-	// listeners that only care "is this session now gone" (e.g.
-	// BacklogLifecycleListener's ItemSession.EndedAt bookkeeping) can subscribe to
-	// both.
-	EventStopped
-)
-
-// ReasonColdRestoreLostHistory is passed to fireLifecycleEvent(EventStarted, ...)
-// when a cold restore was forced fresh after recoverConversationBeforeLaunch's
-// recovery attempt found nothing, despite EverHadConversationHistory being true
-// (session-revive-uuid-loss AC3).
-const ReasonColdRestoreLostHistory = "cold-restore-fresh-lost-history"
-
-// LifecycleListener is implemented by any component that wants to receive Instance
-// lifecycle notifications. Implementations must be non-blocking; use a goroutine
-// or channel if the handler needs to do significant work.
-type LifecycleListener interface {
-	OnLifecycleEvent(event LifecycleEvent, reason string)
-}
-
 // TagFireRecorder records that a tagging rule matched, independent of whether the
 // resulting tag survives suppression filtering. Declared here (not imported from
 // server/services) because session cannot import that package; *services.AnalyticsStore
@@ -516,7 +482,7 @@ type Instance struct {
 	// history) for the configurable retry policy (session-retry-backoff).
 	// Fields are embedded (promoted) so callers can access inst.RetryAttempt
 	// etc. directly, mirroring ReviewState. Protected by mu.
-	RetryState
+	domain.RetryState
 
 	// RetryPolicyOverride is a per-session override for the global
 	// RetryPolicyConfig default, resolved once (global (+) override) at
@@ -757,7 +723,7 @@ type Instance struct {
 	restartTriggerMu deadlock.Mutex
 
 	// lifecycleListeners receives EventStarted / EventExited notifications.
-	LifecycleListeners   []LifecycleListener
+	LifecycleListeners   []domain.LifecycleListener
 	LifecycleListenersMu deadlock.Mutex
 
 	// rateLimitCallbacksMu protects the rate limit event callback fields below.
@@ -1130,8 +1096,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		IsExpanded:       true, // Default to expanded for newly created instances
 		InstanceType:     domain.InstanceTypeManaged,
 		IsManaged:        true,
-		ExternalMetadata: nil,                     // Only set for external instances
-		Permissions:      GetManagedPermissions(), // Full permissions for managed instances
+		ExternalMetadata: nil,                            // Only set for external instances
+		Permissions:      domain.GetManagedPermissions(), // Full permissions for managed instances
 		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   t, // Initialize to creation time
 			LastMeaningfulOutput: t, // Initialize to creation time
@@ -1458,7 +1424,7 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		if i.hasLifecycleListeners() {
 			_ = i.UpdateDiffStats()
 		}
-		i.FireLifecycleEvent(EventExited, reason)
+		i.FireLifecycleEvent(domain.EventExited, reason)
 	}
 }
 
@@ -1486,34 +1452,6 @@ func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 		return
 	}
 	i.tryExtractConversationUUID()
-}
-
-// reasonForReviveOutcome returns the fireLifecycleEvent(EventStarted, ...)
-// reason for outcome — non-empty only for ReviveOutcomeFreshLostHistory, so
-// the notification listener in server/services/session_service.go can filter
-// on the reason string alone (session-revive-uuid-loss AC3).
-func reasonForReviveOutcome(outcome domain.ReviveOutcome) string {
-	if outcome == domain.ReviveOutcomeFreshLostHistory {
-		return ReasonColdRestoreLostHistory
-	}
-	return ""
-}
-
-// reviveOutcomeForColdRestore derives the ColdRestore branch's ReviveOutcome
-// (session-revive-uuid-loss AC3) from its three decision inputs. Pure and
-// side-effect-free so startLocked/start share one definition instead of
-// duplicating the branch logic.
-func reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory bool) domain.ReviveOutcome {
-	if hasClaudeSession {
-		if hadUUIDBeforeRecovery {
-			return domain.ReviveOutcomeResumeLive
-		}
-		return domain.ReviveOutcomeResumeRecovered
-	}
-	if everHadHistory {
-		return domain.ReviveOutcomeFreshLostHistory
-	}
-	return domain.ReviveOutcomeFreshExpected
 }
 
 // startLocked is the actor-safe body of Start(). Called only from within
@@ -1607,7 +1545,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			i.claudeSessionMu.RLock()
 			everHadHistory := i.EverHadConversationHistory
 			i.claudeSessionMu.RUnlock()
-			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
+			reviveOutcome = domain.ReviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			i.applyLaunchEnv()
@@ -1775,7 +1713,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	i.mu.Unlock()
 	i.claudeSessionMu.Unlock()
 	i.snapshot.Store(snap)
-	i.FireLifecycleEvent(EventStarted, reasonForReviveOutcome(reviveOutcome))
+	i.FireLifecycleEvent(domain.EventStarted, domain.ReasonForReviveOutcome(reviveOutcome))
 
 	i.startVNCServer(context.Background())
 	i.startCDP(context.Background())
@@ -1881,7 +1819,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			i.claudeSessionMu.RLock()
 			everHadHistory := i.EverHadConversationHistory
 			i.claudeSessionMu.RUnlock()
-			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
+			reviveOutcome = domain.ReviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 			// can be injected via ExtraEnv at new-session time.
 			// context.Background() is safe here: the VNC manager creates its own internal
@@ -2023,7 +1961,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
 	i.claudeSessionMu.Unlock()
-	i.FireLifecycleEvent(EventStarted, reasonForReviveOutcome(reviveOutcome))
+	i.FireLifecycleEvent(domain.EventStarted, domain.ReasonForReviveOutcome(reviveOutcome))
 
 	// Phase 2: Start x11vnc and window tracker now that the tmux session is live.
 	// Run unconditionally (not gated on firstTimeSetup) so hot-restores also get VNC.
@@ -2138,7 +2076,7 @@ func (i *Instance) destroy(force bool) error {
 		}
 	}
 
-	defer i.FireLifecycleEvent(EventStopped, "operator-destroy")
+	defer i.FireLifecycleEvent(domain.EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
 
 	// Stop any running (or not-yet-started) SessionDriver goroutine and mark

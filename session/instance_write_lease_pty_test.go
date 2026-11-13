@@ -62,7 +62,7 @@ func TestWedgedWrite_ShouldKeepTheLeaseAndPauseAndDeleteShouldCompleteWhileItIsW
 				stuckDialogProcessManager: &stuckDialogProcessManager{dialogText: "idle"},
 				master:                    master, slave: slave, closeSlave: tc.closeSlave,
 			}
-			inst := &Instance{Title: "wedged-" + tc.name, Status: domain.Active, processManager: pm, Permissions: GetManagedPermissions()}
+			inst := &Instance{Title: "wedged-" + tc.name, Status: domain.Active, processManager: pm, Permissions: domain.GetManagedPermissions()}
 			inst.started.Store(true)
 			inst.SetLeaseFlag(&LeaseFlag{})
 

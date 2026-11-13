@@ -3,49 +3,11 @@ package session
 import (
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/session/domain"
 	"time"
 	"unicode"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-// GetManagedPermissions returns full permissions for squad-managed instances
-func GetManagedPermissions() domain.InstancePermissions {
-	return domain.InstancePermissions{
-		CanView:              true,
-		CanAttach:            true,
-		CanSendCommand:       true,
-		CanPause:             true,
-		CanResume:            true,
-		CanDestroy:           true,
-		CanModifyGit:         true,
-		CanAddToQueue:        true,
-		RequiresConfirmation: make(map[string]bool),
-	}
-}
-
-// GetExternalPermissions returns limited permissions for external instances
-// allowAttach controls whether attach operations are permitted (power user mode)
-func GetExternalPermissions(allowAttach bool) domain.InstancePermissions {
-	perms := domain.InstancePermissions{
-		CanView:              true,
-		CanAttach:            allowAttach,
-		CanSendCommand:       allowAttach,
-		CanPause:             false,
-		CanResume:            false,
-		CanDestroy:           false,
-		CanModifyGit:         false,
-		CanAddToQueue:        false,
-		RequiresConfirmation: make(map[string]bool),
-	}
-
-	// If attach is allowed, require confirmation
-	if allowAttach {
-		perms.RequiresConfirmation["attach"] = true
-		perms.RequiresConfirmation["send"] = true
-	}
-
-	return perms
-}
 
 // GetMuxExternalPermissions returns permissions for mux-enabled external instances.
 // Mux instances support full bidirectional terminal access and can be destroyed
@@ -220,45 +182,6 @@ func isValidTitle(title string) bool {
 		}
 	}
 	return true
-}
-
-// Workspace describes where a session is operating. It names the four path
-// concepts the domain actually has; picking the wrong one has already shipped a
-// bug. Why, and the full story: .claude/rules/instance-lock-free-reads.md.
-//
-// Which one you want:
-//
-//	comparing two sessions' locations  -> ActiveDir
-//	reading or writing files           -> ExistingDir
-//	"same repository?"                 -> RepoRoot, or Instance.WorkspaceKey()
-//
-// Use Instance.Workspace() to obtain this value; do not construct directly.
-type Workspace struct {
-	// RepoRoot is the path the session was created against, as recorded on
-	// Instance.Path. For a session created from a pre-existing worktree this is
-	// that worktree, not the main checkout -- Instance.MainRepoPath holds the
-	// main checkout in that case.
-	RepoRoot string
-
-	// WorktreeDir is the dedicated git worktree created for this session, or ""
-	// when the session works directly in RepoRoot.
-	WorktreeDir string
-
-	// ActiveDir is where this session works: WorktreeDir if it has one, else
-	// RepoRoot. Deliberately does NOT check whether the directory still exists,
-	// so it stays stable across a worktree cleanup -- which makes it the correct
-	// key for comparing, correlating, or identifying sessions, and the right
-	// default when you are unsure.
-	ActiveDir string
-
-	// ExistingDir is ActiveDir when that directory exists on disk, else
-	// RepoRoot. Use it only to open files: pause_session deletes a worktree
-	// while keeping its branch, and without the fallback filesystem callers
-	// surface a bare "directory not found: .".
-	//
-	// Lossy by construction -- two sessions whose worktrees were both cleaned up
-	// share an ExistingDir without being in the same place, so never compare it.
-	ExistingDir string
 }
 
 // RestartState holds the state needed to restart a session

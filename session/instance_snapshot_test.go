@@ -317,7 +317,7 @@ func minimalInstance(t *testing.T) *Instance {
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 		IsManaged:   true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 	i.tagManager = NewTagManager(&i.Tags)
 	finishInstanceConstruction(i)

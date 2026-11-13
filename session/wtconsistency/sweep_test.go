@@ -252,7 +252,7 @@ func TestSweep_NoRaceWithConcurrentActorWrites(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
-			inst.SetGitHubResolution(session.GitHubResolution{
+			inst.SetGitHubResolution(domain.GitHubResolution{
 				Path:   "/tmp/race-path",
 				Branch: "work/race-actor-write",
 			})

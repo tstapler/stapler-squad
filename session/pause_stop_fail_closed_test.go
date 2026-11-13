@@ -26,7 +26,7 @@ func brokenWorktreeInstance(t *testing.T) (*Instance, string) {
 		Title:       "dirty-check-fails",
 		Status:      domain.Running,
 		IsWorktree:  true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		GitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), wtDir, "dirty-check-fails", "branch", ""),
 		},
@@ -188,7 +188,7 @@ func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testin
 	t.Cleanup(func() { _ = wt.Cleanup() })
 	inst := &Instance{
 		Title: "force-known-dirty", Status: domain.Running, IsWorktree: true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		GitManager:  gitwt.Manager{Worktree: wt},
 	}
 	inst.started.Store(true)

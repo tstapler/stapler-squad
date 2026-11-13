@@ -1177,7 +1177,7 @@ func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy,
 		inst.RetryAttempt = nextAttempt
 		inst.LastFailureReason = reason
 		inst.NextRetryAt = now.Add(delay)
-		inst.recordAttempt(nextAttempt, reason, now)
+		inst.RecordAttempt(nextAttempt, reason, now)
 		inst.mu.Unlock()
 		log.Info("SessionDriver: scheduling retry after failure",
 			"session", inst.Title, "reason", reason,

@@ -92,7 +92,7 @@ func (i *Instance) StartController() error {
 				}
 			}
 		})
-		i.FireLifecycleEvent(EventExited, "pty-eof")
+		i.FireLifecycleEvent(domain.EventExited, "pty-eof")
 
 		if isStaleResumeExit(i.Program, exitContent) {
 			go i.recoverFromStaleResume()
@@ -149,7 +149,7 @@ func (i *Instance) StartController() error {
 // EventExited, and EventStopped notifications for this instance.
 // The listener is called synchronously on the goroutine that fires the event;
 // implementations must return quickly (no long blocking operations).
-func (i *Instance) RegisterLifecycleListener(l LifecycleListener) {
+func (i *Instance) RegisterLifecycleListener(l domain.LifecycleListener) {
 	i.LifecycleListenersMu.Lock()
 	defer i.LifecycleListenersMu.Unlock()
 	i.LifecycleListeners = append(i.LifecycleListeners, l)
@@ -167,9 +167,9 @@ func (i *Instance) hasLifecycleListeners() bool {
 }
 
 // fireLifecycleEvent notifies all registered listeners of a lifecycle event.
-func (i *Instance) FireLifecycleEvent(event LifecycleEvent, reason string) {
+func (i *Instance) FireLifecycleEvent(event domain.LifecycleEvent, reason string) {
 	i.LifecycleListenersMu.Lock()
-	listeners := make([]LifecycleListener, len(i.LifecycleListeners))
+	listeners := make([]domain.LifecycleListener, len(i.LifecycleListeners))
 	copy(listeners, i.LifecycleListeners)
 	i.LifecycleListenersMu.Unlock()
 
@@ -180,7 +180,7 @@ func (i *Instance) FireLifecycleEvent(event LifecycleEvent, reason string) {
 
 // FireLifecycleEventForTest is the exported version of fireLifecycleEvent, used
 // exclusively in cross-package tests that need to simulate an unexpected exit.
-func (i *Instance) FireLifecycleEventForTest(event LifecycleEvent, reason string) {
+func (i *Instance) FireLifecycleEventForTest(event domain.LifecycleEvent, reason string) {
 	i.FireLifecycleEvent(event, reason)
 }
 

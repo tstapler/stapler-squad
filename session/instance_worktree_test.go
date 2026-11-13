@@ -404,7 +404,7 @@ func TestWorkspace_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *testin
 	repoPath := t.TempDir()
 	goneWorktrees := t.TempDir()
 
-	newSession := func(name string) Workspace {
+	newSession := func(name string) domain.Workspace {
 		inst := &Instance{Title: name, Path: repoPath, Status: domain.Running}
 		inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, filepath.Join(goneWorktrees, name)))
 		return inst.Workspace()
@@ -497,7 +497,7 @@ func TestGetEffectiveRootDir_ConcurrentWithSetGitHubResolution_NoRace(t *testing
 		defer wg.Done()
 		<-start
 		for n := 0; n < iterations; n++ {
-			inst.SetGitHubResolution(GitHubResolution{
+			inst.SetGitHubResolution(domain.GitHubResolution{
 				Path:   fmt.Sprintf("/tmp/resolved-%d", n),
 				Branch: "resolved-branch",
 				Owner:  "octocat",
@@ -542,7 +542,7 @@ func TestApplyWorktreeDetectionLocked_ConcurrentWithSetGitHubResolution_NoRace(t
 		defer wg.Done()
 		<-start
 		for n := 0; n < iterations; n++ {
-			inst.SetGitHubResolution(GitHubResolution{
+			inst.SetGitHubResolution(domain.GitHubResolution{
 				Branch: "resolved-branch",
 				Owner:  "octocat",
 				Repo:   "Hello-World",

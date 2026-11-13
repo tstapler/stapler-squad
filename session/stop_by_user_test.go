@@ -41,7 +41,7 @@ func TestStopByUser_should_KillTmuxAndTransitionToStopped_When_SessionIsActive(t
 		Title:       "test-stop-active",
 		Status:      domain.Active,
 		IsWorktree:  false,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 	inst.started.Store(true)
 
@@ -68,7 +68,7 @@ func TestStopByUser_should_RejectTransition_When_SessionIsRestoring(t *testing.T
 		Status:      domain.Restoring,
 		IsWorktree:  true,
 		Path:        repoPath,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 	inst.started.Store(true)
 	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))

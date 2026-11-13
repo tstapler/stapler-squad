@@ -77,7 +77,7 @@ func TestSessionStartedPublisher_should_PublishViaLifecycleListener_When_Instanc
 	inst := newStartedInstanceWithStatus(t, domain.Active)
 	ch, _ := svc.GetEventBus().Subscribe(context.Background())
 
-	(&sessionStartedPublisher{svc: svc, inst: inst}).OnLifecycleEvent(session.EventStarted, "")
+	(&sessionStartedPublisher{svc: svc, inst: inst}).OnLifecycleEvent(domain.EventStarted, "")
 
 	select {
 	case ev := <-ch:

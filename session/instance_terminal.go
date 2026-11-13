@@ -317,13 +317,13 @@ func (i *Instance) CaptureCurrentState() error {
 // GetPermissions returns the permissions for this instance based on its type.
 func (i *Instance) GetPermissions() domain.InstancePermissions {
 	if i.IsManaged {
-		return GetManagedPermissions()
+		return domain.GetManagedPermissions()
 	}
 
 	// External instance - permissions depend on discovery configuration
 	// For now, we'll use a conservative default (view-only)
 	// TODO: This should be configurable via PTYDiscoveryConfig
-	return GetExternalPermissions(false)
+	return domain.GetExternalPermissions(false)
 }
 
 // GetStatusIconForType returns the appropriate status icon based on instance type.

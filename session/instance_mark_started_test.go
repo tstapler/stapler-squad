@@ -20,8 +20,8 @@ type markStartedRecorder struct {
 	reasons []string
 }
 
-func (r *markStartedRecorder) OnLifecycleEvent(event LifecycleEvent, reason string) {
-	if event != EventStarted {
+func (r *markStartedRecorder) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
+	if event != domain.EventStarted {
 		return
 	}
 	r.mu.Lock()

@@ -343,8 +343,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		},
 		InstanceType:     domain.InstanceTypeManaged, // Restored instances are always managed
 		IsManaged:        true,
-		ExternalMetadata: nil,                     // External instances are not persisted
-		Permissions:      GetManagedPermissions(), // Full permissions for managed instances
+		ExternalMetadata: nil,                            // External instances are not persisted
+		Permissions:      domain.GetManagedPermissions(), // Full permissions for managed instances
 		// GitHub integration fields
 		GitHubPRNumber:  data.GitHubPRNumber,
 		GitHubPRURL:     data.GitHubPRURL,

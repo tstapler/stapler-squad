@@ -80,7 +80,7 @@ func HotRestoreIfLive(inst *Instance, isLive func() bool) (HotRestoreOutcome, er
 	// The session is healthy again: drop pending backoff state exactly as RetryNow
 	// does, or the driver's retry tick would restart the live pane.
 	inst.mu.Lock()
-	inst.reset()
+	inst.ResetEpisode()
 	inst.mu.Unlock()
 	if ctrlErr := inst.StartController(); ctrlErr != nil {
 		log.Warn("HotRestoreIfLive: failed to start controller after attach", "session", inst.Title, "err", ctrlErr)

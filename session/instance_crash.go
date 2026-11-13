@@ -52,7 +52,7 @@ func (i *Instance) MarkCrashed(exitReason string) error {
 		return transitionToLocked(s, context.Background(), domain.Crashed)
 	})
 	if err == nil {
-		i.FireLifecycleEvent(EventExited, "dead-pane-crashed: "+exitReason)
+		i.FireLifecycleEvent(domain.EventExited, "dead-pane-crashed: "+exitReason)
 	}
 	return err
 }
@@ -74,7 +74,7 @@ func (i *Instance) MarkExitedNormally() error {
 		return transitionToLocked(s, context.Background(), domain.Stopped)
 	})
 	if err == nil {
-		i.FireLifecycleEvent(EventExited, "dead-pane-exited-normally")
+		i.FireLifecycleEvent(domain.EventExited, "dead-pane-exited-normally")
 	}
 	return err
 }

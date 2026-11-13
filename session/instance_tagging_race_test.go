@@ -40,7 +40,7 @@ func TestReclassifyTagsLocked_should_NotRace_When_SetterAndGetTagsRunConcurrentl
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
-			inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: branches[i%len(branches)]})
+			inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: branches[i%len(branches)]})
 		}
 	}()
 

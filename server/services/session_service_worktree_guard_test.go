@@ -43,7 +43,7 @@ func newWorktreeGuardTarget(title, uuid, worktreePath string) *session.Instance 
 		Path:        worktreePath,
 		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(worktreePath, worktreePath, title, "guard-branch", "0000000000000000000000000000000000000000"))
 	return inst

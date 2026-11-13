@@ -562,7 +562,7 @@ func markStartedIfTmuxAliveLocked(s *instanceState) (marked bool) {
 	i.started.Store(true)
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
-	i.FireLifecycleEvent(EventStarted, "streamhub-self-heal-tmux-alive")
+	i.FireLifecycleEvent(domain.EventStarted, "streamhub-self-heal-tmux-alive")
 	return true
 }
 

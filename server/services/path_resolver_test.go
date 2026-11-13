@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // newResolverFixture builds a worktree with the symlink classes found in the
@@ -156,32 +156,32 @@ func TestResolveInWorktree_ShouldRefuseAnySymlink_When_WriteMode(t *testing.T) {
 	}
 }
 
-type stubWorkspaceProvider struct{ ws session.Workspace }
+type stubWorkspaceProvider struct{ ws domain.Workspace }
 
-func (s stubWorkspaceProvider) GetWorkspace(string) (session.Workspace, error) { return s.ws, nil }
+func (s stubWorkspaceProvider) GetWorkspace(string) (domain.Workspace, error) { return s.ws, nil }
 
 func TestResolveFileRequest_ShouldUseExistingDirForRead_And_RequireActiveEqualsExistingForWrite(t *testing.T) {
 	dir, _ := newResolverFixture(t)
 	ctx := context.Background()
 	ref := FileRef{SessionID: "s1", Path: "src/a.go"}
 
-	read, err := resolveFileRequest(ctx, stubWorkspaceProvider{session.Workspace{ExistingDir: dir}}, ref, AccessRead)
+	read, err := resolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{ExistingDir: dir}}, ref, AccessRead)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = read.Root.Close() })
 	assert.Equal(t, ResolvedPath("src/a.go"), read.Resolved)
 
 	// Directory mode: no WorktreeDir, ActiveDir == ExistingDir == RepoRoot is editable.
-	write, err := resolveFileRequest(ctx, stubWorkspaceProvider{session.Workspace{RepoRoot: dir, ActiveDir: dir, ExistingDir: dir}}, ref, AccessWrite)
+	write, err := resolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{RepoRoot: dir, ActiveDir: dir, ExistingDir: dir}}, ref, AccessWrite)
 	require.NoError(t, err)
 	_ = write.Root.Close()
 
 	// Paused worktree: ExistingDir fell back to the repo root.
-	_, err = resolveFileRequest(ctx, stubWorkspaceProvider{session.Workspace{RepoRoot: dir, ActiveDir: "/gone/worktree", ExistingDir: dir}}, ref, AccessWrite)
+	_, err = resolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{RepoRoot: dir, ActiveDir: "/gone/worktree", ExistingDir: dir}}, ref, AccessWrite)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "WorktreeMissing")
 
-	_, err = resolveFileRequest(ctx, stubWorkspaceProvider{session.Workspace{ExistingDir: dir}}, FileRef{}, AccessRead)
+	_, err = resolveFileRequest(ctx, stubWorkspaceProvider{domain.Workspace{ExistingDir: dir}}, FileRef{}, AccessRead)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 
 	_, err = resolveFileRequest(ctx, stubWorkspaceProvider{}, ref, AccessRead)

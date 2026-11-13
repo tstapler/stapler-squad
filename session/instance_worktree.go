@@ -534,7 +534,7 @@ func (i *Instance) GetCreationWarning() string {
 // Workspace type for which field answers which question — in particular
 // ActiveDir to compare sessions, ExistingDir to open files. Prefer it to
 // reading inst.Path directly, which is wrong for worktree sessions.
-func (i *Instance) Workspace() Workspace {
+func (i *Instance) Workspace() domain.Workspace {
 	repoRoot := i.GetPath()
 	worktreeDir := ""
 	if i.GitManager.HasWorktree() {
@@ -558,7 +558,7 @@ func (i *Instance) Workspace() Workspace {
 			existingDir = repoRoot
 		}
 	}
-	return Workspace{
+	return domain.Workspace{
 		RepoRoot:    repoRoot,
 		WorktreeDir: worktreeDir,
 		ActiveDir:   activeDir,

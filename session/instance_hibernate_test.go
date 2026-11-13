@@ -110,7 +110,7 @@ func TestResumeFromHibernation_FailedRollback_DoesNotClobberConcurrentStop(t *te
 	inst := &Instance{
 		Title:       "test-resume-rollback-race",
 		Status:      domain.Active,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 	inst.started.Store(true)
 	li := NewLiveInstance(inst)

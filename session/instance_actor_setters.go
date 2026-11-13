@@ -933,25 +933,7 @@ func (i *Instance) CreationCancelFunc() context.CancelFunc {
 
 // ---- GitHubResolution -------------------------------------------------------------
 
-// GitHubResolution carries the fields a deferred GitHub-URL clone resolves to
-// (Epic 2.1, async-session-creation): SessionService.CreateSession publishes
-// an instance immediately, before the clone runs, using the raw request
-// path/branch as placeholders; once the background clone completes, it calls
-// SetGitHubResolution with the real values. Grouped into one struct rather
-// than a same-typed-string parameter pile (see
-// .claude/rules/primitive-obsession-checklist.md).
-type GitHubResolution struct {
-	Path           string
-	Branch         string
-	Owner          string
-	Repo           string
-	SourceRef      string
-	ClonedRepoPath string
-	PRNumber       int
-	PRURL          string
-}
-
-func setGitHubResolutionLocked(s *instanceState, r GitHubResolution) {
+func setGitHubResolutionLocked(s *instanceState, r domain.GitHubResolution) {
 	s.inst.mu.Lock()
 	s.inst.Path = r.Path
 	if r.Branch != "" {
@@ -972,7 +954,7 @@ func setGitHubResolutionLocked(s *instanceState, r GitHubResolution) {
 // once a deferred GitHub URL resolution (Epic 2.1) completes in the
 // background, ahead of Start(). Actor-routed like every other field setter in
 // this file — callers must not write these fields directly.
-func (i *Instance) SetGitHubResolution(r GitHubResolution) {
+func (i *Instance) SetGitHubResolution(r domain.GitHubResolution) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setGitHubResolutionLocked(s, r)
 		return nil

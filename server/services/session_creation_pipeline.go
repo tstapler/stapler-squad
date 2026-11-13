@@ -188,7 +188,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if ref.PRNumber > 0 {
 			prURL = ref.PRURL()
 		}
-		p.instance.SetGitHubResolution(session.GitHubResolution{
+		p.instance.SetGitHubResolution(domain.GitHubResolution{
 			Path:           localPath,
 			Branch:         branch,
 			Owner:          ref.Owner,

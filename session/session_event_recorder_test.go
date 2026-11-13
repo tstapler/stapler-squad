@@ -37,7 +37,7 @@ func TestNoopSessionEventRecorder_Should_NotPanic_When_NilOrNoop(t *testing.T) {
 	r.RecordAttentionCleared("demo", ReasonTaskComplete)
 	r.RecordStatusChanged("demo", domain.Running, domain.Stopped)
 	r.RecordAcknowledged("demo", false)
-	r.RecordLifecycle("demo", EventStarted)
+	r.RecordLifecycle("demo", domain.EventStarted)
 	r.RecordNotificationSuppressed("demo", "x")
 	r.RecordApprovalResolved("demo", true)
 }

@@ -54,7 +54,7 @@ type SessionEventRecorder interface {
 	RecordStatusChanged(title string, from, to domain.Status)
 	// RecordAcknowledged: undone is true for UnacknowledgeSession.
 	RecordAcknowledged(title string, undone bool)
-	RecordLifecycle(title string, event LifecycleEvent)
+	RecordLifecycle(title string, event domain.LifecycleEvent)
 	RecordNotificationSuppressed(title string, reason string)
 	RecordApprovalResolved(title string, approved bool)
 }
@@ -67,7 +67,7 @@ func (noopSessionEventRecorder) RecordAttentionRaised(string, AttentionReason)  
 func (noopSessionEventRecorder) RecordAttentionCleared(string, AttentionReason)           {}
 func (noopSessionEventRecorder) RecordStatusChanged(string, domain.Status, domain.Status) {}
 func (noopSessionEventRecorder) RecordAcknowledged(string, bool)                          {}
-func (noopSessionEventRecorder) RecordLifecycle(string, LifecycleEvent)                   {}
+func (noopSessionEventRecorder) RecordLifecycle(string, domain.LifecycleEvent)            {}
 func (noopSessionEventRecorder) RecordNotificationSuppressed(string, string)              {}
 func (noopSessionEventRecorder) RecordApprovalResolved(string, bool)                      {}
 

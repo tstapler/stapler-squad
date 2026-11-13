@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // session_tagging_integration_test.go implements plan.md's Story 7.2.1: one test exercising
@@ -49,13 +50,13 @@ func TestSessionTaggingPipeline_should_ProduceFinalLLMTagWithNoUnclassified_When
 
 	// Given: creating/mutating onto a branch matching the seed rule applies "Bugfix"
 	// synchronously with rule provenance, zero manual tagging action.
-	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
+	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
 	require.Contains(t, inst.GetTags(), "Bugfix")
 	require.Equal(t, "seed-bugfix", inst.RuleTagProvenance["Bugfix"])
 	require.NotContains(t, inst.GetTags(), UnclassifiedTag)
 
 	// When: the session is renamed off that branch, the sync fixpoint retracts "Bugfix".
-	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "main"})
+	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "main"})
 	require.NotContains(t, inst.GetTags(), "Bugfix", "rule-owned tag must be retracted once its branch condition no longer holds")
 	require.NotContains(t, inst.GetTags(), UnclassifiedTag)
 

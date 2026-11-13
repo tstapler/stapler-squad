@@ -17,8 +17,8 @@ type reviveOutcomeRecorder struct {
 	reasons []string
 }
 
-func (r *reviveOutcomeRecorder) OnLifecycleEvent(event LifecycleEvent, reason string) {
-	if event == EventStarted {
+func (r *reviveOutcomeRecorder) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
+	if event == domain.EventStarted {
 		r.reasons = append(r.reasons, reason)
 	}
 }
@@ -41,7 +41,7 @@ func TestReviveOutcomeForColdRestore(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviveOutcomeForColdRestore(tt.hadUUIDBeforeRecovery, tt.hasClaudeSession, tt.everHadHistory)
+			got := domain.ReviveOutcomeForColdRestore(tt.hadUUIDBeforeRecovery, tt.hasClaudeSession, tt.everHadHistory)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -119,7 +119,7 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 
 			assert.Equal(t, domain.ReviveOutcomeFreshLostHistory, inst.LastReviveOutcome)
 			require.Len(t, recorder.reasons, 1, "expected exactly one EventStarted")
-			assert.Equal(t, ReasonColdRestoreLostHistory, recorder.reasons[0])
+			assert.Equal(t, domain.ReasonColdRestoreLostHistory, recorder.reasons[0])
 		})
 	}
 }

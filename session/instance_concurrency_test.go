@@ -21,7 +21,7 @@ func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 		Title:       "test-non-worktree",
 		Status:      domain.Active,
 		IsWorktree:  false,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		// gitManager left as zero value — IsDirty() returns error if called
 	}
 	inst.started.Store(true)
@@ -43,7 +43,7 @@ func TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized(t 
 		Title:       "test-worktree-uninit",
 		Status:      domain.Active,
 		IsWorktree:  true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		// gitManager.worktree == nil → IsDirty returns "git worktree not initialized"
 	}
 	inst.started.Store(true)

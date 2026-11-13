@@ -192,7 +192,7 @@ func TestReclassifyTagsLocked_should_ApplyMatchingSeedRuleTagSynchronously_When_
 	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 
-	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
+	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
 
 	assert.Contains(t, inst.GetTags(), "Bugfix")
 	assert.Equal(t, "seed-bugfix", inst.RuleTagProvenance["Bugfix"])
@@ -209,11 +209,11 @@ func TestReclassifyTagsLocked_should_RetractRuleOwnedTag_When_ConditionNoLongerH
 
 	// Prime: apply the rule via a mutating setter (SetGitHubResolution with an unchanged
 	// branch — Branch stays "bugfix/x", Path is set for the first time).
-	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "bugfix/x"})
+	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "bugfix/x"})
 	require.Contains(t, inst.GetTags(), "Bugfix")
 
 	// Rename off the matching branch.
-	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "main"})
+	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "main"})
 
 	tags := inst.GetTags()
 	assert.NotContains(t, tags, "Bugfix", "rule-owned tag must be retracted once its condition no longer holds")
@@ -229,7 +229,7 @@ func TestReclassifyTagsLocked_should_NotReAddSuppressedTag_When_RuleConditionMat
 	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 
-	inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: "bugfix/x"})
+	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "bugfix/x"})
 
 	assert.NotContains(t, inst.GetTags(), "Bugfix", "a suppressed tag must never be re-added by the fixpoint")
 }

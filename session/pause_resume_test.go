@@ -71,7 +71,7 @@ func TestPause_should_NoOpSucceed_When_ActiveInstanceNeverStarted(t *testing.T) 
 	inst := &Instance{
 		Title:       "never-started",
 		Status:      domain.Active,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 
 	err := inst.Pause()
@@ -90,7 +90,7 @@ func TestPause_should_ReturnErrPauseNotPermitted_When_PermissionDenied(t *testin
 	inst := &Instance{
 		Title:       "no-pause-perm",
 		Status:      domain.Active,
-		Permissions: GetExternalPermissions(false),
+		Permissions: domain.GetExternalPermissions(false),
 	}
 	inst.started.Store(true)
 
@@ -106,7 +106,7 @@ func TestPause_should_ReturnAlreadyPausedError_When_AlreadyPaused(t *testing.T) 
 	inst := &Instance{
 		Title:       "already-paused",
 		Status:      domain.Paused,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 
 	err := inst.Pause()
@@ -126,7 +126,7 @@ func TestPause_should_ReturnInvalidTransition_When_NeverStartedFromNonPauseableS
 			inst := &Instance{
 				Title:       "never-started-" + status.String(),
 				Status:      status,
-				Permissions: GetManagedPermissions(),
+				Permissions: domain.GetManagedPermissions(),
 			}
 
 			err := inst.Pause()
@@ -148,7 +148,7 @@ func TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverS
 	inst := &Instance{
 		Title:       "never-started-paused",
 		Status:      domain.Paused,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
 	fakePM := newFakePauseResumeProcessManager(t)
@@ -171,7 +171,7 @@ func TestResume_should_AttachPTY_When_TmuxWasKilledOnPause(t *testing.T) {
 	inst := &Instance{
 		Title:       "resume-pty",
 		Status:      domain.Paused,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
 	fakePM := newFakePauseResumeProcessManager(t)
@@ -189,7 +189,7 @@ func TestResume_should_ReturnErrResumeNotPermitted_When_PermissionDenied(t *test
 	inst := &Instance{
 		Title:       "no-resume-perm",
 		Status:      domain.Paused,
-		Permissions: GetExternalPermissions(false),
+		Permissions: domain.GetExternalPermissions(false),
 	}
 
 	err := inst.Resume()
@@ -206,7 +206,7 @@ func TestResume_should_NotFailFatally_When_ClaudeSessionReattachmentFails(t *tes
 	inst := &Instance{
 		Title:       "never-started-paused-claude",
 		Status:      domain.Paused,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
 	inst.claudeSession = &ClaudeSessionData{

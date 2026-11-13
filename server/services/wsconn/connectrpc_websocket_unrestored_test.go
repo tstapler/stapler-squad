@@ -179,8 +179,8 @@ func TestEnsureControlModeStarted_should_NotMarkStarted_When_RestoredWithoutPTY(
 
 type startedCounter struct{ n *atomic.Int32 }
 
-func (c startedCounter) OnLifecycleEvent(e session.LifecycleEvent, _ string) {
-	if e == session.EventStarted {
+func (c startedCounter) OnLifecycleEvent(e domain.LifecycleEvent, _ string) {
+	if e == domain.EventStarted {
 		c.n.Add(1)
 	}
 }

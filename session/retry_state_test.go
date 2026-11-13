@@ -124,7 +124,7 @@ func TestClassifyFailureReason_should_ReturnCrashed_When_ProcessManagerAlive(t *
 
 func TestEvaluateSessionRetry_should_ReturnNotEligible_When_ReasonAbsentFromRetryOn(t *testing.T) {
 	t.Parallel()
-	rs := RetryState{RetryAttempt: 2, RetryMaxAttempts: 3}
+	rs := domain.RetryState{RetryAttempt: 2, RetryMaxAttempts: 3}
 	policy := RetryPolicy{Enabled: true, RetryOn: []string{"crashed"}}
 	now := time.Now()
 	bootTime := now.Add(-time.Hour) // long past any restart-grace window
@@ -137,7 +137,7 @@ func TestEvaluateSessionRetry_should_ReturnNotEligible_When_ReasonAbsentFromRetr
 
 func TestEvaluateSessionRetry_should_ReturnExhausted_When_AttemptAtCap(t *testing.T) {
 	t.Parallel()
-	rs := RetryState{RetryAttempt: 3, RetryMaxAttempts: 3}
+	rs := domain.RetryState{RetryAttempt: 3, RetryMaxAttempts: 3}
 	policy := RetryPolicy{Enabled: true, RetryOn: []string{"crashed"}}
 	now := time.Now()
 	bootTime := now.Add(-time.Hour)
@@ -150,7 +150,7 @@ func TestEvaluateSessionRetry_should_ReturnExhausted_When_AttemptAtCap(t *testin
 
 func TestEvaluateSessionRetry_should_ReturnScheduled_When_BelowCapAndEligible(t *testing.T) {
 	t.Parallel()
-	rs := RetryState{RetryAttempt: 1, RetryMaxAttempts: 3}
+	rs := domain.RetryState{RetryAttempt: 1, RetryMaxAttempts: 3}
 	policy := RetryPolicy{Enabled: true, RetryOn: []string{"crashed"}}
 	now := time.Now()
 	bootTime := now.Add(-time.Hour)
@@ -163,7 +163,7 @@ func TestEvaluateSessionRetry_should_ReturnScheduled_When_BelowCapAndEligible(t 
 
 func TestEvaluateSessionRetry_should_ReturnRestartGrace_When_TmuxExitedWithinBootWindow(t *testing.T) {
 	t.Parallel()
-	rs := RetryState{RetryAttempt: 0, RetryMaxAttempts: 1}
+	rs := domain.RetryState{RetryAttempt: 0, RetryMaxAttempts: 1}
 	policy := RetryPolicy{Enabled: true, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 	bootTime := time.Now()
 	now := bootTime.Add(5 * time.Second)
@@ -176,7 +176,7 @@ func TestEvaluateSessionRetry_should_ReturnRestartGrace_When_TmuxExitedWithinBoo
 
 func TestEvaluateSessionRetry_should_ReturnNotEligible_When_PolicyDisabled(t *testing.T) {
 	t.Parallel()
-	rs := RetryState{RetryAttempt: 0, RetryMaxAttempts: 3}
+	rs := domain.RetryState{RetryAttempt: 0, RetryMaxAttempts: 3}
 	policy := RetryPolicy{Enabled: false, RetryOn: []string{"crashed"}}
 	now := time.Now()
 
