@@ -366,7 +366,7 @@ func TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession(t *testi
 		}
 	}
 	require.NotNil(t, found, "created instance must be registered with the poller")
-	require.True(t, found.ExecutionTarget != nil && found.ExecutionTarget.IsRemote(),
+	require.True(t, found.GetExecutionTarget().IsRemote(),
 		"Instance.ExecutionTarget.IsRemote() must be true for a remote-created session")
 }
 
@@ -563,7 +563,7 @@ func TestCreateSession_RemoteTarget_ExistingWorktree_AttachesWithoutCreatingNewO
 		}
 	}
 	require.NotNil(t, found, "created instance must be registered with the poller")
-	require.True(t, found.ExecutionTarget != nil && found.ExecutionTarget.IsRemote())
+	require.True(t, found.GetExecutionTarget().IsRemote())
 
 	// Persistence must actually succeed with a non-empty branch: a remote
 	// ExistingWorktree/Directory session has no caller-supplied branch, and

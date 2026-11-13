@@ -379,10 +379,8 @@ func JoinSessionDriver(inst *Instance) {
 // runSessionDriver is the thin wrapper that resolves the effective retry
 // policy once and delegates to runSessionDriverWithPrompt.
 func runSessionDriver(inst *Instance, allowedPath string, stop <-chan struct{}) {
-	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, inst.RetryPolicyOverride)
-	inst.mu.Lock()
-	inst.RetryMaxAttempts = policy.MaxAttempts
-	inst.mu.Unlock()
+	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, inst.RetryPolicyOverride())
+	inst.SetRetryProgress(func(rs *domain.RetryState) { rs.RetryMaxAttempts = policy.MaxAttempts })
 
 	var initialPrompt string
 	if inst.InitialPrompt != "" {
@@ -1165,20 +1163,18 @@ func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy,
 	}
 
 	now := time.Now()
-	inst.mu.RLock()
-	rs := inst.RetryState
-	inst.mu.RUnlock()
+	rs := inst.Snapshot().Retry
 
 	switch evaluateSessionRetry(rs, policy, reason, now, ServerStartTime) {
 	case retryDecisionScheduled:
 		nextAttempt := rs.RetryAttempt + 1
 		delay := backoffDelay(rs.RetryAttempt, policy.InitialDelay, policy.MaxDelay, defaultJitterFraction)
-		inst.mu.Lock()
-		inst.RetryAttempt = nextAttempt
-		inst.LastFailureReason = reason
-		inst.NextRetryAt = now.Add(delay)
-		inst.RecordAttempt(nextAttempt, reason, now)
-		inst.mu.Unlock()
+		inst.SetRetryProgress(func(st *domain.RetryState) {
+			st.RetryAttempt = nextAttempt
+			st.LastFailureReason = reason
+			st.NextRetryAt = now.Add(delay)
+			st.RecordAttempt(nextAttempt, reason, now)
+		})
 		log.Info("SessionDriver: scheduling retry after failure",
 			"session", inst.Title, "reason", reason,
 			"attempt", nextAttempt, "max_attempts", rs.RetryMaxAttempts, "delay", delay,
@@ -1189,9 +1185,7 @@ func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy,
 		log.Info("SessionDriver: restart-grace — server booted recently, restarting without consuming a retry attempt",
 			"session", inst.Title, "reason", reason,
 		)
-		inst.mu.Lock()
-		inst.LastFailureReason = reason
-		inst.mu.Unlock()
+		inst.SetRetryProgress(func(st *domain.RetryState) { st.LastFailureReason = reason })
 		prompt := buildRetryContinuationPrompt(inst, reason)
 		if err := restartForRetry(inst, allowedPath, prompt, policy, stop); err != nil {
 			log.Warn("SessionDriver: restart-grace restart failed",
@@ -1215,7 +1209,7 @@ func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy,
 func markSessionPermanentlyFailed(inst *Instance, reason string) {
 	inst.mu.Lock()
 	alreadyFailed := inst.Status == domain.PermanentlyFailed
-	var snap *InstanceSnapshot
+	var snap *domain.InstanceSnapshot
 	if !alreadyFailed {
 		inst.Status = domain.PermanentlyFailed
 		// Publish the transition to inst.snapshot (the atomic pointer
@@ -1270,9 +1264,7 @@ func buildRetryContinuationPrompt(inst *Instance, reason string) string {
 	if reason == "" {
 		return base
 	}
-	inst.mu.RLock()
-	attempt := inst.RetryAttempt
-	inst.mu.RUnlock()
+	attempt := inst.Snapshot().Retry.RetryAttempt
 	prefix := fmt.Sprintf(
 		"Previous attempt failed due to %s. (This is retry attempt %d; if this failure looks identical to the last one, the worktree itself may be the problem.) ",
 		reason, attempt,

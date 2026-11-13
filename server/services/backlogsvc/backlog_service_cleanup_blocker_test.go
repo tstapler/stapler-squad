@@ -38,7 +38,7 @@ func newBlockerHarness(t *testing.T, status session.BacklogStatus) *blockerHarne
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	h := &blockerHarness{t: t, storage: storage, repo: repo, svc: svc, stopper: &svctest.MockSessionStopper{LiveUUIDs: map[string]bool{}}, uuid: "work-" + t.Name()}
 	svc.SetSessionStopper(h.stopper)
-	svc.cleanup.removeFn = func(wt session.GitWorktreeData) error {
+	svc.cleanup.removeFn = func(wt domain.GitWorktreeData) error {
 		h.removed = append(h.removed, wt.WorktreePath)
 		return nil
 	}
@@ -47,9 +47,9 @@ func newBlockerHarness(t *testing.T, status session.BacklogStatus) *blockerHarne
 	h.itemID = item.ID
 	h.path = filepath.Join(t.TempDir(), "wt")
 	now := time.Now()
-	require.NoError(t, repo.Create(t.Context(), session.InstanceData{
+	require.NoError(t, repo.Create(t.Context(), domain.InstanceData{
 		Title: h.uuid, UUID: h.uuid, Path: h.path, Status: domain.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
-		Worktree: session.GitWorktreeData{RepoPath: filepath.Dir(h.path), WorktreePath: h.path, SessionName: h.uuid, BranchName: "backlog/x", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
+		Worktree: domain.GitWorktreeData{RepoPath: filepath.Dir(h.path), WorktreePath: h.path, SessionName: h.uuid, BranchName: "backlog/x", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: h.uuid, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
@@ -226,13 +226,13 @@ func TestCleanupGate_ShouldRecheckBeforeEachRemoval_WhenPRAttachesMidCleanup(t *
 	second := "work2-" + t.Name()
 	now := time.Now()
 	path2 := filepath.Join(t.TempDir(), "wt2")
-	require.NoError(t, h.repo.Create(t.Context(), session.InstanceData{
+	require.NoError(t, h.repo.Create(t.Context(), domain.InstanceData{
 		Title: second, UUID: second, Path: path2, Status: domain.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
-		Worktree: session.GitWorktreeData{RepoPath: filepath.Dir(path2), WorktreePath: path2, SessionName: second, BranchName: "backlog/y", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
+		Worktree: domain.GitWorktreeData{RepoPath: filepath.Dir(path2), WorktreePath: path2, SessionName: second, BranchName: "backlog/y", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
 	_, err := h.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: h.itemID, SessionUUID: second, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
-	h.svc.cleanup.removeFn = func(wt session.GitWorktreeData) error {
+	h.svc.cleanup.removeFn = func(wt domain.GitWorktreeData) error {
 		h.removed = append(h.removed, wt.WorktreePath)
 		h.link(session.ItemPROwner(h.itemID), 77, domain.PRStateOpen) // lands after the first removal
 		return nil

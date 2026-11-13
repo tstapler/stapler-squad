@@ -258,7 +258,7 @@ func WorkspacePeersBlockForPath(ctx context.Context, storage *Storage, repoPath 
 	if info.IsWorktree && info.MainRepoRoot != "" {
 		mainRepoPath = info.MainRepoRoot
 	}
-	workspaceKey := WorkspaceKey(info.GitHubOwner, info.GitHubRepo, mainRepoPath, repoPath)
+	workspaceKey := domain.WorkspaceKey(info.GitHubOwner, info.GitHubRepo, mainRepoPath, repoPath)
 	if workspaceKey == "" {
 		return ""
 	}

@@ -14,7 +14,7 @@ func TestUpsertSessionPRSetTx_ShouldKeepGoodLinks_WhenOneLinkIsDeterministically
 	t.Parallel()
 	repo := newPRRepo(t)
 	ctx := context.Background()
-	data := InstanceData{UUID: "u-skip", PRs: []domain.PRView{
+	data := domain.InstanceData{UUID: "u-skip", PRs: []domain.PRView{
 		{Ref: mustPRRef(t, "", "acme", "app", 1), AttachSource: domain.AttachSourceManual},
 		{AttachSource: domain.AttachSourceManual}, // zero ref
 		{Ref: mustPRRef(t, "", "acme", "app", 3), AttachSource: domain.AttachSourceManual},

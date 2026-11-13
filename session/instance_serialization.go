@@ -84,8 +84,8 @@ func (i *Instance) tymuxSessionID() string {
 	return ""
 }
 
-func (i *Instance) ToInstanceData() InstanceData {
-	snap, err := sendSyncValue(i, func(s *instanceState) (*InstanceSnapshot, error) {
+func (i *Instance) ToInstanceData() domain.InstanceData {
+	snap, err := sendSyncValue(i, func(s *instanceState) (*domain.InstanceSnapshot, error) {
 		// i.mu guards buildSnapshot here too: legacy setters (MarkViewed & co.)
 		// mutate fields directly under i.mu.Lock() from outside the actor — see
 		// runActor's doc comment in actor.go.
@@ -103,7 +103,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		i.mu.Unlock()
 	}
 
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:               snap.Title,
 		UUID:                snap.UUID,
 		Path:                snap.Path,
@@ -200,20 +200,20 @@ func (i *Instance) ToInstanceData() InstanceData {
 	}
 
 	// Only include worktree data if gitWorktree is initialized
-	if i.GitManager.HasWorktree() {
-		data.Worktree = GitWorktreeData{
-			RepoPath:      i.GitManager.GetRepoPath(),
-			WorktreePath:  i.GitManager.GetWorktreePath(),
+	if i.gitManager.HasWorktree() {
+		data.Worktree = domain.GitWorktreeData{
+			RepoPath:      i.gitManager.GetRepoPath(),
+			WorktreePath:  i.gitManager.GetWorktreePath(),
 			SessionName:   snap.Title,
-			BranchName:    i.GitManager.GetBranchName(),
-			BaseCommitSHA: i.GitManager.GetBaseCommitSHA(),
+			BranchName:    i.gitManager.GetBranchName(),
+			BaseCommitSHA: i.gitManager.GetBaseCommitSHA(),
 		}
 	}
 
 	// Only include diff stats if they exist
 	// GetDiffStats takes gm.mu; the bare field races with SetDiffStats.
-	if ds := i.GitManager.GetDiffStats(); ds != nil {
-		data.DiffStats = DiffStatsData{
+	if ds := i.gitManager.GetDiffStats(); ds != nil {
+		data.DiffStats = domain.DiffStatsData{
 			Added:   ds.Added,
 			Removed: ds.Removed,
 			Content: ds.Content,
@@ -243,7 +243,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 // dead one) before the HTTP server could bind. See server/dependencies.go's
 // "Step 6" background goroutine, which already exists to start un-started
 // instances asynchronously once the deferred path skips Start() here.
-func FromInstanceData(data InstanceData) (*Instance, error) {
+func FromInstanceData(data domain.InstanceData) (*Instance, error) {
 	return fromInstanceData(data, false)
 }
 
@@ -254,8 +254,161 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 // truth question (IsBackendProcessAlive()) or act on the real session
 // (KillSession()) for a sessionUUID the live in-memory registry doesn't have
 // tracked — see SessionService.findConfirmedLiveInstance.
-func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
+func FromInstanceDataDeferred(data domain.InstanceData) (*Instance, error) {
 	return fromInstanceData(data, true)
+}
+
+// migrateCorruptedPath fixes paths from before defensive tilde expansion was added,
+// e.g. "/absolute/path/~/other/path". It returns data.Path unchanged when no fix applies.
+func migrateCorruptedPath(data domain.InstanceData) string {
+	migratedPath := data.Path
+	idx := strings.Index(data.Path, "/~/")
+	if idx < 0 {
+		return migratedPath
+	}
+	log.Warn("migrating corrupted path for instance", "session", data.Title, "path", data.Path)
+	tildePath := data.Path[idx+1:] // skip the leading "/"
+	usr, err := user.Current()
+	if err != nil {
+		log.Error("failed to expand corrupted path", "session", data.Title, "err", err)
+		return migratedPath
+	}
+	migratedPath = filepath.Join(usr.HomeDir, tildePath[2:])
+	log.Info("migrated corrupted path", "session", data.Title, "from", data.Path, "to", migratedPath)
+	return migratedPath
+}
+
+// migrateCategoryToTags converts a legacy Category to Tags when Tags is empty.
+// Supports both simple ("Work") and nested ("Work/Frontend") categories.
+func migrateCategoryToTags(data domain.InstanceData) []string {
+	if len(data.Tags) == 0 && data.Category != "" {
+		log.Info("migrating category to tags", "category", data.Category, "session", data.Title)
+		return []string{data.Category}
+	}
+	return data.Tags
+}
+
+// resolveRestoredBackend pins a restored instance's backend when none was persisted.
+func resolveRestoredBackend(instance *Instance, data domain.InstanceData) {
+	if instance.Backend == "" {
+		sessionName := tmux.NewSessionName(instance.Title, tmux.TmuxPrefix).String()
+		if _, ok := config.LoadConfig().GetTymuxSessionOverride(sessionName); ok {
+			instance.Backend = ResolveSessionBackendForTitle(config.LoadConfig(), instance.Title, "")
+		}
+	}
+	if instance.Backend == "" && data.TymuxSessionID != "" {
+		// A daemon id proves the record ran on tymux; don't let a changed
+		// process-wide default drop it onto another backend.
+		instance.Backend = domain.BackendTymux
+	}
+	// Other persisted sessions predate backend pinning and were tmux; no later global selection
+	// (tymux or native) may re-route them, or their stream, to another backend.
+	if sel := getSelectedBackend(); instance.Backend == "" && sel != "" && sel != domain.BackendTmux {
+		instance.Backend = domain.BackendTmux
+	}
+}
+
+// pauseIfWorktreeMissing marks a restored, non-paused instance as paused when its
+// worktree directory is gone from disk.
+func pauseIfWorktreeMissing(instance *Instance) {
+	// Check if the worktree still exists on disk if the instance is not paused or hibernated.
+	// No mutex is needed here because the instance is not yet shared.
+	if !instance.Paused() && !instance.Hibernated() && instance.gitManager.HasWorktree() {
+		worktreePath := instance.gitManager.GetWorktreePath()
+		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+			// Worktree has been deleted — use transitionTo so the state machine is respected.
+			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
+			level := worktreeMissingLevel(alreadyLogged)
+			logger := log.ForSession(instance.Title)
+			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
+			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
+			if err := instance.transitionTo(context.Background(), domain.Paused); err != nil {
+				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
+				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
+				instance.loadStatus(domain.Paused)
+			}
+		}
+	}
+}
+
+// restoreStoppedInstance wires a Stopped record's tmux session and recovers it to
+// Active only when the pane is genuinely alive and the session is not archived or one-shot.
+func restoreStoppedInstance(instance *Instance, deferStart bool) {
+	// Wire the tmux session object so IsAlive() can be called.
+	instance.wireTmuxSession(shellLaunch(instance.Program))
+	// If the underlying tmux session is still alive (e.g. server crashed mid-write
+	// or exit callback fired falsely), recover it rather than leave it stuck as
+	// Stopped. IsAlive() alone can't see remain-on-exit: it keeps the tmux
+	// session/pane around as a dead placeholder after the wrapped program exits
+	// (same distinction PaneProcessDead() draws for the health checker, see
+	// instance_tmux.go), so without the pane-exit check below, every session the
+	// health checker had just legitimately marked Stopped would be revived right
+	// back to Active on the very next LoadInstances() -- SessionHealthChecker's
+	// tick calls LoadInstances() every poll, so this raced the exact fix in
+	// session/health.go that makes freshly-created sessions reach Stopped promptly.
+	//
+	// Skip this probe entirely for archived sessions: ArchivedAt is set only by
+	// archiveItemWorkSessions, which explicitly kills the tmux pane at archive
+	// time (see review_queue_poller.go's shouldSkipSession doc comment) -- there
+	// is no scenario where an archived session's pane is secretly still alive.
+	// Without this skip, every LoadInstances() call (the 15s health-check tick,
+	// most MCP tools, many RPC handlers) paid two uncached tmux subprocess spawns
+	// (PaneExitStatus + IsAlive) per archived session -- on one real deployment
+	// this was 280 archived-but-Stopped sessions out of 282 total Stopped, i.e.
+	// ~560 needless subprocess spawns on every single LoadInstances() call,
+	// which pprof's fork-pressure monitor flagged as a sustained "critical"
+	// spawn/failure rate (subprocess failures/spawns >> the exec-gate's timeout
+	// budget once a couple thousand archived sessions accumulate).
+	//
+	// Also skip for one-shot sessions (backlog:triage/backlog:review tags, see
+	// IsOneShot): session_driver.go's handleStoppedStatus already treats their
+	// Stopped status as terminal and deliberately does not retry them
+	// ("BacklogLifecycleListener handles this; driver exits cleanly"). Reviving
+	// one here contradicts that decision and respawns the same one-shot
+	// `claude -p --resume ...` invocation, which exits almost immediately and
+	// gets killed again -- an endless ~60s kill/respawn loop observed in
+	// production for an archived backlog item's stale review session, whose own
+	// ArchivedAt was nil (set only by archiveItemWorkSessions, which this old
+	// session predates) so only this check protects it.
+	if instance.ArchivedAt != nil || IsOneShot(instance) {
+		instance.started.Store(true)
+	} else {
+		paneExited := false
+		if r, ok := capabilityOf[ExitStatusReporter](instance.processManager); ok {
+			_, _, paneExited = r.PaneExitStatus()
+		}
+		if instance.processManager.IsAlive() && !paneExited {
+			log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
+			instance.loadStatus(domain.Active)
+			if deferStart {
+				// Leave started=false: the async Step 6 loop will call Start(false)
+				// and hot-attach to this already-live session off the critical path.
+			} else if err := instance.Start(false); err != nil {
+				log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
+				instance.loadStatus(domain.Stopped)
+				instance.started.Store(true)
+			}
+		} else {
+			instance.started.Store(true)
+		}
+	}
+}
+
+// restoreWorktreeAndDiffStats restores git worktree and diff stats via the manager
+// (they cannot be set through the Instance struct literal).
+func restoreWorktreeAndDiffStats(instance *Instance, data domain.InstanceData) {
+	instance.gitManager.SetWorktree(git.NewGitWorktreeFromStorage(
+		data.Worktree.RepoPath,
+		data.Worktree.WorktreePath,
+		data.Worktree.SessionName,
+		data.Worktree.BranchName,
+		data.Worktree.BaseCommitSHA,
+	))
+	instance.gitManager.SetDiffStats(&git.DiffStats{
+		Added:   data.DiffStats.Added,
+		Removed: data.DiffStats.Removed,
+		Content: data.DiffStats.Content,
+	})
 }
 
 // fromInstanceData is the shared implementation. When deferStart is true, the
@@ -263,43 +416,9 @@ func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
 // tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
 // the synchronous Start() call, leaving Instance.Started() false so the async
 // Step 6 loop in BuildRuntimeDeps picks it up off the startup critical path.
-func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
-	// MIGRATION: Fix corrupted paths from before defensive tilde expansion was added
-	// Detect paths like "/absolute/path/~/other/path" and fix them
-	migratedPath := data.Path
-	if strings.Contains(data.Path, "/~/") {
-		// Path contains unexpanded tilde - extract and expand it
-		log.Warn("migrating corrupted path for instance", "session", data.Title, "path", data.Path)
-
-		// Find the index of "/~/"
-		idx := strings.Index(data.Path, "/~/")
-		if idx >= 0 {
-			// Extract the tilde path (everything from "~/" onwards)
-			tildePath := data.Path[idx+1:] // Skip the leading "/"
-
-			// Expand the tilde path
-			if strings.HasPrefix(tildePath, "~/") {
-				usr, err := user.Current()
-				if err != nil {
-					log.Error("failed to expand corrupted path", "session", data.Title, "err", err)
-					// Fall back to original path
-				} else {
-					migratedPath = filepath.Join(usr.HomeDir, tildePath[2:])
-					log.Info("migrated corrupted path", "session", data.Title, "from", data.Path, "to", migratedPath)
-				}
-			}
-		}
-	}
-
-	// MIGRATION: Convert legacy Category to Tags for backward compatibility
-	// If Tags is empty but Category exists, migrate category to tags
-	tags := data.Tags
-	if len(tags) == 0 && data.Category != "" {
-		// Migrate existing category to tag format
-		// Support both simple ("Work") and nested ("Work/Frontend") categories
-		tags = []string{data.Category}
-		log.Info("migrating category to tags", "category", data.Category, "session", data.Title)
-	}
+func fromInstanceData(data domain.InstanceData, deferStart bool) (*Instance, error) {
+	migratedPath := migrateCorruptedPath(data)
+	tags := migrateCategoryToTags(data)
 
 	instance := &Instance{
 		Title:               data.Title,
@@ -433,41 +552,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// NewProcessManager's process-wide default resolves to.
 	// Sessions created before a per-session tymux override was configured have no
 	// persisted backend; honor the override here or it is silently ignored forever.
-	if instance.Backend == "" {
-		sessionName := tmux.NewSessionName(instance.Title, tmux.TmuxPrefix).String()
-		if _, ok := config.LoadConfig().GetTymuxSessionOverride(sessionName); ok {
-			instance.Backend = ResolveSessionBackendForTitle(config.LoadConfig(), instance.Title, "")
-		}
-	}
-	if instance.Backend == "" && data.TymuxSessionID != "" {
-		// A daemon id proves the record ran on tymux; don't let a changed
-		// process-wide default drop it onto another backend.
-		instance.Backend = domain.BackendTymux
-	}
-	// Other persisted sessions predate backend pinning and were tmux; no later global selection
-	// (tymux or native) may re-route them, or their stream, to another backend.
-	if sel := getSelectedBackend(); instance.Backend == "" && sel != "" && sel != domain.BackendTmux {
-		instance.Backend = domain.BackendTmux
-	}
+	resolveRestoredBackend(instance, data)
 	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
 	}
 	instance.processManager = pm
 
-	// Restore git worktree and diff stats via manager (cannot use struct literal for sub-manager fields).
-	instance.GitManager.SetWorktree(git.NewGitWorktreeFromStorage(
-		data.Worktree.RepoPath,
-		data.Worktree.WorktreePath,
-		data.Worktree.SessionName,
-		data.Worktree.BranchName,
-		data.Worktree.BaseCommitSHA,
-	))
-	instance.GitManager.SetDiffStats(&git.DiffStats{
-		Added:   data.DiffStats.Added,
-		Removed: data.DiffStats.Removed,
-		Content: data.DiffStats.Content,
-	})
+	restoreWorktreeAndDiffStats(instance, data)
 
 	// Restore Claude session data if it exists
 	if data.ClaudeSession.ConversationUUID != "" {
@@ -487,87 +579,13 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	// Initialize session-specific logging
 	_ = log.GetSessionLoggers
 
-	// Check if the worktree still exists on disk if the instance is not paused or hibernated.
-	// No mutex is needed here because the instance is not yet shared.
-	if !instance.Paused() && !instance.Hibernated() && instance.GitManager.HasWorktree() {
-		worktreePath := instance.GitManager.GetWorktreePath()
-		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
-			// Worktree has been deleted — use transitionTo so the state machine is respected.
-			_, alreadyLogged := loggedMissingWorktree.LoadOrStore(instance.Title, struct{}{})
-			level := worktreeMissingLevel(alreadyLogged)
-			logger := log.ForSession(instance.Title)
-			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
-			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
-			if err := instance.transitionTo(context.Background(), domain.Paused); err != nil {
-				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
-				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
-				instance.loadStatus(domain.Paused)
-			}
-		}
-	}
+	pauseIfWorktreeMissing(instance)
 
 	if instance.Paused() {
 		instance.started.Store(true)
 		instance.wireTmuxSession(shellLaunch(instance.Program))
 	} else if instance.Status == domain.Stopped {
-		// Wire the tmux session object so IsAlive() can be called.
-		instance.wireTmuxSession(shellLaunch(instance.Program))
-		// If the underlying tmux session is still alive (e.g. server crashed mid-write
-		// or exit callback fired falsely), recover it rather than leave it stuck as
-		// Stopped. IsAlive() alone can't see remain-on-exit: it keeps the tmux
-		// session/pane around as a dead placeholder after the wrapped program exits
-		// (same distinction PaneProcessDead() draws for the health checker, see
-		// instance_tmux.go), so without the pane-exit check below, every session the
-		// health checker had just legitimately marked Stopped would be revived right
-		// back to Active on the very next LoadInstances() -- SessionHealthChecker's
-		// tick calls LoadInstances() every poll, so this raced the exact fix in
-		// session/health.go that makes freshly-created sessions reach Stopped promptly.
-		//
-		// Skip this probe entirely for archived sessions: ArchivedAt is set only by
-		// archiveItemWorkSessions, which explicitly kills the tmux pane at archive
-		// time (see review_queue_poller.go's shouldSkipSession doc comment) -- there
-		// is no scenario where an archived session's pane is secretly still alive.
-		// Without this skip, every LoadInstances() call (the 15s health-check tick,
-		// most MCP tools, many RPC handlers) paid two uncached tmux subprocess spawns
-		// (PaneExitStatus + IsAlive) per archived session -- on one real deployment
-		// this was 280 archived-but-Stopped sessions out of 282 total Stopped, i.e.
-		// ~560 needless subprocess spawns on every single LoadInstances() call,
-		// which pprof's fork-pressure monitor flagged as a sustained "critical"
-		// spawn/failure rate (subprocess failures/spawns >> the exec-gate's timeout
-		// budget once a couple thousand archived sessions accumulate).
-		//
-		// Also skip for one-shot sessions (backlog:triage/backlog:review tags, see
-		// IsOneShot): session_driver.go's handleStoppedStatus already treats their
-		// Stopped status as terminal and deliberately does not retry them
-		// ("BacklogLifecycleListener handles this; driver exits cleanly"). Reviving
-		// one here contradicts that decision and respawns the same one-shot
-		// `claude -p --resume ...` invocation, which exits almost immediately and
-		// gets killed again -- an endless ~60s kill/respawn loop observed in
-		// production for an archived backlog item's stale review session, whose own
-		// ArchivedAt was nil (set only by archiveItemWorkSessions, which this old
-		// session predates) so only this check protects it.
-		if instance.ArchivedAt != nil || IsOneShot(instance) {
-			instance.started.Store(true)
-		} else {
-			paneExited := false
-			if r, ok := capabilityOf[ExitStatusReporter](instance.processManager); ok {
-				_, _, paneExited = r.PaneExitStatus()
-			}
-			if instance.processManager.IsAlive() && !paneExited {
-				log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
-				instance.loadStatus(domain.Active)
-				if deferStart {
-					// Leave started=false: the async Step 6 loop will call Start(false)
-					// and hot-attach to this already-live session off the critical path.
-				} else if err := instance.Start(false); err != nil {
-					log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
-					instance.loadStatus(domain.Stopped)
-					instance.started.Store(true)
-				}
-			} else {
-				instance.started.Store(true)
-			}
-		}
+		restoreStoppedInstance(instance, deferStart)
 	} else if instance.Status == domain.Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)
 		// but do NOT call Start — hibernated sessions resume only on explicit request.

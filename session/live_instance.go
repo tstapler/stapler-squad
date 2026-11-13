@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"sync"
 )
 
@@ -54,8 +55,8 @@ func NewLiveInstance(inst *Instance) *LiveInstance {
 // newLiveInstance is the internal construction path used by Registry.Acquire.
 // It calls FromInstanceData to reconstruct the *Instance from storage data
 // (including Start() for Active sessions), then wraps it in a LiveInstance.
-func newLiveInstance(data InstanceData, storage *Storage) (*LiveInstance, error) {
-	rows := []InstanceData{data}
+func newLiveInstance(data domain.InstanceData, storage *Storage) (*LiveInstance, error) {
+	rows := []domain.InstanceData{data}
 	storage.hydrateSessionPRs(context.Background(), rows) // single-session read; LoadInstances does the bulk one
 	inst, err := FromInstanceData(rows[0])
 	if err != nil {

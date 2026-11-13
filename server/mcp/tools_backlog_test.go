@@ -5397,7 +5397,7 @@ type fakeErrInstanceStore struct {
 	findErr error
 }
 
-func (f *fakeErrInstanceStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+func (f *fakeErrInstanceStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	return nil, f.findErr
 }
 

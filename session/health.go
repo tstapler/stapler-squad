@@ -578,10 +578,10 @@ func respawnDeadPane(instance *Instance) error {
 // checkWorktreeHealth flags a session whose git worktree directory has been
 // removed out from under it.
 func checkWorktreeHealth(instance *Instance, result *HealthCheckResult) {
-	if instance.Paused() || !instance.GitManager.HasWorktree() {
+	if instance.Paused() || !instance.GitManager().HasWorktree() {
 		return
 	}
-	worktreePath := instance.GitManager.GetWorktreePath()
+	worktreePath := instance.GitManager().GetWorktreePath()
 	if worktreePath == "" {
 		return
 	}

@@ -474,7 +474,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	// nonexistent SHA — this is what a pruned/corrupted commit looks like in practice.
 	inst := blktest.NewTestInstance("diff-error-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-error-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -903,7 +903,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	// exactly as observed for ae1e2070.
 	inst := blktest.NewTestInstance("diff-repair-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "diff-repair-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -986,7 +986,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	// the auto-repair attempt below.
 	inst := blktest.NewTestInstance("diff-repair-empty-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-repair-empty-test", "main", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -1080,7 +1080,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	// the ent ORM) — exactly the shape this guard exists to defend against.
 	inst := blktest.NewTestInstance("diff-error-no-branch-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-error-no-branch-test", "placeholder-branch", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 	forceEmptyBranchNameViaRawSQL(t, storage, "diff-error-no-branch-test")
@@ -1167,7 +1167,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 
 	inst := blktest.NewTestInstance("worktree-mismatch-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, recycledPath, "worktree-mismatch-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -1257,7 +1257,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 		sessionName := fmt.Sprintf("worktree-mismatch-repeat-test-%d", i)
 		inst := blktest.NewTestInstance(sessionName)
 		inst.UUID = workSessionUUID
-		inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+		inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 			repoDir, recycledPath, sessionName, "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 		require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -1326,7 +1326,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 
 	inst := blktest.NewTestInstance("worktree-gone-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "worktree-gone-test", "feature", baseSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -1410,7 +1410,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 
 	inst := blktest.NewTestInstance("worktree-gone-basesha-corrupted-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "worktree-gone-basesha-corrupted-test", "feature", corruptedBaseSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -1545,7 +1545,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 
 	inst := blktest.NewTestInstance("branch-drift-conflict-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-conflict-test", "feature", baseSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-conflict-test", "feature", baseSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: origin}
@@ -1635,7 +1635,7 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 
 	inst := blktest.NewTestInstance("branch-drift-clean-sync-test")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-clean-sync-test", "feature", baseSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-clean-sync-test", "feature", baseSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: origin}

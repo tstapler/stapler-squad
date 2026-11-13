@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // forkResumeID returns the resume conversation UUID stored in the forked instance (if any).
@@ -48,7 +49,7 @@ func TestForkFromCheckpoint_ConvUUID_SetAsResumeId(t *testing.T) {
 	historyFile := filepath.Join(historyDir, "conv-aaa.jsonl")
 	writeConvLines(t, historyFile, 10)
 	srcInst.HistoryFilePath = historyFile
-	srcInst.claudeSession = &ClaudeSessionData{ConversationUUID: "conv-aaa"}
+	srcInst.claudeSession = &domain.ClaudeSessionData{ConversationUUID: "conv-aaa"}
 
 	// Create checkpoint with conv data.
 	cp, err := srcInst.CreateCheckpoint("snap", 5)
@@ -86,7 +87,7 @@ func TestForkFromCheckpoint_NoGitSHA_Succeeds(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, fork)
-	assert.False(t, fork.GitManager.HasWorktree(), "no git worktree should be created when SHA is empty")
+	assert.False(t, fork.gitManager.HasWorktree(), "no git worktree should be created when SHA is empty")
 }
 
 func TestForkFromCheckpoint_NoConvUUID_EmptyResumeId(t *testing.T) {
@@ -169,7 +170,7 @@ func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 		Title:           "src-session",
 		Path:            t.TempDir(),
 		HistoryFilePath: historyFile,
-		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: "conv-real"}},
+		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: "conv-real"}},
 	}
 	srcInst.started.Store(true)
 

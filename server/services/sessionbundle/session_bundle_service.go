@@ -255,7 +255,7 @@ func (s *SessionBundleService) assembleBundle(
 }
 
 // collectSessionMetadata adds the required session_metadata section.
-func (c *bundleCollector) collectSessionMetadata(snap *session.InstanceSnapshot) {
+func (c *bundleCollector) collectSessionMetadata(snap *domain.InstanceSnapshot) {
 	metaPayload := struct {
 		ID          string    `json:"id"`
 		UUID        string    `json:"uuid"`

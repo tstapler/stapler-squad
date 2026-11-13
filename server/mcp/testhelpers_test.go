@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
@@ -74,11 +75,11 @@ func (s *stubStore) UpdateInstanceMetadata(currentTitle string, newTitle, catego
 	return nil
 }
 
-func (s *stubStore) ListInstanceData() ([]session.InstanceData, error) {
+func (s *stubStore) ListInstanceData() ([]domain.InstanceData, error) {
 	if s.loadErr != nil {
 		return nil, s.loadErr
 	}
-	data := make([]session.InstanceData, 0, len(s.instances))
+	data := make([]domain.InstanceData, 0, len(s.instances))
 	for _, inst := range s.instances {
 		data = append(data, inst.ToInstanceData())
 	}
@@ -87,7 +88,7 @@ func (s *stubStore) ListInstanceData() ([]session.InstanceData, error) {
 
 // FindInstanceDataByID mirrors Storage.FindInstanceDataByID's stable-ID-or-title
 // matching, scanning s.instances in place of an indexed query.
-func (s *stubStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+func (s *stubStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	if s.loadErr != nil {
 		return nil, s.loadErr
 	}

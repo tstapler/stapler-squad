@@ -27,15 +27,15 @@ func writeRecords(dir string, recs []scenario.SessionRecord) error {
 	return nil
 }
 
-func toInstanceData(r scenario.SessionRecord) session.InstanceData {
+func toInstanceData(r scenario.SessionRecord) domain.InstanceData {
 	status := domain.Paused
 	if r.Status == "active" {
 		status = domain.Active
 	}
-	return session.InstanceData{
+	return domain.InstanceData{
 		Title: r.Title, Path: r.Path, Branch: r.Branch, Status: status, Program: r.Program,
 		Category: r.Category, Tags: r.Tags, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		LastTerminalUpdate: r.UpdatedAt, LastMeaningfulOutput: r.UpdatedAt,
-		DiffStats: session.DiffStatsData{Added: r.Added, Removed: r.Removed},
+		DiffStats: domain.DiffStatsData{Added: r.Added, Removed: r.Removed},
 	}
 }

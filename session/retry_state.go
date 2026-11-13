@@ -224,6 +224,15 @@ func (i *Instance) retryExhausted() bool {
 	return i.RetryMaxAttempts > 0 && i.RetryAttempt >= i.RetryMaxAttempts
 }
 
+// SetRetryProgress applies update to the retry state under the instance lock and
+// republishes the snapshot, so Snapshot().Retry never lags a driver write.
+func (i *Instance) SetRetryProgress(update func(rs *domain.RetryState)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	update(&i.RetryState)
+	i.snapshot.Store(buildSnapshot(i))
+}
+
 // RetrySnapshot returns a race-free copy of RetryState for wire-boundary
 // conversion (server/adapters.InstanceToProto) and read-only UI consumers,
 // mirroring how GitHubPRState and its siblings are read directly rather than
@@ -253,9 +262,7 @@ func (i *Instance) retryPendingElapsed(now time.Time) (pending, elapsed bool) {
 // clearNextRetryAt clears a pending retry timestamp, called after a
 // successful automated restart consumes it.
 func (i *Instance) clearNextRetryAt() {
-	i.mu.Lock()
-	i.NextRetryAt = time.Time{}
-	i.mu.Unlock()
+	i.SetRetryProgress(func(rs *domain.RetryState) { rs.NextRetryAt = time.Time{} })
 }
 
 // lastRetryFailureReason returns the most recently recorded failure reason,
@@ -390,13 +397,20 @@ func (i *Instance) IsRetryPending() bool {
 // restartForRetry actually takes (Start()'s Creating→Active transition, or
 // Restart()'s own handling), mirroring the automated entry points exactly.
 func (i *Instance) RetryNow(allowedPath string) error {
-	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, i.RetryPolicyOverride)
+	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, i.retryPolicyOverride)
 
-	i.mu.Lock()
-	i.ResetEpisode()
-	i.RetryMaxAttempts = policy.MaxAttempts
-	i.mu.Unlock()
+	i.SetRetryProgress(func(rs *domain.RetryState) {
+		rs.ResetEpisode()
+		rs.RetryMaxAttempts = policy.MaxAttempts
+	})
 
 	prompt := buildRetryContinuationPrompt(i, "manual retry")
 	return restartForRetry(i, allowedPath, prompt, policy, nil)
+}
+
+// RetryPolicyOverride returns the per-session retry policy override, nil when
+// the session inherits the global default. It is an accessor, not a snapshot
+// field, so the snapshot does not carry a config type.
+func (i *Instance) RetryPolicyOverride() *config.RetryPolicyConfig {
+	return i.retryPolicyOverride
 }

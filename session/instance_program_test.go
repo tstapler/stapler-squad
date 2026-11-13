@@ -150,7 +150,7 @@ func TestSwitchProgram_LeavingClaudeFamily_ClearsConversationState(t *testing.T)
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "abc-123"})
 	inst.HistoryFilePath = "/fake/history.jsonl"
 
 	changed, _, err := inst.SwitchProgram(context.Background(), "aider", nil)
@@ -168,7 +168,7 @@ func TestSwitchProgram_RoundTrip_NoStaleResume(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "stale-uuid"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "stale-uuid"})
 
 	_, _, err := inst.SwitchProgram(context.Background(), "aider", nil)
 	require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState(t *testing.T
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "abc-123"})
 
 	changed, resolved, err := inst.SwitchProgram(context.Background(), "aider", nil)
 

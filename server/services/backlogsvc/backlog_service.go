@@ -1357,7 +1357,7 @@ func (s *BacklogService) cleanupWorktrees(ctx context.Context, sessions []backlo
 }
 
 // removeWorktree deletes one worktree (scaffolding first) and reports success.
-func (s *BacklogService) removeWorktree(wt session.GitWorktreeData) bool {
+func (s *BacklogService) removeWorktree(wt domain.GitWorktreeData) bool {
 	// Scaffolding first: if Cleanup below fails or the path isn't a removable
 	// worktree, the item-pinned /backlog:* files must not outlive the item.
 	_ = pipeline.CleanupSlashCommands(wt.WorktreePath)

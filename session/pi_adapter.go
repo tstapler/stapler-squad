@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // piScannerInitialBufferSize and piScannerMaxBufferSize size the bufio.Scanner
@@ -382,14 +383,14 @@ func (a *PiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Ins
 		sessionID = uuid.New().String()
 		inst.piSessionMu.Lock()
 		if inst.piSession == nil {
-			inst.piSession = &PiSessionData{}
+			inst.piSession = &domain.PiSessionData{}
 		}
 		inst.piSession.SessionID = sessionID
 		inst.piSessionMu.Unlock()
 
 		inst.claudeSessionMu.Lock()
 		if inst.claudeSession == nil {
-			inst.claudeSession = &ClaudeSessionData{}
+			inst.claudeSession = &domain.ClaudeSessionData{}
 		}
 		inst.claudeSession.ConversationUUID = sessionID
 		inst.claudeSessionMu.Unlock()

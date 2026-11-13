@@ -366,8 +366,8 @@ func TestRetentionSweeper_ShouldNotDelete_WhenSessionUnarchivedAfterCycleLoad(t 
 	defer fix.cleanup()
 	addArchivedWithUUID(t, fix, "revived", "u-rev")
 	sweeper, _ := newPRSweeper(fix)
-	sweeper.reread = func(string) (*session.InstanceData, error) {
-		return &session.InstanceData{UUID: "u-rev"}, nil // ArchivedAt cleared since the cycle load
+	sweeper.reread = func(string) (*domain.InstanceData, error) {
+		return &domain.InstanceData{UUID: "u-rev"}, nil // ArchivedAt cleared since the cycle load
 	}
 	sweeper.sweep(context.Background())
 	assert.True(t, hasStoredTitle(t, fix, "revived"))

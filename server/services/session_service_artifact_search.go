@@ -249,7 +249,7 @@ func (v visibleSet) unscanned() int32 {
 	return n
 }
 
-func sessionLastActivity(snap *session.InstanceSnapshot) time.Time {
+func sessionLastActivity(snap *domain.InstanceSnapshot) time.Time {
 	if !snap.LastMeaningfulChangeAt.IsZero() {
 		return snap.LastMeaningfulChangeAt
 	}

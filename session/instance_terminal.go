@@ -301,8 +301,8 @@ func (i *Instance) CaptureCurrentState() error {
 	if path == "" {
 		return nil
 	}
-	if i.GitManager.HasWorktree() {
-		if worktreePath := i.GitManager.GetWorktreePath(); worktreePath != "" && pathEscapesRoot(worktreePath, path) {
+	if i.gitManager.HasWorktree() {
+		if worktreePath := i.gitManager.GetWorktreePath(); worktreePath != "" && pathEscapesRoot(worktreePath, path) {
 			log.Warn("refusing to persist working dir outside worktree", "session", i.Title, "path", path, "worktree", worktreePath)
 			return nil
 		}

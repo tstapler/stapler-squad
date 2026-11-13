@@ -124,17 +124,17 @@ func TestListItemIDsBySessionUUIDs_ShouldReturnEveryItemOfASession(t *testing.T)
 
 func TestLegacyOnlyPRSafe_ShouldFollowThePersistedTerminalFlag(t *testing.T) {
 	t.Parallel()
-	assert.True(t, LegacyOnlyPRSafe(InstanceData{GitHubPRNumber: 9, GitHubPRStatusTerminal: true}))
-	assert.False(t, LegacyOnlyPRSafe(InstanceData{GitHubPRNumber: 9, GitHubPRStatusTerminal: false}))
+	assert.True(t, LegacyOnlyPRSafe(domain.InstanceData{GitHubPRNumber: 9, GitHubPRStatusTerminal: true}))
+	assert.False(t, LegacyOnlyPRSafe(domain.InstanceData{GitHubPRNumber: 9, GitHubPRStatusTerminal: false}))
 }
 
 func TestLegacyNumberRepresented_ShouldMatchRepoAndNumber(t *testing.T) {
 	t.Parallel()
-	d := InstanceData{GitHubPRNumber: 12, GitHubOwner: "Acme", GitHubRepo: "App", GitHubHost: "github.com"}
+	d := domain.InstanceData{GitHubPRNumber: 12, GitHubOwner: "Acme", GitHubRepo: "App", GitHubHost: "github.com"}
 	rows := make([]domain.PRView, 0, 2)
 	rows = append(rows, domain.PRView{Ref: mustPRRef(t, "", "acme", "app", 11)})
 	assert.False(t, LegacyNumberRepresented(d, rows), "links {#11} do not carry legacy #12")
 	rows = append(rows, domain.PRView{Ref: mustPRRef(t, "", "acme", "app", 12)})
 	assert.True(t, LegacyNumberRepresented(d, rows))
-	assert.False(t, LegacyNumberRepresented(InstanceData{GitHubPRNumber: 12}, rows), "unbuildable ref is never represented")
+	assert.False(t, LegacyNumberRepresented(domain.InstanceData{GitHubPRNumber: 12}, rows), "unbuildable ref is never represented")
 }

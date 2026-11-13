@@ -3365,8 +3365,8 @@ func (r *EntRepository) ArchivedSessionUUIDs(ctx context.Context, sessionUUIDs [
 // GetWorktreeDataBySessionUUIDs is GetWorktreeDataBySessionUUID for many
 // sessions in one query per 500 UUIDs. UUIDs with no session or no worktree are
 // absent from the result.
-func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]GitWorktreeData, error) {
-	out := make(map[string]GitWorktreeData, len(sessionUUIDs))
+func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]domain.GitWorktreeData, error) {
+	out := make(map[string]domain.GitWorktreeData, len(sessionUUIDs))
 	const chunkSize = 500
 	for start := 0; start < len(sessionUUIDs); start += chunkSize {
 		end := min(start+chunkSize, len(sessionUUIDs))
@@ -3379,7 +3379,7 @@ func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessi
 		}
 		for _, sess := range rows {
 			if wt := sess.Edges.Worktree; wt != nil {
-				out[sess.UUID] = GitWorktreeData{
+				out[sess.UUID] = domain.GitWorktreeData{
 					RepoPath:      wt.RepoPath,
 					WorktreePath:  wt.WorktreePath,
 					SessionName:   wt.SessionName,
@@ -3395,21 +3395,21 @@ func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessi
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns an empty GitWorktreeData (no error) if the session does
 // not exist or is a directory-mode session without a dedicated worktree.
-func (r *EntRepository) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (GitWorktreeData, error) {
+func (r *EntRepository) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (domain.GitWorktreeData, error) {
 	sess, err := r.Client.Session.Query().
 		Where(entSession.UUID(sessionUUID)).
 		WithWorktree().
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return GitWorktreeData{}, nil
+			return domain.GitWorktreeData{}, nil
 		}
-		return GitWorktreeData{}, fmt.Errorf("GetWorktreeDataBySessionUUID %q: %w", sessionUUID, err)
+		return domain.GitWorktreeData{}, fmt.Errorf("GetWorktreeDataBySessionUUID %q: %w", sessionUUID, err)
 	}
 	if sess.Edges.Worktree == nil {
-		return GitWorktreeData{}, nil
+		return domain.GitWorktreeData{}, nil
 	}
-	return GitWorktreeData{
+	return domain.GitWorktreeData{
 		RepoPath:      sess.Edges.Worktree.RepoPath,
 		WorktreePath:  sess.Edges.Worktree.WorktreePath,
 		SessionName:   sess.Edges.Worktree.SessionName,

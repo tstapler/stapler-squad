@@ -96,8 +96,8 @@ type WorktreeConsistencyFinding struct {
 // IssueMissingWorktreeRow case. Built once per sweep tick (pitfalls.md §1
 // "snapshot-once-per-cycle").
 type SessionWorktreeCandidate struct {
-	Data     session.InstanceData
-	Worktree *session.GitWorktreeData
+	Data     domain.InstanceData
+	Worktree *domain.GitWorktreeData
 }
 
 // creatingGracePeriod excludes Status == Creating sessions younger than this (measured
@@ -111,7 +111,7 @@ const creatingGracePeriod = 5 * time.Minute
 // ent row should exist for this session — the shared predicate Epic 1.1's candidate filter
 // and Epic 1.2's issue classification both depend on (single source of truth, avoids
 // duplicated logic across the two files this project touches).
-func ExpectsWorktree(data session.InstanceData) bool {
+func ExpectsWorktree(data domain.InstanceData) bool {
 	isWorktreeSession := data.SessionType == domain.SessionTypeNewWorktree ||
 		data.SessionType == domain.SessionTypeExistingWorktree ||
 		data.IsWorktree
@@ -622,15 +622,15 @@ var errBaseCommitShaUnresolved = errors.New("base_commit_sha could not be derive
 // worktree itself couldn't be read at all." NewGitWorktreeFromExisting derives
 // BaseCommitSHA from the worktree's current HEAD and leaves it "" (without erroring the
 // whole call) when HEAD can't be read — e.g. a corrupted or dangling symbolic ref.
-func deriveRepairedWorktreeData(candidate SessionWorktreeCandidate, match *git.NativeWorktreeEntry) (session.GitWorktreeData, error) {
+func deriveRepairedWorktreeData(candidate SessionWorktreeCandidate, match *git.NativeWorktreeEntry) (domain.GitWorktreeData, error) {
 	wt, err := git.NewGitWorktreeFromExisting(match.WorktreePath, candidate.Data.Title)
 	if err != nil {
-		return session.GitWorktreeData{}, fmt.Errorf("deriveRepairedWorktreeData: %w", err)
+		return domain.GitWorktreeData{}, fmt.Errorf("deriveRepairedWorktreeData: %w", err)
 	}
 	if wt.GetBaseCommitSHA() == "" {
-		return session.GitWorktreeData{}, fmt.Errorf("%w (worktree at %q)", errBaseCommitShaUnresolved, match.WorktreePath)
+		return domain.GitWorktreeData{}, fmt.Errorf("%w (worktree at %q)", errBaseCommitShaUnresolved, match.WorktreePath)
 	}
-	return session.GitWorktreeData{
+	return domain.GitWorktreeData{
 		RepoPath:      wt.GetRepoPath(),
 		WorktreePath:  wt.GetWorktreePath(),
 		SessionName:   candidate.Data.Title,
@@ -650,7 +650,7 @@ func deriveRepairedWorktreeData(candidate SessionWorktreeCandidate, match *git.N
 // the Worktree edge. created reports whether this call actually wrote the row; created ==
 // false with a nil error means the row already existed (the guard fired) — the caller
 // falls through to the flag path in that case, per Task 1.2.3b.
-func repairWorktreeRow(ctx context.Context, repo *session.EntRepository, sessionUUID string, wt session.GitWorktreeData) (created bool, err error) {
+func repairWorktreeRow(ctx context.Context, repo *session.EntRepository, sessionUUID string, wt domain.GitWorktreeData) (created bool, err error) {
 	tx, err := repo.Client.Tx(ctx)
 	if err != nil {
 		return false, fmt.Errorf("repairWorktreeRow: begin transaction: %w", err)

@@ -209,9 +209,9 @@ func TestResume_should_NotFailFatally_When_ClaudeSessionReattachmentFails(t *tes
 		Permissions: domain.GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
-	inst.claudeSession = &ClaudeSessionData{
+	inst.claudeSession = &domain.ClaudeSessionData{
 		ConversationUUID: "does-not-exist",
-		Settings:         ClaudeSettings{AutoReattach: true},
+		Settings:         domain.ClaudeSettings{AutoReattach: true},
 	}
 	fakePM := newFakePauseResumeProcessManager(t)
 	inst.processManager = fakePM

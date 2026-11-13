@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/interceptors"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/importer"
 )
 
@@ -224,17 +225,17 @@ func TestImportService_CancelPendingKill_ReturnsInvalidArgument_When_InstanceIdE
 // depended on by the upload-handler tests, so this file uses its own
 // configurable fake instead of generalizing the shared one.
 type fakeImportCollisionStore struct {
-	instances []session.InstanceData
+	instances []domain.InstanceData
 
 	added        []*session.Instance
 	deletedTitle string
 }
 
 func (f *fakeImportCollisionStore) LoadInstances() ([]*session.Instance, error) { return nil, nil }
-func (f *fakeImportCollisionStore) ListInstanceData() ([]session.InstanceData, error) {
+func (f *fakeImportCollisionStore) ListInstanceData() ([]domain.InstanceData, error) {
 	return f.instances, nil
 }
-func (f *fakeImportCollisionStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+func (f *fakeImportCollisionStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	for i := range f.instances {
 		if f.instances[i].MatchesID(id) {
 			return &f.instances[i], nil
@@ -281,7 +282,7 @@ func TestImportService_CommitImportExternalSession_ReturnsFailedStatus_When_Path
 	tmpHome := t.TempDir()
 	collidingPath := t.TempDir()
 	store := &fakeImportCollisionStore{
-		instances: []session.InstanceData{{Title: "existing", Path: collidingPath}},
+		instances: []domain.InstanceData{{Title: "existing", Path: collidingPath}},
 	}
 	detector := session.NewHistoryFileDetectorWithHomeDir(&fakeProcessFileInspector{}, tmpHome)
 	svc := &ImportService{detector: detector, storage: store}

@@ -34,7 +34,7 @@ func buildPRAnnotations(poller *prpoller.PRStatusPoller, scanner *unfinished.Sca
 // annotationsForSnapshot emits one annotation per attached PR so every PR a
 // session holds links back to it; a session with no links keeps the single
 // legacy entry. Reads the snapshot, never raw fields: actor writes do not hold mu.
-func annotationsForSnapshot(title string, snap *session.InstanceSnapshot, enterpriseHosts []string) []githubpkg.PRAnnotationSession {
+func annotationsForSnapshot(title string, snap *domain.InstanceSnapshot, enterpriseHosts []string) []githubpkg.PRAnnotationSession {
 	if len(snap.GitHub.PRs) > 0 {
 		return annotationsForPRs(title, snap)
 	}
@@ -54,7 +54,7 @@ func annotationsForSnapshot(title string, snap *session.InstanceSnapshot, enterp
 	}}
 }
 
-func annotationsForPRs(title string, snap *session.InstanceSnapshot) []githubpkg.PRAnnotationSession {
+func annotationsForPRs(title string, snap *domain.InstanceSnapshot) []githubpkg.PRAnnotationSession {
 	out := make([]githubpkg.PRAnnotationSession, 0, len(snap.GitHub.PRs))
 	for _, v := range snap.GitHub.PRs {
 		host := v.Ref.Host()
@@ -96,7 +96,7 @@ func annotationSessions(poller *prpoller.PRStatusPoller, enterpriseHosts []strin
 // (e.g. a paused session whose worktree is gone) and no PR URL stays
 // unrecorded and may legacy-link a same-owner, same-branch GHE PR; legacy
 // links are flagged LegacyFallback and never grant nudge linkage.
-func resolveSessionRepo(snap *session.InstanceSnapshot, enterpriseHosts []string) (_ githubpkg.RepoRef, prNumber int, hostUnrecorded bool) {
+func resolveSessionRepo(snap *domain.InstanceSnapshot, enterpriseHosts []string) (_ githubpkg.RepoRef, prNumber int, hostUnrecorded bool) {
 	prNumber = snap.GitHub.GitHubPRNumber
 	var repoRef githubpkg.RepoRef
 	if snap.GitHub.GitHubOwner != "" && snap.GitHub.GitHubRepo != "" {
@@ -124,7 +124,7 @@ func resolveSessionRepo(snap *session.InstanceSnapshot, enterpriseHosts []string
 // (fork or rename) it says nothing reliable about where the stored PR lives, so
 // only the stored PR URL's host is trusted; without one the session stays
 // unrecorded rather than being stamped with the remote's host.
-func confirmLegacyHost(snap *session.InstanceSnapshot, stored githubpkg.RepoRef, enterpriseHosts []string) (_ githubpkg.RepoRef, hostUnrecorded bool) {
+func confirmLegacyHost(snap *domain.InstanceSnapshot, stored githubpkg.RepoRef, enterpriseHosts []string) (_ githubpkg.RepoRef, hostUnrecorded bool) {
 	if remote, ok := remoteRepo(snap.Path, enterpriseHosts); ok &&
 		strings.EqualFold(remote.Owner(), stored.Owner()) && strings.EqualFold(remote.Repo(), stored.Repo()) {
 		return remote, false

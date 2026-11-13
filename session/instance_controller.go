@@ -150,9 +150,9 @@ func (i *Instance) StartController() error {
 // The listener is called synchronously on the goroutine that fires the event;
 // implementations must return quickly (no long blocking operations).
 func (i *Instance) RegisterLifecycleListener(l domain.LifecycleListener) {
-	i.LifecycleListenersMu.Lock()
-	defer i.LifecycleListenersMu.Unlock()
-	i.LifecycleListeners = append(i.LifecycleListeners, l)
+	i.lifecycleListenersMu.Lock()
+	defer i.lifecycleListenersMu.Unlock()
+	i.lifecycleListeners = append(i.lifecycleListeners, l)
 }
 
 // hasLifecycleListeners reports whether any listener is currently registered
@@ -161,17 +161,24 @@ func (i *Instance) RegisterLifecycleListener(l domain.LifecycleListener) {
 // when nothing is wired to consume it — e.g. deployments where
 // SessionSummaryGenerator is nil and no listener was ever registered.
 func (i *Instance) hasLifecycleListeners() bool {
-	i.LifecycleListenersMu.Lock()
-	defer i.LifecycleListenersMu.Unlock()
-	return len(i.LifecycleListeners) > 0
+	i.lifecycleListenersMu.Lock()
+	defer i.lifecycleListenersMu.Unlock()
+	return len(i.lifecycleListeners) > 0
+}
+
+// LifecycleListenerCount returns how many lifecycle listeners are registered.
+func (i *Instance) LifecycleListenerCount() int {
+	i.lifecycleListenersMu.Lock()
+	defer i.lifecycleListenersMu.Unlock()
+	return len(i.lifecycleListeners)
 }
 
 // fireLifecycleEvent notifies all registered listeners of a lifecycle event.
 func (i *Instance) FireLifecycleEvent(event domain.LifecycleEvent, reason string) {
-	i.LifecycleListenersMu.Lock()
-	listeners := make([]domain.LifecycleListener, len(i.LifecycleListeners))
-	copy(listeners, i.LifecycleListeners)
-	i.LifecycleListenersMu.Unlock()
+	i.lifecycleListenersMu.Lock()
+	listeners := make([]domain.LifecycleListener, len(i.lifecycleListeners))
+	copy(listeners, i.lifecycleListeners)
+	i.lifecycleListenersMu.Unlock()
 
 	for _, l := range listeners {
 		l.OnLifecycleEvent(event, reason)

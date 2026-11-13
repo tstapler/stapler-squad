@@ -349,7 +349,7 @@ func newPreflightFixture(t *testing.T, storage *session.Storage) (*backlogdto.Ba
 	require.NoError(t, err)
 	inst := newTestInstance("preflight-" + sessionUUID[:8])
 	inst.UUID = sessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir+"/../wt", "preflight-test", "backlog/preflight-test", "abc123")
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir+"/../wt", "preflight-test", "backlog/preflight-test", "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 	return item, backlogdto.ItemSessionSummary{ID: is.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
 }

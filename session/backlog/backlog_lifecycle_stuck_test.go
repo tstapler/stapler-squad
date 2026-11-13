@@ -3450,7 +3450,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	// whose worktree is the shared main checkout itself.
 	inst := newTestInstance("shipped-no-pr-instance")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "shipped-no-pr-instance", "main", mainSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "shipped-no-pr-instance", "main", mainSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
@@ -3520,7 +3520,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_NoPRAndCommitNotOnMain(t *
 	// repoPath's checked-out HEAD is the "feature" branch's unshipped commit.
 	inst := newTestInstance("unshipped-no-pr-instance")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "unshipped-no-pr-instance", "feature", featureSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "unshipped-no-pr-instance", "feature", featureSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	for i := 0; i < 3; i++ {
@@ -3599,7 +3599,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_LastCommitShaIsStaleBaseSe
 	// the worktree's real state disagrees with the stale LastCommitSha above.
 	inst := newTestInstance("stale-base-seed-instance")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "stale-base-seed-instance", "feature", featureSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "stale-base-seed-instance", "feature", featureSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	for i := 0; i < 3; i++ {
@@ -3675,7 +3675,7 @@ func TestReconcileBouncingItems_should_notTreatFreshBranchBaseAsShipped_When_Zer
 	// also mainSHA, matching what a real spawn records.
 	inst := newTestInstance("fresh-branch-instance")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "fresh-branch-instance", "backlog/fresh-feature", mainSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "fresh-branch-instance", "backlog/fresh-feature", mainSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	for i := 0; i < 3; i++ {
@@ -3753,7 +3753,7 @@ func TestReconcileBouncingItems_should_stillFlag_When_WorktreePathWasRecycledToA
 	// "other-item-branch" with a commit this item never authored.
 	inst := newTestInstance("recycled-worktree-instance")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "recycled-worktree-instance", "feature", staleFeatureSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "recycled-worktree-instance", "feature", staleFeatureSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	// A later, unrelated item is spawned into the very same path (worktree
@@ -3826,7 +3826,7 @@ func TestReconcileBouncingItems_should_stillTransitionToDone_When_WorkCommittedD
 
 	inst := newTestInstance("direct-to-main-instance")
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "direct-to-main-instance", "main", mainSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "direct-to-main-instance", "main", mainSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	for i := 0; i < 3; i++ {

@@ -34,6 +34,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/memory"
@@ -2241,7 +2242,7 @@ func (a *notificationDecisionListerAdapter) ListDecisionRecords(_ context.Contex
 // than in session, per this repo's interface-pollution convention, so a fake with
 // no real *session.Storage (and no ent-backed repository) can stand in for tests.
 type instanceDataLister interface {
-	ListInstanceData() ([]session.InstanceData, error)
+	ListInstanceData() ([]domain.InstanceData, error)
 }
 
 // pruneOrphanedMinUptime gates buildSessionExistenceLookup's returned func so a

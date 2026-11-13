@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -472,9 +473,9 @@ type fakePRInstanceStore struct {
 	saveCalls      int
 }
 
-func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)       { return nil, nil }
-func (f *fakePRInstanceStore) ListInstanceData() ([]session.InstanceData, error) { return nil, nil }
-func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*session.InstanceData, error) {
+func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)      { return nil, nil }
+func (f *fakePRInstanceStore) ListInstanceData() ([]domain.InstanceData, error) { return nil, nil }
+func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*domain.InstanceData, error) {
 	return nil, session.ErrInstanceDataNotFound
 }
 func (f *fakePRInstanceStore) AddInstance(*session.Instance) error                    { return nil }

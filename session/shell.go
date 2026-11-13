@@ -67,28 +67,6 @@ type Shell struct {
 	watcherDone chan struct{}
 }
 
-// ShellData carries the input fields for creating a new shell.
-type ShellData struct {
-	// ID is the UUID for the shell. If empty, the caller must populate it.
-	ID string
-	// Name is the user-visible label.
-	Name string
-	// Command is the command to run in the shell.
-	Command string
-	// WorkingDir is the starting directory for the shell process.
-	WorkingDir string
-	// TmuxSessionName is the full sibling tmux session name.
-	TmuxSessionName string
-	// OrderIndex is the display order for the tab.
-	OrderIndex int
-
-	// Status, ExitCode and StartedAt are read-side only: populated by
-	// ShellRepository.ListShells, ignored by CreateShell.
-	Status    string
-	ExitCode  *int
-	StartedAt time.Time
-}
-
 // SpawnShellRequest carries the parameters for Instance.SpawnShell.
 type SpawnShellRequest struct {
 	// Name is the optional user-visible label. Defaults to the command base name.

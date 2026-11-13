@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // piExtension holds pi-coding-agent controller and session state, and
@@ -33,7 +34,7 @@ type piExtension struct {
 	// resume-on-restart (see buildPiCommand). Populated only when
 	// isPi(i.Program) and the config.FeaturePiSupport flag is enabled -- see
 	// the capture in Restart. Guarded by piSessionMu, not i.mu.
-	piSession *PiSessionData
+	piSession *domain.PiSessionData
 	// piSessionMu protects piSession. Separate from i.mu: SetPiSessionID is
 	// called from PiStatusSource's reader goroutine (via the onSessionID
 	// callback) and Restart touches piSession too, so a dedicated lock makes
@@ -208,7 +209,7 @@ func (i *Instance) SetPiSessionID(id string) {
 		return
 	}
 	if i.piSession == nil {
-		i.piSession = &PiSessionData{}
+		i.piSession = &domain.PiSessionData{}
 	}
 	i.piSession.SessionID = id
 	i.piSession.LastAttached = time.Now()

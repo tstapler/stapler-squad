@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -119,7 +120,7 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 		if changed && !s.inst.LastMeaningfulOutput.Equal(prevMeaningful) {
 			s.inst.touchLocked(SessionEventOutput, s.inst.LastMeaningfulOutput)
 		}
-		var snap *InstanceSnapshot
+		var snap *domain.InstanceSnapshot
 		if changed {
 			snap = buildSnapshot(s.inst)
 		}

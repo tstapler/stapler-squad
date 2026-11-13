@@ -78,7 +78,7 @@ func attachWorktree(t *testing.T, storage *session.Storage, repoPath, branch, he
 	t.Helper()
 	inst := newTestInstance("bug047-instance")
 	inst.UUID = "bug047-work-session"
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "bug047-instance", branch, headSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "bug047-instance", branch, headSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 }
 

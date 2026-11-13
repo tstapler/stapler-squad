@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestClaudeSessionData_UnmarshalJSON_LegacyConversationID(t *testing.T) {
 	// new SquadSessionID field so existing sessions hydrate correctly.
 	payload := []byte(`{"session_id":"sess-1","conversation_id":"legacy-id","project_name":"demo"}`)
 
-	var got ClaudeSessionData
+	var got domain.ClaudeSessionData
 	if err := json.Unmarshal(payload, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -34,7 +35,7 @@ func TestClaudeSessionData_UnmarshalJSON_NewKeyTakesPrecedence(t *testing.T) {
 	// squad_session_id key wins over the legacy conversation_id key.
 	payload := []byte(`{"squad_session_id":"new-id","conversation_id":"old-id"}`)
 
-	var got ClaudeSessionData
+	var got domain.ClaudeSessionData
 	if err := json.Unmarshal(payload, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestClaudeSessionData_UnmarshalJSON_NewFormatOnly(t *testing.T) {
 	// squad_session_id key is used directly.
 	payload := []byte(`{"session_id":"sess-2","squad_session_id":"squad-2"}`)
 
-	var got ClaudeSessionData
+	var got domain.ClaudeSessionData
 	if err := json.Unmarshal(payload, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

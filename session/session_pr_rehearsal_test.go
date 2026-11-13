@@ -174,8 +174,8 @@ func (r *rehearsalReport) flush() {
 type listTiming struct{ load, p99 time.Duration }
 
 // measureListPath times LoadInstances (the bulk load) and the p99 of one
-// list-request's work: converting every loaded instance's snapshot to the domain
-// Session, where PR views are read. It stands in for the ListSessions RPC.
+// list-request's work: reading every loaded instance's snapshot and its
+// active PR. It stands in for the ListSessions RPC.
 func measureListPath(t *testing.T, s *Storage) listTiming {
 	t.Helper()
 	start := time.Now()
@@ -184,14 +184,16 @@ func measureListPath(t *testing.T, s *Storage) listTiming {
 	load := time.Since(start)
 	for n := 0; n < rehearsalListWarmup; n++ {
 		for _, inst := range insts {
-			_ = InstanceToSession(inst)
+			snap := inst.Snapshot()
+			_ = domain.ActivePR(snap.GitHub.PRs, snap.Branch)
 		}
 	}
 	samples := make([]time.Duration, 0, rehearsalListSamples)
 	for n := 0; n < rehearsalListSamples; n++ {
 		begin := time.Now()
 		for _, inst := range insts {
-			_ = InstanceToSession(inst)
+			snap := inst.Snapshot()
+			_ = domain.ActivePR(snap.GitHub.PRs, snap.Branch)
 		}
 		samples = append(samples, time.Since(begin))
 	}

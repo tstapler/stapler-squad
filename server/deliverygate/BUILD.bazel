@@ -26,6 +26,7 @@ go_library(
         "//pkg/events",
         "//proto/session/v1:sessionv1_go",
         "//session",
+        "//session/domain",
         "//session/tmux",
         "//telemetry",
         "@io_opentelemetry_go_otel//attribute",

@@ -59,9 +59,7 @@ func TestLifecycleCallbackConcurrency(t *testing.T) {
 	}
 
 	// Verify listener list is not corrupted.
-	inst.LifecycleListenersMu.Lock()
-	listenerCount := len(inst.LifecycleListeners)
-	inst.LifecycleListenersMu.Unlock()
+	listenerCount := inst.LifecycleListenerCount()
 	if listenerCount != 1 {
 		t.Errorf("expected 1 listener after concurrent fires, got %d", listenerCount)
 	}
