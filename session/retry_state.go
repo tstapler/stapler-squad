@@ -341,7 +341,7 @@ func (i *Instance) RetryNow(allowedPath string) error {
 	})
 
 	prompt := buildRetryContinuationPrompt(i, "manual retry")
-	return restartForRetry(i, allowedPath, prompt, policy, nil)
+	return driverControl().RestartForRetry(i, allowedPath, prompt, policy, nil)
 }
 
 // RetryPolicyOverride returns the per-session retry policy override, nil when

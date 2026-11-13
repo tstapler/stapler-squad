@@ -142,7 +142,7 @@ func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 					"session", i.Title, "err", err)
 			}
 		}
-		StartSessionDriver(i, i.GetEffectiveRootDir())
+		driverControl().Start(i, i.GetEffectiveRootDir())
 		cfg := appconfig.LoadConfig()
 		checkpointDir, err := cfg.HibernationCheckpointDirOrDefault()
 		if err == nil && checkpointDir != "" {

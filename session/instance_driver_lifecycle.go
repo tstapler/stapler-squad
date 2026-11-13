@@ -123,3 +123,23 @@ func JoinSessionDriver(inst *Instance) {
 			"session", inst.Title, "timeout", stopJoinTimeout)
 	}
 }
+
+// DriverControl is the seam through which Instance code starts the session driver
+// and runs a retry restart without naming session_driver.go, which stays above the
+// Instance file set. Two implementations: sessionDriverControl (production) and any
+// test fake installed in driverControlHook.
+type DriverControl interface {
+	Start(inst *Instance, allowedPath string)
+	RestartForRetry(inst *Instance, allowedPath, continuationPrompt string, policy RetryPolicy, stop <-chan struct{}) error
+}
+
+// driverControlHook is assigned once, in an init() of the staying driver code, so it is
+// race-free and never written after startup.
+var driverControlHook DriverControl
+
+func driverControl() DriverControl {
+	if driverControlHook == nil {
+		panic("session: DriverControl not registered (the package implementing the session driver must set driverControlHook in init)")
+	}
+	return driverControlHook
+}

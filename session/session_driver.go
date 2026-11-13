@@ -1333,3 +1333,16 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 	}()
 	return nil
 }
+
+// sessionDriverControl is the production DriverControl.
+type sessionDriverControl struct{}
+
+func (sessionDriverControl) Start(inst *Instance, allowedPath string) {
+	StartSessionDriver(inst, allowedPath)
+}
+
+func (sessionDriverControl) RestartForRetry(inst *Instance, allowedPath, continuationPrompt string, policy RetryPolicy, stop <-chan struct{}) error {
+	return restartForRetry(inst, allowedPath, continuationPrompt, policy, stop)
+}
+
+func init() { driverControlHook = sessionDriverControl{} }
