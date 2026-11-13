@@ -388,7 +388,7 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFaile
 // recreate it before Start() runs.
 func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted(t *testing.T) {
 	t.Parallel()
-	repoPath := setupTestRepository(t)
+	repoPath := sessiontest.SetupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoPath, "retry-worktree-recreate")
 	require.NoError(t, err)

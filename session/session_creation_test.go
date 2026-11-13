@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
@@ -190,7 +192,7 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	tempRepo := setupTestRepository(t)
+	tempRepo := sessiontest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
 	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{

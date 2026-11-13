@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -20,7 +22,7 @@ func TestRepositoryEntryPoints_ShouldResolveOnePullRequestState_WhenCaseDiffers(
 	spellings := [][2]string{{"Acme", "App"}, {"acme", "app"}, {"ACME", "APP"}}
 
 	for i, sp := range spellings {
-		ref := mustPRRef(t, "", sp[0], sp[1], 12)
+		ref := sessiontest.MustPRRef(t, "", sp[0], sp[1], 12)
 		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), ref, domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual})
 		require.NoError(t, err, "spelling %d", i)
 		_, err = repo.EnsureState(ctx, ref, domain.PRInitial{})
@@ -32,10 +34,10 @@ func TestRepositoryEntryPoints_ShouldResolveOnePullRequestState_WhenCaseDiffers(
 	assert.Equal(t, 2, countLinks(t, repo), "one session link and one item link")
 
 	// A tombstone written through one spelling blocks every other spelling.
-	_, err := repo.DeleteSessionPR(ctx, SessionPROwner("u1"), mustPRRef(t, "", "Acme", "App", 12))
+	_, err := repo.DeleteSessionPR(ctx, SessionPROwner("u1"), sessiontest.MustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
 	for _, sp := range spellings {
-		ref := mustPRRef(t, "", sp[0], sp[1], 12)
+		ref := sessiontest.MustPRRef(t, "", sp[0], sp[1], 12)
 		tombstoned, err := repo.IsTombstoned(ctx, SessionPROwner("u1"), ref)
 		require.NoError(t, err)
 		assert.True(t, tombstoned, "spelling %v", sp)

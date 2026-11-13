@@ -3,42 +3,20 @@ package session
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
-
-var prTestEpoch = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
-
-func mustPRRef(t *testing.T, host, owner, repo string, n int) domain.PRRef {
-	t.Helper()
-	ref, err := domain.NewPRRef(host, owner, repo, n)
-	if err != nil {
-		t.Fatalf("NewPRRef(%q,%q,%q,%d): %v", host, owner, repo, n, err)
-	}
-	return ref
-}
-
-// prRow builds a view of acme/app#n attached n minutes after the epoch, so a
-// higher number is newer unless a test overrides AttachedAt.
-func prRow(t *testing.T, n int, state domain.PRState, head string) domain.PRView {
-	t.Helper()
-	return domain.PRView{
-		StateID:    n,
-		Ref:        mustPRRef(t, "", "acme", "app", n),
-		State:      state,
-		HeadBranch: head,
-		AttachedAt: prTestEpoch.Add(time.Duration(n) * time.Minute),
-	}
-}
 
 func unverifiedTerminal(v domain.PRView, exhausted bool) domain.PRView {
 	v.State = domain.PRStateUnknown
 	v.StoredTerminal = true
 	if exhausted {
 		v.PollFailCount = 5
-		v.FirstFailAt = prTestEpoch
-		v.LastPolledAt = prTestEpoch.Add(31 * time.Minute)
+		v.FirstFailAt = sessiontest.PrTestEpoch
+		v.LastPolledAt = sessiontest.PrTestEpoch.Add(31 * time.Minute)
 	}
 	return v
 }
@@ -58,19 +36,19 @@ func TestNewPRRef_ShouldCanonicalizeIdentity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			ref := mustPRRef(t, tt.host, tt.owner, tt.repo, 12)
+			ref := sessiontest.MustPRRef(t, tt.host, tt.owner, tt.repo, 12)
 			if ref.Host() != tt.wantHost || ref.Owner() != tt.wantO || ref.Repo() != tt.wantR || ref.Number() != 12 {
 				t.Errorf("got %s, want %s/%s/%s#12", ref, tt.wantHost, tt.wantO, tt.wantR)
 			}
 		})
 	}
 
-	a := mustPRRef(t, "", "Acme", "App", 12)
-	b := mustPRRef(t, "github.com", "acme", "app", 12)
+	a := sessiontest.MustPRRef(t, "", "Acme", "App", 12)
+	b := sessiontest.MustPRRef(t, "github.com", "acme", "app", 12)
 	if a != b {
 		t.Errorf("refs differing only in case/empty host must be equal: %v vs %v", a, b)
 	}
-	if ghe := mustPRRef(t, "ghe.acme.io", "acme", "app", 12); ghe == b {
+	if ghe := sessiontest.MustPRRef(t, "ghe.acme.io", "acme", "app", 12); ghe == b {
 		t.Error("a GHE ref must differ from github.com")
 	}
 }
@@ -100,7 +78,7 @@ func TestNewPRRef_ShouldRejectIncompleteInput(t *testing.T) {
 
 func TestPRRef_ShouldPrintItselfInStringAndJSON(t *testing.T) {
 	t.Parallel()
-	ref := mustPRRef(t, "", "Acme", "App", 12)
+	ref := sessiontest.MustPRRef(t, "", "Acme", "App", 12)
 	if got := fmt.Sprint(ref); got != "github.com/acme/app#12" {
 		t.Errorf("fmt.Sprint = %q", got)
 	}
@@ -161,18 +139,18 @@ func TestParsePRRoleAndAttachSource_ShouldValidate(t *testing.T) {
 
 func TestPRView_Terminal_ShouldUseEffectiveTerminal(t *testing.T) {
 	t.Parallel()
-	open := prRow(t, 1, domain.PRStateOpen, "a")
+	open := sessiontest.PrRow(t, 1, domain.PRStateOpen, "a")
 	tests := []struct {
 		name string
 		view domain.PRView
 		want bool
 	}{
 		{"open", open, false},
-		{"merged", prRow(t, 2, domain.PRStateMerged, "a"), true},
-		{"closed", prRow(t, 3, domain.PRStateClosed, "a"), true},
-		{"unknown", prRow(t, 4, domain.PRStateUnknown, "a"), false},
-		{"unverified terminal, not exhausted", unverifiedTerminal(prRow(t, 5, domain.PRStateUnknown, "a"), false), false},
-		{"unverified terminal, exhausted", unverifiedTerminal(prRow(t, 6, domain.PRStateUnknown, "a"), true), true},
+		{"merged", sessiontest.PrRow(t, 2, domain.PRStateMerged, "a"), true},
+		{"closed", sessiontest.PrRow(t, 3, domain.PRStateClosed, "a"), true},
+		{"unknown", sessiontest.PrRow(t, 4, domain.PRStateUnknown, "a"), false},
+		{"unverified terminal, not exhausted", unverifiedTerminal(sessiontest.PrRow(t, 5, domain.PRStateUnknown, "a"), false), false},
+		{"unverified terminal, exhausted", unverifiedTerminal(sessiontest.PrRow(t, 6, domain.PRStateUnknown, "a"), true), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -186,7 +164,7 @@ func TestPRView_Terminal_ShouldUseEffectiveTerminal(t *testing.T) {
 
 func TestPRView_VerifyExhausted_ShouldNeedCountAndSpan(t *testing.T) {
 	t.Parallel()
-	base := unverifiedTerminal(prRow(t, 7, domain.PRStateUnknown, "a"), true)
+	base := unverifiedTerminal(sessiontest.PrRow(t, 7, domain.PRStateUnknown, "a"), true)
 	tests := []struct {
 		name   string
 		mutate func(*domain.PRView)
@@ -214,9 +192,9 @@ func TestActivePR_ShouldPickPinThenBranchThenNewestNonTerminal(t *testing.T) {
 	t.Parallel()
 	rows := func() []domain.PRView {
 		return []domain.PRView{
-			prRow(t, 11, domain.PRStateMerged, "feat-a"),
-			prRow(t, 12, domain.PRStateOpen, "feat-b"),
-			prRow(t, 13, domain.PRStateOpen, "feat-c"),
+			sessiontest.PrRow(t, 11, domain.PRStateMerged, "feat-a"),
+			sessiontest.PrRow(t, 12, domain.PRStateOpen, "feat-b"),
+			sessiontest.PrRow(t, 13, domain.PRStateOpen, "feat-c"),
 		}
 	}
 	tests := []struct {
@@ -252,8 +230,8 @@ func TestActivePR_ShouldRankUnknownBelowOpen_WhenBothNonTerminal(t *testing.T) {
 		rows []domain.PRView
 		want int
 	}{
-		{"older open beats newer unknown", []domain.PRView{prRow(t, 12, domain.PRStateOpen, "x"), prRow(t, 14, domain.PRStateUnknown, "x")}, 12},
-		{"merged plus unknown gives unknown", []domain.PRView{prRow(t, 11, domain.PRStateMerged, "x"), prRow(t, 14, domain.PRStateUnknown, "x")}, 14},
+		{"older open beats newer unknown", []domain.PRView{sessiontest.PrRow(t, 12, domain.PRStateOpen, "x"), sessiontest.PrRow(t, 14, domain.PRStateUnknown, "x")}, 12},
+		{"merged plus unknown gives unknown", []domain.PRView{sessiontest.PrRow(t, 11, domain.PRStateMerged, "x"), sessiontest.PrRow(t, 14, domain.PRStateUnknown, "x")}, 14},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -269,8 +247,8 @@ func TestActivePR_ShouldRankUnknownBelowOpen_WhenBothNonTerminal(t *testing.T) {
 func TestActivePR_ShouldUseEffectiveTerminal_WhenSeededUnknownTerminalRow(t *testing.T) {
 	t.Parallel()
 	older := func(n int, exhausted bool) domain.PRView {
-		v := unverifiedTerminal(prRow(t, n, domain.PRStateUnknown, "x"), exhausted)
-		v.AttachedAt = prTestEpoch // older than every prRow(n>0)
+		v := unverifiedTerminal(sessiontest.PrRow(t, n, domain.PRStateUnknown, "x"), exhausted)
+		v.AttachedAt = sessiontest.PrTestEpoch // older than every sessiontest.PrRow(n>0)
 		return v
 	}
 	tests := []struct {
@@ -278,10 +256,10 @@ func TestActivePR_ShouldUseEffectiveTerminal_WhenSeededUnknownTerminalRow(t *tes
 		rows []domain.PRView
 		want int
 	}{
-		{"exhausted seeded row does not outrank newer verified merged", []domain.PRView{older(14, true), prRow(t, 13, domain.PRStateMerged, "x")}, 13},
-		{"exhausted seeded vs closed: newer by time wins", []domain.PRView{older(14, true), prRow(t, 9, domain.PRStateClosed, "x")}, 9},
-		{"not-exhausted seeded row is non-terminal unknown, above terminal", []domain.PRView{older(14, false), prRow(t, 13, domain.PRStateMerged, "x")}, 14},
-		{"not-exhausted seeded row ranks below an open PR", []domain.PRView{older(14, false), prRow(t, 12, domain.PRStateOpen, "x")}, 12},
+		{"exhausted seeded row does not outrank newer verified merged", []domain.PRView{older(14, true), sessiontest.PrRow(t, 13, domain.PRStateMerged, "x")}, 13},
+		{"exhausted seeded vs closed: newer by time wins", []domain.PRView{older(14, true), sessiontest.PrRow(t, 9, domain.PRStateClosed, "x")}, 9},
+		{"not-exhausted seeded row is non-terminal unknown, above terminal", []domain.PRView{older(14, false), sessiontest.PrRow(t, 13, domain.PRStateMerged, "x")}, 14},
+		{"not-exhausted seeded row ranks below an open PR", []domain.PRView{older(14, false), sessiontest.PrRow(t, 12, domain.PRStateOpen, "x")}, 12},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -306,12 +284,12 @@ func TestActivePR_ShouldReturnNil_WhenNoPRs(t *testing.T) {
 
 func TestActivePR_ShouldReturnNewestOpen_WhenStackedAndBranchMatchesNeither(t *testing.T) {
 	t.Parallel()
-	got := domain.ActivePR([]domain.PRView{prRow(t, 20, domain.PRStateOpen, "stack-1"), prRow(t, 21, domain.PRStateOpen, "stack-2")}, "stack-3")
+	got := domain.ActivePR([]domain.PRView{sessiontest.PrRow(t, 20, domain.PRStateOpen, "stack-1"), sessiontest.PrRow(t, 21, domain.PRStateOpen, "stack-2")}, "stack-3")
 	if got == nil || got.Ref.Number() != 21 {
 		t.Fatalf("ActivePR = %v, want #21", got)
 	}
 	// Merged-only set still yields its newest PR.
-	got = domain.ActivePR([]domain.PRView{prRow(t, 5, domain.PRStateMerged, "a"), prRow(t, 6, domain.PRStateMerged, "b")}, "main")
+	got = domain.ActivePR([]domain.PRView{sessiontest.PrRow(t, 5, domain.PRStateMerged, "a"), sessiontest.PrRow(t, 6, domain.PRStateMerged, "b")}, "main")
 	if got == nil || got.Ref.Number() != 6 {
 		t.Fatalf("merged-only ActivePR = %v, want #6", got)
 	}
@@ -319,7 +297,7 @@ func TestActivePR_ShouldReturnNewestOpen_WhenStackedAndBranchMatchesNeither(t *t
 
 func TestActivePR_ShouldReturnACopy_WhenCallerMutatesResult(t *testing.T) {
 	t.Parallel()
-	prs := []domain.PRView{prRow(t, 1, domain.PRStateOpen, "a")}
+	prs := []domain.PRView{sessiontest.PrRow(t, 1, domain.PRStateOpen, "a")}
 	got := domain.ActivePR(prs, "a")
 	got.State = domain.PRStateMerged
 	if prs[0].State != domain.PRStateOpen {
@@ -334,9 +312,9 @@ func TestItemPRVerdict_ShouldBeDone_WhenMergedAndClosedUnmerged(t *testing.T) {
 		rows []domain.PRView
 		want ItemVerdict
 	}{
-		{"merged plus closed", []domain.PRView{prRow(t, 11, domain.PRStateMerged, "a"), prRow(t, 12, domain.PRStateClosed, "b")}, ItemVerdictDone},
-		{"only closed", []domain.PRView{prRow(t, 12, domain.PRStateClosed, "b")}, ItemVerdictAllClosedUnmerged},
-		{"merged plus open", []domain.PRView{prRow(t, 11, domain.PRStateMerged, "a"), prRow(t, 13, domain.PRStateOpen, "c")}, ItemVerdictOpen},
+		{"merged plus closed", []domain.PRView{sessiontest.PrRow(t, 11, domain.PRStateMerged, "a"), sessiontest.PrRow(t, 12, domain.PRStateClosed, "b")}, ItemVerdictDone},
+		{"only closed", []domain.PRView{sessiontest.PrRow(t, 12, domain.PRStateClosed, "b")}, ItemVerdictAllClosedUnmerged},
+		{"merged plus open", []domain.PRView{sessiontest.PrRow(t, 11, domain.PRStateMerged, "a"), sessiontest.PrRow(t, 13, domain.PRStateOpen, "c")}, ItemVerdictOpen},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -350,15 +328,15 @@ func TestItemPRVerdict_ShouldBeDone_WhenMergedAndClosedUnmerged(t *testing.T) {
 
 func TestItemPRVerdict_ShouldHold_WhenUnknownOrUnverifiedTerminal(t *testing.T) {
 	t.Parallel()
-	merged := prRow(t, 11, domain.PRStateMerged, "a")
+	merged := sessiontest.PrRow(t, 11, domain.PRStateMerged, "a")
 	tests := []struct {
 		name string
 		rows []domain.PRView
 	}{
-		{"merged plus unknown", []domain.PRView{merged, prRow(t, 13, domain.PRStateUnknown, "c")}},
-		{"merged plus unverified terminal", []domain.PRView{merged, unverifiedTerminal(prRow(t, 12, domain.PRStateUnknown, "b"), false)}},
-		{"merged plus exhausted unverified terminal", []domain.PRView{merged, unverifiedTerminal(prRow(t, 12, domain.PRStateUnknown, "b"), true)}},
-		{"only exhausted unverified terminal is not abandoned", []domain.PRView{unverifiedTerminal(prRow(t, 12, domain.PRStateUnknown, "b"), true)}},
+		{"merged plus unknown", []domain.PRView{merged, sessiontest.PrRow(t, 13, domain.PRStateUnknown, "c")}},
+		{"merged plus unverified terminal", []domain.PRView{merged, unverifiedTerminal(sessiontest.PrRow(t, 12, domain.PRStateUnknown, "b"), false)}},
+		{"merged plus exhausted unverified terminal", []domain.PRView{merged, unverifiedTerminal(sessiontest.PrRow(t, 12, domain.PRStateUnknown, "b"), true)}},
+		{"only exhausted unverified terminal is not abandoned", []domain.PRView{unverifiedTerminal(sessiontest.PrRow(t, 12, domain.PRStateUnknown, "b"), true)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -372,7 +350,7 @@ func TestItemPRVerdict_ShouldHold_WhenUnknownOrUnverifiedTerminal(t *testing.T) 
 
 func TestItemPRVerdict_ShouldCountOnce_WhenSameStateViaSessionAndItemLink(t *testing.T) {
 	t.Parallel()
-	viaSession := prRow(t, 11, domain.PRStateMerged, "a")
+	viaSession := sessiontest.PrRow(t, 11, domain.PRStateMerged, "a")
 	viaSession.SessionUUID = "s1"
 	viaItem := viaSession
 	viaItem.SessionUUID, viaItem.BacklogItemID = "", "item-1"
@@ -412,11 +390,11 @@ func TestPRsAllTerminal_ShouldUseEffectiveTerminal(t *testing.T) {
 		rows []domain.PRView
 		want bool
 	}{
-		{"merged and closed", []domain.PRView{prRow(t, 1, domain.PRStateMerged, "a"), prRow(t, 2, domain.PRStateClosed, "b")}, true},
-		{"one open", []domain.PRView{prRow(t, 1, domain.PRStateMerged, "a"), prRow(t, 2, domain.PRStateOpen, "b")}, false},
-		{"unknown blocks", []domain.PRView{prRow(t, 1, domain.PRStateMerged, "a"), prRow(t, 2, domain.PRStateUnknown, "b")}, false},
-		{"unverified terminal not exhausted blocks", []domain.PRView{unverifiedTerminal(prRow(t, 1, domain.PRStateUnknown, "a"), false)}, false},
-		{"unverified terminal exhausted releases", []domain.PRView{unverifiedTerminal(prRow(t, 1, domain.PRStateUnknown, "a"), true)}, true},
+		{"merged and closed", []domain.PRView{sessiontest.PrRow(t, 1, domain.PRStateMerged, "a"), sessiontest.PrRow(t, 2, domain.PRStateClosed, "b")}, true},
+		{"one open", []domain.PRView{sessiontest.PrRow(t, 1, domain.PRStateMerged, "a"), sessiontest.PrRow(t, 2, domain.PRStateOpen, "b")}, false},
+		{"unknown blocks", []domain.PRView{sessiontest.PrRow(t, 1, domain.PRStateMerged, "a"), sessiontest.PrRow(t, 2, domain.PRStateUnknown, "b")}, false},
+		{"unverified terminal not exhausted blocks", []domain.PRView{unverifiedTerminal(sessiontest.PrRow(t, 1, domain.PRStateUnknown, "a"), false)}, false},
+		{"unverified terminal exhausted releases", []domain.PRView{unverifiedTerminal(sessiontest.PrRow(t, 1, domain.PRStateUnknown, "a"), true)}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -430,7 +408,7 @@ func TestPRsAllTerminal_ShouldUseEffectiveTerminal(t *testing.T) {
 
 func TestIsLiveWork_ShouldBeLiveOnlyInsideWindow_WhenUnendedAndActive(t *testing.T) {
 	t.Parallel()
-	now := prTestEpoch
+	now := sessiontest.PrTestEpoch
 	const window = 10 * time.Minute
 	tests := []struct {
 		name  string
@@ -458,7 +436,7 @@ func TestIsLiveWork_ShouldBeLiveOnlyInsideWindow_WhenUnendedAndActive(t *testing
 func TestLiveWorkHoldExpired_ShouldExpireAtMaxHold(t *testing.T) {
 	t.Parallel()
 	const maxHold = time.Hour
-	merged := prTestEpoch
+	merged := sessiontest.PrTestEpoch
 	tests := []struct {
 		name string
 		now  time.Time
@@ -482,7 +460,7 @@ func TestLiveWorkHoldExpired_ShouldExpireAtMaxHold(t *testing.T) {
 
 func TestAssignRole_ShouldFollowTable_WhenAttachSourceAndOrderVary(t *testing.T) {
 	withRole := func(v domain.PRView, r domain.PRRole) domain.PRView { v.Role = r; return v }
-	primary := withRole(prRow(t, 11, domain.PRStateMerged, "feat/a"), domain.PRRolePrimary)
+	primary := withRole(sessiontest.PrRow(t, 11, domain.PRStateMerged, "feat/a"), domain.PRRolePrimary)
 	tests := []struct {
 		name     string
 		existing []domain.PRView
@@ -490,11 +468,11 @@ func TestAssignRole_ShouldFollowTable_WhenAttachSourceAndOrderVary(t *testing.T)
 		want     domain.PRRole
 	}{
 		{"empty session gets primary", nil, "main", domain.PRRolePrimary},
-		{"only followups, no primary yet", []domain.PRView{withRole(prRow(t, 12, domain.PRStateOpen, "b"), domain.PRRoleFollowup)}, "main", domain.PRRolePrimary},
+		{"only followups, no primary yet", []domain.PRView{withRole(sessiontest.PrRow(t, 12, domain.PRStateOpen, "b"), domain.PRRoleFollowup)}, "main", domain.PRRolePrimary},
 		{"primary exists, unrelated base", []domain.PRView{primary}, "main", domain.PRRoleFollowup},
 		{"base equals another head", []domain.PRView{primary}, "feat/a", domain.PRRoleStacked},
-		{"base equals head of non-primary link", []domain.PRView{primary, withRole(prRow(t, 12, domain.PRStateOpen, "feat/b"), domain.PRRoleFollowup)}, "feat/b", domain.PRRoleStacked},
-		{"empty base never stacks", []domain.PRView{withRole(prRow(t, 11, domain.PRStateOpen, ""), domain.PRRolePrimary)}, "", domain.PRRoleFollowup},
+		{"base equals head of non-primary link", []domain.PRView{primary, withRole(sessiontest.PrRow(t, 12, domain.PRStateOpen, "feat/b"), domain.PRRoleFollowup)}, "feat/b", domain.PRRoleStacked},
+		{"empty base never stacks", []domain.PRView{withRole(sessiontest.PrRow(t, 11, domain.PRStateOpen, ""), domain.PRRolePrimary)}, "", domain.PRRoleFollowup},
 		{"backfill import into session with merged primary", []domain.PRView{primary}, "", domain.PRRoleFollowup},
 	}
 	for _, tt := range tests {

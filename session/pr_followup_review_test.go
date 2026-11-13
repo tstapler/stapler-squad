@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -15,9 +17,9 @@ func TestUpsertSessionPRSetTx_ShouldKeepGoodLinks_WhenOneLinkIsDeterministically
 	repo := newPRRepo(t)
 	ctx := context.Background()
 	data := domain.InstanceData{UUID: "u-skip", PRs: []domain.PRView{
-		{Ref: mustPRRef(t, "", "acme", "app", 1), AttachSource: domain.AttachSourceManual},
+		{Ref: sessiontest.MustPRRef(t, "", "acme", "app", 1), AttachSource: domain.AttachSourceManual},
 		{AttachSource: domain.AttachSourceManual}, // zero ref
-		{Ref: mustPRRef(t, "", "acme", "app", 3), AttachSource: domain.AttachSourceManual},
+		{Ref: sessiontest.MustPRRef(t, "", "acme", "app", 3), AttachSource: domain.AttachSourceManual},
 	}}
 	tx, err := repo.Client.Tx(ctx)
 	require.NoError(t, err)

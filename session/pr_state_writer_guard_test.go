@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -48,7 +50,7 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	ctx := context.Background()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
-	ref := mustPRRef(t, "", "acme", "app", 12)
+	ref := sessiontest.MustPRRef(t, "", "acme", "app", 12)
 
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}))
 	stateRowIs(t, storage.Repo, ref, domain.PRStateUnknown, true, "seeded")

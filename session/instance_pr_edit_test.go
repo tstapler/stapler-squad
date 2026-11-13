@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -56,15 +58,15 @@ func editorInstance(t *testing.T) (*Instance, *fakePRSetEditor) {
 	inst := newPRTestInstance(t)
 	ed := &fakePRSetEditor{}
 	inst.SetPRPersister(ed)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 13), domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen}))
 	return inst, ed
 }
 
 func TestDetachPRPersisted_ShouldWriteRepositoryThenMemoryThenMirror(t *testing.T) {
 	t.Parallel()
 	inst, ed := editorInstance(t)
-	r12 := mustPRRef(t, "", "acme", "app", 12)
+	r12 := sessiontest.MustPRRef(t, "", "acme", "app", 12)
 
 	found, err := inst.DetachPRPersisted(context.Background(), r12)
 
@@ -81,7 +83,7 @@ func TestDetachPRPersisted_ShouldLeaveMemoryAlone_WhenRepositoryFails(t *testing
 	inst, ed := editorInstance(t)
 	ed.editErr = errors.New("db down")
 
-	found, err := inst.DetachPRPersisted(context.Background(), mustPRRef(t, "", "acme", "app", 12))
+	found, err := inst.DetachPRPersisted(context.Background(), sessiontest.MustPRRef(t, "", "acme", "app", 12))
 
 	require.Error(t, err)
 	assert.False(t, found)
@@ -91,7 +93,7 @@ func TestDetachPRPersisted_ShouldLeaveMemoryAlone_WhenRepositoryFails(t *testing
 func TestDetachPRPersisted_ShouldReportNotFound_WhenPRNotAttached(t *testing.T) {
 	t.Parallel()
 	inst, ed := editorInstance(t)
-	found, err := inst.DetachPRPersisted(context.Background(), mustPRRef(t, "", "acme", "app", 99))
+	found, err := inst.DetachPRPersisted(context.Background(), sessiontest.MustPRRef(t, "", "acme", "app", 99))
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Empty(t, ed.events, "nothing to detach, nothing written")
@@ -100,7 +102,7 @@ func TestDetachPRPersisted_ShouldReportNotFound_WhenPRNotAttached(t *testing.T) 
 func TestPinPRPersisted_ShouldPinThenUnpin(t *testing.T) {
 	t.Parallel()
 	inst, ed := editorInstance(t)
-	r12 := mustPRRef(t, "", "acme", "app", 12)
+	r12 := sessiontest.MustPRRef(t, "", "acme", "app", 12)
 	pinsBefore, unpinsBefore := PRPinCount("pin"), PRPinCount("unpin")
 
 	require.NoError(t, inst.PinPRPersisted(context.Background(), r12, true))
@@ -120,7 +122,7 @@ func TestPinPRPersisted_ShouldNotPinInMemory_WhenRepositoryFails(t *testing.T) {
 	t.Parallel()
 	inst, ed := editorInstance(t)
 	ed.editErr = errors.New("db down")
-	require.Error(t, inst.PinPRPersisted(context.Background(), mustPRRef(t, "", "acme", "app", 12), true))
+	require.Error(t, inst.PinPRPersisted(context.Background(), sessiontest.MustPRRef(t, "", "acme", "app", 12), true))
 	assert.Equal(t, 13, domain.ActivePR(inst.Snapshot().GitHub.PRs, "").Ref.Number())
 }
 
@@ -129,7 +131,7 @@ func TestAttachPRManual_ShouldClearTombstoneBeforeAttaching(t *testing.T) {
 	inst := newPRTestInstance(t)
 	ed := &fakePRSetEditor{}
 	inst.SetPRPersister(ed)
-	r30 := mustPRRef(t, "", "acme", "app", 30)
+	r30 := sessiontest.MustPRRef(t, "", "acme", "app", 30)
 
 	require.NoError(t, inst.AttachPRManual(context.Background(), r30, domain.PRInitial{State: domain.PRStateOpen}))
 
@@ -143,6 +145,6 @@ func TestPRSetEdits_ShouldFail_WhenPersisterCannotEdit(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.SetPRPersister(&fakePRPersister{})
-	_, err := inst.DetachPRPersisted(context.Background(), mustPRRef(t, "", "acme", "app", 12))
+	_, err := inst.DetachPRPersisted(context.Background(), sessiontest.MustPRRef(t, "", "acme", "app", 12))
 	assert.ErrorIs(t, err, ErrPRPersisterUnavailable)
 }

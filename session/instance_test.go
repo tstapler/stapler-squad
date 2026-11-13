@@ -377,7 +377,7 @@ func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testi
 // ordering that still applies for instances that DO have a listener.
 func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffStatsRunsFirst(t *testing.T) {
 	t.Parallel()
-	repoDir := setupTestRepository(t)
+	repoDir := sessiontest.SetupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "diff-capture-test")
 	if err != nil {
@@ -424,7 +424,7 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 // subprocess on every Destroy() — nothing would consume the result anyway.
 func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(t *testing.T) {
 	t.Parallel()
-	repoDir := setupTestRepository(t)
+	repoDir := sessiontest.SetupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "diff-skip-test")
 	if err != nil {
@@ -456,7 +456,7 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 // TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits
 // covers AC6's cached-signal path: UpdateDiffStats computes HasCommitsAhead
 // alongside the diff stats (both outside the lock), so GetHasCommitsAhead can
-// answer synchronously afterward. Uses setupTestGitRepo (not setupTestRepository)
+// answer synchronously afterward. Uses setupTestGitRepo (not sessiontest.SetupTestRepository)
 // because it fixes the repo's default branch at "main" — the same bounceMainBranch
 // constant UpdateDiffStats passes to HasCommitsAheadOfMain — so the assertion
 // actually exercises the ahead-count computation rather than HasCommitsAheadOfMain's

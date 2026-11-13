@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -47,7 +49,7 @@ func TestWriteLease_ShouldRefuseNilZeroAndForeignLeaseWithZeroWrites_WhenAnyWrit
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			pane := newFakePaneSubmitter()
+			pane := sessiontest.NewFakePaneSubmitter()
 
 			l := tc.lease()
 			err := SubmitDriverContent(ctx, pane, l, "x", time.Millisecond, time.Millisecond)
@@ -62,7 +64,7 @@ func TestWriteLease_ShouldRefuseNilZeroAndForeignLeaseWithZeroWrites_WhenAnyWrit
 			err = SendKeysWithTimeout(ctx, pane, l, "x", time.Second)
 			require.ErrorIs(t, err, tc.wantErr)
 
-			assert.Empty(t, pane.sendCalls, "a refused lease must perform 0 writes")
+			assert.Empty(t, pane.SendCalls, "a refused lease must perform 0 writes")
 		})
 	}
 	// Every refusal released the foreign lease it was handed.
@@ -361,7 +363,7 @@ func TestTerminalWriteLeaseFlag_ShouldSerializeWhenOnAndReturnANonExclusiveLease
 	assert.True(t, (&LeaseFlag{}).Enabled(), "default on")
 
 	flag := &LeaseFlag{}
-	inst := &Instance{Title: "flag", UUID: fakeLeaseOwner}
+	inst := &Instance{Title: "flag", UUID: sessiontest.FakeLeaseOwner}
 	inst.SetLeaseFlag(flag)
 
 	a, ok := inst.TryTerminalWriteLease(LeaseWriterSteer)
@@ -379,8 +381,8 @@ func TestTerminalWriteLeaseFlag_ShouldSerializeWhenOnAndReturnANonExclusiveLease
 	require.NoError(t, err)
 
 	// The capability types keep working with the flag off; a zero value is still refused.
-	pane := newFakePaneSubmitter()
-	pane.updates = []bool{true}
+	pane := sessiontest.NewFakePaneSubmitter()
+	pane.Updates = []bool{true}
 	require.ErrorIs(t, SubmitDriverContent(context.Background(), pane, &HeldLease{}, "x", time.Millisecond, time.Millisecond), ErrNoLease)
 	require.NoError(t, SendKeysWithTimeout(context.Background(), pane, b, "x", time.Second))
 	c.Release()
@@ -399,11 +401,11 @@ func TestTerminalWriteLeaseFlag_ShouldSerializeWhenOnAndReturnANonExclusiveLease
 func TestEveryAcquirer_ShouldLeaveTheLeaseFreeOnEveryExitPath_WhenSuccessBusyWriteErrorCancelledContextAndEarlyReturnAreExercised(t *testing.T) {
 	t.Parallel()
 	// Each case gets its own instance bound to the fake pane's lease identity.
-	setup := func(t *testing.T, failOnCall int) (*Instance, *fakePaneSubmitter, *HeldLease) {
+	setup := func(t *testing.T, failOnCall int) (*Instance, *sessiontest.FakePaneSubmitter, *HeldLease) {
 		t.Helper()
-		inst := leaseInstance(t, fakeLeaseOwner)
-		pane := newFakePaneSubmitter()
-		pane.failOnCall = failOnCall
+		inst := leaseInstance(t, sessiontest.FakeLeaseOwner)
+		pane := sessiontest.NewFakePaneSubmitter()
+		pane.FailOnCall = failOnCall
 		lease, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
 		require.True(t, ok)
 		return inst, pane, lease
@@ -433,10 +435,10 @@ func TestEveryAcquirer_ShouldLeaveTheLeaseFreeOnEveryExitPath_WhenSuccessBusyWri
 	t.Run("SubmitDriverContent pane owner refusal", func(t *testing.T) {
 		t.Parallel()
 		inst, pane, lease := setup(t, -1)
-		sub := &ownerCheckedSubmitter{fakePaneSubmitter: pane, ownerErr: errors.New("owner mismatch")}
+		sub := &ownerCheckedSubmitter{FakePaneSubmitter: pane, ownerErr: errors.New("owner mismatch")}
 		require.Error(t, SubmitDriverContent(ctx, sub, lease, "x", time.Millisecond, 20*time.Millisecond))
 		AssertLeaseFree(t, inst)
-		assert.Empty(t, pane.sendCalls)
+		assert.Empty(t, pane.SendCalls)
 	})
 	t.Run("SubmitContentWithEnter success", func(t *testing.T) {
 		t.Parallel()

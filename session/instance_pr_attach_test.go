@@ -82,7 +82,7 @@ func attachNumbers(t *testing.T, inst *Instance) []int {
 func TestAttachPR_ShouldKeepBoth_WhenTwoGoroutinesAttach(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	r12, r13 := mustPRRef(t, "", "acme", "app", 12), mustPRRef(t, "", "acme", "app", 13)
+	r12, r13 := sessiontest.MustPRRef(t, "", "acme", "app", 12), sessiontest.MustPRRef(t, "", "acme", "app", 13)
 
 	var wg sync.WaitGroup
 	for _, c := range []struct {
@@ -114,11 +114,11 @@ func TestAttachPR_ShouldKeepBoth_WhenTwoGoroutinesAttach(t *testing.T) {
 func TestAttachPR_ShouldNotMutatePublishedSnapshot_WhenAdding(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
+	if err := inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
 		t.Fatal(err)
 	}
 	earlier := inst.Snapshot()
-	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
+	if err := inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 13), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(earlier.GitHub.PRs); got != 1 {
@@ -133,13 +133,13 @@ func TestAttachPR_ShouldProjectActivePRToLegacyFields_WhenAnyScopeState(t *testi
 	t.Parallel()
 	h := sessiontest.InstallRecordingHandler(t)
 	inst := newPRTestInstance(t)
-	r11 := mustPRRef(t, "", "acme", "app", 11)
+	r11 := sessiontest.MustPRRef(t, "", "acme", "app", 11)
 	if err := inst.AttachPR(r11, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
 		t.Fatal(err)
 	}
 	inst.MarkPRTerminal(r11, domain.PRStateMerged)
 
-	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
+	if err := inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +167,7 @@ func loggedActivePRChange(h *sessiontest.RecordingHandler, from, to int64) bool 
 func TestAttachPR_ShouldShowNewestNonTerminal_WhenNoBranchMatch(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	r11, r12 := mustPRRef(t, "", "acme", "app", 11), mustPRRef(t, "", "acme", "app", 12)
+	r11, r12 := sessiontest.MustPRRef(t, "", "acme", "app", 11), sessiontest.MustPRRef(t, "", "acme", "app", 12)
 	if err := inst.AttachPR(r11, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen, HeadBranch: "other-a"}); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestAttachPR_ShouldReturnErrNoSessionUUID_WhenUUIDEmpty(t *testing.T) {
 	inst := newPRTestInstance(t)
 	inst.UUID = ""
 	FinishInstanceConstruction(inst)
-	err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{})
+	err := inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{})
 	if !errors.Is(err, domain.ErrNoSessionUUID) {
 		t.Fatalf("AttachPR err = %v, want domain.ErrNoSessionUUID", err)
 	}
@@ -221,7 +221,7 @@ func TestAttachPR_ShouldPersistFromSnapshot_WhenPersisterInjected(t *testing.T) 
 	inst := newPRTestInstance(t)
 	p := &fakePRPersister{}
 	inst.SetPRPersister(p)
-	r12 := mustPRRef(t, "", "acme", "app", 12)
+	r12 := sessiontest.MustPRRef(t, "", "acme", "app", 12)
 	if err := inst.AttachPR(r12, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestAttachPR_ShouldMarkPending_WhenSessionRowMissingOrPersistFails(t *testi
 			t.Parallel()
 			inst := newPRTestInstance(t)
 			inst.SetPRPersister(&fakePRPersister{err: perr})
-			if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceCreatedFromURL, domain.PRInitial{}); err != nil {
+			if err := inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceCreatedFromURL, domain.PRInitial{}); err != nil {
 				t.Fatalf("AttachPR returned %v; persist failures must not fail the attach", err)
 			}
 			if !inst.PRPersistPending() {
@@ -267,7 +267,7 @@ func TestAttachPR_ShouldDropLink_WhenRepositoryReportsTombstone(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.SetPRPersister(&fakePRPersister{res: domain.PRLinkResult{Tombstoned: true}})
-	if err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
+	if err := inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := attachNumbers(t, inst); len(got) != 0 {
@@ -278,7 +278,7 @@ func TestAttachPR_ShouldDropLink_WhenRepositoryReportsTombstone(t *testing.T) {
 func TestDetachPinApply_ShouldUpdateSetAndFlags(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	r11, r12 := mustPRRef(t, "", "acme", "app", 11), mustPRRef(t, "", "acme", "app", 12)
+	r11, r12 := sessiontest.MustPRRef(t, "", "acme", "app", 11), sessiontest.MustPRRef(t, "", "acme", "app", 12)
 	_ = inst.AttachPR(r11, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen})
 	_ = inst.AttachPR(r12, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen})
 
@@ -316,7 +316,7 @@ func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumbe
 			inst := newPRTestInstance(t)
 			inst.GitHubPRNumber, inst.LegacyPRUnrepresented = 11, true
 			FinishInstanceConstruction(inst)
-			_ = inst.AttachPR(mustPRRef(t, "", "acme", "app", tt.attach), domain.AttachSourceBackfill, domain.PRInitial{})
+			_ = inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", tt.attach), domain.AttachSourceBackfill, domain.PRInitial{})
 			if got := inst.Snapshot().GitHub.LegacyPRUnrepresented; got != tt.wantSet {
 				t.Errorf("LegacyPRUnrepresented = %v, want %v", got, tt.wantSet)
 			}
@@ -327,7 +327,7 @@ func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumbe
 func TestDetachPR_ShouldClearLegacyScalars_WhenLastLinkRemoved(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	ref := mustPRRef(t, "", "acme", "app", 12)
+	ref := sessiontest.MustPRRef(t, "", "acme", "app", 12)
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen, Terminal: true}))
 	require.True(t, inst.DetachPR(ref))
 
@@ -350,7 +350,7 @@ func intAttr(r sessiontest.CapturedRecord, key string) int64 {
 func TestSetGitHubResolution_ShouldAttachCreatedFromURL_WithoutOverwritingHeldPR(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 
 	inst.SetGitHubResolution(domain.GitHubResolution{
 		Path: inst.Snapshot().Path, Owner: "acme", Repo: "app",
@@ -384,7 +384,7 @@ func TestAttachPR_ShouldObservePRCountThree_WhenThirdPRAttaches(t *testing.T) {
 	inst := newPRTestInstance(t)
 	before := SessionPRCountObservations(3)
 	for _, n := range []int{11, 12, 13} {
-		require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", n), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+		require.NoError(t, inst.AttachPR(sessiontest.MustPRRef(t, "", "acme", "app", n), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	}
 	assert.GreaterOrEqual(t, SessionPRCountObservations(3), before+1, "third attach observed ssq_session_pr_count=3")
 }

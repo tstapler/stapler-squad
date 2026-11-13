@@ -7,70 +7,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
 
-// fakePaneSubmitter is a scripted paneSubmitter: it records every SendKeys
-// argument in call order (so a test can assert content and Enter travelled as
-// two separate writes, not one concatenated string) and can be told to fail
-// on a specific call index. HasUpdated pops the next value off updates
-// (repeating the last one once exhausted, mirroring fakePaneSettleChecker),
-// so a test can script both the pre-Enter settle wait and the post-Enter
-// submit-confirmation poll independently.
-type fakePaneSubmitter struct {
-	sendCalls   []string
-	failOnCall  int // -1 (default) means never fail
-	updates     []bool
-	updateCalls int
-	onSend      func(int)
-}
-
-// fakeLeaseOwner is the lease identity every pane fake in this file reports.
-const fakeLeaseOwner = "fake-pane-owner"
-
-func (f *fakePaneSubmitter) LeaseOwnerUUID() string { return fakeLeaseOwner }
-
-// newFakeLease returns a held lease bound to fakeLeaseOwner, taken from a
+// newFakeLease returns a held lease bound to sessiontest.FakeLeaseOwner, taken from a
 // throwaway instance so each call owns an independent lease.
 func newFakeLease(t *testing.T) *HeldLease {
 	t.Helper()
-	inst := &Instance{UUID: fakeLeaseOwner}
+	inst := &Instance{UUID: sessiontest.FakeLeaseOwner}
 	l, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
 	require.True(t, ok)
 	return l
-}
-
-func (f *fakePaneSubmitter) SendKeys(keys string) error {
-	idx := len(f.sendCalls)
-	f.sendCalls = append(f.sendCalls, keys)
-	if f.onSend != nil {
-		f.onSend(len(f.sendCalls))
-	}
-	if f.failOnCall == idx {
-		return errors.New("fake send failure")
-	}
-	return nil
-}
-
-func (f *fakePaneSubmitter) HasUpdated() (bool, bool) {
-	if len(f.updates) == 0 {
-		return false, false
-	}
-	idx := f.updateCalls
-	f.updateCalls++
-	if idx >= len(f.updates) {
-		idx = len(f.updates) - 1
-	}
-	return f.updates[idx], false
-}
-
-// newFakePaneSubmitter returns a fake that reports a pane update on every
-// HasUpdated call — i.e. content settles immediately and every submit is
-// confirmed — unless the test overrides updates itself.
-func newFakePaneSubmitter() *fakePaneSubmitter {
-	return &fakePaneSubmitter{failOnCall: -1, updates: []bool{false, true}}
 }
 
 // TestSubmitDriverContent_SendsContentAndEnterAsSeparateWrites is the direct
@@ -80,8 +31,8 @@ func newFakePaneSubmitter() *fakePaneSubmitter {
 // paste block instead of submitting it for long content.
 func TestSubmitDriverContent_SendsContentAndEnterAsSeparateWrites(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
-	inst.updates = []bool{false, false, true} // settle immediately, then confirm the submit
+	inst := sessiontest.NewFakePaneSubmitter()
+	inst.Updates = []bool{false, false, true} // settle immediately, then confirm the submit
 
 	const content = "some long driver-generated prompt text"
 	// A wide maxWait: the fake answers at once, and a tight window made the confirm
@@ -90,14 +41,14 @@ func TestSubmitDriverContent_SendsContentAndEnterAsSeparateWrites(t *testing.T) 
 		t.Fatalf("SubmitDriverContent returned unexpected error: %v", err)
 	}
 
-	if len(inst.sendCalls) != 2 {
-		t.Fatalf("SendKeys called %d times, want exactly 2 (content, then Enter) — got %#v", len(inst.sendCalls), inst.sendCalls)
+	if len(inst.SendCalls) != 2 {
+		t.Fatalf("SendKeys called %d times, want exactly 2 (content, then Enter) — got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
-	if inst.sendCalls[0] != content {
-		t.Errorf("first SendKeys call = %q, want exactly the content with no suffix", inst.sendCalls[0])
+	if inst.SendCalls[0] != content {
+		t.Errorf("first SendKeys call = %q, want exactly the content with no suffix", inst.SendCalls[0])
 	}
-	if inst.sendCalls[1] != EnterKeySequence {
-		t.Errorf("second SendKeys call = %q, want exactly EnterKeySequence sent on its own", inst.sendCalls[1])
+	if inst.SendCalls[1] != EnterKeySequence {
+		t.Errorf("second SendKeys call = %q, want exactly EnterKeySequence sent on its own", inst.SendCalls[1])
 	}
 }
 
@@ -105,15 +56,15 @@ func TestSubmitDriverContent_SendsContentAndEnterAsSeparateWrites(t *testing.T) 
 // content write short-circuits before Enter is attempted.
 func TestSubmitDriverContent_ContentSendFailure_NeverSendsEnter(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
-	inst.failOnCall = 0
+	inst := sessiontest.NewFakePaneSubmitter()
+	inst.FailOnCall = 0
 
 	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error from the failed content send")
 	}
-	if len(inst.sendCalls) != 1 {
-		t.Errorf("SendKeys called %d times, want exactly 1 (Enter must not be sent after a content failure) — got %#v", len(inst.sendCalls), inst.sendCalls)
+	if len(inst.SendCalls) != 1 {
+		t.Errorf("SendKeys called %d times, want exactly 1 (Enter must not be sent after a content failure) — got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
 }
 
@@ -121,15 +72,15 @@ func TestSubmitDriverContent_ContentSendFailure_NeverSendsEnter(t *testing.T) {
 // Enter write (after a successful content write) still surfaces as an error.
 func TestSubmitDriverContent_SubmitKeystrokeFailure_ReportsError(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
-	inst.failOnCall = 1
+	inst := sessiontest.NewFakePaneSubmitter()
+	inst.FailOnCall = 1
 
 	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected an error from the failed submit keystroke")
 	}
-	if len(inst.sendCalls) != 2 {
-		t.Errorf("SendKeys called %d times, want exactly 2 (content succeeded, Enter attempted and failed) — got %#v", len(inst.sendCalls), inst.sendCalls)
+	if len(inst.SendCalls) != 2 {
+		t.Errorf("SendKeys called %d times, want exactly 2 (content succeeded, Enter attempted and failed) — got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
 }
 
@@ -140,31 +91,31 @@ func TestSubmitDriverContent_SubmitKeystrokeFailure_ReportsError(t *testing.T) {
 // change, return ErrSubmitNotConfirmed rather than nil.
 func TestSubmitDriverContent_SwallowedSubmit_RetriesOnceThenReturnsErrSubmitNotConfirmed(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
-	inst.updates = []bool{false} // settles immediately (no changes), never confirms (repeats false forever)
+	inst := sessiontest.NewFakePaneSubmitter()
+	inst.Updates = []bool{false} // settles immediately (no changes), never confirms (repeats false forever)
 
 	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 5*time.Millisecond)
 	if !errors.Is(err, ErrSubmitNotConfirmed) {
 		t.Fatalf("SubmitDriverContent error = %v, want ErrSubmitNotConfirmed", err)
 	}
-	if len(inst.sendCalls) != 3 {
-		t.Fatalf("SendKeys called %d times, want exactly 3 (content, Enter, retry Enter) — got %#v", len(inst.sendCalls), inst.sendCalls)
+	if len(inst.SendCalls) != 3 {
+		t.Fatalf("SendKeys called %d times, want exactly 3 (content, Enter, retry Enter) — got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
-	if inst.sendCalls[1] != EnterKeySequence || inst.sendCalls[2] != EnterKeySequence {
-		t.Errorf("expected both the second and third SendKeys calls to be EnterKeySequence, got %#v", inst.sendCalls)
+	if inst.SendCalls[1] != EnterKeySequence || inst.SendCalls[2] != EnterKeySequence {
+		t.Errorf("expected both the second and third SendKeys calls to be EnterKeySequence, got %#v", inst.SendCalls)
 	}
 }
 
-// retryConfirmFake is a fakePaneSubmitter whose pane only shows a change once
+// retryConfirmFake is a sessiontest.FakePaneSubmitter whose pane only shows a change once
 // the retry Enter (the 3rd SendKeys call) has been sent — deterministically
 // exercising the "first confirmation attempt fails, retry succeeds" path
 // without depending on timing/call-count coincidences.
 type retryConfirmFake struct {
-	*fakePaneSubmitter
+	*sessiontest.FakePaneSubmitter
 }
 
 func (f *retryConfirmFake) HasUpdated() (bool, bool) {
-	return len(f.sendCalls) >= 3, false
+	return len(f.SendCalls) >= 3, false
 }
 
 // TestSubmitDriverContent_ConfirmedOnRetry_Succeeds asserts that when the
@@ -172,14 +123,14 @@ func (f *retryConfirmFake) HasUpdated() (bool, bool) {
 // call succeeds rather than returning ErrSubmitNotConfirmed.
 func TestSubmitDriverContent_ConfirmedOnRetry_Succeeds(t *testing.T) {
 	t.Parallel()
-	inst := &retryConfirmFake{fakePaneSubmitter: newFakePaneSubmitter()}
+	inst := &retryConfirmFake{FakePaneSubmitter: sessiontest.NewFakePaneSubmitter()}
 
 	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 5*time.Millisecond)
 	if err != nil {
 		t.Fatalf("SubmitDriverContent returned unexpected error: %v", err)
 	}
-	if len(inst.sendCalls) != 3 {
-		t.Fatalf("SendKeys called %d times, want exactly 3 (content, Enter, retry Enter) — got %#v", len(inst.sendCalls), inst.sendCalls)
+	if len(inst.SendCalls) != 3 {
+		t.Fatalf("SendKeys called %d times, want exactly 3 (content, Enter, retry Enter) — got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
 }
 
@@ -193,7 +144,7 @@ func TestWaitForPaneUpdate_ReturnsTrue_AsSoonAsChangeObserved(t *testing.T) {
 	t.Parallel()
 	// Scripted: two "no change yet" polls, then a change — simulating a
 	// capture-pane round trip slower than any fixed short sleep would allow for.
-	checker := &fakePaneSettleChecker{updates: []bool{false, false, true}}
+	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{false, false, true}}
 
 	start := time.Now()
 	updated := waitForPaneUpdate(context.Background(), checker, 5*time.Millisecond, time.Second)
@@ -212,7 +163,7 @@ func TestWaitForPaneUpdate_ReturnsTrue_AsSoonAsChangeObserved(t *testing.T) {
 // elapses, preserving the fallback exact-content check in sendInitialPromptTick.
 func TestWaitForPaneUpdate_ReturnsFalse_When_PaneNeverChanges(t *testing.T) {
 	t.Parallel()
-	checker := &fakePaneSettleChecker{updates: []bool{false}}
+	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{false}}
 
 	if waitForPaneUpdate(context.Background(), checker, time.Millisecond, 20*time.Millisecond) {
 		t.Error("waitForPaneUpdate returned true even though the pane never reported a change")
@@ -224,7 +175,7 @@ func TestWaitForPaneUpdate_ReturnsFalse_When_PaneNeverChanges(t *testing.T) {
 // waitForPaneUpdate must not block past context cancellation.
 func TestWaitForPaneUpdate_ReturnsFalse_When_ContextCancelled(t *testing.T) {
 	t.Parallel()
-	checker := &fakePaneSettleChecker{updates: []bool{false}}
+	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{false}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -243,7 +194,7 @@ func TestWaitForPaneUpdate_ReturnsFalse_When_ContextCancelled(t *testing.T) {
 // still leave a real Enter keystroke landing in the pane afterward.
 func TestSubmitDriverContent_ContextAlreadyCancelled_NeverSendsKeys(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
+	inst := sessiontest.NewFakePaneSubmitter()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -251,8 +202,8 @@ func TestSubmitDriverContent_ContextAlreadyCancelled_NeverSendsKeys(t *testing.T
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SubmitDriverContent error = %v, want wrapping context.Canceled", err)
 	}
-	if len(inst.sendCalls) != 0 {
-		t.Fatalf("SendKeys called %d times, want 0 — a cancelled context must stop before any write, got %#v", len(inst.sendCalls), inst.sendCalls)
+	if len(inst.SendCalls) != 0 {
+		t.Fatalf("SendKeys called %d times, want 0 — a cancelled context must stop before any write, got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
 }
 
@@ -265,9 +216,9 @@ func TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter(t *test
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	inst := newFakePaneSubmitter()
-	inst.updates = []bool{false} // never updates
-	inst.onSend = func(calls int) {
+	inst := sessiontest.NewFakePaneSubmitter()
+	inst.Updates = []bool{false} // never updates
+	inst.OnSend = func(calls int) {
 		if calls == 1 {
 			cancel()
 		}
@@ -281,8 +232,8 @@ func TestSubmitDriverContent_ContextExpiresDuringSettle_StopsBeforeEnter(t *test
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SubmitDriverContent error = %v, want context cancellation", err)
 	}
-	if len(inst.sendCalls) != 1 {
-		t.Fatalf("SendKeys called %d times, want exactly 1 (content only — ctx expired before Enter) — got %#v", len(inst.sendCalls), inst.sendCalls)
+	if len(inst.SendCalls) != 1 {
+		t.Fatalf("SendKeys called %d times, want exactly 1 (content only — ctx expired before Enter) — got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
 }
 
@@ -292,7 +243,7 @@ type blockingKeySender struct {
 	unblock chan struct{}
 }
 
-func (b *blockingKeySender) LeaseOwnerUUID() string { return fakeLeaseOwner }
+func (b *blockingKeySender) LeaseOwnerUUID() string { return sessiontest.FakeLeaseOwner }
 
 func (b *blockingKeySender) SendKeys(_ string) error {
 	<-b.unblock
@@ -316,8 +267,8 @@ func TestSendKeysWithTimeout_WedgedWrite_ReturnsDeadlineExceeded(t *testing.T) {
 // non-timeout path still surfaces SendKeys' own error rather than masking it.
 func TestSendKeysWithTimeout_NormalWrite_ReturnsUnderlyingError(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
-	inst.failOnCall = 0
+	inst := sessiontest.NewFakePaneSubmitter()
+	inst.FailOnCall = 0
 
 	err := SendKeysWithTimeout(context.Background(), inst, newFakeLease(t), "input", time.Second)
 	if err == nil || err.Error() != "fake send failure" {
@@ -329,13 +280,13 @@ func TestSendKeysWithTimeout_NormalWrite_ReturnsUnderlyingError(t *testing.T) {
 // wrapper still sends content and Enter as two separate writes.
 func TestSubmitContentWithEnter_DelegatesToSubmitDriverContent(t *testing.T) {
 	t.Parallel()
-	inst := newFakePaneSubmitter()
+	inst := sessiontest.NewFakePaneSubmitter()
 
 	if err := SubmitContentWithEnter(context.Background(), inst, newFakeLease(t), "hello"); err != nil {
 		t.Fatalf("SubmitContentWithEnter error = %v, want nil", err)
 	}
-	if len(inst.sendCalls) != 2 || inst.sendCalls[0] != "hello" || inst.sendCalls[1] != EnterKeySequence {
-		t.Fatalf("sendCalls = %#v, want [\"hello\", EnterKeySequence]", inst.sendCalls)
+	if len(inst.SendCalls) != 2 || inst.SendCalls[0] != "hello" || inst.SendCalls[1] != EnterKeySequence {
+		t.Fatalf("sendCalls = %#v, want [\"hello\", EnterKeySequence]", inst.SendCalls)
 	}
 }
 
@@ -349,9 +300,9 @@ func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	inst := newFakePaneSubmitter()
-	inst.updates = []bool{false} // settles immediately; confirmation poll never sees a change
-	inst.onSend = func(calls int) {
+	inst := sessiontest.NewFakePaneSubmitter()
+	inst.Updates = []bool{false} // settles immediately; confirmation poll never sees a change
+	inst.OnSend = func(calls int) {
 		if calls == 2 {
 			cancel()
 		}
@@ -361,8 +312,8 @@ func TestSubmitDriverContent_ContextExpiresBeforeRetry_StopsBeforeRetryEnter(t *
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SubmitDriverContent error = %v, want context cancellation", err)
 	}
-	if len(inst.sendCalls) != 2 {
-		t.Fatalf("SendKeys called %d times, want exactly 2 (content, first Enter — no retry) — got %#v", len(inst.sendCalls), inst.sendCalls)
+	if len(inst.SendCalls) != 2 {
+		t.Fatalf("SendKeys called %d times, want exactly 2 (content, first Enter — no retry) — got %#v", len(inst.SendCalls), inst.SendCalls)
 	}
 }
 
@@ -376,7 +327,7 @@ func TestSessionPackage_NoDirectSendKeysPlusEnterConcatenation(t *testing.T) {
 }
 
 type ownerCheckedSubmitter struct {
-	*fakePaneSubmitter
+	*sessiontest.FakePaneSubmitter
 	ownerErr error
 }
 
@@ -384,19 +335,19 @@ func (o *ownerCheckedSubmitter) VerifyPaneOwner(context.Context) error { return 
 
 // ce71ad1a: a pane whose owner can't be confirmed must receive no bytes.
 func TestSubmitDriverContent_OwnerMismatch_WritesNothing(t *testing.T) {
-	sub := &ownerCheckedSubmitter{fakePaneSubmitter: newFakePaneSubmitter(), ownerErr: errors.New("pane ownership mismatch")}
+	sub := &ownerCheckedSubmitter{FakePaneSubmitter: sessiontest.NewFakePaneSubmitter(), ownerErr: errors.New("pane ownership mismatch")}
 
 	err := SubmitDriverContent(context.Background(), sub, newFakeLease(t), "review prompt", time.Millisecond, time.Millisecond)
 
 	require.ErrorContains(t, err, "pane owner not verified")
-	require.Empty(t, sub.sendCalls, "no content or Enter may be written to a pane with a mismatched owner")
+	require.Empty(t, sub.SendCalls, "no content or Enter may be written to a pane with a mismatched owner")
 }
 
 func TestSubmitDriverContent_OwnerVerified_Writes(t *testing.T) {
-	sub := &ownerCheckedSubmitter{fakePaneSubmitter: newFakePaneSubmitter()}
+	sub := &ownerCheckedSubmitter{FakePaneSubmitter: sessiontest.NewFakePaneSubmitter()}
 
 	require.NoError(t, SubmitDriverContent(context.Background(), sub, newFakeLease(t), "review prompt", time.Millisecond, time.Millisecond))
-	require.Equal(t, "review prompt", sub.sendCalls[0])
+	require.Equal(t, "review prompt", sub.SendCalls[0])
 }
 
 // T-WL-03: the lease stays held until the abandoned writer goroutine's write
@@ -406,7 +357,7 @@ func TestSubmitContentWithEnterAndSendKeysWithTimeout_ShouldKeepTheLeaseUntilThe
 
 	t.Run("SendKeysWithTimeout", func(t *testing.T) {
 		t.Parallel()
-		inst := leaseInstance(t, fakeLeaseOwner)
+		inst := leaseInstance(t, sessiontest.FakeLeaseOwner)
 		lease, ok := inst.TryTerminalWriteLease(LeaseWriterMCP)
 		require.True(t, ok)
 		pane := &blockingKeySender{unblock: make(chan struct{})}
@@ -423,15 +374,15 @@ func TestSubmitContentWithEnterAndSendKeysWithTimeout_ShouldKeepTheLeaseUntilThe
 
 	t.Run("SubmitContentWithEnter", func(t *testing.T) {
 		t.Parallel()
-		inst := leaseInstance(t, fakeLeaseOwner)
+		inst := leaseInstance(t, sessiontest.FakeLeaseOwner)
 		lease, ok := inst.TryTerminalWriteLease(LeaseWriterMCP)
 		require.True(t, ok)
 
 		unblock := make(chan struct{})
 		entered := make(chan struct{})
-		pane := newFakePaneSubmitter()
+		pane := sessiontest.NewFakePaneSubmitter()
 		var once sync.Once
-		pane.onSend = func(int) {
+		pane.OnSend = func(int) {
 			once.Do(func() { close(entered) })
 			<-unblock
 		}
@@ -454,13 +405,13 @@ func TestSubmitContentWithEnterAndSendKeysWithTimeout_ShouldKeepTheLeaseUntilThe
 // stolenUpdateFake never reports HasUpdated (a concurrent poller consumed the
 // diff) but its pane content changes once Enter is sent.
 type stolenUpdateFake struct {
-	*fakePaneSubmitter
+	*sessiontest.FakePaneSubmitter
 }
 
 func (f *stolenUpdateFake) HasUpdated() (bool, bool) { return false, false }
 
 func (f *stolenUpdateFake) CapturePaneContent() (string, error) {
-	if len(f.sendCalls) >= 2 {
+	if len(f.SendCalls) >= 2 {
 		return "prompt cleared, agent working", nil
 	}
 	return "prompt with typed text", nil
@@ -471,9 +422,9 @@ func (f *stolenUpdateFake) CapturePaneContent() (string, error) {
 // shared HasUpdated consumer ate the change.
 func TestSubmitDriverContent_ConfirmsViaOwnSnapshot_WhenHasUpdatedStolen(t *testing.T) {
 	t.Parallel()
-	inst := &stolenUpdateFake{fakePaneSubmitter: newFakePaneSubmitter()}
+	inst := &stolenUpdateFake{FakePaneSubmitter: sessiontest.NewFakePaneSubmitter()}
 
 	err := SubmitDriverContent(context.Background(), inst, newFakeLease(t), "content", time.Millisecond, 20*time.Millisecond)
 	require.NoError(t, err)
-	require.Len(t, inst.sendCalls, 2, "no retry Enter once the pane visibly changed")
+	require.Len(t, inst.SendCalls, 2, "no retry Enter once the pane visibly changed")
 }

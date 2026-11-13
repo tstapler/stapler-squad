@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1422,7 +1424,7 @@ func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
 		uuid := fmt.Sprintf("uuid-%03d", i)
 		prLoadFixture(t, storage, fmt.Sprintf("bulk-%03d", i), uuid, "acme", "app", 0)
 		_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid),
-			mustPRRef(t, "", "acme", "app", 1000+i), domain.PRLink{Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateOpen}})
+			sessiontest.MustPRRef(t, "", "acme", "app", 1000+i), domain.PRLink{Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateOpen}})
 		require.NoError(t, err)
 	}
 
@@ -1452,7 +1454,7 @@ func TestLoadSaveLoad_ShouldKeepUnrepresentedLegacyNumber_WhenSkippedClass(t *te
 	// A represented legacy number for contrast.
 	prLoadFixture(t, storage, "represented", "uuid-represented", "acme", "app", 42)
 	_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner("uuid-represented"),
-		mustPRRef(t, "", "acme", "app", 42), domain.PRLink{Source: domain.AttachSourceBackfill})
+		sessiontest.MustPRRef(t, "", "acme", "app", 42), domain.PRLink{Source: domain.AttachSourceBackfill})
 	require.NoError(t, err)
 
 	byTitle := func(insts []*Instance) map[string]*Instance {

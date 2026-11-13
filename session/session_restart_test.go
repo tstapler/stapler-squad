@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
@@ -585,7 +587,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 
 	// Create a git repository
-	tempRepo := setupTestRepository(t)
+	tempRepo := sessiontest.SetupTestRepository(t)
 	defer func() {
 		if err := os.RemoveAll(tempRepo); err != nil {
 			t.Logf("Failed to remove temp repo: %v", err)

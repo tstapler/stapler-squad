@@ -3,6 +3,7 @@ package sessiontest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -282,4 +283,139 @@ var ValidTransitionSet = map[[2]domain.Status]bool{
 	// Hibernated
 	{domain.Hibernated, domain.Active}:  true,
 	{domain.Hibernated, domain.Stopped}: true,
+}
+
+// FakePaneSettleChecker is a scripted paneSettleChecker: each call to
+// HasUpdated pops the next value off updates (repeating the last one once
+// exhausted), so a test can script "still changing... still changing...
+// settled" without a real tmux pane.
+type FakePaneSettleChecker struct {
+	Updates []bool
+	Calls   int
+}
+
+func (f *FakePaneSettleChecker) HasUpdated() (bool, bool) {
+	idx := f.Calls
+	f.Calls++
+	if idx >= len(f.Updates) {
+		idx = len(f.Updates) - 1
+	}
+	return f.Updates[idx], false
+}
+
+// SetupTestRepository creates a temporary git repository for testing
+//
+// Uses go-git directly rather than shelling out — see
+// the `prefer-go-git-over-subshells` skill.
+func SetupTestRepository(t *testing.T) string {
+	t.Helper()
+	dir, err := SetupTestRepositoryCommon(t.TempDir(), "# Test Repository")
+	require.NoError(t, err)
+	return dir
+}
+
+// SetupTestRepositoryCommon is the shared go-git init/add/commit logic behind
+// SetupTestRepository and setupTestRepositoryBench — *testing.T and
+// *testing.B report failures differently (require.NoError vs b.Fatal), so
+// each caller wraps this with its own error handling instead of taking a
+// testing.TB.
+func SetupTestRepositoryCommon(dir, readmeContents string) (string, error) {
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContents), 0644); err != nil {
+		return "", err
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		return "", err
+	}
+	if _, err := wt.Add("."); err != nil {
+		return "", err
+	}
+	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
+		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
+	}); err != nil {
+		return "", err
+	}
+
+	return dir, nil
+}
+
+// FakePaneSubmitter is a scripted paneSubmitter: it records every SendKeys
+// argument in call order (so a test can assert content and Enter travelled as
+// two separate writes, not one concatenated string) and can be told to fail
+// on a specific call index. HasUpdated pops the next value off updates
+// (repeating the last one once exhausted, mirroring FakePaneSettleChecker),
+// so a test can script both the pre-Enter settle wait and the post-Enter
+// submit-confirmation poll independently.
+type FakePaneSubmitter struct {
+	SendCalls   []string
+	FailOnCall  int // -1 (default) means never fail
+	Updates     []bool
+	updateCalls int
+	OnSend      func(int)
+}
+
+// FakeLeaseOwner is the lease identity every pane fake in this file reports.
+const FakeLeaseOwner = "fake-pane-owner"
+
+func (f *FakePaneSubmitter) LeaseOwnerUUID() string { return FakeLeaseOwner }
+
+func (f *FakePaneSubmitter) SendKeys(keys string) error {
+	idx := len(f.SendCalls)
+	f.SendCalls = append(f.SendCalls, keys)
+	if f.OnSend != nil {
+		f.OnSend(len(f.SendCalls))
+	}
+	if f.FailOnCall == idx {
+		return errors.New("fake send failure")
+	}
+	return nil
+}
+
+func (f *FakePaneSubmitter) HasUpdated() (bool, bool) {
+	if len(f.Updates) == 0 {
+		return false, false
+	}
+	idx := f.updateCalls
+	f.updateCalls++
+	if idx >= len(f.Updates) {
+		idx = len(f.Updates) - 1
+	}
+	return f.Updates[idx], false
+}
+
+// NewFakePaneSubmitter returns a fake that reports a pane update on every
+// HasUpdated call — i.e. content settles immediately and every submit is
+// confirmed — unless the test overrides Updates itself.
+func NewFakePaneSubmitter() *FakePaneSubmitter {
+	return &FakePaneSubmitter{FailOnCall: -1, Updates: []bool{false, true}}
+}
+
+var PrTestEpoch = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+
+func MustPRRef(t *testing.T, host, owner, repo string, n int) domain.PRRef {
+	t.Helper()
+	ref, err := domain.NewPRRef(host, owner, repo, n)
+	if err != nil {
+		t.Fatalf("NewPRRef(%q,%q,%q,%d): %v", host, owner, repo, n, err)
+	}
+	return ref
+}
+
+// PrRow builds a view of acme/app#n attached n minutes after the epoch, so a
+// higher number is newer unless a test overrides AttachedAt.
+func PrRow(t *testing.T, n int, state domain.PRState, head string) domain.PRView {
+	t.Helper()
+	return domain.PRView{
+		StateID:    n,
+		Ref:        MustPRRef(t, "", "acme", "app", n),
+		State:      state,
+		HeadBranch: head,
+		AttachedAt: PrTestEpoch.Add(time.Duration(n) * time.Minute),
+	}
 }

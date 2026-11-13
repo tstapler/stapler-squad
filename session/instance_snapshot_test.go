@@ -1,11 +1,13 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/domain"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
 // --- Story 1.1: Construction guarantee ---
@@ -307,7 +309,7 @@ func TestBuildSnapshot_ShouldCopyPRsDeeply_WhenPublished(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "pr-snap", Path: t.TempDir(), Program: "echo", Branch: "feat/x"}
 	FinishInstanceConstruction(inst)
-	ref := mustPRRef(t, "", "acme", "app", 12)
+	ref := sessiontest.MustPRRef(t, "", "acme", "app", 12)
 	inst.PRs = []domain.PRView{{StateID: 1, Ref: ref, State: domain.PRStateOpen, HeadBranch: "feat/x"}}
 	inst.LegacyPRUnrepresented = true
 	inst.HasPRLinks = true
@@ -335,7 +337,7 @@ func TestBuildSnapshot_ShouldCopyPRsDeeply_WhenPublished(t *testing.T) {
 func TestToInstanceData_ShouldCarryPRFlagsOut_WhenSnapshotHasLinks(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "pr-out", Path: t.TempDir(), Program: "echo"}
-	inst.PRs = []domain.PRView{{StateID: 1, Ref: mustPRRef(t, "", "acme", "app", 12), State: domain.PRStateOpen}}
+	inst.PRs = []domain.PRView{{StateID: 1, Ref: sessiontest.MustPRRef(t, "", "acme", "app", 12), State: domain.PRStateOpen}}
 	inst.LegacyPRUnrepresented, inst.HasPRLinks = true, true
 	FinishInstanceConstruction(inst)
 
