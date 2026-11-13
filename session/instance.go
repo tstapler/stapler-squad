@@ -222,7 +222,7 @@ type Instance struct {
 	// global, or BackendTmux). See ProcessManagerOptions.Backend's doc comment for
 	// precedence. Can also change post-construction via Restart's migration path;
 	// read it via Snapshot(), not this raw field.
-	Backend ProcessManagerBackend `json:"backend,omitempty"`
+	Backend domain.ProcessManagerBackend `json:"backend,omitempty"`
 	// Tags are multi-valued labels for flexible session organization
 	// Sessions can have multiple tags and appear in multiple groups simultaneously
 	// Examples: ["frontend", "urgent", "client-work"]
@@ -972,7 +972,7 @@ type InstanceOptions struct {
 	TmuxServerSocket string
 	// Backend mirrors Instance.Backend — see its doc comment. Copied onto the new
 	// Instance in NewInstance before the ProcessManager is constructed.
-	Backend ProcessManagerBackend
+	Backend domain.ProcessManagerBackend
 	// GitHub integration fields for PR/URL-based session creation
 	GitHubPRNumber  int    // PR number if created from PR URL
 	GitHubPRURL     string // Full URL to the PR
@@ -1175,7 +1175,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The session itself is wired later by initTmuxSession() at Start() time.
-	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
 	}
@@ -2614,7 +2614,7 @@ func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *s
 // that backend instead of respawning in place: there's no live hand-off
 // between daemons, so this kills, rebuilds under the new backend, and
 // resumes -- same mechanism as an in-place restart.
-func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBackend) (retErr error) {
+func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessManagerBackend) (retErr error) {
 	if err := validateBackendOverride(backendOverride); err != nil {
 		return err
 	}

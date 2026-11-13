@@ -442,14 +442,14 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	if instance.Backend == "" && data.TymuxSessionID != "" {
 		// A daemon id proves the record ran on tymux; don't let a changed
 		// process-wide default drop it onto another backend.
-		instance.Backend = BackendTymux
+		instance.Backend = domain.BackendTymux
 	}
 	// Other persisted sessions predate backend pinning and were tmux; no later global selection
 	// (tymux or native) may re-route them, or their stream, to another backend.
-	if sel := getSelectedBackend(); instance.Backend == "" && sel != "" && sel != BackendTmux {
-		instance.Backend = BackendTmux
+	if sel := getSelectedBackend(); instance.Backend == "" && sel != "" && sel != domain.BackendTmux {
+		instance.Backend = domain.BackendTmux
 	}
-	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
 	}

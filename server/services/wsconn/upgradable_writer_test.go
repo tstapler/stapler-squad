@@ -19,7 +19,7 @@ import (
 func newTymuxInstanceWithStatus(t *testing.T, status domain.Status) *session.Instance {
 	t.Helper()
 	inst := session.NewStartedInstanceForTest(t, "upgrade", session.NewTymuxBackend(retainedPaintManager{}))
-	inst.Backend = session.BackendTymux
+	inst.Backend = domain.BackendTymux
 	session.SetStatusForTest(t, inst, status, nil)
 	return inst
 }

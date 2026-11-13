@@ -341,10 +341,10 @@ func (i *Instance) pm() ProcessManager {
 	}
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
+		mgr, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
 		if err != nil {
 			log.Error("unrecognized process manager backend; falling back to BackendTmux", "session", i.Title, "backend", i.Backend, "err", err)
-			mgr, _ = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+			mgr, _ = NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{})
 		}
 		i.processManager = mgr
 	}
@@ -848,7 +848,7 @@ func (i *Instance) wireTmuxSession(command launchcmd.LaunchCommand) {
 // this call's type assertions. Nests i.mu *inside* i.pmMu for the Backend
 // write below -- no call site anywhere else in the package nests the other
 // way (mu-then-pmMu), so keep that ordering if this ever changes.
-func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, command launchcmd.LaunchCommand) error {
+func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride domain.ProcessManagerBackend, command launchcmd.LaunchCommand) error {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 
@@ -867,7 +867,7 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 	// A different backend means a different daemon entirely (tmux vs.
 	// tymuxd) -- no live hand-off is possible, so build a brand-new
 	// ProcessManager via the same factory CreateSession uses.
-	newPM, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{
+	newPM, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{
 		Backend:      backendOverride,
 		SessionName:  i.Title,
 		Program:      shellString(command),
@@ -880,7 +880,7 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 	}
 	i.processManager = newPM
 	i.wireTmuxSession(command)
-	if backendOverride == BackendTymux {
+	if backendOverride == domain.BackendTymux {
 		newPM.AppendLaunchEnv(i.buildExtraEnv()...)
 	}
 	newPM.ResetExitOnce()
@@ -897,11 +897,11 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 // validateBackendOverride rejects an unrecognized backendOverride before
 // Restart tears down the live session -- NewProcessManager's own validation
 // runs too late for this call path, after KillSession has already run.
-func validateBackendOverride(backendOverride ProcessManagerBackend) error {
+func validateBackendOverride(backendOverride domain.ProcessManagerBackend) error {
 	if backendOverride == "" {
 		return nil
 	}
-	if !knownBackend(backendOverride) {
+	if !domain.KnownBackend(backendOverride) {
 		return fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backendOverride)
 	}
 	return nil

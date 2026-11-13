@@ -112,7 +112,7 @@ type InstanceData struct {
 	// persisted so a process restart doesn't silently drop it — see
 	// Instance.Backend's doc comment for precedence. Empty means "no pin,
 	// fall through to the process-wide default."
-	Backend ProcessManagerBackend `json:"backend,omitempty"`
+	Backend domain.ProcessManagerBackend `json:"backend,omitempty"`
 
 	// Terminal update timestamps for activity tracking
 	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`

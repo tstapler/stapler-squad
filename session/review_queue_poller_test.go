@@ -972,7 +972,7 @@ func TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped(
 	poller.tmuxSocket = querier
 
 	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux", "tymux-only-socket", domain.Active)
-	tymuxInst.Backend = BackendTymux
+	tymuxInst.Backend = domain.BackendTymux
 	poller.SetInstances([]*Instance{tymuxInst})
 
 	// Deliberately do NOT call querier.setLiveSessions for "tymux-only-socket"
@@ -1002,7 +1002,7 @@ func TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled(t
 
 	tmuxInst := makeSocketTestInstance("tmux-session", "session-tmux", "shared-socket", domain.Active)
 	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux-name", "shared-socket", domain.Active)
-	tymuxInst.Backend = BackendTymux
+	tymuxInst.Backend = domain.BackendTymux
 	poller.SetInstances([]*Instance{tmuxInst, tymuxInst})
 
 	// tmux session genuinely alive; the tymux instance's name is deliberately

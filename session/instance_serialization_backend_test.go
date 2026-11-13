@@ -26,7 +26,7 @@ func TestFromInstanceData_EmptyBackend_HonorsTymuxSessionOverride(t *testing.T) 
 	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "dotfiles"))
 
 	require.NoError(t, err)
-	assert.Equal(t, BackendTymux, inst.Backend)
+	assert.Equal(t, domain.BackendTymux, inst.Backend)
 	_, isTymux := inst.processManager.(*TymuxBackend)
 	assert.True(t, isTymux, "process manager must be a TymuxBackend, got %T", inst.processManager)
 }
@@ -51,7 +51,7 @@ func TestFromInstanceData_TymuxBackend_SetsBaselineCommand(t *testing.T) {
 	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
 	defer func() { newTymuxSessionFn = orig }()
 	data := restoredPausedData(t, "tymux-restore")
-	data.Backend = BackendTymux
+	data.Backend = domain.BackendTymux
 
 	_, err := FromInstanceDataDeferred(data)
 
@@ -64,7 +64,7 @@ func TestFromInstanceData_TymuxBackend_SetsBaselineCommand(t *testing.T) {
 func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	fake := &fakeTymuxManagerForSetCommand{}
-	inst := &Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: BackendTymux}
+	inst := &Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux}
 	inst.processManager = NewTymuxBackend(fake)
 
 	inst.wireTmuxSession(shellLaunch("claude --resume abc"))
@@ -100,7 +100,7 @@ func TestFromInstanceData_EveryStatusBranch_WiresTymuxCommand(t *testing.T) {
 			defer func() { newTymuxSessionFn = orig }()
 			data := restoredPausedData(t, "branch-"+status.String())
 			data.Status = status
-			data.Backend = BackendTymux
+			data.Backend = domain.BackendTymux
 
 			_, err := FromInstanceDataDeferred(data)
 
@@ -120,7 +120,7 @@ func TestFromInstanceData_EmptyBackend_GlobalTymux_StaysTmux(t *testing.T) {
 	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "legacy-tmux"))
 
 	require.NoError(t, err)
-	assert.Equal(t, BackendTmux, inst.Backend, "legacy sessions are pinned to tmux")
+	assert.Equal(t, domain.BackendTmux, inst.Backend, "legacy sessions are pinned to tmux")
 	_, isTmux := inst.processManager.(*TmuxBackend)
 	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.processManager)
 }
@@ -129,13 +129,13 @@ func TestFromInstanceData_EmptyBackend_GlobalTymux_StaysTmux(t *testing.T) {
 func TestFromInstanceData_EmptyBackend_GlobalNative_StaysTmux(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	cfg := config.LoadConfig()
-	cfg.ProcessManagerBackend = string(BackendNative)
+	cfg.ProcessManagerBackend = string(domain.BackendNative)
 	require.NoError(t, config.SaveConfig(cfg))
 
 	inst, err := FromInstanceDataDeferred(restoredPausedData(t, "legacy-native"))
 
 	require.NoError(t, err)
-	assert.Equal(t, BackendTmux, inst.Backend)
+	assert.Equal(t, domain.BackendTmux, inst.Backend)
 	_, isTmux := inst.processManager.(*TmuxBackend)
 	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.processManager)
 }

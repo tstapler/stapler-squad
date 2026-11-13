@@ -143,7 +143,7 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		Backend:   BackendTymux,
+		Backend:   domain.BackendTymux,
 	}
 	inst.started.Store(true)
 
@@ -153,7 +153,7 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 
-	assert.Equal(t, BackendTymux, loaded[0].Backend,
+	assert.Equal(t, domain.BackendTymux, loaded[0].Backend,
 		"Backend must survive AddInstance → LoadInstances round-trip through the ent repository")
 }
 

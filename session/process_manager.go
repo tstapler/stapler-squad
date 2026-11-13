@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -98,29 +99,6 @@ type LaunchSpec struct {
 	NewTmuxSession func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession
 }
 
-// ProcessManagerBackend identifies the backend implementation.
-type ProcessManagerBackend string
-
-const (
-	BackendTmux   ProcessManagerBackend = "tmux"
-	BackendNative ProcessManagerBackend = "native"
-	BackendTymux  ProcessManagerBackend = "tymux"
-)
-
-// pushesLivenessEvents lists backends that report liveness push-style
-// (instanceOnExitCallback) instead of being independently pollable by name
-// — the single place to add a future backend instead of touching every
-// poll site that needs to skip it.
-var pushesLivenessEvents = map[ProcessManagerBackend]bool{
-	BackendTymux: true,
-}
-
-// SkipsPollBasedLiveness reports whether tmux-socket-based liveness polling
-// (reconcileSessions, health.go) has anything correct to add for this backend.
-func (b ProcessManagerBackend) SkipsPollBasedLiveness() bool {
-	return pushesLivenessEvents[b]
-}
-
 // ProcessManagerOptions holds constructor parameters for NewProcessManager.
 type ProcessManagerOptions struct {
 	SessionName  string
@@ -135,7 +113,7 @@ type ProcessManagerOptions struct {
 	// this one call — an explicit per-session choice always wins. Zero value ("")
 	// means "no per-session override," preserving today's behavior for every caller
 	// that doesn't set it. See NewProcessManager's precedence in backend_factory.go.
-	Backend ProcessManagerBackend
+	Backend domain.ProcessManagerBackend
 	// TymuxSessionID is the persisted daemon session id for a restored tymux Instance.
 	TymuxSessionID string
 }

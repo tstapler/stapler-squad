@@ -14,7 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -199,12 +199,12 @@ func TestBuildLogConfig_DefaultsToInfoNotDebug(t *testing.T) {
 func Test_tymuxNeeded_should_ReturnExpected_When_GivenResolvedBackend(t *testing.T) {
 	tests := []struct {
 		name            string
-		resolvedBackend session.ProcessManagerBackend
+		resolvedBackend domain.ProcessManagerBackend
 		want            bool
 	}{
-		{"tymux backend needs supervision", session.BackendTymux, true},
-		{"tmux backend does not need supervision", session.BackendTmux, false},
-		{"unknown backend does not need supervision", session.ProcessManagerBackend("bogus"), false},
+		{"tymux backend needs supervision", domain.BackendTymux, true},
+		{"tmux backend does not need supervision", domain.BackendTmux, false},
+		{"unknown backend does not need supervision", domain.ProcessManagerBackend("bogus"), false},
 	}
 
 	for _, tt := range tests {
@@ -229,7 +229,7 @@ func Test_tymuxNeeded_should_ReturnTrue_When_AnyTymuxSessionOverrideIsTrue(t *te
 		},
 	}
 
-	if !tymuxNeeded(cfg, session.BackendTmux) {
+	if !tymuxNeeded(cfg, domain.BackendTmux) {
 		t.Fatal("tymuxNeeded() = false, want true: a true TymuxSessionOverrides entry must trigger supervision even when the global default is tmux")
 	}
 }
@@ -244,7 +244,7 @@ func Test_tymuxNeeded_should_ReturnFalse_When_AllTymuxSessionOverridesAreFalse(t
 		},
 	}
 
-	if tymuxNeeded(cfg, session.BackendTmux) {
+	if tymuxNeeded(cfg, domain.BackendTmux) {
 		t.Fatal("tymuxNeeded() = true, want false: an all-false override map must not trigger supervision on its own")
 	}
 }
@@ -252,7 +252,7 @@ func Test_tymuxNeeded_should_ReturnFalse_When_AllTymuxSessionOverridesAreFalse(t
 // Test_tymuxNeeded_should_ReturnFalse_When_ConfigIsNil confirms the nil-safety
 // guard added alongside the TymuxSessionOverrides check.
 func Test_tymuxNeeded_should_ReturnFalse_When_ConfigIsNil(t *testing.T) {
-	if tymuxNeeded(nil, session.BackendTmux) {
+	if tymuxNeeded(nil, domain.BackendTmux) {
 		t.Fatal("tymuxNeeded(nil, BackendTmux) = true, want false")
 	}
 }

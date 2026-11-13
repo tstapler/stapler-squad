@@ -24,20 +24,20 @@ func TestToInstanceData_PreservesBackend(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Program:   "claude",
-		Backend:   BackendTymux,
+		Backend:   domain.BackendTymux,
 	}
 
 	data := instance.ToInstanceData()
-	if data.Backend != BackendTymux {
-		t.Fatalf("ToInstanceData(): expected Backend %q, got %q", BackendTymux, data.Backend)
+	if data.Backend != domain.BackendTymux {
+		t.Fatalf("ToInstanceData(): expected Backend %q, got %q", domain.BackendTymux, data.Backend)
 	}
 
 	restored, err := FromInstanceData(data)
 	if err != nil {
 		t.Fatalf("FromInstanceData: %v", err)
 	}
-	if restored.Backend != BackendTymux {
-		t.Fatalf("FromInstanceData(): expected Backend %q, got %q", BackendTymux, restored.Backend)
+	if restored.Backend != domain.BackendTymux {
+		t.Fatalf("FromInstanceData(): expected Backend %q, got %q", domain.BackendTymux, restored.Backend)
 	}
 }
 

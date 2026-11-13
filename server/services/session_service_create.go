@@ -878,7 +878,7 @@ func (s *SessionService) CreateSession(
 		// req.Msg.Title — since that's what TymuxSessionOverrides/StreamHubSessionOverrides are
 		// keyed by (see config.Config.TymuxSessionOverrides's doc comment and
 		// tmuxSessionNameForStreamPath's identical derivation in connectrpc_websocket.go).
-		Backend: session.ResolveSessionBackendForTitle(cfg, req.Msg.Title, session.ProcessManagerBackend(req.Msg.GetBackendOverride())),
+		Backend: session.ResolveSessionBackendForTitle(cfg, req.Msg.Title, domain.ProcessManagerBackend(req.Msg.GetBackendOverride())),
 		// Tags is a direct passthrough of req.Msg.Tags (Task 2.3.1c) -- set once, synchronously,
 		// at construction time, like Title/Path. This exists so MCP's create_session/
 		// create_session_for_pr can apply "source:mcp"/PR-derived tags before the async

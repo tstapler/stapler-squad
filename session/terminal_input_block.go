@@ -16,7 +16,7 @@ func TerminalInputBlock(snap *InstanceSnapshot) (blocked, recoverable bool) {
 	if snap.ArchivedAt != nil {
 		return true, true // clears on unarchive
 	}
-	if snap.Backend == BackendTymux && snap.Status != domain.Active {
+	if snap.Backend == domain.BackendTymux && snap.Status != domain.Active {
 		return true, true
 	}
 	return false, false

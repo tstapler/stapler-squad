@@ -587,7 +587,7 @@ func TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck(t *testi
 	checker := NewSessionHealthChecker(nil)
 
 	mock := &mockTmuxManager{hasSessionReturn: false} // would fail TmuxAlive() if ever consulted
-	inst := &Instance{Title: "tymux-backend-test", Status: domain.Active, Backend: BackendTymux}
+	inst := &Instance{Title: "tymux-backend-test", Status: domain.Active, Backend: domain.BackendTymux}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 

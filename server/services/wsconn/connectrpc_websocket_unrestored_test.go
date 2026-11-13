@@ -69,7 +69,7 @@ func TestStreamPaths_RetainedTymuxFirstPaintAndWriter(t *testing.T) {
 			t.Parallel()
 			inst := session.NewStartedInstanceForTest(t, "paint", session.NewTymuxBackend(retainedPaintManager{}))
 			inst.Status = status
-			inst.Backend = session.BackendTymux
+			inst.Backend = domain.BackendTymux
 			frame, ok := fullStateFrame(context.Background(), inst)
 			require.True(t, ok)
 			require.Equal(t, "retained first paint", frame.data)

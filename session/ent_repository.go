@@ -1571,7 +1571,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
-		Backend:             ProcessManagerBackend(sess.Backend),
+		Backend:             domain.ProcessManagerBackend(sess.Backend),
 		TymuxSessionID:      sess.TymuxSessionID,
 		LastOutputSignature: sess.LastOutputSignature,
 		MCPServerURL:        sess.McpServerURL,

@@ -120,7 +120,7 @@ type InstanceSnapshot struct {
 	SessionType           domain.SessionType
 	TmuxPrefix            string
 	TmuxServerSocket      string
-	Backend               ProcessManagerBackend
+	Backend               domain.ProcessManagerBackend
 	Tags                  []string // defensive deep copy — see buildSnapshot
 
 	// RuleTagProvenance/SuppressedRuleTags mirror Instance's ADR-002 tag-provenance

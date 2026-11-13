@@ -695,7 +695,7 @@ func (s *SessionService) RestartSession(
 	// Restart the instance, migrating backends first if BackendOverride names
 	// a different one — see RestartSessionRequest.backend_override's doc
 	// comment and session.Instance.Restart's migrating branch.
-	if err := instance.Restart(req.Msg.PreserveOutput, session.ProcessManagerBackend(req.Msg.GetBackendOverride())); err != nil {
+	if err := instance.Restart(req.Msg.PreserveOutput, domain.ProcessManagerBackend(req.Msg.GetBackendOverride())); err != nil {
 		log.Error("[RestartSession] failed to restart session", "session", instance.Title, "err", err)
 		if errors.Is(err, session.ErrUnrecognizedBackend) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)

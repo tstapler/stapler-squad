@@ -557,7 +557,7 @@ func TestFindConfirmedLiveInstance_MapMiss_TymuxShadowWithLiveStoredSession_Retu
 		Path:           t.TempDir(),
 		Status:         domain.Active,
 		Program:        "claude",
-		Backend:        session.BackendTymux,
+		Backend:        domain.BackendTymux,
 		TymuxSessionID: "d-1",
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),

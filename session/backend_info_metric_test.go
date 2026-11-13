@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // collectBackendInfo returns the "backend/source" pairs session_backend_info
@@ -51,7 +52,7 @@ func TestRecordBackendInfo_GlobalDefaultIsTmux(t *testing.T) {
 
 func TestRecordBackendInfo_ReportsGlobalAndSessionOverrideSources(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.ProcessManagerBackend = string(BackendTymux)
+	cfg.ProcessManagerBackend = string(domain.BackendTymux)
 	cfg.TymuxSessionOverrides = map[string]bool{"ssq_a": false, "ssq_b": false}
 	RecordBackendInfo(cfg)
 	assert.Equal(t, []string{"tmux/session_override", "tymux/global"}, collectBackendInfo(t),

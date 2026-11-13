@@ -152,7 +152,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Program:      discovered.Metadata.Command,
 		Status:       domain.Active,
 		InstanceType: InstanceTypeExternal,
-		Backend:      BackendTmux, // wraps an existing tmux session; no global selection may re-route it
+		Backend:      domain.BackendTmux, // wraps an existing tmux session; no global selection may re-route it
 		Category:     "External",
 		Tags:         []string{"external", "mux"},
 		CreatedAt:    now, // Initialize timestamps to avoid stale notifications
@@ -178,7 +178,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 	// instance.Backend value here means genuinely corrupted/unexpected data —
 	// log it loudly and skip wrapping this discovered session rather than
 	// registering an Instance with no process manager.
-	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
 	if err != nil {
 		log.Error("failed to construct process manager for external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title, "err", err)
 		return

@@ -1203,11 +1203,11 @@ func (h *ConnectRPCWebSocketHandler) routeShellStream(stream *connectWebSocketSt
 // controlModeStreamingFor reports whether a main terminal takes the hub/control-mode path.
 // The capture-pane fallback drives a tmux session by name (pipe-pane, send-keys), which a tymux
 // session does not have, so tymux ignores STAPLER_SQUAD_USE_CONTROL_MODE=false.
-func controlModeStreamingFor(controlModeEnv string, managed bool, backend session.ProcessManagerBackend) bool {
+func controlModeStreamingFor(controlModeEnv string, managed bool, backend domain.ProcessManagerBackend) bool {
 	if !managed {
 		return false
 	}
-	return backend == session.BackendTymux || controlModeEnv == "" || controlModeEnv == "true"
+	return backend == domain.BackendTymux || controlModeEnv == "" || controlModeEnv == "true"
 }
 
 // routeMainTerminalStream picks the streaming path for a main-session (non-shell)

@@ -3275,7 +3275,7 @@ func TestCreateSession_HonorsExplicitBackendOverride(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	backendOverride := string(session.BackendTymux)
+	backendOverride := string(domain.BackendTymux)
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:           title,
 		Path:            t.TempDir(),
@@ -3287,7 +3287,7 @@ func TestCreateSession_HonorsExplicitBackendOverride(t *testing.T) {
 
 	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
 	require.NotNil(t, inst)
-	assert.Equal(t, session.BackendTymux, inst.Backend,
+	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"request backend_override must win even though this session's TymuxSessionOverrides entry forces tmux")
 }
 
@@ -3316,7 +3316,7 @@ func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
 
 	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
 	require.NotNil(t, inst)
-	assert.Equal(t, session.BackendTymux, inst.Backend,
+	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend with no request override present")
 }
 
@@ -3342,7 +3342,7 @@ func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
 
 	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
 	require.NotNil(t, inst)
-	assert.Equal(t, session.BackendTymux, inst.Backend,
+	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"with no request override and no session-name override, CreateSession must apply the process-wide registered default")
 }
 
@@ -3374,7 +3374,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
-	assert.Equal(t, session.BackendTmux, inst.Backend,
+	assert.Equal(t, domain.BackendTmux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }
 
@@ -3398,7 +3398,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
-	assert.Equal(t, session.BackendTmux, inst.Backend,
+	assert.Equal(t, domain.BackendTmux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }
 

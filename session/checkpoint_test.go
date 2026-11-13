@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -174,7 +175,7 @@ func TestForkFromCheckpoint_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, newInst)
 
-	assert.Equal(t, BackendTmux, newInst.Backend,
+	assert.Equal(t, domain.BackendTmux, newInst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }
 
