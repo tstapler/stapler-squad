@@ -8,27 +8,11 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
-
-// ReviewGateSpawner can create a short-lived review session for a backlog item.
-// Deprecated: use headless.Pool via NewBacklogLifecycleListenerWithSpawner instead.
-// Retained for backward compatibility with existing tests and callers.
-type ReviewGateSpawner interface {
-	// SpawnReviewSession creates a one-shot review session for item using prompt.
-	// itemSessionID is the UUID of the work ItemSession being reviewed.
-	SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error)
-}
-
-// AutoReopenSpawner can automatically reopen a backlog item for rework after a
-// failed review verdict (FAIL or PARTIAL). It transitions the item back to
-// in_progress and spawns a new work session so the review→rework cycle is
-// fully automated.
-type AutoReopenSpawner interface {
-	AutoReopenAfterFailedReview(ctx context.Context, itemID string) error
-}
 
 // ReviewRespawner can automatically re-trigger the review gate for a backlog
 // item stuck in review with no active session in flight (the
@@ -381,7 +365,7 @@ func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *bac
 // Every automatic spawn path funnels through here, so this is where the
 // per-item check-then-reserve lives. The reservation is held until Run
 // returns, i.e. past the review ItemSession row being persisted.
-func (l *BacklogLifecycleListener) spawnReviewGate(gateContext GateContext, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
+func (l *BacklogLifecycleListener) spawnReviewGate(gateContext reviewgate.GateContext, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
 	release, ok := l.ReserveReview(l.shutdownCtx, item.ID)
 	if !ok {
 		log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate: skipping duplicate review spawn item=%s (reviewer already in flight or open)", item.ID)

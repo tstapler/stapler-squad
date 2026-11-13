@@ -22,7 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -1889,7 +1889,7 @@ func TestSpawnSessionFromItem_should_RecordBaseCommitSha_In_ProtoResponse(t *tes
 	require.NoError(t, err)
 	require.Len(t, creator.calls, 1)
 
-	head, err := backlog.GetGitHeadSHA(creator.calls[0].path)
+	head, err := pipeline.GetGitHeadSHA(creator.calls[0].path)
 	require.NoError(t, err)
 
 	resp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
@@ -3489,7 +3489,7 @@ func TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewS
 		},
 	})
 	require.NoError(t, err)
-	engine, err := backlog.NewPipelineEngine(pmRepo)
+	engine, err := pipeline.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
@@ -3531,7 +3531,7 @@ func TestTriggerReReview_should_ResolveFamilyAliasToConcreteModelId_When_ReviewS
 	require.NoError(t, listErr)
 	reviewSession := sessions[len(sessions)-1]
 	assert.Equal(t, "claude-opus-4-8", reviewSession.ResolvedModel)
-	assert.Equal(t, backlog.ComputeExecutorHash("", "family:opus"), reviewSession.ExecutorSnapshotHash,
+	assert.Equal(t, pipeline.ComputeExecutorHash("", "family:opus"), reviewSession.ExecutorSnapshotHash,
 		"ExecutorSnapshotHash must hash the RAW unresolved alias, not the resolved concrete model ID")
 	assert.Empty(t, reviewSession.ConfiguredProgram, "no fallback occurred for the claude program")
 	assert.Empty(t, reviewSession.ExecutorFallbackReason)

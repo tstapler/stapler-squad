@@ -16,7 +16,10 @@ session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
 session/importer files=13 loc=2173 imports=7
 session/itemsources files=8 loc=1731 imports=7
-session/backlog files=24 loc=12436 imports=17
+session/backlog files=13 loc=8148 imports=15
+session/backlog/chains files=3 loc=733 imports=7
+session/backlog/reviewgate files=3 loc=990 imports=9
+session/backlog/pipeline files=8 loc=2565 imports=14
 session/backlog/liveness files=7 loc=912 imports=8
 session/backlog/stuck files=2 loc=478 imports=4
 session/backlog/shadowledger files=2 loc=621 imports=5
@@ -27,7 +30,7 @@ server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
 server/services/wsconn files=23 loc=9895 imports=22
-server/services/backlogsvc files=32 loc=15400 imports=25
+server/services/backlogsvc files=32 loc=15400 imports=28
 server/services/internal/svctest files=36 loc=1459 imports=17
 server/services/sessionbundle files=4 loc=862 imports=7
 server/services/devtools files=4 loc=501 imports=4

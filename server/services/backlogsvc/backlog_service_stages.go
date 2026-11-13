@@ -22,7 +22,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/chains"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -203,7 +203,7 @@ func mapStageStrandingError(ctx context.Context, s *BacklogService, err error) e
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, backlog.ErrDisableWouldStrandLiveItems):
+	case errors.Is(err, chains.ErrDisableWouldStrandLiveItems):
 		return connect.NewError(connect.CodeFailedPrecondition, s.withStrandedItemIDs(ctx, err))
 	default:
 		return connect.NewError(connect.CodeInternal, err)

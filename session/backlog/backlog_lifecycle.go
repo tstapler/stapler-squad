@@ -14,7 +14,10 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/chains"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -51,7 +54,7 @@ type BacklogLifecycleListener struct {
 	// SessionService exists, so the spawner is wired post-construction via
 	// SetSessionCreator.
 	sessionCreatorMu sync.RWMutex
-	sessionCreator   ReviewGateSpawner
+	sessionCreator   reviewgate.ReviewGateSpawner
 
 	// poolMu guards headlessPool for concurrent Set/get access.
 	poolMu       sync.RWMutex
@@ -62,7 +65,7 @@ type BacklogLifecycleListener struct {
 
 	// autoReopenMu guards autoReopener for concurrent Set/get access.
 	autoReopenMu sync.RWMutex
-	autoReopener AutoReopenSpawner
+	autoReopener reviewgate.AutoReopenSpawner
 
 	// prFixMu guards prFixSpawner for concurrent Set/get access.
 	prFixMu      sync.RWMutex
@@ -233,13 +236,13 @@ type BacklogLifecycleListener struct {
 	shutdownCancel context.CancelFunc
 
 	// runner encapsulates the spawnReviewGate logic so it can be tested independently.
-	runner *ReviewGateRunner
+	runner *reviewgate.ReviewGateRunner
 
 	// pipelineEngine resolves mode-specific slash-command sets and prompts (Epic 1.5).
 	// Optional — nil (the default for every constructor except NewBacklogLifecycleListenerWithPool,
 	// which is production's only caller) falls back to the built-in default pipeline. Set once at
 	// construction and forwarded unchanged into runner — never mutated afterward.
-	pipelineEngine PipelineEngine
+	pipelineEngine pipeline.PipelineEngine
 
 	// livenessEngine resolves per-stage/per-pipeline-mode stuck-detection thresholds (Epic 1.4 of
 	// backlog-custom-workflow-stages), replacing the flat liveness.MaxHeadlessTriageSessionStaleness/
@@ -257,7 +260,7 @@ type BacklogLifecycleListener struct {
 	// default) makes reconcileTriggerChains a no-op — matches every other
 	// optional-dependency detector's nil-safe convention in this file. Wired
 	// via SetChainReconciler.
-	chainReconciler *TriggerChainReconciler
+	chainReconciler *chains.TriggerChainReconciler
 
 	// gateSatisfactionRepoMu guards gateSatisfactionRepo for concurrent Set/get access.
 	gateSatisfactionRepoMu sync.RWMutex
@@ -353,7 +356,7 @@ func (l *BacklogLifecycleListener) SetReviewGateSatisfactionRepository(repo sess
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
 // wired). Exported for the pointer-equality integration test proving BacklogService and
 // BacklogLifecycleListener share a single PipelineEngine instance (Story 1.5.1).
-func (l *BacklogLifecycleListener) PipelineEngine() PipelineEngine {
+func (l *BacklogLifecycleListener) PipelineEngine() pipeline.PipelineEngine {
 	return l.pipelineEngine
 }
 
@@ -402,7 +405,7 @@ func (l *BacklogLifecycleListener) SetRepoSettingsSeam(s RepoSettingsSeam) {
 
 // SetAutoReopener wires in the spawner used to automatically reopen items for
 // rework when a review verdict is FAIL or PARTIAL.
-func (l *BacklogLifecycleListener) SetAutoReopener(r AutoReopenSpawner) {
+func (l *BacklogLifecycleListener) SetAutoReopener(r reviewgate.AutoReopenSpawner) {
 	l.autoReopenMu.Lock()
 	defer l.autoReopenMu.Unlock()
 	l.autoReopener = r
@@ -412,21 +415,21 @@ func (l *BacklogLifecycleListener) SetAutoReopener(r AutoReopenSpawner) {
 // after construction. Needed because production wiring
 // (server/dependencies.go) constructs this listener before SessionService
 // exists.
-func (l *BacklogLifecycleListener) SetSessionCreator(s ReviewGateSpawner) {
+func (l *BacklogLifecycleListener) SetSessionCreator(s reviewgate.ReviewGateSpawner) {
 	l.sessionCreatorMu.Lock()
 	defer l.sessionCreatorMu.Unlock()
 	l.sessionCreator = s
 }
 
 // getSessionCreator returns the current review-gate session spawner under a read lock.
-func (l *BacklogLifecycleListener) getSessionCreator() ReviewGateSpawner {
+func (l *BacklogLifecycleListener) getSessionCreator() reviewgate.ReviewGateSpawner {
 	l.sessionCreatorMu.RLock()
 	defer l.sessionCreatorMu.RUnlock()
 	return l.sessionCreator
 }
 
 // getAutoReopener returns the current auto-reopener under a read lock.
-func (l *BacklogLifecycleListener) getAutoReopener() AutoReopenSpawner {
+func (l *BacklogLifecycleListener) getAutoReopener() reviewgate.AutoReopenSpawner {
 	l.autoReopenMu.RLock()
 	defer l.autoReopenMu.RUnlock()
 	return l.autoReopener
@@ -541,14 +544,14 @@ func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
 // SetChainReconciler wires in the pipeline-chain restart-recovery reconciler
 // (webhook-triggers Phase 6). Called via server/dependencies.go once a
 // ChainFirer has been constructed (see WireChainFirer).
-func (l *BacklogLifecycleListener) SetChainReconciler(r *TriggerChainReconciler) {
+func (l *BacklogLifecycleListener) SetChainReconciler(r *chains.TriggerChainReconciler) {
 	l.chainReconcilerMu.Lock()
 	defer l.chainReconcilerMu.Unlock()
 	l.chainReconciler = r
 }
 
 // getChainReconciler returns the current chain reconciler under a read lock.
-func (l *BacklogLifecycleListener) getChainReconciler() *TriggerChainReconciler {
+func (l *BacklogLifecycleListener) getChainReconciler() *chains.TriggerChainReconciler {
 	l.chainReconcilerMu.RLock()
 	defer l.chainReconcilerMu.RUnlock()
 	return l.chainReconciler
@@ -882,7 +885,7 @@ func (l *BacklogLifecycleListener) Shutdown() {
 // newListenerBase initialises fields common to all BacklogLifecycleListener constructors.
 // pipelineEngine and livenessEngine may both be nil — see their field doc comments for the
 // fallback behavior.
-func newListenerBase(storage *session.Storage, pipelineEngine PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
+func newListenerBase(storage *session.Storage, pipelineEngine pipeline.PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &BacklogLifecycleListener{
 		storage:                 storage,
@@ -901,7 +904,7 @@ func newListenerBase(storage *session.Storage, pipelineEngine PipelineEngine, li
 		prByNumberFinder:        defaultPRByNumberFinder,
 		dashboardBaseURLFn:      func() string { return "" },
 	}
-	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
+	l.runner = reviewgate.NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
 }
 
@@ -914,7 +917,7 @@ func NewBacklogLifecycleListener(storage *session.Storage) *BacklogLifecycleList
 
 // NewBacklogLifecycleListenerWithSpawner creates a listener that will spawn a
 // review gate session when a work session exits and SkipReviewGate is false.
-func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner ReviewGateSpawner) *BacklogLifecycleListener {
+func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner reviewgate.ReviewGateSpawner) *BacklogLifecycleListener {
 	l := newListenerBase(storage, nil, nil)
 	l.SetSessionCreator(spawner)
 	return l
@@ -926,7 +929,7 @@ func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner Re
 // the built-in default pipeline for every item. livenessEngine is the shared
 // liveness.LivenessEngine instance (Epic 1.4) — pass nil to fall back to each stuck-detection
 // sweep's literal constant for every item.
-func NewBacklogLifecycleListenerWithPool(storage *session.Storage, pool *headless.Pool, pipelineEngine PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
+func NewBacklogLifecycleListenerWithPool(storage *session.Storage, pool *headless.Pool, pipelineEngine pipeline.PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
 	l := newListenerBase(storage, pipelineEngine, livenessEngine)
 	l.headlessPool = pool
 	return l
@@ -1129,7 +1132,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 // no persisted TransitionGate backs it (GateID ""), and it always reviews a
 // code diff (RequiresDiff: true) — the same behavior review_gate.go's Run had
 // unconditionally before Story 2.4.3 generalized it to accept a GateContext.
-var builtInReviewGateContext = GateContext{
+var builtInReviewGateContext = reviewgate.GateContext{
 	GateID:           "",
 	TargetTransition: session.BacklogStatusReview,
 	RequiresDiff:     true,
@@ -1157,19 +1160,19 @@ var builtInReviewGateContext = GateContext{
 // review gate in that case. server/dependencies.go wires the concrete engine
 // via SetWorkflowEngine; with none (or a non-concrete one) this degrades to
 // the `to == BacklogStatusReview` case only.
-func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to session.BacklogStatus) (GateContext, bool) {
+func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to session.BacklogStatus) (reviewgate.GateContext, bool) {
 	if to == session.BacklogStatusReview {
 		return builtInReviewGateContext, true
 	}
 	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
-		return GateContext{}, false
+		return reviewgate.GateContext{}, false
 	}
 	gateID, cfg, found := cwe.ResolveAutomatedReviewGateContext(from, to)
 	if !found {
-		return GateContext{}, false
+		return reviewgate.GateContext{}, false
 	}
-	return GateContext{
+	return reviewgate.GateContext{
 		GateID:           gateID,
 		TargetTransition: to,
 		RequiresDiff:     cfg.RequiresDiff,
@@ -1696,7 +1699,7 @@ func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, err
 // transitionBouncingItemToDone moves an item reconcileBouncingItems has
 // externally verified as converged (its PR merged, or its commit shipped to
 // main) to done. It does this via the state machine's own legal edges —
-// recording a genuine PASS verdict via recordTerminalReviewVerdict (documenting
+// recording a genuine PASS verdict via RecordTerminalReviewVerdict (documenting
 // the external verification as the justification), then in_progress->review
 // (only if the item isn't already at review) followed by review->done —
 // rather than calling the raw storage-layer TransitionBacklogItemStatus
@@ -1708,7 +1711,7 @@ func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, err
 // the guarded RPC path in server/services/backlog_service_lifecycle.go that
 // this internal caller was bypassing).
 func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Context, item backlogdto.BacklogItemData, verdictSummary string) error {
-	if _, err := recordTerminalReviewVerdict(l.storage, item.ID, item.AcceptanceCriteria, "bounce-reconcile-"+uuid.New().String(), session.ReviewVerdictPass, verdictSummary); err != nil {
+	if _, err := pipeline.RecordTerminalReviewVerdict(l.storage, item.ID, item.AcceptanceCriteria, "bounce-reconcile-"+uuid.New().String(), session.ReviewVerdictPass, verdictSummary); err != nil {
 		return fmt.Errorf("record PASS verdict: %w", err)
 	}
 

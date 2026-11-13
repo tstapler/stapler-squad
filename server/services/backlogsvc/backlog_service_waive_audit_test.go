@@ -15,7 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -249,7 +249,7 @@ func TestApplyTriageResultToUpdate_should_NeverStoreModelWaiver_And_RepoCarriesE
 	require.NoError(t, f.waive(t, t.Context(), 0, "owner call", nil)) // "pending one"
 
 	// Re-triage: reorders, inserts, and the model emits a bogus waived status plus waiver metadata.
-	result := &backlog.HeadlessTriageResult{AcceptanceCriteria: []session.AcCriterion{
+	result := &pipeline.HeadlessTriageResult{AcceptanceCriteria: []session.AcCriterion{
 		{Text: "brand new", Status: session.AcStatusWaived, WaiverReason: "model says so", WaivedBy: "model"},
 		{Text: "done one", Status: session.AcStatusDone},
 		{Text: "Pending One", Status: session.AcStatusPending},

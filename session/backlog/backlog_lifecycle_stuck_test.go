@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -577,13 +578,13 @@ func TestReconcileUnprocessedReviewVerdicts_should_notAct_When_ReviewSessionStil
 
 		listener := NewBacklogLifecycleListener(storage)
 		listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return true }) // everything alive — only the verdict age should trigger action
-		reopener := newFakeAutoReopenSpawner()
+		reopener := blktest.NewFakeAutoReopenSpawner()
 		listener.SetAutoReopener(reopener)
 
 		listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 		select {
-		case gotItemID := <-reopener.called:
+		case gotItemID := <-reopener.Called:
 			assert.Equal(t, item.ID, gotItemID,
 				"an idle-but-alive review session whose verdict has aged past reviewVerdictIdleThreshold must still reach the auto-reopener (forcePush path)")
 		case <-time.After(2 * time.Second):
@@ -753,14 +754,14 @@ func TestReconcileUnprocessedReviewVerdicts_should_invokeAutoReopener_When_Newes
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 
 	er := storage.Repo
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID,
 			"a dead, verdict-less newest review session must still reach the auto-reopener, not leave the item invisible to this sweep forever")
 	case <-time.After(2 * time.Second):
@@ -816,7 +817,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRe
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetSessionLivenessChecker(func(sessionUUID string) bool { return false }) // everything dead
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	er := storage.Repo
 
@@ -831,7 +832,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRe
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
 	}
@@ -853,7 +854,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRe
 	listener.reconcileUnprocessedReviewVerdicts(ctx, er)
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		t.Fatalf("bouncing gate is mid-backoff on tick 2 — AutoReopenAfterFailedReview must not be invoked, got call for item=%s", gotItemID)
 	case <-time.After(300 * time.Millisecond):
 	}

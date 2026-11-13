@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -52,10 +53,10 @@ func (l *BacklogLifecycleListener) runCustomGateCheck(ctx context.Context, gateI
 // (mirrors resolveCustomCheckStalenessThresholdWithEngine's identical
 // extraction below, done for the same reason: l.headlessPool is a concrete
 // *headless.Pool, not an interface, so it can't be substituted in tests).
-func (l *BacklogLifecycleListener) runCustomGateCheckWithCaller(ctx context.Context, caller CustomCheckCaller, gateID uuid.UUID, cfg session.CustomCheckConfig, targetStage session.BacklogStatus, item *backlogdto.BacklogItemData) {
+func (l *BacklogLifecycleListener) runCustomGateCheckWithCaller(ctx context.Context, caller reviewgate.CustomCheckCaller, gateID uuid.UUID, cfg session.CustomCheckConfig, targetStage session.BacklogStatus, item *backlogdto.BacklogItemData) {
 	mode := backlogdto.PipelineMode(item.PipelineMode)
 	livenessDef := l.resolveCustomCheckLivenessDef(targetStage, mode)
-	if _, err := InvokeCustomGateCheck(ctx, caller, l.getGateSatisfactionRepo(), item, gateID, cfg, livenessDef, targetStage, mode); err != nil {
+	if _, err := reviewgate.InvokeCustomGateCheck(ctx, caller, l.getGateSatisfactionRepo(), item, gateID, cfg, livenessDef, targetStage, mode); err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] runCustomGateCheck item=%s gate=%s: %v", item.ID, gateID, err)
 	}
 }
@@ -130,7 +131,7 @@ func (l *BacklogLifecycleListener) reconcileCustomGateChecks(ctx context.Context
 		if !ok {
 			continue // no bound duration budget recorded — nothing to compare against
 		}
-		age := customCheckInvocationAge(record.CreatedAt)
+		age := time.Since(record.CreatedAt)
 		if age <= threshold {
 			continue // still within budget
 		}
