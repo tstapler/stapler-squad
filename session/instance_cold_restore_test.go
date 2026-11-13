@@ -181,7 +181,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	// PID fast path — a nil inspector would panic there. Same convention as
 	// history_linker_test.go's "no open files → always falls through to
 	// DetectByPath" mocks.
-	inst.historyDetector = NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome)
+	inst.WithHistoryDetectorForTest(NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
 	writeJSONLFixture(t, fakeHome, inst.Path, fixtureUUID, time.Time{})
 
@@ -452,20 +452,18 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			fakeHome := t.TempDir()
 			clearedAt := time.Now()
 
-			inst := &Instance{
-				Title:           "test-clearedat-guard",
-				Path:            tmpDir,
-				SessionType:     domain.SessionTypeDirectory,
-				claudeExtension: claudeExtension{conversationClearedAt: clearedAt},
-				historyDetector: NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome),
-			}
+			inst := (&Instance{
+				Title:       "test-clearedat-guard",
+				Path:        tmpDir,
+				SessionType: domain.SessionTypeDirectory,
+			}).WithConversationClearedAtForTest(clearedAt).WithHistoryDetectorForTest(NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 			writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, clearedAt.Add(tt.offset))
 
 			inst.TryExtractConversationUUID()
 
 			gotUUID := ""
-			if inst.claudeSession != nil {
-				gotUUID = inst.claudeSession.ConversationUUID
+			if inst.GetClaudeSession() != nil {
+				gotUUID = inst.GetClaudeSession().ConversationUUID
 			}
 			assert.Equal(t, tt.wantUUID, gotUUID, tt.wantReason)
 		})
@@ -531,20 +529,19 @@ func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwn
 
 	writeJSONLFixture(t, fakeHome, sharedPath, conversationUUID, time.Time{})
 
-	instB := &Instance{
-		Title:           "session-b",
-		UUID:            "session-b-uuid",
-		Path:            sharedPath,
-		SessionType:     domain.SessionTypeDirectory,
-		historyDetector: NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome),
-	}
+	instB := (&Instance{
+		Title:       "session-b",
+		UUID:        "session-b-uuid",
+		Path:        sharedPath,
+		SessionType: domain.SessionTypeDirectory,
+	}).WithHistoryDetectorForTest(NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	instB.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(instB.UUID,
 		simulatedLiveInstance{uuid: sessionAUUID, conversationUUID: conversationUUID, path: sharedPath, alive: true},
 	))
 
 	instB.TryExtractConversationUUID()
 
-	assert.Nil(t, instB.claudeSession, "B must not silently adopt A's still-live conversation UUID via the path-shared DetectByPath fallback")
+	assert.Nil(t, instB.GetClaudeSession(), "B must not silently adopt A's still-live conversation UUID via the path-shared DetectByPath fallback")
 }
 
 // TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfRecovery
@@ -564,19 +561,18 @@ func TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfReco
 
 	writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, time.Time{})
 
-	inst := &Instance{
-		Title:           "cold-restore-self-recovery",
-		UUID:            "cold-restore-self-uuid",
-		Path:            tmpDir,
-		SessionType:     domain.SessionTypeDirectory,
-		historyDetector: NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome),
-	}
+	inst := (&Instance{
+		Title:       "cold-restore-self-recovery",
+		UUID:        "cold-restore-self-uuid",
+		Path:        tmpDir,
+		SessionType: domain.SessionTypeDirectory,
+	}).WithHistoryDetectorForTest(NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome))
 	inst.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(inst.UUID,
 		simulatedLiveInstance{uuid: inst.UUID, conversationUUID: fixtureUUID, path: tmpDir, alive: true},
 	))
 
 	inst.TryExtractConversationUUID()
 
-	require.NotNil(t, inst.claudeSession, "ColdRestore self-recovery must not be blocked by the ownership guard")
-	assert.Equal(t, fixtureUUID, inst.claudeSession.ConversationUUID, "must successfully re-adopt its own JSONL's conversation UUID")
+	require.NotNil(t, inst.GetClaudeSession(), "ColdRestore self-recovery must not be blocked by the ownership guard")
+	assert.Equal(t, fixtureUUID, inst.GetClaudeSession().ConversationUUID, "must successfully re-adopt its own JSONL's conversation UUID")
 }

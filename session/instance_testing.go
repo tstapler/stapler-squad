@@ -146,6 +146,25 @@ func (i *Instance) WithClaudeSessionForTest(s *domain.ClaudeSessionData) *Instan
 	return i
 }
 
+// WithHistoryDetectorForTest sets the conversation-history detector and returns i, for seeding a struct literal inline.
+func (i *Instance) WithHistoryDetectorForTest(d *HistoryFileDetector) *Instance {
+	i.historyDetector = d
+	return i
+}
+
+// WithConversationClearedAtForTest records when the conversation was last cleared and returns i.
+func (i *Instance) WithConversationClearedAtForTest(at time.Time) *Instance {
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
+	i.conversationClearedAt = at
+	return i
+}
+
+// UpdateProcessManagerForRestartForTest runs the backend swap Restart performs.
+func (i *Instance) UpdateProcessManagerForRestartForTest(migrating bool, backendOverride domain.ProcessManagerBackend, command launchcmd.LaunchCommand) error {
+	return i.updateProcessManagerForRestart(migrating, backendOverride, command)
+}
+
 // MutateForTest runs fn under i.mu and republishes the snapshot, so a test can edit exported fields
 // the way an actor setter would without reaching the unexported lock and snapshot.
 func (i *Instance) MutateForTest(fn func(*Instance)) {
