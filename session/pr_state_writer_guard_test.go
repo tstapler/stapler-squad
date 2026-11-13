@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -48,7 +50,7 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	ctx := context.Background()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
-	ref := mustPRRef(t, "", "acme", "app", 12)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
 
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}))
 	stateRowIs(t, storage.Repo, ref, domain.PRStateUnknown, true, "seeded")
@@ -71,7 +73,7 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	})
 	t.Run("prPersistPending flush", func(t *testing.T) {
 		t.Parallel()
-		inst.prPersistPending.Store(true)
+		inst.SetPRPersistPendingForTest(true)
 		storage.saved.reset() // an unchanged row would otherwise skip the write the flush rides on
 		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 		require.False(t, inst.PRPersistPending(), "the flush ran")

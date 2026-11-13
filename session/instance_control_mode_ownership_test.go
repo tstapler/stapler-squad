@@ -56,7 +56,7 @@ func TestInstanceStartControlMode_should_NeverProduceTwoOwners_When_100Goroutine
 	}
 
 	inst := &Instance{Title: name}
-	_ = inst.pm() // lazily initializes processManager as *TmuxBackend before SetTmuxSession
+	_ = inst.PMForTest() // lazily initializes processManager as *TmuxBackend before SetTmuxSession
 	inst.SetTmuxSession(tmuxSession)
 	t.Cleanup(func() { _ = inst.StopControlMode() })
 

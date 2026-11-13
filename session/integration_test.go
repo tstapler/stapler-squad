@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"github.com/tstapler/stapler-squad/session/domain"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,7 +84,7 @@ func TestSessionRecoveryScenarios(t *testing.T) {
 		t.Skip("skipping integration tests that start real tmux sessions")
 	}
 	// Create a temporary git repository for testing
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	// t.Cleanup, not defer: subtests below are t.Parallel() and spawn real
 	// tmux sessions against tempRepo, so a plain defer here would remove it
 	// while they're still running — observed hanging a full test binary for
@@ -132,7 +132,7 @@ func TestSessionRecoveryScenarios(t *testing.T) {
 // Session is killed and restored, should start in worktree not main repo
 func testSessionRestoredInCorrectWorktree(t *testing.T) {
 	// Set up recovery scenario manually
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
 	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
@@ -217,7 +217,7 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 // testMultipleSessionsRestoreIndependently tests that multiple sessions
 // can be restored independently in their correct worktrees
 func testMultipleSessionsRestoreIndependently(t *testing.T) {
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
 	// Create two instances using new API with cleanup
@@ -341,7 +341,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 
 // testSessionRecoveryWithExistingChanges tests recovery when worktree has uncommitted changes
 func testSessionRecoveryWithExistingChanges(t *testing.T) {
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
 	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
@@ -458,48 +458,6 @@ func uniqueTestTmuxSocket(t *testing.T, suffix string) string {
 		name += "_" + suffix
 	}
 	return name
-}
-
-// setupTestRepository creates a temporary git repository for testing
-//
-// Uses go-git directly rather than shelling out — see
-// the `prefer-go-git-over-subshells` skill.
-func setupTestRepository(t *testing.T) string {
-	t.Helper()
-	dir, err := setupTestRepositoryCommon(t.TempDir(), "# Test Repository")
-	require.NoError(t, err)
-	return dir
-}
-
-// setupTestRepositoryCommon is the shared go-git init/add/commit logic behind
-// setupTestRepository and setupTestRepositoryBench — *testing.T and
-// *testing.B report failures differently (require.NoError vs b.Fatal), so
-// each caller wraps this with its own error handling instead of taking a
-// testing.TB.
-func setupTestRepositoryCommon(dir, readmeContents string) (string, error) {
-	repo, err := git.PlainInit(dir, false)
-	if err != nil {
-		return "", err
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContents), 0644); err != nil {
-		return "", err
-	}
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		return "", err
-	}
-	if _, err := wt.Add("."); err != nil {
-		return "", err
-	}
-	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
-	}); err != nil {
-		return "", err
-	}
-
-	return dir, nil
 }
 
 // testExistingSessionResumption tests that when a tmux session already exists,
@@ -827,7 +785,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 // Uses go-git directly rather than shelling out — see
 // the `prefer-go-git-over-subshells` skill.
 func setupTestRepositoryBench(b *testing.B) string {
-	dir, err := setupTestRepositoryCommon(b.TempDir(), "# Benchmark Repository")
+	dir, err := fixturetest.SetupTestRepositoryCommon(b.TempDir(), "# Benchmark Repository")
 	if err != nil {
 		b.Fatal(err)
 	}

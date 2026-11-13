@@ -67,7 +67,7 @@ func TestSaveInstances_Should_SkipWrite_When_ReloadedInstanceUnchanged(t *testin
 		loaded, err := storage.LoadInstances()
 		require.NoError(t, err)
 		require.Len(t, loaded, 1)
-		loaded[0].started.Store(true)
+		loaded[0].MarkStarted()
 		require.NoError(t, storage.SaveInstances(loaded))
 	}
 	reloadAndSave() // first reload normalises legacy fields (category -> tags) and may write

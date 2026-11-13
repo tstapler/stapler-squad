@@ -91,6 +91,6 @@ func makeSocketTestInstance(title, tmuxSessionName, socket string, status domain
 		IsManaged:        true,
 		TmuxServerSocket: socket,
 	}
-	inst.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: tmuxSessionName})
+	inst.SetProcessManagerForTest(NewTmuxBackend(&mockTmuxManager{tmuxSessionName: tmuxSessionName}))
 	return inst
 }

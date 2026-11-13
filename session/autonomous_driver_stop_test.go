@@ -89,10 +89,10 @@ func newStopHarness(t *testing.T, pool HeadlessPoolClient, maxTurns int, src sto
 	t.Helper()
 	inst := &Instance{Title: "stop-harness", UUID: "abcdefgh-stop-harness"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 	pm := &fakeSendKeysProcessManager{}
-	inst.processManager = pm
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(pm)
+	inst.MarkStarted()
 
 	d := &AutonomousDriver{
 		inst:                   inst,

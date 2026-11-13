@@ -23,7 +23,7 @@ func TestInstance_SetHistoryInfo_FiresCallback_When_UUIDChanges(t *testing.T) {
 	inst.SetHistoryInfo("conv-uuid-1", "/path/to/history.jsonl")
 
 	assert.Equal(t, 1, fired, "expected callback to fire once when the UUID changes")
-	assert.Equal(t, "conv-uuid-1", inst.claudeSession.ConversationUUID)
+	assert.Equal(t, "conv-uuid-1", inst.GetClaudeSession().ConversationUUID)
 	assert.Equal(t, "/path/to/history.jsonl", inst.HistoryFilePath)
 }
 
@@ -78,9 +78,9 @@ func TestRecoverFromStaleResume_should_NotRestart_When_InstanceArchived(t *testi
 		archivedAt := time.Now()
 		mock := &mockTmuxManager{}
 		inst := &Instance{Title: "archived-stale-resume", Status: domain.Stopped, ArchivedAt: &archivedAt}
-		inst.processManager = NewTmuxBackend(mock)
+		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
-		inst.recoverFromStaleResume()
+		inst.RecoverFromStaleResumeForTest()
 
 		assert.Equal(t, 0, mock.startCalls, "an archived session must not be restarted on a stale --resume exit")
 		assert.Equal(t, domain.Stopped, inst.Snapshot().Status, "the archived session's status must be left alone")
@@ -90,9 +90,9 @@ func TestRecoverFromStaleResume_should_NotRestart_When_InstanceArchived(t *testi
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &Instance{Title: "live-stale-resume", Status: domain.Stopped}
-		inst.processManager = NewTmuxBackend(mock)
+		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
-		inst.recoverFromStaleResume()
+		inst.RecoverFromStaleResumeForTest()
 
 		assert.Positive(t, mock.startCalls, "control: a live session must still recover from a stale --resume uuid")
 	})

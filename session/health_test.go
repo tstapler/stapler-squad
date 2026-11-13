@@ -100,7 +100,7 @@ func TestHealthCheckerDebounce(t *testing.T) {
 		Title:  "debounce-test",
 		Status: domain.Active,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 
 	// First call: count=1, below threshold (2), no recovery attempted.
 	result1 := checker.checkSingleSession(inst, nil)
@@ -195,8 +195,8 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 		Title:  "pane-dead-test",
 		Status: domain.Active,
 	}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	// First failure: below threshold, no recovery attempted yet.
 	result1 := checker.checkSingleSession(inst, nil)
@@ -246,8 +246,8 @@ func TestHealthCheckerRecovery_BatchMapMiss_DoesNotDoubleCallIsAlive(t *testing.
 		Title:  "batch-miss-test",
 		Status: domain.Active,
 	}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	// Non-nil, non-empty batch map that does not contain this instance's tmux
 	// session name -- simulates a batch fetch that succeeded for other
@@ -280,8 +280,8 @@ func TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFall
 		Title:  "batch-hit-test",
 		Status: domain.Active,
 	}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	batch := map[string]tmux.PaneDeadStatus{
 		"batch-hit-session": {Dead: true, Code: 137, Signal: "SIGKILL"},
@@ -319,8 +319,8 @@ func TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod(t *tes
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &Instance{Title: "crashed-test", Status: domain.Active}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -364,8 +364,8 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails(t *testi
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &Instance{Title: "crashed-test-respawn-fails", Status: domain.Active}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -405,8 +405,8 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &Instance{Title: "normal-exit-test", Status: domain.Active}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -454,8 +454,8 @@ func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDes
 		Status:    domain.Active,
 		CreatedAt: time.Now(), // created after (>=) checker.startedAt
 	}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -496,8 +496,8 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 		Status:    domain.Active,
 		CreatedAt: time.Now().Add(-1 * time.Hour), // created well before the checker started
 	}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	checker.checkSingleSession(inst, nil) // first failure: below threshold
 	result := checker.checkSingleSession(inst, nil)
@@ -531,8 +531,8 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 
 	mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() would be false
 	inst := &Instance{Title: "permanently-failed-test", Status: domain.PermanentlyFailed}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	// Call past the debounce threshold -- if the skip didn't fire, the second
 	// call would reach the recovery path and invoke Start().
@@ -588,8 +588,8 @@ func TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck(t *testi
 
 	mock := &mockTmuxManager{hasSessionReturn: false} // would fail TmuxAlive() if ever consulted
 	inst := &Instance{Title: "tymux-backend-test", Status: domain.Active, Backend: domain.BackendTymux}
-	inst.started.Store(true)
-	inst.processManager = NewTmuxBackend(mock)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 	// Call past the debounce threshold -- if the skip didn't fire, the second
 	// call would reach recoverMissingSession and invoke Start().
@@ -629,9 +629,9 @@ func TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances(
 	querier.setDown("custom", true) // "" (default) stays up
 
 	instHealthy := &Instance{Title: "healthy-default-socket", Status: domain.Active, TmuxServerSocket: ""}
-	instHealthy.started.Store(true)
+	instHealthy.MarkStarted()
 	instDown := &Instance{Title: "down-custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
-	instDown.started.Store(true)
+	instDown.MarkStarted()
 
 	results := checker.checkInstances([]*Instance{instHealthy, instDown})
 
@@ -660,9 +660,9 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 	// Neither socket is marked down -- both should be checked.
 
 	instDefault := &Instance{Title: "default-socket", Status: domain.Active, TmuxServerSocket: ""}
-	instDefault.started.Store(true)
+	instDefault.MarkStarted()
 	instCustom := &Instance{Title: "custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
-	instCustom.started.Store(true)
+	instCustom.MarkStarted()
 
 	results := checker.checkInstances([]*Instance{instDefault, instCustom})
 
@@ -706,8 +706,8 @@ func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testi
 				// Set before anything calls Snapshot(): it caches its first build.
 				inst.ArchivedAt = &archivedAt
 			}
-			inst.started.Store(true)
-			inst.processManager = NewTmuxBackend(mock)
+			inst.MarkStarted()
+			inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 			// Two calls: the first is below the failure debounce threshold, the
 			// second reaches recoverMissingSession's Start(false).

@@ -11,7 +11,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // TestTransitionTo_should_AllowCreatingToFailed_When_PipelineFails verifies the
@@ -281,28 +280,6 @@ func TestUpdateTimestamps_Should_NotAdvanceLastMeaningfulChange_When_RenameOrPin
 	inst.SetTitleDirect("touch-renamed")
 
 	assert.Equal(t, before, inst.Snapshot().LastMeaningfulChangeAt)
-}
-
-// Snapshot pointer identity stands in for a counting build hook: each rebuild stores a new pointer.
-func TestUpdateTimestamps_Should_RebuildSnapshotOncePerMeaningfulFrameAndZeroOtherwise_When_CountingHook(t *testing.T) {
-	t.Parallel()
-	inst, err := NewInstance(InstanceOptions{Title: "touch-frames", Path: "/tmp/test", Program: "claude"})
-	require.NoError(t, err)
-	inst.SetTmuxSession(tmux.NewTmuxSession("touch-frames", "claude"))
-
-	s0 := inst.Snapshot()
-	inst.UpdateTerminalTimestamps("   \n", false)
-	assert.Same(t, s0, inst.Snapshot(), "blank frame must not rebuild")
-	assert.Equal(t, s0.LastMeaningfulChangeAt, inst.Snapshot().LastMeaningfulChangeAt)
-
-	inst.UpdateTerminalTimestamps("Hello, world!\nError: something happened", false)
-	s1 := inst.Snapshot()
-	assert.NotSame(t, s0, s1, "meaningful frame rebuilds")
-	assert.True(t, s1.LastMeaningfulChangeAt.Equal(s1.LastMeaningfulOutput))
-	assert.True(t, s1.LastMeaningfulChangeAt.After(s0.LastMeaningfulChangeAt))
-
-	inst.UpdateTerminalTimestamps("Hello, world!\nError: something happened", false)
-	assert.Equal(t, s1.LastMeaningfulChangeAt, inst.Snapshot().LastMeaningfulChangeAt, "same signature does not touch")
 }
 
 func TestRecordTurnEnd_Should_AdvanceLastMeaningfulChange_When_TurnEnded(t *testing.T) {

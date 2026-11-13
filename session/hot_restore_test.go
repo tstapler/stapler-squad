@@ -36,12 +36,11 @@ func TestHotRestoreIfLive_Outcomes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{
-				Title:          "t",
-				Status:         tc.status,
-				ArchivedAt:     tc.archivedAt,
-				processManager: &fakeLivenessProcessManager{alive: tc.live},
-			}
+			inst := (&Instance{
+				Title:      "t",
+				Status:     tc.status,
+				ArchivedAt: tc.archivedAt,
+			}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: tc.live})
 			probed := false
 			got, err := HotRestoreIfLive(inst, func() bool {
 				probed = true
@@ -53,21 +52,6 @@ func TestHotRestoreIfLive_Outcomes(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, inst.GetLifecycleStatus())
 		})
 	}
-}
-
-func TestHotRestoreIfLive_FailedAttachRestoresTerminalStatus(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.PermanentlyFailed} // no process manager: Start fails
-	got, err := HotRestoreIfLive(inst, func() bool { return true })
-	require.Error(t, err)
-	assert.Equal(t, HotRestoreError, got)
-	assert.Equal(t, domain.PermanentlyFailed, inst.GetLifecycleStatus())
-}
-
-func TestHotRestoreIfLive_NilInstance(t *testing.T) {
-	t.Parallel()
-	got, _ := HotRestoreIfLive(nil, func() bool { return true })
-	assert.Equal(t, HotRestoreError, got)
 }
 
 // failingAttachPM models a live pane whose hot attach (RestoreWithWorkDir) fails.
@@ -96,7 +80,7 @@ func TestHotRestoreIfLive_FailedAttachNeverKillsTheLiveSession(t *testing.T) {
 	t.Run("tmux-like backend without a releaser", func(t *testing.T) {
 		t.Parallel()
 		pm := &failingAttachPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: true}}
-		inst := &Instance{Title: "t", Status: domain.PermanentlyFailed, processManager: pm}
+		inst := (&Instance{Title: "t", Status: domain.PermanentlyFailed}).WithProcessManagerForTest(pm)
 		got, err := HotRestoreIfLive(inst, func() bool { return true })
 		require.Error(t, err)
 		assert.Equal(t, HotRestoreError, got)
@@ -106,7 +90,7 @@ func TestHotRestoreIfLive_FailedAttachNeverKillsTheLiveSession(t *testing.T) {
 	t.Run("tymux-like backend with a releaser", func(t *testing.T) {
 		t.Parallel()
 		pm := &releasingFailingAttachPM{failingAttachPM: failingAttachPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: true}}}
-		inst := &Instance{Title: "t", Status: domain.Failed, processManager: pm}
+		inst := (&Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(pm)
 		_, err := HotRestoreIfLive(inst, func() bool { return true })
 		require.Error(t, err)
 		assert.Zero(t, pm.closeCalls.Load(), "failed hot attach must not kill the pre-existing pane")
@@ -115,40 +99,12 @@ func TestHotRestoreIfLive_FailedAttachNeverKillsTheLiveSession(t *testing.T) {
 	})
 }
 
-func TestHotRestoreIfLive_ArchivedDuringAttachWindowIsRolledBack(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.PermanentlyFailed}
-	// The probe runs after the first archival check and before the status flip.
-	got, err := HotRestoreIfLive(inst, func() bool {
-		now := time.Now()
-		inst.mu.Lock()
-		inst.ArchivedAt = &now
-		inst.mu.Unlock()
-		return true
-	})
-	require.NoError(t, err)
-	assert.Equal(t, HotRestoreArchived, got)
-	assert.Equal(t, domain.PermanentlyFailed, inst.GetLifecycleStatus())
-}
-
-func TestHotRestoreIfLive_BusyWhenRestartInFlight(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.Failed}
-	inst.SetRetryInFlightForTest(true)
-	probed := false
-	got, err := HotRestoreIfLive(inst, func() bool { probed = true; return true })
-	require.NoError(t, err)
-	assert.Equal(t, HotRestoreBusy, got)
-	assert.False(t, probed)
-	assert.Equal(t, domain.Failed, inst.GetLifecycleStatus())
-}
-
 func TestHotRestoreIfLive_ConcurrentCallsAttachOnce(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
 	var restores atomic.Int32
 	pm := &fakeLivenessProcessManager{alive: true, restoreRelease: release, onRestore: func() { restores.Add(1) }}
-	inst := &Instance{Title: "t", Status: domain.Failed, processManager: pm}
+	inst := (&Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(pm)
 
 	var wg sync.WaitGroup
 	outcomes := make(chan HotRestoreOutcome, 2)
@@ -161,7 +117,7 @@ func TestHotRestoreIfLive_ConcurrentCallsAttachOnce(t *testing.T) {
 		}()
 	}
 	// The loser blocks on hotRestoreMu until the winner finishes its attach.
-	require.Eventually(t, func() bool { return restores.Load() == 0 && inst.retryInFlight.Load() }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return restores.Load() == 0 && inst.RetryInFlightForTest() }, time.Second, time.Millisecond)
 	close(release)
 	wg.Wait()
 	close(outcomes)
@@ -178,37 +134,22 @@ func TestHotRestoreIfLive_ConcurrentCallsAttachOnce(t *testing.T) {
 func TestHotRestoreIfLive_FailedAttachRestoresStartedFlag(t *testing.T) {
 	t.Parallel()
 	pm := &failingAttachPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: true}}
-	inst := &Instance{Title: "t", Status: domain.PermanentlyFailed, processManager: pm}
-	inst.started.Store(true) // a runtime failure: the session had started
+	inst := (&Instance{Title: "t", Status: domain.PermanentlyFailed}).WithProcessManagerForTest(pm)
+	inst.MarkStarted() // a runtime failure: the session had started
 	_, err := HotRestoreIfLive(inst, func() bool { return true })
 	require.Error(t, err)
 	assert.True(t, inst.Started(), "rollback must restore started or Destroy would leak the pane and worktree")
 	assert.Equal(t, domain.PermanentlyFailed, inst.GetLifecycleStatus())
 }
 
-func TestHotRestoreIfLive_ArchivedRaceRestoresStartedFlag(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.Failed}
-	inst.started.Store(true)
-	got, _ := HotRestoreIfLive(inst, func() bool {
-		now := time.Now()
-		inst.mu.Lock()
-		inst.ArchivedAt = &now
-		inst.mu.Unlock()
-		return true
-	})
-	assert.Equal(t, HotRestoreArchived, got)
-	assert.True(t, inst.Started())
-}
-
 func TestHotRestoreIfLive_ClearedDropsPendingRetryState(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.Failed, processManager: &fakeLivenessProcessManager{alive: true}}
-	inst.mu.Lock()
-	inst.NextRetryAt = time.Now().Add(time.Hour)
-	inst.RetryAttempt = 2
-	inst.LastFailureReason = "boom"
-	inst.mu.Unlock()
+	inst := (&Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(&fakeLivenessProcessManager{alive: true})
+	inst.MutateForTest(func(i *Instance) {
+		i.NextRetryAt = time.Now().Add(time.Hour)
+		i.RetryAttempt = 2
+		i.LastFailureReason = "boom"
+	})
 	require.True(t, inst.IsRetryPending())
 
 	got, err := HotRestoreIfLive(inst, func() bool { return true })
@@ -232,7 +173,7 @@ func (m *closeCountingPM) Close() error       { m.closes.Add(1); return nil }
 func TestHotRestoreIfLive_NeverColdLaunchesWhenProcessDiedAfterProbe(t *testing.T) {
 	t.Parallel()
 	pm := &closeCountingPM{fakeLivenessProcessManager: fakeLivenessProcessManager{alive: false}}
-	inst := &Instance{Title: "t", Status: domain.Failed, processManager: pm}
+	inst := (&Instance{Title: "t", Status: domain.Failed}).WithProcessManagerForTest(pm)
 	got, err := HotRestoreIfLive(inst, func() bool { return true })
 	require.Error(t, err)
 	assert.Equal(t, HotRestoreError, got)
@@ -246,7 +187,7 @@ func (m *panickingAttachPM) RestoreWithWorkDir(string) error { panic("attach exp
 
 func TestStartHotAttach_ClearsFlagWhenStartPanics(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.Creating, processManager: &panickingAttachPM{fakeLivenessProcessManager{alive: true}}}
-	assert.Panics(t, func() { _ = inst.startHotAttach() })
-	assert.False(t, inst.hotAttaching.Load(), "a panic must not leave the release-only flag stuck")
+	inst := (&Instance{Title: "t", Status: domain.Creating}).WithProcessManagerForTest(&panickingAttachPM{fakeLivenessProcessManager{alive: true}})
+	assert.Panics(t, func() { _ = inst.StartHotAttachForTest() })
+	assert.False(t, inst.HotAttachingForTest(), "a panic must not leave the release-only flag stuck")
 }

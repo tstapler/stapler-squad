@@ -126,6 +126,6 @@ func TestHandleNewSession_GlobalTymux_ExternalSessionStaysTmux(t *testing.T) {
 
 	require.NotNil(t, got)
 	assert.Equal(t, domain.BackendTmux, got.Backend)
-	_, isTmux := got.processManager.(*TmuxBackend)
-	assert.True(t, isTmux, "process manager must be a TmuxBackend, got %T", got.processManager)
+	_, isTmux := got.ProcessManagerForTest().(*TmuxBackend)
+	assert.True(t, isTmux, "process manager must be a TmuxBackend, got %T", got.ProcessManagerForTest())
 }

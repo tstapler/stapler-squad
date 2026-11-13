@@ -13,7 +13,7 @@ type instanceOption func(inst *Instance, now time.Time)
 func startedInstance(title string, opts ...instanceOption) *Instance {
 	now := time.Now()
 	inst := &Instance{Title: title, UUID: "uuid-" + title, Status: domain.Active}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	inst.UpdatedAt = now
 	for _, o := range opts {
 		o(inst, now)

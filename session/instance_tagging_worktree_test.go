@@ -9,27 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/git"
 )
-
-func newBugfixTaggingEngine() *classifier.TaggingEngine {
-	engine := classifier.NewTaggingEngine()
-	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
-	return engine
-}
 
 func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewWorktreeSessionMatchesSeedRule(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	repoDir := t.TempDir()
 	require.NoError(t, git.InitializeProjectDirectory(repoDir))
@@ -42,12 +37,12 @@ func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewWorktreeSe
 		SessionType:      domain.SessionTypeNewWorktree,
 		Branch:           "bugfix/pr-poller",
 		TmuxPrefix:       fmt.Sprintf("test_tagworktree_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() { _ = cleanup() }()
 
-	inst.SetTaggingEngine(newBugfixTaggingEngine())
+	inst.SetTaggingEngine(fixturetest.NewBugfixTaggingEngine())
 
 	require.NoError(t, inst.Start(true))
 
@@ -61,7 +56,7 @@ func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewProjectOrE
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	t.Run("NewProject", func(t *testing.T) {
 		base := t.TempDir()
@@ -75,12 +70,12 @@ func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewProjectOrE
 			SessionType:      domain.SessionTypeNewProject,
 			Branch:           "bugfix/new-project",
 			TmuxPrefix:       fmt.Sprintf("test_tagnewproj_%d_", time.Now().UnixNano()),
-			TmuxServerSocket: coldRestoreSocket(t),
+			TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 		})
 		require.NoError(t, err)
 		defer func() { _ = cleanup() }()
 
-		inst.SetTaggingEngine(newBugfixTaggingEngine())
+		inst.SetTaggingEngine(fixturetest.NewBugfixTaggingEngine())
 		require.NoError(t, inst.Start(true))
 
 		assert.Contains(t, inst.GetTags(), "Bugfix")
@@ -102,12 +97,12 @@ func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewProjectOrE
 			SessionType:      domain.SessionTypeExistingWorktree,
 			ExistingWorktree: worktree.GetWorktreePath(),
 			TmuxPrefix:       fmt.Sprintf("test_tagexistwt_%d_", time.Now().UnixNano()),
-			TmuxServerSocket: coldRestoreSocket(t),
+			TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 		})
 		require.NoError(t, err)
 		defer func() { _ = cleanup() }()
 
-		inst.SetTaggingEngine(newBugfixTaggingEngine())
+		inst.SetTaggingEngine(fixturetest.NewBugfixTaggingEngine())
 		require.NoError(t, inst.Start(true))
 
 		assert.Contains(t, inst.GetTags(), "Bugfix")
@@ -132,7 +127,7 @@ func TestReclassifyTagsAfterCreate_should_NotDeadlock_When_CalledAfterSetupFirst
 		Branch:      "bugfix/deadlock-guard",
 	})
 	require.NoError(t, err)
-	inst.SetTaggingEngine(newBugfixTaggingEngine())
+	inst.SetTaggingEngine(fixturetest.NewBugfixTaggingEngine())
 
 	require.NoError(t, inst.setupFirstTimeWorktree())
 

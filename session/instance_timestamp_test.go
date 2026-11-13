@@ -15,21 +15,21 @@ func (liveTimestampProcessManager) HasSession() bool { return true }
 
 func TestInstance_TymuxMeaningfulOutputAdvancesWithoutForce(t *testing.T) {
 	t.Parallel()
-	instance, err := NewInstance(InstanceOptions{Title: "tymux-activity-contract", Path: t.TempDir(), Program: "claude"})
+	inst, err := NewInstance(InstanceOptions{Title: "tymux-activity-contract", Path: t.TempDir(), Program: "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manager := tymux.NewTymuxGRPCSession(nil)
-	instance.processManager = liveTimestampProcessManager{NewTymuxBackend(manager)}
+	inst.SetProcessManagerForTest(liveTimestampProcessManager{NewTymuxBackend(manager)})
 	before := time.Now().Add(-time.Hour)
-	instance.SetLastMeaningfulOutput(before)
+	inst.SetLastMeaningfulOutput(before)
 
-	instance.UpdateTerminalTimestamps("Implemented the requested change and verified the regression test.", false)
+	inst.UpdateTerminalTimestamps("Implemented the requested change and verified the regression test.", false)
 
-	if !instance.LastMeaningfulOutputTime().After(before) {
+	if !inst.LastMeaningfulOutputTime().After(before) {
 		t.Error("real tymux content classification must publish activity without forced updates")
 	}
-	if !instance.Snapshot().LastMeaningfulOutput.After(before) {
+	if !inst.Snapshot().LastMeaningfulOutput.After(before) {
 		t.Error("actor-published activity must agree with the lock-free activity reader")
 	}
 }
@@ -42,7 +42,7 @@ func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 		Path:    "/tmp/test",
 		Program: "claude",
 	}
-	instance, err := NewInstance(opts)
+	inst, err := NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
@@ -50,53 +50,53 @@ func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 	// Mock tmux session with banner filter - we need to use a properly initialized session
 	// that includes the banner filter, not just an empty struct
 	mockTmux := tmux.NewTmuxSession("test", "claude")
-	instance.SetTmuxSession(mockTmux)
+	inst.SetTmuxSession(mockTmux)
 
 	// Capture initial timestamps
-	initialCreation := instance.CreatedAt
-	initialTerminalUpdate := instance.LastTerminalUpdate
-	initialMeaningfulOutput := instance.LastMeaningfulOutput
+	initialCreation := inst.CreatedAt
+	initialTerminalUpdate := inst.LastTerminalUpdate
+	initialMeaningfulOutput := inst.LastMeaningfulOutput
 
 	// Test 1: Update with meaningful content (non-banner)
 	meaningfulContent := "Hello, world!\nThis is actual output\nError: something happened"
-	instance.UpdateTerminalTimestamps(meaningfulContent, false)
+	inst.UpdateTerminalTimestamps(meaningfulContent, false)
 
 	// Both timestamps should be updated - poll until they advance
 	if err := wait.WaitForCondition(func() bool {
-		return instance.LastTerminalUpdate.After(initialTerminalUpdate) &&
-			instance.LastMeaningfulOutput.After(initialMeaningfulOutput)
+		return inst.LastTerminalUpdate.After(initialTerminalUpdate) &&
+			inst.LastMeaningfulOutput.After(initialMeaningfulOutput)
 	}, wait.FastWaitConfig()); err != nil {
 		t.Error("Timestamps should be updated after meaningful content")
 	}
 
-	if !instance.LastTerminalUpdate.After(initialTerminalUpdate) {
+	if !inst.LastTerminalUpdate.After(initialTerminalUpdate) {
 		t.Error("LastTerminalUpdate should be updated after meaningful content")
 	}
-	if !instance.LastMeaningfulOutput.After(initialMeaningfulOutput) {
+	if !inst.LastMeaningfulOutput.After(initialMeaningfulOutput) {
 		t.Error("LastMeaningfulOutput should be updated after meaningful content")
 	}
 
 	// Save timestamps for next test
-	beforeBannerTerminalUpdate := instance.LastTerminalUpdate
-	beforeBannerMeaningfulOutput := instance.LastMeaningfulOutput
+	beforeBannerTerminalUpdate := inst.LastTerminalUpdate
+	beforeBannerMeaningfulOutput := inst.LastMeaningfulOutput
 
 	// Test 2: Update with banner-only content
 	bannerOnlyContent := "14:23 5-Jan-24\n[session] 0:bash* \"localhost\" 14:23 5-Jan-24"
-	instance.UpdateTerminalTimestamps(bannerOnlyContent, false)
+	inst.UpdateTerminalTimestamps(bannerOnlyContent, false)
 
 	// LastTerminalUpdate should be updated - poll until it advances
 	if err := wait.WaitForCondition(func() bool {
-		return instance.LastTerminalUpdate.After(beforeBannerTerminalUpdate)
+		return inst.LastTerminalUpdate.After(beforeBannerTerminalUpdate)
 	}, wait.FastWaitConfig()); err != nil {
 		t.Error("LastTerminalUpdate should be updated even for banner-only content")
 	}
 
-	if !instance.LastTerminalUpdate.After(beforeBannerTerminalUpdate) {
+	if !inst.LastTerminalUpdate.After(beforeBannerTerminalUpdate) {
 		t.Error("LastTerminalUpdate should be updated even for banner-only content")
 	}
 
 	// LastMeaningfulOutput should NOT be updated (no meaningful content)
-	if instance.LastMeaningfulOutput.After(beforeBannerMeaningfulOutput) {
+	if inst.LastMeaningfulOutput.After(beforeBannerMeaningfulOutput) {
 		t.Error("LastMeaningfulOutput should NOT be updated for banner-only content")
 	}
 
@@ -109,15 +109,15 @@ func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 	}
 
 	// Test 4: Empty content should not update anything
-	beforeEmptyTerminalUpdate := instance.LastTerminalUpdate
-	beforeEmptyMeaningfulOutput := instance.LastMeaningfulOutput
+	beforeEmptyTerminalUpdate := inst.LastTerminalUpdate
+	beforeEmptyMeaningfulOutput := inst.LastMeaningfulOutput
 
-	instance.UpdateTerminalTimestamps("", false)
+	inst.UpdateTerminalTimestamps("", false)
 
-	if instance.LastTerminalUpdate.After(beforeEmptyTerminalUpdate) {
+	if inst.LastTerminalUpdate.After(beforeEmptyTerminalUpdate) {
 		t.Error("LastTerminalUpdate should not be updated for empty content")
 	}
-	if instance.LastMeaningfulOutput.After(beforeEmptyMeaningfulOutput) {
+	if inst.LastMeaningfulOutput.After(beforeEmptyMeaningfulOutput) {
 		t.Error("LastMeaningfulOutput should not be updated for empty content")
 	}
 }
@@ -130,18 +130,18 @@ func TestInstance_GetTimeSinceMethods(t *testing.T) {
 		Path:    "/tmp/test2",
 		Program: "claude",
 	}
-	instance, err := NewInstance(opts)
+	inst, err := NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
 
 	// Test 1: Time since creation (no updates yet)
-	timeSinceCreation := instance.GetTimeSinceLastTerminalUpdate()
+	timeSinceCreation := inst.GetTimeSinceLastTerminalUpdate()
 	if timeSinceCreation < 0 {
 		t.Error("Time since last terminal update should not be negative")
 	}
 
-	timeSinceMeaningful := instance.GetTimeSinceLastMeaningfulOutput()
+	timeSinceMeaningful := inst.GetTimeSinceLastMeaningfulOutput()
 	if timeSinceMeaningful < 0 {
 		t.Error("Time since last meaningful output should not be negative")
 	}
@@ -154,17 +154,17 @@ func TestInstance_GetTimeSinceMethods(t *testing.T) {
 
 	// Test 2: After terminal update
 	mockTmux := tmux.NewTmuxSession("test2", "claude")
-	instance.SetTmuxSession(mockTmux)
+	inst.SetTmuxSession(mockTmux)
 
-	instance.UpdateTerminalTimestamps("meaningful output here", false)
+	inst.UpdateTerminalTimestamps("meaningful output here", false)
 
 	// Time since should be very small (just updated)
-	timeSinceTerminal := instance.GetTimeSinceLastTerminalUpdate()
+	timeSinceTerminal := inst.GetTimeSinceLastTerminalUpdate()
 	if timeSinceTerminal > 100*time.Millisecond {
 		t.Errorf("Time since terminal update should be small, got: %v", timeSinceTerminal)
 	}
 
-	timeSinceMeaningfulNew := instance.GetTimeSinceLastMeaningfulOutput()
+	timeSinceMeaningfulNew := inst.GetTimeSinceLastMeaningfulOutput()
 	if timeSinceMeaningfulNew > 100*time.Millisecond {
 		t.Errorf("Time since meaningful output should be small, got: %v", timeSinceMeaningfulNew)
 	}
@@ -178,27 +178,27 @@ func TestInstance_PreviewUpdatesTimestamps(t *testing.T) {
 		Path:    "/tmp/testpreview",
 		Program: "claude",
 	}
-	instance, err := NewInstance(opts)
+	inst, err := NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
 
 	// Mock tmux session (not started, so Preview will return empty)
 	mockTmux := tmux.NewTmuxSession("testpreview", "claude")
-	instance.SetTmuxSession(mockTmux)
+	inst.SetTmuxSession(mockTmux)
 
-	initialUpdate := instance.LastTerminalUpdate
-	initialMeaningful := instance.LastMeaningfulOutput
+	initialUpdate := inst.LastTerminalUpdate
+	initialMeaningful := inst.LastMeaningfulOutput
 
 	// Note: Since we can't actually start a tmux session in this test,
 	// we're just verifying the code path exists. In a real integration test,
 	// Preview() would capture actual content and update timestamps.
 
 	// The timestamps should remain unchanged since tmux isn't actually running
-	if !instance.LastTerminalUpdate.Equal(initialUpdate) {
+	if !inst.LastTerminalUpdate.Equal(initialUpdate) {
 		t.Error("Timestamp should not change when tmux is not running")
 	}
-	if !instance.LastMeaningfulOutput.Equal(initialMeaningful) {
+	if !inst.LastMeaningfulOutput.Equal(initialMeaningful) {
 		t.Error("Meaningful output timestamp should not change when tmux is not running")
 	}
 }
@@ -220,15 +220,15 @@ func TestInstance_TimestampConcurrency(t *testing.T) {
 		Path:    "/tmp/testconcurrent",
 		Program: "claude",
 	}
-	instance, err := NewInstance(opts)
+	inst, err := NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
-	li := NewLiveInstance(instance)
+	li := NewLiveInstance(inst)
 	defer li.Stop()
 
 	mockTmux := tmux.NewTmuxSession("testconcurrent", "claude")
-	instance.SetTmuxSession(mockTmux)
+	inst.SetTmuxSession(mockTmux)
 
 	// Concurrent updates should not cause data races
 	done := make(chan bool)
@@ -239,9 +239,9 @@ func TestInstance_TimestampConcurrency(t *testing.T) {
 				if j%2 == 0 {
 					content = "14:23 5-Jan-24" // Banner only
 				}
-				instance.UpdateTerminalTimestamps(content, false)
-				_ = instance.GetTimeSinceLastTerminalUpdate()
-				_ = instance.GetTimeSinceLastMeaningfulOutput()
+				inst.UpdateTerminalTimestamps(content, false)
+				_ = inst.GetTimeSinceLastTerminalUpdate()
+				_ = inst.GetTimeSinceLastMeaningfulOutput()
 			}
 			done <- true
 		}(i)

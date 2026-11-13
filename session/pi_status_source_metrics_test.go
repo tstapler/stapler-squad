@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/testutil/wait"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -19,25 +19,12 @@ import (
 // data points are tagged with (session/pi_status_source_metrics.go).
 const attributeKeyEventType = attribute.Key("type")
 
-// testPiMetricReader backs the single real MeterProvider installed for this
-// test binary. Package-level instruments (piStatusSourceEventsTotal) are
-// constructed against OTel's global delegating meter at package-init time,
-// before this file's init() runs -- otel.SetMeterProvider rewires what that
-// delegating meter forwards to, so a process-lifetime manual reader with
-// delta-based (before/after) assertions is the correct fit here, mirroring
-// server/services/session_creation_metrics_test.go's identical pattern.
-var testPiMetricReader = sdkmetric.NewManualReader()
-
-func init() {
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(testPiMetricReader)))
-}
-
 // collectPiEventsMetric returns pi_status_source_events_total's current
 // collected data, or nil if it has no recorded data points yet.
 func collectPiEventsMetric(t *testing.T) *metricdata.Metrics {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
-	require.NoError(t, testPiMetricReader.Collect(context.Background(), &rm))
+	require.NoError(t, fixturetest.TestPiMetricReader.Collect(context.Background(), &rm))
 	for _, sm := range rm.ScopeMetrics {
 		for i := range sm.Metrics {
 			if sm.Metrics[i].Name == "pi_status_source_events_total" {

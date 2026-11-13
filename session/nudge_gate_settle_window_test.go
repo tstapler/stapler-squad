@@ -27,7 +27,7 @@ import (
 // inst.GetController() call resolves to a controllable, non-tmux controller.
 func nudgeGateTestInstance(cc *claudectl.ClaudeController) *Instance {
 	inst := &Instance{Title: "nudge-gate-test", UUID: uuid.New().String()}
-	inst.controllerManager.SetController(cc)
+	inst.SetControllerForTest(cc)
 	return inst
 }
 

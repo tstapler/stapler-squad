@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,21 +10,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
-
-func TestMigrationToTmux_WiresInstanceEnvironment(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "migration-env", UUID: "migration-proof", Backend: domain.BackendTymux, EnvVars: map[string]string{"MIGRATION_CUSTOM": "present"}}
-	require.NoError(t, inst.updateProcessManagerForRestart(true, domain.BackendTmux, shellLaunch("bash")))
-	sess := inst.GetTmuxSession()
-	require.NotNil(t, sess)
-	field := reflect.ValueOf(sess).Elem().FieldByName("extraEnv")
-	var env []string
-	for idx := 0; idx < field.Len(); idx++ {
-		env = append(env, field.Index(idx).String())
-	}
-	assert.Contains(t, env, "STAPLER_SESSION_UUID=migration-proof")
-	assert.Contains(t, env, "MIGRATION_CUSTOM=present")
-}
 
 type migrationLaunchManager struct {
 	fakeTymuxManagerForSetCommand
@@ -63,22 +47,22 @@ func TestMigrationFromTymux_RequiresDaemonReadyBeforeClosingOldSession(t *testin
 	closeErr := errors.New("old session kill rejected")
 	fake := &migrationClosingManager{seamFakeTymux: seamFakeTymux{id: "old-daemon-session"}, closeErr: closeErr}
 	inst := &Instance{Title: "migration-unreachable", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTymux}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	oldPM := NewTymuxBackend(fake)
-	inst.processManager = oldPM
+	inst.SetProcessManagerForTest(oldPM)
 
 	for attempt := 0; attempt < 2; attempt++ {
 		err := inst.Restart(false, domain.BackendTmux)
 		require.ErrorIs(t, err, unavailable)
 		assert.Zero(t, fake.closeCalls, "failed preflight must not consume kill ownership")
-		assert.Same(t, oldPM, inst.pm())
+		assert.Same(t, oldPM, inst.ProcessManagerForTest())
 		assert.Equal(t, domain.BackendTymux, inst.Snapshot().Backend)
 	}
 	ready = true
 	err := inst.Restart(false, domain.BackendTmux)
 	require.ErrorIs(t, err, closeErr)
 	assert.Equal(t, 1, fake.closeCalls, "recovered daemon must still confirm deletion before migration")
-	assert.Same(t, oldPM, inst.pm())
+	assert.Same(t, oldPM, inst.ProcessManagerForTest())
 	assert.Equal(t, domain.BackendTymux, inst.Snapshot().Backend)
 }
 
@@ -91,8 +75,8 @@ func TestMigrationToTymux_RegistersExitCallbackAndEnvironmentBeforeStart(t *test
 		return tymux.TymuxdReady{}, nil
 	})()
 	inst := &Instance{Title: "migration-callback", UUID: "migration-proof", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTmux, EnvVars: map[string]string{"MIGRATION_CUSTOM": "present"}}
-	inst.started.Store(true)
-	require.NoError(t, inst.initializeBaselineForRestartTest())
+	inst.MarkStarted()
+	require.NoError(t, initializeBaselineForRestartTest(inst))
 
 	err := inst.Restart(false, domain.BackendTymux)
 

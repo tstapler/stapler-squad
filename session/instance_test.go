@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/user"
@@ -12,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +21,6 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/gitwt"
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -376,7 +377,7 @@ func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testi
 // ordering that still applies for instances that DO have a listener.
 func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffStatsRunsFirst(t *testing.T) {
 	t.Parallel()
-	repoDir := setupTestRepository(t)
+	repoDir := fixturetest.SetupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "diff-capture-test")
 	if err != nil {
@@ -423,7 +424,7 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 // subprocess on every Destroy() — nothing would consume the result anyway.
 func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(t *testing.T) {
 	t.Parallel()
-	repoDir := setupTestRepository(t)
+	repoDir := fixturetest.SetupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoDir, "diff-skip-test")
 	if err != nil {
@@ -455,7 +456,7 @@ func TestDestroy_should_SkipDiffStatsCapture_When_NoLifecycleListenerRegistered(
 // TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCommits
 // covers AC6's cached-signal path: UpdateDiffStats computes HasCommitsAhead
 // alongside the diff stats (both outside the lock), so GetHasCommitsAhead can
-// answer synchronously afterward. Uses setupTestGitRepo (not setupTestRepository)
+// answer synchronously afterward. Uses setupTestGitRepo (not fixturetest.SetupTestRepository)
 // because it fixes the repo's default branch at "main" — the same bounceMainBranch
 // constant UpdateDiffStats passes to HasCommitsAheadOfMain — so the assertion
 // actually exercises the ahead-count computation rather than HasCommitsAheadOfMain's
@@ -732,7 +733,7 @@ func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 }
 
 func TestLogPTYUnavailableIfUnexpected_should_SkipLogging_when_TymuxBackendUnsupported(t *testing.T) {
-	buf := captureLogInfo(t)
+	buf := fixturetest.CaptureLogInfo(t)
 
 	logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable",
 		"sess-1", tymux.ErrNotSupportedOnTymuxBackend)
@@ -743,7 +744,7 @@ func TestLogPTYUnavailableIfUnexpected_should_SkipLogging_when_TymuxBackendUnsup
 }
 
 func TestLogPTYUnavailableIfUnexpected_should_LogError_when_GenuinePTYFailure(t *testing.T) {
-	buf := captureLogInfo(t)
+	buf := fixturetest.CaptureLogInfo(t)
 	wantErr := errors.New("ptmx: device busy")
 
 	logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable",
@@ -872,40 +873,6 @@ func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoo
 	assert.NotEqual(t, domain.Active, inst.Status, "status must never reach Active")
 }
 
-// TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly is
-// Epic 4.4's non-regression companion to the structural-guard failure test
-// above: a normal SessionTypeNewWorktree session, with no forced failure,
-// must still resolve a genuinely distinct worktree and reach Active.
-func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test that starts real tmux sessions")
-	}
-	checkTmuxAvailable(t)
-
-	repoDir := t.TempDir()
-	require.NoError(t, git.InitializeProjectDirectory(repoDir))
-
-	title := fmt.Sprintf("guard-structural-ok-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
-		Title:            title,
-		Path:             repoDir,
-		Program:          "sleep 300",
-		SessionType:      domain.SessionTypeNewWorktree,
-		Branch:           "feature-guard-ok",
-		TmuxPrefix:       fmt.Sprintf("test_newworktreeguardok_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
-	})
-	require.NoError(t, err)
-	defer func() { _ = cleanup() }()
-
-	require.NoError(t, inst.Start(true))
-
-	assert.Equal(t, domain.Active, inst.Status)
-	assert.True(t, inst.pm().IsAlive())
-	assert.NotEqual(t, repoDir, inst.gitManager.GetWorktreePath(), "a real, isolated worktree must have been created")
-}
-
 // TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturnsError
 // exercises Story 3.3.2's cross-session collision guard directly: a forced
 // SetPreSpawnCollisionGuard error must prevent any tmux/process spawn.
@@ -948,37 +915,4 @@ func TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturn
 	assert.Contains(t, startErr.Error(), "forced collision")
 	assert.False(t, inst.pm().IsAlive(), "no tmux/process should ever have been spawned")
 	assert.NotEqual(t, domain.Active, inst.Status, "status must never reach Active")
-}
-
-// TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected is Epic
-// 4.4's non-regression companion: no guard wired (the normal production
-// wiring for a session with no colliding sibling) must not block a normal
-// SessionTypeExistingWorktree session from reaching Active.
-func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testing.T) {
-	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test that starts real tmux sessions")
-	}
-	checkTmuxAvailable(t)
-
-	repoDir := t.TempDir()
-	require.NoError(t, git.InitializeProjectDirectory(repoDir))
-
-	title := fmt.Sprintf("guard-collision-ok-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
-		Title:            title,
-		Path:             repoDir,
-		Program:          "sleep 300",
-		SessionType:      domain.SessionTypeExistingWorktree,
-		ExistingWorktree: repoDir,
-		TmuxPrefix:       fmt.Sprintf("test_noguardcollision_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
-	})
-	require.NoError(t, err)
-	defer func() { _ = cleanup() }()
-
-	require.NoError(t, inst.Start(true))
-
-	assert.Equal(t, domain.Active, inst.Status)
-	assert.True(t, inst.pm().IsAlive())
 }

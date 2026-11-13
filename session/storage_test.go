@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -114,7 +116,7 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 	}
 	// Paused sets started=true internally, which is required for SaveInstances.
 	// We use the same fast-path that FromInstanceData takes.
-	inst.started.Store(true)
+	inst.MarkStarted()
 
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -146,7 +148,7 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 		UpdatedAt: time.Now(),
 		Backend:   domain.BackendTymux,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -174,7 +176,7 @@ func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	first, err := storage.LoadInstances()
@@ -209,7 +211,7 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	// First load: migration assigns a new UUID.
@@ -247,7 +249,7 @@ func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 		Status:  domain.Paused,
 		Program: "claude",
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	poller.SetInstances([]*Instance{inst})
 
 	found := poller.FindInstance("test-uuid-lookup")
@@ -270,7 +272,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 		Status:  domain.Paused,
 		Program: "claude",
 	}
-	existing.started.Store(true)
+	existing.MarkStarted()
 	poller.SetInstances([]*Instance{existing})
 
 	newcomer := &Instance{
@@ -279,7 +281,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 		Status:  domain.Paused,
 		Program: "claude",
 	}
-	newcomer.started.Store(true)
+	newcomer.MarkStarted()
 	poller.AddInstance(newcomer)
 
 	// Both sessions must be findable.
@@ -443,7 +445,7 @@ func newTestInstance(title string) *Instance {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	return inst
 }
 
@@ -1345,7 +1347,7 @@ func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActive
 		UpdatedAt:  time.Now(),
 		ArchivedAt: &archivedAt,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	loaded, err := storage.LoadInstances()
@@ -1422,7 +1424,7 @@ func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
 		uuid := fmt.Sprintf("uuid-%03d", i)
 		prLoadFixture(t, storage, fmt.Sprintf("bulk-%03d", i), uuid, "acme", "app", 0)
 		_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid),
-			mustPRRef(t, "", "acme", "app", 1000+i), domain.PRLink{Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateOpen}})
+			fixturetest.MustPRRef(t, "", "acme", "app", 1000+i), domain.PRLink{Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateOpen}})
 		require.NoError(t, err)
 	}
 
@@ -1452,7 +1454,7 @@ func TestLoadSaveLoad_ShouldKeepUnrepresentedLegacyNumber_WhenSkippedClass(t *te
 	// A represented legacy number for contrast.
 	prLoadFixture(t, storage, "represented", "uuid-represented", "acme", "app", 42)
 	_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner("uuid-represented"),
-		mustPRRef(t, "", "acme", "app", 42), domain.PRLink{Source: domain.AttachSourceBackfill})
+		fixturetest.MustPRRef(t, "", "acme", "app", 42), domain.PRLink{Source: domain.AttachSourceBackfill})
 	require.NoError(t, err)
 
 	byTitle := func(insts []*Instance) map[string]*Instance {

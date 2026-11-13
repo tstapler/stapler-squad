@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +64,7 @@ func TestStopByUser_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *te
 func TestWorktreeNeedsCommit_should_PreserveUntrackedFile_When_WorktreeRemoved(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	initTestRepoForReviewQueue(t, repoPath)
+	fixturetest.InitTestRepoForReviewQueue(t, repoPath)
 
 	wt, branch, err := git.NewGitWorktree(repoPath, "untracked-survives")
 	require.NoError(t, err)
@@ -110,7 +112,7 @@ func TestWorktreeNeedsCommit_should_BeFalse_When_WorktreeDirMissing(t *testing.T
 func TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	initTestRepoForReviewQueue(t, repoPath)
+	fixturetest.InitTestRepoForReviewQueue(t, repoPath)
 	wt, branch, err := git.NewGitWorktree(repoPath, "stale-clean")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
@@ -181,7 +183,7 @@ func TestForceStopByUser_should_StillRefuse_When_TransitionIllegal(t *testing.T)
 func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testing.T) {
 	t.Parallel()
 	repoPath := t.TempDir()
-	initTestRepoForReviewQueue(t, repoPath)
+	fixturetest.InitTestRepoForReviewQueue(t, repoPath)
 	wt, branch, err := git.NewGitWorktree(repoPath, "force-known-dirty")
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())

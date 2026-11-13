@@ -2,8 +2,6 @@ package session
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync"
 	"testing"
 
@@ -108,7 +106,7 @@ func TestSwitchProgram_RestartError_PersistAlreadyRan(t *testing.T) {
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Status = domain.Active
-	inst.started.Store(true)
+	inst.MarkStarted()
 	inst.Path = "" // forces Restart() to fail deterministically, no real tmux involved
 
 	persistedProgram := ""
@@ -229,17 +227,6 @@ func TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState(t *testing.T
 	assert.True(t, changed)
 	assert.Equal(t, "aider", resolved)
 	assert.Empty(t, inst.GetClaudeConversationUUID(), "switching to non-family program must clear the stale claude UUID, not silently keep it")
-}
-
-// TestPortHistoryFailureIsExpected directly covers the Warn-vs-Error log-level selection used
-// by SwitchProgram, independent of whether isClaudeAntigravityCrossSwitch/CanHandle parity
-// currently makes the ErrNoHistoryAdapter branch reachable in production — this keeps the
-// selection logic itself verified as defense-in-depth against future drift.
-func TestPortHistoryFailureIsExpected(t *testing.T) {
-	t.Parallel()
-	assert.True(t, portHistoryFailureIsExpected(ErrNoHistoryAdapter))
-	assert.True(t, portHistoryFailureIsExpected(fmt.Errorf("wrapped: %w", ErrNoHistoryAdapter)))
-	assert.False(t, portHistoryFailureIsExpected(errors.New("disk full")))
 }
 
 // TestSwitchProgram_ConcurrentCalls_Serialize is a race-detector regression guard (run

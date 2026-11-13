@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/github"
@@ -16,9 +18,9 @@ import (
 func newTwoPRInstance(t *testing.T) *Instance {
 	t.Helper()
 	inst := newPRTestInstance(t)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceCreatedFromURL,
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceCreatedFromURL,
 		domain.PRInitial{State: domain.PRStateMerged, Terminal: true}))
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery,
+	require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery,
 		domain.PRInitial{State: domain.PRStateOpen}))
 	return inst
 }
@@ -74,7 +76,7 @@ func TestPRActions_ShouldHonorExplicitPRAndRefuseUnattached(t *testing.T) {
 	fake := &fakePRActions{}
 	inst.SetPRActionClient(fake)
 	ctx := context.Background()
-	r11, r99 := mustPRRef(t, "", "acme", "app", 11), mustPRRef(t, "", "acme", "app", 99)
+	r11, r99 := fixturetest.MustPRRef(t, "", "acme", "app", 11), fixturetest.MustPRRef(t, "", "acme", "app", 99)
 
 	require.NoError(t, inst.MergePR(ctx, &r11, "merge"))
 	require.Equal(t, []string{"merge#11"}, fake.calls)
@@ -95,15 +97,15 @@ func TestPRActions_ShouldNeverTargetPRZero_WhenSessionHasNoPR(t *testing.T) {
 
 func TestResolvePR_ShouldReturnCurrentPRAndRejectNonPRSession(t *testing.T) {
 	t.Parallel()
-	got, err := newTwoPRInstance(t).resolvePR(nil)
+	got, err := newTwoPRInstance(t).ResolvePRForTest(nil)
 	require.NoError(t, err)
 	require.Equal(t, 12, got.Number())
 
-	explicit := mustPRRef(t, "", "acme", "app", 11)
-	got, err = newTwoPRInstance(t).resolvePR(&explicit)
+	explicit := fixturetest.MustPRRef(t, "", "acme", "app", 11)
+	got, err = newTwoPRInstance(t).ResolvePRForTest(&explicit)
 	require.NoError(t, err)
 	require.Equal(t, explicit, got)
 
-	_, err = (&Instance{Title: "plain"}).resolvePR(nil)
+	_, err = (&Instance{Title: "plain"}).ResolvePRForTest(nil)
 	require.ErrorContains(t, err, "is not a PR session")
 }

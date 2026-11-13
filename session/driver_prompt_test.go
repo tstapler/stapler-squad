@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,10 +22,10 @@ func promptOfSize(unit string, size int) string {
 }
 
 // writtenBeforeEnter joins every content write the fake saw, up to the Enter.
-func writtenBeforeEnter(t *testing.T, fake *fakePaneSubmitter) string {
+func writtenBeforeEnter(t *testing.T, fake *fixturetest.FakePaneSubmitter) string {
 	t.Helper()
 	var got strings.Builder
-	for _, c := range fake.sendCalls {
+	for _, c := range fake.SendCalls {
 		if c == EnterKeySequence {
 			break
 		}
@@ -54,7 +56,7 @@ func TestParseDriverPrompt_DeliveredIntactAtEverySize(t *testing.T) {
 				if want == "" {
 					return
 				}
-				fake := newFakePaneSubmitter()
+				fake := fixturetest.NewFakePaneSubmitter()
 				require.NoError(t, SubmitDriverContent(context.Background(), fake, newFakeLease(t), p.Keys(), time.Millisecond, 5*time.Second))
 				assert.True(t, writtenBeforeEnter(t, fake) == want, "bytes written differ from the prompt")
 			})
@@ -70,7 +72,7 @@ func TestParseDriverPrompt_PasteTerminatorFailsLoudly(t *testing.T) {
 
 func TestSubmitInitialPrompt_UndeliverableWritesNothingAndReleasesLease(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{UUID: fakeLeaseOwner}
+	inst := &Instance{UUID: fixturetest.FakeLeaseOwner}
 	lease, ok := inst.TryTerminalWriteLease(LeaseWriterDriver)
 	require.True(t, ok)
 	err := submitInitialPrompt(context.Background(), inst, lease, "x\x1b[201~y")
@@ -82,8 +84,8 @@ func TestSubmitInitialPrompt_UndeliverableWritesNothingAndReleasesLease(t *testi
 
 func TestSendKeysChunked_PartialFailureReportsProgress(t *testing.T) {
 	t.Parallel()
-	fake := newFakePaneSubmitter()
-	fake.failOnCall = 1
+	fake := fixturetest.NewFakePaneSubmitter()
+	fake.FailOnCall = 1
 	err := sendKeysChunked(context.Background(), fake, strings.Repeat("a", 3*maxInlinePromptBytes))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed after 4096 of 12288 bytes")
@@ -126,7 +128,7 @@ func TestDriverPrompt_RealPTYReceivesLargePromptIntact(t *testing.T) {
 
 type ptyKeySender struct{ m *NativeProcessManager }
 
-func (p ptyKeySender) LeaseOwnerUUID() string { return fakeLeaseOwner }
+func (p ptyKeySender) LeaseOwnerUUID() string { return fixturetest.FakeLeaseOwner }
 func (p ptyKeySender) SendKeys(k string) error {
 	_, err := p.m.SendKeys(k)
 	return err

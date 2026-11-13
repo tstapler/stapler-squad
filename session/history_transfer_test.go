@@ -135,15 +135,12 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	f.Close()
 
 	// Mock Instance
-	inst := &Instance{
+	inst := (&Instance{
 		Title: "test-session",
 		Path:  workspace,
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{
-				ConversationUUID: uuid,
-			},
-		},
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{
+		ConversationUUID: uuid,
+	})
 
 	// Run porting
 	ctx := context.Background()
@@ -294,15 +291,12 @@ func TestPortSessionHistory_ClaudeToOpencode(t *testing.T) {
 	}
 	f.Close()
 
-	inst := &Instance{
+	inst := (&Instance{
 		Title: "test-opencode-port",
 		Path:  workspace,
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{
-				ConversationUUID: uuid,
-			},
-		},
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{
+		ConversationUUID: uuid,
+	})
 
 	ctx := context.Background()
 	err = PortSessionHistory(ctx, "claude", "opencode", inst)
@@ -511,15 +505,12 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 		t.Fatalf("failed to copy live log to temp: %v", err)
 	}
 
-	inst := &Instance{
+	inst := (&Instance{
 		Title: "live-port-test",
 		Path:  instWorkspacePath,
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{
-				ConversationUUID: liveSessionUUID,
-			},
-		},
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{
+		ConversationUUID: liveSessionUUID,
+	})
 
 	err = PortSessionHistory(context.Background(), "claude", "agy", inst)
 	if err != nil {
@@ -619,15 +610,12 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 	}
 
 	workspace := "/home/tstapler/.stapler-squad/workspaces/d685c4b1a423cca3/worktrees/stapler-squad-transfer_18bc8392fbd12153"
-	inst := &Instance{
+	inst := (&Instance{
 		Title: "live-port-test-agy",
 		Path:  workspace,
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{
-				ConversationUUID: liveSessionUUID,
-			},
-		},
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{
+		ConversationUUID: liveSessionUUID,
+	})
 
 	err = PortSessionHistory(context.Background(), "agy", "claude", inst)
 	if err != nil {
@@ -701,13 +689,12 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 	f.Close()
 
 	// Run the port.
-	inst := &Instance{
+	inst := (&Instance{
 		Title:           "schema-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{ConversationUUID: uuid})
 	if err := portClaudeToAgy(inst); err != nil {
 		t.Fatalf("portClaudeToAgy: %v", err)
 	}
@@ -805,13 +792,12 @@ func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
 	f.Close()
 
 	ctx := context.Background()
-	inst := &Instance{
+	inst := (&Instance{
 		Title:           "secret-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
-	}
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{ConversationUUID: uuid})
 
 	if err := PortSessionHistory(ctx, "claude", "agy", inst); err != nil {
 		t.Fatalf("PortSessionHistory failed: %v", err)

@@ -25,7 +25,7 @@ func TestRegistryRetain_PreservesExistingActorAndIdentity(t *testing.T) {
 
 	registry.ForceRelease(canonical.UUID)
 	require.Nil(t, registry.Lookup(canonical.UUID))
-	require.Error(t, actor.ctx.Err())
+	require.Error(t, actor.ContextErrForTest())
 }
 
 func TestRegistryRetain_AdoptsUnregisteredActor(t *testing.T) {
@@ -39,5 +39,5 @@ func TestRegistryRetain_AdoptsUnregisteredActor(t *testing.T) {
 	require.Equal(t, 1, registry.Count())
 	registry.Shutdown()
 	require.Nil(t, registry.Lookup(inst.UUID))
-	require.Error(t, actor.ctx.Err())
+	require.Error(t, actor.ContextErrForTest())
 }

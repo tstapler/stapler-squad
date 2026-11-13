@@ -23,7 +23,7 @@ func TestDriverAttempt_WaitingForOperatorDoesNotEscalate(t *testing.T) {
 			inst := &Instance{Title: t.Name(), Program: "pi", Status: domain.Active, InitialPromptSentAt: old}
 			inst.SetLastMeaningfulOutput(old)
 			source := NewPiStatusSource(inst.Title, nil)
-			source.status.Store(int32(status))
+			source.SetStatusForTest(status)
 			manager := NewInstanceStatusManager()
 			manager.RegisterPiStatusSource(inst.Title, source)
 			inst.SetStatusManager(manager)
@@ -49,7 +49,7 @@ func TestDriverAttempt_BacklogApprovalWaitResetsBudget(t *testing.T) {
 			inst := &Instance{Title: t.Name(), Program: "pi", Status: domain.Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
 			inst.SetLastMeaningfulOutput(old)
 			source := NewPiStatusSource(inst.Title, nil)
-			source.status.Store(int32(status))
+			source.SetStatusForTest(status)
 			manager := NewInstanceStatusManager()
 			manager.RegisterPiStatusSource(inst.Title, source)
 			inst.SetStatusManager(manager)
@@ -59,13 +59,13 @@ func TestDriverAttempt_BacklogApprovalWaitResetsBudget(t *testing.T) {
 			if cont || ret || !attempt.nudgeSentAt.IsZero() || attempt.idleDuration(now, old) != 0 {
 				t.Fatal("approval waiting must pause both retry and nudge budgets")
 			}
-			source.status.Store(int32(detection.StatusProcessing))
+			source.SetStatusForTest(detection.StatusProcessing)
 			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now.Add(time.Minute))
 			if ret {
 				t.Fatal("resumed work must receive a fresh inactivity budget")
 			}
 			inst.RemoveTag(TagBacklogWork)
-			inst.processManager = &livenessPM{alive: false} // interactive: only a dead pane fails
+			inst.SetProcessManagerForTest(&livenessPM{alive: false}) // interactive: only a dead pane fails
 			late := now.Add(driverInactivityTimeout + time.Second)
 			handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late) // first dead probe
 			_, ret = handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, late.Add(deadPaneConfirmWindow))
@@ -83,7 +83,7 @@ func TestDriverAttempt_BacklogIdleStillEscalates(t *testing.T) {
 	inst := &Instance{Title: t.Name(), Program: "pi", Status: domain.Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
 	inst.SetLastMeaningfulOutput(old)
 	source := NewPiStatusSource(inst.Title, nil)
-	source.status.Store(int32(detection.StatusIdle))
+	source.SetStatusForTest(detection.StatusIdle)
 	manager := NewInstanceStatusManager()
 	manager.RegisterPiStatusSource(inst.Title, source)
 	inst.SetStatusManager(manager)
@@ -130,7 +130,7 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			inst := &Instance{Title: tc.name, Status: domain.Active, InitialPromptSentAt: tc.promptAt}
-			inst.processManager = &livenessPM{alive: false} // interactive escalation requires a dead pane
+			inst.SetProcessManagerForTest(&livenessPM{alive: false}) // interactive escalation requires a dead pane
 			if tc.backlog {
 				inst.Tags = []string{TagBacklogWork}
 			}

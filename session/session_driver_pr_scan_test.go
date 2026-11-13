@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -21,7 +23,7 @@ func TestScanAndLinkPRURL_ShouldAttachAndClearTerminal_WhenNumberChanges(t *test
 		inst := newPRTestInstance(t)
 		fake := &fakePRPersister{}
 		inst.SetPRPersister(fake)
-		require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery,
+		require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery,
 			domain.PRInitial{State: domain.PRStateMerged, Terminal: true}))
 		require.True(t, inst.Snapshot().GitHub.GitHubPRStatusTerminal)
 
@@ -91,7 +93,7 @@ func TestScanAndLinkPRURL_ShouldNotAttach_WhenRepoMismatchOrBareMention(t *testi
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := installRecordingHandler(t)
+			h := fixturetest.InstallRecordingHandler(t)
 			inst := &Instance{Title: "scan-mismatch", UUID: "u-mismatch", Path: t.TempDir(), Program: "echo", GitHubOwner: "acme", GitHubRepo: "app"}
 			if tt.configure != nil {
 				tt.configure(inst)
@@ -103,8 +105,8 @@ func TestScanAndLinkPRURL_ShouldNotAttach_WhenRepoMismatchOrBareMention(t *testi
 			assert.Empty(t, inst.Snapshot().GitHub.PRs)
 			assert.Zero(t, inst.Snapshot().GitHub.GitHubPRNumber)
 			var debugNamesURL bool
-			for _, r := range h.recordsAtLevel(slog.LevelDebug) {
-				if _, ok := r.attrs["url"]; ok {
+			for _, r := range h.RecordsAtLevel(slog.LevelDebug) {
+				if _, ok := r.Attrs["url"]; ok {
 					debugNamesURL = true
 				}
 			}
@@ -149,9 +151,9 @@ func TestScanAndLinkPRURL_ShouldSkipTombstonedRef_WhenOwnerDetachedItBefore(t *t
 	inst.SetPRPersister(storage)
 	ctx := context.Background()
 	owner := SessionPROwner(inst.UUID)
-	_, err := storage.Repo.UpsertSessionPR(ctx, owner, mustPRRef(t, "", "acme", "app", 12), domain.PRLink{Source: domain.AttachSourceManual})
+	_, err := storage.Repo.UpsertSessionPR(ctx, owner, fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.PRLink{Source: domain.AttachSourceManual})
 	require.NoError(t, err)
-	_, err = storage.Repo.DeleteSessionPR(ctx, owner, mustPRRef(t, "", "Acme", "App", 12))
+	_, err = storage.Repo.DeleteSessionPR(ctx, owner, fixturetest.MustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
 	require.Equal(t, 0, countLinks(t, storage.Repo))
 
