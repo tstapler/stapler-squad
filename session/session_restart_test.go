@@ -815,9 +815,9 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 		"LoadInstances took %s — Start() may be getting called synchronously again instead of deferred to the async Step 6 loop", elapsed)
 
 	var found *Instance
-	for _, inst := range instances {
-		if inst.UUID == inst.UUID {
-			found = inst
+	for _, loaded := range instances {
+		if loaded.UUID == inst.UUID {
+			found = loaded
 			break
 		}
 	}

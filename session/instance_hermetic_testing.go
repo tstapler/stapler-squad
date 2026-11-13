@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -24,6 +25,8 @@ func InstallHermeticHooksForTest() {
 	driverControlHook = noopDriverControl{}
 }
 
+var errNoBackend = errors.New("hermetic test backend has no process")
+
 // noopProcessManager is a backend with no process: every query answers "nothing there".
 type noopProcessManager struct{}
 
@@ -37,7 +40,7 @@ func (noopProcessManager) HasLiveSessionNoCache() bool                          
 func (noopProcessManager) GetSessionIdentifier() string                                   { return "" }
 func (noopProcessManager) HasSession() bool                                               { return false }
 func (noopProcessManager) GetCurrentWorkingDirectory() (string, error)                    { return "", nil }
-func (noopProcessManager) GetPTY() (*os.File, error)                                      { return nil, nil }
+func (noopProcessManager) GetPTY() (*os.File, error)                                      { return nil, errNoBackend }
 func (noopProcessManager) SendKeys(keys string) (int, error)                              { return 0, nil }
 func (noopProcessManager) TapEnter() error                                                { return nil }
 func (noopProcessManager) SendPromptWithEnter(prompt string) error                        { return nil }
@@ -63,7 +66,7 @@ func (noopProcessManager) StartControlMode() error                              
 func (noopProcessManager) StopControlMode() error                               { return nil }
 func (noopProcessManager) SubscribeToControlModeUpdates() (string, chan []byte) { return "", nil }
 func (noopProcessManager) UnsubscribeFromControlModeUpdates(id string)          {}
-func (noopProcessManager) Attach() (chan struct{}, error)                       { return nil, nil }
+func (noopProcessManager) Attach() (chan struct{}, error)                       { return nil, errNoBackend }
 func (noopProcessManager) DetachSafely() error                                  { return nil }
 func (noopProcessManager) SetOnExitCallback(fn func(string))                    {}
 func (noopProcessManager) ResetExitOnce()                                       {}
