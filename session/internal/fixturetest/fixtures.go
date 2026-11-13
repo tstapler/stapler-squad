@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.uber.org/goleak"
 )
@@ -231,6 +232,11 @@ func NewBugfixTaggingEngine() *classifier.TaggingEngine {
 // delta-based (before/after) assertions is the correct fit here, mirroring
 // server/services/session_creation_metrics_test.go's identical pattern.
 var TestPiMetricReader = sdkmetric.NewManualReader()
+
+// Importing this package installs TestPiMetricReader as the global meter provider's reader, for every test binary that uses it.
+func init() {
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(TestPiMetricReader)))
+}
 
 // InitTestRepoForReviewQueue creates and commits a minimal git repository for the
 // uncommitted-changes detection tests below.

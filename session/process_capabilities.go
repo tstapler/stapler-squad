@@ -70,7 +70,7 @@ type InStreamResyncer interface {
 // before a backend migration tears down the old session, so an unreachable daemon cannot make
 // termination unconfirmable.
 type DaemonReadiness interface {
-	ensureDaemonReady() error
+	EnsureDaemonReady() error
 }
 
 // AltScreenQuerier asks the backend whether the pane shows its alternate screen.

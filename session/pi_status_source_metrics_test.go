@@ -11,19 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/testutil/wait"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // attributeKeyEventType is the attribute key pi_status_source_events_total's
 // data points are tagged with (session/pi_status_source_metrics.go).
 const attributeKeyEventType = attribute.Key("type")
-
-func init() {
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(fixturetest.TestPiMetricReader)))
-}
 
 // collectPiEventsMetric returns pi_status_source_events_total's current
 // collected data, or nil if it has no recorded data points yet.

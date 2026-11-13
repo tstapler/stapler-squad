@@ -2585,7 +2585,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessMa
 	if migrating {
 		if old, ok := capabilityOf[DaemonReadiness](i.pm()); ok && i.tymuxSessionID() != "" {
 			// Confirm the old daemon is reachable before Close tears down its stream or ownership.
-			if err := old.ensureDaemonReady(); err != nil {
+			if err := old.EnsureDaemonReady(); err != nil {
 				return fmt.Errorf("cannot migrate until the old tymux daemon can confirm session termination; retry after daemon recovery: %w", err)
 			}
 		}

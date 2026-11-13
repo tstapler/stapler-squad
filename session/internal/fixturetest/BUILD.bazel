@@ -15,6 +15,7 @@ go_library(
         "@com_github_go_git_go_git_v5//:go-git",
         "@com_github_go_git_go_git_v5//plumbing/object",
         "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel_sdk_metric//:metric",
         "@org_uber_go_goleak//:goleak",
     ],

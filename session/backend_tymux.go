@@ -53,13 +53,13 @@ func (b *TymuxBackend) AppendLaunchEnv(env ...string) { b.mgr.AppendEnv(env...) 
 
 // --- Lifecycle ---
 
-// ensureDaemonReady calls tymux.EnsureDaemonRunning under tymuxColdStartTimeout,
+// EnsureDaemonReady calls tymux.EnsureDaemonRunning under tymuxColdStartTimeout,
 // shared by Start and RestoreWithWorkDir (both need the identical
 // daemon-check-before-delegate contract; see Start's doc comment for why it
 // lives here and not in NewProcessManager). Wrapped in its own span/metric
 // (BUG-108) so a slow Start/RestoreWithWorkDir can be attributed to daemon
 // cold-start specifically, distinct from mgr.Start's own steady-state work.
-func (b *TymuxBackend) ensureDaemonReady() error {
+func (b *TymuxBackend) EnsureDaemonReady() error {
 	ctx, cancel := context.WithTimeout(context.Background(), tymuxColdStartTimeout)
 	defer cancel()
 	return withBackendOperationSpan(ctx, backendLabelTymux, "session.backend.tymux_daemon_ready", func() error {
@@ -81,7 +81,7 @@ func (b *TymuxBackend) ensureDaemonReady() error {
 // regress RPC latency.
 func (b *TymuxBackend) Start(dir string) error {
 	return withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.start", func() error {
-		if err := b.ensureDaemonReady(); err != nil {
+		if err := b.EnsureDaemonReady(); err != nil {
 			return fmt.Errorf("start: %w", err)
 		}
 		return b.mgr.Start(dir)
@@ -92,7 +92,7 @@ func (b *TymuxBackend) Start(dir string) error {
 // for the restore path.
 func (b *TymuxBackend) RestoreWithWorkDir(w string) error {
 	return withBackendOperationSpan(context.Background(), backendLabelTymux, "session.backend.restore", func() error {
-		if err := b.ensureDaemonReady(); err != nil {
+		if err := b.EnsureDaemonReady(); err != nil {
 			return fmt.Errorf("restore: %w", err)
 		}
 		return b.mgr.RestoreWithWorkDir(w)
