@@ -38,7 +38,7 @@ func TestInstance_RetainedPaneCaptureDoesNotRequireStarted(t *testing.T) {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			inst := redrawInstance(&redrawManager{data: "final screen", ok: true}, status)
-			inst.started.Store(false)
+			inst.SetStartedForTest(false)
 			raw, err := inst.CapturePaneContentRaw()
 			require.NoError(t, err)
 			assert.Equal(t, "final screen", string(raw))
@@ -55,8 +55,8 @@ func TestInstance_RetainedPaneCaptureDoesNotRequireStarted(t *testing.T) {
 
 func redrawInstance(mgr tymux.TymuxManager, status domain.Status) *Instance {
 	inst := &Instance{Title: "redraw", UUID: "uuid-redraw", Status: status}
-	inst.processManager = NewTymuxBackend(mgr)
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(NewTymuxBackend(mgr))
+	inst.MarkStarted()
 	return inst
 }
 
@@ -121,7 +121,7 @@ func TestInstance_CapturePaneRedraw_should_PropagateCaptureError(t *testing.T) {
 func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(t *testing.T) {
 	t.Parallel()
 	notStarted := redrawInstance(&redrawManager{ok: true, noPane: true}, domain.Active)
-	notStarted.started.Store(false)
+	notStarted.SetStartedForTest(false)
 	cases := map[string]*Instance{
 		"not started": notStarted,
 		"paused":      redrawInstance(&redrawManager{ok: true}, domain.Paused),
@@ -133,7 +133,7 @@ func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(
 			_, ok, err := inst.CapturePaneRedraw(context.Background())
 			assert.ErrorIs(t, err, streamhub.ErrSessionNotStarted)
 			assert.False(t, ok)
-			assert.Equal(t, 0, inst.processManager.(*TymuxBackend).mgr.(*redrawManager).calls)
+			assert.Equal(t, 0, inst.ProcessManagerForTest().(*TymuxBackend).mgr.(*redrawManager).calls)
 		})
 	}
 }
@@ -141,8 +141,8 @@ func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(
 func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingPane_When_BackendHasNoCapability(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "tmuxish", UUID: "uuid-tmuxish", Status: domain.Active}
-	inst.processManager = &fakeSendKeysProcessManager{}
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(&fakeSendKeysProcessManager{})
+	inst.MarkStarted()
 
 	snap, ok, err := inst.CapturePaneRedraw(context.Background())
 

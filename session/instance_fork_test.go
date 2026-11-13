@@ -15,10 +15,11 @@ import (
 
 // forkResumeID returns the resume conversation UUID stored in the forked instance (if any).
 func forkResumeID(inst *Instance) string {
-	if inst.claudeSession == nil {
+	cs := inst.GetClaudeSession()
+	if cs == nil {
 		return ""
 	}
-	return inst.claudeSession.ConversationUUID
+	return cs.ConversationUUID
 }
 
 // writeConvLines writes count JSON lines to path (simulates Claude history file).
@@ -43,13 +44,13 @@ func TestForkFromCheckpoint_ConvUUID_SetAsResumeId(t *testing.T) {
 		Title: "src-session",
 		Path:  t.TempDir(),
 	}
-	srcInst.started.Store(true)
+	srcInst.MarkStarted()
 	// Point HistoryFilePath at a real file with content.
 	historyDir := t.TempDir()
 	historyFile := filepath.Join(historyDir, "conv-aaa.jsonl")
 	writeConvLines(t, historyFile, 10)
 	srcInst.HistoryFilePath = historyFile
-	srcInst.claudeSession = &domain.ClaudeSessionData{ConversationUUID: "conv-aaa"}
+	srcInst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "conv-aaa"})
 
 	// Create checkpoint with conv data.
 	cp, err := srcInst.CreateCheckpoint("snap", 5)
@@ -97,7 +98,7 @@ func TestForkFromCheckpoint_NoConvUUID_EmptyResumeId(t *testing.T) {
 		Title: "src-session",
 		Path:  t.TempDir(),
 	}
-	srcInst.started.Store(true)
+	srcInst.MarkStarted()
 	// claudeSession is nil — no UUID available.
 
 	cp, err := srcInst.CreateCheckpoint("snap", 0)
@@ -166,13 +167,12 @@ func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 	historyFile := filepath.Join(historyDir, "conv-real.jsonl")
 	writeParsableClaudeTurns(t, historyFile, 10)
 
-	srcInst := &Instance{
+	srcInst := (&Instance{
 		Title:           "src-session",
 		Path:            t.TempDir(),
 		HistoryFilePath: historyFile,
-		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: "conv-real"}},
-	}
-	srcInst.started.Store(true)
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{ConversationUUID: "conv-real"})
+	srcInst.MarkStarted()
 
 	// Checkpoint after 6 turns.
 	cp, err := srcInst.CreateCheckpoint("mid-point", 0)

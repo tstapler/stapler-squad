@@ -197,7 +197,7 @@ func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_Wh
 			// The tmux session object must still be wired for archived
 			// sessions, so KillTmuxPaneOnly / findConfirmedLiveInstance's
 			// shadow instance keep working through this same constructor.
-			if tb, ok := restored.processManager.(*TmuxBackend); ok {
+			if tb, ok := restored.ProcessManagerForTest().(*TmuxBackend); ok {
 				if tb.TmuxManager() == nil {
 					t.Error("expected the tmux session object to be wired even for an archived session")
 				}

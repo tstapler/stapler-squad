@@ -73,7 +73,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 
 	// Verify the command was enriched with --resume flag
 	// Check the tmux session's program command
-	if instance.processManager.HasSession() {
+	if instance.ProcessManagerForTest().HasSession() {
 		// The program should contain the --resume flag
 		expectedCommand := fmt.Sprintf("claude --model sonnet --resume %s", validSessionID)
 		t.Logf("✓ Session started with expected command containing --resume flag")

@@ -70,8 +70,8 @@ func TestInstance_CaptureCurrentState_UpdatesWorkingDir(t *testing.T) {
 	mockSession := tmux.NewTmuxSessionWithDeps(sessionName, "echo", nil, mockExec)
 	tpm := &TmuxProcessManager{}
 	tpm.SetSession(mockSession)
-	inst := &Instance{Title: sessionName, processManager: NewTmuxBackend(tpm)}
-	inst.started.Store(true)
+	inst := (&Instance{Title: sessionName}).WithProcessManagerForTest(NewTmuxBackend(tpm))
+	inst.MarkStarted()
 
 	err := inst.CaptureCurrentState()
 

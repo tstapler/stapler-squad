@@ -27,8 +27,8 @@ func TestFromInstanceData_EmptyBackend_HonorsTymuxSessionOverride(t *testing.T) 
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTymux, inst.Backend)
-	_, isTymux := inst.processManager.(*TymuxBackend)
-	assert.True(t, isTymux, "process manager must be a TymuxBackend, got %T", inst.processManager)
+	_, isTymux := inst.ProcessManagerForTest().(*TymuxBackend)
+	assert.True(t, isTymux, "process manager must be a TymuxBackend, got %T", inst.ProcessManagerForTest())
 }
 
 func TestFromInstanceData_EmptyBackend_NoOverride_StaysOnDefault(t *testing.T) {
@@ -38,7 +38,7 @@ func TestFromInstanceData_EmptyBackend_NoOverride_StaysOnDefault(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, inst.Backend, "no override means the backend stays unpinned")
-	_, isTmux := inst.processManager.(*TmuxBackend)
+	_, isTmux := inst.ProcessManagerForTest().(*TmuxBackend)
 	assert.True(t, isTmux)
 }
 
@@ -65,9 +65,9 @@ func TestWireTmuxSession_DeliversLaunchCommandToTymuxBackend(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	fake := &fakeTymuxManagerForSetCommand{}
 	inst := &Instance{Title: "wire-tymux", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux}
-	inst.processManager = NewTymuxBackend(fake)
+	inst.SetProcessManagerForTest(NewTymuxBackend(fake))
 
-	inst.wireTmuxSession(shellLaunch("claude --resume abc"))
+	inst.WireTmuxSessionForTest(shellLaunch("claude --resume abc"))
 
 	assert.Equal(t, "claude --resume abc", fake.gotCommand)
 }
@@ -76,9 +76,9 @@ func TestWireTmuxSession_InstallsTmuxSessionOnTmuxBackend(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	mgr := &TmuxProcessManager{}
 	inst := &Instance{Title: "wire-tmux", Path: t.TempDir(), Program: "claude"}
-	inst.processManager = NewTmuxBackend(mgr)
+	inst.SetProcessManagerForTest(NewTmuxBackend(mgr))
 
-	inst.wireTmuxSession(shellLaunch("claude"))
+	inst.WireTmuxSessionForTest(shellLaunch("claude"))
 
 	assert.NotNil(t, mgr.Session())
 }
@@ -121,8 +121,8 @@ func TestFromInstanceData_EmptyBackend_GlobalTymux_StaysTmux(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTmux, inst.Backend, "legacy sessions are pinned to tmux")
-	_, isTmux := inst.processManager.(*TmuxBackend)
-	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.processManager)
+	_, isTmux := inst.ProcessManagerForTest().(*TmuxBackend)
+	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.ProcessManagerForTest())
 }
 
 // An empty persisted Backend means tmux whatever the global selection, including "native".
@@ -136,6 +136,6 @@ func TestFromInstanceData_EmptyBackend_GlobalNative_StaysTmux(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, domain.BackendTmux, inst.Backend)
-	_, isTmux := inst.processManager.(*TmuxBackend)
-	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.processManager)
+	_, isTmux := inst.ProcessManagerForTest().(*TmuxBackend)
+	assert.True(t, isTmux, "process manager must stay a TmuxBackend, got %T", inst.ProcessManagerForTest())
 }

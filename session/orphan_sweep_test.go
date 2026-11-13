@@ -84,8 +84,7 @@ exit 1
 	t.Setenv("TMUX_BIN", fakeTmux)
 
 	inst := &Instance{}
-	inst.initShellRegistry()
-	inst.shells.AddStopped(&Shell{
+	inst.AddStoppedShellForTest(&Shell{
 		ID:              "shell-1",
 		TmuxSessionName: "staplersquad_parent_shell_shell-1",
 	})
@@ -212,7 +211,7 @@ type namedPM struct {
 func (p namedPM) GetSessionIdentifier() string { return p.id }
 
 func liveInstance(tmuxName string) *Instance {
-	return &Instance{Title: tmuxName, processManager: namedPM{id: tmuxName}}
+	return (&Instance{Title: tmuxName}).WithProcessManagerForTest(namedPM{id: tmuxName})
 }
 
 func sweepNow() time.Time { return time.Unix(2_000_000_000, 0) }
@@ -414,9 +413,9 @@ func TestControlModeSessionsOn_should_FilterBySocketAndSkipInstancesWithoutTmuxS
 	onDefault := tmux.NewTmuxSessionWithServerSocket("a", "true", tmux.TmuxPrefix, "ssq-default")
 	onOther := tmux.NewTmuxSessionWithServerSocket("b", "true", tmux.TmuxPrefix, "ssq-other")
 	instances := []*Instance{
-		{processManager: accessorPM{ts: onDefault}},
-		{processManager: accessorPM{ts: onOther}},
-		{processManager: accessorPM{ts: nil}},
+		(&Instance{}).WithProcessManagerForTest(accessorPM{ts: onDefault}),
+		(&Instance{}).WithProcessManagerForTest(accessorPM{ts: onOther}),
+		(&Instance{}).WithProcessManagerForTest(accessorPM{ts: nil}),
 		liveInstance("staplersquad_noaccessor"),
 	}
 

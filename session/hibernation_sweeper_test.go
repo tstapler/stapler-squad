@@ -312,9 +312,9 @@ func TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple(t *tes
 	// otherwise every session collapses onto the same "" cache key and this
 	// test can't tell a correct name->UUID mapping from a broken one.
 	instA := makeIdleInstance(t, "uuid-a", "session-a", time.Minute)
-	instA.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-a"})
+	instA.SetProcessManagerForTest(NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-a"}))
 	instB := makeIdleInstance(t, "uuid-b", "session-b", time.Minute)
-	instB.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"})
+	instB.SetProcessManagerForTest(NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"}))
 	instC := makeIdleInstance(t, "uuid-c", "session-c", time.Minute)
 	instC.Status = domain.Paused // inactive — should be excluded from the batch
 
@@ -394,7 +394,7 @@ func TestSweeper_AttachedTerminalPreventsAutomaticHibernation(t *testing.T) {
 				sweeper.sweep(context.Background())
 			}
 			assert.Equal(t, domain.Active, inst.GetLifecycleStatus())
-			assert.Empty(t, inst.hibernateReason)
+			assert.Empty(t, inst.HibernateReasonForTest())
 		})
 	}
 }
@@ -418,11 +418,11 @@ func TestTerminalViewLease(t *testing.T) {
 func TestTerminalViewLeaseRejectsAttachmentDuringAutomaticHibernation(t *testing.T) {
 	t.Parallel()
 	inst := makeIdleInstance(t, "race", "race", time.Hour)
-	inst.terminalViewers.Store(-1)
+	inst.SetTerminalViewersForTest(-1)
 	release, err := inst.AcquireTerminalView()
 	require.Error(t, err)
 	assert.Nil(t, release)
-	assert.Equal(t, int64(-1), inst.terminalViewers.Load())
+	assert.Equal(t, int64(-1), inst.TerminalViewersForTest())
 }
 
 // --- Benchmarks for ListSessions hot path ---

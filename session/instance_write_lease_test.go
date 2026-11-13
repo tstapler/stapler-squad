@@ -139,8 +139,8 @@ func TestWriteLease_ShouldHandTheLeaseToAWaiter_WhenTheHolderReleases(t *testing
 func TestWriteLease_ShouldNotDeadlockOrInvertLockOrder_WhenDriverSteerNudgeAndStatusPollerRunConcurrently(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: "idle"}
-	inst := &Instance{Title: "lock-order", Status: domain.Active, processManager: pm}
-	inst.started.Store(true)
+	inst := (&Instance{Title: "lock-order", Status: domain.Active}).WithProcessManagerForTest(pm)
+	inst.MarkStarted()
 	inst.SetLeaseFlag(&LeaseFlag{})
 
 	var wg sync.WaitGroup
@@ -229,7 +229,7 @@ func TestWriteLease_ShouldRaiseTheHeldSecondsGaugeAndLogOneWedgeWarnPerMinuteAnd
 	inst := leaseInstance(t, "wedge")
 	lease, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
 	require.True(t, ok)
-	t0 := lease.acquiredAt
+	t0 := lease.AcquiredAtForTest()
 	scanMine := func(now time.Time, warnAfter time.Duration) []WedgedLease {
 		return ScanWedgedLeases(now, warnAfter, func(i *Instance) bool { return i == inst })
 	}
@@ -267,8 +267,8 @@ func TestWriteLease_ShouldRaiseTheHeldSecondsGaugeAndLogOneWedgeWarnPerMinuteAnd
 func TestAutomatedWriters_ShouldNotCountABusyLeaseAsADialogAttemptAndStillAnswerAfterThreeBusyTicks_WhenTheLeaseIsBusy(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: trustDialogText}
-	inst := &Instance{Title: "latch", Status: domain.Active, processManager: pm}
-	inst.started.Store(true)
+	inst := (&Instance{Title: "latch", Status: domain.Active}).WithProcessManagerForTest(pm)
+	inst.MarkStarted()
 	inst.SetLeaseFlag(&LeaseFlag{})
 
 	held, ok := inst.TryTerminalWriteLease(LeaseWriterReply)
@@ -294,8 +294,8 @@ func TestAutomatedWriters_ShouldNotCountABusyLeaseAsADialogAttemptAndStillAnswer
 func TestAttemptBacklogNudge_ShouldSkipTheTickAndWriteNothing_WhenTheLeaseIsBusy(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: "idle"}
-	inst := &Instance{Title: "nudge-busy", Status: domain.Active, processManager: pm}
-	inst.started.Store(true)
+	inst := (&Instance{Title: "nudge-busy", Status: domain.Active}).WithProcessManagerForTest(pm)
+	inst.MarkStarted()
 	inst.SetLeaseFlag(&LeaseFlag{})
 
 	held, _ := inst.TryTerminalWriteLease(LeaseWriterReply)
@@ -318,8 +318,8 @@ func TestInitialPrompt_ShouldNotCountALeaseApiErrorTowardTheAttemptLimitNorMarkS
 			t.Cleanup(func() { submitInitialPrompt = prev })
 
 			pm := &stuckDialogProcessManager{dialogText: "> "}
-			inst := &Instance{Title: "initial-lease-err", Status: domain.Active, processManager: pm}
-			inst.started.Store(true)
+			inst := (&Instance{Title: "initial-lease-err", Status: domain.Active}).WithProcessManagerForTest(pm)
+			inst.MarkStarted()
 			inst.SetLeaseFlag(&LeaseFlag{})
 
 			var sent bool
@@ -337,8 +337,8 @@ func TestInitialPrompt_ShouldNotCountALeaseApiErrorTowardTheAttemptLimitNorMarkS
 // T-WL-04 (initial prompt half): a busy lease consumes no attempt.
 func TestInitialPrompt_ShouldConsumeNoAttempt_WhenTheLeaseIsBusy(t *testing.T) {
 	pm := &stuckDialogProcessManager{dialogText: "> "}
-	inst := &Instance{Title: "initial-busy", Status: domain.Active, processManager: pm}
-	inst.started.Store(true)
+	inst := (&Instance{Title: "initial-busy", Status: domain.Active}).WithProcessManagerForTest(pm)
+	inst.MarkStarted()
 	inst.SetLeaseFlag(&LeaseFlag{})
 	held, _ := inst.TryTerminalWriteLease(LeaseWriterReply)
 
@@ -497,7 +497,7 @@ func TestScanWedgedLeases_ShouldRunIncludeOutsideTheRegistryLock(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ScanWedgedLeases(lease.acquiredAt.Add(LeaseWedgeWarnAfter), LeaseWedgeWarnAfter, func(i *Instance) bool {
+		ScanWedgedLeases(lease.AcquiredAtForTest().Add(LeaseWedgeWarnAfter), LeaseWedgeWarnAfter, func(i *Instance) bool {
 			if l, got := other.TryTerminalWriteLease(LeaseWriterNudge); got {
 				l.Release()
 			}

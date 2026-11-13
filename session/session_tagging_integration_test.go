@@ -84,7 +84,7 @@ func TestSessionTaggingPipeline_should_LeaveTagsEmptyThenApplyRealTag_When_First
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Branch = "feature/x"
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.MutateForTest(func(*Instance) {})
 
 	engine := classifier.NewTaggingEngine()
 	engine.ReplaceRules([]classifier.TaggingRule{neverMatchingRule("seed-feature", "Feature")})

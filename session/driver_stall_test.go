@@ -84,12 +84,12 @@ func newStallFixture(t *testing.T, sc stallScenario) *stallFixture {
 	if sc.autonomous {
 		inst.Tags = []string{TagBacklogWork}
 	}
-	inst.processManager = &livenessPM{alive: !sc.paneDead}
+	inst.SetProcessManagerForTest(&livenessPM{alive: !sc.paneDead})
 	inst.SetLastMeaningfulOutput(last)
 	manager := NewInstanceStatusManager()
 	if !sc.controllerOff {
 		source := NewPiStatusSource(inst.Title, nil)
-		source.status.Store(int32(sc.status))
+		source.SetStatusForTest(sc.status)
 		manager.RegisterPiStatusSource(inst.Title, source)
 	}
 	inst.SetStatusManager(manager)
@@ -346,7 +346,7 @@ func TestInteractiveStall_TransientDeadProbeDoesNotFail(t *testing.T) {
 	policy := retryEverything()
 	policy.RetryOn = []string{"crashed"}
 	later := stallTestNow.Add(driverInactivityTimeout + time.Minute)
-	pm := f.inst.processManager.(*livenessPM)
+	pm := f.inst.ProcessManagerForTest().(*livenessPM)
 
 	f.tick(policy, later) // dead since `later`
 	pm.alive = true
@@ -367,11 +367,11 @@ func TestInteractiveStall_StatusFlappingDoesNotRefireFlag(t *testing.T) {
 	t.Parallel()
 	f := newStallFixture(t, stallScenario{status: detection.StatusExecuting})
 	policy := retryEverything()
-	source, ok := f.inst.GetStatusManager().piSources.Load(f.inst.Title)
+	source, ok := f.inst.GetStatusManager().GetPiStatusSource(f.inst.Title)
 	if !ok {
 		t.Fatal("fixture has no status source")
 	}
-	set := func(s detection.DetectedStatus) { source.status.Store(int32(s)) }
+	set := func(s detection.DetectedStatus) { source.SetStatusForTest(s) }
 	now := stallTestNow.Add(4 * time.Hour)
 
 	f.tick(policy, now)

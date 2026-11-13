@@ -39,9 +39,9 @@ func newNudgeWriterInstance(t *testing.T, paneContent string, pm nudgePane) *Ins
 	cc, _ := claudectltest.NewController(paneContent)
 	inst := minimalInstance(t)
 	inst.ForceStatus(domain.Active)
-	inst.controllerManager.SetController(cc)
-	inst.processManager = pm
-	inst.started.Store(true)
+	inst.SetControllerForTest(cc)
+	inst.SetProcessManagerForTest(pm)
+	inst.MarkStarted()
 	return inst
 }
 

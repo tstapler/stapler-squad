@@ -71,8 +71,8 @@ func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
 func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 	t.Parallel()
 	mock := &mockTmuxManager{capturePaneReturn: "tmux rendered screen"}
-	inst := &Instance{Title: "tmux-preview-session", Status: domain.Active, processManager: NewTmuxBackend(mock)}
-	inst.started.Store(true)
+	inst := (&Instance{Title: "tmux-preview-session", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	inst.MarkStarted()
 
 	// Even if a stale claudectl.ClaudeController buffer exists, capture-pane must win.
 	buf := ptyio.NewCircularBuffer(1024)
@@ -82,7 +82,7 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
 	ctrl := claudectl.NewBareForTest(inst.Title, inst)
 	ctrl.SetPTYAccessForTest(pa)
-	inst.controllerManager.SetController(ctrl)
+	inst.SetControllerForTest(ctrl)
 
 	content, err := inst.Preview()
 	if err != nil {
@@ -99,8 +99,8 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T) {
 	t.Parallel()
 	mock := &mockTmuxManager{capturePaneErr: fmt.Errorf("no such tmux session")}
-	inst := &Instance{Title: "tmux-preview-fallback", Status: domain.Active, processManager: NewTmuxBackend(mock)}
-	inst.started.Store(true)
+	inst := (&Instance{Title: "tmux-preview-fallback", Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(mock))
+	inst.MarkStarted()
 
 	buf := ptyio.NewCircularBuffer(1024)
 	if _, err := buf.Write([]byte("pty buffer fallback content")); err != nil {
@@ -109,7 +109,7 @@ func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T
 	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
 	ctrl := claudectl.NewBareForTest(inst.Title, inst)
 	ctrl.SetPTYAccessForTest(pa)
-	inst.controllerManager.SetController(ctrl)
+	inst.SetControllerForTest(ctrl)
 
 	content, err := inst.Preview()
 	if err != nil {
@@ -147,8 +147,8 @@ func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *ex
 	tpm := &TmuxProcessManager{}
 	tpm.SetSession(ts)
 
-	inst := &Instance{Title: t.Name(), Status: domain.Active, processManager: NewTmuxBackend(tpm)}
-	inst.started.Store(true)
+	inst := (&Instance{Title: t.Name(), Status: domain.Active}).WithProcessManagerForTest(NewTmuxBackend(tpm))
+	inst.MarkStarted()
 	return inst
 }
 
@@ -190,7 +190,7 @@ func TestInstance_PreviewContext_FallsBackToPreviewOnGenuineCaptureError(t *test
 	pa := ptyio.NewPTYAccess(inst.Title, nil, buf)
 	ctrl := claudectl.NewBareForTest(inst.Title, inst)
 	ctrl.SetPTYAccessForTest(pa)
-	inst.controllerManager.SetController(ctrl)
+	inst.SetControllerForTest(ctrl)
 
 	content, err := inst.PreviewContext(context.Background())
 	if err != nil {

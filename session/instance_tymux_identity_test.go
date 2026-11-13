@@ -21,7 +21,7 @@ func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T)
 
 	live := &fakeTymuxManagerForSetCommand{sessionID: "daemon-session-42"}
 	inst := &Instance{Title: "before-rename", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
-	inst.processManager = NewTymuxBackend(live)
+	inst.SetProcessManagerForTest(NewTymuxBackend(live))
 	require.NoError(t, inst.Rename("after-rename"))
 
 	data := inst.ToInstanceData()
@@ -90,7 +90,7 @@ func TestEntRepository_ClearsTymuxSessionID(t *testing.T) {
 func TestToInstanceData_TmuxSwitchedInstanceDropsTymuxSessionID(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	inst := &Instance{Title: "switched", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTmux}
-	inst.processManager = newTmuxBackendFromOpts(ProcessManagerOptions{})
+	inst.SetProcessManagerForTest(newTmuxBackendFromOpts(ProcessManagerOptions{}))
 	assert.Empty(t, inst.ToInstanceData().TymuxSessionID)
 }
 

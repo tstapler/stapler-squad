@@ -107,7 +107,7 @@ func newTagPollerFixture(fake *fakeTagPoolClient, outputTags ...string) tagPolle
 // SessionTagClassificationPoller.pollOnce sees the given field values on its first tick.
 func primedInstance(title string, branch string) *Instance {
 	inst := &Instance{Title: title, Branch: branch}
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.MutateForTest(func(*Instance) {})
 	return inst
 }
 
@@ -115,15 +115,14 @@ func primedInstance(title string, branch string) *Instance {
 // same-package access), mirroring instance_snapshot_test.go's own convention for forcing a
 // snapshot rebuild without going through the actor mailbox.
 func renameAndResnapshot(inst *Instance, title, branch string) {
-	inst.mu.Lock()
-	if title != "" {
-		inst.Title = title
-	}
-	if branch != "" {
-		inst.Branch = branch
-	}
-	inst.snapshot.Store(buildSnapshot(inst))
-	inst.mu.Unlock()
+	inst.MutateForTest(func(i *Instance) {
+		if title != "" {
+			i.Title = title
+		}
+		if branch != "" {
+			i.Branch = branch
+		}
+	})
 }
 
 // TestSessionTagPoller_should_NotRaceOrPanic_When_StartStopCalledRepeatedly is a regression test

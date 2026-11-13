@@ -11,7 +11,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/gitwt"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -79,17 +78,16 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Create test instance with worktree
 	now := time.Now()
-	instance := &Instance{
+	instance := (&Instance{
 		Title:       "test-uncommitted-changes",
 		Path:        repoPath,
 		Branch:      branchName,
 		Status:      domain.Active,
-		gitManager:  gitwt.Manager{Worktree: worktree},
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
-	}
-	instance.started.Store(true)
+	}).WithWorktreeForTest(worktree)
+	instance.MarkStarted()
 
 	// Create review queue infrastructure
 	queue := queuepkg.NewReviewQueue()
@@ -254,17 +252,16 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 	t.Parallel()
 	// Create test instance WITHOUT worktree (directory session)
 	now := time.Now()
-	instance := &Instance{
+	instance := (&Instance{
 		Title:       "test-no-worktree",
 		Path:        "/tmp/test-path",
 		Branch:      "",
 		Status:      domain.Active,
-		gitManager:  gitwt.Manager{Worktree: nil}, // No worktree
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
-	}
-	instance.started.Store(true)
+	}).WithWorktreeForTest(nil)
+	instance.MarkStarted()
 
 	// Create review queue infrastructure
 	queue := queuepkg.NewReviewQueue()
@@ -319,17 +316,16 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 
 	// Create instance
 	now := time.Now()
-	instance := &Instance{
+	instance := (&Instance{
 		Title:       "integration-test",
 		Path:        repoPath,
 		Branch:      branchName,
 		Status:      domain.Active,
-		gitManager:  gitwt.Manager{Worktree: worktree},
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
-	}
-	instance.started.Store(true)
+	}).WithWorktreeForTest(worktree)
+	instance.MarkStarted()
 
 	// Create review queue with poller
 	queue := queuepkg.NewReviewQueue()

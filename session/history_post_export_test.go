@@ -17,14 +17,11 @@ func postExportInstance(t *testing.T) (*Instance, *int) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	calls := 0
-	inst := &Instance{
+	inst := (&Instance{
 		Title: "ported",
 		Path:  "/home/test/proj",
-		claudeExtension: claudeExtension{
-			claudeSession: &domain.ClaudeSessionData{ConversationUUID: "uuid-1"},
-		},
-	}
-	inst.claudeSessionIDSavedCallback = func() { calls++ }
+	}).WithClaudeSessionForTest(&domain.ClaudeSessionData{ConversationUUID: "uuid-1"})
+	inst.SetClaudeSessionIDSavedCallback(func() { calls++ })
 	return inst, &calls
 }
 
@@ -64,15 +61,15 @@ func TestClaudeAdapter_AfterExport_AppendsHistoryAndRecordsSession(t *testing.T)
 	require.Equal(t, "uuid-1", lines[0]["sessionId"])
 	require.Equal(t, inst.GetWorkingDirectory(), lines[0]["project"])
 	require.Equal(t, 1, *calls)
-	require.Equal(t, "ported", inst.claudeSession.ProjectName)
-	require.Equal(t, inst.GetWorkingDirectory(), inst.claudeSession.Metadata["working_dir"])
+	require.Equal(t, "ported", inst.GetClaudeSession().ProjectName)
+	require.Equal(t, inst.GetWorkingDirectory(), inst.GetClaudeSession().Metadata["working_dir"])
 }
 
 func TestOpencodeAdapter_AfterExport_RecordsSessionOnly(t *testing.T) {
 	inst, calls := postExportInstance(t)
 	require.NoError(t, NewOpencodeAdapter().AfterExport(context.Background(), inst))
 	require.Equal(t, 1, *calls)
-	require.Equal(t, "ported", inst.claudeSession.ProjectName)
+	require.Equal(t, "ported", inst.GetClaudeSession().ProjectName)
 	home, _ := os.UserHomeDir()
 	_, err := os.Stat(filepath.Join(home, ".claude", "history.jsonl"))
 	require.True(t, os.IsNotExist(err))

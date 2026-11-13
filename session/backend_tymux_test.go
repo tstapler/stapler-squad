@@ -187,7 +187,7 @@ func TestInstanceRestart_MigratesBackendWhenOverrideDiffersFromCurrent(t *testin
 		Status:  domain.Active,
 		Backend: domain.BackendTmux,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, inst.initializeBaselineForRestartTest())
 
 	err := inst.Restart(false, domain.BackendTymux)
@@ -195,7 +195,7 @@ func TestInstanceRestart_MigratesBackendWhenOverrideDiffersFromCurrent(t *testin
 	require.Error(t, err, "Start() against an unreachable tymuxd must fail in this sandboxed test environment")
 	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"Backend must be updated to the migration target even though the subsequent Start() failed -- the migration decision happens before Start() is attempted")
-	_, ok := inst.processManager.(*TymuxBackend)
+	_, ok := inst.ProcessManagerForTest().(*TymuxBackend)
 	assert.True(t, ok, "processManager must be swapped to *TymuxBackend, not left as the original *TmuxBackend")
 }
 
@@ -232,14 +232,14 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 		Backend:          domain.BackendTmux,
 		TmuxServerSocket: testTmuxSocket(t),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, inst.initializeBaselineForRestartTest())
 	defer func() { _ = inst.KillSession() }()
 
 	require.NoError(t, inst.Restart(false, ""))
 
 	assert.Equal(t, domain.BackendTmux, inst.Backend)
-	_, ok := inst.processManager.(*TmuxBackend)
+	_, ok := inst.ProcessManagerForTest().(*TmuxBackend)
 	assert.True(t, ok, "processManager must remain a *TmuxBackend when no migration was requested")
 }
 
@@ -343,8 +343,8 @@ func TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCo
 		Status:  domain.Active,
 		Backend: domain.BackendTymux,
 	}
-	inst.started.Store(true)
-	inst.processManager = NewTymuxBackend(fake)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTymuxBackend(fake))
 
 	require.NoError(t, inst.Restart(false, ""))
 

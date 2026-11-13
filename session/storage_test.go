@@ -114,7 +114,7 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 	}
 	// Paused sets started=true internally, which is required for SaveInstances.
 	// We use the same fast-path that FromInstanceData takes.
-	inst.started.Store(true)
+	inst.MarkStarted()
 
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -146,7 +146,7 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 		UpdatedAt: time.Now(),
 		Backend:   domain.BackendTymux,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -174,7 +174,7 @@ func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	first, err := storage.LoadInstances()
@@ -209,7 +209,7 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	// First load: migration assigns a new UUID.
@@ -247,7 +247,7 @@ func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 		Status:  domain.Paused,
 		Program: "claude",
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	poller.SetInstances([]*Instance{inst})
 
 	found := poller.FindInstance("test-uuid-lookup")
@@ -270,7 +270,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 		Status:  domain.Paused,
 		Program: "claude",
 	}
-	existing.started.Store(true)
+	existing.MarkStarted()
 	poller.SetInstances([]*Instance{existing})
 
 	newcomer := &Instance{
@@ -279,7 +279,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 		Status:  domain.Paused,
 		Program: "claude",
 	}
-	newcomer.started.Store(true)
+	newcomer.MarkStarted()
 	poller.AddInstance(newcomer)
 
 	// Both sessions must be findable.
@@ -443,7 +443,7 @@ func newTestInstance(title string) *Instance {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	return inst
 }
 
@@ -1345,7 +1345,7 @@ func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActive
 		UpdatedAt:  time.Now(),
 		ArchivedAt: &archivedAt,
 	}
-	inst.started.Store(true)
+	inst.MarkStarted()
 	require.NoError(t, storage.AddInstance(inst))
 
 	loaded, err := storage.LoadInstances()

@@ -20,7 +20,7 @@ func TestInstance_TymuxMeaningfulOutputAdvancesWithoutForce(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := tymux.NewTymuxGRPCSession(nil)
-	instance.processManager = liveTimestampProcessManager{NewTymuxBackend(manager)}
+	instance.SetProcessManagerForTest(liveTimestampProcessManager{NewTymuxBackend(manager)})
 	before := time.Now().Add(-time.Hour)
 	instance.SetLastMeaningfulOutput(before)
 

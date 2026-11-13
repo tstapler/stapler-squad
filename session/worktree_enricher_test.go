@@ -290,7 +290,7 @@ func TestWorktreeEnricher_StopWhileReadyPreventsProbe(t *testing.T) {
 	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var probes atomic.Int32
 	e := NewWorktreeEnricher(WorktreeEnricherConfig{Ready: func(string) bool { close(entered); <-release; return true }, Probe: func(string) (*WorktreeInfo, error) { probes.Add(1); return okInfo(), nil }})
-	go func() { defer close(returned); _, _ = e.safeProbe("/protected") }()
+	go func() { defer close(returned); _, _ = e.ProbeForTest("/protected") }()
 	waitEnrichmentSignal(t, entered)
 	e.Stop()
 	close(release)
@@ -332,7 +332,7 @@ func TestWorktreeEnricher_ConsentGateIntegration(t *testing.T) {
 		Probe: func(string) (*WorktreeInfo, error) { require.True(t, saved); probes.Add(1); return okInfo(), nil },
 	}, false)
 	e.Request("/protected/repo")
-	enrichWaitUntil(t, func() bool { return e.queue.Stats().Processed == 1 })
+	enrichWaitUntil(t, func() bool { return e.QueueProcessedForTest() == 1 })
 	require.Zero(t, probes.Load())
 	paths, err := gate.Continue(gate.Roots()[0].ID)
 	require.NoError(t, err)
@@ -378,7 +378,7 @@ func TestWorktreeEnricher_StopCancelsRetriesAndDeregisters(t *testing.T) {
 	require.Nil(t, ActiveWorktreeEnricher())
 	(*retry.Load())()
 	e.Request("/new")
-	require.Equal(t, 0, e.queue.Pending(), "stopped enricher accepts no work")
+	require.Equal(t, 0, e.QueuePendingForTest(), "stopped enricher accepts no work")
 	require.EqualValues(t, 1, probes.Load())
 }
 
@@ -443,10 +443,7 @@ func TestWorktreeEnricher_EvictsOldestBeyondCap(t *testing.T) {
 	_, ok3 := e.Result("/3")
 	require.False(t, ok1, "oldest result evicted")
 	require.True(t, ok3)
-	e.mu.Lock()
-	n := len(e.results)
-	e.mu.Unlock()
-	require.Equal(t, 2, n)
+	require.Equal(t, 2, e.ResultCountForTest())
 }
 
 func TestWorktreeEnricher_PanickingProbeBecomesErrorResult(t *testing.T) {

@@ -108,7 +108,7 @@ func TestSwitchProgram_RestartError_PersistAlreadyRan(t *testing.T) {
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Status = domain.Active
-	inst.started.Store(true)
+	inst.MarkStarted()
 	inst.Path = "" // forces Restart() to fail deterministically, no real tmux involved
 
 	persistedProgram := ""

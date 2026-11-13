@@ -39,7 +39,7 @@ func TestSetAutoApprove_should_ReturnErrorAndSkipRestart_When_PersistFails(t *te
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Status = domain.Active
-	inst.started.Store(true)
+	inst.MarkStarted()
 	persistErr := errors.New("disk full")
 
 	err := inst.SetAutoApprove(true, func() error {
@@ -62,7 +62,7 @@ func TestSetAutoApprove_RestartError_PersistAlreadyRan(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Status = domain.Active
-	inst.started.Store(true)
+	inst.MarkStarted()
 	inst.Path = "" // forces Restart() to fail deterministically, no real tmux involved
 
 	persistedValue := false
@@ -90,7 +90,7 @@ func TestSetAutoApprove_SerializesWithSwitchProgram_When_ConcurrentCalls(t *test
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Status = domain.Active
-	inst.started.Store(true)
+	inst.MarkStarted()
 	inst.Path = "" // forces Restart() to fail deterministically, no real tmux involved
 
 	entered := make(chan struct{})
@@ -609,9 +609,9 @@ func TestAutonomousSetters_ReturnErrorWhenActorDone(t *testing.T) {
 			t.Parallel()
 			inst := minimalInstance(t)
 			inst.AutonomousMode = true
-			inst.snapshot.Store(buildSnapshot(inst))
+			inst.PublishSnapshotForTest()
 			li := NewLiveInstance(inst)
-			li.cancel()
+			li.CancelForTest()
 			t.Cleanup(li.Stop)
 			before := inst.Snapshot().Autonomous
 

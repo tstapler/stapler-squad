@@ -71,7 +71,7 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	})
 	t.Run("prPersistPending flush", func(t *testing.T) {
 		t.Parallel()
-		inst.prPersistPending.Store(true)
+		inst.SetPRPersistPendingForTest(true)
 		storage.saved.reset() // an unchanged row would otherwise skip the write the flush rides on
 		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 		require.False(t, inst.PRPersistPending(), "the flush ran")

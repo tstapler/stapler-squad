@@ -13,7 +13,7 @@ import (
 
 func addTestInstance(t *testing.T, storage *Storage, inst *Instance) {
 	t.Helper()
-	inst.started.Store(true)
+	inst.MarkStarted()
 	if inst.CreatedAt.IsZero() {
 		inst.CreatedAt = time.Now()
 	}

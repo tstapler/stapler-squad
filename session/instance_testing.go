@@ -6,7 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/launchcmd"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // NewStartedInstanceForTest returns an Instance that reports itself started and
@@ -111,3 +115,153 @@ func FinishInstanceForTest(i *Instance) { FinishInstanceConstruction(i) }
 // SetProcessManagerForTest swaps the instance's pane backend so tests in packages that import session can
 // stand in a fake without reaching the unexported field.
 func (i *Instance) SetProcessManagerForTest(pm ProcessManager) { i.processManager = pm }
+
+// WithProcessManagerForTest swaps the pane backend and returns i, so a struct literal can seed it inline.
+func (i *Instance) WithProcessManagerForTest(pm ProcessManager) *Instance {
+	i.processManager = pm
+	return i
+}
+
+// ProcessManagerForTest returns the raw pane backend, unlike pm(), which takes pmMu.
+func (i *Instance) ProcessManagerForTest() ProcessManager { return i.processManager }
+
+// SetStartedForTest sets the started flag; MarkStarted covers the true case.
+func (i *Instance) SetStartedForTest(v bool) { i.started.Store(v) }
+
+// WithReviewQueueForTest sets the review queue and returns i, for seeding a struct literal inline.
+func (i *Instance) WithReviewQueueForTest(q *queue.ReviewQueue) *Instance {
+	i.reviewQueue = q
+	return i
+}
+
+// WithWorktreeForTest sets the git worktree (nil for a directory session) and returns i, for seeding a struct literal inline.
+func (i *Instance) WithWorktreeForTest(w *git.GitWorktree) *Instance {
+	i.gitManager.Worktree = w
+	return i
+}
+
+// WithClaudeSessionForTest sets the Claude session data and returns i, for seeding a struct literal inline.
+func (i *Instance) WithClaudeSessionForTest(s *domain.ClaudeSessionData) *Instance {
+	i.SetClaudeSession(s)
+	return i
+}
+
+// MutateForTest runs fn under i.mu and republishes the snapshot, so a test can edit exported fields
+// the way an actor setter would without reaching the unexported lock and snapshot.
+func (i *Instance) MutateForTest(fn func(*Instance)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	fn(i)
+	i.snapshot.Store(buildSnapshot(i))
+}
+
+// RecoverFromStaleResumeForTest runs the stale-resume recovery a failed resume exit triggers.
+func (i *Instance) RecoverFromStaleResumeForTest() { i.recoverFromStaleResume() }
+
+// CleanupAfterFailedStartForTest runs the failed-start cleanup path.
+func (i *Instance) CleanupAfterFailedStartForTest(firstTimeSetup bool) error {
+	return i.cleanupAfterFailedStart(firstTimeSetup)
+}
+
+// WireTmuxSessionForTest installs the launch command on the current backend, as Start does.
+func (i *Instance) WireTmuxSessionForTest(command launchcmd.LaunchCommand) {
+	i.wireTmuxSession(command)
+}
+
+// InitTmuxSessionForTest rebuilds the pane backend session, as Start does.
+func (i *Instance) InitTmuxSessionForTest() { i.initTmuxSession() }
+
+// InitTagManagerForTest attaches the tag manager NewInstance would have installed.
+func (i *Instance) InitTagManagerForTest() { i.tagManager = NewTagManager(&i.Tags) }
+
+// AddStoppedShellForTest registers a stopped companion shell, creating the registry first.
+func (i *Instance) AddStoppedShellForTest(sh *Shell) {
+	i.initShellRegistry()
+	i.shells.AddStopped(sh)
+}
+
+// SetPRPersistPendingForTest marks a PR set change as awaiting the next full save.
+func (i *Instance) SetPRPersistPendingForTest(v bool) { i.prPersistPending.Store(v) }
+
+// SetDestroyedForTest sets the destroyed flag without running Destroy.
+func (i *Instance) SetDestroyedForTest(v bool) { i.destroyed.Store(v) }
+
+// HibernateReasonForTest returns the recorded hibernation reason.
+func (i *Instance) HibernateReasonForTest() string { return i.hibernateReason }
+
+// HoldPMLockForTest takes pmMu, as a backend migration does before taking i.mu, and returns its release.
+func (i *Instance) HoldPMLockForTest() (release func()) {
+	i.pmMu.Lock()
+	return i.pmMu.Unlock
+}
+
+// InstanceLockFreeForTest reports whether i.mu can be taken right now.
+func (i *Instance) InstanceLockFreeForTest() bool {
+	if i.mu.TryLock() {
+		i.mu.Unlock()
+		return true
+	}
+	return false
+}
+
+// AcquiredAtForTest returns when the lease was granted.
+func (l *HeldLease) AcquiredAtForTest() time.Time { return l.acquiredAt }
+
+// ContextErrForTest returns the actor context's error, non-nil once the actor was stopped.
+func (l *LiveInstance) ContextErrForTest() error { return l.ctx.Err() }
+
+// PublishSnapshotForTest republishes the snapshot without taking i.mu, for a test that edits fields
+// before the instance is shared.
+func (i *Instance) PublishSnapshotForTest() { i.snapshot.Store(buildSnapshot(i)) }
+
+// PMForTest calls the lock-taking pm() accessor, so a test can observe pmMu contention.
+func (i *Instance) PMForTest() ProcessManager { return i.pm() }
+
+// SetTerminalViewersForTest sets the attached-viewer count.
+func (i *Instance) SetTerminalViewersForTest(n int64) { i.terminalViewers.Store(n) }
+
+// TerminalViewersForTest returns the attached-viewer count.
+func (i *Instance) TerminalViewersForTest() int64 { return i.terminalViewers.Load() }
+
+// RetryInFlightForTest reports whether a restart claimed the retry slot.
+func (i *Instance) RetryInFlightForTest() bool { return i.retryInFlight.Load() }
+
+// StartHotAttachForTest runs the attach-only Start that HotRestoreIfLive performs.
+func (i *Instance) StartHotAttachForTest() error { return i.startHotAttach() }
+
+// HotAttachingForTest reports whether a hot attach is in progress.
+func (i *Instance) HotAttachingForTest() bool { return i.hotAttaching.Load() }
+
+// ResolvePRForTest resolves ref (nil for the active PR) the way the PR actions do.
+func (i *Instance) ResolvePRForTest(ref *domain.PRRef) (domain.PRRef, error) { return i.resolvePR(ref) }
+
+// CancelForTest cancels the actor context without stopping the actor, to model a dead actor.
+func (l *LiveInstance) CancelForTest() { l.cancel() }
+
+// ProbeForTest runs safeProbe, the panic-recovering probe wrapper.
+func (e *WorktreeEnricher) ProbeForTest(path string) (*WorktreeInfo, error) { return e.safeProbe(path) }
+
+// QueueProcessedForTest returns how many probe tasks the worker pool finished.
+func (e *WorktreeEnricher) QueueProcessedForTest() int64 { return int64(e.queue.Stats().Processed) }
+
+// QueuePendingForTest returns how many probe tasks are waiting.
+func (e *WorktreeEnricher) QueuePendingForTest() int { return e.queue.Pending() }
+
+// ResultCountForTest returns the number of cached results.
+func (e *WorktreeEnricher) ResultCountForTest() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.results)
+}
+
+// DriverGoroutinesForTest returns the live driver goroutine count.
+func (i *Instance) DriverGoroutinesForTest() int {
+	i.driverMu.Lock()
+	defer i.driverMu.Unlock()
+	return i.driverGoroutines
+}
+
+// SetStatusForTest sets the inferred status, so a test can drive the status poller without a pi subprocess.
+func (s *PiStatusSource) SetStatusForTest(status detection.DetectedStatus) {
+	s.status.Store(int32(status))
+}

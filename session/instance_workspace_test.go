@@ -279,10 +279,10 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 	// shell out to real tmux, whose wall time (several seconds, more under
 	// package-wide load) is what made this test flaky against its 10s bound.
 	fakePM := &fakeSwitchWorkspaceProcessManager{alive: true}
-	instance.processManager = fakePM
+	instance.SetProcessManagerForTest(fakePM)
 
 	// Simulate an already-running session so SwitchWorkspace's guard passes.
-	instance.started.Store(true)
+	instance.MarkStarted()
 	instance.Status = domain.Active
 
 	done := make(chan struct{})

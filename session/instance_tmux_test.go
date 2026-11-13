@@ -38,11 +38,10 @@ func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
 	// IsBackendProcessAlive() used the cached path, it would wrongly
 	// report false here.
 	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false, existsNoCacheReturn: true}
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.Creating,
-		processManager: NewTmuxBackend(mock),
-	}
+	inst := (&Instance{
+		Title:  "t",
+		Status: domain.Creating,
+	}).WithProcessManagerForTest(NewTmuxBackend(mock))
 	// started deliberately left false: TmuxAlive() would report false here,
 	// but IsBackendProcessAlive() must not gate on it.
 
@@ -64,11 +63,10 @@ func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
 // never need a live session to answer this safely.
 func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
 	mock := &mockTmuxManager{hasSessionReturn: false, existsNoCacheReturn: true}
-	inst := &Instance{
-		Title:          "t",
-		Status:         domain.Creating,
-		processManager: NewTmuxBackend(mock),
-	}
+	inst := (&Instance{
+		Title:  "t",
+		Status: domain.Creating,
+	}).WithProcessManagerForTest(NewTmuxBackend(mock))
 
 	if inst.IsBackendProcessAlive() {
 		t.Error("IsBackendProcessAlive() = true, want false when HasSession() is false (no backend session object exists yet)")
@@ -91,15 +89,14 @@ func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
 func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T) {
 	const uuid = "550e8400-e29b-41d4-a716-446655440000"
 	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false}
-	inst := &Instance{
-		Title:          "t",
-		Program:        "claude",
-		processManager: NewTmuxBackend(mock),
-		LaunchCommand:  "claude", // stale command baked in before the crash, with no --resume
-	}
+	inst := (&Instance{
+		Title:         "t",
+		Program:       "claude",
+		LaunchCommand: "claude", // stale command baked in before the crash, with no --resume
+	}).WithProcessManagerForTest(NewTmuxBackend(mock))
 	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: uuid})
 
-	inst.initTmuxSession()
+	inst.InitTmuxSessionForTest()
 
 	if !strings.Contains(inst.LaunchCommand, "--resume") || !strings.Contains(inst.LaunchCommand, uuid) {
 		t.Errorf("LaunchCommand = %q, want it rebuilt with \"--resume %s\" (pointer stale but IsAlive()==false must not short-circuit the rebuild)", inst.LaunchCommand, uuid)
@@ -112,7 +109,7 @@ func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T)
 // GetTmuxSession().RestoreWithWorkDir().
 func TestRestoreProcess_DelegatesToProcessManager(t *testing.T) {
 	mock := &mockTmuxManager{restoreReturn: errRestoreFailedForTest}
-	inst := &Instance{Title: "t", processManager: NewTmuxBackend(mock)}
+	inst := (&Instance{Title: "t"}).WithProcessManagerForTest(NewTmuxBackend(mock))
 
 	err := inst.RestoreProcess("/some/dir")
 
@@ -153,14 +150,13 @@ func TestInitTmuxSession_ReuseRequiresAliveNotJustConstructed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			mock := &mockTmuxManager{hasSessionReturn: tc.hasSession, isAliveReturn: tc.isAlive}
-			inst := &Instance{
-				Title:          "t",
-				Program:        "some-other-program",
-				processManager: NewTmuxBackend(mock),
-				LaunchCommand:  sentinel,
-			}
+			inst := (&Instance{
+				Title:         "t",
+				Program:       "some-other-program",
+				LaunchCommand: sentinel,
+			}).WithProcessManagerForTest(NewTmuxBackend(mock))
 
-			inst.initTmuxSession()
+			inst.InitTmuxSessionForTest()
 
 			rebuilt := inst.LaunchCommand != sentinel
 			if rebuilt != tc.wantRebuild {
@@ -315,7 +311,8 @@ func wantPiStderrRedirect(t *testing.T, inst *Instance) string {
 
 func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &domain.PiSessionData{SessionID: "abc123"}}}
+	inst := &Instance{Program: "pi"}
+	inst.SetPiSessionID("abc123")
 	got := inst.buildLaunchCommand("")
 	want := "pi --session 'abc123'" + wantPiStderrRedirect(t, inst)
 	if got != want {
@@ -1380,8 +1377,8 @@ func TestInstance_ResizePTY_should_RejectNonPositiveDimensions_WithoutReachingSe
 }
 
 func TestInstance_CanFallBackToTmuxSendKeys_OnlyForATmuxBackend(t *testing.T) {
-	tmuxInst := &Instance{Title: "t", processManager: NewTmuxBackend(&TmuxProcessManager{})}
-	tymuxInst := &Instance{Title: "t", processManager: NewTymuxBackend(nil)}
+	tmuxInst := (&Instance{Title: "t"}).WithProcessManagerForTest(NewTmuxBackend(&TmuxProcessManager{}))
+	tymuxInst := (&Instance{Title: "t"}).WithProcessManagerForTest(NewTymuxBackend(nil))
 
 	assert.True(t, tmuxInst.CanFallBackToTmuxSendKeys())
 	assert.False(t, tymuxInst.CanFallBackToTmuxSendKeys())

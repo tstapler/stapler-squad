@@ -362,11 +362,11 @@ func TestAutonomousDriver_run_should_suppressSend_When_NextMessageMatchesLastNud
 
 	inst := &Instance{Title: "test-suppress", UUID: "abcdefgh-1234"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	fakePM := &fakeSendKeysProcessManager{}
-	inst.processManager = fakePM
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -427,11 +427,11 @@ func TestAutonomousDriver_run_should_sendBoth_When_NextMessagesDiffer(t *testing
 
 	inst := &Instance{Title: "test-distinct", UUID: "abcdefgh-5678"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	fakePM := &fakeSendKeysProcessManager{}
-	inst.processManager = fakePM
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -499,11 +499,11 @@ func TestAutonomousDriver_SuppressesDuplicateNudge_When_PaneUnchanged(t *testing
 
 	inst := &Instance{Title: "test-suppress-pane-unchanged", UUID: "abcdefgh-punc"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	fakePM := &fakeSendKeysProcessManager{}
-	inst.processManager = fakePM
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	// Every Preview() call (pre-call tail, post-SendKeys delivery capture,
 	// and the DONE-branch capture) returns identical content, simulating a
@@ -582,11 +582,11 @@ func TestAutonomousDriver_run_should_useDeliveryTimeSnapshot_When_PaneChangesDur
 
 	inst := &Instance{Title: "test-delivery-snapshot", UUID: "abcdefgh-dsnap"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	fakePM := &fakeSendKeysProcessManager{}
-	inst.processManager = fakePM
-	inst.started.Store(true)
+	inst.SetProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	// Preview() call order within run(): turn1 pre-call tail, turn1
 	// post-SendKeys delivery capture, turn2 pre-call tail, (DONE branch
@@ -652,7 +652,7 @@ func TestAutonomousDriver_MaxTurnsLimit(t *testing.T) {
 
 	inst := &Instance{Title: "test-max-turns", UUID: "abcdefgh-1234"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -698,7 +698,7 @@ func TestAutonomousDriver_DoneSignal(t *testing.T) {
 
 	inst := &Instance{Title: "test-done", UUID: "abcdefgh-5678"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -744,7 +744,7 @@ func TestAutonomousDriver_IdempotencyGuard(t *testing.T) {
 
 	inst := &Instance{Title: "test-idempotent", UUID: "abcdefgh-9999"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -781,7 +781,7 @@ func TestAutonomousDriver_StatusChannelSignal(t *testing.T) {
 
 	inst := &Instance{Title: "test-channel", UUID: "abcdefgh-7777"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -820,7 +820,7 @@ func TestAutonomousDriver_PanicRecovery(t *testing.T) {
 
 	inst := &Instance{Title: "test-panic", UUID: "abcdefgh-panic0"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -854,7 +854,7 @@ func TestAutonomousDriver_Stop_CancelsLoop(t *testing.T) {
 
 	inst := &Instance{Title: "test-stop", UUID: "abcdefgh-stop0"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -903,7 +903,7 @@ func TestAutonomousDriver_Stop_CancelsLoop_DuringNudgeSuppression(t *testing.T) 
 
 	inst := &Instance{Title: "test-stop-suppressed", UUID: "abcdefgh-stop1"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -974,7 +974,7 @@ func TestAutonomousDriver_Wait_BlocksUntilRunExits(t *testing.T) {
 
 	inst := &Instance{Title: "test-wait-blocks", UUID: "abcdefgh-wait0"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -1034,7 +1034,7 @@ func TestAutonomousDriver_Wait_RespectsOwnContextTimeout(t *testing.T) {
 
 	inst := &Instance{Title: "test-wait-timeout", UUID: "abcdefgh-wait1"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -1091,7 +1091,7 @@ func TestAutonomousDriver_NilPool_Start(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "test-nil-pool", UUID: "abcdef12-nil"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:         inst,
@@ -1113,7 +1113,7 @@ func TestAutonomousDriver_ShortUUID(t *testing.T) {
 	}
 	inst := &Instance{Title: "short-uuid-test", UUID: "abc"} // 3 chars, less than 8
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := &AutonomousDriver{
 		inst:                   inst,
@@ -1389,7 +1389,7 @@ func TestAutonomousDriver_run_should_neverFireTurnCallback_When_OnlyBatchedToolC
 
 	inst := &Instance{Title: "test-batched-summary-startup", UUID: "abcdefgh-wfi5"}
 	cc, _ := claudectltest.NewController(batchedSummary)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	driver := NewAutonomousDriver(inst, pool, "goal", 5, WithStartupTimeout(150*time.Millisecond))
 
@@ -1431,7 +1431,7 @@ func TestNewAutonomousDriver_ConfigurableStartupTimeout(t *testing.T) {
 	pool := &fakeHeadlessPool{}
 	inst := &Instance{Title: "test-timeout", UUID: "abcdefgh-tout"}
 	cc, _ := claudectl.NewClaudeController(inst)
-	inst.controllerManager.controller.Store(cc)
+	inst.SetControllerForTest(cc)
 
 	// Custom timeout
 	d := NewAutonomousDriver(inst, pool, "goal", 0, WithStartupTimeout(5*time.Minute))

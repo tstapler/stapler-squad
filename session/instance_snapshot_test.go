@@ -181,7 +181,7 @@ func TestSetAutonomousCompleteActorRouted(t *testing.T) {
 
 	inst.AutonomousMode = true
 	inst.AutonomousTurn = 5
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.PublishSnapshotForTest()
 
 	inst.SetAutonomousComplete(true)
 
@@ -201,7 +201,7 @@ func TestSnapshotReflectsClearConversationState(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.HistoryFilePath = "/some/path"
-	inst.snapshot.Store(buildSnapshot(inst)) // prime snapshot with the path
+	inst.PublishSnapshotForTest() // prime snapshot with the path
 	if inst.Snapshot().HistoryFilePath == "" {
 		t.Skip("prime failed — HistoryFilePath not in snapshot")
 	}
@@ -258,7 +258,7 @@ func TestInstanceSnapshot_should_DeepCopyRuleTagProvenance_When_SnapshotTaken(t 
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.PublishSnapshotForTest()
 	snap := inst.Snapshot()
 
 	snap.RuleTagProvenance["Bugfix"] = "mutated"
@@ -272,7 +272,7 @@ func TestInstanceSnapshot_should_DeepCopySuppressedRuleTags_When_SnapshotTaken(t
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.SuppressedRuleTags = map[string]bool{"Bugfix": true}
-	inst.snapshot.Store(buildSnapshot(inst))
+	inst.PublishSnapshotForTest()
 	snap := inst.Snapshot()
 
 	snap.SuppressedRuleTags["Bugfix"] = false
@@ -298,7 +298,7 @@ func minimalInstance(t *testing.T) *Instance {
 		IsManaged:   true,
 		Permissions: domain.GetManagedPermissions(),
 	}
-	i.tagManager = NewTagManager(&i.Tags)
+	i.InitTagManagerForTest()
 	FinishInstanceConstruction(i)
 	return i
 }

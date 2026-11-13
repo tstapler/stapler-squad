@@ -95,15 +95,15 @@ func TestPRActions_ShouldNeverTargetPRZero_WhenSessionHasNoPR(t *testing.T) {
 
 func TestResolvePR_ShouldReturnCurrentPRAndRejectNonPRSession(t *testing.T) {
 	t.Parallel()
-	got, err := newTwoPRInstance(t).resolvePR(nil)
+	got, err := newTwoPRInstance(t).ResolvePRForTest(nil)
 	require.NoError(t, err)
 	require.Equal(t, 12, got.Number())
 
 	explicit := mustPRRef(t, "", "acme", "app", 11)
-	got, err = newTwoPRInstance(t).resolvePR(&explicit)
+	got, err = newTwoPRInstance(t).ResolvePRForTest(&explicit)
 	require.NoError(t, err)
 	require.Equal(t, explicit, got)
 
-	_, err = (&Instance{Title: "plain"}).resolvePR(nil)
+	_, err = (&Instance{Title: "plain"}).ResolvePRForTest(nil)
 	require.ErrorContains(t, err, "is not a PR session")
 }

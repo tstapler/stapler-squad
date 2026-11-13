@@ -391,7 +391,9 @@ func TestStartSessionDriver_Idempotent(t *testing.T) {
 	// Pre-set driverRunning = true to simulate an already-running driver.
 	// This is the state the instance would be in after the first StartSessionDriver call
 	// while the goroutine is still executing.
-	inst.driverRunning.Store(true)
+	if _, err := inst.BeginDriverRun(); err != nil {
+		t.Fatalf("BeginDriverRun: %v", err)
+	}
 
 	// This call must be a no-op because driverRunning is already true.
 	// StartSessionDriver checks CompareAndSwap(false, true) — when driverRunning is true,
@@ -399,7 +401,7 @@ func TestStartSessionDriver_Idempotent(t *testing.T) {
 	StartSessionDriver(inst, "/tmp")
 
 	// driverRunning should still be true (the no-op call did not reset it).
-	if !inst.driverRunning.Load() {
+	if !inst.DriverRunning() {
 		t.Error("driverRunning should still be true after no-op second call")
 	}
 }
@@ -435,12 +437,11 @@ func TestMarkSessionNeedsAttention_NilReviewQueue(t *testing.T) {
 func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	t.Parallel()
 	rq := queue.NewReviewQueue()
-	inst := &Instance{
-		Title:       "test-second-failure",
-		UUID:        "test-uuid-second-fail",
-		reviewQueue: rq,
-		Status:      domain.Stopped,
-	}
+	inst := (&Instance{
+		Title:  "test-second-failure",
+		UUID:   "test-uuid-second-fail",
+		Status: domain.Stopped,
+	}).WithReviewQueueForTest(rq)
 	inst.RetryAttempt = 1
 	inst.RetryMaxAttempts = 1 // already at cap — next failure is exhausted
 
@@ -962,13 +963,12 @@ func shrinkDriverTiming(t *testing.T) driverTiming {
 
 func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDialogProcessManager, logMsg string) {
 	t.Helper()
-	inst := &Instance{
-		Title:          title,
-		Status:         domain.Active,
-		processManager: fakePM,
-		InitialPrompt:  driverInitialPrompt,
-	}
-	inst.started.Store(true)
+	inst := (&Instance{
+		Title:         title,
+		Status:        domain.Active,
+		InitialPrompt: driverInitialPrompt,
+	}).WithProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	timing := shrinkDriverTiming(t)
 	StartSessionDriver(inst, "/tmp")
@@ -994,7 +994,7 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	// old Status=Paused-and-hope-it-notices approach which could leak both
 	// goroutines past the test's own lifetime.
 	StopSessionDriver(inst)
-	if inst.driverRunning.Load() {
+	if inst.DriverRunning() {
 		t.Fatal("driverRunning still true after StopSessionDriver returned")
 	}
 }
@@ -1278,23 +1278,13 @@ func TestAnswerDialogOnce(t *testing.T) {
 // callers that need one can still clean up via the real StopSessionDriver,
 // rather than hand-rolling stop/done channels outside the Start/Stop wrapper.
 func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string, policy RetryPolicy) {
-	inst.driverMu.Lock()
-	if inst.driverDestroyed {
-		inst.driverMu.Unlock()
+	stop, err := inst.BeginDriverRun()
+	if err != nil {
 		return
 	}
-	if !inst.driverRunning.CompareAndSwap(false, true) {
-		inst.driverMu.Unlock()
-		return
-	}
-	stopper := &sessionDriverStopper{stop: make(chan struct{})}
-	inst.driverWG.Add(1)
-	inst.driverStopper.Store(stopper)
-	inst.driverMu.Unlock()
 	go func() {
-		defer inst.driverWG.Done()
-		defer inst.driverRunning.Store(false)
-		runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, policy, stopper.stop)
+		defer inst.FinishDriverGoroutine()
+		runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, policy, stop)
 	}()
 }
 
@@ -1316,14 +1306,12 @@ func startSessionDriverForTest(inst *Instance, allowedPath, initialPrompt string
 // RetryAttempt already at RetryMaxAttempts simulates "already retried once"
 // so the second-failure path fires directly.
 func newDialogGiveUpEscalationInstance(fakePM *stuckDialogProcessManager) (*Instance, RetryPolicy) {
-	inst := &Instance{
-		Title:          "dialog-give-up-escalation",
-		UUID:           "test-uuid-give-up-escalation",
-		Status:         domain.Active,
-		processManager: fakePM,
-		reviewQueue:    queue.NewReviewQueue(),
-	}
-	inst.started.Store(true)
+	inst := ((&Instance{
+		Title:  "dialog-give-up-escalation",
+		UUID:   "test-uuid-give-up-escalation",
+		Status: domain.Active,
+	}).WithReviewQueueForTest(queue.NewReviewQueue())).WithProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 	inst.RetryAttempt = 1
 	inst.RetryMaxAttempts = 1
 	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
@@ -1379,7 +1367,7 @@ func waitForSendKeysCountAbove(t *testing.T, fakePM *stuckDialogProcessManager, 
 func waitForDriverRunning(t *testing.T, inst *Instance) {
 	t.Helper()
 	deadline := time.After(time.Second)
-	for !inst.driverRunning.Load() {
+	for !inst.DriverRunning() {
 		select {
 		case <-deadline:
 			t.Fatal("driver goroutine never marked itself running")
@@ -1413,14 +1401,12 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	fakePM := &stuckDialogProcessManager{pollEntered: make(chan struct{})}
 
-	inst := &Instance{
-		Title:          "concurrent-stop-test",
-		UUID:           "test-uuid-concurrent-stop",
-		Status:         domain.Active,
-		processManager: fakePM,
-		reviewQueue:    queue.NewReviewQueue(),
-	}
-	inst.started.Store(true)
+	inst := ((&Instance{
+		Title:  "concurrent-stop-test",
+		UUID:   "test-uuid-concurrent-stop",
+		Status: domain.Active,
+	}).WithReviewQueueForTest(queue.NewReviewQueue())).WithProcessManagerForTest(fakePM)
+	inst.MarkStarted()
 
 	StartSessionDriver(inst, t.TempDir())
 	waitForDriverRunning(t, inst)
@@ -1433,7 +1419,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 
 	stopSessionDriverConcurrently(t, inst)
 
-	if inst.driverRunning.Load() {
+	if inst.DriverRunning() {
 		t.Fatal("driverRunning still true after StopSessionDriver returned")
 	}
 
@@ -1442,7 +1428,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 	// A refused start returns synchronously without spawning; if it did spawn,
 	// the deferred goleak.VerifyNone below catches the leaked goroutine.
 	StartSessionDriver(inst, t.TempDir())
-	if inst.driverRunning.Load() {
+	if inst.DriverRunning() {
 		t.Fatal("StartSessionDriver spawned a new driver goroutine after the instance was destroyed")
 	}
 
@@ -1563,7 +1549,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &Instance{Title: "archived-retry-test", Status: domain.Stopped, ArchivedAt: &archivedAt}
-		inst.processManager = NewTmuxBackend(mock)
+		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 
 		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"tmux_exited"}}
 		shouldContinue, shouldReturn := handleDriverFailure(inst, "/tmp", policy, "tmux_exited", make(chan struct{}))
@@ -1586,7 +1572,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &Instance{Title: "live-retry-scheduled", Status: domain.Stopped}
-		inst.processManager = NewTmuxBackend(mock)
+		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 		inst.RetryAttempt = 0
 		inst.RetryMaxAttempts = 3
 
@@ -1605,7 +1591,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &Instance{Title: "live-retry-exhausted", Status: domain.Stopped}
-		inst.processManager = NewTmuxBackend(mock)
+		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 		inst.RetryAttempt = 1
 		inst.RetryMaxAttempts = 1 // already at cap
 
@@ -1630,7 +1616,7 @@ func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(
 		archivedAt := time.Now()
 		mock := &mockTmuxManager{}
 		inst := &Instance{Title: "archived-pending-retry", Status: domain.Stopped, ArchivedAt: &archivedAt}
-		inst.processManager = NewTmuxBackend(mock)
+		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 		inst.NextRetryAt = time.Now().Add(-time.Minute) // already elapsed
 
 		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
@@ -1651,7 +1637,7 @@ func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(
 		t.Parallel()
 		mock := &mockTmuxManager{}
 		inst := &Instance{Title: "live-pending-retry", Status: domain.Stopped}
-		inst.processManager = NewTmuxBackend(mock)
+		inst.SetProcessManagerForTest(NewTmuxBackend(mock))
 		inst.NextRetryAt = time.Now().Add(time.Hour) // not yet elapsed
 
 		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"crashed"}}
