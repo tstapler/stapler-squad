@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -23,7 +23,7 @@ const attributeKeyResolvedSessionType = attribute.Key("resolved_session_type")
 
 // collectWorktreeMismatchMetric returns
 // session_creation_worktree_type_mismatch_total's current collected data, or
-// nil if it has no recorded data points yet. Reuses sessiontest.TestPiMetricReader (the
+// nil if it has no recorded data points yet. Reuses fixturetest.TestPiMetricReader (the
 // single process-lifetime manual reader installed by
 // pi_status_source_metrics_test.go's init() — only the first
 // otel.SetMeterProvider call in this test binary wins, per that file's own
@@ -31,7 +31,7 @@ const attributeKeyResolvedSessionType = attribute.Key("resolved_session_type")
 func collectWorktreeMismatchMetric(t *testing.T) *metricdata.Metrics {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
-	require.NoError(t, sessiontest.TestPiMetricReader.Collect(context.Background(), &rm))
+	require.NoError(t, fixturetest.TestPiMetricReader.Collect(context.Background(), &rm))
 	for _, sm := range rm.ScopeMetrics {
 		for i := range sm.Metrics {
 			if sm.Metrics[i].Name == "session_creation_worktree_type_mismatch_total" {
@@ -78,7 +78,7 @@ func TestStartLocked_should_RecordInvariantMetricAndWarn_When_NewWorktreeRequest
 	before := collectWorktreeMismatchMetric(t)
 	baseline := sumForResolvedSessionType(t, before, string(domain.SessionTypeDirectory))
 
-	handler := sessiontest.InstallRecordingHandler(t)
+	handler := fixturetest.InstallRecordingHandler(t)
 	repoDir := t.TempDir()
 	now := time.Now().UnixNano()
 	title := fmt.Sprintf("worktree-type-mismatch-%d", now)
@@ -89,7 +89,7 @@ func TestStartLocked_should_RecordInvariantMetricAndWarn_When_NewWorktreeRequest
 		SessionType:          domain.SessionTypeDirectory,
 		RequestedNewWorktree: true, // the mismatch: the original request asked for SESSION_TYPE_NEW_WORKTREE
 		TmuxPrefix:           fmt.Sprintf("test_worktreemismatch_%d_", now),
-		TmuxServerSocket:     sessiontest.ColdRestoreSocket(t),
+		TmuxServerSocket:     fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() { _ = cleanup() }()

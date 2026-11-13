@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 )
 
 // T-WL-11
@@ -18,7 +18,7 @@ func TestTerminalWriteLeaseFlag_ShouldSerializeWhenOnAndReturnANonExclusiveLease
 	assert.True(t, (&LeaseFlag{}).Enabled(), "default on")
 
 	flag := &LeaseFlag{}
-	inst := &Instance{Title: "flag", UUID: sessiontest.FakeLeaseOwner}
+	inst := &Instance{Title: "flag", UUID: fixturetest.FakeLeaseOwner}
 	inst.SetLeaseFlag(flag)
 
 	a, ok := inst.TryTerminalWriteLease(LeaseWriterSteer)
@@ -36,7 +36,7 @@ func TestTerminalWriteLeaseFlag_ShouldSerializeWhenOnAndReturnANonExclusiveLease
 	require.NoError(t, err)
 
 	// The capability types keep working with the flag off; a zero value is still refused.
-	pane := sessiontest.NewFakePaneSubmitter()
+	pane := fixturetest.NewFakePaneSubmitter()
 	pane.Updates = []bool{true}
 	require.ErrorIs(t, SubmitDriverContent(context.Background(), pane, &HeldLease{}, "x", time.Millisecond, time.Millisecond), ErrNoLease)
 	require.NoError(t, SendKeysWithTimeout(context.Background(), pane, b, "x", time.Second))

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -28,7 +28,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 	}
 
 	// Initialize git repo, configure user, and create initial commit
-	sessiontest.InitTestRepoForReviewQueue(t, repoPath)
+	fixturetest.InitTestRepoForReviewQueue(t, repoPath)
 
 	// Create worktree for testing
 	worktree, branchName, err := git.NewGitWorktree(repoPath, "test-session")
@@ -47,7 +47,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Create test instance with worktree
 	now := time.Now()
-	instance := (&Instance{
+	inst := (&Instance{
 		Title:       "test-uncommitted-changes",
 		Path:        repoPath,
 		Branch:      branchName,
@@ -56,13 +56,13 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}).WithWorktreeForTest(worktree)
-	instance.MarkStarted()
+	inst.MarkStarted()
 
 	// Create review queue infrastructure
 	queue := queuepkg.NewReviewQueue()
 	statusManager := NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusManager, nil)
-	poller.AddInstance(instance)
+	poller.AddInstance(inst)
 
 	// Tests 1-3 below are NOT t.Parallel(): they form a single required
 	// narrative sequence (clean -> dirty -> committed) sharing one queue,
@@ -76,8 +76,8 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 
 	// Test 1: Clean worktree (no uncommitted changes) should not be added to queue
 	t.Run("clean_worktree_not_added", func(t *testing.T) {
-		poller.checkSession(instance, nil)
-		if queue.Has(instance.Title) {
+		poller.checkSession(inst, nil)
+		if queue.Has(inst.Title) {
 			t.Error("Expected clean worktree to not be in review queue")
 		}
 	})
@@ -95,14 +95,14 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		worktree.InvalidateDirtyCache()
 
 		// Check session - should detect uncommitted changes
-		poller.checkSession(instance, nil)
+		poller.checkSession(inst, nil)
 
 		// Verify added to queue with correct reason
-		if !queue.Has(instance.Title) {
+		if !queue.Has(inst.Title) {
 			t.Error("Expected uncommitted changes to add session to queue")
 		}
 
-		item, exists := queue.Get(instance.Title)
+		item, exists := queue.Get(inst.Title)
 		if !exists {
 			t.Fatal("Expected item to exist in queue")
 		}
@@ -128,10 +128,10 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		}
 
 		// Check session again - should be removed from queue
-		poller.checkSession(instance, nil)
+		poller.checkSession(inst, nil)
 
-		if queue.Has(instance.Title) {
-			item, _ := queue.Get(instance.Title)
+		if queue.Has(inst.Title) {
+			item, _ := queue.Get(inst.Title)
 			if item.Reason == queuepkg.ReasonUncommittedChanges {
 				t.Error("Expected committed changes to remove session from queue")
 			}
@@ -221,7 +221,7 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 	t.Parallel()
 	// Create test instance WITHOUT worktree (directory session)
 	now := time.Now()
-	instance := (&Instance{
+	inst := (&Instance{
 		Title:       "test-no-worktree",
 		Path:        "/tmp/test-path",
 		Branch:      "",
@@ -230,20 +230,20 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}).WithWorktreeForTest(nil)
-	instance.MarkStarted()
+	inst.MarkStarted()
 
 	// Create review queue infrastructure
 	queue := queuepkg.NewReviewQueue()
 	statusManager := NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusManager, nil)
-	poller.AddInstance(instance)
+	poller.AddInstance(inst)
 
 	// Check session - should not crash and not add to queue for uncommitted changes
-	poller.checkSession(instance, nil)
+	poller.checkSession(inst, nil)
 
 	// If added to queue, it should NOT be for uncommitted changes
-	if queue.Has(instance.Title) {
-		item, _ := queue.Get(instance.Title)
+	if queue.Has(inst.Title) {
+		item, _ := queue.Get(inst.Title)
 		if item.Reason == queuepkg.ReasonUncommittedChanges {
 			t.Error("Expected session without worktree to not be added for uncommitted changes")
 		}
@@ -267,7 +267,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	sessiontest.InitTestRepoForReviewQueue(t, repoPath)
+	fixturetest.InitTestRepoForReviewQueue(t, repoPath)
 
 	// Create worktree
 	worktree, branchName, err := git.NewGitWorktree(repoPath, "integration-session")
@@ -285,7 +285,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 
 	// Create instance
 	now := time.Now()
-	instance := (&Instance{
+	inst := (&Instance{
 		Title:       "integration-test",
 		Path:        repoPath,
 		Branch:      branchName,
@@ -294,7 +294,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}).WithWorktreeForTest(worktree)
-	instance.MarkStarted()
+	inst.MarkStarted()
 
 	// Create review queue with poller
 	queue := queuepkg.NewReviewQueue()
@@ -303,7 +303,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	pollerCfg.PollInterval = 100 * time.Millisecond
 	pollerCfg.SlowPollInterval = 100 * time.Millisecond
 	poller := NewReviewQueuePollerWithConfig(queue, statusManager, nil, pollerCfg)
-	poller.AddInstance(instance)
+	poller.AddInstance(inst)
 
 	// Start polling in background
 	ctx, cancel := context.WithCancel(context.Background())
@@ -322,7 +322,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	}
 
 	// Verify initially clean (not in queue)
-	if queue.Has(instance.Title) {
+	if queue.Has(inst.Title) {
 		t.Error("Expected clean worktree to not be in queue initially")
 	}
 
@@ -339,17 +339,17 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	detectCfg := wait.DefaultWaitConfig()
 	detectCfg.Description = "uncommitted changes detected"
 	if err := wait.WaitForCondition(func() bool {
-		return queue.Has(instance.Title)
+		return queue.Has(inst.Title)
 	}, detectCfg); err != nil {
 		t.Fatalf("poller failed to detect uncommitted changes: %v", err)
 	}
 
 	// Verify detected and added to queue
-	if !queue.Has(instance.Title) {
+	if !queue.Has(inst.Title) {
 		t.Error("Expected uncommitted changes to be detected by poller")
 	}
 
-	item, exists := queue.Get(instance.Title)
+	item, exists := queue.Get(inst.Title)
 	if !exists {
 		t.Fatal("Expected item to exist in queue")
 	}
@@ -367,18 +367,18 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	committedCfg := wait.DefaultWaitConfig()
 	committedCfg.Description = "committed state detected"
 	if err := wait.WaitForCondition(func() bool {
-		if !queue.Has(instance.Title) {
+		if !queue.Has(inst.Title) {
 			return true
 		}
-		updatedItem, _ := queue.Get(instance.Title)
+		updatedItem, _ := queue.Get(inst.Title)
 		return updatedItem.Reason != queuepkg.ReasonUncommittedChanges
 	}, committedCfg); err != nil {
 		t.Fatalf("poller failed to detect committed state: %v", err)
 	}
 
 	// Verify removed from queue (or reason changed)
-	if queue.Has(instance.Title) {
-		updatedItem, _ := queue.Get(instance.Title)
+	if queue.Has(inst.Title) {
+		updatedItem, _ := queue.Get(inst.Title)
 		if updatedItem.Reason == queuepkg.ReasonUncommittedChanges {
 			t.Error("Expected committed changes to remove UncommittedChanges reason from queue")
 		}

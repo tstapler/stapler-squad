@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -25,7 +25,7 @@ import (
 func TestMarkStartedIfTmuxAlive_should_TransitionCreatingToActiveAndFireEvent_When_StartedIsFalse(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "test-mark-started-creating", Status: domain.Creating}
-	recorder := &sessiontest.MarkStartedRecorder{}
+	recorder := &fixturetest.MarkStartedRecorder{}
 	inst.RegisterLifecycleListener(recorder)
 
 	require.False(t, inst.Started())
@@ -44,7 +44,7 @@ func TestMarkStartedIfTmuxAlive_should_TransitionCreatingToActiveAndFireEvent_Wh
 func TestMarkStartedIfTmuxAlive_should_OnlySetStarted_When_AlreadyActive(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "test-mark-started-active", Status: domain.Active}
-	recorder := &sessiontest.MarkStartedRecorder{}
+	recorder := &fixturetest.MarkStartedRecorder{}
 	inst.RegisterLifecycleListener(recorder)
 
 	inst.MarkStartedIfTmuxAlive()
@@ -62,7 +62,7 @@ func TestMarkStartedIfTmuxAlive_should_BeNoOp_When_AlreadyStarted(t *testing.T) 
 	t.Parallel()
 	inst := &Instance{Title: "test-mark-started-noop", Status: domain.Active}
 	inst.started.Store(true)
-	recorder := &sessiontest.MarkStartedRecorder{}
+	recorder := &fixturetest.MarkStartedRecorder{}
 	inst.RegisterLifecycleListener(recorder)
 
 	inst.MarkStartedIfTmuxAlive()
@@ -85,7 +85,7 @@ func TestMarkStartedIfTmuxAlive_should_NotOverride_When_StatusIsPausedStoppedOrP
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			inst := &Instance{Title: "test-mark-started-" + status.String(), Status: status}
-			recorder := &sessiontest.MarkStartedRecorder{}
+			recorder := &fixturetest.MarkStartedRecorder{}
 			inst.RegisterLifecycleListener(recorder)
 
 			inst.MarkStartedIfTmuxAlive()
@@ -111,7 +111,7 @@ func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCal
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-mark-started-race-%d", time.Now().UnixNano())
 	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
@@ -121,7 +121,7 @@ func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCal
 		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_markstarted_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {

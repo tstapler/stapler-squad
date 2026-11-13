@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 	"go.uber.org/goleak"
 )
 
@@ -64,7 +64,7 @@ func simulateHandleDriverFailureRetryInterleaving(inst *Instance, stopper *sessi
 
 func TestStopSessionDriver_WaitsForHandleDriverFailureRetryGoroutine_NoGoroutineLeak(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, append(sessiontest.KnownBackgroundGoroutines, baseline)...)
+	defer goleak.VerifyNone(t, append(fixturetest.KnownBackgroundGoroutines, baseline)...)
 
 	inst := &Instance{Title: "test-stop-waits-for-retry"}
 	stopper := &sessionDriverStopper{stop: make(chan struct{})}

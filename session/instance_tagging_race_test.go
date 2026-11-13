@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -76,7 +76,7 @@ func TestReclassifyTagsAfterCreate_should_AcquireOwnLock_When_CalledConcurrently
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	base := t.TempDir()
 	projectDir := base + "/lock-order-race-project"
@@ -89,13 +89,13 @@ func TestReclassifyTagsAfterCreate_should_AcquireOwnLock_When_CalledConcurrently
 		SessionType:      domain.SessionTypeNewProject,
 		Branch:           "bugfix/lock-order-race",
 		TmuxPrefix:       fmt.Sprintf("test_taglockrace_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() { _ = cleanup() }()
 
 	engine := classifier.NewTaggingEngine()
-	engine.ReplaceRules([]classifier.TaggingRule{sessiontest.BugfixSeedRule()})
+	engine.ReplaceRules([]classifier.TaggingRule{fixturetest.BugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 
 	stopReading := make(chan struct{})

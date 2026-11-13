@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -874,7 +874,7 @@ func testSessionCreationFileSystem(t *testing.T) {
 func testSessionCreationWorktreeManagement(t *testing.T) {
 	t.Run("NewWorktreeCreation", func(t *testing.T) {
 		// Create a git repository
-		tempRepo := sessiontest.SetupTestRepository(t)
+		tempRepo := fixturetest.SetupTestRepository(t)
 		defer func() {
 			if err := os.RemoveAll(tempRepo); err != nil {
 				t.Logf("Failed to remove temp repo: %v", err)

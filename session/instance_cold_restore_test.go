@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -26,7 +26,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 
@@ -37,7 +37,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -85,7 +85,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 
@@ -96,7 +96,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -153,7 +153,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-%d", time.Now().UnixNano())
 	fakeHome := t.TempDir()
@@ -161,11 +161,11 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
-		Program:          sessiontest.StubClaudeBinary(t),
+		Program:          fixturetest.StubClaudeBinary(t),
 		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -181,7 +181,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	// PID fast path — a nil inspector would panic there. Same convention as
 	// history_linker_test.go's "no open files → always falls through to
 	// DetectByPath" mocks.
-	inst.historyDetector = NewHistoryFileDetectorWithHomeDir(&sessiontest.MockProcessInspector{Files: []string{}}, fakeHome)
+	inst.historyDetector = NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome)
 	const fixtureUUID = "550e8400-e29b-41d4-a716-446655440000"
 	writeJSONLFixture(t, fakeHome, inst.Path, fixtureUUID, time.Time{})
 
@@ -230,11 +230,11 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-hot-%d", time.Now().UnixNano())
 	tmpDir := t.TempDir()
-	socket := sessiontest.ColdRestoreSocket(t)
+	socket := fixturetest.ColdRestoreSocket(t)
 	prefix := fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano())
 
 	// First instance: create and start normally to put a live tmux session in place.
@@ -301,7 +301,7 @@ func TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHas
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	t.Run("oneshot_review_tag_stays_stopped", func(t *testing.T) {
 		t.Parallel()
@@ -350,7 +350,7 @@ func newLiveSleepInstance(t *testing.T) (inst *Instance, title, tmpDir, prefix, 
 	t.Helper()
 	title = fmt.Sprintf("test-oneshot-revive-%d", time.Now().UnixNano())
 	tmpDir = t.TempDir()
-	socket = sessiontest.ColdRestoreSocket(t)
+	socket = fixturetest.ColdRestoreSocket(t)
 	prefix = fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano())
 
 	inst, cleanup, err := NewInstanceWithCleanup(sleepInstanceOptions(title, tmpDir, prefix, socket))
@@ -457,7 +457,7 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 				Path:            tmpDir,
 				SessionType:     domain.SessionTypeDirectory,
 				claudeExtension: claudeExtension{conversationClearedAt: clearedAt},
-				historyDetector: NewHistoryFileDetectorWithHomeDir(&sessiontest.MockProcessInspector{Files: []string{}}, fakeHome),
+				historyDetector: NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome),
 			}
 			writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, clearedAt.Add(tt.offset))
 
@@ -536,7 +536,7 @@ func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwn
 		UUID:            "session-b-uuid",
 		Path:            sharedPath,
 		SessionType:     domain.SessionTypeDirectory,
-		historyDetector: NewHistoryFileDetectorWithHomeDir(&sessiontest.MockProcessInspector{Files: []string{}}, fakeHome),
+		historyDetector: NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome),
 	}
 	instB.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(instB.UUID,
 		simulatedLiveInstance{uuid: sessionAUUID, conversationUUID: conversationUUID, path: sharedPath, alive: true},
@@ -569,7 +569,7 @@ func TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfReco
 		UUID:            "cold-restore-self-uuid",
 		Path:            tmpDir,
 		SessionType:     domain.SessionTypeDirectory,
-		historyDetector: NewHistoryFileDetectorWithHomeDir(&sessiontest.MockProcessInspector{Files: []string{}}, fakeHome),
+		historyDetector: NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{Files: []string{}}, fakeHome),
 	}
 	inst.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(inst.UUID,
 		simulatedLiveInstance{uuid: inst.UUID, conversationUUID: fixtureUUID, path: tmpDir, alive: true},

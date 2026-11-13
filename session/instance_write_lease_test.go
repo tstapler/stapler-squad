@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,7 +49,7 @@ func TestWriteLease_ShouldRefuseNilZeroAndForeignLeaseWithZeroWrites_WhenAnyWrit
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			pane := sessiontest.NewFakePaneSubmitter()
+			pane := fixturetest.NewFakePaneSubmitter()
 
 			l := tc.lease()
 			err := SubmitDriverContent(ctx, pane, l, "x", time.Millisecond, time.Millisecond)
@@ -359,10 +359,10 @@ func TestInitialPrompt_ShouldConsumeNoAttempt_WhenTheLeaseIsBusy(t *testing.T) {
 func TestEveryAcquirer_ShouldLeaveTheLeaseFreeOnEveryExitPath_WhenSuccessBusyWriteErrorCancelledContextAndEarlyReturnAreExercised(t *testing.T) {
 	t.Parallel()
 	// Each case gets its own instance bound to the fake pane's lease identity.
-	setup := func(t *testing.T, failOnCall int) (*Instance, *sessiontest.FakePaneSubmitter, *HeldLease) {
+	setup := func(t *testing.T, failOnCall int) (*Instance, *fixturetest.FakePaneSubmitter, *HeldLease) {
 		t.Helper()
-		inst := leaseInstance(t, sessiontest.FakeLeaseOwner)
-		pane := sessiontest.NewFakePaneSubmitter()
+		inst := leaseInstance(t, fixturetest.FakeLeaseOwner)
+		pane := fixturetest.NewFakePaneSubmitter()
 		pane.FailOnCall = failOnCall
 		lease, ok := inst.TryTerminalWriteLease(LeaseWriterOther)
 		require.True(t, ok)

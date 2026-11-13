@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +15,7 @@ import (
 
 func linkPR(t *testing.T, s *Storage, uuid string, n int, role domain.PRRole, at time.Time) {
 	t.Helper()
-	_, err := s.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid), sessiontest.MustPRRef(t, "", "acme", "app", n),
+	_, err := s.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid), fixturetest.MustPRRef(t, "", "acme", "app", n),
 		domain.PRLink{Role: role, Source: domain.AttachSourceManual, AttachedAt: at, Initial: domain.PRInitial{State: domain.PRStateOpen}})
 	require.NoError(t, err)
 }
@@ -87,7 +87,7 @@ func TestMirrorReconciler_ShouldOverwriteTombstonedValue_WhenSessionHasOtherLink
 	defer cleanup()
 	prLoadFixture(t, storage, "tombstoned", "u-tomb", "acme", "app", 12)
 	linkPR(t, storage, "u-tomb", 11, domain.PRRolePrimary, time.Now())
-	_, err := storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner("u-tomb"), sessiontest.MustPRRef(t, "", "acme", "app", 12))
+	_, err := storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner("u-tomb"), fixturetest.MustPRRef(t, "", "acme", "app", 12))
 	require.NoError(t, err)
 	inst := loadByTitle(t, storage, "tombstoned")
 	require.False(t, inst.Snapshot().GitHub.LegacyPRUnrepresented)
@@ -112,7 +112,7 @@ func TestMirrorReconciler_ShouldEndWithMirrorEqualToActivePR_WhenAttachApplyAndR
 	var wg sync.WaitGroup
 	for n := 1; n <= 8; n++ {
 		wg.Add(3)
-		ref := sessiontest.MustPRRef(t, "", "acme", "app", n)
+		ref := fixturetest.MustPRRef(t, "", "acme", "app", n)
 		go func() {
 			defer wg.Done()
 			_ = inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen})

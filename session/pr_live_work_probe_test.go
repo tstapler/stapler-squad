@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,7 +39,7 @@ func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*domain.Instan
 
 func TestLiveWorkProbe_ShouldMapSnapshotToLiveEndedIdle_AndHeldByLiveWorkShouldHoldOnErrorAndNilMeansToday(t *testing.T) {
 	t.Parallel()
-	now := sessiontest.PrTestEpoch
+	now := fixturetest.PrTestEpoch
 	archived := now.Add(-time.Hour)
 	mk := func(status domain.Status, lmca time.Time, mut func(*domain.InstanceSnapshot)) *domain.InstanceSnapshot {
 		s := &domain.InstanceSnapshot{Status: status, LastMeaningfulChangeAt: lmca, CreatedAt: now.Add(-3 * time.Hour)}
@@ -78,7 +78,7 @@ func TestLiveWorkProbe_ShouldMapSnapshotToLiveEndedIdle_AndHeldByLiveWorkShouldH
 
 func TestLiveWorkProbe_ShouldReturnNotLiveWithoutError_WhenSessionAbsentOrPersistedEnded(t *testing.T) {
 	t.Parallel()
-	now := sessiontest.PrTestEpoch
+	now := fixturetest.PrTestEpoch
 	archived := now
 	store := &fakeProbeInstanceStore{data: map[string]*domain.InstanceData{
 		"archived": {Status: domain.Active, ArchivedAt: &archived, LastMeaningfulOutput: now},
@@ -96,7 +96,7 @@ func TestLiveWorkProbe_ShouldReturnNotLiveWithoutError_WhenSessionAbsentOrPersis
 
 func TestLiveWorkProbe_ShouldHoldOnTransientErrorButOnlyForOneHour_AndRecoverOnSuccess(t *testing.T) {
 	t.Parallel()
-	now := sessiontest.PrTestEpoch
+	now := fixturetest.PrTestEpoch
 	store := &fakeProbeInstanceStore{err: errors.New("db busy")}
 	p := NewSnapshotLiveWorkProbe(fakeSnapshotSource{}, store)
 	before := LiveWorkResultCount(LiveWorkResultCapError)
@@ -120,7 +120,7 @@ func TestLiveWorkProbe_ShouldHoldOnTransientErrorButOnlyForOneHour_AndRecoverOnS
 
 func TestIsLiveWork_ShouldCapMidTurnSession_WhenNoChangeForOverOneHour(t *testing.T) {
 	t.Parallel()
-	now := sessiontest.PrTestEpoch
+	now := fixturetest.PrTestEpoch
 	f := LiveWorkFacts{Unended: true, Working: true, LastMeaningfulChangeAt: now.Add(-59 * time.Minute)}
 	assert.True(t, IsLiveWork(f, now, LiveWorkIdleWindow))
 	f.LastMeaningfulChangeAt = now.Add(-time.Hour)
@@ -134,42 +134,42 @@ func TestIsLiveWork_ShouldCapMidTurnSession_WhenNoChangeForOverOneHour(t *testin
 
 func TestLiveWorkHoldStart_ShouldUseFirstMerge_ThenLastPolled_ThenFirstObserved(t *testing.T) {
 	t.Parallel()
-	obs := sessiontest.PrTestEpoch.Add(5 * time.Hour)
+	obs := fixturetest.PrTestEpoch.Add(5 * time.Hour)
 	merged := func(n int, mergedAt, polled time.Time) domain.PRView {
 		t.Helper()
-		v := sessiontest.PrRow(t, n, domain.PRStateMerged, "")
+		v := fixturetest.PrRow(t, n, domain.PRStateMerged, "")
 		v.MergedAt, v.LastPolledAt = mergedAt, polled
 		return v
 	}
-	first, second := sessiontest.PrTestEpoch, sessiontest.PrTestEpoch.Add(30*time.Minute)
+	first, second := fixturetest.PrTestEpoch, fixturetest.PrTestEpoch.Add(30*time.Minute)
 	assert.Equal(t, first, LiveWorkHoldStart([]domain.PRView{merged(2, second, time.Time{}), merged(1, first, time.Time{})}, obs), "first merge, not the latest")
 	assert.Equal(t, second, LiveWorkHoldStart([]domain.PRView{merged(1, time.Time{}, second)}, obs), "zero merged_at falls back to last_polled_at")
 	assert.Equal(t, obs, LiveWorkHoldStart([]domain.PRView{merged(1, time.Time{}, time.Time{})}, obs), "no timestamps: first observation")
-	open := sessiontest.PrRow(t, 3, domain.PRStateOpen, "")
+	open := fixturetest.PrRow(t, 3, domain.PRStateOpen, "")
 	assert.Equal(t, obs, LiveWorkHoldStart([]domain.PRView{open}, obs), "open PRs never start the clock")
 }
 
 func TestSplitLiveCurrentRound_ShouldSkipOnlyTheLiveNewestWorkSession_AndTreatErrorAsLive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	older := backlogdto.ItemSessionSummary{ID: "1", SessionUUID: "old", Role: SessionRoleWork, CreatedAt: sessiontest.PrTestEpoch}
-	newest := backlogdto.ItemSessionSummary{ID: "2", SessionUUID: "new", Role: SessionRoleWork, CreatedAt: sessiontest.PrTestEpoch.Add(time.Hour)}
-	review := backlogdto.ItemSessionSummary{ID: "3", SessionUUID: "rev", Role: SessionRoleReview, CreatedAt: sessiontest.PrTestEpoch.Add(2 * time.Hour)}
+	older := backlogdto.ItemSessionSummary{ID: "1", SessionUUID: "old", Role: SessionRoleWork, CreatedAt: fixturetest.PrTestEpoch}
+	newest := backlogdto.ItemSessionSummary{ID: "2", SessionUUID: "new", Role: SessionRoleWork, CreatedAt: fixturetest.PrTestEpoch.Add(time.Hour)}
+	review := backlogdto.ItemSessionSummary{ID: "3", SessionUUID: "rev", Role: SessionRoleReview, CreatedAt: fixturetest.PrTestEpoch.Add(2 * time.Hour)}
 	all := []backlogdto.ItemSessionSummary{older, newest, review}
 
-	arch, skipped := SplitLiveCurrentRound(ctx, &fakeProbe{live: map[string]bool{"new": true}}, sessiontest.PrTestEpoch, all)
+	arch, skipped := SplitLiveCurrentRound(ctx, &fakeProbe{live: map[string]bool{"new": true}}, fixturetest.PrTestEpoch, all)
 	assert.True(t, skipped)
 	assert.Equal(t, []backlogdto.ItemSessionSummary{older, review}, arch)
 
-	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{err: errors.New("boom")}, sessiontest.PrTestEpoch, all)
+	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{err: errors.New("boom")}, fixturetest.PrTestEpoch, all)
 	assert.True(t, skipped, "a probe error counts as live")
 	assert.Equal(t, []backlogdto.ItemSessionSummary{older, review}, arch)
 
-	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{}, sessiontest.PrTestEpoch, all)
+	arch, skipped = SplitLiveCurrentRound(ctx, &fakeProbe{}, fixturetest.PrTestEpoch, all)
 	assert.False(t, skipped)
 	assert.Equal(t, all, arch)
 
-	arch, skipped = SplitLiveCurrentRound(ctx, nil, sessiontest.PrTestEpoch, all)
+	arch, skipped = SplitLiveCurrentRound(ctx, nil, fixturetest.PrTestEpoch, all)
 	assert.False(t, skipped, "a nil probe skips nothing")
 	assert.Equal(t, all, arch)
 }

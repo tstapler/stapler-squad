@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ import (
 // the process (session/git/native_rollout_test.go's installObservabilityTestProviders
 // documents this same constraint for that package) -- no other file in this
 // package installs one, so this is safe as the one-time singleton.
-// sessiontest.TestPiMetricReader (pi_status_source_metrics_test.go) already installed
+// fixturetest.TestPiMetricReader (pi_status_source_metrics_test.go) already installed
 // this package's one MeterProvider; backendOperationDurationMS was built at
 // package-init time against the global delegating meter, so it's already
 // wired to that reader without any action here.
@@ -60,7 +60,7 @@ func findBackendSpanAttr(attrs []attribute.KeyValue, key string) (attribute.KeyV
 func collectBackendDurationMetric(t *testing.T) *metricdata.Metrics {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
-	require.NoError(t, sessiontest.TestPiMetricReader.Collect(context.Background(), &rm))
+	require.NoError(t, fixturetest.TestPiMetricReader.Collect(context.Background(), &rm))
 	for _, sm := range rm.ScopeMetrics {
 		for i := range sm.Metrics {
 			if sm.Metrics[i].Name == "session_backend_operation_duration_ms" {
@@ -147,7 +147,7 @@ func TestWithBackendOperationSpan_should_RecordErrorOutcome_When_UnderlyingCallF
 // filter/group by "backend" to compare tmux against tymux, so a call must
 // actually land a labeled data point, not just emit a span.
 func TestWithBackendOperationSpan_RecordsDurationHistogram_LabeledByBackendAndOperation(t *testing.T) {
-	installBackendSpanRecorder(t) // also ensures sessiontest.TestPiMetricReader is exercised even if no metric test ran first
+	installBackendSpanRecorder(t) // also ensures fixturetest.TestPiMetricReader is exercised even if no metric test ran first
 
 	before := sumBackendHistogramCount(t, collectBackendDurationMetric(t), backendLabelTmux, "session.backend.attach")
 

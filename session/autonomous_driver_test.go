@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
@@ -306,7 +306,7 @@ var errTestSendKeysFailure = errors.New("fakeSendKeysProcessManager: forced Send
 // letting a test script distinct pane content across the pre-call tail
 // capture, the post-SendKeys delivery-time capture, and later turns'
 // pre-call captures — without needing a real tmux-backed Instance. Mirrors
-// sessiontest.FakePaneSettleChecker's pop-with-repeat pattern.
+// fixturetest.FakePaneSettleChecker's pop-with-repeat pattern.
 type fakePanePreviewer struct {
 	mu        sync.Mutex
 	snapshots []string
@@ -1494,7 +1494,7 @@ const (
 // keystroke follow the content write as soon as the TUI has actually
 // finished rendering it, not just eventually.
 func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEarly(t *testing.T) {
-	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{true, true, false, false, false}}
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{true, true, false, false, false}}
 
 	start := time.Now()
 	waitForPaneSettle(context.Background(), checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
@@ -1518,7 +1518,7 @@ func TestWaitForPaneSettle_should_returnBeforeDeadline_When_PaneStopsChangingEar
 // hang waitForPaneSettle forever — it must still return once maxWait elapses,
 // so the caller's submit keystroke is never permanently blocked.
 func TestWaitForPaneSettle_should_returnAtDeadline_When_PaneNeverSettles(t *testing.T) {
-	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{true}} // always "still changing"
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{true}} // always "still changing"
 
 	start := time.Now()
 	waitForPaneSettle(context.Background(), checker, testPaneSettlePollInterval, testPaneSettleMaxWait)
@@ -1533,7 +1533,7 @@ func TestWaitForPaneSettle_should_returnAtDeadline_When_PaneNeverSettles(t *test
 // a cancelled context stops the poll loop right away rather than waiting out
 // maxWait.
 func TestWaitForPaneSettle_should_returnImmediately_When_ContextCancelled(t *testing.T) {
-	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{true}}
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{true}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

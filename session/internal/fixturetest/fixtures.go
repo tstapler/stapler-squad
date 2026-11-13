@@ -1,4 +1,6 @@
-package sessiontest
+// Package fixturetest holds test fixtures that touch no session or Instance symbol, so tests on both sides of
+// the Instance package boundary can share them without importing each other's _test.go files.
+package fixturetest
 
 import (
 	"bytes"

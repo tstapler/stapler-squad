@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -340,7 +341,7 @@ func TestGetEffectiveRootDir_ReturnsWorktreePath_EvenWhenMissingFromDisk(t *test
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: domain.Active}
-	inst.gitManager.SetWorktree(sessiontest.NewTestGitWorktree(repoPath, worktreePath))
+	inst.gitManager.SetWorktree(fixturetest.NewTestGitWorktree(repoPath, worktreePath))
 
 	require.Equal(t, worktreePath, inst.GetEffectiveRootDir())
 }
@@ -359,7 +360,7 @@ func TestWorkspace_FallsBackToRepoRoot_WhenWorktreePathMissingFromDisk(t *testin
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: domain.Active}
-	inst.gitManager.SetWorktree(sessiontest.NewTestGitWorktree(repoPath, worktreePath))
+	inst.gitManager.SetWorktree(fixturetest.NewTestGitWorktree(repoPath, worktreePath))
 
 	ws := inst.Workspace()
 	require.Equal(t, repoPath, ws.ExistingDir, "must fall back to RepoRoot when the worktree path is gone")
@@ -380,7 +381,7 @@ func TestWorkspace_UsesWorktreePath_WhenPresentOnDisk(t *testing.T) {
 	worktreePath := git.CanonicalizeWorktreePath(t.TempDir())
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: domain.Active}
-	inst.gitManager.SetWorktree(sessiontest.NewTestGitWorktree(repoPath, worktreePath))
+	inst.gitManager.SetWorktree(fixturetest.NewTestGitWorktree(repoPath, worktreePath))
 
 	// NewGitWorktreeFromStorage canonicalizes worktreePath via
 	// CanonicalizeWorktreePath since the directory exists on disk (e.g. macOS's
@@ -407,7 +408,7 @@ func TestWorkspace_ActiveDirAndExistingDir_Diverge_WhenWorktreeMissing(t *testin
 
 	newSession := func(name string) domain.Workspace {
 		inst := &Instance{Title: name, Path: repoPath, Status: domain.Active}
-		inst.gitManager.SetWorktree(sessiontest.NewTestGitWorktree(repoPath, filepath.Join(goneWorktrees, name)))
+		inst.gitManager.SetWorktree(fixturetest.NewTestGitWorktree(repoPath, filepath.Join(goneWorktrees, name)))
 		return inst.Workspace()
 	}
 	first, second := newSession("alpha"), newSession("beta")
@@ -427,7 +428,7 @@ func TestWorkspace_ActiveDir_KeepsWorktreeDir_WhenMissingFromDisk(t *testing.T) 
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
 
 	inst := &Instance{Title: "worktree-session", Path: repoPath, Status: domain.Active}
-	inst.gitManager.SetWorktree(sessiontest.NewTestGitWorktree(repoPath, worktreePath))
+	inst.gitManager.SetWorktree(fixturetest.NewTestGitWorktree(repoPath, worktreePath))
 
 	ws := inst.Workspace()
 	require.Equal(t, worktreePath, ws.ActiveDir)
@@ -460,7 +461,7 @@ func TestGetWorkingDirectory_MatchesGetEffectiveRootDir_WhenWorktreePathEmpty(t 
 	repoPath := t.TempDir()
 
 	inst := &Instance{Title: "empty-worktree-path", Path: repoPath, Status: domain.Active}
-	inst.gitManager.SetWorktree(sessiontest.NewTestGitWorktree(repoPath, ""))
+	inst.gitManager.SetWorktree(fixturetest.NewTestGitWorktree(repoPath, ""))
 
 	require.Equal(t, repoPath, inst.GetWorkingDirectory())
 	require.Equal(t, inst.GetEffectiveRootDir(), inst.GetWorkingDirectory())

@@ -10,7 +10,7 @@ package session
 import (
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
@@ -56,7 +56,7 @@ func newActorTestInstance(t *testing.T) *Instance {
 // open, closing that race entirely.
 func TestActorNoLeak(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, append(sessiontest.KnownBackgroundGoroutines, baseline)...)
+	defer goleak.VerifyNone(t, append(fixturetest.KnownBackgroundGoroutines, baseline)...)
 
 	inst := newActorTestInstance(t)
 	li := NewLiveInstance(inst)
@@ -89,7 +89,7 @@ func TestActorSendSync(t *testing.T) {
 // t.Parallel() in this package's shared test binary.
 func TestActorStopIdempotent(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, append(sessiontest.KnownBackgroundGoroutines, baseline)...)
+	defer goleak.VerifyNone(t, append(fixturetest.KnownBackgroundGoroutines, baseline)...)
 
 	inst := newActorTestInstance(t)
 	li := NewLiveInstance(inst)

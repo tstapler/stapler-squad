@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -43,7 +43,7 @@ func (f *fakeVersionCommandRunner) callCount() int {
 // one log.Error for a given binary path, and a second check against the same
 // path is a no-op (memoized), not a second shell-out or a second log line.
 func TestScrollForwardVersionMismatchCheck_should_LogErrorOnceForPath_When_InstalledVersionDiffersFromVerified(t *testing.T) {
-	h := sessiontest.InstallRecordingHandler(t)
+	h := fixturetest.InstallRecordingHandler(t)
 	runner := &fakeVersionCommandRunner{out: []byte("2.2.0\n")}
 	binaryPath := "/usr/local/bin/claude-mismatch-" + t.Name()
 
@@ -75,7 +75,7 @@ func TestScrollForwardVersionMismatchCheck_should_LogErrorOnceForPath_When_Insta
 // this as a mismatch against every real install, caught by ForwardScroll's
 // own tests actually shelling out to the real binary in this environment.
 func TestScrollForwardVersionMismatchCheck_should_LogNothing_When_InstalledVersionMatchesVerified(t *testing.T) {
-	h := sessiontest.InstallRecordingHandler(t)
+	h := fixturetest.InstallRecordingHandler(t)
 	runner := &fakeVersionCommandRunner{out: []byte("2.1.270 (Claude Code)\n")}
 	binaryPath := "/usr/local/bin/claude-match-" + t.Name()
 
@@ -92,7 +92,7 @@ func TestScrollForwardVersionMismatchCheck_should_LogNothing_When_InstalledVersi
 // thing reported the same way -- log.Warn, never log.Error, and no mismatch
 // is claimed.
 func TestScrollForwardVersionMismatchCheck_should_LogWarnNotError_When_VersionLookupFails(t *testing.T) {
-	h := sessiontest.InstallRecordingHandler(t)
+	h := fixturetest.InstallRecordingHandler(t)
 	runner := &fakeVersionCommandRunner{err: errors.New(`fake: exec: "claude": executable file not found in $PATH`)}
 	binaryPath := "/usr/local/bin/claude-lookup-fail-" + t.Name()
 
@@ -111,7 +111,7 @@ func TestScrollForwardVersionMismatchCheck_should_LogWarnNotError_When_VersionLo
 // closes Story 1.5.3's memoization-key acceptance criteria: the guard is keyed
 // by binary path, not global -- two distinct paths each get their own check.
 func TestScrollForwardVersionMismatchCheck_should_FireIndependentlyPerDistinctBinaryPath(t *testing.T) {
-	h := sessiontest.InstallRecordingHandler(t)
+	h := fixturetest.InstallRecordingHandler(t)
 	runnerA := &fakeVersionCommandRunner{out: []byte("2.2.0\n")}
 	runnerB := &fakeVersionCommandRunner{out: []byte("2.2.0\n")}
 	pathA := "/usr/local/bin/claude-a-" + t.Name()
@@ -136,7 +136,7 @@ func TestScrollForwardVersionMismatchCheck_should_FireIndependentlyPerDistinctBi
 // since there's no real claude binary at the test's throwaway path) without
 // ForwardScroll ever being called.
 func TestScrollForwardVersionMismatchCheck_should_FireRegardlessOfScrollVolume_When_SessionNeverScrolls(t *testing.T) {
-	h := sessiontest.InstallRecordingHandler(t)
+	h := fixturetest.InstallRecordingHandler(t)
 	binaryPath := filepath.Join(t.TempDir(), "claude")
 
 	inst := &Instance{Title: t.Name(), Program: binaryPath}

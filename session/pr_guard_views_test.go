@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +20,7 @@ func TestListSessionPRViewsByUUIDs_ShouldStayWithinStatementBudget_WhenManySessi
 	uuids := make([]string, 0, 1001)
 	for i := 0; i < 200; i++ {
 		uuids = append(uuids, fmt.Sprintf("sess-%03d", i))
-		upsertLink(t, repo, SessionPROwner(uuids[i]), sessiontest.MustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceBackfill)
+		upsertLink(t, repo, SessionPROwner(uuids[i]), fixturetest.MustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceBackfill)
 	}
 
 	var got map[string][]domain.PRView
@@ -48,8 +48,8 @@ func TestListItemGuardViewsByItemIDs_ShouldReturnDirectLinksWithoutTombstoned(t 
 	s := &Storage{Repo: repo}
 	ctx := context.Background()
 	item := addLegacyItem(t, repo, "item", "in_progress", 0, "")
-	open := sessiontest.MustPRRef(t, "", "acme", "app", 22)
-	gone := sessiontest.MustPRRef(t, "", "acme", "app", 23)
+	open := fixturetest.MustPRRef(t, "", "acme", "app", 22)
+	gone := fixturetest.MustPRRef(t, "", "acme", "app", 23)
 	upsertLink(t, repo, ItemPROwner(item), open, domain.AttachSourceReportPRCreated)
 	upsertLink(t, repo, ItemPROwner(item), gone, domain.AttachSourceReportPRCreated)
 	_, err := repo.DeleteSessionPR(ctx, ItemPROwner(item), gone)
@@ -67,7 +67,7 @@ func TestListItemGuardViewsByItemIDs_ShouldFlagLegacyUnrepresented_WhenNumberHas
 	repo := newPRRepo(t)
 	s := &Storage{Repo: repo}
 	ctx := context.Background()
-	ref := sessiontest.MustPRRef(t, "", "acme", "app", 5)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 5)
 	unlinked := addLegacyItem(t, repo, "unlinked", "pr_pending", 5, synthesizePRURL(ref))
 	badRef := addLegacyItem(t, repo, "bad-ref", "pr_pending", 5, "")
 	linked := addLegacyItem(t, repo, "linked", "pr_pending", 5, synthesizePRURL(ref))
@@ -96,7 +96,7 @@ func TestListItemGuardViewsByItemIDs_ShouldStayWithinStatementBudget_WhenManyIte
 	for i := 0; i < 200; i++ {
 		id := addLegacyItem(t, repo, fmt.Sprintf("item-%03d", i), "in_progress", 0, "")
 		ids = append(ids, id)
-		upsertLink(t, repo, ItemPROwner(id), sessiontest.MustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceReportPRCreated)
+		upsertLink(t, repo, ItemPROwner(id), fixturetest.MustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceReportPRCreated)
 	}
 	stmts := countStatements(t, repo, func() {
 		got, err := s.ListItemGuardViewsByItemIDs(ctx, ids)
@@ -134,9 +134,9 @@ func TestLegacyNumberRepresented_ShouldMatchRepoAndNumber(t *testing.T) {
 	t.Parallel()
 	d := domain.InstanceData{GitHubPRNumber: 12, GitHubOwner: "Acme", GitHubRepo: "App", GitHubHost: "github.com"}
 	rows := make([]domain.PRView, 0, 2)
-	rows = append(rows, domain.PRView{Ref: sessiontest.MustPRRef(t, "", "acme", "app", 11)})
+	rows = append(rows, domain.PRView{Ref: fixturetest.MustPRRef(t, "", "acme", "app", 11)})
 	assert.False(t, LegacyNumberRepresented(d, rows), "links {#11} do not carry legacy #12")
-	rows = append(rows, domain.PRView{Ref: sessiontest.MustPRRef(t, "", "acme", "app", 12)})
+	rows = append(rows, domain.PRView{Ref: fixturetest.MustPRRef(t, "", "acme", "app", 12)})
 	assert.True(t, LegacyNumberRepresented(d, rows))
 	assert.False(t, LegacyNumberRepresented(domain.InstanceData{GitHubPRNumber: 12}, rows), "unbuildable ref is never represented")
 }

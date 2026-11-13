@@ -18,61 +18,61 @@ func TestUpdateTerminalTimestamps_SignatureBasedPreservation(t *testing.T) {
 		Path:    "/tmp/test-signature",
 		Program: "claude",
 	}
-	instance, err := NewInstance(opts)
+	inst, err := NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
 
 	// Mock tmux session with banner filter
 	mockTmux := tmux.NewTmuxSession("test-signature", "claude")
-	instance.SetTmuxSession(mockTmux)
+	inst.SetTmuxSession(mockTmux)
 
 	// Simulate historical timestamp (2 hours ago)
 	historicalTime := time.Now().Add(-2 * time.Hour)
-	instance.LastMeaningfulOutput = historicalTime
+	inst.LastMeaningfulOutput = historicalTime
 
 	// Set up initial signature
 	unchangedContent := "Hello, world!\nThis is unchanged terminal content\nStill here!"
-	instance.UpdateTerminalTimestamps(unchangedContent, false)
+	inst.UpdateTerminalTimestamps(unchangedContent, false)
 
 	// Record the timestamp after first update
-	firstUpdateTime := instance.LastMeaningfulOutput
-	firstSignature := instance.LastOutputSignature
+	firstUpdateTime := inst.LastMeaningfulOutput
+	firstSignature := inst.LastOutputSignature
 
 	if firstSignature == "" {
 		t.Fatal("Signature should be set after first update")
 	}
 
 	// Test 1: Update with SAME content - timestamp should NOT change
-	instance.UpdateTerminalTimestamps(unchangedContent, false)
+	inst.UpdateTerminalTimestamps(unchangedContent, false)
 
-	if !instance.LastMeaningfulOutput.Equal(firstUpdateTime) {
+	if !inst.LastMeaningfulOutput.Equal(firstUpdateTime) {
 		t.Errorf("LastMeaningfulOutput should be preserved when content unchanged. "+
 			"Expected %v, got %v",
-			firstUpdateTime, instance.LastMeaningfulOutput)
+			firstUpdateTime, inst.LastMeaningfulOutput)
 	}
 
-	if instance.LastOutputSignature != firstSignature {
+	if inst.LastOutputSignature != firstSignature {
 		t.Errorf("Signature should remain unchanged when content unchanged. "+
 			"Expected %s, got %s",
-			firstSignature, instance.LastOutputSignature)
+			firstSignature, inst.LastOutputSignature)
 	}
 
 	// Test 2: Update with DIFFERENT content - timestamp SHOULD change
 	changedContent := "Hello, world!\nThis is CHANGED terminal content\nNew stuff here!"
-	instance.UpdateTerminalTimestamps(changedContent, false)
+	inst.UpdateTerminalTimestamps(changedContent, false)
 
 	if err := wait.WaitForCondition(func() bool {
-		return instance.LastMeaningfulOutput.After(firstUpdateTime)
+		return inst.LastMeaningfulOutput.After(firstUpdateTime)
 	}, wait.FastWaitConfig()); err != nil {
 		t.Error("LastMeaningfulOutput should be updated when content changes")
 	}
 
-	if !instance.LastMeaningfulOutput.After(firstUpdateTime) {
+	if !inst.LastMeaningfulOutput.After(firstUpdateTime) {
 		t.Error("LastMeaningfulOutput should be updated when content changes")
 	}
 
-	if instance.LastOutputSignature == firstSignature {
+	if inst.LastOutputSignature == firstSignature {
 		t.Error("Signature should change when content changes")
 	}
 
@@ -89,41 +89,41 @@ func TestPreview_PreservesHistoricalTimestamps(t *testing.T) {
 		Path:    "/tmp/test-preview-preserve",
 		Program: "claude",
 	}
-	instance, err := NewInstance(opts)
+	inst, err := NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
 
 	// Mock tmux session
 	mockTmux := tmux.NewTmuxSession("test-preview-preserve", "claude")
-	instance.SetTmuxSession(mockTmux)
+	inst.SetTmuxSession(mockTmux)
 
 	// Simulate historical timestamp (2 hours ago) and existing signature
 	historicalTime := time.Now().Add(-2 * time.Hour)
-	instance.LastMeaningfulOutput = historicalTime
+	inst.LastMeaningfulOutput = historicalTime
 
 	// Set up signature for existing content
 	existingContent := "Some terminal output that hasn't changed"
-	instance.UpdateTerminalTimestamps(existingContent, false)
-	storedSignature := instance.LastOutputSignature
+	inst.UpdateTerminalTimestamps(existingContent, false)
+	storedSignature := inst.LastOutputSignature
 
 	// Verify timestamp was set
-	initialTimestamp := instance.LastMeaningfulOutput
+	initialTimestamp := inst.LastMeaningfulOutput
 
 	// Simulate app restart + Preview() call with SAME content
 	// (This is what happens in review_queue_poller.go refreshAllSessionsInQueue)
-	instance.UpdateTerminalTimestamps(existingContent, false)
+	inst.UpdateTerminalTimestamps(existingContent, false)
 
 	// Verify timestamp was PRESERVED (not reset to current time)
-	if !instance.LastMeaningfulOutput.Equal(initialTimestamp) {
+	if !inst.LastMeaningfulOutput.Equal(initialTimestamp) {
 		t.Errorf("Preview() should preserve historical timestamp when content unchanged. "+
 			"Expected %v, got %v",
-			initialTimestamp, instance.LastMeaningfulOutput)
+			initialTimestamp, inst.LastMeaningfulOutput)
 	}
 
-	if instance.LastOutputSignature != storedSignature {
+	if inst.LastOutputSignature != storedSignature {
 		t.Errorf("Signature should remain unchanged. Expected %s, got %s",
-			storedSignature, instance.LastOutputSignature)
+			storedSignature, inst.LastOutputSignature)
 	}
 
 	t.Log("✓ Historical timestamp preserved correctly during Preview() refresh")
@@ -138,47 +138,47 @@ func TestForceUpdate_SignatureChangeDetection(t *testing.T) {
 		Path:    "/tmp/test-force-update",
 		Program: "claude",
 	}
-	instance, err := NewInstance(opts)
+	inst, err := NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
 
 	mockTmux := tmux.NewTmuxSession("test-force-update", "claude")
-	instance.SetTmuxSession(mockTmux)
+	inst.SetTmuxSession(mockTmux)
 
 	// Set initial content and timestamp
 	initialContent := "Initial terminal content"
-	instance.UpdateTerminalTimestamps(initialContent, true) // forceUpdate=true
-	initialTimestamp := instance.LastMeaningfulOutput
-	initialSignature := instance.LastOutputSignature
+	inst.UpdateTerminalTimestamps(initialContent, true) // forceUpdate=true
+	initialTimestamp := inst.LastMeaningfulOutput
+	initialSignature := inst.LastOutputSignature
 
 	// Test 1: forceUpdate=true with SAME content should NOT update timestamp
 	// (signature checking is still active in forceUpdate path)
-	instance.UpdateTerminalTimestamps(initialContent, true)
+	inst.UpdateTerminalTimestamps(initialContent, true)
 
-	if !instance.LastMeaningfulOutput.Equal(initialTimestamp) {
+	if !inst.LastMeaningfulOutput.Equal(initialTimestamp) {
 		t.Error("forceUpdate=true should still preserve timestamp when content unchanged")
 	}
 
-	if instance.LastOutputSignature != initialSignature {
+	if inst.LastOutputSignature != initialSignature {
 		t.Error("Signature should remain unchanged")
 	}
 
 	// Test 2: forceUpdate=true with DIFFERENT content SHOULD update timestamp
 	changedContent := "Changed terminal content"
-	instance.UpdateTerminalTimestamps(changedContent, true)
+	inst.UpdateTerminalTimestamps(changedContent, true)
 
 	if err := wait.WaitForCondition(func() bool {
-		return instance.LastMeaningfulOutput.After(initialTimestamp)
+		return inst.LastMeaningfulOutput.After(initialTimestamp)
 	}, wait.FastWaitConfig()); err != nil {
 		t.Error("forceUpdate=true should update timestamp when content changes")
 	}
 
-	if !instance.LastMeaningfulOutput.After(initialTimestamp) {
+	if !inst.LastMeaningfulOutput.After(initialTimestamp) {
 		t.Error("forceUpdate=true should update timestamp when content changes")
 	}
 
-	if instance.LastOutputSignature == initialSignature {
+	if inst.LastOutputSignature == initialSignature {
 		t.Error("Signature should change when content changes")
 	}
 
@@ -222,37 +222,37 @@ func TestReviewQueueRefreshScenario(t *testing.T) {
 		Path:    "/tmp/test-review-refresh",
 		Program: "claude",
 	}
-	instance, err := NewInstance(opts)
+	inst, err := NewInstance(opts)
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
 
 	mockTmux := tmux.NewTmuxSession("test-review-refresh", "claude")
-	instance.SetTmuxSession(mockTmux)
+	inst.SetTmuxSession(mockTmux)
 
 	// STEP 1: Session was active 2 hours ago
 	twoHoursAgo := time.Now().Add(-2 * time.Hour)
 	terminalContent := "Claude is waiting for input\n$ "
 
-	instance.LastMeaningfulOutput = twoHoursAgo
-	instance.LastTerminalUpdate = twoHoursAgo
-	instance.LastOutputSignature = computeContentSignature(terminalContent)
+	inst.LastMeaningfulOutput = twoHoursAgo
+	inst.LastTerminalUpdate = twoHoursAgo
+	inst.LastOutputSignature = computeContentSignature(terminalContent)
 
 	// STEP 2: Simulate app restart - timestamps loaded from disk
 	// (already set above - in real scenario, loaded via FromInstanceData)
 
 	// STEP 3: Review queue poller checks if timestamps are stale
-	timeSinceLastUpdate := time.Since(instance.LastTerminalUpdate)
+	timeSinceLastUpdate := time.Since(inst.LastTerminalUpdate)
 	if timeSinceLastUpdate <= 30*time.Second {
 		t.Skip("Test requires stale timestamp (> 30s), but timestamp is fresh")
 	}
 
 	// STEP 4: Poller calls Preview() to refresh timestamps
 	// (Preview internally calls UpdateTerminalTimestamps with forceUpdate=false)
-	instance.UpdateTerminalTimestamps(terminalContent, false)
+	inst.UpdateTerminalTimestamps(terminalContent, false)
 
 	// CRITICAL VERIFICATION: Timestamp should be PRESERVED (not reset to now)
-	timeDiff := time.Since(instance.LastMeaningfulOutput)
+	timeDiff := time.Since(inst.LastMeaningfulOutput)
 	expectedDiff := time.Since(twoHoursAgo)
 
 	// Allow 1 second tolerance for test execution time
@@ -264,10 +264,10 @@ func TestReviewQueueRefreshScenario(t *testing.T) {
 	}
 
 	// Verify signature was used for comparison
-	if instance.LastOutputSignature != computeContentSignature(terminalContent) {
+	if inst.LastOutputSignature != computeContentSignature(terminalContent) {
 		t.Error("Signature should match original content signature")
 	}
 
 	t.Logf("✓ Review queue refresh correctly preserved historical timestamp (%v old)",
-		time.Since(instance.LastMeaningfulOutput))
+		time.Since(inst.LastMeaningfulOutput))
 }

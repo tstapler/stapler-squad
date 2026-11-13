@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +20,7 @@ func TestUpdatePullRequestState_ReconcilerRefreshOnUnverifiedTerminal(t *testing
 	later := prRepoT0.Add(time.Hour)
 	seed := func(t *testing.T, n int) (*EntRepository, domain.PRRef) {
 		repo := newPRRepo(t)
-		ref := sessiontest.MustPRRef(t, "", "acme", "app", n)
+		ref := fixturetest.MustPRRef(t, "", "acme", "app", n)
 		seedState(t, repo, ref, domain.PRStateUnknown, true)
 		setPolled(t, repo, ref, prRepoT0)
 		require.NoError(t, repo.Client.PullRequestState.Update().Where(refPredicate(ref)).

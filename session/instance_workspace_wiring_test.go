@@ -92,7 +92,7 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 		t.Skip("skipping integration test that restarts a session via a fake process manager")
 	}
 
-	instance, cleanup, err := NewTestInstance(t, "switch-workspace-deadlock-regression").
+	inst, cleanup, err := NewTestInstance(t, "switch-workspace-deadlock-regression").
 		WithSessionType(domain.SessionTypeDirectory).
 		Build()
 	require.NoError(t, err)
@@ -101,18 +101,18 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 	}
 
 	// Wrap in LiveInstance so the actor goroutine is present (production-realistic).
-	li := NewLiveInstance(instance)
+	li := NewLiveInstance(inst)
 	defer li.Stop()
 
 	// Swap the real tmux backend for a fake: the restart path would otherwise
 	// shell out to real tmux, whose wall time (several seconds, more under
 	// package-wide load) is what made this test flaky against its 10s bound.
 	fakePM := &fakeSwitchWorkspaceProcessManager{alive: true}
-	instance.SetProcessManagerForTest(fakePM)
+	inst.SetProcessManagerForTest(fakePM)
 
 	// Simulate an already-running session so SwitchWorkspace's guard passes.
-	instance.MarkStarted()
-	instance.Status = domain.Active
+	inst.MarkStarted()
+	inst.Status = domain.Active
 
 	done := make(chan struct{})
 	go func() {

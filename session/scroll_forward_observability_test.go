@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
@@ -16,7 +16,7 @@ import (
 
 // findRecordByMessage returns the first record in records whose msg matches,
 // or nil if none does.
-func findRecordByMessage(records []sessiontest.CapturedRecord, msg string) *sessiontest.CapturedRecord {
+func findRecordByMessage(records []fixturetest.CapturedRecord, msg string) *fixturetest.CapturedRecord {
 	for i := range records {
 		if records[i].Msg == msg {
 			return &records[i]
@@ -42,14 +42,14 @@ func (want scrollForwardAttemptLabels) matches(attrs attribute.Set) bool {
 }
 
 // sumScrollForwardAttempts sums scroll_forward_attempts_total's current data
-// points matching want, via the package's shared sessiontest.TestPiMetricReader
+// points matching want, via the package's shared fixturetest.TestPiMetricReader
 // (pi_status_source_metrics_test.go) -- the single real MeterProvider
 // installed for this test binary.
 func sumScrollForwardAttempts(t *testing.T, want scrollForwardAttemptLabels) int64 {
 	t.Helper()
 
 	var rm metricdata.ResourceMetrics
-	require.NoError(t, sessiontest.TestPiMetricReader.Collect(context.Background(), &rm))
+	require.NoError(t, fixturetest.TestPiMetricReader.Collect(context.Background(), &rm))
 	m := findMetricByName(rm, "scroll_forward_attempts_total")
 	if m == nil {
 		return 0
@@ -83,7 +83,7 @@ func findMetricByName(rm metricdata.ResourceMetrics, name string) *metricdata.Me
 // structured log line records which path served the request -- DELIVERED
 // maps to "app_forwarded" -- on every ForwardScroll call, not just errors.
 func TestForwardScroll_should_LogPathAndOutcome_When_AnyRequestCompletes(t *testing.T) {
-	h := sessiontest.InstallRecordingHandler(t)
+	h := fixturetest.InstallRecordingHandler(t)
 	fakePM := &fakeScrollForwardProcessManager{captureSeq: []string{"settled", "settled"}}
 	inst := newForwardScrollTestInstance(t, fakePM)
 
@@ -114,7 +114,7 @@ func TestForwardScroll_should_LogPathAndOutcome_When_AnyRequestCompletes(t *test
 // is REQ-15's coverage-gap test: a session whose program has no registered
 // ScrollAdapter gets exactly one log.Warn, not one per scroll attempt.
 func TestForwardScroll_should_LogCoverageGapWarningOnlyOnce_When_ProgramHasNoRegisteredScrollAdapter(t *testing.T) {
-	h := sessiontest.InstallRecordingHandler(t)
+	h := fixturetest.InstallRecordingHandler(t)
 	program := "bash-" + t.Name() // unique per test: scrollForwardCoverageGapLogged is a package-level, cross-test sync.Map
 	inst := &Instance{Title: t.Name(), Program: program}
 

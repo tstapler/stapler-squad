@@ -76,7 +76,7 @@ func TestMigrationToTymux_RegistersExitCallbackAndEnvironmentBeforeStart(t *test
 	})()
 	inst := &Instance{Title: "migration-callback", UUID: "migration-proof", Path: t.TempDir(), Program: "bash", Status: domain.Active, Backend: domain.BackendTmux, EnvVars: map[string]string{"MIGRATION_CUSTOM": "present"}}
 	inst.MarkStarted()
-	require.NoError(t, inst.initializeBaselineForRestartTest())
+	require.NoError(t, initializeBaselineForRestartTest(inst))
 
 	err := inst.Restart(false, domain.BackendTymux)
 

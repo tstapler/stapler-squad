@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/tstapler/stapler-squad/session/domain"
 
@@ -61,7 +61,7 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	tests := []struct {
 		name    string
@@ -95,7 +95,7 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 				SessionType:      domain.SessionTypeDirectory,
 				AutoYes:          false,
 				TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-				TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
+				TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 			})
 			require.NoError(t, err)
 			defer func() {
@@ -136,7 +136,7 @@ func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-no-history-%d", time.Now().UnixNano())
 	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
@@ -146,7 +146,7 @@ func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
 		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -182,7 +182,7 @@ func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *test
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-cold-then-hot-%d", time.Now().UnixNano())
 	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
@@ -192,7 +192,7 @@ func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *test
 		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 )
 
@@ -19,7 +19,7 @@ func TestWaitForPaneUpdate_ReturnsTrue_AsSoonAsChangeObserved(t *testing.T) {
 	t.Parallel()
 	// Scripted: two "no change yet" polls, then a change — simulating a
 	// capture-pane round trip slower than any fixed short sleep would allow for.
-	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{false, false, true}}
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{false, false, true}}
 
 	start := time.Now()
 	updated := waitForPaneUpdate(context.Background(), checker, 5*time.Millisecond, time.Second)
@@ -38,7 +38,7 @@ func TestWaitForPaneUpdate_ReturnsTrue_AsSoonAsChangeObserved(t *testing.T) {
 // elapses, preserving the fallback exact-content check in sendInitialPromptTick.
 func TestWaitForPaneUpdate_ReturnsFalse_When_PaneNeverChanges(t *testing.T) {
 	t.Parallel()
-	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{false}}
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{false}}
 
 	if waitForPaneUpdate(context.Background(), checker, time.Millisecond, 20*time.Millisecond) {
 		t.Error("waitForPaneUpdate returned true even though the pane never reported a change")
@@ -50,7 +50,7 @@ func TestWaitForPaneUpdate_ReturnsFalse_When_PaneNeverChanges(t *testing.T) {
 // waitForPaneUpdate must not block past context cancellation.
 func TestWaitForPaneUpdate_ReturnsFalse_When_ContextCancelled(t *testing.T) {
 	t.Parallel()
-	checker := &sessiontest.FakePaneSettleChecker{Updates: []bool{false}}
+	checker := &fixturetest.FakePaneSettleChecker{Updates: []bool{false}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

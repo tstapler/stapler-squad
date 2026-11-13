@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +19,7 @@ import (
 func startedWorktreeInstance(t *testing.T, name string) *Instance {
 	t.Helper()
 	repoPath := t.TempDir()
-	sessiontest.InitTestRepoForReviewQueue(t, repoPath)
+	fixturetest.InitTestRepoForReviewQueue(t, repoPath)
 
 	wt, _, err := git.NewGitWorktree(repoPath, name)
 	require.NoError(t, err)

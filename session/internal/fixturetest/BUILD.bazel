@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fixturetest",
+    testonly = True,
+    srcs = ["fixtures.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/internal/fixturetest",
+    visibility = ["//session:__subpackages__"],
+    deps = [
+        "//executor/safeexec",
+        "//log",
+        "//pkg/classifier",
+        "//session/domain",
+        "//session/git",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":fixturetest",
+    visibility = ["//session:__subpackages__"],
+)

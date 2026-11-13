@@ -7,19 +7,19 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 )
 
 // TestCanTransition_ExhaustiveMatrix verifies every pair of known statuses against
-// the ground-truth sessiontest.ValidTransitionSet. This is the single source of truth: adding
-// a new transition to transitionDefs without also updating sessiontest.ValidTransitionSet
+// the ground-truth fixturetest.ValidTransitionSet. This is the single source of truth: adding
+// a new transition to transitionDefs without also updating fixturetest.ValidTransitionSet
 // (or vice-versa) will cause this test to fail.
 func TestCanTransition_ExhaustiveMatrix(t *testing.T) {
 	t.Parallel()
-	for _, from := range sessiontest.AllStatuses {
-		for _, to := range sessiontest.AllStatuses {
+	for _, from := range fixturetest.AllStatuses {
+		for _, to := range fixturetest.AllStatuses {
 			pair := [2]domain.Status{from, to}
-			wantValid := sessiontest.ValidTransitionSet[pair]
+			wantValid := fixturetest.ValidTransitionSet[pair]
 			got := CanTransition(from, to)
 			if got != wantValid {
 				if wantValid {
@@ -147,12 +147,12 @@ func TestTransitionDefs_StoppedRecovery(t *testing.T) {
 // TestTransitionDefs_AllStatusesCovered verifies every status has at least one outgoing transition.
 func TestTransitionDefs_AllStatusesCovered(t *testing.T) {
 	t.Parallel()
-	for _, s := range sessiontest.AllStatuses {
+	for _, s := range fixturetest.AllStatuses {
 		if s == domain.Stopped {
 			continue // Stopped → Active is covered above
 		}
 		hasOut := false
-		for _, to := range sessiontest.AllStatuses {
+		for _, to := range fixturetest.AllStatuses {
 			if CanTransition(s, to) {
 				hasOut = true
 				break
@@ -168,7 +168,7 @@ func TestTransitionDefs_AllStatusesCovered(t *testing.T) {
 // non-terminal state can reach Stopped in at most one hop.
 func TestTransitionDefs_StoppedReachableFromEveryState(t *testing.T) {
 	t.Parallel()
-	for _, s := range sessiontest.AllStatuses {
+	for _, s := range fixturetest.AllStatuses {
 		if s == domain.Stopped {
 			continue
 		}
@@ -205,7 +205,7 @@ func TestCanTransition_NewStates(t *testing.T) {
 func TestTransitionTo_ValidTransitions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	for pair := range sessiontest.ValidTransitionSet {
+	for pair := range fixturetest.ValidTransitionSet {
 		from, to := pair[0], pair[1]
 		t.Run(from.String()+"->"+to.String(), func(t *testing.T) {
 			t.Parallel()
@@ -289,9 +289,9 @@ func TestRecoverFromStopped_BumpsUpdatedAt(t *testing.T) {
 func TestTransitionTo_InvalidTransitions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	for _, from := range sessiontest.AllStatuses {
-		for _, to := range sessiontest.AllStatuses {
-			if sessiontest.ValidTransitionSet[[2]domain.Status{from, to}] {
+	for _, from := range fixturetest.AllStatuses {
+		for _, to := range fixturetest.AllStatuses {
+			if fixturetest.ValidTransitionSet[[2]domain.Status{from, to}] {
 				continue // skip valid pairs
 			}
 			from, to := from, to // capture

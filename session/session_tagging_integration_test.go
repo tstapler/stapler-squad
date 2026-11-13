@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,10 +44,10 @@ func TestSessionTaggingPipeline_should_ProduceFinalLLMTagWithNoUnclassified_When
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	engine := classifier.NewTaggingEngine()
-	// sessiontest.BugfixSeedRule (instance_actor_setters_test.go) mirrors SeedTaggingRules()'s seed-bugfix
+	// fixturetest.BugfixSeedRule (instance_actor_setters_test.go) mirrors SeedTaggingRules()'s seed-bugfix
 	// entry. neverMatchingRule seeds "Refactor" into the vocabulary without ever firing as a
 	// sync rule, so the later LLM step's ["Refactor"] response is in-vocabulary.
-	engine.ReplaceRules([]classifier.TaggingRule{sessiontest.BugfixSeedRule(), neverMatchingRule("seed-refactor", "Refactor")})
+	engine.ReplaceRules([]classifier.TaggingRule{fixturetest.BugfixSeedRule(), neverMatchingRule("seed-refactor", "Refactor")})
 	inst.SetTaggingEngine(engine)
 
 	// Given: creating/mutating onto a branch matching the seed rule applies "Bugfix"

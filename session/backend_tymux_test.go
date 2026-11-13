@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -190,7 +190,7 @@ func TestInstanceRestart_MigratesBackendWhenOverrideDiffersFromCurrent(t *testin
 		Backend: domain.BackendTmux,
 	}
 	inst.MarkStarted()
-	require.NoError(t, inst.initializeBaselineForRestartTest())
+	require.NoError(t, initializeBaselineForRestartTest(inst))
 
 	err := inst.Restart(false, domain.BackendTymux)
 
@@ -223,7 +223,7 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	sessiontest.CheckTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 	// A private server socket means this respawn hits a real but
 	// test-isolated tmux server rather than the host's default one.
 	inst := &Instance{
@@ -235,7 +235,7 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 		TmuxServerSocket: testTmuxSocket(t),
 	}
 	inst.MarkStarted()
-	require.NoError(t, inst.initializeBaselineForRestartTest())
+	require.NoError(t, initializeBaselineForRestartTest(inst))
 	defer func() { _ = inst.KillSession() }()
 
 	require.NoError(t, inst.Restart(false, ""))
@@ -245,16 +245,16 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 	assert.True(t, ok, "processManager must remain a *TmuxBackend when no migration was requested")
 }
 
-// initializeBaselineForRestartTest constructs i.processManager the same way
+// initializeBaselineForRestartTest constructs the instance's process manager the same way
 // NewInstance does (via the factory, so it's a real *TmuxBackend matching
 // i.Backend) without going through the rest of NewInstance's worktree/VNC/
 // CDP machinery this test has no use for.
-func (i *Instance) initializeBaselineForRestartTest() error {
+func initializeBaselineForRestartTest(i *Instance) error {
 	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: i.Backend})
 	if err != nil {
 		return err
 	}
-	i.processManager = pm
+	i.SetProcessManagerForTest(pm)
 	return nil
 }
 

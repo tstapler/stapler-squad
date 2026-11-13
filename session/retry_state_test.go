@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 
 	"github.com/stretchr/testify/require"
@@ -184,7 +185,7 @@ func TestRetryNow_should_TakeRecoverFromStoppedAndStartPath_When_CalledFromFaile
 // recreate it before Start() runs.
 func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted(t *testing.T) {
 	t.Parallel()
-	repoPath := sessiontest.SetupTestRepository(t)
+	repoPath := fixturetest.SetupTestRepository(t)
 
 	wt, _, err := git.NewGitWorktree(repoPath, "retry-worktree-recreate")
 	require.NoError(t, err)
@@ -228,7 +229,7 @@ func TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails(t *testing
 	// reaching Start(false).
 	repoPath := t.TempDir()
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
-	wt := sessiontest.NewTestGitWorktree(repoPath, worktreePath)
+	wt := fixturetest.NewTestGitWorktree(repoPath, worktreePath)
 
 	inst := (&Instance{
 		Title:  "t",

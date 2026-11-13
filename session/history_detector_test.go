@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,7 @@ func TestHistoryFileDetector_Detect_MatchesClaudePattern(t *testing.T) {
 	projectDir := "-Users-alice-myproject"
 	historyPath := filepath.Join(homeDir, ".claude", "projects", projectDir, uuid+".jsonl")
 
-	inspector := &sessiontest.MockProcessInspector{
+	inspector := &fixturetest.MockProcessInspector{
 		Files: []string{
 			"/dev/null",
 			"/tmp/some-other-file.txt",
@@ -42,7 +42,7 @@ func TestHistoryFileDetector_Detect_MatchesClaudePattern(t *testing.T) {
 
 func TestHistoryFileDetector_Detect_NoJSONLReturnsNilNil(t *testing.T) {
 	t.Parallel()
-	inspector := &sessiontest.MockProcessInspector{
+	inspector := &fixturetest.MockProcessInspector{
 		Files: []string{
 			"/dev/null",
 			"/tmp/some-file.txt",
@@ -64,7 +64,7 @@ func TestHistoryFileDetector_Detect_FiltersAgentJSONL(t *testing.T) {
 	projectDir := "-Users-alice-myproject"
 	agentPath := filepath.Join(homeDir, ".claude", "projects", projectDir, "agent-abc123.jsonl")
 
-	inspector := &sessiontest.MockProcessInspector{
+	inspector := &fixturetest.MockProcessInspector{
 		Files: []string{agentPath},
 	}
 
@@ -112,7 +112,7 @@ func TestHistoryFileDetector_ExtractsUUIDFromFilename(t *testing.T) {
 			projectDir := "-Users-alice-myproject"
 			historyPath := filepath.Join(homeDir, ".claude", "projects", projectDir, tc.uuid+".jsonl")
 
-			inspector := &sessiontest.MockProcessInspector{
+			inspector := &fixturetest.MockProcessInspector{
 				Files: []string{historyPath},
 			}
 
@@ -132,7 +132,7 @@ func TestHistoryFileDetector_ExtractsUUIDFromFilename(t *testing.T) {
 
 func TestHistoryFileDetector_ProcessDeadReturnsNilNil(t *testing.T) {
 	t.Parallel()
-	inspector := &sessiontest.MockProcessInspector{
+	inspector := &fixturetest.MockProcessInspector{
 		Err: fmt.Errorf("process 9999999 not found"),
 	}
 
@@ -274,7 +274,7 @@ func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
 	path1 := filepath.Join(homeDir, ".claude", "projects", projectDir, uuid1+".jsonl")
 	path2 := filepath.Join(homeDir, ".claude", "projects", projectDir, uuid2+".jsonl")
 
-	inspector := &sessiontest.MockProcessInspector{
+	inspector := &fixturetest.MockProcessInspector{
 		Files: []string{path1, path2},
 	}
 
@@ -289,7 +289,7 @@ func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
 func TestHistoryFileDetector_ResolveFilePath_ReconstructsPath_When_HomeDirOverridden(t *testing.T) {
 	t.Parallel()
 	tmpHome := t.TempDir()
-	detector := NewHistoryFileDetectorWithHomeDir(&sessiontest.MockProcessInspector{}, tmpHome)
+	detector := NewHistoryFileDetectorWithHomeDir(&fixturetest.MockProcessInspector{}, tmpHome)
 
 	projectPath := "/Users/alice/myproject"
 	uuid := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
@@ -311,7 +311,7 @@ func TestHistoryFileDetector_ResolveFilePath_UsesRealHomeDir_When_NoOverride(t *
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	detector := NewHistoryFileDetector(&sessiontest.MockProcessInspector{})
+	detector := NewHistoryFileDetector(&fixturetest.MockProcessInspector{})
 	uuid := "11111111-2222-3333-4444-555555555555"
 
 	got, err := detector.ResolveFilePath("/Users/alice/myproject", uuid)

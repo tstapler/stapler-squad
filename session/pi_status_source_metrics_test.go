@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -22,7 +22,7 @@ import (
 const attributeKeyEventType = attribute.Key("type")
 
 func init() {
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(sessiontest.TestPiMetricReader)))
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(fixturetest.TestPiMetricReader)))
 }
 
 // collectPiEventsMetric returns pi_status_source_events_total's current
@@ -30,7 +30,7 @@ func init() {
 func collectPiEventsMetric(t *testing.T) *metricdata.Metrics {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
-	require.NoError(t, sessiontest.TestPiMetricReader.Collect(context.Background(), &rm))
+	require.NoError(t, fixturetest.TestPiMetricReader.Collect(context.Background(), &rm))
 	for _, sm := range rm.ScopeMetrics {
 		for i := range sm.Metrics {
 			if sm.Metrics[i].Name == "pi_status_source_events_total" {
