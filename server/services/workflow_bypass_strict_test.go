@@ -184,11 +184,11 @@ func clsExprText(e ast.Expr) string {
 	return fmt.Sprintf("%T", e)
 }
 
-// clsRegistryConstants maps each Caller* constant in session/transition_callers.go
+// clsRegistryConstants maps each Caller* constant in session/domain/transition_callers.go
 // to its string value.
 func clsRegistryConstants(t *testing.T, root string) map[string]string {
 	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, "session", "transition_callers.go"), nil, parser.SkipObjectResolution)
+	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, "session", "domain", "transition_callers.go"), nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
 	out := map[string]string{}
 	for _, decl := range f.Decls {
@@ -224,7 +224,7 @@ func clsRequestViolations(lits []clsRequestLiteral, consts map[string]string, dy
 		value, isConst := consts[l.constRef]
 		switch {
 		case l.caller == "":
-			problems = append(problems, fmt.Sprintf("%s builds a TransitionRequest with no Caller: name a registered caller (session/transition_callers.go)", l.key))
+			problems = append(problems, fmt.Sprintf("%s builds a TransitionRequest with no Caller: name a registered caller (session/domain/transition_callers.go)", l.key))
 		case isConst:
 			if _, ok := domain.LookupTransitionCaller(domain.TransitionCaller(value)); !ok {
 				problems = append(problems, fmt.Sprintf("%s uses %s (%q), which is not in the caller registry", l.key, l.constRef, value))
@@ -292,7 +292,7 @@ func clsCallerRefs(t *testing.T, root string, consts map[string]string) map[stri
 	t.Helper()
 	refs := map[string]map[string]bool{}
 	walkModuleFuncs(t, root, func(rel string, fd *ast.FuncDecl) {
-		if rel == "session/transition_callers.go" {
+		if rel == "session/domain/transition_callers.go" {
 			return
 		}
 		ast.Inspect(fd.Body, func(n ast.Node) bool {
@@ -340,7 +340,7 @@ func clsUnusedCallers(specs []domain.TransitionCallerSpec, consts map[string]str
 		}
 		name := constFor[string(spec.Name)]
 		if name == "" {
-			problems = append(problems, fmt.Sprintf("registered caller %s has no Caller* constant in session/transition_callers.go", spec.Name))
+			problems = append(problems, fmt.Sprintf("registered caller %s has no Caller* constant in session/domain/transition_callers.go", spec.Name))
 			continue
 		}
 		reached := literal[name]

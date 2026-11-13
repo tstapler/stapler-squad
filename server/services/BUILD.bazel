@@ -791,6 +791,8 @@ go_test(
         "//session/backlog/chains:go_sources",
         "//session/backlog/pipeline:go_sources",
         "//session/backlog/reviewgate:go_sources",
+        "//session/domain:go_sources",
+        "//session/domain/backlogdto:go_sources",
         "//session/gitwt:go_sources",
         "//session/jules:go_sources",
         "//session/mux:hooks.go",

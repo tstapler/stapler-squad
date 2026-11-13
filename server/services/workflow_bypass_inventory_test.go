@@ -384,7 +384,7 @@ func TestWorkflowBypassInventory_EveryGatedAndEngineRoutedSiteIsRegistered(t *te
 		covered[s.key()] = true
 		switch n := got[s.key()]; {
 		case n == 0:
-			problems = append(problems, fmt.Sprintf("unregistered %s site %s: add a caller entry to session/transition_callers.go", s.class, s.key()))
+			problems = append(problems, fmt.Sprintf("unregistered %s site %s: add a caller entry to session/domain/transition_callers.go", s.class, s.key()))
 		case n != s.calls:
 			problems = append(problems, fmt.Sprintf("%s: registry accounts for %d call(s), inventory says %d (duplicate or missing registration)", s.key(), n, s.calls))
 		}

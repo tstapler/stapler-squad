@@ -826,11 +826,6 @@ go_test(
     ],
 )
 
-exports_files(
-    ["transition_callers.go"],
-    visibility = ["//tools/lint/silenttransition:__pkg__"],
-)
-
 # Read by session/tymux's metrics guard test, which scans these sources.
 # Read by server/services tests that scan session sources.
 filegroup(
