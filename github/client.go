@@ -90,8 +90,8 @@ type PRInfo struct {
 	ChangesRequestedCount int    // Count of current non-dismissed CHANGES_REQUESTED reviews
 	CheckConclusion       string // "success" / "failure" / "pending" / "action_required" / "neutral" / ""
 	CheckStatus           string // "completed" / "in_progress" / ""
-	Checks                []CheckItem
-	Reviews               []ReviewItem
+	Checks                []domain.GitHubCheckItem
+	Reviews               []domain.GitHubReviewItem
 }
 
 // PRComment represents a comment on a PR (either issue comment or review comment)
@@ -149,26 +149,6 @@ type ghStatusCheckItem struct {
 	State      string `json:"state"`      // SUCCESS, FAILURE, PENDING, ERROR, NEUTRAL
 	Status     string `json:"status"`     // completed, in_progress, queued
 	Conclusion string `json:"conclusion"` // success, failure, cancelled, action_required, neutral, skipped, timed_out
-}
-
-// CheckItem is one itemized CI check from a PR's statusCheckRollup — the data
-// getCheckConclusion collapses into a single string; exported so callers that want
-// the itemized view (e.g. the VCS tab's "why blocked" rollup) don't need to.
-type CheckItem struct {
-	Name       string
-	Context    string
-	State      string
-	Status     string
-	Conclusion string
-}
-
-// ReviewItem is one PR review — the data parseReviewCounts collapses into
-// approved/changes-requested counts, exported so callers can also read the
-// reviewer's Body text (e.g. a CHANGES_REQUESTED review's stated reason).
-type ReviewItem struct {
-	Author string
-	State  string
-	Body   string
 }
 
 // ghCommentResponse represents a comment from gh pr view --json comments
@@ -380,13 +360,13 @@ func GetPRInfoCtx(ctx context.Context, ref RepoRef, prNumber int) (*PRInfo, erro
 	approvedCount, changesReqCount := parseReviewCounts(resp.Reviews)
 	checkConclusion, checkStatus := getCheckConclusion(resp.StatusCheckRollup)
 
-	checks := make([]CheckItem, len(resp.StatusCheckRollup))
+	checks := make([]domain.GitHubCheckItem, len(resp.StatusCheckRollup))
 	for i, c := range resp.StatusCheckRollup {
-		checks[i] = CheckItem(c)
+		checks[i] = domain.GitHubCheckItem(c)
 	}
-	reviews := make([]ReviewItem, len(resp.Reviews))
+	reviews := make([]domain.GitHubReviewItem, len(resp.Reviews))
 	for i, r := range resp.Reviews {
-		reviews[i] = ReviewItem{Author: r.Author.Login, State: r.State, Body: r.Body}
+		reviews[i] = domain.GitHubReviewItem{Author: r.Author.Login, State: r.State, Body: r.Body}
 	}
 
 	return &PRInfo{

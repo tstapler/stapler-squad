@@ -108,6 +108,7 @@ go_test(
     deps = [
         "//config",
         "//envtest",
+        "//session/domain",
         "@com_github_go_git_go_git_v5//:go-git",
         "@com_github_go_git_go_git_v5//config",
         "@com_github_stretchr_testify//assert",

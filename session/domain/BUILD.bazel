@@ -8,6 +8,7 @@ go_library(
         "backlog.go",
         "errors.go",
         "github_host.go",
+        "github_pr_items.go",
         "guidance_cancel_reason.go",
         "guidance_request_source.go",
         "wake_trigger.go",

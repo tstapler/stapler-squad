@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -399,11 +400,11 @@ func TestInstanceToProto_should_SetPinned_FromInstance(t *testing.T) {
 func TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated(t *testing.T) {
 	inst := &session.Instance{
 		GitHubCheckConclusion: "success",
-		GitHubChecks: []github.CheckItem{
+		GitHubChecks: []domain.GitHubCheckItem{
 			{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "COMPLETED", Conclusion: "SUCCESS"},
 			{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "COMPLETED", Conclusion: "FAILURE"},
 		},
-		GitHubReviewFeedback: []github.ReviewItem{
+		GitHubReviewFeedback: []domain.GitHubReviewItem{
 			{Author: "alice", State: "APPROVED", Body: "LGTM"},
 			{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix X"},
 		},

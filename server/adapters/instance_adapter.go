@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
@@ -576,7 +577,7 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 }
 
 // checksToProto converts the itemized GitHub statusCheckRollup into proto GithubCheckItem messages.
-func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
+func checksToProto(checks []domain.GitHubCheckItem) []*sessionv1.GithubCheckItem {
 	out := make([]*sessionv1.GithubCheckItem, len(checks))
 	for i, c := range checks {
 		out[i] = &sessionv1.GithubCheckItem{Name: c.Name, Context: c.Context, State: c.State, Status: c.Status, Conclusion: c.Conclusion}
@@ -585,7 +586,7 @@ func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
 }
 
 // reviewFeedbackToProto converts the itemized GitHub PR review list into proto GithubReviewFeedback messages.
-func reviewFeedbackToProto(reviews []github.ReviewItem) []*sessionv1.GithubReviewFeedback {
+func reviewFeedbackToProto(reviews []domain.GitHubReviewItem) []*sessionv1.GithubReviewFeedback {
 	out := make([]*sessionv1.GithubReviewFeedback, len(reviews))
 	for i, r := range reviews {
 		out[i] = &sessionv1.GithubReviewFeedback{Author: r.Author, State: r.State, Body: r.Body}

@@ -33,7 +33,6 @@ package session
 import (
 	"time"
 
-	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -61,8 +60,8 @@ type GitHubIntegration struct {
 	GitHubApprovedCount    int
 	GitHubChangesReqCount  int
 	GitHubCheckConclusion  string
-	GitHubChecks           []github.CheckItem
-	GitHubReviewFeedback   []github.ReviewItem
+	GitHubChecks           []domain.GitHubCheckItem
+	GitHubReviewFeedback   []domain.GitHubReviewItem
 	GitHubMergeable        string
 	GitHubPRStatusTerminal bool
 	LastPRStatusCheck      time.Time
@@ -243,8 +242,8 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubApprovedCount:    i.GitHubApprovedCount,
 			GitHubChangesReqCount:  i.GitHubChangesReqCount,
 			GitHubCheckConclusion:  i.GitHubCheckConclusion,
-			GitHubChecks:           append([]github.CheckItem(nil), i.GitHubChecks...),
-			GitHubReviewFeedback:   append([]github.ReviewItem(nil), i.GitHubReviewFeedback...),
+			GitHubChecks:           append([]domain.GitHubCheckItem(nil), i.GitHubChecks...),
+			GitHubReviewFeedback:   append([]domain.GitHubReviewItem(nil), i.GitHubReviewFeedback...),
 			GitHubMergeable:        i.GitHubMergeable,
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,

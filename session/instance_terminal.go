@@ -9,7 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -423,8 +424,8 @@ type PRStatusUpdate struct {
 	ChangesReqCount int
 	IsDraft         bool
 	Terminal        bool
-	Checks          []github.CheckItem
-	Reviews         []github.ReviewItem
+	Checks          []domain.GitHubCheckItem
+	Reviews         []domain.GitHubReviewItem
 }
 
 // UpdatePRStatus atomically updates the PR status fields on this instance.
