@@ -314,12 +314,12 @@ func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.B
 	}
 	holders := h.sessionHoldersOf(ctx, item.ID)
 	merged := 0
-	var waiting []session.PRView
+	var waiting []domain.PRView
 	for _, v := range prs {
 		switch v.State {
-		case session.PRStateMerged:
+		case domain.PRStateMerged:
 			merged++
-		case session.PRStateClosed:
+		case domain.PRStateClosed:
 		default:
 			waiting = append(waiting, v)
 		}
@@ -330,7 +330,7 @@ func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.B
 	}
 	for _, v := range waiting {
 		fmt.Fprintf(sb, "Waiting on #%d (%s).", v.Ref.Number(), v.State)
-		if v.State == session.PRStateUnknown {
+		if v.State == domain.PRStateUnknown {
 			if !v.AttachedAt.IsZero() && time.Since(v.AttachedAt) > unknownPRHoldWarnAfter {
 				fmt.Fprintf(sb, " Held longer than %s.", unknownPRHoldWarnAfter)
 			}
@@ -347,8 +347,8 @@ func (h *backlogHandlers) writePullRequestSet(ctx context.Context, sb *strings.B
 
 // sessionHoldersOf maps each PR to the item's sessions that link it, so the report
 // can name the session detach alongside the item detach. Best-effort: errors log.
-func (h *backlogHandlers) sessionHoldersOf(ctx context.Context, itemID string) map[session.PRRef][]string {
-	out := map[session.PRRef][]string{}
+func (h *backlogHandlers) sessionHoldersOf(ctx context.Context, itemID string) map[domain.PRRef][]string {
+	out := map[domain.PRRef][]string{}
 	sessions, err := h.storage.ListItemSessions(ctx, itemID)
 	if err != nil {
 		log.WarningLog().Printf("get_backlog_stuck_report: ListItemSessions failed for %s: %v", itemID, err)

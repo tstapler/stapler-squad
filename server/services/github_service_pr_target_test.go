@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // recordingPRActions records which PR each GitHub action reaches.
@@ -46,9 +47,9 @@ func prTargetService(t *testing.T, prs ...prSpec) (*GitHubService, *recordingPRA
 	t.Helper()
 	inst := &session.Instance{Title: "multi", UUID: "uuid-multi", GitHubOwner: "acme", GitHubRepo: "app"}
 	for i, p := range prs {
-		ref, err := session.NewPRRef("", "acme", "app", p.number)
+		ref, err := domain.NewPRRef("", "acme", "app", p.number)
 		require.NoError(t, err)
-		require.NoError(t, inst.AttachPR(ref, session.AttachSourceBranchDiscovery,
+		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery,
 			session.PRInitial{State: p.state, Terminal: p.terminal}), "pr %d", i)
 	}
 	rec := &recordingPRActions{}
@@ -58,7 +59,7 @@ func prTargetService(t *testing.T, prs ...prSpec) (*GitHubService, *recordingPRA
 	return svc, rec
 }
 
-var mergedAndOpen = []prSpec{{11, session.PRStateMerged, true}, {12, session.PRStateOpen, false}}
+var mergedAndOpen = []prSpec{{11, domain.PRStateMerged, true}, {12, domain.PRStateOpen, false}}
 
 func TestMergePR_ShouldTargetActivePR_WhenNoPRSelector(t *testing.T) {
 	t.Parallel()

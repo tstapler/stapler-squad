@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -44,7 +45,7 @@ func terminalFixture(t *testing.T, status session.BacklogStatus) (*BacklogLifecy
 	f := newItemPRFixture(t, 0)
 	_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(status)).Save(context.Background())
 	require.NoError(t, err)
-	f.link(session.ItemPROwner(f.itemID), 22, session.PRStateMerged)
+	f.link(session.ItemPROwner(f.itemID), 22, domain.PRStateMerged)
 	v, err := f.repo.GetPullRequestState(context.Background(), testRef(22))
 	require.NoError(t, err)
 	return NewBacklogLifecycleListener(f.storage), f, v.StateID
@@ -76,7 +77,7 @@ func TestPRTerminalListener_ShouldResolveSessionLinkOwnersToTheirItems(t *testin
 	t.Parallel()
 	l, f, _ := terminalFixture(t, session.BacklogStatusDone)
 	sess := f.session(session.SessionRoleWork)
-	f.link(session.SessionPROwner(sess), 30, session.PRStateMerged)
+	f.link(session.SessionPROwner(sess), 30, domain.PRStateMerged)
 	v, err := f.repo.GetPullRequestState(context.Background(), testRef(30))
 	require.NoError(t, err)
 	c := &blockingCleaner{}
@@ -95,7 +96,7 @@ func TestPRTerminalListener_ShouldStartAtMostTwentyCleanups_WhenThreeHundredItem
 	for i := 0; i < 30; i++ {
 		item, err := f.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: fmt.Sprintf("done %d", i), Status: string(session.BacklogStatusDone)})
 		require.NoError(t, err)
-		f.link(session.ItemPROwner(item.ID), 22, session.PRStateMerged)
+		f.link(session.ItemPROwner(item.ID), 22, domain.PRStateMerged)
 	}
 	v, err := f.repo.GetPullRequestState(ctx, testRef(22))
 	require.NoError(t, err)

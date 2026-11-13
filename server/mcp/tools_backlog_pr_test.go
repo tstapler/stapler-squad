@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -155,14 +156,14 @@ func TestReportPRCreated_ShouldAttachAdditionalPR_WhenScopeOnAndNoReplacesNumber
 	assert.Equal(t, 42, fetched.PrNumber, "the open follow-up outranks the stale scalar")
 	views, lerr := storage.ItemPRs(context.Background(), item.ID)
 	require.NoError(t, lerr)
-	var followup *session.PRView
+	var followup *domain.PRView
 	for i := range views {
 		if views[i].Ref.Number() == 42 {
 			followup = &views[i]
 		}
 	}
 	require.NotNil(t, followup, "#42 is in the derived set")
-	assert.Equal(t, session.PRRoleFollowup, followup.Role)
+	assert.Equal(t, domain.PRRoleFollowup, followup.Role)
 }
 
 func TestReportPRCreated_ShouldKeepReassignmentRules_WhenScopeOffOrReplacesNumberGiven(t *testing.T) {

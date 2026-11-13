@@ -1775,14 +1775,14 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) {
 	cases := []struct {
 		name     string
-		state    session.PRState
+		state    domain.PRState
 		head     string
 		wantRuns bool
 	}{
-		{"merged PR on an earlier branch lets a new one be created", session.PRStateMerged, "feat-a", true},
-		{"merged PR on this branch does not block either", session.PRStateMerged, "feat-b", true},
-		{"open PR on another branch does not block", session.PRStateOpen, "feat-a", true},
-		{"open PR on this branch short-circuits", session.PRStateOpen, "feat-b", false},
+		{"merged PR on an earlier branch lets a new one be created", domain.PRStateMerged, "feat-a", true},
+		{"merged PR on this branch does not block either", domain.PRStateMerged, "feat-b", true},
+		{"open PR on another branch does not block", domain.PRStateOpen, "feat-a", true},
+		{"open PR on this branch short-circuits", domain.PRStateOpen, "feat-b", false},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1798,9 +1798,9 @@ func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) 
 			require.NoError(t, err)
 
 			inst := &session.Instance{Title: "multi-pr-session", UUID: sessionUUID, Branch: "feat-b", GitHubOwner: "acme", GitHubRepo: "widgets"}
-			ref, err := session.NewPRRef("", "acme", "widgets", 11)
+			ref, err := domain.NewPRRef("", "acme", "widgets", 11)
 			require.NoError(t, err)
-			require.NoError(t, inst.AttachPR(ref, session.AttachSourceBranchDiscovery,
+			require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery,
 				session.PRInitial{State: tc.state, Terminal: tc.state.Terminal(), HeadBranch: tc.head}))
 			poller.SetInstances([]*session.Instance{inst})
 
@@ -1846,10 +1846,10 @@ func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID strin
 		require.NoError(t, gerr)
 		require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, "refs/heads/feature-x")))
 	}
-	ref, err := session.NewPRRef("", "acme", "widgets", 1)
+	ref, err := domain.NewPRRef("", "acme", "widgets", 1)
 	require.NoError(t, err)
 	inst := &session.Instance{Title: "empty-branch", UUID: sessionUUID, Path: dir, HasPRLinks: true,
-		PRs: []session.PRView{{Ref: ref, State: session.PRStateOpen, HeadBranch: "feature-x", SessionUUID: sessionUUID}}}
+		PRs: []domain.PRView{{Ref: ref, State: domain.PRStateOpen, HeadBranch: "feature-x", SessionUUID: sessionUUID}}}
 	poller.SetInstances([]*session.Instance{inst})
 	return mgr, fake, &session.ReviewItem{SessionID: "empty-branch", SessionName: "empty-branch", Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now()}
 }

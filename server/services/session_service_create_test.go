@@ -626,7 +626,7 @@ func TestCreatePaths_ShouldAttachViaAttachPR_WhenCreateFromURLOrResolutionOrOneS
 	}, wait.WaitConfig{Timeout: 30 * time.Second, PollInterval: 50 * time.Millisecond, Description: "resolved PR attached"}))
 	prs := inst.Snapshot().GitHub.PRs
 	assert.Equal(t, 12, prs[0].Ref.Number())
-	assert.Equal(t, session.AttachSourceCreatedFromURL, prs[0].AttachSource)
+	assert.Equal(t, domain.AttachSourceCreatedFromURL, prs[0].AttachSource)
 	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber)
 }
 

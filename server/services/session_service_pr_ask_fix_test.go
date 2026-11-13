@@ -38,9 +38,9 @@ func newAskFixFixture(t *testing.T, status domain.Status) *askFixFixture {
 	inst := &session.Instance{Title: "ask-fix", UUID: "uuid-ask-fix", Program: "claude", Status: status,
 		CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	for _, n := range []int{11, 12} {
-		ref, err := session.NewPRRef("", "acme", "app", n)
+		ref, err := domain.NewPRRef("", "acme", "app", n)
 		require.NoError(t, err)
-		require.NoError(t, inst.AttachPR(ref, session.AttachSourceManual, session.PRInitial{State: session.PRStateOpen}))
+		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, session.PRInitial{State: domain.PRStateOpen}))
 	}
 	svctest.AddInstanceToPoller(fix.poller, inst)
 	rec := &guardedSteerRecorder{}
@@ -137,7 +137,7 @@ func TestAskSessionToFixPullRequest_ShouldTargetActivePR_WhenSelectorUnset(t *te
 func TestAttachSessionPullRequest_ShouldReportAlreadyTrackedWithoutLookup_WhenPRAlreadyAttached(t *testing.T) {
 	t.Parallel()
 	fix := setupForkTestFixture(t)
-	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, session.PRStateOpen, false})
+	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, domain.PRStateOpen, false})
 	lookups := 0
 	fix.svc.prRefs.lookup = func(_ context.Context, _ github.RepoRef, n int) (*github.PRInfo, error) {
 		lookups++

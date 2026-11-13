@@ -30,20 +30,20 @@ type ArtifactIndex struct {
 	tok    *Tokenizer
 	scorer *BM25Scorer
 
-	prSessions map[session.PRRef]map[string]struct{} // artifact PR records -> sessions
-	shas       map[string][]shaEntry                 // 7-char prefix -> commits
-	bySession  map[string]sessionKeys                // what to unwind on Update/Remove
+	prSessions map[domain.PRRef]map[string]struct{} // artifact PR records -> sessions
+	shas       map[string][]shaEntry                // 7-char prefix -> commits
+	bySession  map[string]sessionKeys               // what to unwind on Update/Remove
 }
 
 // PRLinkSource lists the sessions that hold a SessionPR link to a PR.
 type PRLinkSource interface {
-	SessionUUIDsByPR(ctx context.Context, ref session.PRRef) ([]string, error)
+	SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]string, error)
 }
 
 type shaEntry struct{ sha, sessionID string }
 
 type sessionKeys struct {
-	prs     []session.PRRef
+	prs     []domain.PRRef
 	shaKeys []string
 }
 
@@ -80,7 +80,7 @@ func NewArtifactIndex(links PRLinkSource) *ArtifactIndex {
 		docs:       NewDocumentStore(),
 		tok:        NewTokenizer(),
 		scorer:     NewBM25Scorer(idx),
-		prSessions: map[session.PRRef]map[string]struct{}{},
+		prSessions: map[domain.PRRef]map[string]struct{}{},
 		shas:       map[string][]shaEntry{},
 		bySession:  map[string]sessionKeys{},
 	}
@@ -174,7 +174,7 @@ func slicesDeleteSession(es []shaEntry, sessionID string) []shaEntry {
 func (x *ArtifactIndex) recordExact(sessionID string, rec domain.ArtifactRecord, keys *sessionKeys) {
 	switch r := rec.(type) {
 	case domain.PRRecord:
-		ref, err := session.NewPRRef(r.Host, r.Owner, r.Repo, r.Number)
+		ref, err := domain.NewPRRef(r.Host, r.Owner, r.Repo, r.Number)
 		if err != nil {
 			return
 		}
@@ -247,7 +247,7 @@ func (x *ArtifactIndex) SessionsForSHAPrefix(prefix string) []string {
 // sessions whose transcript artifacts name it. A session in both is returned once,
 // as session_pr. Rows are not checked against live sessions; the caller filters
 // orphans. Artifact records never seed SessionPR.
-func (x *ArtifactIndex) SessionsForPR(ctx context.Context, ref session.PRRef) ([]SessionPRHit, error) {
+func (x *ArtifactIndex) SessionsForPR(ctx context.Context, ref domain.PRRef) ([]SessionPRHit, error) {
 	if ref.IsZero() {
 		return nil, session.ErrZeroPRRef
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 )
@@ -33,7 +34,7 @@ func (r *EntRepository) recomputeItemPRMirror(ctx context.Context, item *ent.Bac
 	if err != nil {
 		return false, err
 	}
-	active := ActivePR(prs, "")
+	active := domain.ActivePR(prs, "")
 	if active == nil || active.Ref.Number() == item.PrNumber {
 		return false, nil
 	}

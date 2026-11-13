@@ -363,7 +363,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		GitHubCheckConclusion:  data.GitHubCheckConclusion,
 		GitHubPRStatusTerminal: data.GitHubPRStatusTerminal,
 		LastPRStatusCheck:      data.LastPRStatusCheck,
-		PRs:                    append([]PRView(nil), data.PRs...),
+		PRs:                    append([]domain.PRView(nil), data.PRs...),
 		LegacyPRUnrepresented:  data.LegacyPRUnrepresented,
 		HasPRLinks:             data.HasPRLinks,
 		// Worktree detection fields

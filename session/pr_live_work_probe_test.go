@@ -133,18 +133,18 @@ func TestIsLiveWork_ShouldCapMidTurnSession_WhenNoChangeForOverOneHour(t *testin
 func TestLiveWorkHoldStart_ShouldUseFirstMerge_ThenLastPolled_ThenFirstObserved(t *testing.T) {
 	t.Parallel()
 	obs := prTestEpoch.Add(5 * time.Hour)
-	merged := func(n int, mergedAt, polled time.Time) PRView {
+	merged := func(n int, mergedAt, polled time.Time) domain.PRView {
 		t.Helper()
-		v := prRow(t, n, PRStateMerged, "")
+		v := prRow(t, n, domain.PRStateMerged, "")
 		v.MergedAt, v.LastPolledAt = mergedAt, polled
 		return v
 	}
 	first, second := prTestEpoch, prTestEpoch.Add(30*time.Minute)
-	assert.Equal(t, first, LiveWorkHoldStart([]PRView{merged(2, second, time.Time{}), merged(1, first, time.Time{})}, obs), "first merge, not the latest")
-	assert.Equal(t, second, LiveWorkHoldStart([]PRView{merged(1, time.Time{}, second)}, obs), "zero merged_at falls back to last_polled_at")
-	assert.Equal(t, obs, LiveWorkHoldStart([]PRView{merged(1, time.Time{}, time.Time{})}, obs), "no timestamps: first observation")
-	open := prRow(t, 3, PRStateOpen, "")
-	assert.Equal(t, obs, LiveWorkHoldStart([]PRView{open}, obs), "open PRs never start the clock")
+	assert.Equal(t, first, LiveWorkHoldStart([]domain.PRView{merged(2, second, time.Time{}), merged(1, first, time.Time{})}, obs), "first merge, not the latest")
+	assert.Equal(t, second, LiveWorkHoldStart([]domain.PRView{merged(1, time.Time{}, second)}, obs), "zero merged_at falls back to last_polled_at")
+	assert.Equal(t, obs, LiveWorkHoldStart([]domain.PRView{merged(1, time.Time{}, time.Time{})}, obs), "no timestamps: first observation")
+	open := prRow(t, 3, domain.PRStateOpen, "")
+	assert.Equal(t, obs, LiveWorkHoldStart([]domain.PRView{open}, obs), "open PRs never start the clock")
 }
 
 func TestSplitLiveCurrentRound_ShouldSkipOnlyTheLiveNewestWorkSession_AndTreatErrorAsLive(t *testing.T) {

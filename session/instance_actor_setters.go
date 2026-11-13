@@ -287,12 +287,12 @@ func setGitHubPRURLLocked(s *instanceState, prURL string, prNumber int) {
 // With a resolved owner/repo and a uuid the PR joins the session's PR set through
 // AttachPR; otherwise only the legacy scalars are written and no link is created.
 func (i *Instance) SetGitHubPR(prURL string, prNumber int) {
-	i.setLegacyPR(prURL, prNumber, AttachSourcePRCreationService)
+	i.setLegacyPR(prURL, prNumber, domain.AttachSourcePRCreationService)
 }
 
 // setLegacyPR attaches the PR with source, or writes the legacy scalars alone when
 // the session cannot hold a link.
-func (i *Instance) setLegacyPR(prURL string, prNumber int, source AttachSource) {
+func (i *Instance) setLegacyPR(prURL string, prNumber int, source domain.AttachSource) {
 	if i.attachLegacyPR(prNumber, source, PRInitial{URL: prURL}) {
 		return
 	}
@@ -319,7 +319,7 @@ func setGitHubPRNumberLocked(s *instanceState, n int) {
 // Like SetGitHubPR it attaches through AttachPR (as a branch discovery) when the
 // session can hold a link, and writes only the scalar when it cannot.
 func (i *Instance) SetGitHubPRNumber(n int) {
-	if i.attachLegacyPR(n, AttachSourceBranchDiscovery, PRInitial{}) {
+	if i.attachLegacyPR(n, domain.AttachSourceBranchDiscovery, PRInitial{}) {
 		return
 	}
 	_ = i.sendSyncErr(func(s *instanceState) error {
@@ -979,7 +979,7 @@ func (i *Instance) SetGitHubResolution(r GitHubResolution) {
 	})
 	// After the owner/repo above are published: the PR the URL named joins the set.
 	if r.PRNumber > 0 {
-		i.setLegacyPR(r.PRURL, r.PRNumber, AttachSourceCreatedFromURL)
+		i.setLegacyPR(r.PRURL, r.PRNumber, domain.AttachSourceCreatedFromURL)
 	}
 }
 

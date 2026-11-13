@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -44,7 +45,7 @@ type SessionRetentionSweeper struct {
 	reread func(uuid string) (*session.InstanceData, error)
 	// reverifyClosed asks GitHub whether a PR the store has as closed-unmerged was
 	// reopened; nil uses a conditional GET. An error holds the session.
-	reverifyClosed func(ctx context.Context, ref session.PRRef) (reopened bool, err error)
+	reverifyClosed func(ctx context.Context, ref domain.PRRef) (reopened bool, err error)
 	// reverify is the per-sweep GitHub budget and the unverifiable-PR tracker.
 	reverify closedPRReverifier
 }

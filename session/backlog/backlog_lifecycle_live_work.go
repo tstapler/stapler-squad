@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -55,7 +56,7 @@ func (l *BacklogLifecycleListener) liveWorkNow() time.Time {
 // with a warning (expiry wins over a probe error). Off unless reader:backlog is on
 // and a probe is wired. A probe error is treated as live; the real probe caps that
 // itself.
-func (l *BacklogLifecycleListener) heldByLiveWork(ctx context.Context, itemID string, prs []session.PRView) (held, maxHoldExpired bool) {
+func (l *BacklogLifecycleListener) heldByLiveWork(ctx context.Context, itemID string, prs []domain.PRView) (held, maxHoldExpired bool) {
 	probe := l.LiveWorkProbe()
 	if probe == nil || !l.backlogReaderEnabled() {
 		return false, false
@@ -163,7 +164,7 @@ const prRefreshWait = 10 * time.Second
 // PRRowRefresher refreshes one PR's state row from GitHub and returns once the poll
 // core has written it. *PRStatusPoller implements it.
 type PRRowRefresher interface {
-	Refresh(ctx context.Context, ref session.PRRef, src session.PRObservationSource) error
+	Refresh(ctx context.Context, ref domain.PRRef, src session.PRObservationSource) error
 }
 
 // SetPRRowRefresher wires the poller's per-PR refresh into the reconcilers.

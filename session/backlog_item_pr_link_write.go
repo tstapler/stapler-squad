@@ -19,15 +19,15 @@ import (
 // the replaced PR of a correction: its item-direct link is deleted without a
 // tombstone. A tombstoned Ref writes no link (the operator detached it).
 type itemPRLinkWrite struct {
-	Ref    PRRef
-	Source AttachSource
+	Ref    domain.PRRef
+	Source domain.AttachSource
 	URL    string
-	Drop   *PRRef
+	Drop   *domain.PRRef
 }
 
 // newItemPRLinkWrite builds the write for a PR association, or nil when its URL and
 // number do not form a ref (the gate then fails closed on the unrepresented number).
-func newItemPRLinkWrite(pr PRAssociation, replaced *PRRef) *itemPRLinkWrite {
+func newItemPRLinkWrite(pr PRAssociation, replaced *domain.PRRef) *itemPRLinkWrite {
 	ref, err := ParseItemPRRef(pr.URL, pr.Number)
 	if err != nil {
 		log.WarningLog().Printf("[Storage] item PR link not written: %v", err)
@@ -35,7 +35,7 @@ func newItemPRLinkWrite(pr PRAssociation, replaced *PRRef) *itemPRLinkWrite {
 	}
 	src := pr.Source
 	if src == "" {
-		src = AttachSourceManual
+		src = domain.AttachSourceManual
 	}
 	return &itemPRLinkWrite{Ref: ref, Source: src, URL: pr.URL, Drop: replaced}
 }
@@ -53,7 +53,7 @@ func (w *itemPRLinkWrite) writeTx(ctx context.Context, tx *ent.Tx, itemID string
 		}
 	}
 	res, err := upsertSessionPRTx(ctx, tx, owner, w.Ref, PRLink{
-		Role: PRRolePrimary, Source: w.Source, Initial: PRInitial{State: PRStateOpen, URL: w.URL},
+		Role: domain.PRRolePrimary, Source: w.Source, Initial: PRInitial{State: domain.PRStateOpen, URL: w.URL},
 	})
 	if err != nil {
 		return fmt.Errorf("write item-direct PR link: %w", err)
@@ -68,7 +68,7 @@ func (w *itemPRLinkWrite) writeTx(ctx context.Context, tx *ent.Tx, itemID string
 }
 
 // deleteItemLinkTx removes the owner's link to ref (no tombstone) inside tx.
-func deleteItemLinkTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref PRRef) error {
+func deleteItemLinkTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref domain.PRRef) error {
 	ids, err := tx.PullRequestState.Query().Where(refPredicate(ref)).IDs(ctx)
 	if err != nil {
 		return fmt.Errorf("look up replaced PR state: %w", err)
@@ -87,7 +87,7 @@ func deleteItemLinkTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref PRRef)
 // in one transaction (pushAndCreatePR and shipViaAgentOrFallback, BUG-058 narrowed):
 // a failure of either leaves neither. The transition to pr_pending stays a separate
 // call, so BUG-058 itself is not closed.
-func (r *EntRepository) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source AttachSource) error {
+func (r *EntRepository) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source domain.AttachSource) error {
 	id, err := uuid.Parse(itemID)
 	if err != nil {
 		return fmt.Errorf("set item PR fields: invalid item id %q: %w", itemID, err)

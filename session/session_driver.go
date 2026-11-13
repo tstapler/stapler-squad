@@ -1064,8 +1064,8 @@ func attachScannedPRURL(inst *Instance, prURL string) {
 		return
 	}
 	gh := inst.Snapshot().GitHub
-	want, wantErr := NewPRRef(gh.GitHubHost, gh.GitHubOwner, gh.GitHubRepo, parsed.PRNumber)
-	got, gotErr := NewPRRef(parsed.Host, parsed.Owner, parsed.Repo, parsed.PRNumber)
+	want, wantErr := domain.NewPRRef(gh.GitHubHost, gh.GitHubOwner, gh.GitHubRepo, parsed.PRNumber)
+	got, gotErr := domain.NewPRRef(parsed.Host, parsed.Owner, parsed.Repo, parsed.PRNumber)
 	if wantErr != nil || gotErr != nil || want != got {
 		log.Debug("SessionDriver: ignoring PR URL from terminal output that is not in the session's repository",
 			"session", inst.Title, "url", prURL, "session_repo", gh.GitHubOwner+"/"+gh.GitHubRepo)

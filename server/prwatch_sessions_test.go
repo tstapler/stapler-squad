@@ -235,17 +235,17 @@ func TestDetectRemote_should_ServeOtherSessions_When_ProbeBlocks(t *testing.T) {
 
 func twoPRSnap(t *testing.T, id string, merged, open int) *session.InstanceSnapshot {
 	t.Helper()
-	ref := func(n int) session.PRRef {
-		r, err := session.NewPRRef("", "acme", "widget", n)
+	ref := func(n int) domain.PRRef {
+		r, err := domain.NewPRRef("", "acme", "widget", n)
 		require.NoError(t, err)
 		return r
 	}
 	snap := prSnap(id, domain.Active)
 	snap.GitHub.GitHubPRNumber, snap.GitHub.GitHubPRStatusTerminal = open, false
-	snap.GitHub.PRs = []session.PRView{
-		{Ref: ref(merged), State: session.PRStateMerged, StoredTerminal: true},
-		{Ref: ref(open), State: session.PRStateOpen},
-		{Ref: ref(open + 1), State: session.PRStateOpen},
+	snap.GitHub.PRs = []domain.PRView{
+		{Ref: ref(merged), State: domain.PRStateMerged, StoredTerminal: true},
+		{Ref: ref(open), State: domain.PRStateOpen},
+		{Ref: ref(open + 1), State: domain.PRStateOpen},
 	}
 	return snap
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -47,10 +48,10 @@ func (s *BacklogService) populatePRCounts(ctx context.Context, items []*sessionv
 }
 
 // countItemPRs returns the set size and how many of its PRs are merged.
-func countItemPRs(prs []session.PRView) (total, merged int32) {
+func countItemPRs(prs []domain.PRView) (total, merged int32) {
 	for _, v := range prs {
 		total++
-		if v.State == session.PRStateMerged {
+		if v.State == domain.PRStateMerged {
 			merged++
 		}
 	}
@@ -60,9 +61,9 @@ func countItemPRs(prs []session.PRView) (total, merged int32) {
 // prHolds derives the held lines from the same facts the gate reads: non-terminal PRs
 // of the derived set, superseded rounds' non-terminal PRs, a live work session, and a
 // live session past the max hold. The client never recomputes a hold.
-func (s *BacklogService) prHolds(ctx context.Context, item *backlogdto.BacklogItemData, prs []session.PRView) []*sessionv1.PrHold {
+func (s *BacklogService) prHolds(ctx context.Context, item *backlogdto.BacklogItemData, prs []domain.PRView) []*sessionv1.PrHold {
 	holds := services.NonTerminalPRHolds(prs, "")
-	inSet := map[session.PRRef]bool{}
+	inSet := map[domain.PRRef]bool{}
 	for _, v := range prs {
 		inSet[v.Ref] = true
 	}
@@ -76,7 +77,7 @@ func (s *BacklogService) prHolds(ctx context.Context, item *backlogdto.BacklogIt
 
 // supersededRoundHolds names non-terminal PRs only an earlier round's session links:
 // the verdict ignores them but they still hold that round's worktree.
-func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, inSet map[session.PRRef]bool) []*sessionv1.PrHold {
+func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, inSet map[domain.PRRef]bool) []*sessionv1.PrHold {
 	var uuids []string
 	for _, is := range sessions {
 		if is.Role == session.SessionRoleWork && is.SessionUUID != "" {
@@ -101,7 +102,7 @@ func (s *BacklogService) supersededRoundHolds(ctx context.Context, sessions []ba
 
 // liveWorkHolds reports SESSION_ACTIVE while the newest work session is live, and
 // MAX_HOLD instead once the first merge is older than the max hold.
-func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, prs []session.PRView) []*sessionv1.PrHold {
+func (s *BacklogService) liveWorkHolds(ctx context.Context, sessions []backlogdto.ItemSessionSummary, prs []domain.PRView) []*sessionv1.PrHold {
 	probe := s.cleanup.ruleLProbe()
 	if probe == nil {
 		return nil

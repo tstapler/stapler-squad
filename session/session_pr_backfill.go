@@ -22,6 +22,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
@@ -44,9 +45,9 @@ var errSessionNoRepo = errors.New("session has a PR number but no github owner/r
 // ParseItemPRRef builds the PRRef of a backlog item from its pr_url and
 // pr_number: path /{owner}/{repo}/pull/{n}, host from the URL (GHE included),
 // and the number in the URL must equal pr_number. No git-remote fallback.
-func ParseItemPRRef(prURL string, prNumber int) (PRRef, error) {
-	bad := func() (PRRef, error) {
-		return PRRef{}, fmt.Errorf("%w: url %q number %d", ErrItemBadPRRef, prURL, prNumber)
+func ParseItemPRRef(prURL string, prNumber int) (domain.PRRef, error) {
+	bad := func() (domain.PRRef, error) {
+		return domain.PRRef{}, fmt.Errorf("%w: url %q number %d", ErrItemBadPRRef, prURL, prNumber)
 	}
 	u, err := url.Parse(strings.TrimSpace(prURL))
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -61,7 +62,7 @@ func ParseItemPRRef(prURL string, prNumber int) (PRRef, error) {
 		return bad()
 	}
 	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
-	ref, err := NewPRRef(host, parts[0], strings.TrimSuffix(parts[1], ".git"), n)
+	ref, err := domain.NewPRRef(host, parts[0], strings.TrimSuffix(parts[1], ".git"), n)
 	if err != nil {
 		return bad()
 	}
@@ -71,32 +72,32 @@ func ParseItemPRRef(prURL string, prNumber int) (PRRef, error) {
 // sessionLegacyRef builds the PRRef of a session's legacy columns. An empty
 // github_host means github.com, though a GOPATH-style cloned path may still
 // reveal a GHE host.
-func sessionLegacyRef(owner, repo, host, path string, number int) (PRRef, error) {
+func sessionLegacyRef(owner, repo, host, path string, number int) (domain.PRRef, error) {
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" {
-		return PRRef{}, errSessionNoRepo
+		return domain.PRRef{}, errSessionNoRepo
 	}
 	if host == "" {
 		if repoRef, err := github.NewRepoRef(owner, repo); err == nil {
 			host = hostFromClonedPath(path, repoRef)
 		}
 	}
-	return NewPRRef(host, owner, repo, number)
+	return domain.NewPRRef(host, owner, repo, number)
 }
 
-func synthesizePRURL(ref PRRef) string {
+func synthesizePRURL(ref domain.PRRef) string {
 	return fmt.Sprintf("https://%s/%s/%s/pull/%d", ref.Host(), ref.Owner(), ref.Repo(), ref.Number())
 }
 
 // ItemPRCoverage is everything needed to decide whether an item's scalar PR is
 // already represented by a link or covered by a detach tombstone.
 type ItemPRCoverage struct {
-	ItemLinks         []PRRef            // item-direct links
-	SessionLinks      map[string][]PRRef // links of each of the item's sessions, every round and role
-	ItemTombstones    []PRRef
-	SessionTombstones map[string][]PRRef
+	ItemLinks         []domain.PRRef            // item-direct links
+	SessionLinks      map[string][]domain.PRRef // links of each of the item's sessions, every round and role
+	ItemTombstones    []domain.PRRef
+	SessionTombstones map[string][]domain.PRRef
 }
 
-func containsRef(refs []PRRef, ref PRRef) bool {
+func containsRef(refs []domain.PRRef, ref domain.PRRef) bool {
 	for _, r := range refs {
 		if r == ref {
 			return true
@@ -106,7 +107,7 @@ func containsRef(refs []PRRef, ref PRRef) bool {
 }
 
 // Represented reports whether any link of the item or of any of its sessions is ref.
-func (c ItemPRCoverage) Represented(ref PRRef) bool {
+func (c ItemPRCoverage) Represented(ref domain.PRRef) bool {
 	if containsRef(c.ItemLinks, ref) {
 		return true
 	}
@@ -121,7 +122,7 @@ func (c ItemPRCoverage) Represented(ref PRRef) bool {
 // CoveredByTombstone is the wide tombstone test: a tombstone of the item OR of
 // any of its sessions (every round and role), so detaching a session-only PR can
 // never make it look "unrepresented" again.
-func (c ItemPRCoverage) CoveredByTombstone(ref PRRef) bool {
+func (c ItemPRCoverage) CoveredByTombstone(ref domain.PRRef) bool {
 	if containsRef(c.ItemTombstones, ref) {
 		return true
 	}
@@ -136,13 +137,13 @@ func (c ItemPRCoverage) CoveredByTombstone(ref PRRef) bool {
 // ItemHasUnrepresentedLegacyPR reports the item's scalar PR as a ref when it has a
 // buildable one that no link represents and no tombstone covers; the error is
 // ErrItemBadPRRef for the skip class (unbuildable ref).
-func ItemHasUnrepresentedLegacyPR(prURL string, prNumber int, c ItemPRCoverage) (PRRef, bool, error) {
+func ItemHasUnrepresentedLegacyPR(prURL string, prNumber int, c ItemPRCoverage) (domain.PRRef, bool, error) {
 	if prNumber <= 0 {
-		return PRRef{}, false, nil
+		return domain.PRRef{}, false, nil
 	}
 	ref, err := ParseItemPRRef(prURL, prNumber)
 	if err != nil {
-		return PRRef{}, false, err
+		return domain.PRRef{}, false, err
 	}
 	return ref, !c.Represented(ref) && !c.CoveredByTombstone(ref), nil
 }
@@ -170,7 +171,7 @@ func (r *PRBackfillReport) skipTitle(title string) {
 
 type prBackfillCandidate struct {
 	owner    PROwner
-	ref      PRRef
+	ref      domain.PRRef
 	title    string
 	url      string
 	terminal bool // seeded as an unverified terminal row only if EVERY contributor says so
@@ -179,7 +180,7 @@ type prBackfillCandidate struct {
 }
 
 // prBackfillHook is a test seam called before each import; nil in production.
-type prBackfillHook func(PRRef) error
+type prBackfillHook func(domain.PRRef) error
 
 // runPRBackfill is one pass. A returned error is transient (retry); deterministic
 // per-row failures are counted in the report and the pass continues.
@@ -205,8 +206,8 @@ func (r *EntRepository) runPRBackfill(ctx context.Context, hook prBackfillHook) 
 
 // mergeBackfillSeeds: a PR is an unverified terminal row only when every
 // contributing candidate is terminal-seeded (non-terminal wins, fail closed).
-func mergeBackfillSeeds(groups ...[]prBackfillCandidate) map[PRRef]bool {
-	seeds := make(map[PRRef]bool)
+func mergeBackfillSeeds(groups ...[]prBackfillCandidate) map[domain.PRRef]bool {
+	seeds := make(map[domain.PRRef]bool)
 	for _, g := range groups {
 		for _, c := range g {
 			if prev, ok := seeds[c.ref]; ok {
@@ -219,7 +220,7 @@ func mergeBackfillSeeds(groups ...[]prBackfillCandidate) map[PRRef]bool {
 	return seeds
 }
 
-func (r *EntRepository) importPRCandidates(ctx context.Context, group []prBackfillCandidate, seeds map[PRRef]bool, hook prBackfillHook, rep *PRBackfillReport) error {
+func (r *EntRepository) importPRCandidates(ctx context.Context, group []prBackfillCandidate, seeds map[domain.PRRef]bool, hook prBackfillHook, rep *PRBackfillReport) error {
 	imported := 0
 	for _, c := range group {
 		if imported >= maxBackfillWritesPerBoot {
@@ -232,8 +233,8 @@ func (r *EntRepository) importPRCandidates(ctx context.Context, group []prBackfi
 			}
 		}
 		res, err := r.UpsertSessionPR(ctx, c.owner, c.ref, PRLink{
-			Role: PRRolePrimary, Source: AttachSourceBackfill,
-			Initial: PRInitial{State: PRStateUnknown, Terminal: seeds[c.ref], URL: c.url},
+			Role: domain.PRRolePrimary, Source: domain.AttachSourceBackfill,
+			Initial: PRInitial{State: domain.PRStateUnknown, Terminal: seeds[c.ref], URL: c.url},
 		})
 		switch {
 		case err == nil && res.Tombstoned:
@@ -288,7 +289,7 @@ func logPRBackfill(rep PRBackfillReport) {
 
 type sessionPRRow struct {
 	uuid, title string
-	ref         PRRef
+	ref         domain.PRRef
 	terminal    bool
 }
 
@@ -360,8 +361,8 @@ func (r *EntRepository) filterUnrepresentedSessions(ctx context.Context, rows []
 
 // linkRefsByOwner returns each owner's linked PRRefs in one joined statement per
 // chunk of 500 owners. ownerColumn is a code constant, never caller input.
-func (r *EntRepository) linkRefsByOwner(ctx context.Context, ownerColumn string, ids []string) (map[string][]PRRef, error) {
-	out := make(map[string][]PRRef)
+func (r *EntRepository) linkRefsByOwner(ctx context.Context, ownerColumn string, ids []string) (map[string][]domain.PRRef, error) {
+	out := make(map[string][]domain.PRRef)
 	for _, chunk := range chunkSlice(ids, itemSessionBatchChunk) {
 		query := "SELECT sp." + ownerColumn + ", ps.host, ps.owner, ps.repo, ps.number FROM session_prs sp " +
 			"JOIN pull_request_states ps ON ps.id = sp.pull_request_state_id WHERE sp." + ownerColumn +
@@ -383,14 +384,14 @@ func (r *EntRepository) linkRefsByOwner(ctx context.Context, ownerColumn string,
 	return out, nil
 }
 
-func scanLinkRefs(rows *entsql.Rows, out map[string][]PRRef) error {
+func scanLinkRefs(rows *entsql.Rows, out map[string][]domain.PRRef) error {
 	for rows.Next() {
 		var owner, host, ghOwner, repo string
 		var number int
 		if err := rows.Scan(&owner, &host, &ghOwner, &repo, &number); err != nil {
 			return fmt.Errorf("scan link ref: %w", err)
 		}
-		ref, err := NewPRRef(host, ghOwner, repo, number)
+		ref, err := domain.NewPRRef(host, ghOwner, repo, number)
 		if err != nil {
 			return fmt.Errorf("stored link ref %s/%s/%s#%d: %w", host, ghOwner, repo, number, err)
 		}
@@ -475,7 +476,7 @@ func (r *EntRepository) itemCoverage(ctx context.Context, itemIDs []string, item
 	return func(itemID string) ItemPRCoverage {
 		c := ItemPRCoverage{
 			ItemLinks: itemLinks[itemID], ItemTombstones: itemTombs[itemID],
-			SessionLinks: map[string][]PRRef{}, SessionTombstones: map[string][]PRRef{},
+			SessionLinks: map[string][]domain.PRRef{}, SessionTombstones: map[string][]domain.PRRef{},
 		}
 		for _, s := range sessionsByItem[itemID] {
 			c.SessionLinks[s] = sessionLinks[s]

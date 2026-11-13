@@ -108,7 +108,7 @@ type fakeTransition struct {
 type fakeLinkRecord struct {
 	itemID string
 	prURL  string
-	source session.AttachSource
+	source domain.AttachSource
 }
 
 type fakePRRecord struct {
@@ -197,7 +197,7 @@ func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, req 
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, itemID, prURL string, source session.AttachSource) (bool, error) {
+func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, itemID, prURL string, source domain.AttachSource) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.tombstoned[prURL] {
@@ -523,8 +523,8 @@ func TestJulesApplyCompleted_ShouldCreateTwoItemDirectLinks_WhenTwoOutputs(t *te
 	require.NoError(t, p.applyJulesState(context.Background(), entry, row, s))
 
 	require.Len(t, storage.links, 2, "invalid and duplicate outputs are not linked")
-	assert.Equal(t, fakeLinkRecord{"item-1", pr31, session.AttachSourceJules}, storage.links[0])
-	assert.Equal(t, fakeLinkRecord{"item-1", pr32, session.AttachSourceJules}, storage.links[1])
+	assert.Equal(t, fakeLinkRecord{"item-1", pr31, domain.AttachSourceJules}, storage.links[0])
+	assert.Equal(t, fakeLinkRecord{"item-1", pr32, domain.AttachSourceJules}, storage.links[1])
 	require.Len(t, storage.prRecorded, 1)
 	assert.Equal(t, pr31, storage.prRecorded[0].prURL, "the first PR stays the legacy scalar")
 	assert.NotContains(t, getLog(), "jules multiple pr outputs")

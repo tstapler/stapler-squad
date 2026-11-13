@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 var testGHEHosts = []string{"ghe.example.com"}
@@ -74,15 +75,15 @@ func TestResolveSessionRepo_LegacyNoRemoteNoURL_StaysUnrecorded(t *testing.T) {
 }
 
 func TestAnnotationsForSnapshot_ShouldEmitOneEntryPerPR_WhenSessionHoldsSeveral(t *testing.T) {
-	r11, err := session.NewPRRef("", "acme", "app", 11)
+	r11, err := domain.NewPRRef("", "acme", "app", 11)
 	require.NoError(t, err)
-	r12, err := session.NewPRRef("", "acme", "app", 12)
+	r12, err := domain.NewPRRef("", "acme", "app", 12)
 	require.NoError(t, err)
 	snap := &session.InstanceSnapshot{
 		Branch: "feat",
 		GitHub: session.GitHubIntegration{
 			GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 12,
-			PRs: []session.PRView{{Ref: r11}, {Ref: r12}},
+			PRs: []domain.PRView{{Ref: r11}, {Ref: r12}},
 		},
 	}
 

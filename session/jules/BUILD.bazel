@@ -10,6 +10,7 @@ go_library(
         "//jules",
         "//log",
         "//session",
+        "//session/domain",
         "//session/domain/backlogdto",
     ],
 )

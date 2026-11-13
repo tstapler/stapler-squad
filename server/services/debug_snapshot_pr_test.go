@@ -6,13 +6,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestDebugSnapshot_ShouldDumpEveryPRRow_WhenSessionHasSeveral(t *testing.T) {
 	t.Parallel()
 	inst := multiPRInstance(t, "dbg", "",
-		prViewFor(t, 11, session.PRStateMerged, "success"),
-		prViewFor(t, 12, session.PRStateOpen, ciConclusionFailure))
+		prViewFor(t, 11, domain.PRStateMerged, "success"),
+		prViewFor(t, 12, domain.PRStateOpen, ciConclusionFailure))
 
 	got, _ := collectSessionSnapshots(context.Background(), []*session.Instance{inst})
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Tests of the terminal-scan PR writer (session-multi-pr-tracking T2.2.1).
@@ -20,8 +21,8 @@ func TestScanAndLinkPRURL_ShouldAttachAndClearTerminal_WhenNumberChanges(t *test
 		inst := newPRTestInstance(t)
 		fake := &fakePRPersister{}
 		inst.SetPRPersister(fake)
-		require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceBranchDiscovery,
-			PRInitial{State: PRStateMerged, Terminal: true}))
+		require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery,
+			PRInitial{State: domain.PRStateMerged, Terminal: true}))
 		require.True(t, inst.Snapshot().GitHub.GitHubPRStatusTerminal)
 
 		scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, pushLine12)
@@ -29,7 +30,7 @@ func TestScanAndLinkPRURL_ShouldAttachAndClearTerminal_WhenNumberChanges(t *test
 		prs := inst.Snapshot().GitHub.PRs
 		require.Len(t, prs, 2)
 		assert.Equal(t, 12, prs[1].Ref.Number())
-		assert.Equal(t, AttachSourcePushScan, prs[1].AttachSource)
+		assert.Equal(t, domain.AttachSourcePushScan, prs[1].AttachSource)
 		g := inst.Snapshot().GitHub
 		assert.Equal(t, 12, g.GitHubPRNumber)
 		assert.False(t, g.GitHubPRStatusTerminal, "merged #11's true must not ride onto open #12")
@@ -148,7 +149,7 @@ func TestScanAndLinkPRURL_ShouldSkipTombstonedRef_WhenOwnerDetachedItBefore(t *t
 	inst.SetPRPersister(storage)
 	ctx := context.Background()
 	owner := SessionPROwner(inst.UUID)
-	_, err := storage.Repo.UpsertSessionPR(ctx, owner, mustPRRef(t, "", "acme", "app", 12), PRLink{Source: AttachSourceManual})
+	_, err := storage.Repo.UpsertSessionPR(ctx, owner, mustPRRef(t, "", "acme", "app", 12), PRLink{Source: domain.AttachSourceManual})
 	require.NoError(t, err)
 	_, err = storage.Repo.DeleteSessionPR(ctx, owner, mustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)

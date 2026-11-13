@@ -73,7 +73,7 @@ func (o PROwner) validate() error {
 
 func (o PROwner) isSession() bool { return o.SessionUUID != "" }
 
-func checkPRIdentity(owner PROwner, ref PRRef) error {
+func checkPRIdentity(owner PROwner, ref domain.PRRef) error {
 	if ref.IsZero() {
 		return ErrZeroPRRef
 	}
@@ -83,7 +83,7 @@ func checkPRIdentity(owner PROwner, ref PRRef) error {
 // PRInitial is the state a caller actually observed when inserting a state row;
 // the zero value inserts `unknown`, non-terminal (it observed nothing).
 type PRInitial struct {
-	State      PRState
+	State      domain.PRState
 	Terminal   bool
 	URL        string
 	Title      string
@@ -92,17 +92,17 @@ type PRInitial struct {
 	IsDraft    bool
 }
 
-func (i PRInitial) state() PRState {
+func (i PRInitial) state() domain.PRState {
 	if i.State == "" {
-		return PRStateUnknown
+		return domain.PRStateUnknown
 	}
 	return i.State
 }
 
 // PRLink describes the link UpsertSessionPR should create.
 type PRLink struct {
-	Role    PRRole // requested role; primary is downgraded to followup when the session already has one
-	Source  AttachSource
+	Role    domain.PRRole // requested role; primary is downgraded to followup when the session already has one
+	Source  domain.AttachSource
 	Initial PRInitial
 	// AttachedAt, when set, is stored as the link's attached_at instead of now.
 	AttachedAt time.Time
@@ -113,10 +113,10 @@ type PRLinkResult struct {
 	StateID    int
 	Created    bool // a new link row was inserted
 	Tombstoned bool // the owner detached this PR earlier; nothing was written
-	Role       PRRole
+	Role       domain.PRRole
 }
 
-func clientEnsureState(ctx context.Context, c *ent.PullRequestStateClient, ref PRRef, initial PRInitial) (int, error) {
+func clientEnsureState(ctx context.Context, c *ent.PullRequestStateClient, ref domain.PRRef, initial PRInitial) (int, error) {
 	create := c.Create().
 		SetHost(ref.Host()).SetOwner(ref.Owner()).SetRepo(ref.Repo()).SetNumber(ref.Number()).
 		SetState(string(initial.state())).SetTerminal(initial.Terminal).
@@ -131,7 +131,7 @@ func clientEnsureState(ctx context.Context, c *ent.PullRequestStateClient, ref P
 	return clientStateID(ctx, c, ref)
 }
 
-func clientStateID(ctx context.Context, c *ent.PullRequestStateClient, ref PRRef) (int, error) {
+func clientStateID(ctx context.Context, c *ent.PullRequestStateClient, ref domain.PRRef) (int, error) {
 	id, err := c.Query().Where(refPredicate(ref)).OnlyID(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("look up pull request state %s: %w", ref, err)
@@ -139,7 +139,7 @@ func clientStateID(ctx context.Context, c *ent.PullRequestStateClient, ref PRRef
 	return id, nil
 }
 
-func refPredicate(ref PRRef) predicate.PullRequestState {
+func refPredicate(ref domain.PRRef) predicate.PullRequestState {
 	return pullrequeststate.And(
 		pullrequeststate.Host(ref.Host()), pullrequeststate.Owner(ref.Owner()),
 		pullrequeststate.Repo(ref.Repo()), pullrequeststate.Number(ref.Number()),
@@ -148,14 +148,14 @@ func refPredicate(ref PRRef) predicate.PullRequestState {
 
 // EnsureState inserts the state row for ref if absent and returns its id. It
 // never modifies an existing row.
-func (r *EntRepository) EnsureState(ctx context.Context, ref PRRef, initial PRInitial) (int, error) {
+func (r *EntRepository) EnsureState(ctx context.Context, ref domain.PRRef, initial PRInitial) (int, error) {
 	if ref.IsZero() {
 		return 0, ErrZeroPRRef
 	}
 	return clientEnsureState(ctx, r.Client.PullRequestState, ref, initial)
 }
 
-func tombstonePredicate(owner PROwner, ref PRRef) []predicate.SessionPRTombstone {
+func tombstonePredicate(owner PROwner, ref domain.PRRef) []predicate.SessionPRTombstone {
 	return []predicate.SessionPRTombstone{
 		sessionprtombstone.SessionUUID(owner.SessionUUID), sessionprtombstone.BacklogItemID(owner.BacklogItemID),
 		sessionprtombstone.Host(ref.Host()), sessionprtombstone.Owner(ref.Owner()),
@@ -168,7 +168,7 @@ func linkOwnerPredicates(owner PROwner) []predicate.SessionPR {
 }
 
 // IsTombstoned reports whether owner detached ref earlier.
-func (r *EntRepository) IsTombstoned(ctx context.Context, owner PROwner, ref PRRef) (bool, error) {
+func (r *EntRepository) IsTombstoned(ctx context.Context, owner PROwner, ref domain.PRRef) (bool, error) {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return false, err
 	}
@@ -179,7 +179,7 @@ func (r *EntRepository) IsTombstoned(ctx context.Context, owner PROwner, ref PRR
 // A tombstoned (owner, ref) writes nothing and reports Tombstoned; a user attach
 // calls ClearTombstone first. An existing link is left untouched (attached_at,
 // role and pin survive a repeat call).
-func (r *EntRepository) UpsertSessionPR(ctx context.Context, owner PROwner, ref PRRef, link PRLink) (PRLinkResult, error) {
+func (r *EntRepository) UpsertSessionPR(ctx context.Context, owner PROwner, ref domain.PRRef, link PRLink) (PRLinkResult, error) {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return PRLinkResult{}, err
 	}
@@ -192,7 +192,7 @@ func (r *EntRepository) UpsertSessionPR(ctx context.Context, owner PROwner, ref 
 	return res, err
 }
 
-func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref PRRef, link PRLink) (PRLinkResult, error) {
+func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref domain.PRRef, link PRLink) (PRLinkResult, error) {
 	tombstoned, err := tx.SessionPRTombstone.Query().Where(tombstonePredicate(owner, ref)...).Exist(ctx)
 	if err != nil {
 		return PRLinkResult{}, fmt.Errorf("check tombstone: %w", err)
@@ -208,7 +208,7 @@ func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref PRRef
 		Where(append(linkOwnerPredicates(owner), sessionpr.PullRequestStateID(stateID))...).Only(ctx)
 	switch {
 	case err == nil:
-		return PRLinkResult{StateID: stateID, Role: PRRole(existing.Role)}, nil
+		return PRLinkResult{StateID: stateID, Role: domain.PRRole(existing.Role)}, nil
 	case !ent.IsNotFound(err):
 		return PRLinkResult{}, fmt.Errorf("look up existing link: %w", err)
 	}
@@ -230,9 +230,9 @@ func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref PRRef
 
 // resolveNewLinkRole enforces the link cap for sessions and items, and the
 // one-primary rule for sessions.
-func resolveNewLinkRole(ctx context.Context, tx *ent.Tx, owner PROwner, want PRRole) (PRRole, error) {
+func resolveNewLinkRole(ctx context.Context, tx *ent.Tx, owner PROwner, want domain.PRRole) (domain.PRRole, error) {
 	if want == "" {
-		want = PRRolePrimary
+		want = domain.PRRolePrimary
 	}
 	count, err := tx.SessionPR.Query().Where(linkOwnerPredicates(owner)...).Count(ctx)
 	if err != nil {
@@ -244,18 +244,18 @@ func resolveNewLinkRole(ctx context.Context, tx *ent.Tx, owner PROwner, want PRR
 	if !owner.isSession() {
 		return want, nil
 	}
-	if want != PRRolePrimary {
+	if want != domain.PRRolePrimary {
 		return want, nil
 	}
 	hasPrimary, err := tx.SessionPR.Query().
-		Where(sessionpr.SessionUUID(owner.SessionUUID), sessionpr.Role(string(PRRolePrimary))).Exist(ctx)
+		Where(sessionpr.SessionUUID(owner.SessionUUID), sessionpr.Role(string(domain.PRRolePrimary))).Exist(ctx)
 	if err != nil {
 		return "", fmt.Errorf("check primary link: %w", err)
 	}
 	if hasPrimary {
-		return PRRoleFollowup, nil
+		return domain.PRRoleFollowup, nil
 	}
-	return PRRolePrimary, nil
+	return domain.PRRolePrimary, nil
 }
 
 // withPRTx runs fn in a transaction, rolling back on error.
@@ -279,7 +279,7 @@ func (r *EntRepository) withPRTx(ctx context.Context, op string, fn func(*ent.Tx
 // for an empty uuid and ErrSessionNotPersisted when the session row does not exist
 // yet (the first full save then writes the set). A tombstoned PR writes nothing
 // and reports Tombstoned. Failure at any step rolls everything back.
-func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string, ref PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
+func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
 	if sessionUUID == "" {
 		return PRLinkResult{}, ErrNoSessionUUID
 	}
@@ -358,7 +358,7 @@ func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data InstanceData) er
 
 // ClearTombstone removes one owner's tombstone for ref: the repository half of a
 // user attach. It is a no-op when none exists.
-func (r *EntRepository) ClearTombstone(ctx context.Context, owner PROwner, ref PRRef) error {
+func (r *EntRepository) ClearTombstone(ctx context.Context, owner PROwner, ref domain.PRRef) error {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return err
 	}
@@ -369,7 +369,7 @@ func (r *EntRepository) ClearTombstone(ctx context.Context, owner PROwner, ref P
 // DeleteSessionPR detaches ref from owner: it deletes exactly that owner's link
 // and writes that owner's tombstone in one transaction. It reports whether a link
 // existed; the tombstone is written either way so a later automatic attach is blocked.
-func (r *EntRepository) DeleteSessionPR(ctx context.Context, owner PROwner, ref PRRef) (bool, error) {
+func (r *EntRepository) DeleteSessionPR(ctx context.Context, owner PROwner, ref domain.PRRef) (bool, error) {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return false, err
 	}
@@ -403,7 +403,7 @@ func (r *EntRepository) DeleteSessionPR(ctx context.Context, owner PROwner, ref 
 
 // SetPinned pins or unpins ref on a session in one transaction; pinning clears
 // every other pin of that session. Only sessions can pin.
-func (r *EntRepository) SetPinned(ctx context.Context, owner PROwner, ref PRRef, pinned bool) error {
+func (r *EntRepository) SetPinned(ctx context.Context, owner PROwner, ref domain.PRRef, pinned bool) error {
 	if err := checkPRIdentity(owner, ref); err != nil {
 		return err
 	}
@@ -448,8 +448,8 @@ func chunkSlice[T any](xs []T, size int) [][]T {
 // ListBySessionUUIDs returns each session's links joined to their states.
 // Statements: one per 500 uuids for links, plus one per prStateIDChunk distinct
 // states. Sessions without links are absent from the map.
-func (r *EntRepository) ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error) {
-	out := make(map[string][]PRView, len(uuids))
+func (r *EntRepository) ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error) {
+	out := make(map[string][]domain.PRView, len(uuids))
 	var links []*ent.SessionPR
 	for _, chunk := range chunkSlice(uuids, itemSessionBatchChunk) {
 		got, err := r.Client.SessionPR.Query().Where(sessionpr.SessionUUIDIn(chunk...)).All(ctx)
@@ -471,7 +471,7 @@ func (r *EntRepository) ListBySessionUUIDs(ctx context.Context, uuids []string) 
 // SessionUUIDsByPR returns the sorted UUIDs of the sessions linked to ref
 // (item-direct links excluded). Two statements: the state row, then its links.
 // Rows are not checked against live sessions; the caller filters orphans.
-func (r *EntRepository) SessionUUIDsByPR(ctx context.Context, ref PRRef) ([]string, error) {
+func (r *EntRepository) SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]string, error) {
 	if ref.IsZero() {
 		return nil, ErrZeroPRRef
 	}
@@ -493,7 +493,7 @@ func (r *EntRepository) SessionUUIDsByPR(ctx context.Context, ref PRRef) ([]stri
 }
 
 // ListByItem returns the item-direct links of one backlog item joined to states.
-func (r *EntRepository) ListByItem(ctx context.Context, itemID string) ([]PRView, error) {
+func (r *EntRepository) ListByItem(ctx context.Context, itemID string) ([]domain.PRView, error) {
 	if itemID == "" {
 		return nil, ErrInvalidPROwner
 	}
@@ -504,7 +504,7 @@ func (r *EntRepository) ListByItem(ctx context.Context, itemID string) ([]PRView
 	return r.joinLinkStates(ctx, links)
 }
 
-func (r *EntRepository) joinLinkStates(ctx context.Context, links []*ent.SessionPR) ([]PRView, error) {
+func (r *EntRepository) joinLinkStates(ctx context.Context, links []*ent.SessionPR) ([]domain.PRView, error) {
 	if len(links) == 0 {
 		return nil, nil
 	}
@@ -526,7 +526,7 @@ func (r *EntRepository) joinLinkStates(ctx context.Context, links []*ent.Session
 			states[s.ID] = s
 		}
 	}
-	views := make([]PRView, 0, len(links))
+	views := make([]domain.PRView, 0, len(links))
 	for _, l := range links {
 		st, ok := states[l.PullRequestStateID]
 		if !ok {
@@ -546,18 +546,18 @@ func (r *EntRepository) joinLinkStates(ctx context.Context, links []*ent.Session
 // not exhausted. Non-terminal states come first, then unverified terminal ones,
 // each newest link (attached_at) first. Returned views carry state columns only;
 // AttachedAt is the newest link's, and owner fields are empty.
-func (r *EntRepository) ListPollableStates(ctx context.Context) ([]PRView, error) {
+func (r *EntRepository) ListPollableStates(ctx context.Context) ([]domain.PRView, error) {
 	states, err := r.Client.PullRequestState.Query().
 		Where(pullrequeststate.HasLinks(), pullrequeststate.Or(
 			pullrequeststate.Terminal(false),
-			pullrequeststate.And(pullrequeststate.State(string(PRStateUnknown)), pullrequeststate.Terminal(true)),
+			pullrequeststate.And(pullrequeststate.State(string(domain.PRStateUnknown)), pullrequeststate.Terminal(true)),
 		)).
 		WithLinks().
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list pollable states: %w", err)
 	}
-	out := make([]PRView, 0, len(states))
+	out := make([]domain.PRView, 0, len(states))
 	for _, st := range states {
 		v, err := r.linkStateToView(st, nil)
 		if err != nil {
@@ -583,31 +583,31 @@ func (r *EntRepository) ListPollableStates(ctx context.Context) ([]PRView, error
 }
 
 // GetPullRequestState returns one PR's state columns (no owner fields).
-func (r *EntRepository) GetPullRequestState(ctx context.Context, ref PRRef) (PRView, error) {
+func (r *EntRepository) GetPullRequestState(ctx context.Context, ref domain.PRRef) (domain.PRView, error) {
 	if ref.IsZero() {
-		return PRView{}, ErrZeroPRRef
+		return domain.PRView{}, ErrZeroPRRef
 	}
 	st, err := r.Client.PullRequestState.Query().Where(refPredicate(ref)).Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return PRView{}, fmt.Errorf("%w: pull request state %s", domain.ErrNotFound, ref)
+			return domain.PRView{}, fmt.Errorf("%w: pull request state %s", domain.ErrNotFound, ref)
 		}
-		return PRView{}, fmt.Errorf("load pull request state %s: %w", ref, err)
+		return domain.PRView{}, fmt.Errorf("load pull request state %s: %w", ref, err)
 	}
 	return r.linkStateToView(st, nil)
 }
 
 // linkStateToView converts a state row (and optionally one of its links) to a PRView.
-func (r *EntRepository) linkStateToView(st *ent.PullRequestState, link *ent.SessionPR) (PRView, error) {
-	ref, err := NewPRRef(st.Host, st.Owner, st.Repo, st.Number)
+func (r *EntRepository) linkStateToView(st *ent.PullRequestState, link *ent.SessionPR) (domain.PRView, error) {
+	ref, err := domain.NewPRRef(st.Host, st.Owner, st.Repo, st.Number)
 	if err != nil {
-		return PRView{}, fmt.Errorf("stored pull request state %d: %w", st.ID, err)
+		return domain.PRView{}, fmt.Errorf("stored pull request state %d: %w", st.ID, err)
 	}
-	state, err := ParsePRState(st.State)
+	state, err := domain.ParsePRState(st.State)
 	if err != nil {
-		return PRView{}, fmt.Errorf("stored pull request state %d: %w", st.ID, err)
+		return domain.PRView{}, fmt.Errorf("stored pull request state %d: %w", st.ID, err)
 	}
-	v := PRView{
+	v := domain.PRView{
 		StateID: st.ID, Ref: ref, State: state, StoredTerminal: st.Terminal, URL: st.URL, Title: st.Title,
 		HeadBranch: st.HeadBranch, BaseBranch: st.BaseBranch, IsDraft: st.IsDraft,
 		CheckConclusion: st.CheckConclusion, ApprovedCount: st.ApprovedCount, ChangesRequestedCount: st.ChangesReqCount,
@@ -622,11 +622,11 @@ func (r *EntRepository) linkStateToView(st *ent.PullRequestState, link *ent.Sess
 		v.PollFailCount, v.FirstFailAt = 0, time.Time{}
 	}
 	if link != nil {
-		role, rerr := ParsePRRole(link.Role)
+		role, rerr := domain.ParsePRRole(link.Role)
 		if rerr != nil {
 			log.Warn("stored session pr role unparseable", "link", link.ID, "role", link.Role)
 		}
-		src, _ := ParseAttachSource(link.AttachSource)
+		src, _ := domain.ParseAttachSource(link.AttachSource)
 		v.SessionUUID, v.BacklogItemID = link.SessionUUID, link.BacklogItemID
 		v.Role, v.Pinned, v.AttachSource, v.AttachedAt = role, link.Pinned, src, link.AttachedAt
 	}
@@ -645,8 +645,8 @@ func derefTime(t *time.Time) time.Time {
 func (r *EntRepository) MarkPRMaintenanceSucceeded() { r.prVerifyCountersTrusted.Store(true) }
 
 // ListSessionTombstonesByUUIDs returns each session's tombstoned PRs (chunked by 500).
-func (r *EntRepository) ListSessionTombstonesByUUIDs(ctx context.Context, uuids []string) (map[string][]PRRef, error) {
-	out := make(map[string][]PRRef)
+func (r *EntRepository) ListSessionTombstonesByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRRef, error) {
+	out := make(map[string][]domain.PRRef)
 	for _, chunk := range chunkSlice(uuids, itemSessionBatchChunk) {
 		rows, err := r.Client.SessionPRTombstone.Query().Where(sessionprtombstone.SessionUUIDIn(chunk...)).All(ctx)
 		if err != nil {
@@ -660,8 +660,8 @@ func (r *EntRepository) ListSessionTombstonesByUUIDs(ctx context.Context, uuids 
 }
 
 // ListItemTombstones returns each item's tombstoned PRs (chunked by 500).
-func (r *EntRepository) ListItemTombstones(ctx context.Context, itemIDs []string) (map[string][]PRRef, error) {
-	out := make(map[string][]PRRef)
+func (r *EntRepository) ListItemTombstones(ctx context.Context, itemIDs []string) (map[string][]domain.PRRef, error) {
+	out := make(map[string][]domain.PRRef)
 	for _, chunk := range chunkSlice(itemIDs, itemSessionBatchChunk) {
 		rows, err := r.Client.SessionPRTombstone.Query().Where(sessionprtombstone.BacklogItemIDIn(chunk...)).All(ctx)
 		if err != nil {
@@ -674,9 +674,9 @@ func (r *EntRepository) ListItemTombstones(ctx context.Context, itemIDs []string
 	return out, nil
 }
 
-func collectTombstones(out map[string][]PRRef, rows []*ent.SessionPRTombstone, key func(*ent.SessionPRTombstone) string) error {
+func collectTombstones(out map[string][]domain.PRRef, rows []*ent.SessionPRTombstone, key func(*ent.SessionPRTombstone) string) error {
 	for _, t := range rows {
-		ref, err := NewPRRef(t.Host, t.Owner, t.Repo, t.Number)
+		ref, err := domain.NewPRRef(t.Host, t.Owner, t.Repo, t.Number)
 		if err != nil {
 			return fmt.Errorf("stored tombstone %d: %w", t.ID, err)
 		}
@@ -715,7 +715,7 @@ type PRObservation struct {
 	Now        time.Time
 
 	// Fetch payload (Kind == PRObservationFetch). State must be open, closed or merged.
-	State                 PRState
+	State                 domain.PRState
 	IsDraft               bool
 	CheckConclusion       string
 	ApprovedCount         int
@@ -755,7 +755,7 @@ type prDropTracker struct {
 	consecutive map[int]int
 }
 
-func (t *prDropTracker) record(stateID int, ref PRRef, reason PRDropReason) {
+func (t *prDropTracker) record(stateID int, ref domain.PRRef, reason PRDropReason) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	switch reason {
@@ -800,7 +800,7 @@ func (r *EntRepository) PRObservationDropCounts() PRObservationDrops {
 //	merged -> anything                     rejected
 //	unknown (either terminal bit) -> real  any source
 //	open -> unknown                        only via the 5-counted-failure rule
-func (r *EntRepository) UpdatePullRequestState(ctx context.Context, ref PRRef, obs PRObservation) (PRObservationResult, error) {
+func (r *EntRepository) UpdatePullRequestState(ctx context.Context, ref domain.PRRef, obs PRObservation) (PRObservationResult, error) {
 	if ref.IsZero() {
 		return PRObservationResult{}, ErrZeroPRRef
 	}
@@ -841,7 +841,7 @@ func (o PRObservation) validate() error {
 	}
 	switch o.Kind {
 	case PRObservationFetch:
-		if st, err := ParsePRState(string(o.State)); err != nil || st == PRStateUnknown {
+		if st, err := domain.ParsePRState(string(o.State)); err != nil || st == domain.PRStateUnknown {
 			return fmt.Errorf("pr observation: a fetch must report open, closed or merged, got %q", o.State)
 		}
 	case PRObservationCountedFailure, PRObservationErrorNote:
@@ -878,7 +878,7 @@ type observationPlan struct {
 	oldTerminal bool
 	oldPolled   *time.Time
 	// Computed outcome.
-	newState     PRState
+	newState     domain.PRState
 	newTerminal  bool
 	failCount    int
 	firstFailAt  *time.Time
@@ -892,8 +892,8 @@ func planObservation(row *ent.PullRequestState, obs PRObservation) (observationP
 	if row.LastPolledAt != nil && obs.ObservedAt.Before(*row.LastPolledAt) && !row.LastPolledAt.After(obs.Now) {
 		return p, PRDropStale
 	}
-	cur := PRState(row.State)
-	if cur == PRStateMerged || (cur == PRStateClosed && obs.Kind != PRObservationFetch) {
+	cur := domain.PRState(row.State)
+	if cur == domain.PRStateMerged || (cur == domain.PRStateClosed && obs.Kind != PRObservationFetch) {
 		return p, PRDropSticky
 	}
 	switch obs.Kind {
@@ -907,9 +907,9 @@ func planObservation(row *ent.PullRequestState, obs PRObservation) (observationP
 	}
 }
 
-func planFetch(p observationPlan, row *ent.PullRequestState, cur PRState) (observationPlan, PRDropReason) {
+func planFetch(p observationPlan, row *ent.PullRequestState, cur domain.PRState) (observationPlan, PRDropReason) {
 	obs := p.obs
-	if cur == PRStateClosed && obs.State == PRStateOpen {
+	if cur == domain.PRStateClosed && obs.State == domain.PRStateOpen {
 		reopen := obs.Source == PRSourceWebhookReopened && (row.LastPolledAt == nil || obs.ObservedAt.After(*row.LastPolledAt))
 		if !reopen {
 			if obs.Source == PRSourceReconcilerRefresh || obs.Source == PRSourceWebhook {
@@ -922,7 +922,7 @@ func planFetch(p observationPlan, row *ent.PullRequestState, cur PRState) (obser
 	return p, ""
 }
 
-func planCountedFailure(p observationPlan, row *ent.PullRequestState, cur PRState) (observationPlan, PRDropReason) {
+func planCountedFailure(p observationPlan, row *ent.PullRequestState, cur domain.PRState) (observationPlan, PRDropReason) {
 	p.failCount = row.PollFailCount + 1
 	p.firstFailAt = row.FirstFailAt
 	if row.PollFailCount == 0 || row.FirstFailAt == nil {
@@ -931,9 +931,9 @@ func planCountedFailure(p observationPlan, row *ent.PullRequestState, cur PRStat
 	}
 	p.touchPolled = true
 	p.newState, p.newTerminal = cur, row.Terminal
-	exhausted := p.failCount >= verifyExhaustedFailures && p.obs.ObservedAt.Sub(*p.firstFailAt) >= verifyExhaustedSpan
-	if cur == PRStateOpen && exhausted {
-		p.newState, p.newTerminal = PRStateUnknown, false
+	exhausted := p.failCount >= domain.VerifyExhaustedFailures && p.obs.ObservedAt.Sub(*p.firstFailAt) >= domain.VerifyExhaustedSpan
+	if cur == domain.PRStateOpen && exhausted {
+		p.newState, p.newTerminal = domain.PRStateUnknown, false
 	}
 	return p, ""
 }
@@ -1017,7 +1017,7 @@ func lastPolledMatches(old *time.Time) predicate.PullRequestState {
 // many it touched. Called only by the service-startup maintenance pass.
 func (r *EntRepository) ResetVerifyCounters(ctx context.Context) (int, error) {
 	n, err := r.Client.PullRequestState.Update().
-		Where(pullrequeststate.State(string(PRStateUnknown)), pullrequeststate.Terminal(true)).
+		Where(pullrequeststate.State(string(domain.PRStateUnknown)), pullrequeststate.Terminal(true)).
 		SetPollFailCount(0).ClearFirstFailAt().SetPollError("").Save(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("reset verify counters: %w", err)

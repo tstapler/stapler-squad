@@ -302,9 +302,9 @@ type Instance struct {
 	// PRs, LegacyPRUnrepresented and HasPRLinks back Snapshot().GitHub.PRs and its
 	// siblings. Written only by the PR setters (instance_pr_set.go) and load
 	// hydration; never serialized from here (links live in their own table).
-	PRs                   []PRView `json:"-"`
-	LegacyPRUnrepresented bool     `json:"-"`
-	HasPRLinks            bool     `json:"-"`
+	PRs                   []domain.PRView `json:"-"`
+	LegacyPRUnrepresented bool            `json:"-"`
+	HasPRLinks            bool            `json:"-"`
 	// prPersistMu serializes this session's PR persists; prPersister is the
 	// storage seam (nil until injected); prPersistPending marks a PR set change
 	// the next full save must write. See instance_pr_set.go.
@@ -1218,7 +1218,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	if opts.GitHubPRNumber > 0 {
 		// Created from a PR URL: the PR joins the set (its write is deferred to the
 		// first full save, see persistPRAttach).
-		instance.setLegacyPR(opts.GitHubPRURL, opts.GitHubPRNumber, AttachSourceCreatedFromURL)
+		instance.setLegacyPR(opts.GitHubPRURL, opts.GitHubPRNumber, domain.AttachSourceCreatedFromURL)
 	}
 	return instance, nil
 }

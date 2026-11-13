@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
@@ -18,7 +19,7 @@ import (
 type ItemGuardView struct {
 	// Direct are the item-direct links (agent-reported, Jules, manual) with the
 	// item's tombstoned PRs removed.
-	Direct []PRView
+	Direct []domain.PRView
 	// LegacyUnrepresented is true when the item's scalar pr_number/pr_url is
 	// neither carried by a link of the item or its sessions nor covered by a
 	// tombstone, or cannot be turned into a ref at all. It fails closed.
@@ -54,8 +55,8 @@ func (r *EntRepository) fillItemGuardChunk(ctx context.Context, ids []string, ou
 	return nil
 }
 
-func (r *EntRepository) directItemViews(ctx context.Context, ids []string) (map[string][]PRView, error) {
-	byItem := make(map[string][]PRView)
+func (r *EntRepository) directItemViews(ctx context.Context, ids []string) (map[string][]domain.PRView, error) {
+	byItem := make(map[string][]domain.PRView)
 	linkRows, err := r.Client.SessionPR.Query().Where(sessionpr.BacklogItemIDIn(ids...)).All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list item guard links: %w", err)

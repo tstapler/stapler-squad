@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
@@ -122,7 +123,7 @@ func TestStuckDetector_ShouldRaisePRPendingNoPR_WhenEmptySetAndNumberZero(t *tes
 func TestStuckDetector_ShouldNotRaise_WhenNumberZeroButSetHasItemDirectPR(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	f.link(session.ItemPROwner(f.itemID), 21, session.PRStateOpen)
+	f.link(session.ItemPROwner(f.itemID), 21, domain.PRStateOpen)
 	listener := NewBacklogLifecycleListener(f.storage)
 	listener.backlogReaderOverride = func() bool { return true }
 	listener.SetNotifier(&sessiontest.FakeNotifier{})
@@ -137,7 +138,7 @@ func TestStuckDetector_ShouldRaise_WhenNumberSetButSetEmptiedByDetach(t *testing
 	t.Parallel()
 	f := newItemPRFixture(t, 30)
 	s := f.session(session.SessionRoleWork)
-	f.link(session.SessionPROwner(s), 30, session.PRStateOpen)
+	f.link(session.SessionPROwner(s), 30, domain.PRStateOpen)
 	f.detach(session.SessionPROwner(s), 30)
 	listener := NewBacklogLifecycleListener(f.storage)
 	listener.backlogReaderOverride = func() bool { return true }
@@ -160,8 +161,8 @@ func TestReconcileBouncingItems_ShouldHoldDone_WhenTrackedPRMergedButAnotherPROp
 			_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(session.BacklogStatusInProgress)).Save(ctx)
 			require.NoError(t, err)
 			newTrackedWorkSession(t, f.storage, f.itemID, "/tmp/fake-repo", "backlog/bounce-hold", "")
-			f.link(session.ItemPROwner(f.itemID), 172, session.PRStateMerged)
-			f.link(session.ItemPROwner(f.itemID), 173, session.PRStateOpen)
+			f.link(session.ItemPROwner(f.itemID), 172, domain.PRStateMerged)
+			f.link(session.ItemPROwner(f.itemID), 173, domain.PRStateOpen)
 			for i := 0; i < 3; i++ {
 				_, err = f.storage.RawTransitionBacklogItemStatus(ctx, f.itemID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 				require.NoError(t, err)

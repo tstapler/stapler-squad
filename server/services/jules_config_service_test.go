@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -82,7 +83,7 @@ func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, _ se
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, _, _ string, _ session.AttachSource) (bool, error) {
+func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, _, _ string, _ domain.AttachSource) (bool, error) {
 	return true, nil
 }
 

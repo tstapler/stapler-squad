@@ -207,7 +207,7 @@ func rehearseTickerCancel(t *testing.T, repo *EntRepository, opts []goleak.Optio
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := &prMaintenanceClock{}
-	storage.runPRStartupMaintenance(ctx, clock.config(func(PRRef) error { return errors.New("database is locked") }))
+	storage.runPRStartupMaintenance(ctx, clock.config(func(domain.PRRef) error { return errors.New("database is locked") }))
 	require.Equal(t, int64(1), storage.PRMaintenanceFailures())
 	cancel()
 	storage.StopPRMaintenance()
@@ -224,7 +224,7 @@ func rehearseFaultedMaintenance(t *testing.T, repo *EntRepository) time.Duration
 	failures := 4
 	clock := &prMaintenanceClock{}
 	require.NoError(t, func() error {
-		storage.runPRStartupMaintenance(context.Background(), clock.config(func(PRRef) error {
+		storage.runPRStartupMaintenance(context.Background(), clock.config(func(domain.PRRef) error {
 			if failures > 0 {
 				failures--
 				return errors.New("database is locked")

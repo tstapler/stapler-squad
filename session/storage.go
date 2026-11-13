@@ -89,9 +89,9 @@ type InstanceData struct {
 	LastPRStatusCheck      time.Time `json:"last_pr_status_check,omitempty"`
 	// Multi-PR link set carried through full saves (never JSON-serialized: the
 	// links table is the store). See Instance.PRs.
-	PRs                   []PRView `json:"-"`
-	LegacyPRUnrepresented bool     `json:"-"`
-	HasPRLinks            bool     `json:"-"`
+	PRs                   []domain.PRView `json:"-"`
+	LegacyPRUnrepresented bool            `json:"-"`
+	HasPRLinks            bool            `json:"-"`
 	// TerminalClearPending asks the full save to write terminal=false even for a
 	// session without links, whose normal save only ever sets the flag.
 	TerminalClearPending bool `json:"-"`
@@ -533,8 +533,8 @@ func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []InstanceData) {
 			uuids = append(uuids, rows[i].UUID)
 		}
 	}
-	var links map[string][]PRView
-	var tombs map[string][]PRRef
+	var links map[string][]domain.PRView
+	var tombs map[string][]domain.PRRef
 	var loadErr error
 	if len(uuids) > 0 {
 		if links, loadErr = s.Repo.ListBySessionUUIDs(ctx, uuids); loadErr == nil {
@@ -556,7 +556,7 @@ func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []InstanceData) {
 
 // legacyPRUnrepresented: the session's scalar number is neither a link nor tombstoned.
 // An unbuildable ref (no owner/repo) can never become a link, so it stays protected.
-func legacyPRUnrepresented(d InstanceData, tombstones []PRRef, unknown bool) bool {
+func legacyPRUnrepresented(d InstanceData, tombstones []domain.PRRef, unknown bool) bool {
 	if d.GitHubPRNumber <= 0 {
 		return false
 	}
@@ -578,9 +578,9 @@ func legacyPRUnrepresented(d InstanceData, tombstones []PRRef, unknown bool) boo
 	return true
 }
 
-func sortedByAttach(prs []PRView) []PRView {
+func sortedByAttach(prs []domain.PRView) []domain.PRView {
 	out := slices.Clone(prs)
-	slices.SortStableFunc(out, func(a, b PRView) int { return a.AttachedAt.Compare(b.AttachedAt) })
+	slices.SortStableFunc(out, func(a, b domain.PRView) int { return a.AttachedAt.Compare(b.AttachedAt) })
 	return out
 }
 
@@ -902,7 +902,7 @@ func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
 // AttachSessionPR writes one PR link, its state row (insert-if-absent) and the
 // session's legacy mirror columns in a single transaction, keyed by session uuid.
 // See EntRepository.AttachSessionPR for the error contract.
-func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
+func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
 	res, err := s.Repo.AttachSessionPR(ctx, sessionUUID, ref, link, mirror)
 	if err == nil {
 		s.saved.reset() // the row changed behind the save fingerprints
@@ -921,7 +921,7 @@ func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal 
 
 // DetachSessionPR deletes the session's link to ref and writes its tombstone in
 // one transaction (the user's "Not mine").
-func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref PRRef) error {
+func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef) error {
 	if sessionUUID == "" {
 		return ErrNoSessionUUID
 	}
@@ -934,7 +934,7 @@ func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref P
 
 // AttachItemPR writes an item-direct PR link (agent-reported, Jules, manual). A
 // tombstoned PR is not attached (PRLinkResult.Tombstoned).
-func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref PRRef, link PRLink) (PRLinkResult, error) {
+func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref domain.PRRef, link PRLink) (PRLinkResult, error) {
 	if itemID == "" {
 		return PRLinkResult{}, ErrInvalidPROwner
 	}
@@ -948,7 +948,7 @@ func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref PRRef, li
 // DetachItemPR deletes the item-direct link to ref and writes the item's
 // tombstone in one transaction; it reports whether a link existed. Session links
 // are untouched.
-func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref PRRef) (bool, error) {
+func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref domain.PRRef) (bool, error) {
 	if itemID == "" {
 		return false, ErrInvalidPROwner
 	}
@@ -960,7 +960,7 @@ func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref PRRef) (b
 }
 
 // SetSessionPRPinned pins or unpins one of the session's PRs; pinning clears the others.
-func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref PRRef, pinned bool) error {
+func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref domain.PRRef, pinned bool) error {
 	if sessionUUID == "" {
 		return ErrNoSessionUUID
 	}
@@ -972,7 +972,7 @@ func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, re
 }
 
 // ClearSessionPRTombstone removes the session's tombstone for ref, if any.
-func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref PRRef) error {
+func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref domain.PRRef) error {
 	if sessionUUID == "" {
 		return ErrNoSessionUUID
 	}
@@ -986,17 +986,17 @@ func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error
 
 // UpdatePullRequestState applies one poll observation to a PR state row. Invariant I1:
 // the PR status poller is its only production caller.
-func (s *Storage) UpdatePullRequestState(ctx context.Context, ref PRRef, obs PRObservation) (PRObservationResult, error) {
+func (s *Storage) UpdatePullRequestState(ctx context.Context, ref domain.PRRef, obs PRObservation) (PRObservationResult, error) {
 	return s.Repo.UpdatePullRequestState(ctx, ref, obs)
 }
 
 // ListPollableStates is the PR poller's work list (see EntRepository.ListPollableStates).
-func (s *Storage) ListPollableStates(ctx context.Context) ([]PRView, error) {
+func (s *Storage) ListPollableStates(ctx context.Context) ([]domain.PRView, error) {
 	return s.Repo.ListPollableStates(ctx)
 }
 
 // GetPullRequestState returns the state columns of one PR.
-func (s *Storage) GetPullRequestState(ctx context.Context, ref PRRef) (PRView, error) {
+func (s *Storage) GetPullRequestState(ctx context.Context, ref domain.PRRef) (domain.PRView, error) {
 	return s.Repo.GetPullRequestState(ctx, ref)
 }
 
@@ -1493,7 +1493,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 		ExpectedUpdatedAt: &expectedUpdatedAt,
 		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
 	}
-	var replaced *PRRef
+	var replaced *domain.PRRef
 	if isReassignment {
 		if old, perr := ParseItemPRRef(observed.PrURL, observed.PrNumber); perr == nil {
 			replaced = &old
@@ -1535,7 +1535,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 }
 
 // SetItemPRFieldsWithLink writes pr_url/pr_number and the item-direct link atomically.
-func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source AttachSource) error {
+func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source domain.AttachSource) error {
 	return s.Repo.SetItemPRFieldsWithLink(ctx, itemID, prURL, prNumber, source)
 }
 
@@ -1551,10 +1551,10 @@ func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.Bac
 	}
 	src := pr.Source
 	if src == "" {
-		src = AttachSourceReportPRCreated
+		src = domain.AttachSourceReportPRCreated
 	}
 	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(observed.ID), ref, PRLink{
-		Role: PRRoleFollowup, Source: src, Initial: PRInitial{State: PRStateOpen, URL: pr.URL},
+		Role: domain.PRRoleFollowup, Source: src, Initial: PRInitial{State: domain.PRStateOpen, URL: pr.URL},
 	})
 	if err != nil {
 		return fmt.Errorf("additive PR: record link: %w", err)
@@ -1712,19 +1712,19 @@ func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID s
 
 // ListSessionPRViewsByUUIDs returns each session's PR links joined to their
 // states as row data (no live Instance needed). Sessions without links are absent.
-func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error) {
+func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error) {
 	return s.Repo.ListBySessionUUIDs(ctx, uuids)
 }
 
 // SessionUUIDsByPR returns the sessions holding a link to ref (see EntRepository.SessionUUIDsByPR).
-func (s *Storage) SessionUUIDsByPR(ctx context.Context, ref PRRef) ([]string, error) {
+func (s *Storage) SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]string, error) {
 	return s.Repo.SessionUUIDsByPR(ctx, ref)
 }
 
 // AttachItemPRLink upserts an item-direct link (state row plus link) for prURL.
 // It reports attached=false, with no error, when the item carries a tombstone for
 // that PR, so a re-poll cannot undo a detach.
-func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, source AttachSource) (bool, error) {
+func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, source domain.AttachSource) (bool, error) {
 	n, err := ParsePRNumberFromURL(prURL)
 	if err != nil {
 		return false, err
@@ -1738,8 +1738,8 @@ func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, so
 		return false, fmt.Errorf("attach item pr link: list links: %w", err)
 	}
 	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, PRLink{
-		Role: AssignRole(existing, ""), Source: source,
-		Initial: PRInitial{State: PRStateOpen, URL: strings.TrimSpace(prURL)},
+		Role: domain.AssignRole(existing, ""), Source: source,
+		Initial: PRInitial{State: domain.PRStateOpen, URL: strings.TrimSpace(prURL)},
 	})
 	if err != nil {
 		return false, fmt.Errorf("attach item pr link %s: %w", ref, err)
@@ -1748,7 +1748,7 @@ func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, so
 }
 
 // ItemPRs returns the item's derived PR set (see PRSetReader).
-func (s *Storage) ItemPRs(ctx context.Context, itemID string) ([]PRView, error) {
+func (s *Storage) ItemPRs(ctx context.Context, itemID string) ([]domain.PRView, error) {
 	return s.Repo.ItemPRsByID(ctx, itemID)
 }
 

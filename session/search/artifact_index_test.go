@@ -8,19 +8,17 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
-
-	"github.com/tstapler/stapler-squad/session"
 )
 
-type fakeLinks map[session.PRRef][]string
+type fakeLinks map[domain.PRRef][]string
 
-func (f fakeLinks) SessionUUIDsByPR(_ context.Context, ref session.PRRef) ([]string, error) {
+func (f fakeLinks) SessionUUIDsByPR(_ context.Context, ref domain.PRRef) ([]string, error) {
 	return f[ref], nil
 }
 
-func mustRef(t *testing.T, owner, repo string, n int) session.PRRef {
+func mustRef(t *testing.T, owner, repo string, n int) domain.PRRef {
 	t.Helper()
-	ref, err := session.NewPRRef("", owner, repo, n)
+	ref, err := domain.NewPRRef("", owner, repo, n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +122,7 @@ func TestArtifactIndex_SessionsForPR_ShouldNeverSeedSessionPRFromArtifacts(t *te
 	if len(links) != 0 {
 		t.Fatalf("index wrote to the link source: %v", links)
 	}
-	if _, err := x.SessionsForPR(context.Background(), session.PRRef{}); err == nil {
+	if _, err := x.SessionsForPR(context.Background(), domain.PRRef{}); err == nil {
 		t.Fatal("zero ref must be rejected")
 	}
 }

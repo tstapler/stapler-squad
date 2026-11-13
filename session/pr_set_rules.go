@@ -5,59 +5,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-// newerPR orders by AttachedAt, then PR number, then ref text, so ActivePR is
-// deterministic even when a backfill stamps every link in the same instant.
-func newerPR(a, b PRView) bool {
-	if !a.AttachedAt.Equal(b.AttachedAt) {
-		return a.AttachedAt.After(b.AttachedAt)
-	}
-	if a.Ref.Number() != b.Ref.Number() {
-		return a.Ref.Number() > b.Ref.Number()
-	}
-	return a.Ref.String() > b.Ref.String()
-}
-
-// newestPR returns a copy of the newest view satisfying keep, or nil.
-func newestPR(prs []PRView, keep func(PRView) bool) *PRView {
-	var best *PRView
-	for i := range prs {
-		if !keep(prs[i]) {
-			continue
-		}
-		if best == nil || newerPR(prs[i], *best) {
-			best = &prs[i]
-		}
-	}
-	if best == nil {
-		return nil
-	}
-	cp := *best
-	return &cp
-}
-
-// ActivePR picks the PR a session's actions and legacy mirror should target:
-// the pinned PR; else the open PR whose head is currentBranch; else the newest
-// open PR; else the newest non-terminal unknown; else the newest effectively
-// terminal PR; else nil. Ranking uses Terminal(), never the state string alone,
-// and "newest" means the latest AttachedAt.
-func ActivePR(prs []PRView, currentBranch string) *PRView {
-	isOpen := func(v PRView) bool { return v.State == PRStateOpen && !v.Terminal() }
-	steps := []func(PRView) bool{
-		func(v PRView) bool { return v.Pinned },
-		func(v PRView) bool { return currentBranch != "" && isOpen(v) && v.HeadBranch == currentBranch },
-		isOpen,
-		func(v PRView) bool { return v.State == PRStateUnknown && !v.Terminal() },
-		PRView.Terminal,
-	}
-	for _, keep := range steps {
-		if pr := newestPR(prs, keep); pr != nil {
-			return pr
-		}
-	}
-	return nil
-}
 
 // ItemVerdict is the done-rule outcome over an item's PR set.
 type ItemVerdict string
@@ -69,44 +18,20 @@ const (
 	ItemVerdictAllClosedUnmerged ItemVerdict = "all_closed_unmerged"
 )
 
-// distinctPRs drops duplicate views of one PullRequestState (defensive: the
-// schema keeps one state row per PRRef). Views without a state id fall back to
-// the ref.
-func distinctPRs(prs []PRView) []PRView {
-	type key struct {
-		id  int
-		ref PRRef
-	}
-	seen := make(map[key]struct{}, len(prs))
-	out := make([]PRView, 0, len(prs))
-	for _, v := range prs {
-		k := key{id: v.StateID}
-		if v.StateID == 0 {
-			k.ref = v.Ref
-		}
-		if _, dup := seen[k]; dup {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, v)
-	}
-	return out
-}
-
 // ItemPRVerdict implements the done rule over distinct PRs: any open or unknown
 // PR (including every unverified-terminal row, exhausted or not) holds the item
 // open; otherwise one merged PR is Done and only closed PRs are AllClosedUnmerged.
-func ItemPRVerdict(prs []PRView) ItemVerdict {
-	prs = distinctPRs(prs)
+func ItemPRVerdict(prs []domain.PRView) ItemVerdict {
+	prs = domain.DistinctPRs(prs)
 	if len(prs) == 0 {
 		return ItemVerdictNoPRs
 	}
 	merged := false
 	for _, v := range prs {
 		switch v.State {
-		case PRStateMerged:
+		case domain.PRStateMerged:
 			merged = true
-		case PRStateClosed:
+		case domain.PRStateClosed:
 		default: // open, unknown, or anything unrecognized: fail closed
 			return ItemVerdictOpen
 		}
@@ -122,8 +47,8 @@ func ItemPRVerdict(prs []PRView) ItemVerdict {
 // no link must not read as safe); callers that accept "no PRs at all" ask
 // HasNoPRs instead. The legacy number is part of the signature so call sites
 // pass it explicitly, but only the empty-set rule exists today.
-func PRsAllTerminal(prs []PRView, _ int) bool {
-	prs = distinctPRs(prs)
+func PRsAllTerminal(prs []domain.PRView, _ int) bool {
+	prs = domain.DistinctPRs(prs)
 	if len(prs) == 0 {
 		return false
 	}
@@ -136,7 +61,7 @@ func PRsAllTerminal(prs []PRView, _ int) bool {
 }
 
 // HasNoPRs is the explicit empty-set path: no links and no legacy PR number.
-func HasNoPRs(prs []PRView, legacyNumber int) bool {
+func HasNoPRs(prs []domain.PRView, legacyNumber int) bool {
 	return len(prs) == 0 && legacyNumber == 0
 }
 
@@ -210,10 +135,10 @@ func LiveWorkHoldExpired(now, holdStart time.Time, maxHold time.Duration) bool {
 // it). A merged row without merged_at uses last_polled_at (terminal rows are no
 // longer polled, so it stays put); with neither, firstObserved, the first time the
 // hold was seen, so a missing timestamp can never hold forever.
-func LiveWorkHoldStart(prs []PRView, firstObserved time.Time) time.Time {
+func LiveWorkHoldStart(prs []domain.PRView, firstObserved time.Time) time.Time {
 	var first time.Time
-	for _, v := range distinctPRs(prs) {
-		if v.State != PRStateMerged {
+	for _, v := range domain.DistinctPRs(prs) {
+		if v.State != domain.PRStateMerged {
 			continue
 		}
 		at := v.MergedAt
@@ -230,28 +155,6 @@ func LiveWorkHoldStart(prs []PRView, firstObserved time.Time) time.Time {
 	return first
 }
 
-// AssignRole picks the display role for a PR about to be attached to a session
-// that already holds existing links: primary when none of them is primary;
-// otherwise stacked when baseBranch is another attached PR's head branch, else
-// followup. How the PR arrived (attach source) does not change the role.
-func AssignRole(existing []PRView, baseBranch string) PRRole {
-	hasPrimary := false
-	for _, v := range existing {
-		hasPrimary = hasPrimary || v.Role == PRRolePrimary
-	}
-	if !hasPrimary {
-		return PRRolePrimary
-	}
-	if baseBranch != "" {
-		for _, v := range existing {
-			if v.HeadBranch == baseBranch {
-				return PRRoleStacked
-			}
-		}
-	}
-	return PRRoleFollowup
-}
-
 // LegacyPRMirror is the value the legacy scalar PR columns carry for a session
 // that has links: its ActivePR, and whether every linked PR is terminal.
 type LegacyPRMirror struct {
@@ -262,8 +165,8 @@ type LegacyPRMirror struct {
 
 // ProjectLegacyPRMirror derives the legacy scalars from a non-empty link set.
 // It reads no configuration, so the result is identical under every flag scope.
-func ProjectLegacyPRMirror(prs []PRView, currentBranch string) (LegacyPRMirror, bool) {
-	active := ActivePR(prs, currentBranch)
+func ProjectLegacyPRMirror(prs []domain.PRView, currentBranch string) (LegacyPRMirror, bool) {
+	active := domain.ActivePR(prs, currentBranch)
 	if active == nil {
 		return LegacyPRMirror{}, false
 	}
@@ -282,19 +185,19 @@ func ProjectLegacyPRMirror(prs []PRView, currentBranch string) (LegacyPRMirror, 
 // Create-PR short-circuits only on such a PR, so a session whose PRs are all
 // terminal (or sit on other branches) may open another. An empty branch matches
 // nothing: the caller then creates, and GitHub itself rejects a duplicate.
-func OpenPROnBranch(prs []PRView, branch string) (PRView, bool) {
+func OpenPROnBranch(prs []domain.PRView, branch string) (domain.PRView, bool) {
 	if branch == "" {
-		return PRView{}, false
+		return domain.PRView{}, false
 	}
-	best := newestPR(prs, func(v PRView) bool { return !v.Terminal() && v.HeadBranch == branch })
+	best := domain.NewestPR(prs, func(v domain.PRView) bool { return !v.Terminal() && v.HeadBranch == branch })
 	if best == nil {
-		return PRView{}, false
+		return domain.PRView{}, false
 	}
 	return *best, true
 }
 
-// WebURL is the stored URL, or the canonical github.com-style URL built from the ref.
-func (v PRView) WebURL() string {
+// PRWebURL is the stored URL, or the canonical github.com-style URL built from the ref.
+func PRWebURL(v domain.PRView) string {
 	if v.URL != "" {
 		return v.URL
 	}
@@ -311,7 +214,7 @@ func ExistingPRForCreate(snap *InstanceSnapshot, branch string) (url string, num
 	g := snap.GitHub
 	if len(g.PRs) > 0 {
 		v, found := OpenPROnBranch(g.PRs, branch)
-		return v.WebURL(), v.Ref.Number(), found
+		return PRWebURL(v), v.Ref.Number(), found
 	}
 	return g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRURL != ""
 }
@@ -320,7 +223,7 @@ func ExistingPRForCreate(snap *InstanceSnapshot, branch string) (url string, num
 // GitHubCheckConclusion scalar is not mirrored per PR, so with several PRs it can
 // describe a merged one; it is used only when the session has no links.
 func (s *InstanceSnapshot) ActiveCheckConclusion() string {
-	if active := ActivePR(s.GitHub.PRs, s.Branch); active != nil {
+	if active := domain.ActivePR(s.GitHub.PRs, s.Branch); active != nil {
 		return active.CheckConclusion
 	}
 	return s.GitHub.GitHubCheckConclusion

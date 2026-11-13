@@ -18,7 +18,7 @@ import (
 
 type staticPRLinks map[string][]string // PRRef.String() -> session uuids
 
-func (s staticPRLinks) SessionUUIDsByPR(_ context.Context, ref session.PRRef) ([]string, error) {
+func (s staticPRLinks) SessionUUIDsByPR(_ context.Context, ref domain.PRRef) ([]string, error) {
 	return s[ref.String()], nil
 }
 

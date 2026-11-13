@@ -100,10 +100,10 @@ func TestListSessionArtifacts_ShouldKeepOnlySessionsTiedToThePR(t *testing.T) {
 
 func TestListSessionArtifacts_ShouldUseTheSessionsOwnPRState(t *testing.T) {
 	t.Parallel()
-	ref, err := session.NewPRRef("", "acme", "app", 12)
+	ref, err := domain.NewPRRef("", "acme", "app", 12)
 	require.NoError(t, err)
 	inst := artifactSession("u1", "one", 0, scannedBlob(prRecord("acme", "app", 12, domain.PRSourceCreated)))
-	require.NoError(t, inst.AttachPR(ref, session.AttachSourceCreatedFromURL, session.PRInitial{State: session.PRStateMerged, Terminal: true, URL: "https://github.com/acme/app/pull/12"}))
+	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceCreatedFromURL, session.PRInitial{State: domain.PRStateMerged, Terminal: true, URL: "https://github.com/acme/app/pull/12"}))
 	svc := newArtifactSvc(nil, inst)
 	resp, err := svc.ListSessionArtifacts(context.Background(), browseReq(func(r *sessionv1.ListSessionArtifactsRequest) { r.State = "merged" }))
 	require.NoError(t, err)

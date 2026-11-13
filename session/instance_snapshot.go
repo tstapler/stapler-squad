@@ -67,7 +67,7 @@ type GitHubIntegration struct {
 	// Multi-PR set. PRs is a private copy per snapshot (PRView holds only
 	// values); the scalars above mirror ActivePR(PRs) whenever PRs is non-empty.
 	// LegacyPRUnrepresented and HasPRLinks are carried, never derived here.
-	PRs                   []PRView
+	PRs                   []domain.PRView
 	LegacyPRUnrepresented bool
 	HasPRLinks            bool
 }
@@ -245,7 +245,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubMergeable:        i.GitHubMergeable,
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,
-			PRs:                    append([]PRView(nil), i.PRs...),
+			PRs:                    append([]domain.PRView(nil), i.PRs...),
 			LegacyPRUnrepresented:  i.LegacyPRUnrepresented,
 			HasPRLinks:             i.HasPRLinks,
 		},

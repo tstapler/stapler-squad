@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -147,7 +148,7 @@ const progressCommentTimeout = 15 * time.Second
 // progressPR is one PR to name in the review comment.
 type progressPR struct {
 	URL   string
-	State session.PRState
+	State domain.PRState
 }
 
 // progressPRLines lists every PR of the item's set when reader:backlog is on;
@@ -198,7 +199,7 @@ func progressReviewComments(prs []progressPR) string {
 		}
 		state := string(pr.State)
 		if state == "" {
-			state = string(session.PRStateUnknown)
+			state = string(domain.PRStateUnknown)
 		}
 		lines = append(lines, fmt.Sprintf("- %s (%s)", pr.URL, state))
 	}

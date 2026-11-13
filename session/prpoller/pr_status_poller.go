@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // pollerAuthResult is an immutable snapshot of the auth check state.
@@ -100,7 +101,7 @@ type PRStatusPoller struct {
 	// clock is the injected time source of the state loop (nil means time.Now).
 	clock func() time.Time
 	// onPRUnknown is raised once when a polled PR becomes unknown. Guarded by mu.
-	onPRUnknown func(session.PRView)
+	onPRUnknown func(domain.PRView)
 
 	// stateBackoffs holds the in-memory retry gates of non-counted failures,
 	// keyed by PullRequestState id; guarded by stateMu, never p.mu.
@@ -183,9 +184,9 @@ func (p *PRStatusPoller) ETagCache() *github.ETagCache {
 // The dispatched fetch's context is built from p.ctx (the poller's own lifetime),
 // not the passed-in ctx: the webhook handler does not block on this call, so a
 // request-scoped ctx would cancel the fetch as soon as the HTTP response is written.
-func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, ref session.PRRef, src session.PRObservationSource) bool {
+func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, ref domain.PRRef, src session.PRObservationSource) bool {
 	_ = ctx // request-scoped; not used for the dispatched fetch's lifetime, see doc comment
-	if repoRef, err := ref.RepoRef(); err == nil {
+	if repoRef, err := session.PRRepoRef(ref); err == nil {
 		p.etagCache.Invalidate(repoRef, ref.Number())
 	}
 
@@ -213,7 +214,7 @@ func (p *PRStatusPoller) InvalidateAndRefresh(ctx context.Context, ref session.P
 }
 
 // dispatchRowRefresh starts Refresh for ref's row, if it has one.
-func (p *PRStatusPoller) dispatchRowRefresh(ref session.PRRef, src session.PRObservationSource) bool {
+func (p *PRStatusPoller) dispatchRowRefresh(ref domain.PRRef, src session.PRObservationSource) bool {
 	if p.storage == nil || p.ctx == nil {
 		return false
 	}
@@ -231,7 +232,7 @@ func (p *PRStatusPoller) dispatchRowRefresh(ref session.PRRef, src session.PRObs
 }
 
 // legacyScalarsName reports whether a session's legacy scalars name ref.
-func legacyScalarsName(g session.GitHubIntegration, ref session.PRRef) bool {
+func legacyScalarsName(g session.GitHubIntegration, ref domain.PRRef) bool {
 	return strings.EqualFold(g.GitHubOwner, ref.Owner()) && strings.EqualFold(g.GitHubRepo, ref.Repo()) &&
 		g.GitHubPRNumber == ref.Number()
 }

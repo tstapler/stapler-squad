@@ -562,7 +562,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	// user_refresh observation source yet, so it uses reconciler_refresh.
 	// A successful fetch resolves an unverified-terminal row and resets
 	// poll_fail_count; a counted failure leaves it unverified and increments it.
-	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref session.PRRef) error {
+	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref domain.PRRef) error {
 		return prStatusPoller.Refresh(ctx, ref, session.PRSourceReconcilerRefresh)
 	})
 	if err := w.Validate(); err != nil {
