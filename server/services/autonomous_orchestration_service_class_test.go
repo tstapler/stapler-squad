@@ -46,13 +46,13 @@ func TestOnAutonomousDriverComplete_CancelledClassGuards(t *testing.T) {
 	roles := []struct {
 		name       string
 		role       string
-		status     session.BacklogStatus
-		wantStatus session.BacklogStatus
+		status     domain.BacklogStatus
+		wantStatus domain.BacklogStatus
 	}{
-		{"work", session.SessionRoleWork, session.BacklogStatusInProgress, session.BacklogStatusInProgress},
-		{"triage", session.SessionRoleTriage, session.BacklogStatusIdea, session.BacklogStatusIdea},
-		{"review", session.SessionRoleReview, session.BacklogStatusReview, session.BacklogStatusReview},
-		{"unrecognized", "future-pipeline-stage", session.BacklogStatusIdea, session.BacklogStatusIdea},
+		{"work", session.SessionRoleWork, domain.BacklogStatusInProgress, domain.BacklogStatusInProgress},
+		{"triage", session.SessionRoleTriage, domain.BacklogStatusIdea, domain.BacklogStatusIdea},
+		{"review", session.SessionRoleReview, domain.BacklogStatusReview, domain.BacklogStatusReview},
+		{"unrecognized", "future-pipeline-stage", domain.BacklogStatusIdea, domain.BacklogStatusIdea},
 		{"unlinked", "", "", ""},
 	}
 	for _, r := range roles {
@@ -109,7 +109,7 @@ func TestOnAutonomousDriverComplete_CancelledClassGuards(t *testing.T) {
 
 // SVC-5.
 func TestOnAutonomousDriverComplete_CancelledExternal_PreexistingOpenRowStaysOpen(t *testing.T) {
-	f := newCharFixture(t, "cancel-open-row", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "cancel-open-row", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	f.seedAutonomousStuckRow(t, 2, nil)
@@ -126,7 +126,7 @@ func TestOnAutonomousDriverComplete_CancelledExternal_PreexistingOpenRowStaysOpe
 
 // SVC-6.
 func TestOnAutonomousDriverComplete_ReviewRole_CancelledAfterItemLeftReview_ResolvesRow(t *testing.T) {
-	f := newCharFixture(t, "cancel-review-left", session.SessionRoleReview, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "cancel-review-left", session.SessionRoleReview, domain.BacklogStatusInProgress)
 	f.seedAutonomousStuckRow(t, 0, nil)
 
 	f.complete(cancelledOutcome(domain.StopReasonCancelledExternal))
@@ -141,7 +141,7 @@ func TestOnAutonomousDriverComplete_ReviewRole_CancelledAfterItemLeftReview_Reso
 
 // SVC-7.
 func TestCancelledShutdown_FlagOn_KeepsModeAndRoundTrips(t *testing.T) {
-	f := newCharFixture(t, "cancel-shutdown-on", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "cancel-shutdown-on", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	f.setReadoption(true)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
@@ -162,7 +162,7 @@ func TestCancelledShutdown_FlagOn_KeepsModeAndRoundTrips(t *testing.T) {
 
 // SVC-8.
 func TestCancelledShutdown_FlagOff_ClearsModeOutcomeStuckOnly(t *testing.T) {
-	f := newCharFixture(t, "cancel-shutdown-off", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "cancel-shutdown-off", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 

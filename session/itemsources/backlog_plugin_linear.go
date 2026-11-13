@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/linear"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -260,7 +261,7 @@ func linearPriorityToBacklog(p int) int {
 	case 4:
 		return 2
 	default: // 0 (no priority) and 3 (medium)
-		return session.DefaultBacklogPriority
+		return domain.DefaultBacklogPriority
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -39,7 +40,7 @@ func newDepItems(t *testing.T, storage *session.Storage, titles ...string) []bac
 		require.NoError(t, err)
 		it, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 			Title:              title,
-			Status:             string(session.BacklogStatusIdea),
+			Status:             string(domain.BacklogStatusIdea),
 			AcceptanceCriteria: ac, // required before idea -> ready
 		})
 		require.NoError(t, err)
@@ -154,7 +155,7 @@ func TestMCPTransitionBacklogItemStatus_should_Reject_When_ExpectedStatusStale(t
 
 	got, err := storage.GetBacklogItem(context.Background(), items[0].ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusIdea), got.Status, "stale guard must not move the item")
+	assert.Equal(t, string(domain.BacklogStatusIdea), got.Status, "stale guard must not move the item")
 }
 
 func TestMCPTransitionBacklogItemStatus_should_Succeed_When_GuardMatches(t *testing.T) {
@@ -169,7 +170,7 @@ func TestMCPTransitionBacklogItemStatus_should_Succeed_When_GuardMatches(t *test
 
 	got, err := storage.GetBacklogItem(context.Background(), items[0].ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReady), got.Status)
+	assert.Equal(t, string(domain.BacklogStatusReady), got.Status)
 }
 
 func TestMCPTransitionBacklogItemStatus_should_RefuseStart_When_BlockerUnresolved(t *testing.T) {
@@ -194,7 +195,7 @@ func TestMCPTransitionBacklogItemStatus_should_RefuseStart_When_BlockerUnresolve
 
 	got, err := storage.GetBacklogItem(ctx, items[1].ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusQueued), got.Status)
+	assert.Equal(t, string(domain.BacklogStatusQueued), got.Status)
 }
 
 func statusBefore(to string) string {

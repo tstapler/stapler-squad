@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -346,7 +347,7 @@ func (r *TriggerChainReconciler) ReconcileChains(ctx context.Context, er *sessio
 	chainFired := false
 	nextWorkflowSet := true
 	items, err := er.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses:          []string{string(session.BacklogStatusDone)},
+		Statuses:          []string{string(domain.BacklogStatusDone)},
 		ChainFired:        &chainFired,
 		NextWorkflowIDSet: &nextWorkflowSet,
 		Limit:             chainReconcileScanLimit,

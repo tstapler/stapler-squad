@@ -84,7 +84,7 @@ func requireTitleAndDefaultStatus(w http.ResponseWriter, title, status string) (
 		return "", false
 	}
 	if status == "" {
-		status = string(session.BacklogStatusReview)
+		status = string(domain.BacklogStatusReview)
 	}
 	return status, true
 }
@@ -156,7 +156,7 @@ func (h *BacklogDebugSeedHandler) handleSeedQueued(w http.ResponseWriter, r *htt
 	now := time.Now()
 	item, err := h.storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{
 		Title:    req.Title,
-		Status:   string(session.BacklogStatusQueued),
+		Status:   string(domain.BacklogStatusQueued),
 		QueuedAt: &now,
 	})
 	if err != nil {
@@ -196,18 +196,18 @@ type seedStuckStateResponse struct {
 // statusForSeedReason picks the BacklogStatus each real detector anchors its
 // reason on, so a seeded item looks like what the reconciler would have
 // produced (matters for anything that reads item.Status, e.g. self-heal).
-func statusForSeedReason(reason domain.StuckReason) session.BacklogStatus {
+func statusForSeedReason(reason domain.StuckReason) domain.BacklogStatus {
 	switch reason {
 	case domain.StuckReasonPRReadyUnmerged:
-		return session.BacklogStatusPRPending
+		return domain.BacklogStatusPRPending
 	case domain.StuckReasonStaleWork, domain.StuckReasonBouncing, domain.StuckReasonAutonomousStuck:
-		return session.BacklogStatusInProgress
+		return domain.BacklogStatusInProgress
 	case domain.StuckReasonOrphanedTriage:
-		return session.BacklogStatusIdea
+		return domain.BacklogStatusIdea
 	case domain.StuckReasonPlanNotApproved:
-		return session.BacklogStatusQueued
+		return domain.BacklogStatusQueued
 	default: // abandoned_review, rework_cap, push_failed
-		return session.BacklogStatusReview
+		return domain.BacklogStatusReview
 	}
 }
 
@@ -504,7 +504,7 @@ func (h *BacklogDebugSeedHandler) handleSeedReviewVerdict(w http.ResponseWriter,
 		SessionUUID: "e2e-review-" + uuid.New().String(),
 		SessionRole: session.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewOutcomePartial,
+		OverallOutcome: domain.ReviewOutcomePartial,
 		PerCriterion:   string(perCriterion),
 		Summary:        "Seeded verdict for e2e.",
 	})

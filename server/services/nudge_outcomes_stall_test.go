@@ -21,7 +21,7 @@ func TestStallRecovery_RecordsDurableNudgeOutcomes(t *testing.T) {
 	t.Run("delivered then cooldown counts skipped_cap", func(t *testing.T) {
 		rec := session.NewNudgeOutcomeRecorder("", nil)
 		defer session.SwapNudgeOutcomeRecorder(rec)()
-		f := newStallNudgeFixture(t, "nud-counted", session.BacklogStatusInProgress, true, true)
+		f := newStallNudgeFixture(t, "nud-counted", domain.BacklogStatusInProgress, true, true)
 
 		f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 		assert.Equal(t, map[string]int64{"stall/delivered": 1}, nudTotals(rec))
@@ -32,7 +32,7 @@ func TestStallRecovery_RecordsDurableNudgeOutcomes(t *testing.T) {
 	t.Run("uncertain submit", func(t *testing.T) {
 		rec := session.NewNudgeOutcomeRecorder("", nil)
 		defer session.SwapNudgeOutcomeRecorder(rec)()
-		f := newStallNudgeFixture(t, "nud-uncertain", session.BacklogStatusInProgress, true, true)
+		f := newStallNudgeFixture(t, "nud-uncertain", domain.BacklogStatusInProgress, true, true)
 		f.nudger.err = fmt.Errorf("%w: boom", session.ErrNudgeSubmitUncertain)
 
 		f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
@@ -42,7 +42,7 @@ func TestStallRecovery_RecordsDurableNudgeOutcomes(t *testing.T) {
 	t.Run("flags off records nothing", func(t *testing.T) {
 		rec := session.NewNudgeOutcomeRecorder("", nil)
 		defer session.SwapNudgeOutcomeRecorder(rec)()
-		f := newStallNudgeFixture(t, "nud-off", session.BacklogStatusInProgress, false, false)
+		f := newStallNudgeFixture(t, "nud-off", domain.BacklogStatusInProgress, false, false)
 
 		f.complete(stallIn(domain.ObservedIdlePrompt, domain.StopReasonOrchestratorError))
 

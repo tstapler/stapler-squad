@@ -160,7 +160,7 @@ func (a *AutonomousOrchestrationService) planStall(ctx context.Context, storage 
 		Reason:           rec.reason(),
 		State:            rec.State,
 		NudgeEnabled:     diagnoseOn && stallOn,
-		ItemInWorkStatus: session.BacklogStatus(item.Status) == session.BacklogStatusInProgress,
+		ItemInWorkStatus: domain.BacklogStatus(item.Status) == domain.BacklogStatusInProgress,
 		Archived:         inst.IsArchived(),
 		RetryPending:     inst.IsRetryPending(),
 	}
@@ -320,7 +320,7 @@ func (a *AutonomousOrchestrationService) nudgeStalledWorkSession(ctx, rctx conte
 // refreshStuckRow rewrites the open row's context with the final recovery;
 // best effort, the outcome is already decided.
 func (a *AutonomousOrchestrationService) refreshStuckRow(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, rec stopRecord) {
-	if _, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatus(item.Status), formatStopDetail(rec)); err != nil {
+	if _, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, domain.BacklogStatus(item.Status), formatStopDetail(rec)); err != nil {
 		log.Warn("[AutonomousDriver] refresh autonomous_stuck row failed", "item", item.ID, "err", err)
 	}
 }

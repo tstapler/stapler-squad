@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -117,7 +118,7 @@ func StartBacklogGitHubForwardSyncSubscriber(ctx context.Context, bus *events.Ev
 					continue
 				}
 				payload := event.BacklogItemPayload
-				if payload == nil || payload.Kind != events.BacklogChangeStatusTransition || payload.NewStatus != string(session.BacklogStatusDone) {
+				if payload == nil || payload.Kind != events.BacklogChangeStatusTransition || payload.NewStatus != string(domain.BacklogStatusDone) {
 					continue
 				}
 				handleForwardSyncClose(ctx, registry, syncLoop, storage, payload.Item)

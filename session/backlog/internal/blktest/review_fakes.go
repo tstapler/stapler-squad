@@ -70,7 +70,7 @@ func NewCustomCheckTestItem(t *testing.T, storage *session.Storage, title string
 		Title:              title,
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusIdea),
+		Status:             string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 	return item

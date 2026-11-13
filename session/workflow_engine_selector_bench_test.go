@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func BenchmarkSwitchableWorkflowEngine_CanTransition(b *testing.B) {
 	b.Run("default", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			def.CanTransition(BacklogStatusIdea, BacklogStatusReady, nil)
+			def.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)
 		}
 	})
 	for _, m := range []struct {
@@ -34,7 +35,7 @@ func BenchmarkSwitchableWorkflowEngine_CanTransition(b *testing.B) {
 		b.Run(m.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				sel.CanTransition(BacklogStatusIdea, BacklogStatusReady, nil)
+				sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)
 			}
 		})
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -17,14 +18,14 @@ func acTextKey(s string) string { return strings.ToLower(strings.Join(strings.Fi
 // criterion with the same normalized text, wherever it now sits. An incoming waived status that
 // matches no existing waiver is refused (ErrAcWaiverViaUpdate). Existing waivers whose text no
 // longer appears are returned in cleared so the caller can audit their removal.
-func reconcileAcWaivers(existing, incoming []AcCriterion) (merged, cleared []AcCriterion, err error) {
-	waived := map[string][]AcCriterion{}
+func reconcileAcWaivers(existing, incoming []domain.AcCriterion) (merged, cleared []domain.AcCriterion, err error) {
+	waived := map[string][]domain.AcCriterion{}
 	for _, c := range existing {
-		if k := acTextKey(c.Text); c.Status == AcStatusWaived && k != "" {
+		if k := acTextKey(c.Text); c.Status == domain.AcStatusWaived && k != "" {
 			waived[k] = append(waived[k], c)
 		}
 	}
-	merged = make([]AcCriterion, len(incoming))
+	merged = make([]domain.AcCriterion, len(incoming))
 	copy(merged, incoming)
 	for i, c := range merged {
 		k := acTextKey(c.Text)
@@ -34,13 +35,13 @@ func reconcileAcWaivers(existing, incoming []AcCriterion) (merged, cleared []AcC
 			merged[i].Status, merged[i].WaiverReason, merged[i].WaivedBy, merged[i].WaivedAt = w.Status, w.WaiverReason, w.WaivedBy, w.WaivedAt
 			continue
 		}
-		if c.Status == AcStatusWaived {
+		if c.Status == domain.AcStatusWaived {
 			return nil, nil, fmt.Errorf("criterion %d: %w", c.Index, backlogdto.ErrAcWaiverViaUpdate)
 		}
 		merged[i].WaiverReason, merged[i].WaivedBy, merged[i].WaivedAt = "", "", ""
 	}
 	for _, c := range existing {
-		if c.Status != AcStatusWaived {
+		if c.Status != domain.AcStatusWaived {
 			continue
 		}
 		k := acTextKey(c.Text)
@@ -61,12 +62,12 @@ func reconcileAcWaivers(existing, incoming []AcCriterion) (merged, cleared []AcC
 // CheckNoNewAcWaivers is the early, user-facing form of the repository's waiver invariant: it
 // reports ErrAcWaiverViaUpdate when incoming introduces a waived criterion existing does not
 // already hold. The repository re-checks authoritatively inside its transaction.
-func CheckNoNewAcWaivers(existing, incoming AcCriteriaJSON) error {
-	in, err := ParseAcCriteria(incoming)
+func CheckNoNewAcWaivers(existing, incoming domain.AcCriteriaJSON) error {
+	in, err := domain.ParseAcCriteria(incoming)
 	if err != nil {
 		return err
 	}
-	prior, _ := ParseAcCriteria(existing)
+	prior, _ := domain.ParseAcCriteria(existing)
 	_, _, err = reconcileAcWaivers(prior, in)
 	return err
 }

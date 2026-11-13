@@ -58,7 +58,7 @@ func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status domain.
 	return &charFixture{svc: svc, storage: storage, inst: inst, title: title, ch: ch}
 }
 
-func newCharFixture(t *testing.T, title string, role string, itemStatus session.BacklogStatus) *charFixture {
+func newCharFixture(t *testing.T, title string, role string, itemStatus domain.BacklogStatus) *charFixture {
 	t.Helper()
 	f := newUnlinkedCharFixture(t, title)
 	ctx := context.Background()
@@ -92,7 +92,7 @@ func (f *charFixture) drain() []*events.Event {
 func (f *charFixture) seedAutonomousStuckRow(t *testing.T, attempts int32, nextAt *time.Time) {
 	t.Helper()
 	ctx := context.Background()
-	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, session.BacklogStatusInProgress, "seed")
+	applied, err := f.storage.MarkStuck(ctx, f.itemID, domain.StuckReasonAutonomousStuck, domain.BacklogStatusInProgress, "seed")
 	require.NoError(t, err)
 	require.True(t, applied)
 	_, err = f.storage.RecordRemediationAttempt(ctx, f.itemID, domain.StuckReasonAutonomousStuck, attempts, nextAt)
@@ -123,7 +123,7 @@ func (r *signalingRespawner) AutoRespawnAutonomousWork(_ context.Context, itemID
 
 func TestOnAutonomousDriverComplete_Characterization_RemediationNotDue_SkipsRespawn(t *testing.T) {
 	// Not parallel: captureLogs swaps the shared slog seam.
-	f := newCharFixture(t, "char-not-due", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "char-not-due", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	future := time.Now().Add(time.Hour)
@@ -144,7 +144,7 @@ func TestOnAutonomousDriverComplete_Characterization_RemediationNotDue_SkipsResp
 }
 
 func TestOnAutonomousDriverComplete_Characterization_JustParked_NotifiesAndStillRespawns(t *testing.T) {
-	f := newCharFixture(t, "char-just-parked", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "char-just-parked", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	past := time.Now().Add(-time.Minute)
@@ -165,7 +165,7 @@ func TestOnAutonomousDriverComplete_Characterization_JustParked_NotifiesAndStill
 }
 
 func TestOnAutonomousDriverComplete_Characterization_UpdateItemSessionEndedFails_NotifiesBookkeepingFailed(t *testing.T) {
-	f := newCharFixture(t, "char-end-fails", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "char-end-fails", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	session.TestFailItemSessionUpdates(t, f.storage)
@@ -183,7 +183,7 @@ func TestOnAutonomousDriverComplete_Characterization_UpdateItemSessionEndedFails
 }
 
 func TestOnAutonomousDriverComplete_Characterization_NilRespawner_LeavesItemInProgress(t *testing.T) {
-	f := newCharFixture(t, "char-nil-respawner", session.SessionRoleWork, session.BacklogStatusInProgress)
+	f := newCharFixture(t, "char-nil-respawner", session.SessionRoleWork, domain.BacklogStatusInProgress)
 	f.svc.SetAutonomousStuckRespawner(nil)
 
 	f.complete(stallOutcome)
@@ -196,7 +196,7 @@ func TestOnAutonomousDriverComplete_Characterization_NilRespawner_LeavesItemInPr
 	assert.NotNil(t, is.EndedAt)
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), item.Status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), item.Status)
 	assert.Equal(t, []string{"Autonomous fix stuck"}, svctest.NotificationTitles(f.drain()))
 }
 
@@ -212,7 +212,7 @@ func TestOnAutonomousDriverComplete_Characterization_EventPayloadEqualsPostWrite
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newCharFixture(t, "char-event-payload-"+string(rune('a'+i)), session.SessionRoleWork, session.BacklogStatusInProgress)
+			f := newCharFixture(t, "char-event-payload-"+string(rune('a'+i)), session.SessionRoleWork, domain.BacklogStatusInProgress)
 
 			f.complete(tc.outcome)
 
@@ -237,12 +237,12 @@ func TestOnAutonomousDriverComplete_Characterization_MarkStuckOncePerRolePerStal
 	roles := []struct {
 		name   string
 		role   string
-		status session.BacklogStatus
+		status domain.BacklogStatus
 	}{
-		{"work", session.SessionRoleWork, session.BacklogStatusInProgress},
-		{"triage", session.SessionRoleTriage, session.BacklogStatusIdea},
-		{"review", session.SessionRoleReview, session.BacklogStatusReview},
-		{"unrecognized", "future-pipeline-stage", session.BacklogStatusIdea},
+		{"work", session.SessionRoleWork, domain.BacklogStatusInProgress},
+		{"triage", session.SessionRoleTriage, domain.BacklogStatusIdea},
+		{"review", session.SessionRoleReview, domain.BacklogStatusReview},
+		{"unrecognized", "future-pipeline-stage", domain.BacklogStatusIdea},
 	}
 	for _, r := range roles {
 		for _, done := range []bool{false, true} {

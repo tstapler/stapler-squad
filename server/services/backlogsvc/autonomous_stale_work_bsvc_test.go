@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -33,7 +34,7 @@ func TestRemediateStaleWorkSession_should_leaveSessionOpen_When_InspectorNudgesO
 			itemID := createReadyItemForSpawn(t, svc, repoPath, "stale item "+name)
 			_, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: itemID, SessionUUID: "stale-uuid", SessionRole: session.SessionRoleWork})
 			require.NoError(t, err)
-			_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 			require.NoError(t, err)
 
 			require.NoError(t, svc.RemediateStaleWorkSession(t.Context(), itemID))

@@ -122,7 +122,7 @@ func classifyJulesDispatchError(err error) error {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%s: %w", julesUnconfiguredMessage, err))
 	case errors.Is(err, jules.ErrJulesSourceNotRegistered),
 		errors.Is(err, services.ErrJulesDispatchInFlight),
-		errors.Is(err, session.ErrUnresolvedBlockers):
+		errors.Is(err, domain.ErrUnresolvedBlockers):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, jules.ErrJulesRateLimited), errors.Is(err, jules.ErrJulesTransient):
 		return connect.NewError(connect.CodeUnavailable, err)

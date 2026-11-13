@@ -151,7 +151,7 @@ func (e *ConfiguredWorkflowEngine) lookupGateRecord(itemID, gateID uuid.UUID) (*
 // the live config is stale. A from-stage still present in the live cache
 // (even with a different edge set than the snapshot) never consults the
 // fallback — the live graph is always authoritative when it has an opinion.
-func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallback *domain.StageConfigSnapshot) bool {
+func (e *ConfiguredWorkflowEngine) CanTransition(from, to domain.BacklogStatus, fallback *domain.StageConfigSnapshot) bool {
 	if _, ok := e.cache.Get(from, to); ok {
 		return true
 	}
@@ -177,16 +177,16 @@ func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallbac
 // slice, logging a Warn that the live config is stale. A from-stage still
 // present in the live cache (even with zero live edges, e.g. a legitimate
 // dead-end) never consults the fallback.
-func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallback *domain.StageConfigSnapshot) []BacklogStatus {
+func (e *ConfiguredWorkflowEngine) AllowedTransitions(from domain.BacklogStatus, fallback *domain.StageConfigSnapshot) []domain.BacklogStatus {
 	result := e.cache.AllowedTransitions(from)
 	if !e.cache.HasStage(from) {
 		if fallback != nil {
 			log.WarningLog().Printf("[ConfiguredWorkflowEngine] stage %q not found in live cache (likely deleted); falling back to item's captured StageConfigSnapshot with %d transition(s)", from, len(fallback.AllowedTransitions))
-			result = append([]BacklogStatus(nil), fallback.AllowedTransitions...)
+			result = append([]domain.BacklogStatus(nil), fallback.AllowedTransitions...)
 		}
 	}
 	if result == nil {
-		result = []BacklogStatus{}
+		result = []domain.BacklogStatus{}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
@@ -207,7 +207,7 @@ func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallba
 // single synthetic blocking GateStatus instead. When the fallback doesn't
 // contain to either (never a legal edge), today's nil, nil is preserved —
 // CanTransition already governs legality separately.
-func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (e *ConfiguredWorkflowEngine) PendingGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, fallback *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	statuses, _ := e.collectGates(item, to, fallback, true)
 	return statuses, nil
 }
@@ -216,7 +216,7 @@ func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput,
 // kinds (human_approval, automated_review, custom) are skipped rather than
 // evaluated, and skippedStateful reports that at least one was. Shadow
 // evaluation uses it so comparing engines never reads the database.
-func (e *ConfiguredWorkflowEngine) PendingGatesStructuralOnly(item BacklogItemTransitionInput, to BacklogStatus, fallback *domain.StageConfigSnapshot) (statuses []domain.GateStatus, skippedStateful bool) {
+func (e *ConfiguredWorkflowEngine) PendingGatesStructuralOnly(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, fallback *domain.StageConfigSnapshot) (statuses []domain.GateStatus, skippedStateful bool) {
 	return e.collectGates(item, to, fallback, false)
 }
 
@@ -240,7 +240,7 @@ func (g resolvedGate) effectiveStateful() bool {
 	return EffectiveGateStateful(g.Kind, g.Stateful)
 }
 
-func (e *ConfiguredWorkflowEngine) collectGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *domain.StageConfigSnapshot, evalStateful bool) (statuses []domain.GateStatus, skippedStateful bool) {
+func (e *ConfiguredWorkflowEngine) collectGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, fallback *domain.StageConfigSnapshot, evalStateful bool) (statuses []domain.GateStatus, skippedStateful bool) {
 	edge, ok := e.cache.Get(item.Status, to)
 	if !ok {
 		if status, blocked := stageConfigUnresolvableGateStatus(to, fallback); blocked {
@@ -276,7 +276,7 @@ func (e *ConfiguredWorkflowEngine) collectGates(item BacklogItemTransitionInput,
 // from the item's current stage, or ok=false when snap is nil or doesn't
 // contain to — preserving PendingGates' "not a legal edge" nil, nil case for
 // a transition that never existed even in the frozen snapshot.
-func stageConfigUnresolvableGateStatus(to BacklogStatus, snap *domain.StageConfigSnapshot) (status domain.GateStatus, ok bool) {
+func stageConfigUnresolvableGateStatus(to domain.BacklogStatus, snap *domain.StageConfigSnapshot) (status domain.GateStatus, ok bool) {
 	if snap == nil {
 		return domain.GateStatus{}, false
 	}
@@ -298,7 +298,7 @@ func stageConfigUnresolvableGateStatus(to BacklogStatus, snap *domain.StageConfi
 // ValidateGates implements WorkflowEngine as a thin wrapper over PendingGates
 // (ADR-002's Decision 2): nil exactly when every gate PendingGates reports
 // for this transition is satisfied.
-func (e *ConfiguredWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *domain.StageConfigSnapshot) error {
+func (e *ConfiguredWorkflowEngine) ValidateGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, fallback *domain.StageConfigSnapshot) error {
 	statuses, err := e.PendingGates(item, to, fallback)
 	if err != nil {
 		return err
@@ -327,7 +327,7 @@ func firstUnsatisfiedGateError(statuses []domain.GateStatus) error {
 // once this Epic's follow-up wiring (backlog_lifecycle.go's
 // resolveReviewGateContext/resolveCustomCheckGateContext call sites) actually
 // invokes them.
-func (e *ConfiguredWorkflowEngine) evaluateGate(g resolvedGate, item BacklogItemTransitionInput) domain.GateStatus {
+func (e *ConfiguredWorkflowEngine) evaluateGate(g resolvedGate, item domain.BacklogItemTransitionInput) domain.GateStatus {
 	switch g.Kind {
 	case domain.GateKindStructural:
 		return e.evaluateStructuralOrLatched(g, item)
@@ -364,7 +364,7 @@ func (e *ConfiguredWorkflowEngine) evaluateGate(g resolvedGate, item BacklogItem
 // The read runs under lookupGateRecord's bounded context rather than a
 // caller-supplied one: WorkflowEngine.PendingGates' signature (shared with
 // DefaultWorkflowEngine, session/workflow_engine.go) carries no context.
-func (e *ConfiguredWorkflowEngine) evaluateHumanApprovalGate(g resolvedGate, item BacklogItemTransitionInput) domain.GateStatus {
+func (e *ConfiguredWorkflowEngine) evaluateHumanApprovalGate(g resolvedGate, item domain.BacklogItemTransitionInput) domain.GateStatus {
 	if e.gateSatisfactionRepo != nil && item.ItemID != "" {
 		if itemUUID, parseErr := uuid.Parse(item.ItemID); parseErr == nil {
 			if record, lookupErr := e.lookupGateRecord(itemUUID, g.ID); lookupErr == nil && record.Satisfied {
@@ -454,7 +454,7 @@ func (e *ConfiguredWorkflowEngine) checkAutomatedReviewGateConfig(g resolvedGate
 // before this follow-up — only when gateSatisfactionRepo is nil, item.ItemID
 // doesn't parse, or no record exists yet (the gate hasn't fired for this item
 // at all).
-func (e *ConfiguredWorkflowEngine) evaluateRecordedGate(g resolvedGate, item BacklogItemTransitionInput, kindLabel string) domain.GateStatus {
+func (e *ConfiguredWorkflowEngine) evaluateRecordedGate(g resolvedGate, item domain.BacklogItemTransitionInput, kindLabel string) domain.GateStatus {
 	if e.gateSatisfactionRepo != nil && item.ItemID != "" {
 		if itemUUID, parseErr := uuid.Parse(item.ItemID); parseErr == nil {
 			if record, lookupErr := e.lookupGateRecord(itemUUID, g.ID); lookupErr == nil {
@@ -501,7 +501,7 @@ func describeGateSatisfactionRecord(record *GateSatisfactionData, kindLabel stri
 // AutomatedReviewConfig for the first GateKindAutomatedReview gate configured
 // on the (from,to) edge, or ok=false when the edge doesn't exist in the
 // loaded graph or carries no such gate (Epic 2.4, Story 2.4.3's follow-up).
-func (e *ConfiguredWorkflowEngine) ResolveAutomatedReviewGateContext(from, to BacklogStatus) (gateID string, cfg domain.AutomatedReviewConfig, ok bool) {
+func (e *ConfiguredWorkflowEngine) ResolveAutomatedReviewGateContext(from, to domain.BacklogStatus) (gateID string, cfg domain.AutomatedReviewConfig, ok bool) {
 	edge, found := e.cache.Get(from, to)
 	if !found {
 		return "", domain.AutomatedReviewConfig{}, false
@@ -526,7 +526,7 @@ func (e *ConfiguredWorkflowEngine) ResolveAutomatedReviewGateContext(from, to Ba
 // (from,to) edge, or ok=false when the edge doesn't exist in the loaded graph
 // or carries no such gate. Sibling to ResolveAutomatedReviewGateContext above
 // (Epic 2.4, Story 2.4.4's follow-up).
-func (e *ConfiguredWorkflowEngine) ResolveCustomCheckGateContext(from, to BacklogStatus) (gateID uuid.UUID, cfg domain.CustomCheckConfig, ok bool) {
+func (e *ConfiguredWorkflowEngine) ResolveCustomCheckGateContext(from, to domain.BacklogStatus) (gateID uuid.UUID, cfg domain.CustomCheckConfig, ok bool) {
 	edge, found := e.cache.Get(from, to)
 	if !found {
 		return uuid.Nil, domain.CustomCheckConfig{}, false
@@ -562,7 +562,7 @@ func parseResolvedGateConfig(g resolvedGate) (domain.GateConfig, error) {
 // evaluateStructuralGate dispatches to Story 2.4.2's closed set of named
 // structural-check evaluators (session/gate_structural.go) based on the
 // gate's configured check_id, recomputed fresh on every call.
-func evaluateStructuralGate(g resolvedGate, item BacklogItemTransitionInput) domain.GateStatus {
+func evaluateStructuralGate(g resolvedGate, item domain.BacklogItemTransitionInput) domain.GateStatus {
 	checkID, _ := g.Config["check_id"].(string)
 	result := domain.EvaluateStructuralCheck(checkID, item)
 	return domain.GateStatus{

@@ -27,7 +27,7 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	t.Cleanup(cleanup)
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "item prs", AcceptanceCriteria: `[]`, Priority: 1,
-		Status: string(BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
+		Status: string(domain.BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
 	f := &itemPRFixture{t: t, storage: storage, repo: storage.Repo, itemID: item.ID}

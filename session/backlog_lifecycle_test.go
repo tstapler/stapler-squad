@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -29,7 +30,7 @@ func TestCreateItemSessionWithVerdict_Atomic(t *testing.T) {
 		Title:              "Atomic Verdict Test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -39,13 +40,13 @@ func TestCreateItemSessionWithVerdict_Atomic(t *testing.T) {
 		SessionUUID: sessionUUID,
 		SessionRole: SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
-		OverallOutcome: ReviewVerdictFail,
+		OverallOutcome: domain.ReviewVerdictFail,
 		Summary:        "Blocked by security check.",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, sessionUUID, is.SessionUUID)
 	require.NotNil(t, is.ReviewVerdict, "ReviewVerdict must be linked to the ItemSession")
-	assert.Equal(t, string(ReviewVerdictFail), is.ReviewVerdict.OverallOutcome)
+	assert.Equal(t, string(domain.ReviewVerdictFail), is.ReviewVerdict.OverallOutcome)
 	assert.Equal(t, "Blocked by security check.", is.ReviewVerdict.Summary)
 
 	// Both records must be queryable from the same DB — verifies the commit succeeded.
@@ -54,7 +55,7 @@ func TestCreateItemSessionWithVerdict_Atomic(t *testing.T) {
 	require.Len(t, sessions, 1)
 	assert.Equal(t, sessionUUID, sessions[0].SessionUUID)
 	require.NotNil(t, sessions[0].ReviewVerdict, "ReviewVerdict must be linked to the ItemSession")
-	assert.Equal(t, string(ReviewVerdictFail), sessions[0].ReviewVerdict.OverallOutcome)
+	assert.Equal(t, string(domain.ReviewVerdictFail), sessions[0].ReviewVerdict.OverallOutcome)
 }
 
 // TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless is a
@@ -72,9 +73,9 @@ func TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless(t *
 	defer cleanup()
 	ctx := context.Background()
 
-	abandoned := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, true, false)
-	stillReviewing := newStuckReviewTestItem(t, storage, ReviewVerdictUnverifiable, false, false)
-	reworkInProgress := newStuckReviewTestItem(t, storage, ReviewVerdictFail, true, true)
+	abandoned := newStuckReviewTestItem(t, storage, domain.ReviewVerdictUnverifiable, true, false)
+	stillReviewing := newStuckReviewTestItem(t, storage, domain.ReviewVerdictUnverifiable, false, false)
+	reworkInProgress := newStuckReviewTestItem(t, storage, domain.ReviewVerdictFail, true, true)
 
 	// Gateless item: review status but no review ItemSession at all — belongs
 	// to FindReviewItemsWithoutGate, must NOT show up here.
@@ -82,7 +83,7 @@ func TestFindStuckReviewItems_ReturnsAbandonedItem_ExcludesActiveAndGateless(t *
 		Title:              "Gateless review item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -115,7 +116,7 @@ func TestBackfillMissingPRNumbers_ParsesNumberFromURL(t *testing.T) {
 		Title:              "Missing pr_number test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -178,7 +179,7 @@ func TestFindDriftedPRItems_ExcludesPRPendingAndTerminalStatuses(t *testing.T) {
 	ctx := context.Background()
 	er := storage.Repo
 
-	for _, status := range []BacklogStatus{BacklogStatusPRPending, BacklogStatusDone, BacklogStatusArchived} {
+	for _, status := range []domain.BacklogStatus{domain.BacklogStatusPRPending, domain.BacklogStatusDone, domain.BacklogStatusArchived} {
 		prURL := "https://github.com/tstapler/stapler-squad/pull/900"
 		prNumber := 900
 		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{

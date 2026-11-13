@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -52,9 +53,9 @@ func seedReviewItemWithWorkSession(t *testing.T, svc *BacklogService) (itemID, w
 	itemID = created.Msg.Item.Id
 
 	for _, status := range []string{
-		string(session.BacklogStatusReady),
-		string(session.BacklogStatusInProgress),
-		string(session.BacklogStatusReview),
+		string(domain.BacklogStatusReady),
+		string(domain.BacklogStatusInProgress),
+		string(domain.BacklogStatusReview),
 	} {
 		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 			ItemId:       itemID,
@@ -113,8 +114,8 @@ func TestTriggerShipPR_NotInReviewStatus_ReturnsFailedPrecondition(t *testing.T)
 	itemID := created.Msg.Item.Id
 
 	for _, status := range []string{
-		string(session.BacklogStatusReady),
-		string(session.BacklogStatusInProgress),
+		string(domain.BacklogStatusReady),
+		string(domain.BacklogStatusInProgress),
 	} {
 		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 			ItemId:       itemID,
@@ -161,7 +162,7 @@ func TestTriggerShipPR_NoWorkSession_ReturnsFailedPrecondition(t *testing.T) {
 
 	item, err := svc.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item with no work session",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 

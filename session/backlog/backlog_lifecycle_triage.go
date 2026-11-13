@@ -250,7 +250,7 @@ func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(itemID strin
 //nolint:gocognit,gocyclo // see above
 func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Context, er *session.EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusIdea), string(session.BacklogStatusQueued)},
+		Statuses: []string{string(domain.BacklogStatusIdea), string(domain.BacklogStatusQueued)},
 	})
 	if err != nil {
 		log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems list error", "error", err)
@@ -285,7 +285,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			continue
 		}
 
-		isIdea := item.Status == string(session.BacklogStatusIdea)
+		isIdea := item.Status == string(domain.BacklogStatusIdea)
 
 		var reasonDetail string
 		if latestTriage.EndedAt == nil {
@@ -302,7 +302,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				// literal liveness.MaxHeadlessTriageSessionStaleness constant, unchanged from before.
 				staleness = liveness.MaxHeadlessTriageSessionStaleness
 				if l.livenessEngine != nil {
-					if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+					if def, defErr := l.livenessEngine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 						staleness = def.StalenessThreshold()
 					}
 				}
@@ -389,7 +389,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			}
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, session.BacklogStatus(item.Status), reasonDetail)
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, domain.BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
 			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
@@ -445,7 +445,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageRemediation(ctx contex
 		if row.Reason != domain.StuckReasonOrphanedTriage {
 			continue
 		}
-		if row.ItemStatus != session.BacklogStatusIdea && row.ItemStatus != session.BacklogStatusQueued {
+		if row.ItemStatus != domain.BacklogStatusIdea && row.ItemStatus != domain.BacklogStatusQueued {
 			continue // no longer applicable — selfHealStuck resolves it once the item leaves idea/queued
 		}
 		// Checked before RemediationDue so a held item does not spend backoff attempts.

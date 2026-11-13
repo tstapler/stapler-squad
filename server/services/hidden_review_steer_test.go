@@ -79,7 +79,7 @@ func (e *steerEnv) linkRow(inst *session.Instance, role string) string {
 	e.t.Helper()
 	ctx := context.Background()
 	item, err := e.fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
-		Title: "Item for " + inst.Title, Status: string(session.BacklogStatusReview),
+		Title: "Item for " + inst.Title, Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(e.t, err)
 	row, err := e.fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{

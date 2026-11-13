@@ -1083,7 +1083,7 @@ func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 }
 
 // RawTransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus domain.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
 	return s.Repo.RawTransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
 }
 
@@ -1153,16 +1153,16 @@ func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed
 // is documented on the former.
 func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, pr backlogdto.PRAssociation) error {
 	prURL, prNumber, summary, guard := pr.URL, pr.Number, pr.Summary, pr.Guard
-	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
+	if observed.Status == string(domain.BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}
-	if pr.Additive && observed.Status == string(BacklogStatusPRPending) {
+	if pr.Additive && observed.Status == string(domain.BacklogStatusPRPending) {
 		return s.attachAdditivePR(ctx, observed, pr)
 	}
-	if observed.Status != string(BacklogStatusReview) && observed.Status != string(BacklogStatusPRPending) {
-		return fmt.Errorf("%w: expected status %q or %q, got %q", domain.ErrPreconditionFailed, BacklogStatusReview, BacklogStatusPRPending, observed.Status)
+	if observed.Status != string(domain.BacklogStatusReview) && observed.Status != string(domain.BacklogStatusPRPending) {
+		return fmt.Errorf("%w: expected status %q or %q, got %q", domain.ErrPreconditionFailed, domain.BacklogStatusReview, domain.BacklogStatusPRPending, observed.Status)
 	}
-	isReassignment := observed.Status == string(BacklogStatusPRPending)
+	isReassignment := observed.Status == string(domain.BacklogStatusPRPending)
 	if isReassignment {
 		switch {
 		case guard == nil:
@@ -1217,7 +1217,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 	}
 	// The item-direct link is written for every item PR writer, flag on or off, in the
 	// same transaction as the pr_number write.
-	if _, err := s.Repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
+	if _, err := s.Repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, domain.BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
@@ -1338,7 +1338,7 @@ func (s *Storage) SnoozeStuckState(ctx context.Context, itemID string, reason do
 // (e.g. server/services, which cannot reach the unexported repo field) can
 // write stuck state. Returns false, nil when the backend does not support
 // stuck-state writes — never an error for an unsupported backend.
-func (s *Storage) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus BacklogStatus, stuckContext string) (bool, error) {
+func (s *Storage) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus domain.BacklogStatus, stuckContext string) (bool, error) {
 	return s.Repo.MarkStuck(ctx, itemID, reason, expectedStatus, stuckContext)
 }
 
@@ -1645,7 +1645,7 @@ func (s *Storage) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, se
 
 // GetMostRecentReviewVerdictForItem returns the OverallOutcome of the most recent
 // ReviewVerdict linked to any ItemSession for itemID. Returns "" when none exists.
-func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (ReviewOutcome, error) {
+func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (domain.ReviewOutcome, error) {
 	return s.Repo.GetMostRecentReviewVerdictForItem(ctx, itemID)
 }
 

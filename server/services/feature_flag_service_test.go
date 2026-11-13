@@ -421,7 +421,7 @@ func TestConfigSurfaceProof_WorkflowEngineShadow_ChangesShadowCallsRecorded(t *t
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		return modeFlagObservable(t, config.WorkflowEngineShadowFeatureFlag, setting.(bool),
 			func(sel *session.SwitchableWorkflowEngine, rec *countingShadow) any {
-				sel.CanTransition(session.BacklogStatusIdea, session.BacklogStatusReady, nil)
+				sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)
 				return rec.calls.Load()
 			})
 	}, false, true)
@@ -433,7 +433,7 @@ func TestConfigSurfaceProof_WorkflowEngineEnforce_ChangesTransitionAnswer(t *tes
 		return modeFlagObservable(t, config.WorkflowEngineEnforceFeatureFlag, setting.(bool),
 			func(sel *session.SwitchableWorkflowEngine, _ *countingShadow) any {
 				// archived->archived is system-required: only the enforce composition allows it.
-				return sel.CanTransition(session.BacklogStatusArchived, session.BacklogStatusArchived, nil)
+				return sel.CanTransition(domain.BacklogStatusArchived, domain.BacklogStatusArchived, nil)
 			})
 	}, false, true)
 }
@@ -579,7 +579,7 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceSystem_ChangesSystemTransitionA
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceSystemFeatureFlag, setting.(bool)))
 		sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock))
 		// idea->done has no edge: an unchecked system write is allowed until its class enforces.
-		return sel.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil)
+		return sel.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil)
 	}, true, false)
 }
 
@@ -595,7 +595,7 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAns
 		require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceAgentFeatureFlag, setting.(bool)))
 		sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil, NewWorkflowEngineClassModeSource(config.LoadConfig, clock))
 		// idea->done has no edge: an unchecked agent write is allowed until its class enforces.
-		return sel.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil)
+		return sel.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil)
 	}, true, false)
 }
 

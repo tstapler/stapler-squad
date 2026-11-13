@@ -62,7 +62,7 @@ type ReworkBlockStaleResolver interface {
 
 func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Context, er *session.EntRepository) { //nolint:gocognit // moved verbatim by the package split; simplification is a separate change
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusInProgress)},
+		Statuses: []string{string(domain.BacklogStatusInProgress)},
 	})
 	if err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions list error: %v", err)
@@ -97,7 +97,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		// literal liveness.MaxWorkSessionStaleness constant, unchanged from before.
 		maxNoProgress := liveness.MaxWorkSessionStaleness
 		if l.livenessEngine != nil {
-			if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusInProgress, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+			if def, defErr := l.livenessEngine.LivenessFor(domain.BacklogStatusInProgress, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 				maxNoProgress = def.MaxNoProgressDuration
 			}
 		}
@@ -106,7 +106,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		}
 		stillStale[item.ID] = true
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, session.BacklogStatusInProgress,
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonStaleWork, domain.BacklogStatusInProgress,
 			fmt.Sprintf("no progress since %s", lastProgress))
 		if markErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions MarkStuck item=%s: %v", item.ID, markErr)
@@ -177,7 +177,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 		if row.Reason != domain.StuckReasonStaleWork {
 			continue
 		}
-		if row.ItemStatus != session.BacklogStatusInProgress {
+		if row.ItemStatus != domain.BacklogStatusInProgress {
 			continue // self-heal sweep handles it once status has moved on
 		}
 		if stillStale[row.ItemID] {

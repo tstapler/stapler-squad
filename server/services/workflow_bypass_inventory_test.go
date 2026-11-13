@@ -444,12 +444,12 @@ func TestWorkflowBypassInventory_GuardedTransitionCallersAreRegisteredWithTheirT
 	assert.Empty(t, problems, strings.Join(problems, "\n"))
 }
 
-var statusConstNames = map[string]session.BacklogStatus{
-	"BacklogStatusIdea": session.BacklogStatusIdea, "BacklogStatusRefining": session.BacklogStatusRefining,
-	"BacklogStatusReady": session.BacklogStatusReady, "BacklogStatusQueued": session.BacklogStatusQueued,
-	"BacklogStatusInProgress": session.BacklogStatusInProgress, "BacklogStatusReview": session.BacklogStatusReview,
-	"BacklogStatusPRPending": session.BacklogStatusPRPending, "BacklogStatusDone": session.BacklogStatusDone,
-	"BacklogStatusArchived": session.BacklogStatusArchived,
+var statusConstNames = map[string]domain.BacklogStatus{
+	"BacklogStatusIdea": domain.BacklogStatusIdea, "BacklogStatusRefining": domain.BacklogStatusRefining,
+	"BacklogStatusReady": domain.BacklogStatusReady, "BacklogStatusQueued": domain.BacklogStatusQueued,
+	"BacklogStatusInProgress": domain.BacklogStatusInProgress, "BacklogStatusReview": domain.BacklogStatusReview,
+	"BacklogStatusPRPending": domain.BacklogStatusPRPending, "BacklogStatusDone": domain.BacklogStatusDone,
+	"BacklogStatusArchived": domain.BacklogStatusArchived,
 }
 
 // statusLiteralName returns the status value of a BacklogStatus* constant
@@ -499,7 +499,7 @@ func TestWorkflowBypassInventory_AutonomousCompleteTargetSetIsExactlyReady(t *te
 
 	c, ok := domain.LookupTransitionCaller(domain.CallerAutonomousComplete)
 	require.True(t, ok)
-	assert.Equal(t, []domain.SystemEdge{{From: session.BacklogStatusIdea, To: session.BacklogStatusReady}}, c.Edges)
+	assert.Equal(t, []domain.SystemEdge{{From: domain.BacklogStatusIdea, To: domain.BacklogStatusReady}}, c.Edges)
 }
 
 func TestRecordEngineBypass_IncrementsCounter(t *testing.T) {

@@ -28,42 +28,42 @@ import (
 // builtInStageOrder is the fixed order the 9 built-in BacklogStatus values
 // are seeded in. Order has no semantic meaning to ConfiguredWorkflowEngine
 // (Epic 2.3 looks stages up by slug) but keeps seeded rows deterministic.
-var BuiltInStageOrder = []BacklogStatus{
-	BacklogStatusIdea,
-	BacklogStatusRefining,
-	BacklogStatusReady,
-	BacklogStatusQueued,
-	BacklogStatusInProgress,
-	BacklogStatusReview,
-	BacklogStatusPRPending,
-	BacklogStatusDone,
-	BacklogStatusArchived,
+var BuiltInStageOrder = []domain.BacklogStatus{
+	domain.BacklogStatusIdea,
+	domain.BacklogStatusRefining,
+	domain.BacklogStatusReady,
+	domain.BacklogStatusQueued,
+	domain.BacklogStatusInProgress,
+	domain.BacklogStatusReview,
+	domain.BacklogStatusPRPending,
+	domain.BacklogStatusDone,
+	domain.BacklogStatusArchived,
 }
 
 // builtInStageNames gives each built-in stage a human-readable display name.
-var builtInStageNames = map[BacklogStatus]string{
-	BacklogStatusIdea:       "Idea",
-	BacklogStatusRefining:   "Refining",
-	BacklogStatusReady:      "Ready",
-	BacklogStatusQueued:     "Queued",
-	BacklogStatusInProgress: "In Progress",
-	BacklogStatusReview:     "Review",
-	BacklogStatusPRPending:  "PR Pending",
-	BacklogStatusDone:       "Done",
-	BacklogStatusArchived:   "Archived",
+var builtInStageNames = map[domain.BacklogStatus]string{
+	domain.BacklogStatusIdea:       "Idea",
+	domain.BacklogStatusRefining:   "Refining",
+	domain.BacklogStatusReady:      "Ready",
+	domain.BacklogStatusQueued:     "Queued",
+	domain.BacklogStatusInProgress: "In Progress",
+	domain.BacklogStatusReview:     "Review",
+	domain.BacklogStatusPRPending:  "PR Pending",
+	domain.BacklogStatusDone:       "Done",
+	domain.BacklogStatusArchived:   "Archived",
 }
 
 // builtInEntryStages marks the built-in stages a new item may be created
 // directly into. Only "idea" qualifies today.
-var builtInEntryStages = map[BacklogStatus]bool{
-	BacklogStatusIdea: true,
+var builtInEntryStages = map[domain.BacklogStatus]bool{
+	domain.BacklogStatusIdea: true,
 }
 
 // builtInTerminalStages marks the built-in stages that end an item's
 // lifecycle, mirroring Epic 2.1's IsTerminalStatus-equivalent check.
-var builtInTerminalStages = map[BacklogStatus]bool{
-	BacklogStatusDone:     true,
-	BacklogStatusArchived: true,
+var builtInTerminalStages = map[domain.BacklogStatus]bool{
+	domain.BacklogStatusDone:     true,
+	domain.BacklogStatusArchived: true,
 }
 
 // EnsureBuiltInWorkflowStages seeds the 9 built-in BacklogStatus values as
@@ -94,7 +94,7 @@ func EnsureBuiltInWorkflowStages(ctx context.Context, client *ent.Client) error 
 		return fmt.Errorf("EnsureBuiltInWorkflowStages: begin tx: %w", err)
 	}
 
-	stageIDs := make(map[BacklogStatus]uuid.UUID, len(BuiltInStageOrder))
+	stageIDs := make(map[domain.BacklogStatus]uuid.UUID, len(BuiltInStageOrder))
 	for _, slug := range BuiltInStageOrder {
 		row, createErr := tx.BacklogStage.Create().
 			SetSlug(string(slug)).
@@ -352,29 +352,29 @@ func diffLines(seed, live []string) SectionDiff {
 // ItemStatusRef is the minimum the stranded-item preview needs about an item.
 type ItemStatusRef struct {
 	ID     string
-	Status BacklogStatus
+	Status domain.BacklogStatus
 }
 
 // StrandedItem is a live item that loses outgoing edges once enforce is on.
 // The id is hashed; no title or id leaves the process.
 type StrandedItem struct {
-	ItemHash        string        `json:"item_hash"`
-	Status          BacklogStatus `json:"status"`
-	LostEdges       []string      `json:"lost_edges"`
-	NoOutgoingEdges bool          `json:"no_outgoing_edges"`
-	InDisabledStage bool          `json:"in_disabled_stage"`
+	ItemHash        string               `json:"item_hash"`
+	Status          domain.BacklogStatus `json:"status"`
+	LostEdges       []string             `json:"lost_edges"`
+	NoOutgoingEdges bool                 `json:"no_outgoing_edges"`
+	InDisabledStage bool                 `json:"in_disabled_stage"`
 }
 
 // StrandedItemPreview lists, read-only, every item whose enforce-mode allowed
 // transitions are empty or smaller than Default's. A non-empty OverrideReason
 // skips operator gates only, never the graph, so it cannot free a lost edge.
-func StrandedItemPreview(def domain.WorkflowEngine, cfg *ConfiguredWorkflowEngine, items []ItemStatusRef, disabledStages map[BacklogStatus]bool) []StrandedItem {
+func StrandedItemPreview(def domain.WorkflowEngine, cfg *ConfiguredWorkflowEngine, items []ItemStatusRef, disabledStages map[domain.BacklogStatus]bool) []StrandedItem {
 	enf := EnforceAnswer{def: def, cfg: cfg}
 	var out []StrandedItem
 	for _, it := range items {
 		before := def.AllowedTransitions(it.Status, nil)
 		after, _ := enf.allowedTransitions(it.Status, nil)
-		kept := make(map[BacklogStatus]bool, len(after))
+		kept := make(map[domain.BacklogStatus]bool, len(after))
 		for _, to := range after {
 			kept[to] = true
 		}
@@ -399,25 +399,25 @@ func StrandedItemPreview(def domain.WorkflowEngine, cfg *ConfiguredWorkflowEngin
 
 // ListItemStatusRefs reads the non-archived items' ids and statuses, plus the
 // slugs of disabled stages, for StrandedItemPreview. Read-only.
-func ListItemStatusRefs(ctx context.Context, client *ent.Client) ([]ItemStatusRef, map[BacklogStatus]bool, error) {
+func ListItemStatusRefs(ctx context.Context, client *ent.Client) ([]ItemStatusRef, map[domain.BacklogStatus]bool, error) {
 	//nolint:entfullscan the preview must cover every live item.
-	rows, err := client.BacklogItem.Query().Where(backlogitem.StatusNEQ(string(BacklogStatusArchived))).
+	rows, err := client.BacklogItem.Query().Where(backlogitem.StatusNEQ(string(domain.BacklogStatusArchived))).
 		Select(backlogitem.FieldID, backlogitem.FieldStatus).All(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ListItemStatusRefs: query items: %w", err)
 	}
 	items := make([]ItemStatusRef, 0, len(rows))
 	for _, r := range rows {
-		items = append(items, ItemStatusRef{ID: r.ID.String(), Status: BacklogStatus(r.Status)})
+		items = append(items, ItemStatusRef{ID: r.ID.String(), Status: domain.BacklogStatus(r.Status)})
 	}
 	//nolint:entfullscan the preview must cover every stage.
 	stages, err := client.BacklogStage.Query().Where(backlogstage.Enabled(false)).All(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ListItemStatusRefs: query disabled stages: %w", err)
 	}
-	disabled := make(map[BacklogStatus]bool, len(stages))
+	disabled := make(map[domain.BacklogStatus]bool, len(stages))
 	for _, s := range stages {
-		disabled[BacklogStatus(s.Slug)] = true
+		disabled[domain.BacklogStatus(s.Slug)] = true
 	}
 	return items, disabled, nil
 }

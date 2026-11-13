@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -77,7 +78,7 @@ func TestNotificationPushGateClassification(t *testing.T) {
 		defer cancel()
 		ch, _ := bus.Subscribe(ctx)
 
-		svc.notifyRepeatedFailure(ctx, "item-1", "Item title", session.BacklogStatusInProgress, 3, "same test failure")
+		svc.notifyRepeatedFailure(ctx, "item-1", "Item title", domain.BacklogStatusInProgress, 3, "same test failure")
 
 		ev := svctest.RequireOneNotification(t, ch)
 		assert.Equal(t, "Auto-rework stopped — repeated failure", ev.NotificationTitle)
@@ -100,7 +101,7 @@ func TestNotificationPushGateClassification(t *testing.T) {
 
 		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "Item idle 20m — over the 15m threshold",
-			Status: string(session.BacklogStatusReview),
+			Status: string(domain.BacklogStatusReview),
 		})
 		require.NoError(t, err)
 		_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{

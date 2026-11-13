@@ -217,7 +217,7 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "shared-worktree item",
 		RepoPath: repoDir,
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -302,7 +302,7 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 		// The backlog item itself has also reached a terminal state -- consistent
 		// with every round being done, though the sweep does not read item status
 		// directly (it derives group eligibility purely from sibling session data).
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 

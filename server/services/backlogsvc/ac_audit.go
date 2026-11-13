@@ -70,7 +70,7 @@ func truncateAuditField(s string, n int) string {
 // Failing to write it is logged, never allowed to turn a denial into an allow.
 func (s *BacklogService) recordDeniedAcAttempt(ctx context.Context, itemID string, index int, reason, outcome string) {
 	err := s.storage.RecordAcAudit(ctx, session.AcAuditEventData{
-		ItemID: itemID, CriterionIndex: index, NewStatus: string(session.AcStatusWaived), Reason: reason, Outcome: outcome,
+		ItemID: itemID, CriterionIndex: index, NewStatus: string(domain.AcStatusWaived), Reason: reason, Outcome: outcome,
 	})
 	if err != nil {
 		log.Warn("failed to record AC audit event", "item", itemID, "outcome", outcome, "err", err)
@@ -109,7 +109,7 @@ func (s *BacklogService) ListAcAuditEvents(
 }
 
 // acCriteriaToProto converts criteria (used for the waivers an update dropped) to proto form.
-func acCriteriaToProto(cs []session.AcCriterion) []*sessionv1.AcCriterion {
+func acCriteriaToProto(cs []domain.AcCriterion) []*sessionv1.AcCriterion {
 	out := make([]*sessionv1.AcCriterion, len(cs))
 	for i, c := range cs {
 		out[i] = &sessionv1.AcCriterion{

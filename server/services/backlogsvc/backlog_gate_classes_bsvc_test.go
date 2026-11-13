@@ -30,7 +30,7 @@ func newClsGateHarness(t *testing.T) *clsGateHarness {
 }
 
 // block adds an unsatisfied human_approval gate to from->to and returns its id.
-func (c *clsGateHarness) block(t *testing.T, from, to session.BacklogStatus) uuid.UUID {
+func (c *clsGateHarness) block(t *testing.T, from, to domain.BacklogStatus) uuid.UUID {
 	t.Helper()
 	gate, err := c.h.repo.CreateGate(t.Context(), session.GateCreateInput{
 		TransitionID: c.h.transitionID(t, from, to).ID,
@@ -50,7 +50,7 @@ func (c *clsGateHarness) approve(t *testing.T, itemID string, gateID uuid.UUID) 
 	require.NoError(t, err)
 }
 
-func (c *clsGateHarness) itemAt(t *testing.T, status session.BacklogStatus) *backlogdto.BacklogItemData {
+func (c *clsGateHarness) itemAt(t *testing.T, status domain.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
 	item, err := c.svc.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "class proof item", Status: string(status), SkipPlanning: true})
 	require.NoError(t, err)
@@ -63,9 +63,9 @@ func (c *clsGateHarness) status(t *testing.T, itemID string) string {
 }
 
 // move drives the gate as caller from the item's current status to `to`.
-func (c *clsGateHarness) move(ctx context.Context, caller domain.TransitionCaller, itemID string, to session.BacklogStatus) error {
+func (c *clsGateHarness) move(ctx context.Context, caller domain.TransitionCaller, itemID string, to domain.BacklogStatus) error {
 	req := backlogdto.TransitionRequest{Caller: caller, ItemID: itemID, To: to, TriggeredBy: session.TriggeredBySystem}
-	if to == session.BacklogStatusArchived {
+	if to == domain.BacklogStatusArchived {
 		_, err := c.svc.storage.GatedArchive(ctx, req)
 		return err
 	}
@@ -86,7 +86,7 @@ func clsDeniedRow(t *testing.T, c *clsGateHarness, itemID string, caller domain.
 
 func TestClassProof_Agent_GateOnInProgressToReviewDeniesRequestReviewAndApprovalFreesIt(t *testing.T) {
 	c := newClsGateHarness(t)
-	inProgress, review := session.BacklogStatusInProgress, session.BacklogStatusReview
+	inProgress, review := domain.BacklogStatusInProgress, domain.BacklogStatusReview
 	gateID := c.block(t, inProgress, review)
 	item := c.itemAt(t, inProgress)
 
@@ -103,7 +103,7 @@ func TestClassProof_Agent_GateOnInProgressToReviewDeniesRequestReviewAndApproval
 
 func TestClassProof_Agent_OperatorCannotDisableTheFixedRequestReviewEdge(t *testing.T) {
 	svc, _, repo, _ := enfService(t)
-	edge := enfEdgeID(t, repo, session.BacklogStatusInProgress, session.BacklogStatusReview)
+	edge := enfEdgeID(t, repo, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 
 	err := enfSetEdge(t, svc, edge, false)
 
@@ -113,7 +113,7 @@ func TestClassProof_Agent_OperatorCannotDisableTheFixedRequestReviewEdge(t *test
 
 func TestClassProof_Agent_GenericDelegateIsDeniedWhenAnOperatorDisablesTheEdge(t *testing.T) {
 	svc, storage, repo, _ := enfService(t)
-	done, refining := session.BacklogStatusDone, session.BacklogStatusRefining
+	done, refining := domain.BacklogStatusDone, domain.BacklogStatusRefining
 	edge := enfEdgeID(t, repo, done, refining)
 	item := enfItemAt(t, storage, done)
 	agentCtx := services.WithTransitionActor(t.Context(), session.TriggeredByAgent)
@@ -135,7 +135,7 @@ func TestClassProof_Agent_GenericDelegateIsDeniedWhenAnOperatorDisablesTheEdge(t
 
 func TestClassProof_System_GateOnPRPendingToDoneDeniesTheMergeAdvanceUntilApprovedAndRemovalLeavesNoDenial(t *testing.T) {
 	c := newClsGateHarness(t)
-	prPending, done := session.BacklogStatusPRPending, session.BacklogStatusDone
+	prPending, done := domain.BacklogStatusPRPending, domain.BacklogStatusDone
 	gateID := c.block(t, prPending, done)
 	item := c.itemAt(t, prPending)
 
@@ -159,8 +159,8 @@ func TestClassProof_System_GateOnPRPendingToDoneDeniesTheMergeAdvanceUntilApprov
 
 // clsArchiveProbeFrom are the statuses a seeded stage graph has an archive edge
 // from; an archive caller declares the AnyStatus wildcard, so the probe picks one.
-var clsArchiveProbeFrom = []session.BacklogStatus{
-	session.BacklogStatusIdea, session.BacklogStatusReady, session.BacklogStatusDone,
+var clsArchiveProbeFrom = []domain.BacklogStatus{
+	domain.BacklogStatusIdea, domain.BacklogStatusReady, domain.BacklogStatusDone,
 }
 
 // clsProbeEdge picks the first edge a caller declares that the seeded stage graph
@@ -168,7 +168,7 @@ var clsArchiveProbeFrom = []session.BacklogStatus{
 func clsProbeEdge(t *testing.T, c *clsGateHarness, spec domain.TransitionCallerSpec) (domain.SystemEdge, bool) {
 	t.Helper()
 	for _, e := range spec.Edges {
-		froms := []session.BacklogStatus{e.From}
+		froms := []domain.BacklogStatus{e.From}
 		if e.From == domain.AnyStatus {
 			froms = clsArchiveProbeFrom
 		}

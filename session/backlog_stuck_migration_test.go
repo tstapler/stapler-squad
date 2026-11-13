@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -29,7 +30,7 @@ func TestBacklogStuckStateSchema_should_createTableAndUniqueIndex_When_FreshClie
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "schema test item",
-		Status: string(BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	itemUUID, err := uuid.Parse(item.ID)
@@ -71,11 +72,11 @@ func TestBacklogStuckState_should_cascadeDelete_When_ParentItemDeleted(t *testin
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "cascade delete test item",
-		Status: string(BacklogStatusPRPending),
+		Status: string(domain.BacklogStatusPRPending),
 	})
 	require.NoError(t, err)
 
-	applied, err := repo.MarkStuck(ctx, item.ID, "pr_ready_unmerged", BacklogStatusPRPending, "context")
+	applied, err := repo.MarkStuck(ctx, item.ID, "pr_ready_unmerged", domain.BacklogStatusPRPending, "context")
 	require.NoError(t, err)
 	require.True(t, applied)
 

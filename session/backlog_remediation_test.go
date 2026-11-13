@@ -168,9 +168,9 @@ func TestRemediationDue_should_capAtFiveAttemptsWithDelayedRetries_When_StuckRap
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
 
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 
 	dueCount := 0
@@ -209,8 +209,8 @@ func TestRemediationDue_should_advanceThroughFullScheduleThenPark_When_EachAttem
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 
 	wantDelays := []time.Duration{30 * time.Minute, 2 * time.Hour, 8 * time.Hour, 24 * time.Hour}
@@ -269,8 +269,8 @@ func TestRemediationDue_should_grantColdRetry_When_ParkedRowsHeartbeatDeadlineEl
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusIdea)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonOrphanedTriage, BacklogStatusIdea, "orphaned triage")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusIdea)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonOrphanedTriage, domain.BacklogStatusIdea, "orphaned triage")
 	require.NoError(t, err)
 
 	// Simulate a row that is ALREADY parked (as if it hit the cap long ago,
@@ -321,8 +321,8 @@ func TestRecordManualRemediationAttempt_should_rejectParked_When_AttemptsAtCap(t
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 
 	applied, recErr := repo.RecordRemediationAttempt(ctx, itemID, domain.StuckReasonBouncing, MaxRemediationAttempts, nil)
@@ -349,7 +349,7 @@ func TestRecordManualRemediationAttempt_should_error_When_NoOpenRowExists(t *tes
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
 
 	_, err = storage.RecordManualRemediationAttempt(ctx, itemID, domain.StuckReasonBouncing)
 	require.ErrorIs(t, err, ErrNoOpenStuckState)
@@ -367,8 +367,8 @@ func TestRecordManualRemediationAttempt_should_incrementLikeANormalAttempt_When_
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 
 	justParked, err := storage.RecordManualRemediationAttempt(ctx, itemID, domain.StuckReasonBouncing)
@@ -399,8 +399,8 @@ func TestResetStuckRemediation_should_clearCountersAndNotifiedAt_When_RowIsOpen(
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 	_, err = repo.MarkStuckNotified(ctx, itemID, domain.StuckReasonBouncing)
 	require.NoError(t, err)
@@ -432,14 +432,14 @@ func TestBulkResetStuckRemediation_should_onlyResetParkedRows_When_OnlyParkedTru
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	parkedItemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, parkedItemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	parkedItemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, parkedItemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 	_, err = repo.RecordRemediationAttempt(ctx, parkedItemID, domain.StuckReasonBouncing, MaxRemediationAttempts, nil)
 	require.NoError(t, err)
 
-	midBackoffItemID := createStuckTestItem(t, repo, ctx, BacklogStatusReview)
-	_, err = repo.MarkStuck(ctx, midBackoffItemID, domain.StuckReasonAbandonedReview, BacklogStatusReview, "abandoned")
+	midBackoffItemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusReview)
+	_, err = repo.MarkStuck(ctx, midBackoffItemID, domain.StuckReasonAbandonedReview, domain.BacklogStatusReview, "abandoned")
 	require.NoError(t, err)
 	next := time.Now().Add(2 * time.Hour)
 	_, err = repo.RecordRemediationAttempt(ctx, midBackoffItemID, domain.StuckReasonAbandonedReview, 2, &next)

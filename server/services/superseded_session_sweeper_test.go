@@ -24,7 +24,7 @@ func seedItemWithRounds(t *testing.T, storage *session.Storage, createdAts []tim
 	t.Helper()
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "multi-round item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 

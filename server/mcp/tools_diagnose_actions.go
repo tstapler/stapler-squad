@@ -11,6 +11,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -118,10 +119,10 @@ func (dh *diagnoseHandlers) reportHarnessGap(ctx context.Context, req mcpgo.Call
 	created, createErr := dh.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       title,
 		Description: harnessGapDescription(evidence, severity, callerUUID, origin),
-		Priority:    session.DefaultBacklogPriority,
-		Status:      string(session.BacklogStatusIdea),
+		Priority:    domain.DefaultBacklogPriority,
+		Status:      string(domain.BacklogStatusIdea),
 		RepoPath:    origin.RepoPath,
-		Category:    string(session.BacklogCategoryBugfix),
+		Category:    string(domain.BacklogCategoryBugfix),
 		Labels:      []string{"harness:bug", "auto-diagnose"},
 	})
 	if createErr != nil {
@@ -149,7 +150,7 @@ func (dh *diagnoseHandlers) checkHarnessGapCap(ctx context.Context, originID str
 	}
 	open := 0
 	for _, ref := range blocking {
-		if ref.Status == string(session.BacklogStatusDone) || ref.Status == string(session.BacklogStatusArchived) {
+		if ref.Status == string(domain.BacklogStatusDone) || ref.Status == string(domain.BacklogStatusArchived) {
 			continue
 		}
 		item, getErr := dh.storage.GetBacklogItem(ctx, ref.ItemID)

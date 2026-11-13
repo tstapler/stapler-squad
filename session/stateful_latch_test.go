@@ -38,7 +38,7 @@ func TestShadow_SkipsStatefulStructuralGateWithoutIo_WhenFieldSet(t *testing.T) 
 		from, to := newCustomTransitionWithGates(t, repo.Client, cfg, []domain.GateKind{domain.GateKindStructural}, []bool{tc.stateful})
 		h := newSelectorHarness(t, ModeShadow, cfg)
 
-		_ = h.sel.ValidateGates(BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString(), AcCriteria: latchACDone}, to, nil)
+		_ = h.sel.ValidateGates(domain.BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString(), AcCriteria: latchACDone}, to, nil)
 
 		require.Equal(t, tc.wantSkipped, h.recorder.notCompared[NotComparedStatefulGate], "stateful=%t", tc.stateful)
 		require.Zero(t, gateRepo.calls.Load())
@@ -54,8 +54,8 @@ func TestLatch_StatefulStructuralGateStaysSatisfied_AfterRegression(t *testing.T
 		require.NoError(t, err)
 		from, to := newCustomTransitionWithGates(t, repo.Client, cfg, []domain.GateKind{domain.GateKindStructural}, []bool{stateful})
 		itemID := uuid.NewString()
-		satisfied := BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACDone}
-		regressed := BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACPending}
+		satisfied := domain.BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACDone}
+		regressed := domain.BacklogItemTransitionInput{Status: from, ItemID: itemID, AcCriteria: latchACPending}
 
 		require.NoError(t, cfg.ValidateGates(satisfied, to, nil))
 		require.Error(t, cfg.ValidateGates(regressed, to, nil), "read-only evaluation never latches")
@@ -78,8 +78,8 @@ func TestRollback_ClearsStatefulLatchOfUndoneEdge(t *testing.T) {
 	h := newGateHarness(t, ModeEnforce)
 	from, to := newCustomTransitionWithGates(t, h.repo.Client, h.cfg, []domain.GateKind{domain.GateKindStructural}, []bool{true})
 	item := h.newItem(t, from)
-	satisfied := BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACDone}
-	regressed := BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACPending}
+	satisfied := domain.BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACDone}
+	regressed := domain.BacklogItemTransitionInput{Status: from, ItemID: item.ID, AcCriteria: latchACPending}
 
 	h.cfg.RecordLatchesAfterCommit(satisfied, to)
 	require.NoError(t, h.cfg.ValidateGates(regressed, to, nil), "latched")

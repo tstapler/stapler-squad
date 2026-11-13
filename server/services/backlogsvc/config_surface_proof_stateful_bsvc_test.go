@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -41,21 +41,21 @@ func stfUpdateStateful(t *testing.T, svc *BacklogService, id string, g bkfGate, 
 func stfRegressedAnswer(t *testing.T, configure func(svc *BacklogService, edge string)) string {
 	t.Helper()
 	svc, storage, repo, _ := enfService(t)
-	configure(svc, enfEdgeID(t, repo, session.BacklogStatusIdea, session.BacklogStatusRefining))
+	configure(svc, enfEdgeID(t, repo, domain.BacklogStatusIdea, domain.BacklogStatusRefining))
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
-		Title: "stateful item", Status: string(session.BacklogStatusIdea), AcceptanceCriteria: session.AcCriteriaJSON(stfACDone),
+		Title: "stateful item", Status: string(domain.BacklogStatusIdea), AcceptanceCriteria: domain.AcCriteriaJSON(stfACDone),
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, enfTransition(t.Context(), svc, item.ID, session.BacklogStatusRefining, ""), "first attempt satisfies the gate")
+	require.NoError(t, enfTransition(t.Context(), svc, item.ID, domain.BacklogStatusRefining, ""), "first attempt satisfies the gate")
 	// DebugForce, not Rollback: Rollback clears the undone edge's latches.
-	_, err = storage.DebugForce(t.Context(), item.ID, session.BacklogStatusIdea, "test")
+	_, err = storage.DebugForce(t.Context(), item.ID, domain.BacklogStatusIdea, "test")
 	require.NoError(t, err)
-	pending := session.AcCriteriaJSON(stfACPending)
+	pending := domain.AcCriteriaJSON(stfACPending)
 	_, err = storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &pending}, nil)
 	require.NoError(t, err)
 
-	return bkfUUID.ReplaceAllString(errText(enfTransition(t.Context(), svc, item.ID, session.BacklogStatusRefining, "")), "<id>")
+	return bkfUUID.ReplaceAllString(errText(enfTransition(t.Context(), svc, item.ID, domain.BacklogStatusRefining, "")), "<id>")
 }
 
 func TestConfigSurfaceProof_CreateTransitionGate_Stateful_ChangesHandlerAnswer(t *testing.T) {
@@ -69,7 +69,7 @@ func TestConfigSurfaceProof_CreateTransitionGate_Stateful_ChangesHandlerAnswer(t
 
 func TestConfigSurfaceProof_CreateTransitionGate_Stateful_RecordedKindIsAlwaysStateful(t *testing.T) {
 	svc, _, repo, _ := enfService(t)
-	edge := enfEdgeID(t, repo, session.BacklogStatusIdea, session.BacklogStatusRefining)
+	edge := enfEdgeID(t, repo, domain.BacklogStatusIdea, domain.BacklogStatusRefining)
 	resp, err := stfCreateGate(t, svc, edge, bkfApproval(), false)
 	require.NoError(t, err)
 	require.True(t, resp.Item.Stateful, "a recorded kind reports its effective statefulness")
@@ -87,7 +87,7 @@ func TestConfigSurfaceProof_UpdateTransitionGate_Stateful_ChangesHandlerAnswer(t
 
 func TestConfigSurfaceProof_UpdateTransitionGate_Stateful_RejectsFalseOnRecordedKind(t *testing.T) {
 	svc, _, repo, _ := enfService(t)
-	edge := enfEdgeID(t, repo, session.BacklogStatusIdea, session.BacklogStatusRefining)
+	edge := enfEdgeID(t, repo, domain.BacklogStatusIdea, domain.BacklogStatusRefining)
 	resp, err := stfCreateGate(t, svc, edge, bkfApproval(), true)
 	require.NoError(t, err)
 

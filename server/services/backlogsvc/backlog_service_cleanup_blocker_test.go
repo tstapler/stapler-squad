@@ -32,7 +32,7 @@ type blockerHarness struct {
 	removed []string
 }
 
-func newBlockerHarness(t *testing.T, status session.BacklogStatus) *blockerHarness {
+func newBlockerHarness(t *testing.T, status domain.BacklogStatus) *blockerHarness {
 	t.Helper()
 	storage, repo := createTestStorageWithRepo(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -96,7 +96,7 @@ func TestCleanupGate_ShouldRetainWorktreeOnEveryPath_WhenOnePROpen(t *testing.T)
 			scope, path := scope, path
 			name := path + map[bool]string{false: "/scope off", true: "/scope on"}[scope]
 			t.Run(name, func(t *testing.T) {
-				h := newBlockerHarness(t, session.BacklogStatusReview)
+				h := newBlockerHarness(t, domain.BacklogStatusReview)
 				h.svc.cleanup.liveEnabled = func() bool { return scope }
 				h.link(session.SessionPROwner(h.uuid), 21, domain.PRStateMerged)
 				h.link(session.SessionPROwner(h.uuid), 22, domain.PRStateOpen)
@@ -139,7 +139,7 @@ func TestCleanupGate_ShouldRetainWorktreeOnEveryPath_WhenOnePROpen(t *testing.T)
 
 func TestCleanupGate_ShouldNameTheItem_WhenOpenPRIsItemDirectOnly(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusDone)
+	h := newBlockerHarness(t, domain.BacklogStatusDone)
 	h.link(session.ItemPROwner(h.itemID), 22, domain.PRStateOpen)
 
 	out := h.svc.cleanupItemWorktrees(uniquePath(h, session.CleanupPathArchiveRPC), h.sessions())
@@ -151,7 +151,7 @@ func TestCleanupGate_ShouldNameTheItem_WhenOpenPRIsItemDirectOnly(t *testing.T) 
 
 func TestCleanupGate_ShouldFailClosed_WhenItemPrNumberHasNoLink(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusDone)
+	h := newBlockerHarness(t, domain.BacklogStatusDone)
 	number, url := 5, ""
 	_, err := h.storage.UpdateBacklogItem(t.Context(), h.itemID, backlogdto.BacklogItemUpdate{PrNumber: &number, PrURL: &url}, nil)
 	require.NoError(t, err)
@@ -168,7 +168,7 @@ func TestCleanupGate_ShouldFailClosed_WhenItemPrNumberHasNoLink(t *testing.T) {
 
 func TestCleanupGate_ShouldRemoveWorktree_WhenEveryPRTerminalAndRecoverAfterLastPRCloses(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusDone)
+	h := newBlockerHarness(t, domain.BacklogStatusDone)
 	h.link(session.SessionPROwner(h.uuid), 22, domain.PRStateOpen)
 	ctx := uniquePath(h, session.CleanupPathSweep)
 	require.Equal(t, session.CleanupBlocked, h.svc.cleanupItemWorktrees(ctx, h.sessions()).Status)
@@ -186,7 +186,7 @@ func TestCleanupGate_ShouldRemoveWorktree_WhenEveryPRTerminalAndRecoverAfterLast
 
 func TestCleanupGate_ShouldHoldWorktreeAndRulePane_WhileCurrentRoundSessionLive(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusDone)
+	h := newBlockerHarness(t, domain.BacklogStatusDone)
 	h.svc.cleanup.liveEnabled = func() bool { return true }
 	probe := &stubProbe{live: map[string]bool{h.uuid: true}}
 	h.svc.SetLiveWorkProbe(probe)
@@ -210,7 +210,7 @@ func TestCleanupGate_ShouldHoldWorktreeAndRulePane_WhileCurrentRoundSessionLive(
 
 func TestCleanupGate_ShouldIgnoreLiveSessionOnReworkPath_OnlyPRClausesBlock(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusInProgress)
+	h := newBlockerHarness(t, domain.BacklogStatusInProgress)
 	h.svc.cleanup.liveEnabled = func() bool { return true }
 	h.svc.SetLiveWorkProbe(&stubProbe{live: map[string]bool{h.uuid: true}})
 
@@ -222,7 +222,7 @@ func TestCleanupGate_ShouldIgnoreLiveSessionOnReworkPath_OnlyPRClausesBlock(t *t
 
 func TestCleanupGate_ShouldRecheckBeforeEachRemoval_WhenPRAttachesMidCleanup(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusDone)
+	h := newBlockerHarness(t, domain.BacklogStatusDone)
 	second := "work2-" + t.Name()
 	now := time.Now()
 	path2 := filepath.Join(t.TempDir(), "wt2")
@@ -254,7 +254,7 @@ func (s *stubProbe) IsLive(_ context.Context, id string, _ time.Time) (bool, err
 // but the stop is not silent.
 func TestStopLiveWorkAndReviewSessions_ShouldStopSession_AndNameItsOpenPR(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusInProgress)
+	h := newBlockerHarness(t, domain.BacklogStatusInProgress)
 	h.link(session.SessionPROwner(h.uuid), 12, domain.PRStateOpen)
 
 	warnings := h.svc.stopLiveWorkAndReviewSessions(t.Context(), h.itemID)
@@ -267,7 +267,7 @@ func TestStopLiveWorkAndReviewSessions_ShouldStopSession_AndNameItsOpenPR(t *tes
 
 func TestStopLiveWorkAndReviewSessions_ShouldWarnNothing_WhenEveryPRTerminal(t *testing.T) {
 	t.Parallel()
-	h := newBlockerHarness(t, session.BacklogStatusInProgress)
+	h := newBlockerHarness(t, domain.BacklogStatusInProgress)
 	h.link(session.SessionPROwner(h.uuid), 12, domain.PRStateMerged)
 
 	assert.Empty(t, h.svc.stopLiveWorkAndReviewSessions(t.Context(), h.itemID))

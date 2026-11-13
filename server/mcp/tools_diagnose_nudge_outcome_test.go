@@ -23,7 +23,7 @@ func TestNudgeSession_should_CountSkippedCap_When_NudgeCapAlreadyReached(t *test
 	require.NoError(t, err)
 	itemID, sessUUID := setupDiagnoseSession(t, storage)
 	ctx := context.Background()
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bouncing")
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusReview, "bouncing")
 	require.NoError(t, err)
 	_, err = repo.RecordDiagnoseNudgeAttempt(ctx, itemID, domain.StuckReasonBouncing, int32(3), nil)
 	require.NoError(t, err)

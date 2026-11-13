@@ -48,12 +48,12 @@ func TestReconcilePRPending_ShouldHoldThenReleaseDone_WhenMergedAndWorkSessionLi
 	ctx := context.Background()
 
 	l.ReconcilePRPending(ctx, f.repo)
-	assert.Equal(t, string(session.BacklogStatusPRPending), statusOf(t, f), "merged, session still active: stays pr_pending")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), statusOf(t, f), "merged, session still active: stays pr_pending")
 	assert.Empty(t, notes.Calls, "no notification while held")
 
 	probe.live = false
 	l.ReconcilePRPending(ctx, f.repo)
-	assert.Equal(t, string(session.BacklogStatusDone), statusOf(t, f), "session idle or ended: the next pass completes the item")
+	assert.Equal(t, string(domain.BacklogStatusDone), statusOf(t, f), "session idle or ended: the next pass completes the item")
 }
 
 func TestReconcilePRPending_ShouldHoldOnProbeError_AndProceedToDoneWithOneWarning_WhenPastMaxHold(t *testing.T) {
@@ -65,15 +65,15 @@ func TestReconcilePRPending_ShouldHoldOnProbeError_AndProceedToDoneWithOneWarnin
 	before := session.LiveWorkResultCount(session.LiveWorkResultMaxHold)
 
 	l.ReconcilePRPending(ctx, f.repo)
-	assert.Equal(t, string(session.BacklogStatusPRPending), statusOf(t, f), "a probe error holds")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), statusOf(t, f), "a probe error holds")
 
 	now = prTestEpoch.Add(59 * time.Minute)
 	l.ReconcilePRPending(ctx, f.repo)
-	assert.Equal(t, string(session.BacklogStatusPRPending), statusOf(t, f), "59 minutes after first observation: still held")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), statusOf(t, f), "59 minutes after first observation: still held")
 
 	now = prTestEpoch.Add(61 * time.Minute)
 	l.ReconcilePRPending(ctx, f.repo)
-	assert.Equal(t, string(session.BacklogStatusDone), statusOf(t, f), "expiry wins over the probe error")
+	assert.Equal(t, string(domain.BacklogStatusDone), statusOf(t, f), "expiry wins over the probe error")
 	require.Len(t, notes.Calls, 1, "exactly one max-hold notification")
 	assert.Equal(t, int64(1), session.LiveWorkResultCount(session.LiveWorkResultMaxHold)-before)
 }
@@ -85,7 +85,7 @@ func TestReconcilePRPending_ShouldTrustRowsNotTheCheckerObservation_WhenAnotherP
 	f.link(session.ItemPROwner(f.itemID), 22, domain.PRStateOpen)
 
 	l.ReconcilePRPending(context.Background(), f.repo)
-	assert.Equal(t, string(session.BacklogStatusPRPending), statusOf(t, f), "verdict is Open while #22 is open")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), statusOf(t, f), "verdict is Open while #22 is open")
 }
 
 func TestReconcilePRPending_ShouldRefreshRowBeforeReadingVerdict_WhenRefresherWired(t *testing.T) {
@@ -109,7 +109,7 @@ func TestReconcilePRPending_ShouldRefreshRowBeforeReadingVerdict_WhenRefresherWi
 
 	l.ReconcilePRPending(context.Background(), f.repo)
 	assert.EqualValues(t, 1, refreshed.Load())
-	assert.Equal(t, string(session.BacklogStatusDone), statusOf(t, f), "the awaited refresh wrote the row before the verdict")
+	assert.Equal(t, string(domain.BacklogStatusDone), statusOf(t, f), "the awaited refresh wrote the row before the verdict")
 }
 
 func TestReconcilePRPending_ShouldBehaveAsToday_WhenFlagOffOrProbeNil(t *testing.T) {
@@ -127,7 +127,7 @@ func TestReconcilePRPending_ShouldBehaveAsToday_WhenFlagOffOrProbeNil(t *testing
 			t.Parallel()
 			l, f, notes := liveWorkListener(t, tc.probe, &now, tc.reader)
 			l.ReconcilePRPending(context.Background(), f.repo)
-			assert.Equal(t, string(session.BacklogStatusDone), statusOf(t, f))
+			assert.Equal(t, string(domain.BacklogStatusDone), statusOf(t, f))
 			assert.Empty(t, notes.Calls)
 		})
 	}
@@ -139,18 +139,18 @@ func TestReconcileBouncingItems_ShouldHoldDoneTransition_WhenMergedAndWorkSessio
 	probe := &stubLiveAll{live: true}
 	l, f, _ := liveWorkListener(t, probe, &now, true)
 	ctx := context.Background()
-	_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(session.BacklogStatusInProgress)).Save(ctx)
+	_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(domain.BacklogStatusInProgress)).Save(ctx)
 	require.NoError(t, err)
 	checker := &fakePRPendingChecker{merged: true}
 	overridePRPendingChecker(t, l, checker)
 
 	l.reconcileBouncingItems(ctx, f.repo)
-	assert.Equal(t, string(session.BacklogStatusInProgress), statusOf(t, f), "live session: no done transition")
+	assert.Equal(t, string(domain.BacklogStatusInProgress), statusOf(t, f), "live session: no done transition")
 	assert.Zero(t, checker.isMergedCalls, "rows already say Done and a session is live: no GitHub call (C4)")
 
 	probe.live = false
 	l.reconcileBouncingItems(ctx, f.repo)
-	assert.Equal(t, string(session.BacklogStatusDone), statusOf(t, f), "idle or ended: it moves to done as today")
+	assert.Equal(t, string(domain.BacklogStatusDone), statusOf(t, f), "idle or ended: it moves to done as today")
 }
 
 type stubLiveAll struct {

@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -42,7 +43,7 @@ type reviewGuardFixture struct {
 	work    backlogdto.ItemSessionSummary
 }
 
-func newReviewGuardFixture(t *testing.T, spawner reviewgate.ReviewGateSpawner, status session.BacklogStatus) *reviewGuardFixture {
+func newReviewGuardFixture(t *testing.T, spawner reviewgate.ReviewGateSpawner, status domain.BacklogStatus) *reviewGuardFixture {
 	t.Helper()
 	storage, cleanup := createTestStorage(t)
 	t.Cleanup(cleanup)
@@ -88,7 +89,7 @@ func (f *reviewGuardFixture) reviewRows(t *testing.T) (total, open int) {
 func TestReviewGate_ConcurrentTriggers_SingleSpawn(t *testing.T) {
 	t.Parallel()
 	spawner := newBlockingReviewSpawner()
-	f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 
 	const callers = 3
 	var returned atomic.Int32
@@ -131,7 +132,7 @@ func TestReviewGate_ConcurrentTriggers_SingleSpawn(t *testing.T) {
 func TestReviewGate_ReleasedAfterSpawnError_AllowsRetry(t *testing.T) {
 	t.Parallel()
 	spawner := &blktest.MockReviewGateSpawner{Err: assert.AnError}
-	f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 
 	f.l.spawnReviewGate(builtInReviewGateContext, f.item, f.work)
 	assert.False(t, f.l.ReviewSpawnGuard().InFlight(f.item.ID), "reservation must be released after a spawn error")
@@ -144,7 +145,7 @@ func TestReviewGate_ReleasedAfterSpawnError_AllowsRetry(t *testing.T) {
 func TestReviewGate_ReservationHeldUntilItemSessionPersisted(t *testing.T) {
 	t.Parallel()
 	spawner := newBlockingReviewSpawner()
-	f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 
 	done := make(chan struct{})
 	go func() {
@@ -165,13 +166,13 @@ func TestTriggerReviewForSession_NoopWhenReviewOpenOrNotInReview(t *testing.T) {
 	t.Parallel()
 	t.Run("not in review", func(t *testing.T) {
 		spawner := &blktest.MockReviewGateSpawner{}
-		f := newReviewGuardFixture(t, spawner, session.BacklogStatusInProgress)
+		f := newReviewGuardFixture(t, spawner, domain.BacklogStatusInProgress)
 		f.l.triggerReviewForSession(f.work.SessionUUID)
 		assert.Equal(t, 0, spawner.CallCount())
 	})
 	t.Run("open review session", func(t *testing.T) {
 		spawner := &blktest.MockReviewGateSpawner{}
-		f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+		f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 		_, err := f.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 			ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleReview,
 		})
@@ -181,7 +182,7 @@ func TestTriggerReviewForSession_NoopWhenReviewOpenOrNotInReview(t *testing.T) {
 	})
 	t.Run("in-flight reservation", func(t *testing.T) {
 		spawner := &blktest.MockReviewGateSpawner{}
-		f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+		f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 		release, ok := f.l.ReserveReview(context.Background(), f.item.ID)
 		require.True(t, ok)
 		defer release()
@@ -193,7 +194,7 @@ func TestTriggerReviewForSession_NoopWhenReviewOpenOrNotInReview(t *testing.T) {
 func TestReviewGate_ReReviewAllowedAfterPriorEnded(t *testing.T) {
 	t.Parallel()
 	spawner := &blktest.MockReviewGateSpawner{}
-	f := newReviewGuardFixture(t, spawner, session.BacklogStatusReview)
+	f := newReviewGuardFixture(t, spawner, domain.BacklogStatusReview)
 	prior, err := f.storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID: f.item.ID, SessionUUID: uuid.New().String(), SessionRole: session.SessionRoleReview,
 	})

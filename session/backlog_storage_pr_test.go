@@ -12,7 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-func itemInStatus(t *testing.T, f *itemPRFixture, status BacklogStatus) *backlogdto.BacklogItemData {
+func itemInStatus(t *testing.T, f *itemPRFixture, status domain.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
 	_, err := f.repo.Client.BacklogItem.UpdateOneID(f.itemEnt().ID).SetStatus(string(status)).Save(context.Background())
 	require.NoError(t, err)
@@ -41,13 +41,13 @@ func itemLinkNumbers(t *testing.T, f *itemPRFixture) []int {
 func TestSetPRAndTransition_ShouldWriteItemDirectLinkWithPRFields_WhenFirstReportScopesOff(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	item := itemInStatus(t, f, BacklogStatusReview)
+	item := itemInStatus(t, f, domain.BacklogStatusReview)
 
 	require.NoError(t, f.storage.setPRAndTransition(context.Background(), item, prAssoc(22, domain.AttachSourceReportPRCreated)))
 
 	got, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusPRPending), got.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), got.Status)
 	assert.Equal(t, 22, got.PrNumber)
 	assert.Equal(t, []int{22}, itemLinkNumbers(t, f))
 	views, _ := f.repo.ListByItem(context.Background(), f.itemID)
@@ -60,7 +60,7 @@ func TestSetPRAndTransition_ShouldDropReplacedItemLinkWithoutTombstone_WhenCorre
 	ctx := context.Background()
 	f := newItemPRFixture(t, 21)
 	f.link(ItemPROwner(f.itemID), 21, domain.PRStateOpen)
-	item := itemInStatus(t, f, BacklogStatusPRPending)
+	item := itemInStatus(t, f, domain.BacklogStatusPRPending)
 	pr := prAssoc(22, domain.AttachSourceReportPRCreated)
 	pr.Guard = &backlogdto.PRReassignmentGuard{OverrideReason: "polluted branch", NewPRAuthorVerified: true}
 
@@ -77,7 +77,7 @@ func TestSetPRAndTransition_ShouldAttachFollowupAndKeepPending_WhenAdditive(t *t
 	ctx := context.Background()
 	f := newItemPRFixture(t, 21)
 	f.link(ItemPROwner(f.itemID), 21, domain.PRStateMerged)
-	item := itemInStatus(t, f, BacklogStatusPRPending)
+	item := itemInStatus(t, f, domain.BacklogStatusPRPending)
 	pr := prAssoc(22, domain.AttachSourceReportPRCreated)
 	pr.Additive = true
 
@@ -85,7 +85,7 @@ func TestSetPRAndTransition_ShouldAttachFollowupAndKeepPending_WhenAdditive(t *t
 
 	got, err := f.storage.GetBacklogItem(ctx, f.itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(BacklogStatusPRPending), got.Status, "status unchanged")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), got.Status, "status unchanged")
 	assert.Equal(t, 22, got.PrNumber, "the mirror follows the derived active PR (open #22 outranks merged #21)")
 	assert.ElementsMatch(t, []int{21, 22}, itemLinkNumbers(t, f))
 	assert.Equal(t, ItemVerdictOpen, f.verdict())
@@ -103,7 +103,7 @@ func TestSetPRAndTransition_ShouldRefuseAdditive_WhenOperatorDetachedThatPR(t *t
 	f := newItemPRFixture(t, 21)
 	f.link(ItemPROwner(f.itemID), 22, domain.PRStateOpen)
 	f.detach(ItemPROwner(f.itemID), 22)
-	item := itemInStatus(t, f, BacklogStatusPRPending)
+	item := itemInStatus(t, f, domain.BacklogStatusPRPending)
 	pr := prAssoc(22, domain.AttachSourceReportPRCreated)
 	pr.Additive = true
 
@@ -116,7 +116,7 @@ func TestSetPRAndTransition_ShouldRefuseAdditive_WhenOperatorDetachedThatPR(t *t
 func TestSetPRAndTransition_ShouldKeepLegacyReassignRules_WhenNotAdditive(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 21)
-	item := itemInStatus(t, f, BacklogStatusPRPending)
+	item := itemInStatus(t, f, domain.BacklogStatusPRPending)
 	err := f.storage.setPRAndTransition(context.Background(), item, prAssoc(22, domain.AttachSourceReportPRCreated))
 	require.ErrorIs(t, err, backlogdto.ErrPRReassignmentNotAllowed, "flag off: a different PR on pr_pending still needs the guard")
 }
@@ -146,7 +146,7 @@ func TestPushAndCreatePR_ShouldWriteFieldsAndLinkAtomically_AndKeepReviewOnFailu
 	t.Parallel()
 	ctx := context.Background()
 	f := newItemPRFixture(t, 0)
-	item := itemInStatus(t, f, BacklogStatusReview)
+	item := itemInStatus(t, f, domain.BacklogStatusReview)
 	f.repo.afterPRLinkHook = func() error { return errors.New("forced link failure") }
 
 	err := f.storage.setPRAndTransition(ctx, item, prAssoc(22, domain.AttachSourcePRCreationService))
@@ -154,7 +154,7 @@ func TestPushAndCreatePR_ShouldWriteFieldsAndLinkAtomically_AndKeepReviewOnFailu
 
 	got, gerr := f.storage.GetBacklogItem(ctx, f.itemID)
 	require.NoError(t, gerr)
-	assert.Equal(t, string(BacklogStatusReview), got.Status, "the item stays in review")
+	assert.Equal(t, string(domain.BacklogStatusReview), got.Status, "the item stays in review")
 	assert.Zero(t, got.PrNumber, "pr_number was rolled back with the link")
 	assert.Empty(t, itemLinkNumbers(t, f))
 

@@ -160,7 +160,7 @@ func (c *stageConfigCache) refresh(ctx context.Context, repo StageConfigReposito
 // CanTransition/AllowedTransitions (session/configured_workflow_engine.go)
 // need to decide whether to consult a per-item StageConfigSnapshot fallback
 // instead of trusting the live graph.
-func (c *stageConfigCache) HasStage(from BacklogStatus) bool {
+func (c *stageConfigCache) HasStage(from domain.BacklogStatus) bool {
 	snap := c.ptr.Load()
 	if snap == nil {
 		return false
@@ -172,7 +172,7 @@ func (c *stageConfigCache) HasStage(from BacklogStatus) bool {
 // Get returns the resolved edge for (from,to), or (resolvedTransitionEdge{},
 // false) if no such legal/enabled edge exists. Lock-free: one atomic Load +
 // two map lookups.
-func (c *stageConfigCache) Get(from, to BacklogStatus) (resolvedTransitionEdge, bool) {
+func (c *stageConfigCache) Get(from, to domain.BacklogStatus) (resolvedTransitionEdge, bool) {
 	snap := c.ptr.Load()
 	if snap == nil {
 		return resolvedTransitionEdge{}, false
@@ -187,7 +187,7 @@ func (c *stageConfigCache) Get(from, to BacklogStatus) (resolvedTransitionEdge, 
 
 // AllowedTransitions returns the stages reachable from from in the current
 // cache snapshot, in no particular order (callers sort as needed).
-func (c *stageConfigCache) AllowedTransitions(from BacklogStatus) []BacklogStatus {
+func (c *stageConfigCache) AllowedTransitions(from domain.BacklogStatus) []domain.BacklogStatus {
 	snap := c.ptr.Load()
 	if snap == nil {
 		return nil
@@ -196,9 +196,9 @@ func (c *stageConfigCache) AllowedTransitions(from BacklogStatus) []BacklogStatu
 	if !ok {
 		return nil
 	}
-	result := make([]BacklogStatus, 0, len(targets))
+	result := make([]domain.BacklogStatus, 0, len(targets))
 	for to := range targets {
-		result = append(result, BacklogStatus(to))
+		result = append(result, domain.BacklogStatus(to))
 	}
 	return result
 }

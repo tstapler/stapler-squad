@@ -24,7 +24,7 @@ func BuildCompletionReviewContext(item *backlogdto.BacklogItemData, sessions []b
 	if d := strings.TrimSpace(domain.SanitizeField(item.Description, 2000)); d != "" {
 		fmt.Fprintf(&sb, "\n## Description\n%s\n", d)
 	}
-	criteria, _ := ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	fmt.Fprintf(&sb, "\n## Acceptance Criteria (final status)\n%s\n", domain.BuildAcChecklist(criteria))
 	if n := strings.TrimSpace(domain.SanitizeField(item.Notes, 1000)); n != "" {
 		fmt.Fprintf(&sb, "\n## Triage Notes\n%s\n", n)

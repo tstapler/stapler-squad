@@ -3,6 +3,7 @@ package session
 // Workflow-engine types and the shadow ledger that the session core uses and the backlog lifecycle code builds on.
 
 import (
+	"github.com/tstapler/stapler-squad/session/domain"
 	"sort"
 	"time"
 )
@@ -92,7 +93,7 @@ type ShadowLedger struct {
 }
 
 // EdgeKey renders an edge; an empty to (AllowedTransitions) renders "from->*".
-func EdgeKey(from, to BacklogStatus) string {
+func EdgeKey(from, to domain.BacklogStatus) string {
 	if to == "" {
 		return string(from) + "->*"
 	}

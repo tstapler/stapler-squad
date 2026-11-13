@@ -33,6 +33,7 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -249,8 +250,8 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	// against a real precondition check on that row, so this test must apply
 	// the real transition itself first, mirroring what *BacklogService's real
 	// transitionWithGuard would have done in production.
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress,
-		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}, session.TriggeredByUser)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress,
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}, session.TriggeredByUser)
 	require.NoError(t, err)
 
 	pollClient := &fakeUsageCycleClient{}
@@ -287,7 +288,7 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	// this test asserted "review" via require.Eventually and was
 	// consequently flaky: it only passed when a 5ms poll happened to land
 	// inside the sub-millisecond window between the two writes.
-	assert.Equal(t, string(session.BacklogStatusPRPending), updated.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), updated.Status)
 
 	messages := handler.messages()
 	assert.Contains(t, messages, "jules dispatch requested")

@@ -80,7 +80,7 @@ func seedBacklogItems(t *testing.T, repo *session.EntRepository, ctx context.Con
 		title := fmt.Sprintf("%s-%d", titlePrefix, i)
 		_, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  title,
-			Status: string(session.BacklogStatusIdea),
+			Status: string(domain.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
 		titles = append(titles, title)

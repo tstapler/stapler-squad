@@ -24,7 +24,7 @@ func TestGetBacklogItemByExternalURL_DedupsManualImports(t *testing.T) {
 	const url = "https://github.com/acme/widgets/issues/42"
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:       "Widget bug",
-		Status:      string(BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  "42",
 		ExternalURL: url,
 	})

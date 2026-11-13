@@ -23,7 +23,7 @@ func newPassItemWithNoopSessions(t *testing.T, storage *session.Storage, n int) 
 		Title:              "PASS item that loops",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	for i := 0; i < n; i++ {
@@ -39,7 +39,7 @@ func newPassItemWithNoopSessions(t *testing.T, storage *session.Storage, n int) 
 	require.NoError(t, err)
 	_, err = storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID: item.ID, SessionUUID: "reviewv-" + uuid.New().String(), SessionRole: session.SessionRoleReview,
-	}, backlogdto.ReviewVerdictData{OverallOutcome: session.ReviewOutcomePass, PerCriterion: `[]`, Summary: "ok"})
+	}, backlogdto.ReviewVerdictData{OverallOutcome: domain.ReviewOutcomePass, PerCriterion: `[]`, Summary: "ok"})
 	require.NoError(t, err)
 	_ = rs
 	return item
@@ -106,8 +106,8 @@ func TestSelfHealStuck_should_resolveRepeatedNoopDispatch_When_ItemLeavesReviewA
 	require.NoError(t, err)
 	require.True(t, blocked, "row stays open while item is still in review")
 
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusArchived,
-		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusArchived,
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, session.TriggeredBySystem)
 	require.NoError(t, err)
 	listener.selfHealStuck(ctx, er)
 

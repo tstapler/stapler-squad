@@ -41,10 +41,10 @@ type HeadlessTriageResult struct {
 	// frontend/test/infra/docs) to avoid the two colliding in the same JSON
 	// object the model produces. Empty or invalid leaves the item's existing
 	// category untouched.
-	ItemCategory       string                `json:"item_category,omitempty"`
-	Suggestions        []TriageSuggestion    `json:"suggestions"`
-	Tasks              []TriageTask          `json:"tasks,omitempty"`
-	AcceptanceCriteria []session.AcCriterion `json:"acceptance_criteria,omitempty"`
+	ItemCategory       string               `json:"item_category,omitempty"`
+	Suggestions        []TriageSuggestion   `json:"suggestions"`
+	Tasks              []TriageTask         `json:"tasks,omitempty"`
+	AcceptanceCriteria []domain.AcCriterion `json:"acceptance_criteria,omitempty"`
 	// Iteration and Feedback are not part of the LLM's JSON output — the caller
 	// sets them after parsing, from server-tracked state, before persisting.
 	Iteration int    `json:"iteration,omitempty"`
@@ -68,7 +68,7 @@ func BuildHeadlessTriagePrompt(item *backlogdto.BacklogItemData, artifactAbsPath
 		WriteDescriptionSection(&sb, item.Description, 0)
 	}
 	if item.AcceptanceCriteria != "" {
-		criteria, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
+		criteria, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
 		if len(criteria) > 0 {
 			sb.WriteString("## Acceptance Criteria\n")
 			for _, c := range criteria {

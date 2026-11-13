@@ -123,7 +123,7 @@ func (s *BacklogService) GetPendingGates(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	to := session.BacklogStatus(req.Msg.ToStatus)
+	to := domain.BacklogStatus(req.Msg.ToStatus)
 	guardInput := s.buildPendingGatesGuardInput(ctx, item, to)
 	fallback := backlogdto.BuildStageConfigSnapshotFallback(item)
 
@@ -146,8 +146,8 @@ func (s *BacklogService) GetPendingGates(
 func (s *BacklogService) buildPendingGatesGuardInput(
 	ctx context.Context,
 	item *backlogdto.BacklogItemData,
-	to session.BacklogStatus,
-) session.BacklogItemTransitionInput {
+	to domain.BacklogStatus,
+) domain.BacklogItemTransitionInput {
 	guardInput, err := s.buildGuardInput(ctx, item, to, "GetPendingGates")
 	if err != nil {
 		log.WarningLog().Printf("[GetPendingGates] failed to check unresolved blockers for item %s: %v", item.ID, err)
@@ -165,17 +165,17 @@ func (s *BacklogService) buildPendingGatesGuardInput(
 func (s *BacklogService) buildGuardInput(
 	ctx context.Context,
 	item *backlogdto.BacklogItemData,
-	to session.BacklogStatus,
+	to domain.BacklogStatus,
 	caller string,
-) (session.BacklogItemTransitionInput, error) {
+) (domain.BacklogItemTransitionInput, error) {
 	var hasUnshippedCode bool
-	if to == session.BacklogStatusDone {
+	if to == domain.BacklogStatusDone {
 		hasUnshippedCode = !s.isCodeShippedToMain(ctx, item.ID, item.RepoPath, caller)
 	}
 
 	var hasUnresolvedBlockers bool
 	var blockersErr error
-	if to == session.BacklogStatusInProgress {
+	if to == domain.BacklogStatusInProgress {
 		hasUnresolvedBlockers, blockersErr = s.HasUnresolvedBlockers(ctx, item.ID)
 	}
 
@@ -184,7 +184,7 @@ func (s *BacklogService) buildGuardInput(
 		log.WarningLog().Printf("[%s] failed to load review verdict for item %s: %v", caller, item.ID, err)
 	}
 
-	guardInput := backlogdto.NewBacklogItemTransitionInput(item, session.BacklogStatus(item.Status))
+	guardInput := backlogdto.NewBacklogItemTransitionInput(item, domain.BacklogStatus(item.Status))
 	guardInput.OverallOutcome = overallOutcome
 	guardInput.HasUnshippedCode = hasUnshippedCode
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers && blockersErr == nil

@@ -253,7 +253,7 @@ func TestNotifyDequeueSpawnParked_TextDependsOnWhetherRetriesStop(t *testing.T) 
 	itemID := newReadyItemWithRepo(t, svc, "text")
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	_, err = storage.MarkStuck(t.Context(), itemID, domain.StuckReasonSpawnFailed, session.BacklogStatusReady, "c")
+	_, err = storage.MarkStuck(t.Context(), itemID, domain.StuckReasonSpawnFailed, domain.BacklogStatusReady, "c")
 	require.NoError(t, err)
 
 	message := func(attempts int32) string {
@@ -413,7 +413,7 @@ func TestRecordDequeueSpawnFailure_UnappliedMarkStuckOpensNoRowAndNoHold(t *test
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
 
-	svc.recordDequeueSpawnFailure(t.Context(), *item, session.BacklogStatusQueued /* item is ready */, errSpawnBoom)
+	svc.recordDequeueSpawnFailure(t.Context(), *item, domain.BacklogStatusQueued /* item is ready */, errSpawnBoom)
 
 	_, ok := openSpawnFailedRow(t, storage, itemID)
 	assert.False(t, ok)

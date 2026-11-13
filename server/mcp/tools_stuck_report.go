@@ -13,7 +13,6 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -76,7 +75,7 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 	h.writePullRequestSet(ctx, &sb, item)
 	h.writeBlockedCleanup(&sb, itemID)
 
-	if session.BacklogStatus(item.Status) == session.BacklogStatusPRPending && item.PrNumber > 0 {
+	if domain.BacklogStatus(item.Status) == domain.BacklogStatusPRPending && item.PrNumber > 0 {
 		h.writeCICrossCheck(ctx, &sb, item)
 	}
 
@@ -95,7 +94,7 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 // out or made impossible, with the item's own AC text never reconciled to
 // match (see backlog item 242f8195-f15c-4b8a-a525-72b61d90c44b).
 func writeAcceptanceCriteria(sb *strings.Builder, item *backlogdto.BacklogItemData) {
-	criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, parseErr := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if parseErr != nil || len(criteria) == 0 {
 		return
 	}

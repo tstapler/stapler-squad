@@ -9,6 +9,7 @@ go_library(
     deps = [
         "//github",
         "//session",
+        "//session/domain",
         "//session/domain/backlogdto",
     ],
 )
@@ -29,6 +30,7 @@ go_test(
     deps = [
         "//github",
         "//session",
+        "//session/domain",
         "//session/domain/backlogdto",
         "@com_github_stretchr_testify//assert",
     ],

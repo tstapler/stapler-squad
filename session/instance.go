@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -29,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
+	"github.com/tstapler/stapler-squad/session/vnc"
 )
 
 // logPTYUnavailableIfUnexpected logs a GetPTY() failure as ERROR unless it's
@@ -532,11 +534,11 @@ type Instance struct {
 	// vncManager owns the Xvfb + x11vnc lifecycle for this session.
 	// Always non-nil after NewInstance() — on unsupported platforms or missing deps,
 	// a no-op manager is returned. VNCManager() returns it for external access.
-	vncManager VNCProcessManager
+	vncManager vnc.VNCProcessManager
 	// cdpManager owns the Chrome DevTools Protocol screencast lifecycle for this
 	// session. Always non-nil after NewInstance() — when Chrome is absent, a
 	// no-op manager is returned. CDPManager() returns it for external access.
-	cdpManager CDPStreamManager
+	cdpManager cdp.CDPStreamManager
 
 	// tagManager provides CRUD operations for session tags.
 	// Backed by a pointer to Instance.Tags for zero-sync compatibility with

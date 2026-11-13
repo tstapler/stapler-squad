@@ -8,12 +8,13 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
-	bkfCustomStage session.BacklogStatus = "bkf_custom"
-	bkfOtherStage  session.BacklogStatus = "bkf_other"
-	bkfStageName                         = "display name"
+	bkfCustomStage domain.BacklogStatus = "bkf_custom"
+	bkfOtherStage  domain.BacklogStatus = "bkf_other"
+	bkfStageName                        = "display name"
 )
 
 // bkfCreateStage creates a stage through the CreateStage handler.
@@ -25,7 +26,7 @@ func bkfCreateStage(t *testing.T, svc *BacklogService, req *sessionv1.CreateStag
 }
 
 // bkfAddEdge creates an edge through CreateStageTransition and returns its error.
-func bkfAddEdge(t *testing.T, svc *BacklogService, from, to session.BacklogStatus, enabled bool) error {
+func bkfAddEdge(t *testing.T, svc *BacklogService, from, to domain.BacklogStatus, enabled bool) error {
 	t.Helper()
 	_, err := svc.CreateStageTransition(t.Context(), connect.NewRequest(&sessionv1.CreateStageTransitionRequest{
 		FromStageSlug: string(from), ToStageSlug: string(to), Enabled: enabled,
@@ -34,7 +35,7 @@ func bkfAddEdge(t *testing.T, svc *BacklogService, from, to session.BacklogStatu
 }
 
 // bkfStageID returns the id of a seeded stage.
-func bkfStageID(t *testing.T, repo *session.EntStageConfigRepository, slug session.BacklogStatus) string {
+func bkfStageID(t *testing.T, repo *session.EntStageConfigRepository, slug domain.BacklogStatus) string {
 	t.Helper()
 	stage, err := repo.GetStageBySlug(t.Context(), string(slug))
 	require.NoError(t, err)
@@ -43,7 +44,7 @@ func bkfStageID(t *testing.T, repo *session.EntStageConfigRepository, slug sessi
 
 // bkfOperatorCanMove reports whether the operator transition handler lets an
 // item at `from` move to `to` after configure edited the stage config.
-func bkfOperatorCanMove(t *testing.T, from, to session.BacklogStatus, configure func(*BacklogService, *session.EntStageConfigRepository)) bool {
+func bkfOperatorCanMove(t *testing.T, from, to domain.BacklogStatus, configure func(*BacklogService, *session.EntStageConfigRepository)) bool {
 	t.Helper()
 	return enfBuiltTransition(t, from, to, configure)
 }
@@ -55,12 +56,12 @@ func bkfUnrelatedEdgeAccepted(t *testing.T, configure func(*BacklogService, *ses
 	t.Helper()
 	svc, _, repo, _ := enfService(t)
 	configure(svc, repo)
-	return bkfAddEdge(t, svc, session.BacklogStatusQueued, session.BacklogStatusRefining, true) == nil
+	return bkfAddEdge(t, svc, domain.BacklogStatusQueued, domain.BacklogStatusRefining, true) == nil
 }
 
 func TestConfigSurfaceProof_CreateStage_ChangesHandlerAnswer(t *testing.T) {
-	ready := session.BacklogStatusReady
-	createWithEdge := func(slug session.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
+	ready := domain.BacklogStatusReady
+	createWithEdge := func(slug domain.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
 		return func(svc *BacklogService, _ *session.EntStageConfigRepository) {
 			bkfCreateStage(t, svc, &sessionv1.CreateStageRequest{Slug: string(slug), Name: bkfStageName, IsEntry: true, IsTerminal: true, Enabled: enabled})
 			require.NoError(t, bkfAddEdge(t, svc, slug, ready, true))
@@ -72,7 +73,7 @@ func TestConfigSurfaceProof_CreateStage_ChangesHandlerAnswer(t *testing.T) {
 		return bkfOperatorCanMove(t, custom, ready, createWithEdge(bkfCustomStage, setting.(bool)))
 	}, false, true) // enabled
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return bkfOperatorCanMove(t, custom, ready, createWithEdge(setting.(session.BacklogStatus), true))
+		return bkfOperatorCanMove(t, custom, ready, createWithEdge(setting.(domain.BacklogStatus), true))
 	}, bkfOtherStage, bkfCustomStage) // slug
 }
 
@@ -90,8 +91,8 @@ func TestConfigSurfaceProof_CreateStage_IsEntryAndIsTerminal_ChangeGraphValidati
 }
 
 func TestConfigSurfaceProof_UpdateStage_ChangesHandlerAnswer(t *testing.T) {
-	done, refining, review := session.BacklogStatusDone, session.BacklogStatusRefining, session.BacklogStatusReview
-	disable := func(slug session.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
+	done, refining, review := domain.BacklogStatusDone, domain.BacklogStatusRefining, domain.BacklogStatusReview
+	disable := func(slug domain.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
 		return func(svc *BacklogService, repo *session.EntStageConfigRepository) {
 			_, err := svc.UpdateStage(t.Context(), connect.NewRequest(&sessionv1.UpdateStageRequest{Id: bkfStageID(t, repo, slug), Enabled: &enabled}))
 			require.NoError(t, err)
@@ -102,7 +103,7 @@ func TestConfigSurfaceProof_UpdateStage_ChangesHandlerAnswer(t *testing.T) {
 		return bkfOperatorCanMove(t, done, refining, disable(refining, setting.(bool)))
 	}, false, true) // enabled
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return bkfOperatorCanMove(t, done, refining, disable(setting.(session.BacklogStatus), false))
+		return bkfOperatorCanMove(t, done, refining, disable(setting.(domain.BacklogStatus), false))
 	}, refining, review) // id: which stage the update targets
 }
 
@@ -127,8 +128,8 @@ func TestConfigSurfaceProof_UpdateStage_IsEntryAndIsTerminal_ChangeGraphValidati
 }
 
 func TestConfigSurfaceProof_CreateStageTransition_ChangesHandlerAnswer(t *testing.T) {
-	queued, refining, review, idea := session.BacklogStatusQueued, session.BacklogStatusRefining, session.BacklogStatusReview, session.BacklogStatusIdea
-	create := func(from, to session.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
+	queued, refining, review, idea := domain.BacklogStatusQueued, domain.BacklogStatusRefining, domain.BacklogStatusReview, domain.BacklogStatusIdea
+	create := func(from, to domain.BacklogStatus, enabled bool) func(*BacklogService, *session.EntStageConfigRepository) {
 		return func(svc *BacklogService, _ *session.EntStageConfigRepository) {
 			require.NoError(t, bkfAddEdge(t, svc, from, to, enabled))
 		}
@@ -138,9 +139,9 @@ func TestConfigSurfaceProof_CreateStageTransition_ChangesHandlerAnswer(t *testin
 		return bkfOperatorCanMove(t, queued, refining, create(queued, refining, setting.(bool)))
 	}, false, true) // enabled
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return bkfOperatorCanMove(t, queued, refining, create(queued, setting.(session.BacklogStatus), true))
+		return bkfOperatorCanMove(t, queued, refining, create(queued, setting.(domain.BacklogStatus), true))
 	}, review, refining) // to_stage_slug
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		return bkfOperatorCanMove(t, queued, review, create(setting.(session.BacklogStatus), review, true))
+		return bkfOperatorCanMove(t, queued, review, create(setting.(domain.BacklogStatus), review, true))
 	}, idea, queued) // from_stage_slug
 }

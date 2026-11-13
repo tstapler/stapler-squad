@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -51,7 +51,7 @@ func TestCreateBacklogItemFromChat_should_CreateItemViaCreateBacklogItem_When_No
 	require.NotNil(t, resp.Msg.Item)
 	assert.Equal(t, "Add dark mode support", resp.Msg.Item.Title)
 	assert.Equal(t, "Add dark mode support", resp.Msg.Item.Description)
-	assert.Equal(t, string(session.BacklogStatusIdea), resp.Msg.Item.Status)
+	assert.Equal(t, string(domain.BacklogStatusIdea), resp.Msg.Item.Status)
 }
 
 // TestCreateBacklogItemFromChat_should_RejectEmptyMessage_When_MessageIsWhitespaceOnly
@@ -81,7 +81,7 @@ func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_Wh
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item awaiting refinement",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -97,7 +97,7 @@ func TestCreateBacklogItemFromChat_should_DelegateToTriggerTriageWithFeedback_Wh
 	require.NoError(t, trigErr)
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5e9, 5e7, "initial triage must complete before refinement")
 
 	resp, chatErr := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
@@ -126,7 +126,7 @@ func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_Refinin
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item awaiting chat refinement",
-		Status:   string(session.BacklogStatusIdea),
+		Status:   string(domain.BacklogStatusIdea),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})
@@ -136,7 +136,7 @@ func TestCreateBacklogItemFromChat_should_UseChatModeRetriagePrompt_When_Refinin
 	require.NoError(t, trigErr)
 	wait.RequireEventually(t, func() bool {
 		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
-		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+		return loadErr == nil && updated.Status == string(domain.BacklogStatusReady)
 	}, 5e9, 5e7, "initial triage must complete before refinement")
 
 	_, chatErr := svc.CreateBacklogItemFromChat(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemFromChatRequest{
@@ -161,7 +161,7 @@ func TestCreateBacklogItemFromChat_should_RejectRefinement_When_ItemNotInIdeaOrR
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "in-progress item",
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 		Priority: 3,
 		RepoPath: t.TempDir(),
 	})

@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -85,7 +86,7 @@ type JulesSessionCreator interface {
 // convention for one server/services type reaching BacklogService behavior
 // via a consumer-owned interface rather than a concrete sibling pointer.
 type julesTransitionGuard interface {
-	TransitionWithGuard(ctx context.Context, item *backlogdto.BacklogItemData, to session.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error)
+	TransitionWithGuard(ctx context.Context, item *backlogdto.BacklogItemData, to domain.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error)
 	HasUnresolvedBlockers(ctx context.Context, itemID string) (bool, error)
 }
 
@@ -305,7 +306,7 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *backlo
 	}
 	if hasBlockers {
 		s.logDispatchRejected(item.ID, "unresolved_blockers")
-		return "", fmt.Errorf("jules: item %s has unresolved blockers: %w", item.ID, session.ErrUnresolvedBlockers)
+		return "", fmt.Errorf("jules: item %s has unresolved blockers: %w", item.ID, domain.ErrUnresolvedBlockers)
 	}
 
 	// 6. Resolve owner/repo -> JulesSourceName, reserve, create, confirm.
@@ -355,11 +356,11 @@ func (s *JulesDispatchService) DispatchToJules(ctx context.Context, item *backlo
 
 	log.Info("jules session created", "item_id", item.ID, "jules_session", string(julesSession.Name), "item_session_id", reservation.ID)
 
-	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}
 	// hasBlockers is guaranteed false here — step 5 already returned early
 	// otherwise — so this call site can never drift back out of sync with
 	// the real check above if the guard sequence is ever reordered.
-	if _, err := s.transitionGuard.TransitionWithGuard(ctx, item, session.BacklogStatusInProgress, precondition, session.TriggeredByUser, hasBlockers); err != nil {
+	if _, err := s.transitionGuard.TransitionWithGuard(ctx, item, domain.BacklogStatusInProgress, precondition, session.TriggeredByUser, hasBlockers); err != nil {
 		return "", fmt.Errorf("jules: transitioning item %s to in_progress: %w", item.ID, err)
 	}
 

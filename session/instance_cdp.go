@@ -25,10 +25,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 )
 
-// CDPStreamManager is a local alias for the cdp package interface so that
-// files within the session package can reference it without importing cdp directly.
-type CDPStreamManager = cdp.CDPStreamManager
-
 // BrowserPassthroughEnabled reports whether browser passthrough is on, through
 // either the "browser-passthrough" feature flag or the explicit config field.
 func BrowserPassthroughEnabled(appCfg *config.Config) bool {
@@ -68,7 +64,7 @@ func (i *Instance) initCDPManager(appCfg *config.Config) {
 // CDPManager returns the CDPStreamManager for this instance.
 // Always non-nil after NewInstance() — returns a no-op manager when Chrome
 // is unavailable.
-func (i *Instance) CDPManager() CDPStreamManager {
+func (i *Instance) CDPManager() cdp.CDPStreamManager {
 	return i.cdpManager
 }
 

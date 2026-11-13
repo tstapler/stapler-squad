@@ -18,7 +18,7 @@ func makeTestBacklogItem(title, description, acJSON, status string, priority int
 		ID:                 "test-item-ctx-1",
 		Title:              title,
 		Description:        description,
-		AcceptanceCriteria: session.AcCriteriaJSON(acJSON),
+		AcceptanceCriteria: domain.AcCriteriaJSON(acJSON),
 		Status:             status,
 		Priority:           priority,
 		Notes:              notes,
@@ -160,7 +160,7 @@ func TestBuildSessionInitialPrompt_WithReviewVerdict_ContainsSummaryAndFailedCri
 		`]`
 	s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
 		ID:             "test-verdict-1",
-		OverallOutcome: string(session.ReviewOutcomeFail),
+		OverallOutcome: string(domain.ReviewOutcomeFail),
 		Summary:        "Handler crashes on empty request body; missing input validation.",
 		PerCriterion:   perCriterion,
 	}
@@ -219,7 +219,7 @@ func TestBuildSessionInitialPrompt_OlderPriorAttempts_OmitFullEvidence(t *testin
 		s := makeEndedItemSession("work", i, "wip")
 		s.ID = fmt.Sprintf("test-session-%d", i)
 		s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
-			OverallOutcome: string(session.ReviewOutcomeFail),
+			OverallOutcome: string(domain.ReviewOutcomeFail),
 			Summary:        fmt.Sprintf("summary-marker-%d", i),
 			PerCriterion:   `[{"criterion_index":0,"outcome":"FAIL","evidence":"evidence-marker"}]`,
 		}
@@ -264,7 +264,7 @@ func TestBuildSessionInitialPrompt_should_includeEscalationNotice_When_ExactlyTw
 		s := makeEndedItemSession(session.SessionRoleReview, 0, "")
 		s.ID = fmt.Sprintf("test-review-session-%d", i)
 		s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
-			OverallOutcome: string(session.ReviewOutcomeFail),
+			OverallOutcome: string(domain.ReviewOutcomeFail),
 			Summary:        "diff computation failed",
 		}
 		sessions = append(sessions, s)
@@ -293,7 +293,7 @@ func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_OnlyOneRevie
 
 	s := makeEndedItemSession(session.SessionRoleReview, 0, "")
 	s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
-		OverallOutcome: string(session.ReviewOutcomeFail),
+		OverallOutcome: string(domain.ReviewOutcomeFail),
 		Summary:        "diff computation failed",
 	}
 
@@ -321,7 +321,7 @@ func TestBuildSessionInitialPrompt_should_omitEscalationNotice_When_ThreeIdentic
 		s := makeEndedItemSession(session.SessionRoleReview, 0, "")
 		s.ID = fmt.Sprintf("test-review-session-%d", i)
 		s.ReviewVerdict = &backlogdto.ReviewVerdictSummary{
-			OverallOutcome: string(session.ReviewOutcomeFail),
+			OverallOutcome: string(domain.ReviewOutcomeFail),
 			Summary:        "diff computation failed",
 		}
 		sessions = append(sessions, s)
@@ -472,9 +472,9 @@ func TestBuildSessionInitialPrompt_NoLinkedIssueLines(t *testing.T) {
 func TestBuildTokenBudgetedPrompt_LinkedIssueLinesSurviveTruncation(t *testing.T) {
 	t.Parallel()
 	const url = "https://github.com/acme/widget/issues/42"
-	criteria := make([]session.AcCriterion, 120)
+	criteria := make([]domain.AcCriterion, 120)
 	for i := range criteria {
-		criteria[i] = session.AcCriterion{Text: strings.Repeat("c", 290)}
+		criteria[i] = domain.AcCriterion{Text: strings.Repeat("c", 290)}
 	}
 	acJSON, err := json.Marshal(criteria)
 	if err != nil {

@@ -4,6 +4,7 @@ package itemsources
 
 import (
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -28,7 +29,7 @@ func mapExternalToBacklogItem(item session.ExternalItem, sourceID string) backlo
 		Title:       title,
 		Description: description,
 		Priority:    item.Priority,
-		Status:      string(session.BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
 		ExternalURL: item.URL,
 		Labels:      item.Labels,

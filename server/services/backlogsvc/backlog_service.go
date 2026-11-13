@@ -925,7 +925,7 @@ func itemSessionToProto(is backlogdto.ItemSessionSummary, costFor func(tmuxUUID 
 		}
 		// Deserialize per-criterion verdicts from JSON storage.
 		if rv.PerCriterion != "" {
-			var cvs []session.CriterionVerdict
+			var cvs []domain.CriterionVerdict
 			if jsonErr := json.Unmarshal([]byte(rv.PerCriterion), &cvs); jsonErr == nil {
 				p.ReviewVerdict.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
 				for i, cv := range cvs {
@@ -1055,7 +1055,7 @@ func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine domai
 		p.ArchivedAt = timestamppb.New(*item.ArchivedAt)
 	}
 	if item.AcceptanceCriteria != "" {
-		criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+		criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
 		if err == nil {
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
@@ -1095,7 +1095,7 @@ func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine domai
 // transitions rather than an empty slice (#585) — see the docstrings on
 // backlogItemToProto/backlogItemSummaryToProto below for how fallback is
 // derived per caller.
-func allowedTransitionStrings(engine domain.WorkflowEngine, from session.BacklogStatus, fallback *domain.StageConfigSnapshot) []string {
+func allowedTransitionStrings(engine domain.WorkflowEngine, from domain.BacklogStatus, fallback *domain.StageConfigSnapshot) []string {
 	targets := engine.AllowedTransitions(from, fallback)
 	out := make([]string, len(targets))
 	for i, t := range targets {
@@ -1136,7 +1136,7 @@ func backlogItemToProto(item *backlogdto.BacklogItemData, engine domain.Workflow
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), backlogdto.BuildStageConfigSnapshotFallback(item)),
+		AllowedTransitions: allowedTransitionStrings(engine, domain.BacklogStatus(item.Status), backlogdto.BuildStageConfigSnapshotFallback(item)),
 		DuplicateRef:       duplicateRefPending(item),
 		DuplicatePending:   duplicateRefPending(item) != "",
 		PublicId:           item.PublicIDRaw,
@@ -1173,7 +1173,7 @@ func backlogItemToProto(item *backlogdto.BacklogItemData, engine domain.Workflow
 
 	// Parse acceptance criteria JSON into repeated AcCriterion.
 	if item.AcceptanceCriteria != "" {
-		criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+		criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
 		if err == nil {
 			protoAC := make([]*sessionv1.AcCriterion, len(criteria))
 			for i, c := range criteria {
@@ -1533,7 +1533,7 @@ func (s *BacklogService) checkWorkStageBudget(itemID string, thresholdUSD *float
 // duplicateRefPending returns the claimed duplicate_ref while item sits in
 // review awaiting confirmation, "" otherwise. Needs eagerly loaded ItemSessions.
 func duplicateRefPending(item *backlogdto.BacklogItemData) string {
-	if item.Status != string(session.BacklogStatusReview) {
+	if item.Status != string(domain.BacklogStatusReview) {
 		return ""
 	}
 	return stuck.PendingDuplicateRef(item.ItemSessions)

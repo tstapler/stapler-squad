@@ -32,15 +32,15 @@ func openRow(t *testing.T, er *session.EntRepository, itemID string, reason doma
 func TestSelfHealStuck_DequeueSpawnFailedRow_AnchoredToReadyQueuedInProgress(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		status   session.BacklogStatus
+		status   domain.BacklogStatus
 		wantOpen bool
 	}{
-		{session.BacklogStatusReady, true},
-		{session.BacklogStatusQueued, true},
-		{session.BacklogStatusInProgress, true}, // mid-claim: resolving here would erase the backoff count
-		{session.BacklogStatusIdea, false},
-		{session.BacklogStatusReview, false},
-		{session.BacklogStatusPRPending, false},
+		{domain.BacklogStatusReady, true},
+		{domain.BacklogStatusQueued, true},
+		{domain.BacklogStatusInProgress, true}, // mid-claim: resolving here would erase the backoff count
+		{domain.BacklogStatusIdea, false},
+		{domain.BacklogStatusReview, false},
+		{domain.BacklogStatusPRPending, false},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.status), func(t *testing.T) {
@@ -69,9 +69,9 @@ func TestSelfHealStuck_ReviewReopenSpawnFailedRow_IsNotAnchored(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(session.BacklogStatusInProgress)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	_, err = storage.Repo.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, session.BacklogStatusInProgress,
+	_, err = storage.Repo.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, domain.BacklogStatusInProgress,
 		"a rework session failed to spawn (x) and the automatic rollback to review also failed")
 	require.NoError(t, err)
 
@@ -88,9 +88,9 @@ func TestMarkStuck_ReopeningResolvedSpawnFailedRow_ResetsRemediationCounters(t *
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(session.BacklogStatusReady)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(domain.BacklogStatusReady)})
 	require.NoError(t, err)
-	_, err = storage.Repo.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, session.BacklogStatusReady, dequeueCtx)
+	_, err = storage.Repo.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, domain.BacklogStatusReady, dequeueCtx)
 	require.NoError(t, err)
 	next := time.Now().Add(time.Hour)
 	_, err = storage.Repo.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonSpawnFailed, 4, &next)
@@ -98,7 +98,7 @@ func TestMarkStuck_ReopeningResolvedSpawnFailedRow_ResetsRemediationCounters(t *
 	_, err = storage.Repo.ResolveStuck(ctx, item.ID, domain.StuckReasonSpawnFailed) // e.g. selfHeal or manual fix
 	require.NoError(t, err)
 
-	_, err = storage.Repo.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, session.BacklogStatusReady, dequeueCtx)
+	_, err = storage.Repo.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, domain.BacklogStatusReady, dequeueCtx)
 	require.NoError(t, err)
 
 	row, ok := openRow(t, storage.Repo, item.ID, domain.StuckReasonSpawnFailed)
@@ -120,10 +120,10 @@ func TestRemediationBlocked_SurvivesDBReopen(t *testing.T) {
 		defer repo.Close()
 		storage, err := session.NewStorageWithRepository(repo)
 		require.NoError(t, err)
-		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(session.BacklogStatusReady)})
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(domain.BacklogStatusReady)})
 		require.NoError(t, err)
 		itemID = item.ID
-		_, err = storage.MarkStuck(ctx, itemID, domain.StuckReasonSpawnFailed, session.BacklogStatusReady, dequeueCtx)
+		_, err = storage.MarkStuck(ctx, itemID, domain.StuckReasonSpawnFailed, domain.BacklogStatusReady, dequeueCtx)
 		require.NoError(t, err)
 		due, _, err := storage.RemediationDue(ctx, itemID, domain.StuckReasonSpawnFailed)
 		require.NoError(t, err)
@@ -150,9 +150,9 @@ func TestRemediationBlockedItems_ReturnsOnlyBlockedRowsOfThatReason(t *testing.T
 	defer cleanup()
 	ctx := context.Background()
 	mk := func(reason domain.StuckReason, consume bool) string {
-		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(session.BacklogStatusReady)})
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(domain.BacklogStatusReady)})
 		require.NoError(t, err)
-		_, err = storage.MarkStuck(ctx, item.ID, reason, session.BacklogStatusReady, "c")
+		_, err = storage.MarkStuck(ctx, item.ID, reason, domain.BacklogStatusReady, "c")
 		require.NoError(t, err)
 		if consume {
 			_, _, err = storage.RemediationDue(ctx, item.ID, reason)
@@ -184,9 +184,9 @@ func TestRemediationBlockedItems_SnoozedRowStaysBlocked(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(session.BacklogStatusReady)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "x", Status: string(domain.BacklogStatusReady)})
 	require.NoError(t, err)
-	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, session.BacklogStatusReady, "c")
+	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, domain.BacklogStatusReady, "c")
 	require.NoError(t, err)
 	_, _, err = storage.RemediationDue(ctx, item.ID, domain.StuckReasonSpawnFailed)
 	require.NoError(t, err)

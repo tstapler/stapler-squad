@@ -420,14 +420,14 @@ func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName
 					// The work role marks inside handleWorkStall, once its plan is known.
 					if outcome.Class() == domain.OutcomeClassStall && is.Role != session.SessionRoleWork {
 						if _, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
-							session.BacklogStatus(item.Status), formatStopDetail(rec)); markErr != nil {
+							domain.BacklogStatus(item.Status), formatStopDetail(rec)); markErr != nil {
 							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuck(autonomous_stuck) failed", "item", item.ID, "err", markErr)
 						} else if _, notifyErr := concreteStorage.MarkStuckNotified(ctx, item.ID, domain.StuckReasonAutonomousStuck); notifyErr != nil {
 							log.Warn("[AutonomousDriver] onAutonomousDriverComplete: MarkStuckNotified(autonomous_stuck) failed", "item", item.ID, "err", notifyErr)
 						}
 					}
 
-					var toStatus session.BacklogStatus
+					var toStatus domain.BacklogStatus
 					var expectedStatus string
 					switch is.Role {
 					case session.SessionRoleTriage:
@@ -451,8 +451,8 @@ func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName
 							log.Info("[AutonomousDriver] triage stuck, notified operator", "item", item.ID, "reason", outcome.Reason)
 							return
 						}
-						toStatus = session.BacklogStatusReady
-						expectedStatus = string(session.BacklogStatusIdea)
+						toStatus = domain.BacklogStatusReady
+						expectedStatus = string(domain.BacklogStatusIdea)
 					case session.SessionRoleWork:
 						if cancelled {
 							log.Info("[AutonomousDriver] work run cancelled, not a stall", "item", item.ID, "stop_reason", outcome.NormalizedStopReason())
@@ -489,7 +489,7 @@ func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName
 							// diagnosable, without forcing a status change or spawning a
 							// second, competing driver on top of a session that (per the live
 							// evidence above) may still be legitimately working.
-							if session.BacklogStatus(item.Status) == session.BacklogStatusInProgress {
+							if domain.BacklogStatus(item.Status) == domain.BacklogStatusInProgress {
 								log.Warn("[AutonomousDriver] orchestrator reported DONE but request_review was never called; leaving item in_progress",
 									"item", item.ID, "session", sessionUUID, "reason", outcome.Reason)
 							}
@@ -514,7 +514,7 @@ func (a *AutonomousOrchestrationService) OnAutonomousDriverComplete(instanceName
 						switch {
 						case outcome.Done:
 							a.resolveAutonomousStuck(ctx, concreteStorage, item.ID)
-						case session.BacklogStatus(item.Status) != session.BacklogStatusReview:
+						case domain.BacklogStatus(item.Status) != domain.BacklogStatusReview:
 							// Also correctly covers a custom stage: "moved on from review" is
 							// true regardless of which built-in or custom status it moved to,
 							// so resolving the stuck row here needs no per-stage knowledge
@@ -692,7 +692,7 @@ func (a *AutonomousOrchestrationService) handleWorkStall(ctx, recoveryCtx contex
 	default:
 		rec.Recovery.Action = stopActionNone
 	}
-	applied, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatus(item.Status), formatStopDetail(*rec))
+	applied, markErr := concreteStorage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, domain.BacklogStatus(item.Status), formatStopDetail(*rec))
 	switch {
 	case markErr != nil:
 		// Additive, never a gate: fail open to today's respawn body.
@@ -920,7 +920,7 @@ func (a *AutonomousOrchestrationService) resolveAutonomousStuck(ctx context.Cont
 // run makes (triage idea->ready) through the transition gate. A returned error,
 // including an engine denial, is surfaced by the caller as the "status update
 // failed" notification.
-func (a *AutonomousOrchestrationService) advanceItemOnDriverComplete(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, toStatus session.BacklogStatus, expectedStatus string, done bool) error {
+func (a *AutonomousOrchestrationService) advanceItemOnDriverComplete(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, toStatus domain.BacklogStatus, expectedStatus string, done bool) error {
 	_, err := storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller:       domain.CallerAutonomousComplete,
 		ItemID:       item.ID,

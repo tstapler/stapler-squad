@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -214,7 +215,7 @@ func pruneStaleSlashCommandFiles(cmdDir string, newFiles map[string]string) {
 // writer share one source of truth with zero behavior drift.
 func buildDefaultSlashCommandSet(item *backlogdto.BacklogItemData) (map[string]string, error) {
 	itemID := item.ID
-	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if err != nil {
 		return nil, fmt.Errorf("buildDefaultSlashCommandSet: failed to parse AC criteria: %w", err)
 	}

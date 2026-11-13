@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"sort"
 	"strings"
 )
@@ -54,7 +55,7 @@ var (
 // ValidateDisableSystemRequiredEdge rejects removing a system-required edge,
 // including every X->archived edge. Callers apply it to disables and deletes.
 func ValidateDisableSystemRequiredEdge(from, to string) error {
-	if !session.IsSystemRequired(session.BacklogStatus(from), session.BacklogStatus(to)) {
+	if !session.IsSystemRequired(domain.BacklogStatus(from), domain.BacklogStatus(to)) {
 		return nil
 	}
 	return fmt.Errorf("%w: %s->%s. Automation relies on this transition; edit its gates instead of disabling it",
@@ -62,8 +63,8 @@ func ValidateDisableSystemRequiredEdge(from, to string) error {
 }
 
 // BuiltInStatuses returns a copy of the built-in stage statuses in pipeline order.
-func BuiltInStatuses() []session.BacklogStatus {
-	return append([]session.BacklogStatus(nil), session.BuiltInStageOrder...)
+func BuiltInStatuses() []domain.BacklogStatus {
+	return append([]domain.BacklogStatus(nil), session.BuiltInStageOrder...)
 }
 
 // StrandedStatuses returns, sorted, every status that has live items but no
@@ -78,10 +79,10 @@ func StrandedStatuses(candidateEdges []session.TransitionDefinition, liveCountBy
 	}
 	var stranded []string
 	for status, n := range liveCountByStatus {
-		if n == 0 || status == string(session.BacklogStatusArchived) || hasOut[status] {
+		if n == 0 || status == string(domain.BacklogStatusArchived) || hasOut[status] {
 			continue
 		}
-		if len(session.SystemRequiredTargets(session.BacklogStatus(status))) > 0 {
+		if len(session.SystemRequiredTargets(domain.BacklogStatus(status))) > 0 {
 			continue
 		}
 		stranded = append(stranded, status)

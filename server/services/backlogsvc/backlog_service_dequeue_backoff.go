@@ -226,7 +226,7 @@ func (s *BacklogService) dequeueSpawnBlocks(itemID string, blocked map[string]bo
 // recordDequeueSpawnFailure handles a failed spawn (item already rolled back to fromStatus).
 // A real failure opens or refreshes the spawn_failed row and spends one remediation attempt,
 // which sets the next deadline; the operator is notified when the budget is exhausted.
-func (s *BacklogService) recordDequeueSpawnFailure(ctx context.Context, item backlogdto.BacklogItemData, fromStatus session.BacklogStatus, spawnErr error) {
+func (s *BacklogService) recordDequeueSpawnFailure(ctx context.Context, item backlogdto.BacklogItemData, fromStatus domain.BacklogStatus, spawnErr error) {
 	switch classifySpawnFailure(ctx, spawnErr) {
 	case spawnFailureCancelled:
 		return
@@ -249,7 +249,7 @@ func (s *BacklogService) recordDequeueSpawnFailure(ctx context.Context, item bac
 }
 
 // chargeDequeueSpawnFailure opens or refreshes the durable spawn_failed row and spends an attempt.
-func (s *BacklogService) chargeDequeueSpawnFailure(ctx context.Context, item backlogdto.BacklogItemData, fromStatus session.BacklogStatus, spawnErr error) {
+func (s *BacklogService) chargeDequeueSpawnFailure(ctx context.Context, item backlogdto.BacklogItemData, fromStatus domain.BacklogStatus, spawnErr error) {
 	msg := fmt.Sprintf("%scould not spawn a work session (%v); retrying with backoff", domain.DequeueSpawnFailedContextPrefix, spawnErr)
 	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonSpawnFailed, fromStatus, msg)
 	if err != nil {

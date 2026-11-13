@@ -176,11 +176,11 @@ func (h *peerHelpHandlers) prepareWaiverRequest(ctx context.Context, itemID stri
 	if err != nil {
 		return nil, "", errResult(ErrInternalError, fmt.Sprintf("load item: %v", err), "")
 	}
-	criteria, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	criteria, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	if err != nil || idx < 0 || idx >= len(criteria) {
 		return nil, "", errResult(ErrInvalidArgument, fmt.Sprintf("waive_criterion_index %d is not a criterion of this item (it has %d)", idx, len(criteria)), "")
 	}
-	if st := criteria[idx].Status; st == session.AcStatusDone || st == session.AcStatusWaived {
+	if st := criteria[idx].Status; st == domain.AcStatusDone || st == domain.AcStatusWaived {
 		return nil, "", errResult(ErrInvalidArgument, fmt.Sprintf("criterion %d is already %s; nothing to waive", idx, st), "")
 	}
 	if !slices.Contains(responses, domain.OwnerActionWaiveResponse) {

@@ -89,7 +89,7 @@ type charFixture struct {
 	ch      <-chan *events.Event
 }
 
-func newCharFixture(t *testing.T, title string, role string, itemStatus session.BacklogStatus) *charFixture {
+func newCharFixture(t *testing.T, title string, role string, itemStatus domain.BacklogStatus) *charFixture {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	ctx, cancel := context.WithCancel(context.Background())

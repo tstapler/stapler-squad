@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
@@ -23,7 +22,7 @@ func makeTestBacklogItemWithID(id, title, acJSON string) *backlogdto.BacklogItem
 		ID:                 id,
 		Title:              title,
 		Description:        "Test description",
-		AcceptanceCriteria: session.AcCriteriaJSON(acJSON),
+		AcceptanceCriteria: domain.AcCriteriaJSON(acJSON),
 		Status:             "ready",
 		Priority:           1,
 	}
@@ -369,7 +368,7 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 		ID:                 "test-item-id-2",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
-		AcceptanceCriteria: session.AcCriteriaJSON(ac),
+		AcceptanceCriteria: domain.AcCriteriaJSON(ac),
 		Status:             "ready",
 		Priority:           2,
 	}
@@ -453,7 +452,7 @@ func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
 		ID:                 "test-item-id-3",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
-		AcceptanceCriteria: session.AcCriteriaJSON(ac),
+		AcceptanceCriteria: domain.AcCriteriaJSON(ac),
 		Status:             "ready",
 		Priority:           2,
 		PlanArtifactsPath:  "/tmp/plans/my-item",
@@ -485,7 +484,7 @@ func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
 		ID:                 "test-item-id-4",
 		Title:              "My Backlog Item",
 		Description:        "A test description",
-		AcceptanceCriteria: session.AcCriteriaJSON(ac),
+		AcceptanceCriteria: domain.AcCriteriaJSON(ac),
 		Status:             "ready",
 		Priority:           2,
 	}

@@ -67,7 +67,7 @@ func TestGetBacklogItemShipStatus_should_ReportShippedDirect_When_CommitOnMainNo
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "direct commit item",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	attachWorkSessionWithCommit(t, storage, repo, item.ID, "direct-work", repoPath, repoPath, "main", sha)
@@ -102,7 +102,7 @@ func TestGetBacklogItemShipStatus_should_ReportShippedViaPr_When_PrUrlSetAndMerg
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "PR-shipped item",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	prURL := "https://github.com/example/repo/pull/42"
@@ -138,7 +138,7 @@ func TestGetBacklogItemShipStatus_should_ReportNotShipped_When_BranchNeverMerged
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with an open, unmerged PR",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	prURL := "https://github.com/example/repo/pull/999"
@@ -167,7 +167,7 @@ func TestGetBacklogItemShipStatus_should_ReturnErrorField_When_NoWorkSessionEver
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with no code",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
@@ -200,7 +200,7 @@ func TestGetBacklogItemShipStatus_should_ListShippedCommits_When_MultipleCommits
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with two shipped commits",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	attachWorkSessionWithRange(t, storage, repo, item.ID, "two-commit-work", repoPath, repoPath, "feature", baseSHA, headSHA)
@@ -243,7 +243,7 @@ func TestGetBacklogItemShipStatus_ShouldPopulateSnapshotFields_WhenShippedSnapsh
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with a durable ship snapshot",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	attachWorkSessionWithCommit(t, storage, repo, item.ID, "snapshot-work", repoPath, repoPath, "main", sha)
@@ -295,7 +295,7 @@ func TestGetBacklogItemShipStatus_ShouldDegradeGracefully_WhenShippedFileStatsJs
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with a corrupt ship snapshot",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	attachWorkSessionWithCommit(t, storage, repo, item.ID, "corrupt-snapshot-work", repoPath, repoPath, "main", sha)
@@ -335,7 +335,7 @@ func TestGetBacklogItemShipStatus_ShouldReturnDurableSnapshot_WhenCalledAgainstR
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with a snapshot captured by the real reconciler path",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 	attachWorkSessionWithCommit(t, storage, repo, item.ID, "ent-storage-snapshot-work", repoPath, repoPath, "main", sha)
@@ -391,7 +391,7 @@ func TestGetBacklogItemShipStatus_should_NotReportShipped_When_OnlySpawnTimeBase
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item whose session only ever recorded its base SHA",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusPRPending),
+		Status:   string(domain.BacklogStatusPRPending),
 	})
 	require.NoError(t, err)
 

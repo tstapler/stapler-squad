@@ -47,6 +47,7 @@ go_test(
         "//jira",
         "//linear",
         "//session",
+        "//session/domain",
         "@com_github_stretchr_testify//require",
     ],
 )

@@ -146,7 +146,7 @@ type ReplayDecision struct {
 type ReplayReport struct {
 	Config       string // seeded | edited
 	Decisions    []ReplayDecision
-	Stranded     map[BacklogStatus]int
+	Stranded     map[domain.BacklogStatus]int
 	StrandedAll  int
 	LiveItems    int
 	Failures     []string
@@ -257,7 +257,7 @@ func replayStoredEdges(ctx context.Context, repo StageConfigRepository) (map[dom
 	out := make(map[domain.SystemEdge]bool, len(transitions))
 	for _, t := range transitions {
 		if t.Edges.FromStage != nil && t.Edges.ToStage != nil {
-			out[domain.SystemEdge{From: BacklogStatus(t.Edges.FromStage.Slug), To: BacklogStatus(t.Edges.ToStage.Slug)}] = true
+			out[domain.SystemEdge{From: domain.BacklogStatus(t.Edges.FromStage.Slug), To: domain.BacklogStatus(t.Edges.ToStage.Slug)}] = true
 		}
 	}
 	return out, nil
@@ -356,7 +356,7 @@ func replayStranded(ctx context.Context, client *ent.Client, repo StageConfigRep
 		return err
 	}
 	report.LiveItems = len(items)
-	report.Stranded = map[BacklogStatus]int{}
+	report.Stranded = map[domain.BacklogStatus]int{}
 	for _, s := range StrandedItemPreview(NewDefaultWorkflowEngine(), cfg, items, disabled) {
 		report.Stranded[s.Status]++
 		report.StrandedAll++
@@ -381,7 +381,7 @@ func (r *ReplayReport) Render() string {
 	}
 	sort.Strings(statuses)
 	for _, s := range statuses {
-		fmt.Fprintf(&b, "  %-12s %d\n", s, r.Stranded[BacklogStatus(s)])
+		fmt.Fprintf(&b, "  %-12s %d\n", s, r.Stranded[domain.BacklogStatus(s)])
 	}
 	b.WriteString("detector-guard table: pinned by the session tests TestEveryStuckDetectorIsClassified, TestDeniedGuards_should_AllShareOnePredicate and TestDetectorLocalGuards_should_CallTheSharedHelper; not derived from the database\n")
 	if r.Failed() {

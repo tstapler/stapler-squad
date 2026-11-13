@@ -16,6 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -49,19 +50,19 @@ func TestPreviewBackwardSyncImpact_CountsOnlyEligibleItems(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
-		Title: "Eligible Ready", Status: string(session.BacklogStatusReady), SourceID: src.ID, ExternalID: "e1",
+		Title: "Eligible Ready", Status: string(domain.BacklogStatusReady), SourceID: src.ID, ExternalID: "e1",
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
-		Title: "Eligible Idea", Status: string(session.BacklogStatusIdea), SourceID: src.ID, ExternalID: "e2",
+		Title: "Eligible Idea", Status: string(domain.BacklogStatusIdea), SourceID: src.ID, ExternalID: "e2",
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
-		Title: "Open Issue", Status: string(session.BacklogStatusReady), SourceID: src.ID, ExternalID: "e3",
+		Title: "Open Issue", Status: string(domain.BacklogStatusReady), SourceID: src.ID, ExternalID: "e3",
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
-		Title: "In Progress", Status: string(session.BacklogStatusInProgress), SourceID: src.ID, ExternalID: "e4",
+		Title: "In Progress", Status: string(domain.BacklogStatusInProgress), SourceID: src.ID, ExternalID: "e4",
 	})
 	require.NoError(t, err)
 	// e5 deliberately has no matching locally-imported item.
@@ -101,7 +102,7 @@ func (f *fakePaginatedSourcePlugin) FetchAll(_ context.Context, _ session.Plugin
 func (f *fakePaginatedSourcePlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) backlogdto.BacklogItemData {
 	return backlogdto.BacklogItemData{
 		Title:      item.Title,
-		Status:     string(session.BacklogStatusIdea),
+		Status:     string(domain.BacklogStatusIdea),
 		ExternalID: item.ExternalID,
 		SourceID:   sourceID,
 	}
@@ -137,11 +138,11 @@ func TestPreviewBackwardSyncImpact_UsesFetchAllAndSurfacesPossiblyIncomplete(t *
 	require.NoError(t, err)
 
 	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
-		Title: "Eligible One", Status: string(session.BacklogStatusReady), SourceID: src.ID, ExternalID: "e1",
+		Title: "Eligible One", Status: string(domain.BacklogStatusReady), SourceID: src.ID, ExternalID: "e1",
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
-		Title: "Eligible Two", Status: string(session.BacklogStatusIdea), SourceID: src.ID, ExternalID: "e2",
+		Title: "Eligible Two", Status: string(domain.BacklogStatusIdea), SourceID: src.ID, ExternalID: "e2",
 	})
 	require.NoError(t, err)
 
@@ -190,9 +191,9 @@ func TestPreviewBackwardSyncImpact_BatchedLookupCountsCorrectlyAtScale(t *testin
 	// non-eligible one. Half of numClosedIssues should end up counted.
 	wantTitles := make([]string, 0, numClosedIssues/2)
 	for i := 0; i < numClosedIssues; i++ {
-		status := string(session.BacklogStatusInProgress)
+		status := string(domain.BacklogStatusInProgress)
 		if i%2 == 0 {
-			status = string(session.BacklogStatusReady)
+			status = string(domain.BacklogStatusReady)
 			wantTitles = append(wantTitles, fmt.Sprintf("Issue %d", i))
 		}
 		_, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{

@@ -61,8 +61,8 @@ func newDiagnoseNudgeTestFixture(t *testing.T) (storage *Storage, repo *EntRepos
 	require.NoError(t, err)
 	ctx = context.Background()
 
-	itemID = createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
-	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing")
+	itemID = createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
+	_, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing")
 	require.NoError(t, err)
 	return storage, repo, itemID, ctx
 }
@@ -129,7 +129,7 @@ func TestDiagnoseNudgeAllowed_NoOpenRow_IsUngated(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
 
 	allowed, reason, err := storage.DiagnoseNudgeAllowed(ctx, itemID, domain.StuckReasonBouncing)
 	require.NoError(t, err)

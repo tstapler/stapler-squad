@@ -425,7 +425,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with an open, unmerged PR",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 		PrURL:    "https://github.com/example/repo/pull/999", // set, but the PR was never merged
 	})
 	require.NoError(t, err)
@@ -437,7 +437,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 		SessionUUID: "review-session",
 		SessionRole: session.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
 
@@ -456,7 +456,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 
 	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "the item must stay in review, not silently reach done")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "the item must stay in review, not silently reach done")
 
 	// Now actually merge the commit to main — the item must be allowed to reach
 	// done once the code is verifiably shipped.
@@ -471,7 +471,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrURLSetButCommitNotO
 
 	fetched, err = storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status)
 }
 
 // TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflictedPR
@@ -502,7 +502,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with an open, conflicted PR",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusPRPending),
+		Status:   string(domain.BacklogStatusPRPending),
 		PrURL:    "https://github.com/example/repo/pull/172",
 		PrNumber: 172,
 	})
@@ -513,7 +513,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 		SessionUUID: "review-session",
 		SessionRole: session.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
 
@@ -531,7 +531,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 
 	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status,
 		"the item must stay in pr_pending — where ReconcilePRPending can still see and fix it — not silently reach done")
 }
 
@@ -543,7 +543,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_PrPendingWithConflict
 // would incorrectly signal a malformed request.
 func TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_ReviewToReadyBlockedByPassVerdict(t *testing.T) {
 	t.Parallel()
-	for _, from := range []session.BacklogStatus{session.BacklogStatusReview, session.BacklogStatusPRPending} {
+	for _, from := range []domain.BacklogStatus{domain.BacklogStatusReview, domain.BacklogStatusPRPending} {
 		t.Run(string(from), func(t *testing.T) {
 			t.Parallel()
 			svc := newBacklogService(t)
@@ -560,13 +560,13 @@ func TestTransitionBacklogItemStatus_should_ReturnFailedPrecondition_When_Review
 				SessionUUID: "review-session-pass-verdict",
 				SessionRole: session.SessionRoleReview,
 			}, backlogdto.ReviewVerdictData{
-				OverallOutcome: session.ReviewVerdictPass,
+				OverallOutcome: domain.ReviewVerdictPass,
 			})
 			require.NoError(t, err)
 
 			_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 				ItemId:       item.ID,
-				TargetStatus: string(session.BacklogStatusReady),
+				TargetStatus: string(domain.BacklogStatusReady),
 			}))
 			require.Error(t, err, "a PASS-verdict item must not reach ready without an override_reason")
 			assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err),
@@ -588,7 +588,7 @@ func TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideR
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item with a passing review verdict and an override",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -597,20 +597,20 @@ func TestTransitionBacklogItemStatus_should_Allow_When_ReviewToReadyHasOverrideR
 		SessionUUID: "review-session-pass-verdict-override",
 		SessionRole: session.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:         item.ID,
-		TargetStatus:   string(session.BacklogStatusReady),
+		TargetStatus:   string(domain.BacklogStatusReady),
 		OverrideReason: "manually reviewed, shipping without the automated gate",
 	}))
 	require.NoError(t, err, "override_reason must let a PASS-verdict item proceed to ready")
 
 	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusReady), fetched.Status)
 }
 
 // TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleBaseSeed
@@ -643,7 +643,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with a stale shipped-looking LastCommitSha",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -654,7 +654,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 		SessionUUID: "review-session",
 		SessionRole: session.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
 
@@ -684,7 +684,7 @@ func TestTransitionBacklogItemStatus_should_BlockDone_When_LastCommitShaIsStaleB
 
 	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status,
 		"the item must stay in review based on the worktree's real HEAD, not the stale LastCommitSha")
 }
 
@@ -706,7 +706,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemReaches
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item reaching done",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -739,7 +739,7 @@ func TestTransitionBacklogItemStatus_should_ArchiveWorkSessions_When_ItemArchive
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item being archived",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
@@ -772,7 +772,7 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "item mid-flight",
-		Status:       string(session.BacklogStatusReady),
+		Status:       string(domain.BacklogStatusReady),
 		SkipPlanning: true,
 	})
 	require.NoError(t, err)
@@ -804,8 +804,8 @@ func TestTransitionBacklogItemStatus_should_NotArchiveWorkSessions_When_Transiti
 // narrows the teardown's `if` condition (e.g. to just review) is caught.
 func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToReady(t *testing.T) {
 	t.Parallel()
-	for _, from := range []session.BacklogStatus{
-		session.BacklogStatusInProgress, session.BacklogStatusReview, session.BacklogStatusPRPending, session.BacklogStatusDone,
+	for _, from := range []domain.BacklogStatus{
+		domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.BacklogStatusDone,
 	} {
 		t.Run(string(from), func(t *testing.T) {
 			t.Parallel()
@@ -829,7 +829,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToR
 
 			_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 				ItemId:         item.ID,
-				TargetStatus:   string(session.BacklogStatusReady),
+				TargetStatus:   string(domain.BacklogStatusReady),
 				OverrideReason: "missed the mobile layout, redo with touch targets",
 			}))
 			require.NoError(t, err)
@@ -839,7 +839,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_SentBackToR
 
 			fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
 			require.NoError(t, err)
-			assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+			assert.Equal(t, string(domain.BacklogStatusReady), fetched.Status)
 		})
 	}
 }
@@ -860,7 +860,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item with a passing review verdict and a live work session",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -869,7 +869,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 		SessionUUID: "review-session-pass-verdict",
 		SessionRole: session.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 	})
 	require.NoError(t, err)
 
@@ -882,7 +882,7 @@ func TestTransitionBacklogItemStatus_should_StopLiveWorkSession_When_PassVerdict
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:         item.ID,
-		TargetStatus:   string(session.BacklogStatusReady),
+		TargetStatus:   string(domain.BacklogStatusReady),
 		OverrideReason: "missed the mobile layout, redo with touch targets",
 	}))
 	require.NoError(t, err, "override_reason must let a PASS-verdict item proceed to ready")
@@ -905,7 +905,7 @@ func TestTransitionBacklogItemStatus_should_NotStopLiveWorkSession_When_Transiti
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "item moving forward from ready",
-		Status:       string(session.BacklogStatusReady),
+		Status:       string(domain.BacklogStatusReady),
 		SkipPlanning: true,
 	})
 	require.NoError(t, err)
@@ -942,7 +942,7 @@ func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTear
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item whose live session teardown fails",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -955,14 +955,14 @@ func TestTransitionBacklogItemStatus_should_StillTransition_When_LiveSessionTear
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:         item.ID,
-		TargetStatus:   string(session.BacklogStatusReady),
+		TargetStatus:   string(domain.BacklogStatusReady),
 		OverrideReason: "missed the mobile layout, redo with touch targets",
 	}))
 	require.NoError(t, err, "a teardown failure must not block the transition")
 
 	fetched, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReady), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusReady), fetched.Status)
 
 	assert.Contains(t, stopper.StoppedUUIDs, "work-live-1", "the stop must still be attempted")
 
@@ -1009,9 +1009,9 @@ func TestSubmitManualReview_PassNoUnshippedCode_TransitionsToDone(t *testing.T) 
 	itemID := created.Msg.Item.Id
 
 	for _, status := range []string{
-		string(session.BacklogStatusReady),
-		string(session.BacklogStatusInProgress),
-		string(session.BacklogStatusReview),
+		string(domain.BacklogStatusReady),
+		string(domain.BacklogStatusInProgress),
+		string(domain.BacklogStatusReview),
 	} {
 		_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 			ItemId:       itemID,
@@ -1026,7 +1026,7 @@ func TestSubmitManualReview_PassNoUnshippedCode_TransitionsToDone(t *testing.T) 
 		Summary:        "looks good",
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), resp.Msg.Item.Status,
+	assert.Equal(t, string(domain.BacklogStatusDone), resp.Msg.Item.Status,
 		"PASS manual review with nothing to ship should still auto-transition to done")
 }
 
@@ -1051,7 +1051,7 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item with unshipped code",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -1062,7 +1062,7 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       item.ID,
-		TargetStatus: string(session.BacklogStatusReview),
+		TargetStatus: string(domain.BacklogStatusReview),
 	}))
 	require.NoError(t, err)
 
@@ -1072,7 +1072,7 @@ func TestSubmitManualReview_PassWithUnshippedCode_StaysInReviewForShipPR(t *test
 		Summary:        "looks good",
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), resp.Msg.Item.Status,
+	assert.Equal(t, string(domain.BacklogStatusReview), resp.Msg.Item.Status,
 		"PASS manual review whose work-session commit was never merged to main must stay in review for the Ship PR action")
 }
 
@@ -1172,7 +1172,7 @@ func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemI
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item stuck in review with an out-of-band PR",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -1184,7 +1184,7 @@ func TestUpdateBacklogItem_should_AssociatePrAndTransitionToPrPending_When_ItemI
 		PrNumber: &num,
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), resp.Msg.Item.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), resp.Msg.Item.Status)
 	assert.Equal(t, url, resp.Msg.Item.PrUrl)
 	assert.Equal(t, num, resp.Msg.Item.PrNumber)
 
@@ -1207,7 +1207,7 @@ func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *te
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item mid-flight, not in review",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -1224,7 +1224,7 @@ func TestUpdateBacklogItem_should_RejectPrAssociation_When_ItemNotInReview(t *te
 
 	final, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), final.Status, "rejected association must not corrupt the item's status")
+	assert.Equal(t, string(domain.BacklogStatusInProgress), final.Status, "rejected association must not corrupt the item's status")
 	assert.Empty(t, final.PrURL, "rejected association must not partially write pr_url")
 }
 
@@ -1246,17 +1246,17 @@ func TestTransitionBacklogItemStatus_should_AppendNoteAndNotify_When_OverrideRea
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item to manually force out of review",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
 	resp, err := svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:         item.ID,
-		TargetStatus:   string(session.BacklogStatusInProgress),
+		TargetStatus:   string(domain.BacklogStatusInProgress),
 		OverrideReason: "reviewer session zombied (#334) — unsticking manually",
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), resp.Msg.Item.Status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), resp.Msg.Item.Status)
 
 	select {
 	case evt := <-sub:
@@ -1287,14 +1287,14 @@ func TestTransitionBacklogItemStatus_should_NotNotify_When_NoOverrideReasonSet(t
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:        "item transitioned routinely",
-		Status:       string(session.BacklogStatusReady),
+		Status:       string(domain.BacklogStatusReady),
 		SkipPlanning: true,
 	})
 	require.NoError(t, err)
 
 	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 		ItemId:       item.ID,
-		TargetStatus: string(session.BacklogStatusInProgress),
+		TargetStatus: string(domain.BacklogStatusInProgress),
 	}))
 	require.NoError(t, err)
 
@@ -1319,7 +1319,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item racing an automated transition",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -1334,8 +1334,8 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 	go func() {
 		defer wg.Done()
 		startBarrier.Wait()
-		_, automatedErr = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, session.BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
-			ExpectedStatus: string(session.BacklogStatusReview),
+		_, automatedErr = storage.RawTransitionBacklogItemStatus(t.Context(), item.ID, domain.BacklogStatusPRPending, &backlogdto.BacklogItemPrecondition{
+			ExpectedStatus: string(domain.BacklogStatusReview),
 		}, session.TriggeredBySystem)
 	}()
 	go func() {
@@ -1343,8 +1343,8 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 		startBarrier.Wait()
 		_, overrideErr = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
 			ItemId:         item.ID,
-			TargetStatus:   string(session.BacklogStatusInProgress),
-			ExpectedStatus: string(session.BacklogStatusReview),
+			TargetStatus:   string(domain.BacklogStatusInProgress),
+			ExpectedStatus: string(domain.BacklogStatusReview),
 			OverrideReason: "manual override racing automation",
 		}))
 	}()
@@ -1367,7 +1367,7 @@ func TestTransitionBacklogItemStatus_should_FailCASForLoser_When_ConcurrentOverr
 
 	final, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
-	assert.Contains(t, []string{string(session.BacklogStatusPRPending), string(session.BacklogStatusInProgress)}, final.Status,
+	assert.Contains(t, []string{string(domain.BacklogStatusPRPending), string(domain.BacklogStatusInProgress)}, final.Status,
 		"final status must be exactly one writer's intended target, not a third bounced state")
 }
 
@@ -1420,7 +1420,7 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:  "item for a single non-racing override",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -1433,17 +1433,17 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 
 	resp, err := svc.OverrideVerdict(t.Context(), connect.NewRequest(&sessionv1.OverrideVerdictRequest{
 		ItemSessionId:  is.ID,
-		ToStatus:       string(session.BacklogStatusInProgress),
+		ToStatus:       string(domain.BacklogStatusInProgress),
 		OverrideReason: "unsticking manually",
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), resp.Msg.Item.Status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), resp.Msg.Item.Status)
 
 	final, err := storage.GetBacklogItem(t.Context(), item.ID)
 	require.NoError(t, err)
 	require.Len(t, final.StatusEvents, 1)
-	assert.Equal(t, string(session.BacklogStatusReview), final.StatusEvents[0].FromStatus)
-	assert.Equal(t, string(session.BacklogStatusInProgress), final.StatusEvents[0].ToStatus)
+	assert.Equal(t, string(domain.BacklogStatusReview), final.StatusEvents[0].FromStatus)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), final.StatusEvents[0].ToStatus)
 }
 
 // disabledEdgeWorkflowEngine wraps the default WorkflowEngine but forces
@@ -1455,10 +1455,10 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 // consult the injected engine, not session.CanTransitionBacklog directly.
 type disabledEdgeWorkflowEngine struct {
 	domain.WorkflowEngine
-	deniedFrom, deniedTo session.BacklogStatus
+	deniedFrom, deniedTo domain.BacklogStatus
 }
 
-func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus, fallback *domain.StageConfigSnapshot) bool {
+func (e disabledEdgeWorkflowEngine) CanTransition(from, to domain.BacklogStatus, fallback *domain.StageConfigSnapshot) bool {
 	if from == e.deniedFrom && to == e.deniedTo {
 		return false
 	}
@@ -1483,7 +1483,7 @@ func newEnforcedGateService(t *testing.T) (*BacklogService, *session.Storage, *s
 	return svc, storage, stageRepo, cfg
 }
 
-func newOverrideVerdictItem(t *testing.T, storage *session.Storage, from session.BacklogStatus) (*backlogdto.BacklogItemData, backlogdto.ItemSessionSummary) {
+func newOverrideVerdictItem(t *testing.T, storage *session.Storage, from domain.BacklogStatus) (*backlogdto.BacklogItemData, backlogdto.ItemSessionSummary) {
 	t.Helper()
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "override verdict item", Status: string(from)})
 	require.NoError(t, err)
@@ -1502,22 +1502,22 @@ func TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHa
 	svc, storage, stageRepo, cfg := newEnforcedGateService(t)
 	ctx := t.Context()
 
-	edges, err := stageRepo.ListAllTransitions(ctx, string(session.BacklogStatusRefining))
+	edges, err := stageRepo.ListAllTransitions(ctx, string(domain.BacklogStatusRefining))
 	require.NoError(t, err)
 	for _, e := range edges {
-		if e.ToStageSlug == string(session.BacklogStatusReady) {
+		if e.ToStageSlug == string(domain.BacklogStatusReady) {
 			disabled := false
 			_, err = stageRepo.UpdateTransition(ctx, e.ID, session.TransitionUpdateInput{Enabled: &disabled})
 			require.NoError(t, err)
 		}
 	}
 	require.NoError(t, cfg.InvalidateCache(ctx))
-	require.False(t, session.IsSystemRequired(session.BacklogStatusRefining, session.BacklogStatusReady), "the edge must be one an operator can disable")
+	require.False(t, session.IsSystemRequired(domain.BacklogStatusRefining, domain.BacklogStatusReady), "the edge must be one an operator can disable")
 
-	item, is := newOverrideVerdictItem(t, storage, session.BacklogStatusRefining)
+	item, is := newOverrideVerdictItem(t, storage, domain.BacklogStatusRefining)
 	_, err = svc.OverrideVerdict(ctx, connect.NewRequest(&sessionv1.OverrideVerdictRequest{
 		ItemSessionId:  is.ID,
-		ToStatus:       string(session.BacklogStatusReady),
+		ToStatus:       string(domain.BacklogStatusReady),
 		OverrideReason: "should be refused by the configured engine",
 	}))
 	require.Error(t, err)
@@ -1526,7 +1526,7 @@ func TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHa
 
 	final, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusRefining), final.Status, "item must stay at its original status when the engine refuses the transition")
+	assert.Equal(t, string(domain.BacklogStatusRefining), final.Status, "item must stay at its original status when the engine refuses the transition")
 }
 
 // TestOverrideVerdict_should_AllowTransition_When_StaticMapWouldRefuseButEngineAllows
@@ -1534,24 +1534,24 @@ func TestOverrideVerdict_should_RefuseTransition_When_ConfiguredWorkflowEngineHa
 // static map, using review->queued, which the static map forbids.
 func TestOverrideVerdict_should_AllowTransition_When_StaticMapWouldRefuseButEngineAllows(t *testing.T) {
 	t.Parallel()
-	require.False(t, session.CanTransitionBacklog(session.BacklogStatusReview, session.BacklogStatusQueued),
+	require.False(t, domain.CanTransitionBacklog(domain.BacklogStatusReview, domain.BacklogStatusQueued),
 		"precondition: the static map must forbid review->queued for this test to prove anything")
 	svc, storage, stageRepo, cfg := newEnforcedGateService(t)
 	ctx := t.Context()
 	_, err := stageRepo.CreateTransition(ctx, session.TransitionCreateInput{
-		FromStageSlug: string(session.BacklogStatusReview), ToStageSlug: string(session.BacklogStatusQueued), Enabled: true,
+		FromStageSlug: string(domain.BacklogStatusReview), ToStageSlug: string(domain.BacklogStatusQueued), Enabled: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, cfg.InvalidateCache(ctx))
 
-	_, is := newOverrideVerdictItem(t, storage, session.BacklogStatusReview)
+	_, is := newOverrideVerdictItem(t, storage, domain.BacklogStatusReview)
 	resp, err := svc.OverrideVerdict(ctx, connect.NewRequest(&sessionv1.OverrideVerdictRequest{
 		ItemSessionId:  is.ID,
-		ToStatus:       string(session.BacklogStatusQueued),
+		ToStatus:       string(domain.BacklogStatusQueued),
 		OverrideReason: "allowed only because the configured graph permits it",
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusQueued), resp.Msg.Item.Status)
+	assert.Equal(t, string(domain.BacklogStatusQueued), resp.Msg.Item.Status)
 }
 
 // ─── AddBacklogItemDependency RPC handler ──────────────────────────────────────

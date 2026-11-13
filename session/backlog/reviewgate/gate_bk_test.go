@@ -76,7 +76,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 		Description:        "Testing the sessionCreator-spawn path",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -152,7 +152,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 		Title:              "Custom Pipeline Mode Review Test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 		PipelineMode:       "quick",
 	}
@@ -200,7 +200,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 		Title:              "Spawner Error Test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -247,7 +247,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 		Title:              "Nil Session Creator Test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -298,7 +298,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 		Description:        "Testing that verification_notes reaches the reviewer prompt",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -356,9 +356,9 @@ func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPred
 	itemData := backlogdto.BacklogItemData{
 		Title:              "AC Snapshot Staleness Test",
 		Description:        "Testing that a live Note reaches the reviewer prompt despite a stale snapshot",
-		AcceptanceCriteria: session.AcCriteriaJSON(liveAC),
+		AcceptanceCriteria: domain.AcCriteriaJSON(liveAC),
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -369,14 +369,14 @@ func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPred
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
 		SessionRole: session.SessionRoleWork,
-		AcSnapshot:  session.AcCriteriaJSON(staleSnapshot),
+		AcSnapshot:  domain.AcCriteriaJSON(staleSnapshot),
 	})
 	require.NoError(t, err)
 
 	item := &backlogdto.BacklogItemData{
 		ID:                 createdItemData.ID,
 		RepoPath:           createdItemData.RepoPath,
-		AcceptanceCriteria: session.AcCriteriaJSON(liveAC),
+		AcceptanceCriteria: domain.AcCriteriaJSON(liveAC),
 	}
 
 	spawner := &blktest.MockReviewGateSpawner{}
@@ -456,7 +456,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 		Title:              "Diff compute failure test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -503,7 +503,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
+	assert.Equal(t, domain.ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
 
 	assert.Contains(t, notifier.Titles(), "Review blocked — diff computation failed")
 
@@ -543,7 +543,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 		Title:              "No worktree recorded, diff compute failure test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -583,7 +583,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictFail, outcome, "a genuine diff-computation failure on the no-worktree path must block with FAIL, not silently fall through")
+	assert.Equal(t, domain.ReviewVerdictFail, outcome, "a genuine diff-computation failure on the no-worktree path must block with FAIL, not silently fall through")
 
 	assert.Contains(t, notifier.Titles(), "Review blocked — diff computation failed")
 
@@ -627,7 +627,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 		Title:              "Empty committed diff test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -668,7 +668,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictFail, outcome, "an empty committed diff must block with FAIL, not proceed to a real review that could false-PASS")
+	assert.Equal(t, domain.ReviewVerdictFail, outcome, "an empty committed diff must block with FAIL, not proceed to a real review that could false-PASS")
 
 	assert.Contains(t, notifier.Titles(), "Review blocked — no changes to review")
 
@@ -694,7 +694,7 @@ func newEmptyDiffFixture(t *testing.T, ctx context.Context, storage *session.Sto
 		Title:              title,
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -884,7 +884,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 		Title:              "Diff auto-repair test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -967,7 +967,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 		Title:              "Diff auto-repair recovered-but-empty test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1015,7 +1015,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictFail, outcome, "a recovered-but-empty diff must be recorded as FAIL, not UNVERIFIABLE and not PASS")
+	assert.Equal(t, domain.ReviewVerdictFail, outcome, "a recovered-but-empty diff must be recorded as FAIL, not UNVERIFIABLE and not PASS")
 
 	assert.Contains(t, notifier.Titles(), "Review blocked — diff computation failed")
 	assert.NotContains(t, notifier.Titles(), "Review auto-repaired a broken diff", "an untrusted (empty) recovery must never be reported to the operator as a successful repair")
@@ -1049,7 +1049,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 		Title:              "No branch name, diff compute failure test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1110,7 +1110,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
+	assert.Equal(t, domain.ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
 
 	assert.Contains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 }
@@ -1151,7 +1151,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 		Title:              "Worktree identity mismatch test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1196,7 +1196,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through against the wrong worktree")
+	assert.Equal(t, domain.ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through against the wrong worktree")
 
 	assert.Contains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 
@@ -1231,7 +1231,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 		Title:              "Worktree identity mismatch repeated-failure test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1310,7 +1310,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 		Title:              "Worktree torn down, branch intact test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1394,7 +1394,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 		Title:              "Worktree torn down, base SHA corrupted test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           repoDir,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1529,7 +1529,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 		Title:              "Branch drift conflict test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           origin,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1573,7 +1573,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, session.ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
+	assert.Equal(t, domain.ReviewVerdictFail, outcome, "a distinct FAIL verdict must be recorded, not a silent pass-through")
 
 	assert.Contains(t, notifier.Titles(), "Review blocked — branch drifted too far behind main")
 
@@ -1619,7 +1619,7 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 		Title:              "Branch drift clean-sync test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           origin,
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1683,7 +1683,7 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 		Title:              "No-diff custom gate test",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusIdea),
+		Status:             string(domain.BacklogStatusIdea),
 		RepoPath:           "/nonexistent/repo/path/story-2-4-3e-regression-test",
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -1713,7 +1713,7 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 
 	gateContext := GateContext{
 		GateID:           "gate-idea-ready-feasibility",
-		TargetTransition: session.BacklogStatusReady,
+		TargetTransition: domain.BacklogStatusReady,
 		RequiresDiff:     false,
 	}
 	runner.Run(ctx, gateContext, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
@@ -1771,7 +1771,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() domain.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
 	runner.SetGateSatisfactionRepository(repo)
 
-	gateContext := GateContext{GateID: gate.ID.String(), TargetTransition: session.BacklogStatus(toStage.Slug), RequiresDiff: true}
+	gateContext := GateContext{GateID: gate.ID.String(), TargetTransition: domain.BacklogStatus(toStage.Slug), RequiresDiff: true}
 	runner.Run(ctx, gateContext, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
 	require.Equal(t, 0, spawner.CallCount(), "the empty-diff guard must block before ever spawning a review session")
@@ -1787,7 +1787,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 	engine, err := session.NewConfiguredWorkflowEngine(stageRepo, repo, nil)
 	require.NoError(t, err)
 
-	statuses, pgErr := engine.PendingGates(session.BacklogItemTransitionInput{ItemID: item.ID, Status: session.BacklogStatus(fromStage.Slug)}, session.BacklogStatus(toStage.Slug), nil)
+	statuses, pgErr := engine.PendingGates(domain.BacklogItemTransitionInput{ItemID: item.ID, Status: domain.BacklogStatus(fromStage.Slug)}, domain.BacklogStatus(toStage.Slug), nil)
 	require.NoError(t, pgErr)
 	require.Len(t, statuses, 1)
 	assert.False(t, statuses[0].Satisfied)
@@ -1812,7 +1812,7 @@ func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateConte
 	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() domain.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
 	runner.SetGateSatisfactionRepository(repo)
 
-	runner.Run(ctx, GateContext{TargetTransition: session.BacklogStatusReview, RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
+	runner.Run(ctx, GateContext{TargetTransition: domain.BacklogStatusReview, RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
 	_, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), uuid.New())
 	require.Error(t, getErr, "no row exists for any gate id since GateID==\"\" must never call Create/Update")

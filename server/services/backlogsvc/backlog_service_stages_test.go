@@ -15,6 +15,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -52,11 +53,11 @@ func TestEnsureBuiltInWorkflowStages_should_MarkDoneAndArchivedAsTerminal(t *tes
 	svc, _, _, _ := newStageCRUDTestService(t)
 	ctx := t.Context()
 
-	doneResp, err := svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(session.BacklogStatusDone)}))
+	doneResp, err := svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(domain.BacklogStatusDone)}))
 	require.NoError(t, err)
 	assert.True(t, doneResp.Msg.Item.IsTerminal, "seeded 'done' stage must be marked terminal")
 
-	archivedResp, err := svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(session.BacklogStatusArchived)}))
+	archivedResp, err := svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(domain.BacklogStatusArchived)}))
 	require.NoError(t, err)
 	assert.True(t, archivedResp.Msg.Item.IsTerminal, "seeded 'archived' stage must be marked terminal")
 }
@@ -117,24 +118,24 @@ func TestDeleteStage_should_ReturnFailedPrecondition_When_StageHasLiveItems(t *t
 	svc, repo, _, storage := newStageCRUDTestService(t)
 	ctx := t.Context()
 
-	reviewStage, err := repo.GetStageBySlug(ctx, string(session.BacklogStatusReview))
+	reviewStage, err := repo.GetStageBySlug(ctx, string(domain.BacklogStatusReview))
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 1", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 1", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 2", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 2", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
-	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 3", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 3", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 
 	_, err = svc.DeleteStage(ctx, connect.NewRequest(&sessionv1.DeleteStageRequest{Id: reviewStage.ID.String()}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "3")
-	assert.Contains(t, err.Error(), string(session.BacklogStatusReview))
+	assert.Contains(t, err.Error(), string(domain.BacklogStatusReview))
 
 	// The stage must still exist — no partial write.
-	_, err = svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(session.BacklogStatusReview)}))
+	_, err = svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(domain.BacklogStatusReview)}))
 	require.NoError(t, err)
 }
 
@@ -145,16 +146,16 @@ func TestDeleteStage_should_Succeed_When_ForceIsTrueDespiteLiveItems(t *testing.
 	svc, repo, _, storage := newStageCRUDTestService(t)
 	ctx := t.Context()
 
-	reviewStage, err := repo.GetStageBySlug(ctx, string(session.BacklogStatusReview))
+	reviewStage, err := repo.GetStageBySlug(ctx, string(domain.BacklogStatusReview))
 	require.NoError(t, err)
 
-	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 1", Status: string(session.BacklogStatusReview)})
+	_, err = storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "item 1", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 
 	_, err = svc.DeleteStage(ctx, connect.NewRequest(&sessionv1.DeleteStageRequest{Id: reviewStage.ID.String(), Force: true}))
 	require.NoError(t, err)
 
-	_, err = svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(session.BacklogStatusReview)}))
+	_, err = svc.GetStage(ctx, connect.NewRequest(&sessionv1.GetStageRequest{Slug: string(domain.BacklogStatusReview)}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }
@@ -187,10 +188,10 @@ func TestUpdateStage_should_InvalidateStageConfigCache_When_UpdateSucceeds(t *te
 	svc, repo, engine, _ := newStageCRUDTestService(t)
 	ctx := t.Context()
 
-	require.True(t, engine.CanTransition(session.BacklogStatusIdea, session.BacklogStatusRefining, nil),
+	require.True(t, engine.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusRefining, nil),
 		"precondition: idea -> refining is a built-in enabled edge")
 
-	refiningStage, err := repo.GetStageBySlug(ctx, string(session.BacklogStatusRefining))
+	refiningStage, err := repo.GetStageBySlug(ctx, string(domain.BacklogStatusRefining))
 	require.NoError(t, err)
 
 	_, err = svc.UpdateStage(ctx, connect.NewRequest(&sessionv1.UpdateStageRequest{
@@ -199,7 +200,7 @@ func TestUpdateStage_should_InvalidateStageConfigCache_When_UpdateSucceeds(t *te
 	}))
 	require.NoError(t, err)
 
-	assert.False(t, engine.CanTransition(session.BacklogStatusIdea, session.BacklogStatusRefining, nil),
+	assert.False(t, engine.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusRefining, nil),
 		"expected the cache to be invalidated synchronously so the disabled stage's edge disappears immediately")
 }
 

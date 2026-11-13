@@ -219,7 +219,7 @@ func (s *BacklogService) stageHostsSystemRequiredEdge(ctx context.Context, slug 
 	}
 	for _, t := range all {
 		if (t.FromStageSlug == slug || t.ToStageSlug == slug) &&
-			session.IsSystemRequired(session.BacklogStatus(t.FromStageSlug), session.BacklogStatus(t.ToStageSlug)) {
+			session.IsSystemRequired(domain.BacklogStatus(t.FromStageSlug), domain.BacklogStatus(t.ToStageSlug)) {
 			return true
 		}
 	}

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/deeplink"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -280,7 +280,7 @@ func (d *DeepLinkResolver) resolveLocal(ctx context.Context, w http.ResponseWrit
 	// means gone/hidden for deep-link purposes (Epic 2.1, Story 2.1.3 sweep —
 	// reviewed, benign; this is not the Done||Archived terminal-status
 	// pattern being consolidated elsewhere).
-	if item.Status == string(session.BacklogStatusArchived) {
+	if item.Status == string(domain.BacklogStatusArchived) {
 		log.Warn("deep_link.resolve_failed", "host", link.Hostname, "item_id", link.ID, "reason", "archived")
 		writeJSON(w, http.StatusNotFound, deepLinkNotFoundResponse{Kind: "not-found", Reason: "archived"})
 		return

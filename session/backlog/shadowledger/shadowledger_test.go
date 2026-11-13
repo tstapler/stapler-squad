@@ -62,15 +62,15 @@ func totalDivergenceCount(cl *session.ClassLedger) int64 {
 func TestShadowRecorder_DoesNotCountGuardDenial_WhenSeededConfigAndFortyDenialsIn500Calls(t *testing.T) {
 	t.Parallel()
 	rig := newShadowRig(t, session.ConfigSeeded)
-	idea := session.BacklogItemTransitionInput{Status: session.BacklogStatusIdea}
+	idea := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}
 	pass := passingReviewItem()
 
 	for i := 0; i < 500; i++ {
 		if i < 40 {
-			require.ErrorIs(t, rig.sel.ValidateGates(idea, session.BacklogStatusReady, nil), domain.ErrACRequired)
+			require.ErrorIs(t, rig.sel.ValidateGates(idea, domain.BacklogStatusReady, nil), domain.ErrACRequired)
 			continue
 		}
-		require.NoError(t, rig.sel.ValidateGates(pass, session.BacklogStatusPRPending, nil))
+		require.NoError(t, rig.sel.ValidateGates(pass, domain.BacklogStatusPRPending, nil))
 	}
 
 	cl := rig.operator()
@@ -82,13 +82,13 @@ func TestShadowRecorder_DoesNotCountGuardDenial_WhenSeededConfigAndFortyDenialsI
 func TestShadowRecorder_ClassifiesDivergence_WhenGraphGateExtraErrorKindCacheEmpty(t *testing.T) {
 	t.Parallel()
 	rig := newShadowRig(t, session.ConfigEdited)
-	setEdgeEnabled(t, rig.h.client, rig.h.cfg, session.BacklogStatusDone, session.BacklogStatusRefining, false)
-	addGateToSeededEdge(t, rig.h.client, rig.h.cfg, session.BacklogStatusReady, session.BacklogStatusInProgress, domain.GateKindStructural,
+	setEdgeEnabled(t, rig.h.client, rig.h.cfg, domain.BacklogStatusDone, domain.BacklogStatusRefining, false)
+	addGateToSeededEdge(t, rig.h.client, rig.h.cfg, domain.BacklogStatusReady, domain.BacklogStatusInProgress, domain.GateKindStructural,
 		map[string]interface{}{"check_id": domain.StructuralCheckACComplete})
 
-	require.True(t, rig.sel.CanTransition(session.BacklogStatusDone, session.BacklogStatusRefining, nil), "shadow returns the Default answer")
-	item := session.BacklogItemTransitionInput{Status: session.BacklogStatusReady, SkipPlanning: true, PlanArtifactsPath: "/plan"}
-	require.NoError(t, rig.sel.ValidateGates(item, session.BacklogStatusInProgress, nil))
+	require.True(t, rig.sel.CanTransition(domain.BacklogStatusDone, domain.BacklogStatusRefining, nil), "shadow returns the Default answer")
+	item := domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady, SkipPlanning: true, PlanArtifactsPath: "/plan"}
+	require.NoError(t, rig.sel.ValidateGates(item, domain.BacklogStatusInProgress, nil))
 
 	cl := rig.operator()
 	require.Equal(t, int64(1), cl.Divergence["CanTransition|graph|edited|transition"])
@@ -104,7 +104,7 @@ func TestShadowRecorder_ClassifiesDivergence_WhenGraphGateExtraErrorKindCacheEmp
 	empty := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), mustEmptyConfigured(t), fixedMode{session.ModeShadow},
 		session.WithShadowRecorder(rig.rec), session.WithConfigLabeler(func() string { return session.ConfigSeeded }))
 	before := totalDivergenceCount(rig.operator())
-	require.True(t, empty.CanTransition(session.BacklogStatusIdea, session.BacklogStatusReady, nil))
+	require.True(t, empty.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil))
 	require.Equal(t, before, totalDivergenceCount(rig.operator()))
 }
 
@@ -113,7 +113,7 @@ func TestShadowRecorder_CountsGateMissing_WhenCompositionDefectInjected(t *testi
 	rig := newShadowRig(t, session.ConfigSeeded)
 	rig.sel.Enf = session.NewEnforceAnswer(guardDroppingEngine{session.NewDefaultWorkflowEngine()}, rig.h.cfg)
 
-	require.ErrorIs(t, rig.sel.ValidateGates(session.BacklogItemTransitionInput{Status: session.BacklogStatusIdea}, session.BacklogStatusReady, nil), domain.ErrACRequired)
+	require.ErrorIs(t, rig.sel.ValidateGates(domain.BacklogItemTransitionInput{Status: domain.BacklogStatusIdea}, domain.BacklogStatusReady, nil), domain.ErrACRequired)
 
 	cl := rig.operator()
 	require.Equal(t, int64(1), cl.Divergence["ValidateGates|gate_missing|seeded|transition"])
@@ -125,7 +125,7 @@ func TestShadowRecorder_CountsGateMissing_WhenCompositionDefectInjected(t *testi
 // guardDroppingEngine is a composition defect: the Default guard half drops every guard.
 type guardDroppingEngine struct{ *session.DefaultWorkflowEngine }
 
-func (guardDroppingEngine) ValidateGates(session.BacklogItemTransitionInput, session.BacklogStatus, *domain.StageConfigSnapshot) error {
+func (guardDroppingEngine) ValidateGates(domain.BacklogItemTransitionInput, domain.BacklogStatus, *domain.StageConfigSnapshot) error {
 	return nil
 }
 
@@ -134,10 +134,10 @@ func TestShadowRecorder_SeparatesReadAndTransitionPaths_WhenUiCallsAllowedTransi
 	rig := newShadowRig(t, session.ConfigSeeded, session.WithReadSampler(func() bool { return true }))
 
 	for i := 0; i < 7; i++ {
-		rig.sel.AllowedTransitions(session.BacklogStatusIdea, nil)
+		rig.sel.AllowedTransitions(domain.BacklogStatusIdea, nil)
 	}
 	for i := 0; i < 3; i++ {
-		rig.sel.CanTransition(session.BacklogStatusIdea, session.BacklogStatusReady, nil)
+		rig.sel.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)
 	}
 
 	cl := rig.operator()
@@ -154,7 +154,7 @@ func TestShadowRecorderLedger_ResumesCountersAndBinaryStartedAt_WhenRestarted(t 
 	clock := sessiontest.NewSelectorClock()
 	first := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
 	first.RecordShadowCall(session.MethodCanTransition, session.PathTransition)
-	first.RecordObservation(session.ShadowObservation{Method: session.MethodCanTransition, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusQueued, Config: session.ConfigSeeded})
+	first.RecordObservation(session.ShadowObservation{Method: session.MethodCanTransition, Path: session.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusQueued, Config: session.ConfigSeeded})
 	require.NoError(t, first.FlushIfDue())
 	firstStart := first.Snapshot().BinaryStarts[0]
 
@@ -166,7 +166,7 @@ func TestShadowRecorderLedger_ResumesCountersAndBinaryStartedAt_WhenRestarted(t 
 	clock.Advance(2 * time.Hour)
 	second := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
 	second.RecordShadowCall(session.MethodCanTransition, session.PathTransition)
-	second.RecordObservation(session.ShadowObservation{Method: session.MethodCanTransition, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusQueued, Config: session.ConfigSeeded})
+	second.RecordObservation(session.ShadowObservation{Method: session.MethodCanTransition, Path: session.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusQueued, Config: session.ConfigSeeded})
 
 	snap := second.Snapshot()
 	require.Equal(t, int64(2), snap.Classes[string(domain.ClassOperator)].Calls["CanTransition|transition"], "counters resume from the ledger")
@@ -182,7 +182,7 @@ func TestShadowRecorderLedger_KeepsRingOf200ReproRecords_UsesConfigDirAndStartsF
 	rec := NewShadowLedgerRecorder(t.TempDir(), WithShadowClock(sessiontest.NewSelectorClock()))
 	for i := 0; i < 250; i++ {
 		rec.RecordObservation(session.ShadowObservation{
-			Method: session.MethodValidateGates, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusQueued,
+			Method: session.MethodValidateGates, Path: session.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusQueued,
 			ItemHash: session.HashItemID("item-secret-id"), Class: session.ClassGateExtra, Config: session.ConfigEdited, Default: "ok", Enforce: "gate",
 		})
 	}
@@ -217,7 +217,7 @@ func TestShadowLedgerRecorder_BoundsDistinctEdges_WhenCustomStagesExplode(t *tes
 	t.Parallel()
 	rec := NewShadowLedgerRecorder("", WithShadowClock(sessiontest.NewSelectorClock()))
 	for i := 0; i < maxLedgerEdges+50; i++ {
-		rec.RecordObservation(session.ShadowObservation{Path: session.PathTransition, From: session.BacklogStatus(string(rune('a'+i%26)) + strings.Repeat("x", i)), To: session.BacklogStatusDone})
+		rec.RecordObservation(session.ShadowObservation{Path: session.PathTransition, From: domain.BacklogStatus(string(rune('a'+i%26)) + strings.Repeat("x", i)), To: domain.BacklogStatusDone})
 	}
 	require.LessOrEqual(t, len(rec.Snapshot().Classes[string(domain.ClassOperator)].Edges), maxLedgerEdges+1)
 	require.Positive(t, rec.Snapshot().Classes[string(domain.ClassOperator)].Edges[otherEdgeKey].TransitionSamples)
@@ -234,7 +234,7 @@ func TestShadowLedgerRecorder_IsRaceFree_WhenRecordedAndSnapshottedConcurrently(
 			for i := 0; i < 200; i++ {
 				rec.RecordShadowCall(session.MethodCanTransition, session.PathTransition)
 				rec.RecordDivergence(session.MethodCanTransition, session.ClassGraph, session.ConfigEdited, session.PathTransition)
-				rec.RecordObservation(session.ShadowObservation{Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusQueued, Class: session.ClassGraph, Config: session.ConfigEdited})
+				rec.RecordObservation(session.ShadowObservation{Path: session.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusQueued, Class: session.ClassGraph, Config: session.ConfigEdited})
 				if i%50 == 0 {
 					_ = rec.Snapshot()
 					require.NoError(t, rec.Flush())
@@ -276,9 +276,9 @@ func TestShadowLedger_KeepsSeparateSectionPerClass_AndCountsDivergencePerCaller(
 	agent := rig.sel.ForCaller(spec)
 
 	for i := 0; i < 3; i++ {
-		require.NoError(t, agent.ValidateGates(session.BacklogItemTransitionInput{Status: session.BacklogStatusReady}, session.BacklogStatusInProgress, nil))
+		require.NoError(t, agent.ValidateGates(domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReady}, domain.BacklogStatusInProgress, nil))
 	}
-	_ = rig.sel.CanTransition(session.BacklogStatusReady, session.BacklogStatusQueued, nil) // operator policy
+	_ = rig.sel.CanTransition(domain.BacklogStatusReady, domain.BacklogStatusQueued, nil) // operator policy
 
 	snap := rig.rec.Snapshot()
 	ag, op := snap.Classes[string(domain.ClassAgent)], snap.Classes[string(domain.ClassOperator)]
@@ -306,7 +306,7 @@ func TestShadowLedger_PerClassSectionsSurviveFlushAndRestart(t *testing.T) {
 	first.RecordShadowCallFor(domain.ClassAgent, session.MethodValidateGates, session.PathTransition)
 	first.RecordDivergenceFor(domain.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
 	first.RecordObservation(session.ShadowObservation{
-		Method: session.MethodValidateGates, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusInProgress,
+		Method: session.MethodValidateGates, Path: session.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusInProgress,
 		Class: session.ClassGuardNew, Config: session.ConfigSeeded, CallerClass: domain.ClassAgent, Caller: domain.CallerMCPResumeWork,
 	})
 	first.RecordShadowCallFor(domain.ClassSystem, session.MethodCanTransition, session.PathTransition)

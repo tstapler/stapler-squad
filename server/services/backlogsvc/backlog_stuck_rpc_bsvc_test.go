@@ -119,7 +119,7 @@ func TestListStuckBacklogItems_should_returnMappedItems_When_OpenRowsExist(t *te
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "PR #148 ready to merge",
-		Status: string(session.BacklogStatusPRPending),
+		Status: string(domain.BacklogStatusPRPending),
 	})
 	require.NoError(t, err)
 
@@ -166,7 +166,7 @@ func TestListStuckBacklogItems_should_PopulatePlanArtifactsPath(t *testing.T) {
 
 	itemWithPlan, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "queued item with a plan",
-		Status: string(session.BacklogStatusQueued),
+		Status: string(domain.BacklogStatusQueued),
 	})
 	require.NoError(t, err)
 	planPath := "project_plans/queued-item/plan.md"
@@ -178,7 +178,7 @@ func TestListStuckBacklogItems_should_PopulatePlanArtifactsPath(t *testing.T) {
 
 	itemWithoutPlan, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "queued item with no plan yet",
-		Status: string(session.BacklogStatusQueued),
+		Status: string(domain.BacklogStatusQueued),
 	})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, itemWithoutPlan.ID, domain.StuckReasonPlanNotApproved, time.Now(), "no plan yet")
@@ -207,7 +207,7 @@ func TestSnoozeStuckItem_should_setSnoozedUntilAndOmitFromList_When_Called(t *te
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "rework-capped item",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -267,7 +267,7 @@ func TestResetStuckRemediation_should_clearCountersAndSurfaceInList_When_RowIsOp
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "bouncing item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -322,13 +322,13 @@ func TestBulkResetStuckRemediation_should_defaultToOnlyParked_When_FlagNotExplic
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	parked, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "parked", Status: string(session.BacklogStatusInProgress)})
+	parked, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "parked", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, parked.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
 	_, err = storage.RecordRemediationAttempt(ctx, parked.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
 	require.NoError(t, err)
 
-	midBackoff, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "mid-backoff", Status: string(session.BacklogStatusReview)})
+	midBackoff, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "mid-backoff", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, midBackoff.ID, domain.StuckReasonAbandonedReview, time.Now(), "abandoned")
 	next := time.Now().Add(2 * time.Hour)
@@ -360,7 +360,7 @@ func TestBulkResetStuckRemediation_should_resetEveryOpenRow_When_OnlyParkedExpli
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	midBackoff, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "mid-backoff", Status: string(session.BacklogStatusReview)})
+	midBackoff, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "mid-backoff", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, midBackoff.ID, domain.StuckReasonAbandonedReview, time.Now(), "abandoned")
 	next := time.Now().Add(2 * time.Hour)
@@ -387,13 +387,13 @@ func TestBulkResetStuckRemediation_should_onlyResetMatchingReason_When_ReasonFil
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	bouncing, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	bouncing, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "bouncing", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, bouncing.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
 	_, err = storage.RecordRemediationAttempt(ctx, bouncing.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
 	require.NoError(t, err)
 
-	staleWork, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stale-work", Status: string(session.BacklogStatusInProgress)})
+	staleWork, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stale-work", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, staleWork.ID, domain.StuckReasonStaleWork, time.Now(), "stale")
 	_, err = storage.RecordRemediationAttempt(ctx, staleWork.ID, domain.StuckReasonStaleWork, session.MaxRemediationAttempts, nil)
@@ -435,7 +435,7 @@ func TestBulkResetStuckRemediation_should_publishNotification_When_RowsReset(t *
 	svc.SetEventBus(bus)
 	ctx := t.Context()
 
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "bouncing", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
 	_, err = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
@@ -488,13 +488,13 @@ func TestBulkResetStuckRemediation_should_useDistinctSessionIDsPerReason_When_No
 	svc.SetEventBus(bus)
 	ctx := t.Context()
 
-	bouncing, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	bouncing, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "bouncing", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, bouncing.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
 	_, err = storage.RecordRemediationAttempt(ctx, bouncing.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
 	require.NoError(t, err)
 
-	staleWork, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stale-work", Status: string(session.BacklogStatusInProgress)})
+	staleWork, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stale-work", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, staleWork.ID, domain.StuckReasonStaleWork, time.Now(), "stale")
 	_, err = storage.RecordRemediationAttempt(ctx, staleWork.ID, domain.StuckReasonStaleWork, session.MaxRemediationAttempts, nil)
@@ -562,7 +562,7 @@ func TestTriggerRemediationNow_should_reject_When_NoOpenStuckRow(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "not stuck", Status: string(session.BacklogStatusInProgress)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "not stuck", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 
 	_, err = svc.TriggerRemediationNow(ctx, connect.NewRequest(&sessionv1.TriggerRemediationNowRequest{
@@ -582,7 +582,7 @@ func TestTriggerRemediationNow_should_reject_When_AlreadyParked(t *testing.T) {
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "parked", Status: string(session.BacklogStatusInProgress)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "parked", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
 	_, err = storage.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts, nil)
@@ -610,7 +610,7 @@ func TestTriggerRemediationNow_should_reject_When_ReasonHasNoPhaseAAction(t *tes
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "push failed", Status: string(session.BacklogStatusReview)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "push failed", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPushFailed, time.Now(), "push rejected")
 
@@ -633,7 +633,7 @@ func TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := t.Context()
 
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "bouncing", Status: string(session.BacklogStatusReview)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "bouncing", Status: string(domain.BacklogStatusReview)})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
@@ -789,7 +789,7 @@ func stuckAutoMergeSvcReq(t *testing.T, lookup RepoSettingsLookup, req *sessionv
 	for i, u := range prURLs {
 		u := u
 		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
-			Title: fmt.Sprintf("item %d", i), Status: string(session.BacklogStatusPRPending),
+			Title: fmt.Sprintf("item %d", i), Status: string(domain.BacklogStatusPRPending),
 		})
 		require.NoError(t, err)
 		_, err = storage.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{PrURL: &u}, nil)
@@ -907,7 +907,7 @@ func TestListStuckBacklogItems_should_BatchItemSessionLookups(t *testing.T) {
 	wantRef := map[string]string{}
 	for i := range items {
 		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
-			Title: fmt.Sprintf("review item %d", i), Status: string(session.BacklogStatusReview),
+			Title: fmt.Sprintf("review item %d", i), Status: string(domain.BacklogStatusReview),
 		})
 		require.NoError(t, err)
 		svctest.SeedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now(), "ctx")
@@ -950,7 +950,7 @@ func TestListStuckBacklogItems_should_NotBlockOnGitHub_When_NotRefreshing(t *tes
 		return githubpkg.RepoSettingsResult{}
 	})
 	ctx := t.Context()
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "pr", Status: string(session.BacklogStatusPRPending)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "pr", Status: string(domain.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	url := "https://github.com/example/repo/pull/1"
 	n := 1

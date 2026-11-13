@@ -52,6 +52,7 @@ go_test(
         "//server/services/internal/svctest",
         "//session",
         "//session/contexthistory",
+        "//session/domain",
         "//session/domain/backlogdto",
         "//session/tokens",
         "//testutil/wait",

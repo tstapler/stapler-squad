@@ -26,8 +26,8 @@ func spawnedPRPendingItem(t *testing.T, svc *BacklogService, storage *session.St
 	notes, prURL := "keep these notes", "https://github.com/o/r/pull/7"
 	_, err = storage.UpdateBacklogItem(t.Context(), itemID, backlogdto.BacklogItemUpdate{Notes: &notes, PrURL: &prURL}, nil)
 	require.NoError(t, err)
-	_, err = storage.Rollback(t.Context(), itemID, session.BacklogStatusPRPending,
-		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}, session.TriggeredBySystem)
+	_, err = storage.Rollback(t.Context(), itemID, domain.BacklogStatusPRPending,
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress)}, session.TriggeredBySystem)
 	require.NoError(t, err)
 	return itemID
 }
@@ -52,7 +52,7 @@ func TestSpawnSessionFromItem_should_RestartPRPendingItem_When_ForceTrue(t *test
 	assert.Equal(t, []string{first[0].SessionUUID}, stopper.StoppedUUIDs, "the previous live work session must be stopped")
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), item.Status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), item.Status)
 	assert.Equal(t, "keep these notes", item.Notes)
 	assert.Equal(t, "https://github.com/o/r/pull/7", item.PrURL)
 }
@@ -77,7 +77,7 @@ func TestSpawnSessionFromItem_should_RestartPRPendingItem_When_WorkSessionAlread
 	assert.Empty(t, stopper.StoppedUUIDs, "nothing live to stop")
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), item.Status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), item.Status)
 }
 
 func TestSpawnSessionFromItem_should_RejectPRPendingItem_When_ForceFalse(t *testing.T) {
@@ -106,7 +106,7 @@ func TestForceResetItem_should_StopSessionsAndMoveToInProgress_When_PRPending(t 
 	svctest.SeedOpenStuckRow(t, storage, itemID, domain.StuckReasonSteerFailed, time.Now(), "steer")
 	svctest.SeedOpenStuckRow(t, storage, itemID, domain.StuckReasonRespawnBlockedActive, time.Now(), "blocked")
 	svctest.SeedOpenStuckRow(t, storage, itemID, domain.StuckReasonBouncing, time.Now(), "out of scope")
-	other, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "other", Status: string(session.BacklogStatusPRPending)})
+	other, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "other", Status: string(domain.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, other.ID, domain.StuckReasonPRNeedsFix, time.Now(), "other item")
 
@@ -115,7 +115,7 @@ func TestForceResetItem_should_StopSessionsAndMoveToInProgress_When_PRPending(t 
 	updated, err := svc.forceResetItem(t.Context(), item, session.TriggeredByUser)
 	require.NoError(t, err)
 
-	assert.Equal(t, string(session.BacklogStatusInProgress), updated.Status)
+	assert.Equal(t, string(domain.BacklogStatusInProgress), updated.Status)
 	assert.Len(t, stopper.StoppedUUIDs, 1)
 	open, err := storage.FindOpenStuckStates(t.Context())
 	require.NoError(t, err)
@@ -160,9 +160,9 @@ func TestTriggerRemediationNow_should_ExplainMultipleReasons_When_Aggregate(t *t
 			t.Parallel()
 			storage := svctest.CreateTestStorage(t)
 			svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
-			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "multi", Status: string(session.BacklogStatusPRPending)})
+			item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "multi", Status: string(domain.BacklogStatusPRPending)})
 			require.NoError(t, err)
-			other, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "other", Status: string(session.BacklogStatusPRPending)})
+			other, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "other", Status: string(domain.BacklogStatusPRPending)})
 			require.NoError(t, err)
 			for _, reason := range tt.seed {
 				svctest.SeedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "x")
@@ -206,5 +206,5 @@ func TestSpawnSessionFromItem_should_RefuseForceRestart_When_JulesSessionLive(t 
 	assert.Len(t, creator.calls, 1, "no new session may spawn")
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), item.Status, "item must not be half-reset")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), item.Status, "item must not be half-reset")
 }

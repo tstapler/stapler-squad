@@ -16,7 +16,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -45,7 +45,7 @@ func (f *fakeMemoryStore) count() int {
 
 func richCompletionItem(t *testing.T, id string) *backlogdto.BacklogItemData {
 	t.Helper()
-	acs, err := session.SerializeAcCriteria([]session.AcCriterion{{Index: 0, Text: "works", Status: "done"}})
+	acs, err := domain.SerializeAcCriteria([]domain.AcCriterion{{Index: 0, Text: "works", Status: "done"}})
 	require.NoError(t, err)
 	return &backlogdto.BacklogItemData{ID: id, Title: "t", Description: "d", AcceptanceCriteria: acs, RepoPath: "/repo/x"}
 }
@@ -125,10 +125,10 @@ func TestCompletionReviewerSubscriber_should_FireOnDoneOnly_AndDedup(t *testing.
 	item := richCompletionItem(t, "item-1")
 	bus.Publish(doneEvent(item, events.BacklogChangeItemArchived, "archived"))
 	bus.Publish(doneEvent(item, events.BacklogChangeStatusTransition, "blocked"))
-	bus.Publish(doneEvent(item, events.BacklogChangeStatusTransition, string(session.BacklogStatusDone)))
-	bus.Publish(doneEvent(item, events.BacklogChangeStatusTransition, string(session.BacklogStatusDone)))
+	bus.Publish(doneEvent(item, events.BacklogChangeStatusTransition, string(domain.BacklogStatusDone)))
+	bus.Publish(doneEvent(item, events.BacklogChangeStatusTransition, string(domain.BacklogStatusDone)))
 	// Sentinel: the loop handles events in order, so once it is reviewed, the earlier ones were dispatched or skipped.
-	bus.Publish(doneEvent(richCompletionItem(t, "sentinel"), events.BacklogChangeStatusTransition, string(session.BacklogStatusDone)))
+	bus.Publish(doneEvent(richCompletionItem(t, "sentinel"), events.BacklogChangeStatusTransition, string(domain.BacklogStatusDone)))
 	wait.RequireEventually(t, func() bool { return mem.count() == 2 }, 2*time.Second, 10*time.Millisecond, "expected item-1 and sentinel appends")
 	assert.EqualValues(t, 2, calls.Load())
 }
@@ -143,8 +143,8 @@ func TestCompletionReviewerSubscriber_should_NotFire_When_FlagOff(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	r.start(ctx, bus)
-	bus.Publish(doneEvent(richCompletionItem(t, "off"), events.BacklogChangeStatusTransition, string(session.BacklogStatusDone)))
-	bus.Publish(doneEvent(richCompletionItem(t, "on"), events.BacklogChangeStatusTransition, string(session.BacklogStatusDone)))
+	bus.Publish(doneEvent(richCompletionItem(t, "off"), events.BacklogChangeStatusTransition, string(domain.BacklogStatusDone)))
+	bus.Publish(doneEvent(richCompletionItem(t, "on"), events.BacklogChangeStatusTransition, string(domain.BacklogStatusDone)))
 	wait.RequireEventually(t, func() bool { return calls.Load() >= 1 }, 2*time.Second, 10*time.Millisecond, "expected a call once flag on")
 	assert.EqualValues(t, 1, calls.Load(), "only the event seen with the flag on is reviewed")
 }
@@ -171,7 +171,7 @@ func TestCompletionReviewerSubscriber_should_BoundConcurrency(t *testing.T) {
 	defer cancel()
 	r.start(ctx, bus)
 	for i := 0; i < maxConcurrentCompletionReviews+5; i++ {
-		bus.Publish(doneEvent(richCompletionItem(t, string(rune('a'+i))), events.BacklogChangeStatusTransition, string(session.BacklogStatusDone)))
+		bus.Publish(doneEvent(richCompletionItem(t, string(rune('a'+i))), events.BacklogChangeStatusTransition, string(domain.BacklogStatusDone)))
 	}
 	wait.RequireEventually(t, func() bool { return inFlight.Load() == maxConcurrentCompletionReviews }, 2*time.Second, 10*time.Millisecond, "expected cap to fill")
 	close(release)

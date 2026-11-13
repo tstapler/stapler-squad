@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -53,7 +54,7 @@ func resolveTriageModel(cfg *config.Config, families map[string]string, program,
 // triageInputHash fingerprints the content triage reasons about: title, description and AC
 // text only. AC index/status/notes are excluded — they mutate during work and would make
 // the hash unstable.
-func triageInputHash(title, description string, criteria []session.AcCriterion) string {
+func triageInputHash(title, description string, criteria []domain.AcCriterion) string {
 	h := sha256.New()
 	h.Write([]byte(title))
 	h.Write([]byte{0})

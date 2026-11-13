@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // These tests (both GitHubIssuesPlugin and GitHubPRsPlugin) rely on
@@ -274,7 +275,7 @@ func TestGitHubIssuesPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {
 	require.Len(t, data.Description, 2000)
 	require.Equal(t, "42", data.ExternalID)
 	require.Equal(t, "src-1", data.SourceID)
-	require.Equal(t, string(session.BacklogStatusIdea), data.Status)
+	require.Equal(t, string(domain.BacklogStatusIdea), data.Status)
 	// Epic 0.1 (Story 0.1.3): Labels and ExternalURL must pass through unchanged.
 	require.Equal(t, []string{"bug", "p1"}, data.Labels)
 	require.Equal(t, "https://github.com/acme/widgets/issues/42", data.ExternalURL)

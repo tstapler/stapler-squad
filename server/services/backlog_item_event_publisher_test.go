@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -256,14 +257,14 @@ func TestWorkspaceIsolation_should_holdEndToEnd_When_SimulatingTwoWorkspaceProce
 	// Mutate workspace A only.
 	item, err := repoA.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "workspace A item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
 	storageA, err := session.NewStorageWithRepository(repoA)
 	require.NoError(t, err)
-	_, err = storageA.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus: string(session.BacklogStatusInProgress),
+	_, err = storageA.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone, &backlogdto.BacklogItemPrecondition{
+		ExpectedStatus: string(domain.BacklogStatusInProgress),
 	}, session.TriggeredBySystem)
 	require.NoError(t, err)
 
