@@ -49,6 +49,7 @@ go_library(
         "diagnose_bundle_budget.go",
         "diagnose_nudge.go",
         "diagnose_result.go",
+        "driver_control.go",
         "driver_prompt.go",
         "driver_stall.go",
         "ent_client_instrumented.go",
