@@ -1700,33 +1700,6 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	return data
 }
 
-// --- New Session-based Repository methods ---
-// These are stub implementations pending full Session-domain migration (Story 2.5).
-
-// GetSession retrieves a session using the new Session domain model.
-// Stub: not yet implemented; use InstanceData-based methods instead.
-func (r *EntRepository) GetSession(ctx context.Context, title string, opts ContextOptions) (*Session, error) {
-	return nil, fmt.Errorf("GetSession not yet implemented for EntRepository")
-}
-
-// ListSessions retrieves all sessions using the new Session domain model.
-// Stub: not yet implemented; use InstanceData-based methods instead.
-func (r *EntRepository) ListSessions(ctx context.Context, opts ContextOptions) ([]*Session, error) {
-	return nil, fmt.Errorf("ListSessions not yet implemented for EntRepository")
-}
-
-// CreateSession creates a new session from the Session domain model.
-// Stub: not yet implemented; use InstanceData-based methods instead.
-func (r *EntRepository) CreateSession(ctx context.Context, session *Session) error {
-	return fmt.Errorf("CreateSession not yet implemented for EntRepository")
-}
-
-// UpdateSession updates an existing session using the Session domain model.
-// Stub: not yet implemented; use InstanceData-based methods instead.
-func (r *EntRepository) UpdateSession(ctx context.Context, session *Session) error {
-	return fmt.Errorf("UpdateSession not yet implemented for EntRepository")
-}
-
 // GetWithOptions retrieves a single session with selective child data loading.
 func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options LoadOptions) (*InstanceData, error) {
 	sess, err := applyLoadOptions(

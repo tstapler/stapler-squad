@@ -1069,32 +1069,6 @@ func (s *Storage) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID str
 	return s.Repo.GetSessionArtifactsByUUID(ctx, sessionUUID)
 }
 
-// --- Session-first convenience methods (Task 2.5) ---
-// These delegate directly to the Repository's Session-based methods.
-// Prefer these over the deprecated InstanceData-based methods for new code.
-
-// GetSession retrieves a session by title using the Session domain model.
-// Use ContextOptions presets (ContextMinimal, ContextUIView, etc.) to control what is loaded.
-func (s *Storage) GetSession(ctx context.Context, title string, opts ContextOptions) (*Session, error) {
-	return s.Repo.GetSession(ctx, title, opts)
-}
-
-// ListSessions retrieves all sessions using the Session domain model.
-// Use ContextOptions presets (ContextMinimal, ContextUIView, etc.) to control what is loaded.
-func (s *Storage) ListSessions(ctx context.Context, opts ContextOptions) ([]*Session, error) {
-	return s.Repo.ListSessions(ctx, opts)
-}
-
-// SaveSession upserts a session using the Session domain model.
-// If the session exists it is updated; otherwise it is created.
-// Deprecated InstanceData-based methods (SaveInstances, LoadInstances) remain for backward compatibility.
-func (s *Storage) SaveSession(ctx context.Context, session *Session) error {
-	if err := s.Repo.UpdateSession(ctx, session); err != nil {
-		return s.Repo.CreateSession(ctx, session)
-	}
-	return nil
-}
-
 // --- Permissions & Analytics --------------------------------------------------
 
 // AllRules returns all auto-approval rules from the repository.

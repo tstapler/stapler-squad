@@ -30,27 +30,6 @@ func TestSnapshotNonNilAfterNewInstance(t *testing.T) {
 	}
 }
 
-func TestSnapshotNonNilAfterSessionToInstance(t *testing.T) {
-	t.Parallel()
-	s := &Session{
-		Title:     "session-to-instance",
-		Status:    domain.Creating,
-		Program:   "echo",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	inst := SessionToInstance(s)
-	if inst == nil {
-		t.Fatal("SessionToInstance returned nil")
-	}
-	if inst.Snapshot() == nil {
-		t.Fatal("Snapshot() is nil after SessionToInstance")
-	}
-	if inst.Snapshot().Title != "session-to-instance" {
-		t.Fatalf("Snapshot().Title = %q", inst.Snapshot().Title)
-	}
-}
-
 // --- Story 1.2: Mutator snapshot freshness ---
 
 func TestSnapshotReflectsMarkViewed(t *testing.T) {

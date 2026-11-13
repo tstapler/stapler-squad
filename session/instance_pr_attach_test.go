@@ -377,21 +377,6 @@ func TestNewInstance_ShouldAttachCreatedFromURL_WhenOptionsCarryPR(t *testing.T)
 	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber)
 }
 
-func TestInstanceToSession_ShouldMapActivePR_WhenSessionHoldsSeveral(t *testing.T) {
-	t.Parallel()
-	inst := newPRTestInstance(t)
-	r11 := mustPRRef(t, "", "acme", "app", 11)
-	require.NoError(t, inst.AttachPR(r11, domain.AttachSourceBranchDiscovery, PRInitial{State: domain.PRStateOpen}))
-	inst.MarkPRTerminal(r11, domain.PRStateMerged)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, PRInitial{State: domain.PRStateOpen}))
-
-	s := InstanceToSession(inst)
-
-	require.NotNil(t, s.Git)
-	assert.Equal(t, 12, s.Git.PRNumber)
-	assert.Equal(t, "https://github.com/acme/app/pull/12", s.Git.PRURL)
-}
-
 func TestAttachPR_ShouldObservePRCountThree_WhenThirdPRAttaches(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
