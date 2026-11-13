@@ -6,6 +6,7 @@ session/backlog/stuck !server
 session/backlog/liveness !server
 session/backlog/pipeline !server
 session/backlog/reviewgate !server
+session/backlog/chains !server
 session/internal/sessiontest !server
 server/services/sessionbundle !server/web
 server/services/devtools !server/web

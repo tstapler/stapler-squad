@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/chains"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
@@ -259,7 +260,7 @@ type BacklogLifecycleListener struct {
 	// default) makes reconcileTriggerChains a no-op — matches every other
 	// optional-dependency detector's nil-safe convention in this file. Wired
 	// via SetChainReconciler.
-	chainReconciler *TriggerChainReconciler
+	chainReconciler *chains.TriggerChainReconciler
 
 	// gateSatisfactionRepoMu guards gateSatisfactionRepo for concurrent Set/get access.
 	gateSatisfactionRepoMu sync.RWMutex
@@ -543,14 +544,14 @@ func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
 // SetChainReconciler wires in the pipeline-chain restart-recovery reconciler
 // (webhook-triggers Phase 6). Called via server/dependencies.go once a
 // ChainFirer has been constructed (see WireChainFirer).
-func (l *BacklogLifecycleListener) SetChainReconciler(r *TriggerChainReconciler) {
+func (l *BacklogLifecycleListener) SetChainReconciler(r *chains.TriggerChainReconciler) {
 	l.chainReconcilerMu.Lock()
 	defer l.chainReconcilerMu.Unlock()
 	l.chainReconciler = r
 }
 
 // getChainReconciler returns the current chain reconciler under a read lock.
-func (l *BacklogLifecycleListener) getChainReconciler() *TriggerChainReconciler {
+func (l *BacklogLifecycleListener) getChainReconciler() *chains.TriggerChainReconciler {
 	l.chainReconcilerMu.RLock()
 	defer l.chainReconcilerMu.RUnlock()
 	return l.chainReconciler

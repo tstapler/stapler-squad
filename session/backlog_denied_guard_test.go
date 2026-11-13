@@ -213,7 +213,7 @@ var denDetectorKinds = map[string]denKind{
 	"pr_ready+merge_detection":    denWriter,
 	"blocked_by_dependency":       denResolve,
 	"dequeue_backlog_items":       denSpawn, // DequeueNextQueuedItems skips a held claim before attempting it
-	"trigger_chain_reconcile":     denNA,    // fires a chained session; writes no status (chain_firer.go)
+	"trigger_chain_reconcile":     denNA,    // fires a chained session; writes no status (backlog/chains/firer.go)
 }
 
 // denScanDirs are the directories the guard scans: the session core and the backlog lifecycle package.

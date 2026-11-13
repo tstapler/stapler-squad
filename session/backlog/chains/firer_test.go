@@ -1,4 +1,4 @@
-package backlog
+package chains
 
 import (
 	"context"
@@ -74,7 +74,7 @@ type chainTestFixture struct {
 
 func newChainTestFixture(t *testing.T) (*chainTestFixture, func()) {
 	t.Helper()
-	repo, cleanup := createTestEntRepository(t)
+	repo, cleanup := session.NewTestEntRepository(t), func() {}
 	client := repo.GetEntClient()
 	return &chainTestFixture{
 		repo:       repo,

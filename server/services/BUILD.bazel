@@ -788,6 +788,7 @@ go_test(
         "//server/services/wsconn:go_sources",
         "//session:go_sources",
         "//session/backlog:go_sources",
+        "//session/backlog/chains:go_sources",
         "//session/backlog/pipeline:go_sources",
         "//session/backlog/reviewgate:go_sources",
         "//session/gitwt:go_sources",

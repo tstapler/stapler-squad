@@ -108,6 +108,7 @@ go_library(
         "//session",
         "//session/artifacts",
         "//session/backlog",
+        "//session/backlog/chains",
         "//session/backlog/liveness",
         "//session/backlog/pipeline",
         "//session/backlog/reviewgate",

@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/chains"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/cdp"
@@ -2078,8 +2079,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// "done" transition commits — AC9) and BacklogLifecycleListener (the
 		// restart-recovery reconciler, running on the existing 60s tick).
 		if triggerFireEventRepo != nil {
-			if chainFirer := backlog.WireChainFirer(storage, workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
-				backlogLifecycleListener.SetChainReconciler(backlog.NewTriggerChainReconciler(chainFirer))
+			if chainFirer := chains.WireChainFirer(storage, workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
+				backlogLifecycleListener.SetChainReconciler(chains.NewTriggerChainReconciler(chainFirer))
 				log.Info("ChainFirer and TriggerChainReconciler initialized")
 			}
 		}
