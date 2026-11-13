@@ -144,8 +144,8 @@ func processManagerBackendKey(pm ProcessManager) domain.ProcessManagerBackend {
 // tmux fallback would mask that.
 var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBackend")
 
-// launchCommand returns opts.Command, or opts.Program parsed from shell text; nil when neither is set.
-func (o ProcessManagerOptions) launchCommand() launchcmd.LaunchCommand {
+// LaunchCommand returns opts.Command, or opts.Program parsed from shell text; nil when neither is set.
+func (o ProcessManagerOptions) LaunchCommand() launchcmd.LaunchCommand {
 	if o.Command != nil {
 		return o.Command
 	}

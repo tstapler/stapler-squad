@@ -21,7 +21,7 @@ func TestLegacySetGitHubPR_OverwriteLeavesTerminalFlagStale(t *testing.T) {
 		GitHubPRNumber:         11,
 		GitHubPRStatusTerminal: true,
 	}
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 
 	inst.SetGitHubPR("https://github.com/acme/app/pull/12", 12)
 

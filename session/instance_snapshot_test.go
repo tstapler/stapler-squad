@@ -299,14 +299,14 @@ func minimalInstance(t *testing.T) *Instance {
 		Permissions: domain.GetManagedPermissions(),
 	}
 	i.tagManager = NewTagManager(&i.Tags)
-	finishInstanceConstruction(i)
+	FinishInstanceConstruction(i)
 	return i
 }
 
 func TestBuildSnapshot_ShouldCopyPRsDeeply_WhenPublished(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "pr-snap", Path: t.TempDir(), Program: "echo", Branch: "feat/x"}
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 	ref := mustPRRef(t, "", "acme", "app", 12)
 	inst.PRs = []domain.PRView{{StateID: 1, Ref: ref, State: domain.PRStateOpen, HeadBranch: "feat/x"}}
 	inst.LegacyPRUnrepresented = true
@@ -337,7 +337,7 @@ func TestToInstanceData_ShouldCarryPRFlagsOut_WhenSnapshotHasLinks(t *testing.T)
 	inst := &Instance{Title: "pr-out", Path: t.TempDir(), Program: "echo"}
 	inst.PRs = []domain.PRView{{StateID: 1, Ref: mustPRRef(t, "", "acme", "app", 12), State: domain.PRStateOpen}}
 	inst.LegacyPRUnrepresented, inst.HasPRLinks = true, true
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 
 	data := inst.ToInstanceData()
 	if !data.LegacyPRUnrepresented || !data.HasPRLinks || len(data.PRs) != 1 {

@@ -46,14 +46,14 @@ func newLiveWorkMetricSet() *liveWorkMetricSet {
 }
 
 func (m *liveWorkMetricSet) count(result string) {
-	m.results.add(result)
+	m.results.Add(result)
 	if m.otel != nil {
 		m.otel.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", result)))
 	}
 }
 
 // LiveWorkResultCount is ssq_pr_live_work_hold_total{result} in this process.
-func LiveWorkResultCount(result string) int64 { return liveWorkMetrics.results.get(result) }
+func LiveWorkResultCount(result string) int64 { return liveWorkMetrics.results.Get(result) }
 
 // SetLiveWorkProbeWired records ssq_live_work_probe_wired (1 wired, 0 not).
 func SetLiveWorkProbeWired(wired bool) {

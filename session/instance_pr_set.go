@@ -47,7 +47,23 @@ func (i *Instance) SetPRPersister(p prSetPersister) {
 // next full save writes it.
 func (i *Instance) PRPersistPending() bool { return i.prPersistPending.Load() }
 
-func (i *Instance) clearPRPersistPending() { i.prPersistPending.Store(false) }
+// LockPRPersist takes the per-session PR persist lock and returns its unlock, so
+// Storage can snapshot and write an instance without an AttachPR persist landing
+// an older mirror in between.
+func (i *Instance) LockPRPersist() (unlock func()) {
+	i.prPersistMu.Lock()
+	return i.prPersistMu.Unlock
+}
+
+// MarkPRPersisted clears the pending PR-persist and terminal-clear marks after a
+// full save wrote them. Call it while holding LockPRPersist.
+func (i *Instance) MarkPRPersisted() {
+	i.ClearPRPersistPending()
+	i.terminalClearPending.Store(false)
+}
+
+// ClearPRPersistPending drops the pending-PR-persist mark once Storage has written it.
+func (i *Instance) ClearPRPersistPending() { i.prPersistPending.Store(false) }
 
 // AttachPR upserts ref into the session's PR set. It is idempotent per ref, takes
 // the role from AssignRole, and returns ErrNoSessionUUID (changing nothing) for a

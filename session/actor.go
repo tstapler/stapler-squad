@@ -184,8 +184,8 @@ func runActor(li *LiveInstance) {
 
 // finishLiveInstanceConstruction publishes the initial snapshot and starts the
 // actor goroutine.  It is the LiveInstance-specific analogue of
-// finishInstanceConstruction: where plain *Instance construction sites call
-// finishInstanceConstruction, the LiveInstance construction path calls this
+// FinishInstanceConstruction: where plain *Instance construction sites call
+// FinishInstanceConstruction, the LiveInstance construction path calls this
 // instead (via NewLiveInstance).
 //
 // Takes i.mu.RLock() around the initial buildSnapshot() for the same reason

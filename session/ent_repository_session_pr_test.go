@@ -692,7 +692,7 @@ func persistedPRSession(t *testing.T) (*Storage, *Instance) {
 	inst := newTestInstance("pr-session")
 	inst.UUID = "uuid-pr-session"
 	inst.GitHubOwner, inst.GitHubRepo, inst.Branch = "acme", "app", "feat/x"
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 	require.NoError(t, storage.AddInstance(inst))
 	return storage, inst
 }
@@ -789,7 +789,7 @@ func TestAttachPR_ShouldDeferPersist_WhenSessionRowNotYetCreated(t *testing.T) {
 	inst := newTestInstance("deferred-pr")
 	inst.UUID = "uuid-deferred"
 	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 	inst.SetPRPersister(storage)
 
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceCreatedFromURL, domain.PRInitial{State: domain.PRStateOpen}))
@@ -869,7 +869,7 @@ func TestFullSave_ShouldClearTerminalFlag_WhenOpenPRAttachedToTerminalSession(t 
 	t.Cleanup(cleanup)
 	clone := newTestInstance("pr-session-clone")
 	clone.UUID, clone.GitHubOwner, clone.GitHubRepo = "uuid-clone", "acme", "app"
-	finishInstanceConstruction(clone)
+	FinishInstanceConstruction(clone)
 	require.NoError(t, clone.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateMerged, Terminal: true}))
 	require.NoError(t, clone.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateOpen}))
 	require.NoError(t, fresh.AddInstance(clone))
@@ -890,7 +890,7 @@ func TestFullSave_ShouldLeaveLegacyColumns_WhenLegacyNumberUnrepresented(t *test
 	inst.SetPRPersister(nil) // exercise the full save; the narrow attach write overwrites the mirror by design
 	inst.UUID = "uuid-legacy-only"
 	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	require.True(t, inst.Snapshot().GitHub.LegacyPRUnrepresented, "an unrelated attach keeps the flag")
 	require.NoError(t, storage.UpdateInstance(inst))
