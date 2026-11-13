@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // The AfterExport methods live here, not in each adapter file, so the shared history.jsonl
@@ -52,28 +51,6 @@ func appendHistoryJSONL(path, cli string, entry map[string]interface{}) error {
 	return nil
 }
 
-// recordPortedClaudeSession stamps the instance's Claude session data after a port and fires
-// the saved-callback outside the lock.
-func recordPortedClaudeSession(i *Instance, uuidStr, workspace string) {
-	i.claudeSessionMu.Lock()
-	if i.claudeSession == nil {
-		i.claudeSession = &domain.ClaudeSessionData{}
-	}
-	i.claudeSession.ConversationUUID = uuidStr
-	i.claudeSession.ProjectName = i.Title
-	i.claudeSession.LastAttached = time.Now()
-	if i.claudeSession.Metadata == nil {
-		i.claudeSession.Metadata = make(map[string]string)
-	}
-	i.claudeSession.Metadata["working_dir"] = workspace
-	cb := i.claudeSessionIDSavedCallback
-	i.claudeSessionMu.Unlock()
-
-	if cb != nil {
-		cb()
-	}
-}
-
 // AfterExport appends the Antigravity history.jsonl entry.
 func (a *AgyAdapter) AfterExport(_ context.Context, inst *Instance) error {
 	home, err := os.UserHomeDir()
@@ -105,12 +82,12 @@ func (a *ClaudeAdapter) AfterExport(_ context.Context, inst *Instance) error {
 	}); err != nil {
 		return err
 	}
-	recordPortedClaudeSession(inst, uuidStr, workspace)
+	inst.RecordPortedClaudeSession(uuidStr, workspace)
 	return nil
 }
 
 // AfterExport records the ported session data (opencode has no history.jsonl).
 func (a *OpencodeAdapter) AfterExport(_ context.Context, inst *Instance) error {
-	recordPortedClaudeSession(inst, inst.GetClaudeConversationUUID(), inst.GetWorkingDirectory())
+	inst.RecordPortedClaudeSession(inst.GetClaudeConversationUUID(), inst.GetWorkingDirectory())
 	return nil
 }

@@ -42,7 +42,7 @@ func TestTryExtract_OwnedNewestFallsThroughToNextCandidate(t *testing.T) {
 	inst := extractFixtureInstance(f, "/repo/extract", func(i *Instance) {
 		i.SetConversationOwnershipGuard(func(uuid, _ string) (string, bool) { return "sibling", uuid == claimSibling })
 	})
-	inst.tryExtractConversationUUID()
+	inst.TryExtractConversationUUID()
 
 	assert.Equal(t, claimOther, extractedUUID(inst))
 }
@@ -55,7 +55,7 @@ func TestTryExtract_AllOwned_StaysUnlinked(t *testing.T) {
 	inst := extractFixtureInstance(f, "/repo/extract", func(i *Instance) {
 		i.SetConversationOwnershipGuard(func(string, string) (string, bool) { return "sibling", true })
 	})
-	inst.tryExtractConversationUUID()
+	inst.TryExtractConversationUUID()
 
 	assert.Empty(t, extractedUUID(inst))
 }
@@ -68,7 +68,7 @@ func TestTryExtract_SkipsConversationPredatingSession(t *testing.T) {
 	f.write(t, claimOldStart, stampedEntry(created.Add(-time.Hour)), time.Second) // newest mtime
 
 	inst := extractFixtureInstance(f, "/repo/extract", nil)
-	inst.tryExtractConversationUUID()
+	inst.TryExtractConversationUUID()
 
 	assert.Equal(t, claimOwnStart, extractedUUID(inst))
 }
@@ -79,7 +79,7 @@ func TestTryExtract_PredatingConversationAcceptedWhenEverHadHistory(t *testing.T
 	f.write(t, claimOldStart, stampedEntry(f.now.Add(-time.Hour)), time.Second)
 
 	inst := extractFixtureInstance(f, "/repo/extract", func(i *Instance) { i.EverHadConversationHistory = true })
-	inst.tryExtractConversationUUID()
+	inst.TryExtractConversationUUID()
 
 	assert.Equal(t, claimOldStart, extractedUUID(inst))
 }
@@ -95,7 +95,7 @@ func TestTryExtract_ClearedAt_SkipsStaleAndTakesNewer(t *testing.T) {
 		i.EverHadConversationHistory = true
 		i.conversationClearedAt = clearedAt
 	})
-	inst.tryExtractConversationUUID()
+	inst.TryExtractConversationUUID()
 
 	require.Equal(t, claimOther, extractedUUID(inst))
 }
