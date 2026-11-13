@@ -107,13 +107,13 @@ func TestRefresher_ShouldMarkRowsTerminal_WhenAllScopesOff(t *testing.T) {
 	inst.Status = domain.Active
 	suspended := newPRTestInstance(t)
 	suspended.UUID, suspended.Title, suspended.Status = "u-suspended", "suspended", domain.Paused
-	require.NoError(t, suspended.AttachPR(prRefN(t, 50), domain.AttachSourceCreatedFromURL, session.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, suspended.AttachPR(prRefN(t, 50), domain.AttachSourceCreatedFromURL, domain.PRInitial{State: domain.PRStateOpen}))
 	p.SetInstances([]*session.Instance{inst, suspended})
 
 	// #11 is a non-active PR of inst (seeded open here), #40 is item-only, #50 belongs to a suspended session.
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 11), session.PRInitial{State: domain.PRStateOpen})
-	seedStateRow(t, storage.Repo, session.ItemPROwner("item-1"), prRefN(t, 40), session.PRInitial{State: domain.PRStateOpen})
-	seedStateRow(t, storage.Repo, session.SessionPROwner("u-suspended"), prRefN(t, 50), session.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 11), domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.ItemPROwner("item-1"), prRefN(t, 40), domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.SessionPROwner("u-suspended"), prRefN(t, 50), domain.PRInitial{State: domain.PRStateOpen})
 	beforeInst, beforeSuspended := inst.Snapshot().GitHub, suspended.Snapshot().GitHub
 
 	p.checkAllSessions()
@@ -133,7 +133,7 @@ func TestRefresher_ShouldMakeNoCalls_WhenRefresherOffScopeSet(t *testing.T) {
 	p, storage := newRowPoller(t, client)
 	on := false
 	p.refresherOn = func() bool { return on }
-	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), session.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
 	assert.Equal(t, 0, client.callsFor(12), "kill switch: zero GitHub calls")
@@ -151,8 +151,8 @@ func TestRefresher_ShouldBoundFetchesToTwoPerPR_WhenLegacyLoopAlsoRuns(t *testin
 	p, storage := newRowPoller(t, client)
 	inst := newPRTestInstance(t)
 	inst.Status = domain.Active
-	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceBranchDiscovery, session.PRInitial{State: domain.PRStateOpen}))
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), session.PRInitial{State: domain.PRStateOpen})
+	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 	p.SetInstances([]*session.Instance{inst})
 
 	p.checkAllSessions()

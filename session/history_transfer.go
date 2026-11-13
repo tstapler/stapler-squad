@@ -2,18 +2,10 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/log"
 )
-
-// ErrNoHistoryAdapter indicates PortSessionHistory was asked to port history for a program
-// pair where no registered HistoryAdapter claims one (or both) sides — e.g. opencode, aider,
-// bash, or gemini (the real Gemini CLI, distinct from Antigravity's own storage format — see
-// AgyAdapter.CanHandle), none of which have a canonical history format to port. Callers should
-// treat this as an expected, low-severity no-op (log and continue), not a hard failure.
-var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
 
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {

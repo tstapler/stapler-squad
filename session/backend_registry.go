@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -18,12 +19,6 @@ var backendRegistry = map[domain.ProcessManagerBackend]backendFactory{
 	domain.BackendTymux:  func(o ProcessManagerOptions) ProcessManager { return newTymuxBackendFromOpts(o) },
 }
 
-// BackendKeyed is the optional capability naming the registry key a ProcessManager
-// was built for.
-type BackendKeyed interface {
-	BackendKey() domain.ProcessManagerBackend
-}
-
 func (*TmuxBackend) BackendKey() domain.ProcessManagerBackend          { return domain.BackendTmux }
 func (*TymuxBackend) BackendKey() domain.ProcessManagerBackend         { return domain.BackendTymux }
 func (*NativeProcessManager) BackendKey() domain.ProcessManagerBackend { return domain.BackendNative }
@@ -35,13 +30,4 @@ func buildBackend(key domain.ProcessManagerBackend, opts ProcessManagerOptions) 
 		return nil, fmt.Errorf("%w: %q", ErrUnrecognizedBackend, key)
 	}
 	return factory(opts), nil
-}
-
-// processManagerBackendKey returns the backend a ProcessManager actually is, or ""
-// when it declares none (nil or a test fake).
-func processManagerBackendKey(pm ProcessManager) domain.ProcessManagerBackend {
-	if k, ok := capabilityOf[BackendKeyed](pm); ok {
-		return k.BackendKey()
-	}
-	return ""
 }

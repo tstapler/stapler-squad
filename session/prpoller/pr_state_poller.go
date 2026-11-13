@@ -524,7 +524,7 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Ins
 		storeEtag()
 		return
 	}
-	initial := session.PRInitial{State: domain.PRStateOpen, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
+	initial := domain.PRInitial{State: domain.PRStateOpen, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
 	if err := inst.AttachPR(prRef, domain.AttachSourceBranchDiscovery, initial); err != nil {
 		log.Warn("PR status poller: attaching the discovered PR failed", "session", snap.Title, "pr", prRef, "err", err)
 		return

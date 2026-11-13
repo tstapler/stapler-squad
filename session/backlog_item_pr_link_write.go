@@ -53,8 +53,8 @@ func (w *itemPRLinkWrite) writeTx(ctx context.Context, tx *ent.Tx, itemID string
 			return err
 		}
 	}
-	res, err := upsertSessionPRTx(ctx, tx, owner, w.Ref, PRLink{
-		Role: domain.PRRolePrimary, Source: w.Source, Initial: PRInitial{State: domain.PRStateOpen, URL: w.URL},
+	res, err := upsertSessionPRTx(ctx, tx, owner, w.Ref, domain.PRLink{
+		Role: domain.PRRolePrimary, Source: w.Source, Initial: domain.PRInitial{State: domain.PRStateOpen, URL: w.URL},
 	})
 	if err != nil {
 		return fmt.Errorf("write item-direct PR link: %w", err)

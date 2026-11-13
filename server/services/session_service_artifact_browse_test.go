@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 )
 
 func browseReq(mut func(*sessionv1.ListSessionArtifactsRequest)) *connect.Request[sessionv1.ListSessionArtifactsRequest] {
@@ -103,7 +102,7 @@ func TestListSessionArtifacts_ShouldUseTheSessionsOwnPRState(t *testing.T) {
 	ref, err := domain.NewPRRef("", "acme", "app", 12)
 	require.NoError(t, err)
 	inst := artifactSession("u1", "one", 0, scannedBlob(prRecord("acme", "app", 12, domain.PRSourceCreated)))
-	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceCreatedFromURL, session.PRInitial{State: domain.PRStateMerged, Terminal: true, URL: "https://github.com/acme/app/pull/12"}))
+	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceCreatedFromURL, domain.PRInitial{State: domain.PRStateMerged, Terminal: true, URL: "https://github.com/acme/app/pull/12"}))
 	svc := newArtifactSvc(nil, inst)
 	resp, err := svc.ListSessionArtifacts(context.Background(), browseReq(func(r *sessionv1.ListSessionArtifactsRequest) { r.State = "merged" }))
 	require.NoError(t, err)

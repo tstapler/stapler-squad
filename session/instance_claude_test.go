@@ -64,7 +64,7 @@ func TestInstance_SetHistoryInfo_SkipsCallback_When_OnlyHistoryPathChanges(t *te
 // fires recoverFromStaleResume whenever an exiting session's tail contains
 // Claude's "No conversation found with session ID", and it calls
 // RecoverFromStopped() + Start(false) directly, bypassing every other guard
-// (it is not a fromInstanceData copy, not boot-time, not reconcileSessions,
+// (it is not a instanceFromData copy, not boot-time, not reconcileSessions,
 // not healthCheckSkipReason, and not restartForRetry).
 //
 // It is reachable for archived sessions because KillTmuxPaneOnly closes the

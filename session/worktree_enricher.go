@@ -19,7 +19,7 @@ import (
 
 // WorktreeEnricher runs DetectWorktree, whose git-ref open() can block on an
 // unreadable (e.g. TCC-protected) path, off the LoadInstances path. Workers only
-// fill an in-memory result cache and never touch an Instance; fromInstanceData
+// fill an in-memory result cache and never touch an Instance; instanceFromData
 // reads the cache (pure memory) and applies a ready result to the instance it is
 // still building. See docs/adr/ADR-038-post-start-worktree-enrichment.md.
 //
