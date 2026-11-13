@@ -402,7 +402,7 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 			log.Warn("[BacklogLifecycle] reconcileOrphanedTriageItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonOrphanedTriage)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonOrphanedTriage)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}

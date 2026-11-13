@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -14,11 +15,11 @@ import (
 // connection. It opens no database handle of its own.
 type EntFlowReader struct {
 	client *ent.Client
-	engine WorkflowEngine // source of Stages; nil means the default engine
+	engine domain.WorkflowEngine // source of Stages; nil means the default engine
 }
 
 // WithWorkflowEngine returns a copy of r whose Stages come from engine.
-func (r *EntFlowReader) WithWorkflowEngine(engine WorkflowEngine) *EntFlowReader {
+func (r *EntFlowReader) WithWorkflowEngine(engine domain.WorkflowEngine) *EntFlowReader {
 	cp := *r
 	cp.engine = engine
 	return &cp

@@ -274,7 +274,7 @@ func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_
 
 	// With the item's own captured StageConfigSnapshot: the transitions legal
 	// at the moment it entered the now-deleted stage.
-	fallback := &StageConfigSnapshot{
+	fallback := &domain.StageConfigSnapshot{
 		StageName:          "Design Review",
 		AllowedTransitions: []BacklogStatus{BacklogStatusReady},
 	}
@@ -312,7 +312,7 @@ func acCriteriaOneUnchecked(t *testing.T) AcCriteriaJSON {
 // order_index order matching the kinds/stateful flags given), invalidates
 // engine's cache, and returns the (from,to) BacklogStatus pair to call
 // CanTransition/PendingGates/ValidateGates with.
-func newCustomTransitionWithGates(t *testing.T, client *ent.Client, engine *ConfiguredWorkflowEngine, kinds []GateKind, stateful []bool) (from, to BacklogStatus) {
+func newCustomTransitionWithGates(t *testing.T, client *ent.Client, engine *ConfiguredWorkflowEngine, kinds []domain.GateKind, stateful []bool) (from, to BacklogStatus) {
 	t.Helper()
 	ctx := context.Background()
 	require.Equal(t, len(kinds), len(stateful), "test fixture bug: kinds/stateful length mismatch")
@@ -357,9 +357,9 @@ func newCustomTransitionWithGates(t *testing.T, client *ent.Client, engine *Conf
 		// the pre-ADR-006 "consult GateSatisfactionRepository" semantics, so
 		// default to the one pre-registered skill.
 		switch kind {
-		case GateKindStructural:
-			c = c.SetConfig(map[string]interface{}{"check_id": StructuralCheckACComplete})
-		case GateKindCustom:
+		case domain.GateKindStructural:
+			c = c.SetConfig(map[string]interface{}{"check_id": domain.StructuralCheckACComplete})
+		case domain.GateKindCustom:
 			c = c.SetConfig(map[string]interface{}{"skill": "review-feasibility"})
 		}
 		_, err := c.Save(ctx)
@@ -381,7 +381,7 @@ func TestValidateGates_should_ReturnError_When_PendingGatesReportsAnyUnsatisfied
 	t.Parallel()
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	from, to := newCustomTransitionWithGates(t, client, engine,
-		[]GateKind{GateKindStructural, GateKindHumanApproval},
+		[]domain.GateKind{domain.GateKindStructural, domain.GateKindHumanApproval},
 		[]bool{false, true},
 	)
 
@@ -404,7 +404,7 @@ func TestValidateGates_should_ReturnError_When_PendingGatesReportsAnyUnsatisfied
 
 	err = engine.ValidateGates(item, to, nil)
 	require.Error(t, err, "ValidateGates must return a non-nil error when any gate is unsatisfied")
-	require.ErrorIs(t, err, ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 }
 
 // TestPendingGates_should_ReportUnsatisfied_When_PreviouslySatisfiedStructuralGateHasSinceRegressed
@@ -417,7 +417,7 @@ func TestPendingGates_should_ReportUnsatisfied_When_PreviouslySatisfiedStructura
 	t.Parallel()
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	from, to := newCustomTransitionWithGates(t, client, engine,
-		[]GateKind{GateKindStructural},
+		[]domain.GateKind{domain.GateKindStructural},
 		[]bool{false},
 	)
 
@@ -471,14 +471,14 @@ func TestPendingGates_should_ReturnSyntheticBlockingGate_When_CacheMissButFallba
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	from, to := deletedEdgeFixture(t, client, engine)
 
-	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+	fallback := &domain.StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
 	statuses, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, fallback)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1, "expected exactly one synthetic blocking gate, not an empty slice")
 
 	got := statuses[0]
-	assert.Equal(t, stageConfigUnresolvableGateID, got.GateID)
-	assert.Equal(t, GateKindStructural, got.Kind)
+	assert.Equal(t, domain.StageConfigUnresolvableGateID, got.GateID)
+	assert.Equal(t, domain.GateKindStructural, got.Kind)
 	assert.False(t, got.Satisfied, "the synthetic gate must always report unsatisfied — a deleted stage's config can never be automatically evaluated")
 	assert.Contains(t, got.Description, "no longer available")
 	assert.Contains(t, got.ActionHint, "Manual Override")
@@ -507,10 +507,10 @@ func TestValidateGates_should_FailClosed_When_CacheMissButFallbackConfirmsEdgeOn
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	from, to := deletedEdgeFixture(t, client, engine)
 
-	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+	fallback := &domain.StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
 	err := engine.ValidateGates(BacklogItemTransitionInput{Status: from}, to, fallback)
 	require.Error(t, err, "ValidateGates must fail closed for a deleted-stage item whose edge once existed, not silently allow the transition")
-	require.ErrorIs(t, err, ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 }
 
 // TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaSharedConstructor
@@ -536,7 +536,7 @@ func TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaShar
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, gateSatisfactionRepo, nil)
 	require.NoError(t, err)
 
-	from, to := newCustomTransitionWithGates(t, client, engine, []GateKind{GateKindAutomatedReview}, []bool{true})
+	from, to := newCustomTransitionWithGates(t, client, engine, []domain.GateKind{domain.GateKindAutomatedReview}, []bool{true})
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "real transition path ItemID regression",
@@ -556,7 +556,7 @@ func TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaShar
 	})
 	require.NoError(t, err)
 
-	guardInput := NewBacklogItemTransitionInput(item, BacklogStatus(item.Status))
+	guardInput := backlogdto.NewBacklogItemTransitionInput(item, BacklogStatus(item.Status))
 	require.Equal(t, item.ID, guardInput.ItemID, "the shared constructor must populate ItemID")
 
 	require.NoError(t, engine.ValidateGates(guardInput, to, nil),
@@ -577,11 +577,11 @@ func TestWorkflowEngine_should_TakePlainStageConfigSnapshotPointer_When_CalledWi
 	t.Parallel()
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	from, to := deletedEdgeFixture(t, client, engine)
-	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+	fallback := &domain.StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
 
 	for _, tc := range []struct {
 		name     string
-		fallback *StageConfigSnapshot
+		fallback *domain.StageConfigSnapshot
 	}{
 		{"nil fallback", nil},
 		{"real fallback", fallback},
@@ -607,7 +607,7 @@ func TestPendingGates_should_ReturnNilNil_When_CacheMissAndFallbackDoesNotContai
 	from, to := deletedEdgeFixture(t, client, engine)
 	require.NotEqual(t, BacklogStatusDone, to, "test fixture bug: deletedEdgeFixture's to-stage must not collide with the destination probed below")
 
-	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{BacklogStatusReady}}
+	fallback := &domain.StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{BacklogStatusReady}}
 	statuses, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, BacklogStatusDone, fallback)
 	require.NoError(t, err)
 	assert.Empty(t, statuses, "a destination never present in the snapshot must not trigger the synthetic blocking gate")
@@ -667,7 +667,7 @@ func TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIs
 	t.Parallel()
 	engine, from, to, reloaded := newDeletedStageItemFixture(t)
 
-	fallback := BuildStageConfigSnapshotFallback(reloaded)
+	fallback := backlogdto.BuildStageConfigSnapshotFallback(reloaded)
 	require.NotNil(t, fallback, "expected a reconstructed snapshot from the item's own status-event history")
 	require.Equal(t, "E2E From", fallback.StageName)
 	require.Equal(t, []BacklogStatus{to}, fallback.AllowedTransitions)
@@ -687,7 +687,7 @@ func TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIs
 	gates, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, fallback)
 	require.NoError(t, err)
 	require.Len(t, gates, 1, "PendingGates must report the synthetic blocking gate, not silently pass the item through")
-	assert.Equal(t, stageConfigUnresolvableGateID, gates[0].GateID)
+	assert.Equal(t, domain.StageConfigUnresolvableGateID, gates[0].GateID)
 	assert.False(t, gates[0].Satisfied)
 }
 
@@ -721,7 +721,7 @@ func TestConfiguredWorkflowEngine_should_NeverConsultFallback_When_StageIsLiveBu
 	// A fallback that (incorrectly, if honored) claims fabricatedTo was once
 	// legal from this stage — must never be consulted for a stage the live
 	// cache still knows about, dead-end or not.
-	fallback := &StageConfigSnapshot{
+	fallback := &domain.StageConfigSnapshot{
 		StageName:          deadEndStage.Name,
 		AllowedTransitions: []BacklogStatus{fabricatedTo},
 	}
@@ -753,7 +753,7 @@ func TestResolveAutomatedReviewGateContext_should_ReturnGateIDAndConfig_When_Gat
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(GateKindAutomatedReview)).
+		SetKind(string(domain.GateKindAutomatedReview)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
@@ -774,7 +774,7 @@ func TestResolveAutomatedReviewGateContext_should_ReturnGateIDAndConfig_When_Gat
 func TestResolveAutomatedReviewGateContext_should_ReturnNotOK_When_EdgeHasNoSuchGate(t *testing.T) {
 	t.Parallel()
 	engine, client := newSeededConfiguredWorkflowEngine(t)
-	from, to := newCustomTransitionWithGates(t, client, engine, []GateKind{GateKindStructural}, []bool{false})
+	from, to := newCustomTransitionWithGates(t, client, engine, []domain.GateKind{domain.GateKindStructural}, []bool{false})
 
 	_, _, ok := engine.ResolveAutomatedReviewGateContext(from, to)
 	assert.False(t, ok, "an edge with only a structural gate must not resolve an automated-review gate context")
@@ -799,7 +799,7 @@ func TestResolveCustomCheckGateContext_should_ReturnGateIDAndConfig_When_GateCon
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(GateKindCustom)).
+		SetKind(string(domain.GateKindCustom)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"skill": "review-feasibility"}).
@@ -823,12 +823,12 @@ func TestResolveCustomCheckGateContext_should_ReturnGateIDAndConfig_When_GateCon
 func TestEvaluateGate_AutomatedReviewAndCustom_should_ConsultGateSatisfactionRepository(t *testing.T) {
 	t.Parallel()
 
-	for _, kind := range []GateKind{GateKindAutomatedReview, GateKindCustom} {
+	for _, kind := range []domain.GateKind{domain.GateKindAutomatedReview, domain.GateKindCustom} {
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
 			engine, client := newSeededConfiguredWorkflowEngine(t)
 			ctx := context.Background()
-			from, to := newCustomTransitionWithGates(t, client, engine, []GateKind{kind}, []bool{true})
+			from, to := newCustomTransitionWithGates(t, client, engine, []domain.GateKind{kind}, []bool{true})
 
 			item, err := NewTestEntRepository(t).Client.BacklogItem.Create().
 				SetTitle("evaluateGate test item").
@@ -922,7 +922,7 @@ var _ GateSatisfactionRepository = (*failOnCallGateSatisfactionRepo)(nil)
 // newCustomTransitionWithGates above, for tests that need an explicit,
 // possibly-invalid Config map (e.g. a skill/pipeline_mode that no longer
 // resolves) rather than that helper's structural-check-only default.
-func newGateWithConfig(t *testing.T, client *ent.Client, engine *ConfiguredWorkflowEngine, kind GateKind, config map[string]interface{}) (from, to BacklogStatus, gateID uuid.UUID) {
+func newGateWithConfig(t *testing.T, client *ent.Client, engine *ConfiguredWorkflowEngine, kind domain.GateKind, config map[string]interface{}) (from, to BacklogStatus, gateID uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -960,7 +960,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Cus
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, nil)
 	require.NoError(t, err)
 
-	from, to, _ := newGateWithConfig(t, client, engine, GateKindCustom, map[string]interface{}{"skill": "no-longer-registered-skill"})
+	from, to, _ := newGateWithConfig(t, client, engine, domain.GateKindCustom, map[string]interface{}{"skill": "no-longer-registered-skill"})
 
 	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 	require.NoError(t, err)
@@ -986,7 +986,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Aut
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, pipelineModeRepo)
 	require.NoError(t, err)
 
-	from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "ghost-mode"})
+	from, to, _ := newGateWithConfig(t, client, engine, domain.GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "ghost-mode"})
 
 	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 	require.NoError(t, err)
@@ -1010,7 +1010,7 @@ func TestEvaluateGate_should_ReportConfigErrorAndSkipSatisfactionLookup_When_Aut
 	engine, err := NewConfiguredWorkflowEngine(stageRepo, &failOnCallGateSatisfactionRepo{t: t}, nil)
 	require.NoError(t, err)
 
-	from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "sdd"})
+	from, to, _ := newGateWithConfig(t, client, engine, domain.GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "sdd"})
 
 	statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 	require.NoError(t, err)
@@ -1036,7 +1036,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_CustomGateConf
 	require.NoError(t, err)
 	ctx := context.Background()
 
-	from, to, gateID := newGateWithConfig(t, client, engine, GateKindCustom, map[string]interface{}{"skill": "review-feasibility"})
+	from, to, gateID := newGateWithConfig(t, client, engine, domain.GateKindCustom, map[string]interface{}{"skill": "review-feasibility"})
 
 	// No record yet: falls through to evaluateRecordedGate's unchanged
 	// "nothing has run yet" placeholder — proving evaluateGate did NOT
@@ -1076,7 +1076,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedRevie
 	ctx := context.Background()
 
 	t.Run("empty pipeline_mode", func(t *testing.T) {
-		from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{})
+		from, to, _ := newGateWithConfig(t, client, engine, domain.GateKindAutomatedReview, map[string]interface{}{})
 		statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 		require.NoError(t, err)
 		require.Len(t, statuses, 1)
@@ -1087,7 +1087,7 @@ func TestEvaluateGate_should_FallThroughToSatisfactionLookup_When_AutomatedRevie
 		_, err := pipelineModeRepo.Create(ctx, PipelineModeCreateInput{Slug: "real-mode", Name: "Real Mode", Enabled: true})
 		require.NoError(t, err)
 
-		from, to, _ := newGateWithConfig(t, client, engine, GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "real-mode"})
+		from, to, _ := newGateWithConfig(t, client, engine, domain.GateKindAutomatedReview, map[string]interface{}{"pipeline_mode": "real-mode"})
 		statuses, err := engine.PendingGates(BacklogItemTransitionInput{ItemID: uuid.New().String(), Status: from}, to, nil)
 		require.NoError(t, err)
 		require.Len(t, statuses, 1)
@@ -1116,7 +1116,7 @@ func TestConfiguredWorkflowEngine_StatefulGateFailsClosed_WhenRepoTimesOut(t *te
 	gateRepo := &deadlineGateRepo{}
 	engine, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
-	from, to := newCustomTransitionWithGates(t, repo.Client, engine, []GateKind{GateKindHumanApproval}, []bool{true})
+	from, to := newCustomTransitionWithGates(t, repo.Client, engine, []domain.GateKind{domain.GateKindHumanApproval}, []bool{true})
 	item := BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString()}
 
 	statuses, err := engine.PendingGates(item, to, nil)
@@ -1137,14 +1137,14 @@ func TestConfiguredWorkflowEngine_PendingGatesStructuralOnly_SkipsStatefulKindsW
 	engine, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
 	from, to := newCustomTransitionWithGates(t, repo.Client, engine,
-		[]GateKind{GateKindStructural, GateKindHumanApproval}, []bool{false, true})
+		[]domain.GateKind{domain.GateKindStructural, domain.GateKindHumanApproval}, []bool{false, true})
 	item := BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString(), AcCriteria: oneAcCriterion()}
 
 	statuses, skipped := engine.PendingGatesStructuralOnly(item, to, nil)
 
 	require.True(t, skipped)
 	require.Len(t, statuses, 1)
-	require.Equal(t, GateKindStructural, statuses[0].Kind)
+	require.Equal(t, domain.GateKindStructural, statuses[0].Kind)
 	require.Zero(t, gateRepo.sawDeadline, "repository never touched")
 	require.Zero(t, engine.GateLookupTimeouts())
 }

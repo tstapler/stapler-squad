@@ -30,16 +30,6 @@ type TransitionDefinition struct {
 	GateCount int
 }
 
-// CallerClass is the caller class a ledger section is kept for; the recorder
-// keeps one section per class.
-type CallerClass string
-
-const (
-	ClassOperator CallerClass = "operator"
-	ClassAgent    CallerClass = "agent"
-	ClassSystem   CallerClass = "system"
-)
-
 // Config labels of the `config` series.
 const (
 	ConfigSeeded    = "seeded"

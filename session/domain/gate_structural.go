@@ -1,6 +1,8 @@
-package session
+package domain
 
-import "fmt"
+import (
+	"fmt"
+)
 
 // gate_structural.go — Story 2.4.2's closed set of structural/mechanical
 // check identifiers a GateKindStructural gate's config.CheckID may name
@@ -15,7 +17,7 @@ const (
 	StructuralCheckACComplete = "ac_complete"
 	// StructuralCheckPRGreen is intended to report satisfied iff the item's
 	// linked PR has passing CI and is mergeable. NOT YET WIRED: no PR/CI
-	// status field exists on domain.BacklogItemTransitionInput today (that
+	// status field exists on BacklogItemTransitionInput today (that
 	// data lives on BacklogItemData, one layer up, and PendingGates'
 	// signature — shared with DefaultWorkflowEngine — takes only
 	// BacklogItemTransitionInput). Evaluates fail-closed (never a false
@@ -27,11 +29,11 @@ const (
 	StructuralCheckNoOpenBlockers = "no_open_blockers"
 )
 
-// structuralCheckResult is the return shape shared by every structural-check
+// StructuralCheckResult is the return shape shared by every structural-check
 // evaluator: whether the check passed, the human-readable description shown
 // in the gate UI (GateStatus.Description), and an ActionHint to unblock it
 // when not satisfied ("" when satisfied).
-type structuralCheckResult struct {
+type StructuralCheckResult struct {
 	Satisfied   bool
 	Description string
 	ActionHint  string
@@ -42,7 +44,7 @@ type structuralCheckResult struct {
 // removal, or a typo that somehow bypassed ParseGateConfig's save-time
 // validation) is handled explicitly by evaluateStructuralCheck's own
 // fallback below, never a silent panic or a permissive default-true.
-var structuralCheckEvaluators = map[string]func(item BacklogItemTransitionInput) structuralCheckResult{
+var structuralCheckEvaluators = map[string]func(item BacklogItemTransitionInput) StructuralCheckResult{
 	StructuralCheckACComplete:     evaluateACCompleteCheck,
 	StructuralCheckPRGreen:        evaluatePRGreenCheck,
 	StructuralCheckNoOpenBlockers: evaluateNoOpenBlockersCheck,
@@ -50,10 +52,10 @@ var structuralCheckEvaluators = map[string]func(item BacklogItemTransitionInput)
 
 // evaluateACCompleteCheck reports satisfied iff item has at least one
 // acceptance criterion and every one is AcStatusDone.
-func evaluateACCompleteCheck(item BacklogItemTransitionInput) structuralCheckResult {
+func evaluateACCompleteCheck(item BacklogItemTransitionInput) StructuralCheckResult {
 	criteria, err := ParseAcCriteria(item.AcCriteria)
 	if err != nil || len(criteria) == 0 {
-		return structuralCheckResult{
+		return StructuralCheckResult{
 			Satisfied:   false,
 			Description: "no acceptance criteria defined",
 			ActionHint:  "define at least one acceptance criterion",
@@ -66,9 +68,9 @@ func evaluateACCompleteCheck(item BacklogItemTransitionInput) structuralCheckRes
 		}
 	}
 	if incomplete == 0 {
-		return structuralCheckResult{Satisfied: true, Description: "all acceptance criteria complete"}
+		return StructuralCheckResult{Satisfied: true, Description: "all acceptance criteria complete"}
 	}
-	return structuralCheckResult{
+	return StructuralCheckResult{
 		Satisfied:   false,
 		Description: fmt.Sprintf("%d of %d acceptance criteria incomplete", incomplete, len(criteria)),
 		ActionHint:  "mark every acceptance criterion done",
@@ -76,25 +78,25 @@ func evaluateACCompleteCheck(item BacklogItemTransitionInput) structuralCheckRes
 }
 
 // evaluateNoOpenBlockersCheck reports satisfied iff the item has no
-// unresolved blocker dependency (domain.BacklogItemTransitionInput.HasUnresolvedBlockers,
+// unresolved blocker dependency (BacklogItemTransitionInput.HasUnresolvedBlockers,
 // populated by DequeueNextQueuedItems' batched dependency query).
-func evaluateNoOpenBlockersCheck(item BacklogItemTransitionInput) structuralCheckResult {
+func evaluateNoOpenBlockersCheck(item BacklogItemTransitionInput) StructuralCheckResult {
 	if item.HasUnresolvedBlockers {
-		return structuralCheckResult{
+		return StructuralCheckResult{
 			Satisfied:   false,
 			Description: "item has one or more unresolved blocker dependencies",
 			ActionHint:  "resolve all blocker items first",
 		}
 	}
-	return structuralCheckResult{Satisfied: true, Description: "no open blockers"}
+	return StructuralCheckResult{Satisfied: true, Description: "no open blockers"}
 }
 
 // evaluatePRGreenCheck always reports unsatisfied — see StructuralCheckPRGreen's
 // doc comment for why. Fail-closed: an operator who configures this check
 // today gets a clearly-labeled "not yet wired" block, never a silent,
 // incorrect PASS.
-func evaluatePRGreenCheck(BacklogItemTransitionInput) structuralCheckResult {
-	return structuralCheckResult{
+func evaluatePRGreenCheck(BacklogItemTransitionInput) StructuralCheckResult {
+	return StructuralCheckResult{
 		Satisfied:   false,
 		Description: "pr_green structural check has no PR/CI status data source yet",
 		ActionHint:  "not yet actionable in this build",
@@ -105,10 +107,10 @@ func evaluatePRGreenCheck(BacklogItemTransitionInput) structuralCheckResult {
 // unrecognized checkID (including empty) reports unsatisfied rather than
 // panicking or defaulting to satisfied — fail-closed, matching
 // TransitionGuard's ErrACRequired guards elsewhere in this package.
-func evaluateStructuralCheck(checkID string, item BacklogItemTransitionInput) structuralCheckResult {
+func EvaluateStructuralCheck(checkID string, item BacklogItemTransitionInput) StructuralCheckResult {
 	eval, ok := structuralCheckEvaluators[checkID]
 	if !ok {
-		return structuralCheckResult{
+		return StructuralCheckResult{
 			Satisfied:   false,
 			Description: fmt.Sprintf("unrecognized structural check id %q", checkID),
 		}

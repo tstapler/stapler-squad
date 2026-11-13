@@ -41,6 +41,7 @@ go_test(
         "//session/backlog/liveness",
         "//session/backlog/pipeline",
         "//session/backlog/stuck",
+        "//session/domain",
         "//session/domain/backlogdto",
         "//session/git",
         "//session/internal/sessiontest",

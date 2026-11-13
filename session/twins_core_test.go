@@ -18,7 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
-func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller TransitionCaller, from, to BacklogStatus, reason string) {
+func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller domain.TransitionCaller, from, to BacklogStatus, reason string) {
 	t.Helper()
 	applied, err := h.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonTransitionDenied, from,
 		domain.FormatTransitionDeniedContext(domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: reason}, "test"))
@@ -28,7 +28,7 @@ func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller Transitio
 
 func denBlock(t *testing.T, h *gateHarness, from, to BacklogStatus) {
 	t.Helper()
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, from, to, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, from, to, domain.GateKindHumanApproval, nil)
 }
 
 func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []backlogdto.OpenStuckStateData {
@@ -115,7 +115,7 @@ func currentAttempts(t *testing.T, repo *EntRepository, itemID string, reason do
 	t.Helper()
 	rows, err := repo.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	row, ok := FindOpenStuckStateFor(rows, itemID, reason)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	require.True(t, ok)
 	return row.RemediationAttempts
 }
@@ -193,7 +193,7 @@ func (f *fakePipelineModeRepository) ListEnabled(ctx context.Context) ([]*ent.Pi
 
 type reportedDenial struct {
 	itemID       string
-	caller       TransitionCaller
+	caller       domain.TransitionCaller
 	from, to     BacklogStatus
 	reason       string
 	err          error
@@ -209,7 +209,7 @@ type recordingReporter struct {
 	panics  bool
 }
 
-func (r *recordingReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller TransitionCaller, from, to BacklogStatus, reason string, denyErr error) {
+func (r *recordingReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to BacklogStatus, reason string, denyErr error) {
 	cur, _ := r.storage.GetBacklogItem(ctx, item.ID)
 	r.mu.Lock()
 	r.calls = append(r.calls, reportedDenial{item.ID, caller, from, to, reason, denyErr, cur.Status})
@@ -376,7 +376,7 @@ func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *ConfiguredWorkflowEng
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *ConfiguredWorkflowEngine, from, to BacklogStatus, kind GateKind, config map[string]interface{}) {
+func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *ConfiguredWorkflowEngine, from, to BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
 	tr, err := client.StageTransition.Query().
@@ -398,12 +398,12 @@ func passingReviewItem() BacklogItemTransitionInput {
 	return BacklogItemTransitionInput{Status: BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
 }
 
-type classModes map[CallerClass]EngineMode
+type classModes map[domain.CallerClass]EngineMode
 
-func (c classModes) Mode() EngineMode { return c[ClassOperator] }
+func (c classModes) Mode() EngineMode { return c[domain.ClassOperator] }
 
-func (c classModes) ModeFor(k CallerClass) EngineMode { return c[k] }
+func (c classModes) ModeFor(k domain.CallerClass) EngineMode { return c[k] }
 
 func allClasses(m EngineMode) classModes {
-	return classModes{ClassOperator: m, ClassAgent: m, ClassSystem: m, "bogus": m}
+	return classModes{domain.ClassOperator: m, domain.ClassAgent: m, domain.ClassSystem: m, "bogus": m}
 }

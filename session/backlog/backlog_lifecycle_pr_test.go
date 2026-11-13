@@ -482,7 +482,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusPRPending, session.BacklogStatusDone, session.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusPRPending, session.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := newPRPendingTestItem(t, h.storage, 9701)
 	newTrackedWorkSession(t, h.storage, item.ID, item.RepoPath, "backlog/sess-gate-merge", "")
 
@@ -499,8 +499,8 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 	reports := h.rep.snapshot()
 	require.Len(t, reports, 2)
 	for _, r := range reports {
-		assert.Equal(t, session.CallerReconcilePRPendingMerge, r.caller)
-		assert.Equal(t, session.DeniedOperatorGate, r.reason)
+		assert.Equal(t, domain.CallerReconcilePRPendingMerge, r.caller)
+		assert.Equal(t, backlogdto.DeniedOperatorGate, r.reason)
 	}
 	for _, c := range notifier.Calls {
 		assert.NotEqual(t, "Status update failed after work completed", c.Title, "the gate's report is the only notification")
@@ -515,20 +515,20 @@ func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusReview, session.BacklogStatusPRPending, session.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusReview, session.BacklogStatusPRPending, domain.GateKindHumanApproval, nil)
 	item := h.newItem(t, session.BacklogStatusReview)
 	listener := NewBacklogLifecycleListener(h.storage)
 	pr := &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/77", Number: 77}
 
 	err := listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found")
-	require.ErrorIs(t, err, session.ErrGateNotSatisfied)
-	require.True(t, session.IsGateDenial(err))
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
+	require.True(t, domain.IsGateDenial(err))
 	got, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusReview), got.Status)
 	assert.Zero(t, got.PrNumber)
 	require.Len(t, h.rep.snapshot(), 1)
-	assert.Equal(t, session.CallerOrphanedAgentPR, h.rep.snapshot()[0].caller)
+	assert.Equal(t, domain.CallerOrphanedAgentPR, h.rep.snapshot()[0].caller)
 
 	sessDisableGates(t, h)
 	require.NoError(t, listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found"))

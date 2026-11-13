@@ -1078,7 +1078,7 @@ func TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue(t *testing.T) {
 	// is not to waste it on a foregone conclusion.
 	rows, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
 	require.True(t, ok, "abandoned_review row must still be open")
 	assert.Equal(t, int32(0), row.RemediationAttempts, "must not consume an abandoned_review attempt on a respawn blocked downstream by the bouncing gate")
 }
@@ -1291,7 +1291,7 @@ func TestReconcilePRPending_DoesNotRespawnFixSession_When_StillCIFailingOnNextTi
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonPRNeedsFix)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonPRNeedsFix)
 	require.True(t, ok, "a pr_needs_fix stuck row must be open while the PR keeps failing CI")
 	assert.Equal(t, int32(1), row.RemediationAttempts, "the gated second tick must not consume a second remediation attempt")
 }
@@ -3071,7 +3071,7 @@ func TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasSt
 
 	rows, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, stillOpen := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
+	_, stillOpen := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
 	assert.False(t, stillOpen, "abandoned_review must be resolved once an out-of-band PR moves the item out of review")
 }
 
@@ -3880,7 +3880,7 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, hasCapRowYet := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	_, hasCapRowYet := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
 	require.False(t, hasCapRowYet, "must not have a bounce_cap_exhausted row before the cap is actually crossed")
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -3899,7 +3899,7 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
 	require.True(t, ok, "crossing the cap while bouncing is still open must mark a durable bounce_cap_exhausted row")
 	assert.NotNil(t, row.NotifiedAt, "the differentiated notify fires immediately (not dwell-gated), so the row must already be marked notified")
 
@@ -3950,7 +3950,7 @@ func TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetP
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, hasCapRow := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	_, hasCapRow := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
 	assert.False(t, hasCapRow, "must not mark bounce_cap_exhausted before remediation_attempts actually reaches the cap")
 	assert.Empty(t, notifier.Calls, "must not fire the differentiated cap-exhausted notify before justParked")
 }
@@ -4002,7 +4002,7 @@ func TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounc
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
 	require.True(t, ok, "MarkStuck's expectedStatus precondition must match the item's real (review) status, not a hardcoded in_progress — otherwise this row would silently never appear")
 	assert.Equal(t, session.BacklogStatusReview, row.ItemStatus)
 }
@@ -4216,7 +4216,7 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 	require.NoError(t, err)
 	_, err = client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindAutomatedReview)).
+		SetKind(string(domain.GateKindAutomatedReview)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
@@ -4255,7 +4255,7 @@ func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransit
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindAutomatedReview)).
+		SetKind(string(domain.GateKindAutomatedReview)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).

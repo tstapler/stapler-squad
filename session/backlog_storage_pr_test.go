@@ -21,8 +21,8 @@ func itemInStatus(t *testing.T, f *itemPRFixture, status BacklogStatus) *backlog
 	return item
 }
 
-func prAssoc(n int, src domain.AttachSource) PRAssociation {
-	return PRAssociation{URL: "https://github.com/acme/app/pull/" + strconv.Itoa(n), Number: n, Summary: "pr", Source: src}
+func prAssoc(n int, src domain.AttachSource) backlogdto.PRAssociation {
+	return backlogdto.PRAssociation{URL: "https://github.com/acme/app/pull/" + strconv.Itoa(n), Number: n, Summary: "pr", Source: src}
 }
 
 func itemLinkNumbers(t *testing.T, f *itemPRFixture) []int {

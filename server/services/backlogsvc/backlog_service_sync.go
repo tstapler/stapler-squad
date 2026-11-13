@@ -158,9 +158,9 @@ func (s *BacklogService) AttachSessionToItem(
 
 	// 7. Transition item to in_progress (only if the state machine permits it; a
 	// non-edge is a silent skip, not a denial, so it is checked before the gate).
-	if s.engine.CanTransition(session.BacklogStatus(item.Status), session.BacklogStatusInProgress, session.BuildStageConfigSnapshotFallback(item)) {
-		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerAttachSessionToItem, ItemID: item.ID, To: session.BacklogStatusInProgress,
+	if s.engine.CanTransition(session.BacklogStatus(item.Status), session.BacklogStatusInProgress, backlogdto.BuildStageConfigSnapshotFallback(item)) {
+		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerAttachSessionToItem, ItemID: item.ID, To: session.BacklogStatusInProgress,
 			TriggeredBy: session.TriggeredBySystem, Unconditional: true,
 		}); transErr != nil {
 			log.ErrorLog().Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)

@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"strings"
 )
 
@@ -71,7 +72,7 @@ func BuildBacklogIntentUserPrompt(message, repoPath string, knownRepoPaths []str
 // raw's length, not its content — it echoes the user's free-text message and
 // can carry PII, and this error routinely reaches a log line.
 func ParseBacklogItemIntentDraft(raw string) (BacklogIntentDraft, error) {
-	candidates := ExtractTopLevelJSONObjects(raw)
+	candidates := domain.ExtractTopLevelJSONObjects(raw)
 	if len(candidates) == 0 {
 		return BacklogIntentDraft{}, fmt.Errorf("ParseBacklogItemIntentDraft: no JSON object found in output (raw_len=%d)", len(raw))
 	}

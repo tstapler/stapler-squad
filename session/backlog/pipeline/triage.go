@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -191,7 +192,7 @@ other questions for a later turn.
 //
 // Caps tasks at maxHeadlessTriageTasks.
 func ParseHeadlessTriageResult(raw string) (HeadlessTriageResult, error) {
-	candidates := session.ExtractTopLevelJSONObjects(raw)
+	candidates := domain.ExtractTopLevelJSONObjects(raw)
 	if len(candidates) == 0 {
 		preview := raw
 		if len(preview) > 200 {

@@ -131,47 +131,6 @@ func resolveStageSnapshotFields(ctx context.Context, stageClient *ent.BacklogSta
 	return stage.Name, slugs
 }
 
-// BuildStageConfigSnapshotFallback reconstructs the StageConfigSnapshot
-// (session/configured_workflow_engine.go) an item's current stage carried at
-// the moment it entered that stage, from item.StatusEvents — already
-// eager-loaded by GetBacklogItem, no new query (ADR-004). It scans for the
-// most recent event whose ToStatus matches item.Status (by CreatedAt, not
-// slice position — callers order this slice both ascending and descending)
-// and builds the snapshot from that event's stageNameSnapshot/
-// allowedTransitionsSnapshot pair. Returns nil when no such event exists —
-// e.g. an item still sitting in its entry stage, which was never the
-// destination of a recorded transition — which is already
-// ConfiguredWorkflowEngine's "no fallback" case, so callers degrade to
-// today's live-cache-only behavior rather than crashing.
-func BuildStageConfigSnapshotFallback(item *backlogdto.BacklogItemData) *StageConfigSnapshot {
-	var latest *backlogdto.BacklogStatusEventData
-	for i := range item.StatusEvents {
-		ev := &item.StatusEvents[i]
-		if ev.ToStatus != item.Status {
-			continue
-		}
-		if latest == nil || ev.CreatedAt.After(latest.CreatedAt) {
-			latest = ev
-		}
-	}
-	if latest == nil {
-		return nil
-	}
-
-	stageName := ""
-	if latest.StageNameSnapshot != nil {
-		stageName = *latest.StageNameSnapshot
-	}
-	allowed := make([]BacklogStatus, 0, len(latest.AllowedTransitionsSnapshot))
-	for _, s := range latest.AllowedTransitionsSnapshot {
-		allowed = append(allowed, BacklogStatus(s))
-	}
-	return &StageConfigSnapshot{
-		StageName:          stageName,
-		AllowedTransitions: allowed,
-	}
-}
-
 // --- converters ---
 
 // reviewVerdictToSummary maps an *ent.ReviewVerdict to a ReviewVerdictSummary DTO.

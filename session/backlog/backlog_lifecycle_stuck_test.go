@@ -1946,7 +1946,7 @@ func TestReconcileOrphanedTriageRemediation_should_SelfSkipWithoutSpendingBudget
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
 	require.True(t, ok, "the orphaned_triage row must stay open")
 	assert.Zero(t, row.RemediationAttempts, "a pointless retriage must never spend the shared remediation budget")
 }
@@ -5373,7 +5373,7 @@ func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_Th
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	require.True(t, ok, "an item with 2 open non-escalation reasons must get a multiple_reasons row")
 	assert.Nil(t, row.NotifiedAt, "must not notify on the tick that created the row")
 	assert.Empty(t, notifier.Calls, "must not notify on the tick that created the row")
@@ -5422,7 +5422,7 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	require.True(t, ok)
 	assert.NotNil(t, row.NotifiedAt, "row must be marked notified after the dwell-gated notify fires")
 
@@ -5458,7 +5458,7 @@ func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelow
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	require.True(t, ok, "row must be open before de-escalation")
 
 	_, err = er.ResolveStuck(ctx, item.ID, domain.StuckReasonStaleWork)
@@ -5468,7 +5468,7 @@ func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelow
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok = session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	_, ok = backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	assert.False(t, ok, "multiple_reasons row must resolve once the open-reason count drops below threshold")
 }
 
@@ -5503,7 +5503,7 @@ func TestReconcileMultiReasonEscalation_should_ExcludeEscalationReasonsFromCount
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	assert.False(t, ok, "multiple_reasons must not count itself toward its own threshold — with only 1 real reason open, it must resolve")
 }
 
@@ -5538,7 +5538,7 @@ func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyWaitingReaso
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	assert.False(t, ok, "waiting reasons must not count toward multi-reason escalation")
 }
 
@@ -5576,7 +5576,7 @@ func TestReconcileMultiReasonEscalation_should_NotEscalate_When_OnlyCoupledBounc
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	assert.False(t, ok, "the coupled bouncing+abandoned_review pair alone must not self-escalate")
 }
 
@@ -5613,7 +5613,7 @@ func TestReconcileMultiReasonEscalation_should_Escalate_When_CoupledPairPlusInde
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonMultipleReasons)
 	require.True(t, ok, "bouncing+push_failed (abandoned_review excluded by the coupling guard) is still 2 independent reasons — must escalate")
 	assert.Contains(t, row.Context, "bouncing")
 	assert.Contains(t, row.Context, "push_failed")
@@ -5670,7 +5670,7 @@ func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_NoOverrideConfigu
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
 	assert.False(t, ok, "34m-old session must not be flagged — unchanged from today's 35m constant")
 }
 
@@ -5710,7 +5710,7 @@ func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_SddModeOverrideRa
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonOrphanedTriage)
 	assert.False(t, ok, "40m-old sdd-mode session must not be flagged under the 55m derived threshold — this is the concrete fix for the 12 parked items")
 }
 
@@ -5764,7 +5764,7 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuck_When_NoOverrideConfigure
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonStaleWork)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonStaleWork)
 	assert.False(t, ok, "1h59m-old progress must not be flagged — unchanged from today's 2h constant")
 }
 
@@ -5802,7 +5802,7 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDur
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, notStale.ID, domain.StuckReasonStaleWork)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, notStale.ID, domain.StuckReasonStaleWork)
 	assert.False(t, ok, "2h1m-old sdd-mode progress must not be flagged under the 3h resolved threshold")
 
 	// Now push a second sdd-mode item past the resolved 3h threshold and confirm the
@@ -5814,7 +5814,7 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDur
 
 	openAfter, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok = session.FindOpenStuckStateFor(openAfter, pastResolved.ID, domain.StuckReasonStaleWork)
+	_, ok = backlogdto.FindOpenStuckStateFor(openAfter, pastResolved.ID, domain.StuckReasonStaleWork)
 	require.True(t, ok, "3h1m-old sdd-mode progress must be flagged past the resolved 3h threshold")
 	require.Len(t, notifier.Calls, 1, "expected exactly one notify call for the newly-stale item")
 	notifyBody := notifier.Calls[0].Message
@@ -5850,7 +5850,7 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBouncing)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBouncing)
 	assert.True(t, ok, "3 cycles in 24h with no PASS must still be flagged — unchanged from today's stuck.BounceThreshold=3/stuck.BounceLookback=24h")
 }
 
@@ -5910,8 +5910,8 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, sddFlagged := session.FindOpenStuckStateFor(open, sddItem.ID, domain.StuckReasonBouncing)
-	_, defaultFlagged := session.FindOpenStuckStateFor(open, defaultItem.ID, domain.StuckReasonBouncing)
+	_, sddFlagged := backlogdto.FindOpenStuckStateFor(open, sddItem.ID, domain.StuckReasonBouncing)
+	_, defaultFlagged := backlogdto.FindOpenStuckStateFor(open, defaultItem.ID, domain.StuckReasonBouncing)
 	assert.False(t, sddFlagged, "sdd-mode item with 4 cycles must not be flagged under the per-item CycleThreshold=5 override")
 	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's liveness.DefaultLivenessEngine fallback (stuck.BounceThreshold=3) — proving per-item, not package-level, resolution")
 }

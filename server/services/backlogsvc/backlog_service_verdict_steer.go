@@ -169,7 +169,7 @@ func buildVerdictSteerMessage(itemID string, v *backlogdto.ReviewVerdictData) st
 	if v.OverallOutcome == session.ReviewOutcomePass {
 		next = "Run /backlog/ship now to open the pull request yourself."
 	} else {
-		next = fmt.Sprintf("Fix the noted gaps in this same session and call request_review again (at most %d review attempts per session; after that run /backlog/ship to hand off to a human).", session.MaxSameSessionReviewAttempts)
+		next = fmt.Sprintf("Fix the noted gaps in this same session and call request_review again (at most %d review attempts per session; after that run /backlog/ship to hand off to a human).", domain.MaxSameSessionReviewAttempts)
 	}
 	return fmt.Sprintf("Review verdict for backlog item %s: %s.\n%s\n\n%s\nThis message is the verdict delivery; do not poll with wait_for_backlog_event or ScheduleWakeup.",
 		itemID, v.OverallOutcome, summary, next)

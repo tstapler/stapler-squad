@@ -32,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -249,7 +250,7 @@ func backlogItemMatchesFilters(item *backlogdto.BacklogItemData, msg *sessionv1.
 // population — without it, every fresh connection immediately overwrote an
 // already-loaded item's enriched worktree data, hiding BacklogFileBrowserModal's
 // trigger.
-func snapshotEventsForItems(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, items []*backlogdto.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) []*sessionv1.BacklogItemEvent {
+func snapshotEventsForItems(ctx context.Context, storage *session.Storage, engine domain.WorkflowEngine, items []*backlogdto.BacklogItemData, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) []*sessionv1.BacklogItemEvent {
 	protoItems := make([]*sessionv1.BacklogItem, len(items))
 	for i, item := range items {
 		protoItems[i] = backlogItemToProto(item, engine, costFor)
@@ -286,7 +287,7 @@ func snapshotEventsForItems(ctx context.Context, storage *session.Storage, engin
 // on Kind to build the matching oneof variant. Mirrors convertEventToProto's
 // switch-on-event.Type pattern already used for session events
 // (event_converter.go).
-func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storage, engine session.WorkflowEngine, evt *events.Event, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) *sessionv1.BacklogItemEvent {
+func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storage, engine domain.WorkflowEngine, evt *events.Event, costFor func(tmuxUUID string) float64, checkBudget func(itemID string, thresholdUSD *float64, totalCostUSD float64)) *sessionv1.BacklogItemEvent {
 	out := &sessionv1.BacklogItemEvent{
 		Timestamp: timestamppb.New(evt.Timestamp),
 		// evt.Seq is assigned by EventBus.Publish (0 means unpublished, which
@@ -404,7 +405,7 @@ func convertEventToBacklogItemEvent(ctx context.Context, storage *session.Storag
 // BacklogItemEventPayload.Item may legitimately be nil (defensive only —
 // production publishers always populate it) so every call site here must
 // guard first.
-func backlogItemToProtoOrNil(item *backlogdto.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+func backlogItemToProtoOrNil(item *backlogdto.BacklogItemData, engine domain.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	if item == nil {
 		return nil
 	}

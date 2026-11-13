@@ -30,6 +30,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -243,8 +244,8 @@ func ComputeContentHash(fields ...string) string {
 // it with write-time allow-list rejection — once that ships, every persisted
 // template field is guaranteed to contain only recognized placeholder names.
 func renderTemplate(tmpl string, placeholders map[string]string) string {
-	pairs := make([]string, 0, len(session.RecognizedPlaceholders)*2)
-	for _, name := range session.RecognizedPlaceholders {
+	pairs := make([]string, 0, len(domain.RecognizedPlaceholders)*2)
+	for _, name := range domain.RecognizedPlaceholders {
 		val, ok := placeholders[name]
 		if !ok {
 			continue

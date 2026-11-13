@@ -1,4 +1,4 @@
-package session
+package domain
 
 import (
 	"crypto/rand"

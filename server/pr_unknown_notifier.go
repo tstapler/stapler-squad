@@ -7,7 +7,6 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -21,7 +20,7 @@ const prUnknownLookupTimeout = 5 * time.Second
 // newPRUnknownNotifier returns the PRStatusPoller.SetOnPRUnknown callback: it
 // raises one warning per session linked to the PR, or one keyed by the PR when
 // only an item holds it. The poller already fires this once per transition.
-func newPRUnknownNotifier(lookup prSessionLookup, n session.Notifier) func(domain.PRView) {
+func newPRUnknownNotifier(lookup prSessionLookup, n domain.Notifier) func(domain.PRView) {
 	return func(v domain.PRView) {
 		ctx, cancel := context.WithTimeout(context.Background(), prUnknownLookupTimeout)
 		defer cancel()

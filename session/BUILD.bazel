@@ -21,7 +21,6 @@ go_library(
         "background_outcome.go",
         "backlog.go",
         "backlog_completion_review_context.go",
-        "backlog_crypto.go",
         "backlog_intent.go",
         "backlog_item_change.go",
         "backlog_item_pr_link_write.go",
@@ -92,11 +91,8 @@ go_library(
         "flow_marker.go",
         "flow_marker_limiter.go",
         "gate_approval.go",
-        "gate_config.go",
         "gate_latch.go",
         "gate_satisfaction_repository.go",
-        "gate_status.go",
-        "gate_structural.go",
         "gemini_adapter.go",
         "gesture_forward_strategy.go",
         "github_metadata.go",
@@ -247,7 +243,6 @@ go_library(
         "tmux_backend.go",
         "tmux_process_manager.go",
         "tmux_socket_querier.go",
-        "transition_callers.go",
         "transition_gate.go",
         "trigger_fire_event_repository.go",
         "turn_end.go",
@@ -420,7 +415,6 @@ go_test(
         "backlog_commands_test.go",
         "backlog_completion_review_context_test.go",
         "backlog_context_test.go",
-        "backlog_crypto_test.go",
         "backlog_denied_guard_test.go",
         "backlog_integration_test.go",
         "backlog_intent_test.go",
@@ -503,7 +497,6 @@ go_test(
         "flow_marker_limiter_test.go",
         "flow_marker_no_mcp_exposure_test.go",
         "gate_approval_test.go",
-        "gate_config_test.go",
         "gate_satisfaction_repository_test.go",
         "gate_structural_test.go",
         "gesture_forward_strategy_test.go",
@@ -827,11 +820,6 @@ go_test(
         "@org_modernc_sqlite//:sqlite",
         "@org_uber_go_goleak//:goleak",
     ],
-)
-
-exports_files(
-    ["transition_callers.go"],
-    visibility = ["//tools/lint/silenttransition:__pkg__"],
 )
 
 # Read by session/tymux's metrics guard test, which scans these sources.

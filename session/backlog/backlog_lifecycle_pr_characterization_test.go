@@ -97,7 +97,7 @@ func TestReconcilePRPendingWithoutPRItems_ShouldFlagStuck_WhenNumberZero(t *test
 
 	rows, err := storage.Repo.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(rows, item.ID, "pr_pending_no_pr")
+	_, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, "pr_pending_no_pr")
 	assert.True(t, ok, "empty set with pr_number=0 raises StuckReasonPRPendingNoPR")
 }
 
@@ -114,7 +114,7 @@ func TestStuckDetector_ShouldRaisePRPendingNoPR_WhenEmptySetAndNumberZero(t *tes
 			listener.reconcilePRPendingWithoutPRItems(context.Background(), f.repo)
 			rows, err := f.repo.FindOpenStuckStates(context.Background())
 			require.NoError(t, err)
-			_, ok := session.FindOpenStuckStateFor(rows, f.itemID, "pr_pending_no_pr")
+			_, ok := backlogdto.FindOpenStuckStateFor(rows, f.itemID, "pr_pending_no_pr")
 			assert.True(t, ok)
 		})
 	}
@@ -130,7 +130,7 @@ func TestStuckDetector_ShouldNotRaise_WhenNumberZeroButSetHasItemDirectPR(t *tes
 	listener.reconcilePRPendingWithoutPRItems(context.Background(), f.repo)
 	rows, err := f.repo.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(rows, f.itemID, "pr_pending_no_pr")
+	_, ok := backlogdto.FindOpenStuckStateFor(rows, f.itemID, "pr_pending_no_pr")
 	assert.False(t, ok, "the empty-set condition replaces pr_number==0 under the reader")
 }
 
@@ -146,7 +146,7 @@ func TestStuckDetector_ShouldRaise_WhenNumberSetButSetEmptiedByDetach(t *testing
 	listener.reconcilePRPendingWithoutPRItems(context.Background(), f.repo)
 	rows, err := f.repo.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(rows, f.itemID, "pr_pending_no_pr")
+	_, ok := backlogdto.FindOpenStuckStateFor(rows, f.itemID, "pr_pending_no_pr")
 	assert.True(t, ok)
 }
 

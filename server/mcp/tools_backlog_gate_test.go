@@ -20,8 +20,8 @@ import (
 
 type enforceEveryClass struct{}
 
-func (enforceEveryClass) Mode() session.EngineMode                       { return session.ModeEnforce }
-func (enforceEveryClass) ModeFor(session.CallerClass) session.EngineMode { return session.ModeEnforce }
+func (enforceEveryClass) Mode() session.EngineMode                      { return session.ModeEnforce }
+func (enforceEveryClass) ModeFor(domain.CallerClass) session.EngineMode { return session.ModeEnforce }
 
 type gateFixture struct {
 	storage *session.Storage
@@ -57,7 +57,7 @@ func (f *gateFixture) addApprovalGate(t *testing.T, from, to session.BacklogStat
 			continue
 		}
 		gate, gateErr := f.repo.CreateGate(t.Context(), session.GateCreateInput{
-			TransitionID: e.ID, Kind: string(session.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
+			TransitionID: e.ID, Kind: string(domain.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
 		})
 		require.NoError(t, gateErr)
 		require.NoError(t, f.cfg.InvalidateCache(t.Context()))

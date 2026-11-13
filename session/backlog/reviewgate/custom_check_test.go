@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -31,7 +32,7 @@ func TestInvokeCustomGateCheck_should_BlockTransitionFailClosed_When_SkillNotInP
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
 	_, err := InvokeCustomGateCheck(context.Background(), caller, repo, item, gateID,
-		session.CustomCheckConfig{SkillID: "not-a-real-skill"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
+		domain.CustomCheckConfig{SkillID: "not-a-real-skill"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
 
 	require.Error(t, err, "an unregistered skill must be rejected")
 	assert.False(t, caller.Called, "the headless call must never be attempted for an unregistered skill")
@@ -62,7 +63,7 @@ func TestInvokeCustomGateCheck_should_BlockAndLogWarn_When_SpawnFailsSynchronous
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
 	_, err := InvokeCustomGateCheck(context.Background(), caller, repo, item, gateID,
-		session.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
+		domain.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
 
 	require.Error(t, err, "a synchronous spawn failure must block the transition immediately")
 	assert.True(t, caller.Called)
@@ -89,7 +90,7 @@ func TestInvokeCustomGateCheck_should_RecordPassVerdict_When_SkillReportsPass(t 
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
 	outcome, err := InvokeCustomGateCheck(context.Background(), caller, repo, item, gateID,
-		session.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
+		domain.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, session.ReviewOutcomePass, outcome.Outcome)

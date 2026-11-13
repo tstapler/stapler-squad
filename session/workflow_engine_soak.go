@@ -90,8 +90,8 @@ func ParseSoakAckFile(data []byte) (SoakAckFile, error) {
 		return SoakAckFile{}, errors.New("ack file: unexpected data after the JSON object")
 	}
 	for c := range f.Classes {
-		switch CallerClass(c) {
-		case ClassOperator, ClassAgent, ClassSystem:
+		switch domain.CallerClass(c) {
+		case domain.ClassOperator, domain.ClassAgent, domain.ClassSystem:
 		default:
 			return SoakAckFile{}, fmt.Errorf("ack file: unknown class %q", c)
 		}
@@ -100,7 +100,7 @@ func ParseSoakAckFile(data []byte) (SoakAckFile, error) {
 }
 
 // For returns the acknowledgements recorded for class.
-func (f SoakAckFile) For(class CallerClass) SoakAcks { return f.Classes[string(class)] }
+func (f SoakAckFile) For(class domain.CallerClass) SoakAcks { return f.Classes[string(class)] }
 
 // Merge returns a with b's entries appended; each LowVolume part holds if
 // either side acknowledges it.
@@ -124,7 +124,7 @@ type SoakParams struct {
 	Window           time.Duration
 	Floor            int64
 	MinEdgeSamples   int64
-	ExpectedEdges    []SystemEdge
+	ExpectedEdges    []domain.SystemEdge
 	Acks             SoakAcks
 	AnyClassEnforced bool
 	ReproPath        string // where the redacted repro records live, printed on alarm
@@ -133,26 +133,26 @@ type SoakParams struct {
 // ExpectedEdgesForClass lists the edges the caller registry says class can
 // request, wildcard archive edges expanded over the built-in statuses and
 // forwarding entries (which declare none) contributing nothing. Sorted, unique.
-func ExpectedEdgesForClass(class CallerClass) []SystemEdge {
-	seen := map[SystemEdge]bool{}
-	var out []SystemEdge
-	add := func(e SystemEdge) {
+func ExpectedEdgesForClass(class domain.CallerClass) []domain.SystemEdge {
+	seen := map[domain.SystemEdge]bool{}
+	var out []domain.SystemEdge
+	add := func(e domain.SystemEdge) {
 		if !seen[e] {
 			seen[e] = true
 			out = append(out, e)
 		}
 	}
-	for _, c := range transitionCallers {
+	for _, c := range domain.TransitionCallers() {
 		if c.Class != class || c.Forwarding {
 			continue
 		}
 		for _, e := range c.Edges {
-			if e.From != AnyStatus {
+			if e.From != domain.AnyStatus {
 				add(e)
 				continue
 			}
 			for _, from := range BuiltInStageOrder {
-				add(SystemEdge{From: from, To: e.To})
+				add(domain.SystemEdge{From: from, To: e.To})
 			}
 		}
 	}
@@ -167,9 +167,9 @@ func ExpectedEdgesForClass(class CallerClass) []SystemEdge {
 
 // DefaultSoakParams returns the owner-approved parameters for class, with the
 // expected-edge list taken from the caller registry.
-func DefaultSoakParams(class CallerClass, now time.Time) SoakParams {
+func DefaultSoakParams(class domain.CallerClass, now time.Time) SoakParams {
 	w := SoakWindowOperatorAgent
-	if class == ClassSystem {
+	if class == domain.ClassSystem {
 		w = SoakWindowSystem
 	}
 	return SoakParams{
@@ -180,21 +180,21 @@ func DefaultSoakParams(class CallerClass, now time.Time) SoakParams {
 
 // Verdict is one class's soak result.
 type Verdict struct {
-	Class             CallerClass       `json:"class"`
-	Status            VerdictStatus     `json:"status"`
-	Reasons           []string          `json:"reasons,omitempty"`
-	ConfigWindow      string            `json:"config_window"`
-	TransitionSamples int64             `json:"transition_samples"`
-	Floor             int64             `json:"floor"`
-	SpanHours         float64           `json:"span_hours"`
-	WindowHours       float64           `json:"window_hours"`
-	Alarms            map[string]int64  `json:"alarms,omitempty"`
-	Unverified        []string          `json:"unverified_in_shadow,omitempty"`
-	CoveredOffline    []string          `json:"covered_offline,omitempty"`
-	Review            string            `json:"review,omitempty"`
-	ReproPath         string            `json:"repro_path,omitempty"`
-	ExitCode          int               `json:"exit_code"`
-	Detail            map[string]string `json:"detail,omitempty"`
+	Class             domain.CallerClass `json:"class"`
+	Status            VerdictStatus      `json:"status"`
+	Reasons           []string           `json:"reasons,omitempty"`
+	ConfigWindow      string             `json:"config_window"`
+	TransitionSamples int64              `json:"transition_samples"`
+	Floor             int64              `json:"floor"`
+	SpanHours         float64            `json:"span_hours"`
+	WindowHours       float64            `json:"window_hours"`
+	Alarms            map[string]int64   `json:"alarms,omitempty"`
+	Unverified        []string           `json:"unverified_in_shadow,omitempty"`
+	CoveredOffline    []string           `json:"covered_offline,omitempty"`
+	Review            string             `json:"review,omitempty"`
+	ReproPath         string             `json:"repro_path,omitempty"`
+	ExitCode          int                `json:"exit_code"`
+	Detail            map[string]string  `json:"detail,omitempty"`
 }
 
 func exitCodeFor(s VerdictStatus) int {
@@ -210,7 +210,7 @@ func exitCodeFor(s VerdictStatus) int {
 
 // EvaluateSoakFromSource loads the ledger and evaluates; a load error is
 // UNAVAILABLE, never READY.
-func EvaluateSoakFromSource(class CallerClass, load func() (ShadowLedger, error), p SoakParams) Verdict {
+func EvaluateSoakFromSource(class domain.CallerClass, load func() (ShadowLedger, error), p SoakParams) Verdict {
 	l, err := load()
 	if err != nil {
 		return Verdict{
@@ -222,7 +222,7 @@ func EvaluateSoakFromSource(class CallerClass, load func() (ShadowLedger, error)
 }
 
 // EvaluateSoak scores one class's ledger against the flip criteria.
-func EvaluateSoak(class CallerClass, l ShadowLedger, p SoakParams) Verdict {
+func EvaluateSoak(class domain.CallerClass, l ShadowLedger, p SoakParams) Verdict {
 	v := Verdict{
 		Class: class, Floor: p.Floor, WindowHours: p.Window.Hours(),
 		Review: reviewNotice(l, p), ReproPath: p.ReproPath,

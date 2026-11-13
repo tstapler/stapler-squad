@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -74,7 +75,7 @@ type completionReviewer struct {
 	storage  *session.Storage
 	call     CompletionReviewCall
 	memory   MemoryStore
-	notifier session.Notifier
+	notifier domain.Notifier
 	enabled  func() bool // live-read rollout flag
 
 	attempts, failures atomic.Int64
@@ -84,7 +85,7 @@ type completionReviewer struct {
 // StartCompletionReviewerSubscriber subscribes to the EventBus (fed by the repository's
 // ItemChangePublisher fan-out) and reviews each item that transitions to done. Dispatch runs in
 // bounded background goroutines with their own panic recovery.
-func StartCompletionReviewerSubscriber(ctx context.Context, bus *events.EventBus, storage *session.Storage, call CompletionReviewCall, memory MemoryStore, notifier session.Notifier) <-chan struct{} {
+func StartCompletionReviewerSubscriber(ctx context.Context, bus *events.EventBus, storage *session.Storage, call CompletionReviewCall, memory MemoryStore, notifier domain.Notifier) <-chan struct{} {
 	done := make(chan struct{})
 	if bus == nil || storage == nil {
 		log.Warn("completion_reviewer: missing dependency, subscriber not started")

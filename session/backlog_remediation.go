@@ -243,7 +243,7 @@ func (s *Storage) findOpenStuckStateForReason(ctx context.Context, itemID string
 	if err != nil {
 		return backlogdto.OpenStuckStateData{}, false, err
 	}
-	row, ok := FindOpenStuckStateFor(rows, itemID, reason)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	return row, ok, nil
 }
 
@@ -453,7 +453,7 @@ var ErrTransitionDeniedHold = errors.New("an automatic transition is denied and 
 // input, which the caller retries as before, so it never parks anything.
 func liftableDenial(reason string) bool {
 	switch reason {
-	case DeniedConfigGraph, DeniedOperatorGate, DeniedTargetStageRemoved:
+	case backlogdto.DeniedConfigGraph, backlogdto.DeniedOperatorGate, backlogdto.DeniedTargetStageRemoved:
 		return true
 	}
 	return false
@@ -524,17 +524,17 @@ func (s *Storage) resolveLiftedDenial(ctx context.Context, itemID string) {
 // denied when the denial can no longer bind: no gate wired, an unregistered
 // caller, or the caller's class not enforced. It decides quietly: the denial
 // was counted when it was recorded, so a probe adds nothing to the soak signal.
-func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d domain.TransitionDenial) (gateVerdict, bool) {
+func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d domain.TransitionDenial) (backlogdto.GateVerdict, bool) {
 	g := s.gate.Load()
-	spec, known := LookupTransitionCaller(TransitionCaller(d.Caller))
+	spec, known := domain.LookupTransitionCaller(domain.TransitionCaller(d.Caller))
 	if g == nil || !known || g.engine.ModeFor(spec.Class) != ModeEnforce {
-		return gateVerdict{}, false
+		return backlogdto.GateVerdict{}, false
 	}
 	item, err := s.GetBacklogItem(ctx, itemID)
 	if err != nil {
-		return gateVerdict{}, true // unknown: keep holding, retry next tick
+		return backlogdto.GateVerdict{}, true // unknown: keep holding, retry next tick
 	}
-	v := decideTransition(g.engine.ForClassQuiet(spec.Class, GuardsNone), item, TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
+	v := backlogdto.DecideTransition(g.engine.ForClassQuiet(spec.Class, domain.GuardsNone), item, backlogdto.TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
 	return v, v.Err != nil
 }
 
@@ -542,10 +542,10 @@ func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d do
 // that nothing retries once denied (the triage session behind them has ended).
 // Every other caller either retries on each sweep tick or re-runs through its
 // spawn point, so lifting its denial only resolves the row.
-var redriveByWrite = map[TransitionCaller]bool{
-	CallerAutonomousComplete: true,
-	CallerMaybeTriggerTriage: true,
-	CallerTriageComplete:     true,
+var redriveByWrite = map[domain.TransitionCaller]bool{
+	domain.CallerAutonomousComplete: true,
+	domain.CallerMaybeTriggerTriage: true,
+	domain.CallerTriageComplete:     true,
 }
 
 // RedriveTransitionDenials is the sweep over recorded denials (Task 1.5.8e): a
@@ -581,9 +581,9 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 		s.reportChangedDenial(ctx, itemID, d, verdict)
 		return false
 	}
-	caller := TransitionCaller(d.Caller)
+	caller := domain.TransitionCaller(d.Caller)
 	if redriveByWrite[caller] {
-		_, err := s.GatedTransition(ctx, TransitionRequest{
+		_, err := s.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller:       caller,
 			ItemID:       itemID,
 			To:           BacklogStatus(d.To),
@@ -602,7 +602,7 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 // reportChangedDenial re-reports a denial whose reason differs from the
 // recorded one; the reporter is idempotent per exact denial, so an unchanged
 // denial stays quiet.
-func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d domain.TransitionDenial, v gateVerdict) {
+func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d domain.TransitionDenial, v backlogdto.GateVerdict) {
 	g := s.gate.Load()
 	if g == nil || v.Reason == d.Reason {
 		return
@@ -611,5 +611,5 @@ func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d doma
 	if err != nil {
 		return
 	}
-	g.reporter.Report(ctx, item, TransitionCaller(d.Caller), BacklogStatus(d.From), BacklogStatus(d.To), v.Reason, v.Err)
+	g.reporter.Report(ctx, item, domain.TransitionCaller(d.Caller), BacklogStatus(d.From), BacklogStatus(d.To), v.Reason, v.Err)
 }

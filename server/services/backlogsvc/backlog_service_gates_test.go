@@ -15,6 +15,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -96,8 +97,8 @@ func TestGetPendingGates_should_ReturnPopulatedGateStatus_When_TransitionHasConf
 	require.NoError(t, err)
 	gate, err := repo.CreateGate(ctx, session.GateCreateInput{
 		TransitionID: transition.ID,
-		Kind:         string(session.GateKindStructural),
-		Config:       map[string]interface{}{"check_id": session.StructuralCheckACComplete},
+		Kind:         string(domain.GateKindStructural),
+		Config:       map[string]interface{}{"check_id": domain.StructuralCheckACComplete},
 		Enabled:      true,
 	})
 	require.NoError(t, err)
@@ -123,7 +124,7 @@ func TestGetPendingGates_should_ReturnPopulatedGateStatus_When_TransitionHasConf
 
 	got := resp.Msg.Gates[0]
 	assert.Equal(t, gate.ID.String(), got.GateId)
-	assert.Equal(t, string(session.GateKindStructural), got.Kind)
+	assert.Equal(t, string(domain.GateKindStructural), got.Kind)
 	assert.False(t, got.Satisfied, "the AC criterion is still pending, so the gate must not report satisfied")
 	assert.Equal(t, "1 of 1 acceptance criteria incomplete", got.Description)
 	assert.Empty(t, got.ConfigError, "a correctly configured gate must not carry a ConfigError")
@@ -149,7 +150,7 @@ func TestGetPendingGates_should_SetConfigError_When_CustomGateReferencesUnregist
 	const unregisteredSkill = "no-such-skill"
 	_, err = repo.CreateGate(ctx, session.GateCreateInput{
 		TransitionID: transition.ID,
-		Kind:         string(session.GateKindCustom),
+		Kind:         string(domain.GateKindCustom),
 		Config:       map[string]interface{}{"skill": unregisteredSkill},
 		Enabled:      true,
 	})

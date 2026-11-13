@@ -10,6 +10,7 @@ go_library(
         "//config",
         "//log",
         "//session",
+        "//session/domain",
         "//session/hostclaim",
     ],
 )

@@ -291,7 +291,7 @@ func (s *WebhookRegistrationService) buildReconcileInput(caller *WebhookCaller, 
 		Workflow:          spec,
 	}
 	if req.Secret != "" {
-		encrypted, encErr := session.EncryptToken(encKey, req.Secret)
+		encrypted, encErr := domain.EncryptToken(encKey, req.Secret)
 		if encErr != nil {
 			return nil, apiErr(http.StatusInternalServerError, "INTERNAL", "secret storage unavailable")
 		}

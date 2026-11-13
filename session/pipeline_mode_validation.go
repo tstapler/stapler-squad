@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -262,7 +263,7 @@ func validateRecognizedPlaceholders(fieldName, value string) error {
 
 // isRecognizedPlaceholder reports whether name is in recognizedPlaceholders.
 func isRecognizedPlaceholder(name string) bool {
-	for _, recognized := range RecognizedPlaceholders {
+	for _, recognized := range domain.RecognizedPlaceholders {
 		if recognized == name {
 			return true
 		}
@@ -278,5 +279,5 @@ func isRecognizedPlaceholder(name string) bool {
 // which fails immediately if a future edit gives one function its own copy
 // that drifts from the other.
 func placeholderAllowList() []string {
-	return RecognizedPlaceholders
+	return domain.RecognizedPlaceholders
 }

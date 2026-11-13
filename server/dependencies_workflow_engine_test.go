@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	logpkg "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -106,11 +107,11 @@ func TestBuildServerDependencies_ClassModesFollowTheirOwnFlags(t *testing.T) {
 	rt, _ := buildNarrowRuntimeDeps(t)
 	modes := rt.WorkflowEngine.Modes
 	require.NotNil(t, modes)
-	require.Equal(t, session.ModeShadow, modes.ModeFor(session.ClassAgent), "agent enforce ships off")
+	require.Equal(t, session.ModeShadow, modes.ModeFor(domain.ClassAgent), "agent enforce ships off")
 
 	// The selector answers per class from the same source: an unchecked agent
 	// write (idea->done has no edge) is allowed until the agent class enforces.
-	spec, ok := session.LookupTransitionCaller(session.CallerMCPResumeWork)
+	spec, ok := domain.LookupTransitionCaller(domain.CallerMCPResumeWork)
 	require.True(t, ok)
 	require.True(t, rt.WorkflowEngine.Engine.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil))
 }

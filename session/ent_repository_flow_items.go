@@ -65,7 +65,7 @@ func (r *EntFlowReader) Stages(context.Context) ([]domain.BacklogStatus, error) 
 // order; a custom stage is placed right after the earliest built-in stage that
 // can transition into it (ties by slug), or just before the terminal archived
 // stage when none does. Built-ins absent from the graph are omitted.
-func PipelineStages(engine WorkflowEngine) []BacklogStatus {
+func PipelineStages(engine domain.WorkflowEngine) []BacklogStatus {
 	known, preds := walkStageGraph(engine)
 	var custom []BacklogStatus
 	for s := range known {
@@ -100,7 +100,7 @@ func PipelineStages(engine WorkflowEngine) []BacklogStatus {
 
 // walkStageGraph explores the graph from every built-in stage and returns the
 // stages it found plus each stage's predecessors.
-func walkStageGraph(engine WorkflowEngine) (known map[BacklogStatus]bool, preds map[BacklogStatus][]BacklogStatus) {
+func walkStageGraph(engine domain.WorkflowEngine) (known map[BacklogStatus]bool, preds map[BacklogStatus][]BacklogStatus) {
 	known = map[BacklogStatus]bool{}
 	preds = map[BacklogStatus][]BacklogStatus{}
 	queue := append([]BacklogStatus(nil), BuiltInStageOrder...)

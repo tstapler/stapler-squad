@@ -193,7 +193,7 @@ func encryptWebhookSecret(secret string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get encryption key: %w", err)
 	}
-	encrypted, err := session.EncryptToken(key, secret)
+	encrypted, err := domain.EncryptToken(key, secret)
 	if err != nil {
 		return "", fmt.Errorf("encrypt webhook secret: %w", err)
 	}

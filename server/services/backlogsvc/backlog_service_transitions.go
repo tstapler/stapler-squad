@@ -57,7 +57,7 @@ func transitionGateToProto(g *session.GateData) *sessionv1.TransitionGate {
 		TransitionId: g.TransitionID.String(),
 		Kind:         g.Kind,
 		Config:       configMapToProto(g.Config),
-		Stateful:     session.EffectiveGateStateful(session.GateKind(g.Kind), g.Stateful),
+		Stateful:     session.EffectiveGateStateful(domain.GateKind(g.Kind), g.Stateful),
 		OrderIndex:   int32(g.OrderIndex),
 		Enabled:      g.Enabled,
 		CreatedAt:    timestamppb.New(g.CreatedAt),
@@ -102,7 +102,7 @@ func validateGateConfig(kind string, config map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("marshal gate config: %w", err)
 	}
-	if _, err := session.ParseGateConfig(session.GateKind(kind), raw); err != nil {
+	if _, err := domain.ParseGateConfig(domain.GateKind(kind), raw); err != nil {
 		return err
 	}
 	return nil
@@ -513,7 +513,7 @@ func (s *BacklogService) CreateTransitionGate(
 		TransitionID: transitionID,
 		Kind:         req.Msg.Kind,
 		Config:       configMapFromProto(req.Msg.Config),
-		Stateful:     session.EffectiveGateStateful(session.GateKind(req.Msg.Kind), req.Msg.Stateful),
+		Stateful:     session.EffectiveGateStateful(domain.GateKind(req.Msg.Kind), req.Msg.Stateful),
 		OrderIndex:   int(req.Msg.OrderIndex),
 		Enabled:      req.Msg.Enabled,
 	})
@@ -582,7 +582,7 @@ func (s *BacklogService) UpdateTransitionGate(
 // resolveUpdateStateful rejects an explicit stateful=false on a recorded kind
 // and stores true when a recorded kind arrives with stateful unset.
 func resolveUpdateStateful(kind string, requested *bool) (*bool, error) {
-	if !session.IsRecordedGateKind(session.GateKind(kind)) {
+	if !session.IsRecordedGateKind(domain.GateKind(kind)) {
 		return requested, nil
 	}
 	if requested != nil && !*requested {

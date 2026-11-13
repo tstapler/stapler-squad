@@ -675,7 +675,7 @@ func planArtifactsPathMissing(item *backlogdto.BacklogItemData, to session.Backl
 // storage.UnresolvedBlockerItemIDs before the claim loop).
 func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogdto.BacklogItemData, to session.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error) {
 	from := session.BacklogStatus(item.Status)
-	guardInput := session.NewBacklogItemTransitionInput(item, from)
+	guardInput := backlogdto.NewBacklogItemTransitionInput(item, from)
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
 	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
 	// Blocked dependencies and missing plans are expected steady-state refusals
@@ -689,7 +689,7 @@ func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogd
 			return nil, guardErr
 		}
 	}
-	return s.storage.GatedTransition(ctx, session.TransitionRequest{
+	return s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller: guardedTransitionCaller(to, triggeredBy), ItemID: item.ID, To: to,
 		Precondition: precondition, TriggeredBy: triggeredBy, Guard: &guardInput,
 	})
@@ -700,14 +700,14 @@ func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogd
 // (->queued), the dequeue claim (->in_progress, system) and Jules dispatch
 // (->in_progress, user). Jules reaches this through an interface whose
 // signature carries no caller.
-func guardedTransitionCaller(to session.BacklogStatus, triggeredBy string) session.TransitionCaller {
+func guardedTransitionCaller(to session.BacklogStatus, triggeredBy string) domain.TransitionCaller {
 	switch {
 	case to == session.BacklogStatusQueued:
-		return session.CallerQueueBacklogItem
+		return domain.CallerQueueBacklogItem
 	case triggeredBy == session.TriggeredByUser:
-		return session.CallerJulesDispatchStart
+		return domain.CallerJulesDispatchStart
 	default:
-		return session.CallerClaimAndSpawn
+		return domain.CallerClaimAndSpawn
 	}
 }
 
@@ -936,7 +936,7 @@ func (s *BacklogService) handleClaimError(ctx context.Context, item backlogdto.B
 				log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
 			}
 		}
-	case errors.Is(claimErr, session.ErrTransitionNotAllowed), errors.Is(claimErr, session.ErrGateNotSatisfied):
+	case errors.Is(claimErr, session.ErrTransitionNotAllowed), errors.Is(claimErr, domain.ErrGateNotSatisfied):
 		// An engine denial was already reported by the gate (transition_denied row,
 		// comment, notification) under caller claim_and_spawn.
 	default:
@@ -1316,8 +1316,8 @@ func (s *BacklogService) spawnSessionAfterGates(
 		if autonomous {
 			triggeredBy = session.TriggeredBySystem
 		}
-		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerSpawnSessionAfterGates, ItemID: item.ID, To: session.BacklogStatusInProgress,
+		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerSpawnSessionAfterGates, ItemID: item.ID, To: session.BacklogStatusInProgress,
 			TriggeredBy: triggeredBy, Unconditional: true,
 		}); transErr != nil {
 			log.Error("[SpawnSessionFromItem] failed to transition item to in_progress", "error", transErr)
@@ -1434,8 +1434,8 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *backlogdto.Ba
 	s.stopLiveWorkAndReviewSessions(ctx, item.ID)
 	wasPRPending := item.Status == string(session.BacklogStatusPRPending)
 	if item.Status == string(session.BacklogStatusReview) || wasPRPending {
-		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: session.BacklogStatusInProgress,
+		updated, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: session.BacklogStatusInProgress,
 			TriggeredBy: triggeredBy, Unconditional: true,
 		})
 		if transErr != nil {
@@ -2152,8 +2152,8 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened after failed review verdict",
 	}
-	inProgress, transitionErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerAutoReopenFailedReview, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress,
+	inProgress, transitionErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerAutoReopenFailedReview, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress,
 		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	})
 	if transitionErr != nil {
@@ -2549,8 +2549,8 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened for PR fix (CI/review)",
 	}
-	if _, err := s.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerAutoReopenForPRFix, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress,
+	if _, err := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerAutoReopenForPRFix, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress,
 		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
 		return fmt.Errorf("transition to in_progress: %w", err)
@@ -2795,8 +2795,8 @@ func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, apply
 		// Already in the state TriggerTriage requires — fall through below.
 	case session.BacklogStatusQueued:
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
-		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerRespawnTriage, ItemID: itemID, To: session.BacklogStatusIdea,
+		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerRespawnTriage, ItemID: itemID, To: session.BacklogStatusIdea,
 			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			return fmt.Errorf("reset queued item to idea before retriage: %w", transErr)
@@ -3028,8 +3028,8 @@ func (s *BacklogService) skipTriageForNewItem(ctx context.Context, itemID string
 	}
 	s.recordTriageSkip(ctx, itemID, reason)
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
-	if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerMaybeTriggerTriage, ItemID: itemID, To: session.BacklogStatusReady,
+	if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerMaybeTriggerTriage, ItemID: itemID, To: session.BacklogStatusReady,
 		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); transErr != nil {
 		if isEngineDenial(transErr) {
@@ -3514,8 +3514,8 @@ Do not modify the code. Only write the review verdict.
 				log.Info("[TriggerReReview] PASS verdict but code not verified on main — leaving in review for manual transition/override", "item", item.ID)
 			} else {
 				precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-				if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-					Caller: session.CallerTriggerReReview, ItemID: item.ID, To: session.BacklogStatusDone,
+				if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+					Caller: domain.CallerTriggerReReview, ItemID: item.ID, To: session.BacklogStatusDone,
 					Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 				}); transErr != nil {
 					log.Warn("[TriggerReReview] PASS but transition to done failed", "error", transErr)

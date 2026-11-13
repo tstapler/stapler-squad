@@ -1,52 +1,48 @@
 package session
 
-import "sort"
-
-// SystemEdge is a (from,to) transition that automation or storage-direct
-// writers depend on, so no operator edit may remove it.
-type SystemEdge struct {
-	From BacklogStatus
-	To   BacklogStatus
-}
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"sort"
+)
 
 // systemRequiredCore lists the non-archive edges (ADR-002 §3): engine-checked
 // automation callers first, then storage-direct writers kept for UI honesty.
-var systemRequiredCore = []SystemEdge{
+var systemRequiredCore = []domain.SystemEdge{
 	// Group 1: engine-checked automation.
-	{BacklogStatusReady, BacklogStatusQueued},
-	{BacklogStatusQueued, BacklogStatusInProgress},
-	{BacklogStatusReady, BacklogStatusInProgress},
+	{From: BacklogStatusReady, To: BacklogStatusQueued},
+	{From: BacklogStatusQueued, To: BacklogStatusInProgress},
+	{From: BacklogStatusReady, To: BacklogStatusInProgress},
 	// AttachSessionToItem moves any status that can reach in_progress there.
-	{BacklogStatusDone, BacklogStatusInProgress},
+	{From: BacklogStatusDone, To: BacklogStatusInProgress},
 	// Group 2: storage-direct writers.
-	{BacklogStatusInProgress, BacklogStatusReview},
-	{BacklogStatusReview, BacklogStatusDone},
-	{BacklogStatusReview, BacklogStatusPRPending},
-	{BacklogStatusPRPending, BacklogStatusDone},
-	{BacklogStatusReview, BacklogStatusInProgress},
-	{BacklogStatusPRPending, BacklogStatusInProgress},
-	{BacklogStatusInProgress, BacklogStatusReady},
-	{BacklogStatusIdea, BacklogStatusReady},
+	{From: BacklogStatusInProgress, To: BacklogStatusReview},
+	{From: BacklogStatusReview, To: BacklogStatusDone},
+	{From: BacklogStatusReview, To: BacklogStatusPRPending},
+	{From: BacklogStatusPRPending, To: BacklogStatusDone},
+	{From: BacklogStatusReview, To: BacklogStatusInProgress},
+	{From: BacklogStatusPRPending, To: BacklogStatusInProgress},
+	{From: BacklogStatusInProgress, To: BacklogStatusReady},
+	{From: BacklogStatusIdea, To: BacklogStatusReady},
 	// request_review re-requests from pr_pending (Task 1.5.1b audit).
-	{BacklogStatusPRPending, BacklogStatusReview},
+	{From: BacklogStatusPRPending, To: BacklogStatusReview},
 	// report_blocked from review.
-	{BacklogStatusReview, BacklogStatusReady},
+	{From: BacklogStatusReview, To: BacklogStatusReady},
 	// respawnTriage resets a queued item before retriage.
-	{BacklogStatusQueued, BacklogStatusIdea},
+	{From: BacklogStatusQueued, To: BacklogStatusIdea},
 }
 
 // systemRequiredOffGraph lists registered edges that validTransitions lacks
 // but real callers write (Task 1.5.1b audit, ADR-007 D7): SkipReviewGate
 // completion, the pushAndCreatePR fallback, and drift recovery to pr_pending.
 // Like the archive group they never reach the UI-facing allowed list.
-var systemRequiredOffGraph = []SystemEdge{
-	{BacklogStatusInProgress, BacklogStatusDone},
-	{BacklogStatusReady, BacklogStatusDone},
-	{BacklogStatusIdea, BacklogStatusPRPending},
-	{BacklogStatusRefining, BacklogStatusPRPending},
-	{BacklogStatusReady, BacklogStatusPRPending},
-	{BacklogStatusQueued, BacklogStatusPRPending},
-	{BacklogStatusInProgress, BacklogStatusPRPending},
+var systemRequiredOffGraph = []domain.SystemEdge{
+	{From: BacklogStatusInProgress, To: BacklogStatusDone},
+	{From: BacklogStatusReady, To: BacklogStatusDone},
+	{From: BacklogStatusIdea, To: BacklogStatusPRPending},
+	{From: BacklogStatusRefining, To: BacklogStatusPRPending},
+	{From: BacklogStatusReady, To: BacklogStatusPRPending},
+	{From: BacklogStatusQueued, To: BacklogStatusPRPending},
+	{From: BacklogStatusInProgress, To: BacklogStatusPRPending},
 }
 
 // SystemRequiredEdges returns the enumerable system-required set: the core
@@ -54,12 +50,12 @@ var systemRequiredOffGraph = []SystemEdge{
 // archived->archived) and the off-graph recovery edges. It does not list
 // custom-stage archive edges; use IsSystemRequired for those. validTransitions
 // is deliberately unchanged, so Off and Shadow keep answering exactly as before.
-func SystemRequiredEdges() []SystemEdge {
-	edges := make([]SystemEdge, 0, len(systemRequiredCore)+len(systemRequiredOffGraph)+len(BuiltInStageOrder))
+func SystemRequiredEdges() []domain.SystemEdge {
+	edges := make([]domain.SystemEdge, 0, len(systemRequiredCore)+len(systemRequiredOffGraph)+len(BuiltInStageOrder))
 	edges = append(edges, systemRequiredCore...)
 	edges = append(edges, systemRequiredOffGraph...)
 	for _, from := range BuiltInStageOrder {
-		edges = append(edges, SystemEdge{from, BacklogStatusArchived})
+		edges = append(edges, domain.SystemEdge{From: from, To: BacklogStatusArchived})
 	}
 	sort.Slice(edges, func(i, j int) bool {
 		if edges[i].From != edges[j].From {
@@ -77,7 +73,7 @@ func IsSystemRequired(from, to BacklogStatus) bool {
 	if to == BacklogStatusArchived {
 		return true
 	}
-	for _, group := range [][]SystemEdge{systemRequiredCore, systemRequiredOffGraph} {
+	for _, group := range [][]domain.SystemEdge{systemRequiredCore, systemRequiredOffGraph} {
 		for _, e := range group {
 			if e.From == from && e.To == to {
 				return true

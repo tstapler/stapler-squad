@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -344,7 +345,7 @@ func TestWriteSlashCommands_ReviewFileInstructsShipOnPassAndAfterAttemptCap(t *t
 
 	mustContain := []string{
 		"/backlog/ship",
-		fmt.Sprintf("%d allowed in THIS session", session.MaxSameSessionReviewAttempts),
+		fmt.Sprintf("%d allowed in THIS session", domain.MaxSameSessionReviewAttempts),
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(content, want) {

@@ -20,9 +20,9 @@ const latchedGateDescription = "previously satisfied (stateful gate latched)"
 
 // evaluateStructuralOrLatched evaluates a structural gate fresh, except that an
 // effectively-stateful one answers from its latch record when present.
-func (e *ConfiguredWorkflowEngine) evaluateStructuralOrLatched(g resolvedGate, item BacklogItemTransitionInput) GateStatus {
+func (e *ConfiguredWorkflowEngine) evaluateStructuralOrLatched(g resolvedGate, item BacklogItemTransitionInput) domain.GateStatus {
 	if g.effectiveStateful() && e.isLatched(g, item.ItemID) {
-		return GateStatus{GateID: g.ID.String(), Kind: GateKindStructural, Satisfied: true, Description: latchedGateDescription}
+		return domain.GateStatus{GateID: g.ID.String(), Kind: domain.GateKindStructural, Satisfied: true, Description: latchedGateDescription}
 	}
 	return evaluateStructuralGate(g, item)
 }
@@ -61,7 +61,7 @@ func (e *ConfiguredWorkflowEngine) RecordLatchesAfterCommit(item BacklogItemTran
 		return
 	}
 	for _, g := range edge.Gates {
-		if g.Kind != GateKindStructural || !g.effectiveStateful() || !evaluateStructuralGate(g, item).Satisfied {
+		if g.Kind != domain.GateKindStructural || !g.effectiveStateful() || !evaluateStructuralGate(g, item).Satisfied {
 			continue
 		}
 		if err := e.recordLatch(itemUUID, g.ID); err != nil {
@@ -92,7 +92,7 @@ func (e *ConfiguredWorkflowEngine) ClearLatches(itemID string, from, to BacklogS
 	ctx, cancel := context.WithTimeout(context.Background(), e.lookupTimeout())
 	defer cancel()
 	for _, g := range edge.Gates {
-		if g.Kind != GateKindStructural || !g.effectiveStateful() {
+		if g.Kind != domain.GateKindStructural || !g.effectiveStateful() {
 			continue
 		}
 		if err := clearer.DeleteByItemAndGate(ctx, itemUUID, g.ID); err != nil {
@@ -153,7 +153,7 @@ func (v engineView) TransitionCommitted(item BacklogItemTransitionInput, to Back
 	}
 }
 
-func notifyTransitionCommitted(view WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) {
+func notifyTransitionCommitted(view domain.WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) {
 	if o, ok := view.(commitObserver); ok {
 		o.TransitionCommitted(item, to)
 	}

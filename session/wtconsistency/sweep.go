@@ -484,7 +484,7 @@ type notifyRequest struct {
 // argument into metadata["item_id"], which would corrupt every consumer keyed on that
 // field for a session with no linked item). Gated by backoff (Story 1.2.4) so a
 // still-unresolved finding doesn't re-notify every tick.
-func notifyLinkageAware(notifier session.Notifier, backoff *notifyBackoff, req notifyRequest) {
+func notifyLinkageAware(notifier domain.Notifier, backoff *notifyBackoff, req notifyRequest) {
 	if !backoff.shouldNotify(notifyBackoffKey{SessionID: req.SessionID, IssueKind: req.IssueKind}) {
 		return
 	}
@@ -535,7 +535,7 @@ func resolveStuckIfLinkedAndLive(ctx context.Context, repo *session.EntRepositor
 // checklist) so finishNotify's own parameter list stays short.
 type notifyGlueDeps struct {
 	Repo     *session.EntRepository
-	Notifier session.Notifier
+	Notifier domain.Notifier
 	Backoff  *notifyBackoff
 }
 
@@ -585,7 +585,7 @@ func finishNotify(ctx context.Context, deps notifyGlueDeps, finding *WorktreeCon
 // finding.Resolution = ResolutionFlagged, always notifies (Notify when a BacklogItem is
 // linked, else NotifySession), and opportunistically dual-writes MarkStuck when the
 // linked item is live (non-terminal).
-func flagAndNotify(ctx context.Context, repo *session.EntRepository, notifier session.Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) {
+func flagAndNotify(ctx context.Context, repo *session.EntRepository, notifier domain.Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) {
 	finding.Resolution = ResolutionFlagged
 	if finding.Severity == "" {
 		finding.Severity = SeverityWarning
@@ -694,7 +694,7 @@ func repairWorktreeRow(ctx context.Context, repo *session.EntRepository, session
 // value still doesn't resolve", per that const's doc comment) rather than the default
 // SeverityWarning every other flagged finding gets — this is the one flagged case where a
 // repair genuinely was attempted first.
-func repairAndNotify(ctx context.Context, repo *session.EntRepository, notifier session.Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) error {
+func repairAndNotify(ctx context.Context, repo *session.EntRepository, notifier domain.Notifier, backoff *notifyBackoff, finding *WorktreeConsistencyFinding) error {
 	candidate := finding.Candidate
 	match := finding.Match
 	if match == nil {
@@ -755,7 +755,7 @@ func repairAndNotify(ctx context.Context, repo *session.EntRepository, notifier 
 // Design checklist).
 type resolveFindingDeps struct {
 	Repo     *session.EntRepository
-	Notifier session.Notifier
+	Notifier domain.Notifier
 	// Backoff may be nil — see notifyBackoff.shouldNotify's doc comment.
 	Backoff *notifyBackoff
 	// IsIsolated hard-restricts the repair branch to non-isolated instances (Story
@@ -895,7 +895,7 @@ func resolveCandidate(ctx context.Context, candidate SessionWorktreeCandidate, e
 // can be flipped off mid-run with no restart — when off, this returns before making any
 // storage or git call (Story 1.3.1's AC). storage.repo is read directly (same package)
 // since resolveFinding needs the raw *EntRepository, not the *Storage wrapper.
-func sweep(ctx context.Context, storage *session.Storage, notifier session.Notifier, cfgFn func() *config.Config, backoff *notifyBackoff) {
+func sweep(ctx context.Context, storage *session.Storage, notifier domain.Notifier, cfgFn func() *config.Config, backoff *notifyBackoff) {
 	if !cfgFn().GetFeatureFlagWithDefault(FeatureFlagWorktreeConsistencySweep, false) {
 		return
 	}
@@ -937,7 +937,7 @@ func sweep(ctx context.Context, storage *session.Storage, notifier session.Notif
 // threaded through every tick's resolveFinding calls, so Story 1.2.4's 24h suppression
 // window persists across ticks within this process (resets on restart, by design — see
 // notifyBackoff's doc comment).
-func StartWorktreeConsistencySweeper(ctx context.Context, storage *session.Storage, notifier session.Notifier, cfgFn func() *config.Config) {
+func StartWorktreeConsistencySweeper(ctx context.Context, storage *session.Storage, notifier domain.Notifier, cfgFn func() *config.Config) {
 	backoff := newNotifyBackoff()
 
 	log.Info("worktree consistency sweeper started", "check_interval", worktreeConsistencySweepInterval)

@@ -106,7 +106,7 @@ type BacklogService struct {
 	// repoSettingsFast, when set, serves non-refresh stuck reports from cache
 	// without waiting on GitHub; refresh=true still uses repoSettings.
 	repoSettingsFast RepoSettingsLookup
-	engine           session.WorkflowEngine
+	engine           domain.WorkflowEngine
 	engineStatus     *WorkflowEngineStatusSource
 	// reviewGuard is the listener's process-wide review-spawn reservation, so
 	// headless re-review honors the same one-reviewer-per-item rule. nil-safe.
@@ -447,7 +447,7 @@ func (s *BacklogService) PipelineEngine() pipeline.PipelineEngine {
 
 // WorkflowEngine returns the engine injected at construction. Exported for the
 // production-wiring test (server/dependencies_workflow_engine_test.go).
-func (s *BacklogService) WorkflowEngine() session.WorkflowEngine {
+func (s *BacklogService) WorkflowEngine() domain.WorkflowEngine {
 	return s.engine
 }
 
@@ -539,7 +539,7 @@ func (s *BacklogService) SetEventBus(b *events.EventBus) {
 // Degradation contract: If creator is nil, RPCs that spawn sessions will return
 // CodeUnimplemented. This is expected in test environments where a real session
 // manager is unavailable.
-func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine session.WorkflowEngine, pipelineEngine pipeline.PipelineEngine, pipelineModeRepo session.PipelineModeRepository) *BacklogService {
+func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine domain.WorkflowEngine, pipelineEngine pipeline.PipelineEngine, pipelineModeRepo session.PipelineModeRepository) *BacklogService {
 	if engine == nil {
 		engine = session.NewDefaultWorkflowEngine()
 	}
@@ -1012,7 +1012,7 @@ type triageResultJSON struct {
 // backlogItemToProto, BacklogItemSummary doesn't carry StatusEvents (that's
 // the whole point of the "summary" — avoid over-hydration), so
 // BuildStageConfigSnapshotFallback has nothing to reconstruct from.
-func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine domain.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		Id:       item.ID,
 		PublicId: item.PublicIDRaw,
@@ -1095,7 +1095,7 @@ func backlogItemSummaryToProto(item *backlogdto.BacklogItemSummary, engine sessi
 // transitions rather than an empty slice (#585) — see the docstrings on
 // backlogItemToProto/backlogItemSummaryToProto below for how fallback is
 // derived per caller.
-func allowedTransitionStrings(engine session.WorkflowEngine, from session.BacklogStatus, fallback *session.StageConfigSnapshot) []string {
+func allowedTransitionStrings(engine domain.WorkflowEngine, from session.BacklogStatus, fallback *domain.StageConfigSnapshot) []string {
 	targets := engine.AllowedTransitions(from, fallback)
 	out := make([]string, len(targets))
 	for i, t := range targets {
@@ -1106,7 +1106,7 @@ func allowedTransitionStrings(engine session.WorkflowEngine, from session.Backlo
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 // engine must be the caller's s.engine — see allowedTransitionStrings.
-func backlogItemToProto(item *backlogdto.BacklogItemData, engine session.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
+func backlogItemToProto(item *backlogdto.BacklogItemData, engine domain.WorkflowEngine, costFor func(tmuxUUID string) float64) *sessionv1.BacklogItem {
 	p := &sessionv1.BacklogItem{
 		WorkflowSuggestions: workflowSuggestionsToProto(session.ParseWorkflowSuggestions(item.WorkflowSuggestions)),
 		Id:                  item.ID,
@@ -1136,7 +1136,7 @@ func backlogItemToProto(item *backlogdto.BacklogItemData, engine session.Workflo
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
+		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), backlogdto.BuildStageConfigSnapshotFallback(item)),
 		DuplicateRef:       duplicateRefPending(item),
 		DuplicatePending:   duplicateRefPending(item) != "",
 		PublicId:           item.PublicIDRaw,

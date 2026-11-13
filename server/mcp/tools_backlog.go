@@ -569,7 +569,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("1. Work through each AC criterion\n")
 		sb.WriteString("2. After completing each criterion, call report_progress with criteria_index + status=pass\n")
 		sb.WriteString("3. When all criteria are done, call request_review with a summary of what you built\n")
-		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", session.MaxSameSessionReviewAttempts)
+		fmt.Fprintf(&sb, "4. After request_review, end your turn and stay idle (do not exit). Do NOT poll, and do NOT use ScheduleWakeup or /loop to wait — every wake re-reads your whole context; the app sends you a message with the verdict as soon as it is recorded. PASS → run /backlog/ship now to open the pull request yourself (it drives /github:pr-ship through local CI, code review, remote CI, and merge-conflict resolution) — shipping the PR is part of this task, do not stop here. FAIL/PARTIAL → fix the noted gaps yourself in this same session and call request_review again — its response tells you which attempt number you're on out of %d cycles allowed in this session; once you've hit that cap, run /backlog/ship anyway to hand the PR to a human instead of retrying indefinitely.\n", domain.MaxSameSessionReviewAttempts)
 		sb.WriteString("5. If you create the PR yourself (via /backlog/ship or a manual `gh pr create`) rather than letting the system create one for you, you MUST call report_pr_created with item_id, pr_url, pr_number, and a summary for each PR you open, as the final step — otherwise the item never shows the PR and stays invisible to the reviewer/operator. If the PR's head branch differs from your tracked branch (e.g. you had to open it from a clean fallback branch), pass override_reason explaining why — do not just retry report_pr_created unchanged. This only works for a PR you opened yourself.\n")
 	case "review":
 		sb.WriteString("## Your Role: Review\n")
@@ -1527,8 +1527,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// review-entry event, making the earlier verdict stale to wait_for_backlog_event.
 	if recoverFromReview {
 		reopen := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
-		_, reopenErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerMCPRequestReview, ItemID: itemID, Observed: item,
+		_, reopenErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerMCPRequestReview, ItemID: itemID, Observed: item,
 			To: session.BacklogStatusInProgress, Precondition: reopen, TriggeredBy: session.TriggeredByAgent,
 		})
 		if reopenErr != nil {
@@ -1543,8 +1543,8 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// Transition item from its validated source status to the target status.
 	// Past a recovery reopen the item changed, so the gate re-reads it.
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
-	transitionReq := session.TransitionRequest{
-		Caller: session.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+	transitionReq := backlogdto.TransitionRequest{
+		Caller: domain.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
 	}
 	if !recoverFromReview {
 		transitionReq.Observed = item
@@ -1728,8 +1728,8 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	// waits in review for a human, and review->review is not an edge.
 	if targetStatus != currentStatus {
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
-		if _, transErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerMCPReportBlocked, ItemID: itemID, Observed: item, To: targetStatus, Precondition: precondition,
+		if _, transErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerMCPReportBlocked, ItemID: itemID, Observed: item, To: targetStatus, Precondition: precondition,
 			TriggeredBy: session.TriggeredByAgent,
 		}); transErr != nil {
 			log.InfoLog().Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
@@ -1874,8 +1874,8 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 	}
 
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "resume_work"}
-	if _, transErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerMCPResumeWork, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress, Precondition: precondition,
+	if _, transErr := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerMCPResumeWork, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress, Precondition: precondition,
 		TriggeredBy: session.TriggeredByAgent,
 	}); transErr != nil {
 		log.InfoLog().Printf("[mcp:resume_work] transition to in_progress failed: %v", transErr)
@@ -1981,7 +1981,7 @@ type transitionDeniedError struct {
 // failure such as a lost compare-and-swap.
 func isTransitionDenied(err error) bool {
 	for _, sentinel := range []error{
-		session.ErrTransitionNotAllowed, session.ErrGateNotSatisfied,
+		session.ErrTransitionNotAllowed, domain.ErrGateNotSatisfied,
 		session.ErrACRequired, session.ErrPlanRequired, session.ErrPlanArtifactsRequired, session.ErrPlanArtifactsMissing,
 		session.ErrVerdictRequired, session.ErrCodeNotOnMain, session.ErrVerdictClearRequiredForReady, session.ErrUnresolvedBlockers,
 	} {
@@ -1998,7 +1998,7 @@ func isTransitionDenied(err error) bool {
 func transitionDeniedResult(err error, from, to session.BacklogStatus) *mcpgo.CallToolResult {
 	blockedBy, hint := blockedByDefaultGuard, "satisfy the guard named in the message, then call again"
 	switch {
-	case errors.Is(err, session.ErrGateNotSatisfied):
+	case errors.Is(err, domain.ErrGateNotSatisfied):
 		blockedBy, hint = blockedByOperatorGate, hintAskOperatorApprove
 	case errors.Is(err, session.ErrTransitionNotAllowed):
 		blockedBy, hint = blockedByConfigGraph, hintAskOperatorEnable
@@ -2658,8 +2658,8 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 
 	note := fmt.Sprintf("%s%s — archived by session %s", duplicateClosureNotePrefix(duplicateRef), reason, callerUUID)
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
-	if _, archErr := h.storage.GatedArchive(ctx, session.TransitionRequest{
-		Caller: session.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+	if _, archErr := h.storage.GatedArchive(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
 	}); archErr != nil {
 		log.InfoLog().Printf("[mcp:report_duplicate] archive failed item=%s: %v", itemID, archErr)
 		if isTransitionDenied(archErr) {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -104,7 +105,7 @@ func TestBuildSessionInitialPrompt_ContainsShipEscapeHatch(t *testing.T) {
 
 	cases := []string{
 		"/backlog/ship",
-		fmt.Sprintf("%d allowed in THIS session", session.MaxSameSessionReviewAttempts),
+		fmt.Sprintf("%d allowed in THIS session", domain.MaxSameSessionReviewAttempts),
 	}
 	for _, want := range cases {
 		if !strings.Contains(out, want) {

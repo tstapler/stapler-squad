@@ -84,12 +84,12 @@ type transitionDeniedReporter struct{ svc *BacklogService }
 // TransitionDeniedReporter returns the reporter to inject into
 // session.Storage.SetTransitionGate. Idempotence per (item, caller, from, to,
 // reason) is notifyTransitionDenied's.
-func (s *BacklogService) TransitionDeniedReporter() session.TransitionDeniedReporter {
+func (s *BacklogService) TransitionDeniedReporter() backlogdto.TransitionDeniedReporter {
 	return transitionDeniedReporter{svc: s}
 }
 
 // Report implements session.TransitionDeniedReporter.
-func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
 	r.svc.notifyTransitionDenied(ctx, item, domain.TransitionDenial{
 		Caller: string(caller),
 		From:   string(from),
@@ -113,7 +113,7 @@ func (s *BacklogService) resolveTransitionDeniedLogged(ctx context.Context, item
 // transition (graph or gate) rather than a write failure; the gate has already
 // reported such a denial for an agent or system caller.
 func isEngineDenial(err error) bool {
-	return errors.Is(err, session.ErrTransitionNotAllowed) || errors.Is(err, session.ErrGateNotSatisfied)
+	return errors.Is(err, session.ErrTransitionNotAllowed) || errors.Is(err, domain.ErrGateNotSatisfied)
 }
 
 // heldByTransitionDenial is the one guard every spawn point calls (Story

@@ -80,7 +80,7 @@ func (l *BacklogLifecycleListener) reconcileRepeatedNoopDispatch(ctx context.Con
 			log.Warn("[BacklogLifecycle] reconcileRepeatedNoopDispatch FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonRepeatedNoopDispatch)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonRepeatedNoopDispatch)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}

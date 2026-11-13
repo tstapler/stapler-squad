@@ -22,7 +22,7 @@ func TestAnalyzer(t *testing.T) {
 
 // registryFile is the caller registry, read as source because this module
 // cannot import package session.
-const registryFile = "../../../session/transition_callers.go"
+const registryFile = "../../../session/domain/transition_callers.go"
 
 // TestSilentTransition_OperatorCallerSetMatchesRegistry fails when the
 // analyzer's operator set drifts from the registry's operator-class (specOp)
@@ -40,7 +40,7 @@ func TestSilentTransition_OperatorCallerSetMatchesRegistry(t *testing.T) {
 	sort.Strings(analyzer)
 
 	if !equalStrings(analyzer, registry) {
-		t.Fatalf("silenttransition.OperatorCallers drifted from the specOp entries in session/transition_callers.go\nanalyzer: %v\nregistry: %v", analyzer, registry)
+		t.Fatalf("silenttransition.OperatorCallers drifted from the specOp entries in session/domain/transition_callers.go\nanalyzer: %v\nregistry: %v", analyzer, registry)
 	}
 }
 

@@ -56,7 +56,7 @@ func allStatusPairs() [][2]BacklogStatus {
 	return pairs
 }
 
-func unsatisfiedGateKeys(t *testing.T, e WorkflowEngine, in BacklogItemTransitionInput, to BacklogStatus) []string {
+func unsatisfiedGateKeys(t *testing.T, e domain.WorkflowEngine, in BacklogItemTransitionInput, to BacklogStatus) []string {
 	t.Helper()
 	statuses, err := e.PendingGates(in, to, nil)
 	require.NoError(t, err)
@@ -74,7 +74,7 @@ func unsatisfiedGateKeys(t *testing.T, e WorkflowEngine, in BacklogItemTransitio
 // pairs and the gate fixture corpus. Gate comparison uses GateID/Kind and
 // errors.Is identity, never Description. It is the single harness Story 1.1.2
 // reuses with the composed enforce engine as underTest.
-func diffEngines(t *testing.T, reference, underTest WorkflowEngine, corpus []gateFixture) engineDiff {
+func diffEngines(t *testing.T, reference, underTest domain.WorkflowEngine, corpus []gateFixture) engineDiff {
 	t.Helper()
 	var d engineDiff
 	for _, p := range allStatusPairs() {

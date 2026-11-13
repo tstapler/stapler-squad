@@ -9,8 +9,14 @@ go_library(
         "artifacts_blob.go",
         "autonomous_stop.go",
         "backlog.go",
+        "backlog_crypto.go",
+        "backlog_shared.go",
+        "backlog_sync_fields.go",
         "context_health.go",
         "errors.go",
+        "gate_config.go",
+        "gate_status.go",
+        "gate_structural.go",
         "github_host.go",
         "github_pr_items.go",
         "guidance_cancel_reason.go",
@@ -24,7 +30,9 @@ go_library(
         "review_state.go",
         "session_type.go",
         "status.go",
+        "transition_callers.go",
         "wake_trigger.go",
+        "workflow_engine_iface.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/domain",
     visibility = ["//visibility:public"],
@@ -40,7 +48,9 @@ go_test(
     name = "domain_test",
     srcs = [
         "autonomous_stop_test.go",
+        "backlog_crypto_test.go",
         "backlog_test.go",
+        "gate_config_test.go",
         "github_host_test.go",
         "guidance_request_source_test.go",
         "purity_test.go",
@@ -58,7 +68,14 @@ filegroup(
     name = "go_sources",
     srcs = glob(["*.go"]),
     visibility = [
+        "//server/services:__pkg__",
         "//session:__pkg__",
         "//session/flow:__pkg__",
     ],
+)
+
+# Read by tools/lint/silenttransition's registry-drift test.
+exports_files(
+    ["transition_callers.go"],
+    visibility = ["//tools/lint/silenttransition:__pkg__"],
 )

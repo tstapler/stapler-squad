@@ -36,4 +36,4 @@ server/services/sessionbundle files=4 loc=862 imports=7
 server/services/devtools files=4 loc=501 imports=4
 server/services/antigravityexport files=2 loc=400 imports=3
 server/services/backlogflow files=4 loc=747 imports=7
-session/domain/backlogdto files=8 loc=970 imports=2
+session/domain/backlogdto files=10 loc=1268 imports=2

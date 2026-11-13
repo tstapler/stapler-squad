@@ -1,4 +1,4 @@
-package session
+package domain
 
 // gate_config.go — Task 2.7.2g's typed GateConfig sum type and
 // ParseGateConfig validator. Each TransitionGate row's raw JSON `config`

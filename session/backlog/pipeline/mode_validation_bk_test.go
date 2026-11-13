@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -18,8 +19,8 @@ import (
 // functions do NOT literally share a slice.
 func TestRenderTemplateAndValidatePipelineModeContent_should_AgreeOnEveryToken_When_TableDrivenOverAllPlaceholdersPlusOneBogusToken(t *testing.T) {
 	t.Parallel()
-	tokens := make([]string, 0, len(session.RecognizedPlaceholders)+1)
-	tokens = append(tokens, session.RecognizedPlaceholders...)
+	tokens := make([]string, 0, len(domain.RecognizedPlaceholders)+1)
+	tokens = append(tokens, domain.RecognizedPlaceholders...)
 	tokens = append(tokens, "made_up_placeholder")
 
 	item := &backlogdto.BacklogItemData{ID: "item-1", Title: "Title", Description: "Desc", RepoPath: "/repo"}

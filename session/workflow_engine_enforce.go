@@ -1,6 +1,9 @@
 package session
 
-import "sort"
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"sort"
+)
 
 // FallbackReason says why the enforce composition could not use the
 // Configured engine and answered from the Default engine instead.
@@ -42,12 +45,12 @@ const (
 // The *For methods apply a callPolicy (ADR-007 D3); allowedTransitions is the
 // operator-policy read the seed preview uses.
 // NewEnforceAnswer pairs the Default engine with the Configured one it is compared against.
-func NewEnforceAnswer(def WorkflowEngine, cfg *ConfiguredWorkflowEngine) EnforceAnswer {
+func NewEnforceAnswer(def domain.WorkflowEngine, cfg *ConfiguredWorkflowEngine) EnforceAnswer {
 	return EnforceAnswer{def: def, cfg: cfg}
 }
 
 type EnforceAnswer struct {
-	def WorkflowEngine
+	def domain.WorkflowEngine
 	cfg *ConfiguredWorkflowEngine
 }
 
@@ -66,18 +69,18 @@ type EnforceAnswer struct {
 // A forwarding caller (the generic MCP delegate) is governed by the Configured
 // graph alone: it gets no SystemRequiredEdges() union.
 type callPolicy struct {
-	Class      CallerClass
-	Guards     GuardPolicy
+	Class      domain.CallerClass
+	Guards     domain.GuardPolicy
 	Forwarding bool
 }
 
-var operatorPolicy = callPolicy{Class: ClassOperator, Guards: GuardsBuiltIn}
+var operatorPolicy = callPolicy{Class: domain.ClassOperator, Guards: domain.GuardsBuiltIn}
 
-func (p callPolicy) runsDefaultGuards() bool { return p.Guards != GuardsNone }
+func (p callPolicy) runsDefaultGuards() bool { return p.Guards != domain.GuardsNone }
 
 // defaultGuardInput is the input the Default TransitionGuard sees.
 func (p callPolicy) defaultGuardInput(item BacklogItemTransitionInput) BacklogItemTransitionInput {
-	if p.Class == ClassSystem {
+	if p.Class == domain.ClassSystem {
 		item.OverrideReason = ""
 	}
 	return item
@@ -85,14 +88,14 @@ func (p callPolicy) defaultGuardInput(item BacklogItemTransitionInput) BacklogIt
 
 // bypassesOperatorGates reports whether item's override frees Configured gates.
 func (p callPolicy) bypassesOperatorGates(item BacklogItemTransitionInput) bool {
-	return p.Class == ClassOperator && item.OverrideReason != ""
+	return p.Class == domain.ClassOperator && item.OverrideReason != ""
 }
 
 // bypassesGraph reports whether an override frees the graph check: operator
 // class only, non-empty reason, and only toward a known stage so an override
 // cannot write a status that exists nowhere.
 func (a EnforceAnswer) bypassesGraph(pol callPolicy, overrideReason string, to BacklogStatus) bool {
-	return pol.Class == ClassOperator && overrideReason != "" && a.knownStage(to)
+	return pol.Class == domain.ClassOperator && overrideReason != "" && a.knownStage(to)
 }
 
 func (a EnforceAnswer) knownStage(s BacklogStatus) bool {
@@ -121,7 +124,7 @@ func (a EnforceAnswer) usableConfigured() (*ConfiguredWorkflowEngine, FallbackRe
 	}
 }
 
-func (a EnforceAnswer) canTransitionFor(pol callPolicy, from, to BacklogStatus, snap *StageConfigSnapshot) (bool, FallbackReason) {
+func (a EnforceAnswer) canTransitionFor(pol callPolicy, from, to BacklogStatus, snap *domain.StageConfigSnapshot) (bool, FallbackReason) {
 	cfg, reason := a.usableConfigured()
 	var allowed bool
 	if cfg != nil {
@@ -134,11 +137,11 @@ func (a EnforceAnswer) canTransitionFor(pol callPolicy, from, to BacklogStatus, 
 
 // allowedTransitions unions the non-archive system edges into the base list;
 // archive edges never reach this UI-facing list.
-func (a EnforceAnswer) allowedTransitions(from BacklogStatus, snap *StageConfigSnapshot) ([]BacklogStatus, FallbackReason) {
+func (a EnforceAnswer) allowedTransitions(from BacklogStatus, snap *domain.StageConfigSnapshot) ([]BacklogStatus, FallbackReason) {
 	return a.allowedTransitionsFor(operatorPolicy, from, snap)
 }
 
-func (a EnforceAnswer) allowedTransitionsFor(pol callPolicy, from BacklogStatus, snap *StageConfigSnapshot) ([]BacklogStatus, FallbackReason) {
+func (a EnforceAnswer) allowedTransitionsFor(pol callPolicy, from BacklogStatus, snap *domain.StageConfigSnapshot) ([]BacklogStatus, FallbackReason) {
 	cfg, reason := a.usableConfigured()
 	var base []BacklogStatus
 	if cfg != nil {
@@ -176,7 +179,7 @@ type gateAnswer struct {
 // validateGates runs Default guards first so their sentinels keep precedence,
 // then the Configured operator gates. evalStructuralOnly forbids any
 // GateSatisfactionRepository read (shadow).
-func (a EnforceAnswer) validateGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) gateAnswer {
+func (a EnforceAnswer) validateGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot, mode gateEvalMode) gateAnswer {
 	cfg, reason := a.usableConfigured()
 	if pol.runsDefaultGuards() {
 		if err := a.def.ValidateGates(pol.defaultGuardInput(item), to, nil); err != nil {
@@ -195,7 +198,7 @@ func (a EnforceAnswer) validateGatesFor(pol callPolicy, item BacklogItemTransiti
 
 // pendingGates is Default's guard statuses plus the Configured operator gates
 // (omitted under override or when Configured is unusable).
-func (a EnforceAnswer) pendingGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) (statuses []GateStatus, skippedStateful bool, fallback FallbackReason, err error) {
+func (a EnforceAnswer) pendingGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot, mode gateEvalMode) (statuses []domain.GateStatus, skippedStateful bool, fallback FallbackReason, err error) {
 	cfg, reason := a.usableConfigured()
 	if pol.runsDefaultGuards() {
 		statuses, err = a.def.PendingGates(pol.defaultGuardInput(item), to, nil)
@@ -207,7 +210,7 @@ func (a EnforceAnswer) pendingGatesFor(pol callPolicy, item BacklogItemTransitio
 	return append(statuses, extra...), skipped, reason, nil
 }
 
-func configuredGates(cfg *ConfiguredWorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) ([]GateStatus, bool) {
+func configuredGates(cfg *ConfiguredWorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot, mode gateEvalMode) ([]domain.GateStatus, bool) {
 	if mode == evalAllGates {
 		statuses, _ := cfg.PendingGates(item, to, snap)
 		return statuses, false

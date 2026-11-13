@@ -155,7 +155,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReconstructSnapshotFromMostRece
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
-	fallback := BuildStageConfigSnapshotFallback(reloaded)
+	fallback := backlogdto.BuildStageConfigSnapshotFallback(reloaded)
 	require.NotNil(t, fallback)
 	require.Equal(t, "Review A", fallback.StageName)
 	require.Equal(t, []BacklogStatus{BacklogStatus("review-b")}, fallback.AllowedTransitions)
@@ -215,7 +215,7 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
-	fallback := BuildStageConfigSnapshotFallback(reloaded)
+	fallback := backlogdto.BuildStageConfigSnapshotFallback(reloaded)
 	require.NotNil(t, fallback)
 	require.Equal(t, "Review A", fallback.StageName)
 	require.Equal(t, []BacklogStatus{BacklogStatus("review-b-v2")}, fallback.AllowedTransitions,
@@ -241,5 +241,5 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnNil_When_NoStatusEventMat
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
-	require.Nil(t, BuildStageConfigSnapshotFallback(reloaded))
+	require.Nil(t, backlogdto.BuildStageConfigSnapshotFallback(reloaded))
 }

@@ -9,13 +9,14 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
 	bkfCheckKey       = "check_id"
-	bkfCheckNoBlocker = session.StructuralCheckNoOpenBlockers
-	bkfCheckPRGreen   = session.StructuralCheckPRGreen
-	bkfCheckACDone    = session.StructuralCheckACComplete
+	bkfCheckNoBlocker = domain.StructuralCheckNoOpenBlockers
+	bkfCheckPRGreen   = domain.StructuralCheckPRGreen
+	bkfCheckACDone    = domain.StructuralCheckACComplete
 )
 
 // Text of the two denials the order proofs tell apart.
@@ -26,18 +27,18 @@ const (
 
 // bkfGate is the writable surface of one transition gate.
 type bkfGate struct {
-	kind    session.GateKind
+	kind    domain.GateKind
 	checkID string
 	order   int32
 	enabled bool
 }
 
 func bkfStructural(checkID string, order int32) bkfGate {
-	return bkfGate{kind: session.GateKindStructural, checkID: checkID, order: order, enabled: true}
+	return bkfGate{kind: domain.GateKindStructural, checkID: checkID, order: order, enabled: true}
 }
 
 func bkfApproval() bkfGate {
-	return bkfGate{kind: session.GateKindHumanApproval, enabled: true}
+	return bkfGate{kind: domain.GateKindHumanApproval, enabled: true}
 }
 
 func (g bkfGate) config() map[string]string {

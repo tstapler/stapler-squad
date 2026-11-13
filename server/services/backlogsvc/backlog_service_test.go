@@ -597,7 +597,7 @@ func TestUpdateBacklogItem_PopulatesUserModifiedFieldsOnTitleEdit(t *testing.T) 
 	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "New Title", refetched.Title)
-	assert.True(t, session.ContainsModifiedField(session.ParseUserModifiedFields(refetched.UserModifiedFields), "title"),
+	assert.True(t, domain.ContainsModifiedField(domain.ParseUserModifiedFields(refetched.UserModifiedFields), "title"),
 		"UserModifiedFields must contain \"title\" after a genuine title edit, got %q", refetched.UserModifiedFields)
 }
 
@@ -627,9 +627,9 @@ func TestUpdateBacklogItem_DoesNotMarkTitleModifiedWhenValueUnchanged(t *testing
 	refetched, err := svc.storage.GetBacklogItem(t.Context(), created.Msg.Item.Id)
 	require.NoError(t, err)
 	assert.Equal(t, 5, refetched.Priority)
-	modified := session.ParseUserModifiedFields(refetched.UserModifiedFields)
-	assert.True(t, session.ContainsModifiedField(modified, "priority"), "priority genuinely changed, must be marked modified")
-	assert.False(t, session.ContainsModifiedField(modified, "title"), "title was resubmitted unchanged, must NOT be marked modified")
+	modified := domain.ParseUserModifiedFields(refetched.UserModifiedFields)
+	assert.True(t, domain.ContainsModifiedField(modified, "priority"), "priority genuinely changed, must be marked modified")
+	assert.False(t, domain.ContainsModifiedField(modified, "title"), "title was resubmitted unchanged, must NOT be marked modified")
 }
 
 // ─── ListBacklogItems ─────────────────────────────────────────────────────────
@@ -5104,7 +5104,7 @@ func TestTriggerSync_DecryptsTokenThroughServiceLayer(t *testing.T) {
 	key := make([]byte, 32)
 	svc.SetSyncKeyFunc(func() ([]byte, error) { return key, nil })
 
-	encToken, err := session.EncryptToken(key, "plaintext-token")
+	encToken, err := domain.EncryptToken(key, "plaintext-token")
 	require.NoError(t, err)
 
 	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{

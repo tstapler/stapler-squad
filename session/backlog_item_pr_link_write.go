@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/sessionpr"
@@ -27,7 +28,7 @@ type itemPRLinkWrite struct {
 
 // newItemPRLinkWrite builds the write for a PR association, or nil when its URL and
 // number do not form a ref (the gate then fails closed on the unrepresented number).
-func newItemPRLinkWrite(pr PRAssociation, replaced *domain.PRRef) *itemPRLinkWrite {
+func newItemPRLinkWrite(pr backlogdto.PRAssociation, replaced *domain.PRRef) *itemPRLinkWrite {
 	ref, err := ParseItemPRRef(pr.URL, pr.Number)
 	if err != nil {
 		log.WarningLog().Printf("[Storage] item PR link not written: %v", err)
@@ -92,7 +93,7 @@ func (r *EntRepository) SetItemPRFieldsWithLink(ctx context.Context, itemID, prU
 	if err != nil {
 		return fmt.Errorf("set item PR fields: invalid item id %q: %w", itemID, err)
 	}
-	link := newItemPRLinkWrite(PRAssociation{URL: prURL, Number: prNumber, Source: source}, nil)
+	link := newItemPRLinkWrite(backlogdto.PRAssociation{URL: prURL, Number: prNumber, Source: source}, nil)
 	return r.withPRTx(ctx, "set item pr fields", func(tx *ent.Tx) error {
 		if n, uerr := tx.BacklogItem.Update().Where(backlogitem.ID(id)).SetPrURL(prURL).SetPrNumber(prNumber).Save(ctx); uerr != nil {
 			return fmt.Errorf("update item: %w", uerr)

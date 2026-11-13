@@ -986,7 +986,7 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data backlogdto.Backlog
 func (s *Storage) CreateBacklogItemForDebug(ctx context.Context, data backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	created, err := s.CreateBacklogItem(ctx, data)
 	if err == nil {
-		RecordEngineBypass(CallerDebugCreate)
+		RecordEngineBypass(backlogdto.CallerDebugCreate)
 	}
 	return created, err
 }
@@ -1145,13 +1145,13 @@ func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string,
 // guard is ignored (may be nil) when observed.Status is review — a
 // first-time recording never needs one.
 func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, prURL string, prNumber int, summary string, guard *backlogdto.PRReassignmentGuard) error {
-	return s.setPRAndTransition(ctx, observed, PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard})
+	return s.setPRAndTransition(ctx, observed, backlogdto.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard})
 }
 
 // setPRAndTransition is the single-UPDATE write shared by
 // RawSetBacklogItemPRAndTransition and GatedSetPRAndTransition; the contract
 // is documented on the former.
-func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, pr PRAssociation) error {
+func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, pr backlogdto.PRAssociation) error {
 	prURL, prNumber, summary, guard := pr.URL, pr.Number, pr.Summary, pr.Guard
 	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
@@ -1260,7 +1260,7 @@ func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL str
 // mirror follow the derived active PR. The status never changes and no override_reason
 // or reassignment guard applies. If the mirror recompute fails, the next
 // ReconcilePRPending pass repairs it.
-func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.BacklogItemData, pr PRAssociation) error {
+func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.BacklogItemData, pr backlogdto.PRAssociation) error {
 	ref, err := ParseItemPRRef(pr.URL, pr.Number)
 	if err != nil {
 		return fmt.Errorf("additive PR: %w", err)
@@ -1321,7 +1321,7 @@ func (s *Storage) HasOpenStuckReason(ctx context.Context, itemID string, reason 
 	if err != nil {
 		return false, err
 	}
-	_, ok := FindOpenStuckStateFor(rows, itemID, reason)
+	_, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	return ok, nil
 }
 

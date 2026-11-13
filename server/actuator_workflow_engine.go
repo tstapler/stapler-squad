@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -42,7 +43,7 @@ func (s *Server) handleActuatorWorkflowEngine(w http.ResponseWriter, r *http.Req
 	writeWorkflowEngineSoak(w, r, s.workflowEngineSoak.Load())
 }
 
-var soakClasses = []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem}
+var soakClasses = []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem}
 
 // soakSeries is one labeled counter in the JSON body.
 type soakSeries struct {
@@ -85,7 +86,7 @@ func writeWorkflowEngineSoak(w http.ResponseWriter, r *http.Request, src *Workfl
 	}
 	classes := soakClasses
 	if c := r.URL.Query().Get("class"); c != "" {
-		classes = []session.CallerClass{session.CallerClass(c)}
+		classes = []domain.CallerClass{domain.CallerClass(c)}
 	}
 	ledger, ledgerErr := src.Ledger()
 	rep := workflowEngineReport{GeneratedAt: now.UTC(), BinaryStartedAt: ledger.BinaryStarts}

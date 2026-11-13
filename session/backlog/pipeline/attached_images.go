@@ -9,7 +9,7 @@ import (
 	"unicode"
 
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // attachedImageRe matches the markdown BacklogItemForm inserts for an uploaded
@@ -28,7 +28,7 @@ var attachedImageExts = map[string]bool{".png": true, ".jpg": true, ".gif": true
 func WriteDescriptionSection(sb *strings.Builder, description string, maxLen int) {
 	body := description
 	if maxLen > 0 {
-		body = session.SanitizeField(description, maxLen)
+		body = domain.SanitizeField(description, maxLen)
 	}
 	fmt.Fprintf(sb, "## Description\n%s\n\n", body)
 	sb.WriteString(AttachedImagesSection(description))

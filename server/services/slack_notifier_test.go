@@ -22,6 +22,7 @@ import (
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -44,7 +45,7 @@ func slackConfigWithWebhook(t *testing.T, webhookURL string) *config.Config {
 	cfg := config.DefaultConfig()
 	key := slackTestEncryptionKey()
 	cfg.MachineEncryptionKey = base64.StdEncoding.EncodeToString(key)
-	ciphertext, err := session.EncryptToken(key, webhookURL)
+	ciphertext, err := domain.EncryptToken(key, webhookURL)
 	require.NoError(t, err)
 	cfg.Slack.WebhookURLEncrypted = ciphertext
 	return cfg
@@ -878,7 +879,7 @@ func TestResolveSlackWebhookURL_EnvOverride_TakesPrecedenceOverDecryptedValue(t 
 	cfg := config.DefaultConfig()
 	key := slackTestEncryptionKey()
 	cfg.MachineEncryptionKey = base64.StdEncoding.EncodeToString(key)
-	ciphertext, err := session.EncryptToken(key, "https://hooks.slack.com/services/STORED/CIPHERTEXT/VALUE")
+	ciphertext, err := domain.EncryptToken(key, "https://hooks.slack.com/services/STORED/CIPHERTEXT/VALUE")
 	require.NoError(t, err)
 	cfg.Slack.WebhookURLEncrypted = ciphertext
 

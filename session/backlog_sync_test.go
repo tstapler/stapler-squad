@@ -311,7 +311,7 @@ func TestSyncOne_DecryptsEncryptedConfigTokenBeforeFetch(t *testing.T) {
 	keyFunc := func() ([]byte, error) { return key, nil }
 	sl := NewSyncLoopWithKeyProvider(storage, registry, keyFunc)
 
-	encToken, err := EncryptToken(key, "plaintext-token")
+	encToken, err := domain.EncryptToken(key, "plaintext-token")
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -556,10 +556,10 @@ func TestMergeUserModifiedFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			merged, err := MergeUserModifiedFields(tt.raw, tt.newFields...)
+			merged, err := domain.MergeUserModifiedFields(tt.raw, tt.newFields...)
 			require.NoError(t, err)
 
-			got := ParseUserModifiedFields(merged)
+			got := domain.ParseUserModifiedFields(merged)
 			require.ElementsMatch(t, tt.want, got)
 			require.Len(t, got, len(tt.want), "must not contain duplicates")
 		})
@@ -601,7 +601,7 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 	// Simulate the UpdateBacklogItem RPC handler's value-diff + merge flow:
 	// the user edits Title, so touchedFields = ["title"], merged into the
 	// item's (currently empty) UserModifiedFields via the production helper.
-	merged, err := MergeUserModifiedFields(created.UserModifiedFields, "title")
+	merged, err := domain.MergeUserModifiedFields(created.UserModifiedFields, "title")
 	require.NoError(t, err)
 	newTitle := "User Edited Title"
 	_, err = storage.UpdateBacklogItem(ctx, created.ID, backlogdto.BacklogItemUpdate{
@@ -645,7 +645,7 @@ func TestDetermineBackwardSyncTarget_ReturnsArchivedForPreWorkStatuses_And_NoTar
 	for _, tt := range tests {
 		t.Run(string(tt.current), func(t *testing.T) {
 			t.Parallel()
-			target, ok := determineBackwardSyncTarget(tt.current)
+			target, ok := domain.DetermineBackwardSyncTarget(tt.current)
 			require.Equal(t, tt.wantOK, ok)
 			require.Equal(t, tt.wantTarget, target)
 		})
@@ -1259,16 +1259,16 @@ func TestSyncOne_BackwardSync_GenuinelyNewerExternalCloseIsProcessed(t *testing.
 // determineBackwardSyncTarget-returns-false branch, a different code path.
 type alwaysDenyWorkflowEngine struct{}
 
-func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ *StageConfigSnapshot) bool {
+func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ *domain.StageConfigSnapshot) bool {
 	return false
 }
-func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]GateStatus, error) {
+func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	return nil, nil
 }
-func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) error {
+func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *domain.StageConfigSnapshot) error {
 	return nil
 }
-func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *StageConfigSnapshot) []BacklogStatus {
+func (alwaysDenyWorkflowEngine) AllowedTransitions(from BacklogStatus, _ *domain.StageConfigSnapshot) []BacklogStatus {
 	return nil
 }
 
@@ -1494,13 +1494,13 @@ func TestTransitionBackward_GateOutcomes(t *testing.T) {
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
 	sl := &SyncLoop{storage: h.storage}
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	item := h.newItem(t, BacklogStatusIdea)
 
 	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
 	require.Equal(t, string(BacklogStatusIdea), h.status(t, item.ID))
 	require.Len(t, h.rep.snapshot(), 1)
-	require.Equal(t, CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
+	require.Equal(t, domain.CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
 
 	sessDisableGates(t, h)
 	require.Equal(t, backwardSyncOutcome{updated: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
@@ -1525,7 +1525,7 @@ func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testi
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	plugin := &fakeSyncPlugin{id: "fake", items: []ExternalItem{{ExternalID: "ext-1", Title: "Issue", State: "closed", IssueUpdatedAt: time.Now()}}}
 	registry := NewPluginRegistry()
 	registry.Register(plugin)
@@ -1541,5 +1541,5 @@ func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testi
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
 	require.Equal(t, string(BacklogStatusIdea), h.status(t, created.ID))
 	require.Len(t, h.rep.snapshot(), 1, "the gate, not the pre-check, must deny and report")
-	require.Equal(t, CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
+	require.Equal(t, domain.CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
 }

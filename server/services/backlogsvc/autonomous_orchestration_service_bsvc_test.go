@@ -96,6 +96,6 @@ func TestOnAutonomousDriverComplete_should_LeaveIdeaAndRaiseOneDenial_When_Syste
 	item, err := f.storage.GetBacklogItem(context.Background(), f.itemID)
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusIdea), item.Status)
-	assert.Equal(t, []string{string(session.CallerAutonomousComplete)}, deniedCallers(t, bs, f.itemID))
+	assert.Equal(t, []string{string(domain.CallerAutonomousComplete)}, deniedCallers(t, bs, f.itemID))
 	assert.Equal(t, []string{"Autonomous fix complete — status update failed"}, svctest.NotificationTitles(f.drain()), "the existing status-update-failed notification fires once")
 }
