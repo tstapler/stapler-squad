@@ -1981,7 +1981,7 @@ type transitionDeniedError struct {
 // failure such as a lost compare-and-swap.
 func isTransitionDenied(err error) bool {
 	for _, sentinel := range []error{
-		session.ErrTransitionNotAllowed, session.ErrGateNotSatisfied,
+		session.ErrTransitionNotAllowed, domain.ErrGateNotSatisfied,
 		session.ErrACRequired, session.ErrPlanRequired, session.ErrPlanArtifactsRequired, session.ErrPlanArtifactsMissing,
 		session.ErrVerdictRequired, session.ErrCodeNotOnMain, session.ErrVerdictClearRequiredForReady, session.ErrUnresolvedBlockers,
 	} {
@@ -1998,7 +1998,7 @@ func isTransitionDenied(err error) bool {
 func transitionDeniedResult(err error, from, to session.BacklogStatus) *mcpgo.CallToolResult {
 	blockedBy, hint := blockedByDefaultGuard, "satisfy the guard named in the message, then call again"
 	switch {
-	case errors.Is(err, session.ErrGateNotSatisfied):
+	case errors.Is(err, domain.ErrGateNotSatisfied):
 		blockedBy, hint = blockedByOperatorGate, hintAskOperatorApprove
 	case errors.Is(err, session.ErrTransitionNotAllowed):
 		blockedBy, hint = blockedByConfigGraph, hintAskOperatorEnable

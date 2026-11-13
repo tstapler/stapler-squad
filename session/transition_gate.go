@@ -193,7 +193,7 @@ func guardInputFor(req TransitionRequest, item *backlogdto.BacklogItemData, from
 // operator-gate status, not a distinct error type.
 func classifyGateDenial(err error) string {
 	switch {
-	case errors.Is(err, ErrGateNotSatisfied):
+	case errors.Is(err, domain.ErrGateNotSatisfied):
 		if strings.Contains(err.Error(), `"`+stageConfigUnresolvableGateID+`"`) {
 			return DeniedTargetStageRemoved
 		}

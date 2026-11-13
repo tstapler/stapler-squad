@@ -15,6 +15,7 @@ go_library(
     deps = [
         "//log",
         "//session",
+        "//session/domain",
         "//session/domain/backlogdto",
         "//session/git",
         "//session/headless",

@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -1757,7 +1758,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindAutomatedReview)).
+		SetKind(string(domain.GateKindAutomatedReview)).
 		SetStateful(true).
 		SetEnabled(true).
 		Save(ctx)

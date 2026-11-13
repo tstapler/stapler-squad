@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -220,7 +221,7 @@ func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing
 		require.NoError(t, err)
 		for _, tr := range ts {
 			if tr.ToStageSlug == string(BacklogStatusDone) {
-				_, err := repo.CreateGate(ctx, GateCreateInput{TransitionID: tr.ID, Kind: string(GateKindHumanApproval), Enabled: true})
+				_, err := repo.CreateGate(ctx, GateCreateInput{TransitionID: tr.ID, Kind: string(domain.GateKindHumanApproval), Enabled: true})
 				require.NoError(t, err)
 			}
 		}

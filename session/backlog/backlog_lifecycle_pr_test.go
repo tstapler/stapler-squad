@@ -482,7 +482,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusPRPending, session.BacklogStatusDone, session.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusPRPending, session.BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := newPRPendingTestItem(t, h.storage, 9701)
 	newTrackedWorkSession(t, h.storage, item.ID, item.RepoPath, "backlog/sess-gate-merge", "")
 
@@ -515,13 +515,13 @@ func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusReview, session.BacklogStatusPRPending, session.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusReview, session.BacklogStatusPRPending, domain.GateKindHumanApproval, nil)
 	item := h.newItem(t, session.BacklogStatusReview)
 	listener := NewBacklogLifecycleListener(h.storage)
 	pr := &github.PRInfo{HTMLURL: "https://github.com/o/r/pull/77", Number: 77}
 
 	err := listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found")
-	require.ErrorIs(t, err, session.ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 	require.True(t, session.IsGateDenial(err))
 	got, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)

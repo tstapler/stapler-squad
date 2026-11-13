@@ -259,7 +259,7 @@ func denialRigs() []denialRig {
 			return h.newItem(t, BacklogStatusReady), BacklogStatusInProgress // no approved plan
 		}},
 		{DeniedOperatorGate, func(t *testing.T, h *gateHarness) (*backlogdto.BacklogItemData, BacklogStatus) {
-			addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, GateKindHumanApproval, nil)
+			addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, domain.GateKindHumanApproval, nil)
 			return h.newItem(t, BacklogStatusIdea), BacklogStatusRefining
 		}},
 		{DeniedTargetStageRemoved, func(t *testing.T, h *gateHarness) (*backlogdto.BacklogItemData, BacklogStatus) {
@@ -330,10 +330,10 @@ func TestGatedTransition_SameEdgeDeniedForDifferentCallers_ReportsSeparately(t *
 		spec, _ := LookupTransitionCaller(caller)
 		require.Equal(t, GuardsNone, spec.Guards)
 	}
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusReady, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusReady, domain.GateKindHumanApproval, nil)
 	for _, caller := range []TransitionCaller{CallerAutonomousComplete, CallerMaybeTriggerTriage, CallerAutonomousComplete} {
 		_, err := h.storage.GatedTransition(context.Background(), TransitionRequest{Caller: caller, ItemID: item.ID, To: BacklogStatusReady})
-		require.ErrorIs(t, err, ErrGateNotSatisfied)
+		require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 	}
 	calls := h.rep.snapshot()
 	require.Len(t, calls, 3, "the gate reports every denial; the reporter suppresses repeats while a row is open")
@@ -358,15 +358,15 @@ func TestGatedTransition_OverrideReason_BypassesOperatorGatesForOperatorsOnly(t 
 	ctx := context.Background()
 	run := func(t *testing.T, caller TransitionCaller, reason string) error {
 		h := newGateHarness(t, ModeEnforce)
-		addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, GateKindHumanApproval, nil)
+		addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusRefining, domain.GateKindHumanApproval, nil)
 		item := h.newItem(t, BacklogStatusIdea)
 		_, err := h.storage.GatedTransition(ctx, TransitionRequest{Caller: caller, ItemID: item.ID, To: BacklogStatusRefining, OverrideReason: reason})
 		return err
 	}
-	require.ErrorIs(t, run(t, CallerOperatorTransitionRPC, ""), ErrGateNotSatisfied)
+	require.ErrorIs(t, run(t, CallerOperatorTransitionRPC, ""), domain.ErrGateNotSatisfied)
 	require.NoError(t, run(t, CallerOperatorTransitionRPC, "owner says so"))
-	require.ErrorIs(t, run(t, CallerMCPResumeWork, "agent insists"), ErrGateNotSatisfied, "an agent never bypasses a Configured gate")
-	require.ErrorIs(t, run(t, CallerAttachSessionToItem, "system has none"), ErrGateNotSatisfied)
+	require.ErrorIs(t, run(t, CallerMCPResumeWork, "agent insists"), domain.ErrGateNotSatisfied, "an agent never bypasses a Configured gate")
+	require.ErrorIs(t, run(t, CallerAttachSessionToItem, "system has none"), domain.ErrGateNotSatisfied)
 }
 
 // --- modes, unwired, registry ----------------------------------------------
@@ -607,14 +607,14 @@ func TestGatedSetPRAndTransition_DeniedByOperatorGate_WritesNothingAndReportsAge
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusReview, BacklogStatusPRPending, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusReview, BacklogStatusPRPending, domain.GateKindHumanApproval, nil)
 	item := h.newItem(t, BacklogStatusReview)
 	observed, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
 	err = h.storage.GatedSetPRAndTransition(ctx, TransitionRequest{Caller: CallerMCPReportPRCreated, Observed: observed},
 		PRAssociation{URL: "https://example.test/o/r/pull/9", Number: 9, Summary: "opened"})
-	require.ErrorIs(t, err, ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 
 	got, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -671,7 +671,7 @@ func TestGatedReconcileStuck_PerItemAtomicity_GatedItemStaysAndIsReported(t *tes
 	pub := &countingPublisher{}
 	h.storage.SetItemChangePublisher(pub)
 
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusInProgress, BacklogStatusReview, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusInProgress, BacklogStatusReview, domain.GateKindHumanApproval, nil)
 	approved := h.newStuckInProgressItem(t)
 	gated := h.newStuckInProgressItem(t)
 

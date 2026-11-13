@@ -405,7 +405,7 @@ func TestWriterCallersDenied_should_ReportOnceAcrossManyTicks(t *testing.T) {
 				_, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
 					Caller: tc.caller, ItemID: item.ID, To: tc.to, TriggeredBy: session.TriggeredBySystem,
 				})
-				require.ErrorIs(t, err, session.ErrGateNotSatisfied)
+				require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 			}
 
 			assert.Len(t, transitionDeniedRows(t, svc, item.ID), 1)

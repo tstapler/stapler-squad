@@ -26,7 +26,7 @@ func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller session.T
 
 func denBlock(t *testing.T, h *gateHarness, from, to session.BacklogStatus) {
 	t.Helper()
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, from, to, session.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, from, to, domain.GateKindHumanApproval, nil)
 }
 
 func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []backlogdto.OpenStuckStateData {
@@ -214,7 +214,7 @@ func (h *gateHarness) moveRaw(t *testing.T, id string, to session.BacklogStatus)
 	require.NoError(t, err)
 }
 
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, kind session.GateKind, config map[string]interface{}) {
+func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
 	tr, err := client.StageTransition.Query().

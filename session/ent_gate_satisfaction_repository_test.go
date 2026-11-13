@@ -37,7 +37,7 @@ func newTestGateSatisfactionFixture(t *testing.T) (*EntGateSatisfactionRepositor
 		SetFromStageID(fromStage.ID).SetToStageID(toStage.ID).Save(ctx)
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
-		SetTransitionID(transition.ID).SetKind(string(GateKindHumanApproval)).Save(ctx)
+		SetTransitionID(transition.ID).SetKind(string(domain.GateKindHumanApproval)).Save(ctx)
 	require.NoError(t, err)
 
 	return NewEntGateSatisfactionRepository(client), client, gate.ID

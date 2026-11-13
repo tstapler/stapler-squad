@@ -936,7 +936,7 @@ func (s *BacklogService) handleClaimError(ctx context.Context, item backlogdto.B
 				log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
 			}
 		}
-	case errors.Is(claimErr, session.ErrTransitionNotAllowed), errors.Is(claimErr, session.ErrGateNotSatisfied):
+	case errors.Is(claimErr, session.ErrTransitionNotAllowed), errors.Is(claimErr, domain.ErrGateNotSatisfied):
 		// An engine denial was already reported by the gate (transition_denied row,
 		// comment, notification) under caller claim_and_spawn.
 	default:

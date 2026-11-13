@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -273,7 +274,7 @@ func (s *SwitchableWorkflowEngine) AllowedTransitions(from BacklogStatus, snap *
 }
 
 // PendingGates implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]GateStatus, error) {
+func (s *SwitchableWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]domain.GateStatus, error) {
 	return s.operatorView().PendingGates(item, to, snap)
 }
 
@@ -363,7 +364,7 @@ func (v engineView) legacyCan(from, to BacklogStatus, snap *StageConfigSnapshot)
 	return v.unchecked || v.s.def.CanTransition(from, to, snap)
 }
 
-func (v engineView) legacyGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]GateStatus, error) {
+func (v engineView) legacyGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]domain.GateStatus, error) {
 	if v.unchecked {
 		return nil, nil
 	}
@@ -443,7 +444,7 @@ func (v engineView) AllowedTransitions(from BacklogStatus, snap *StageConfigSnap
 }
 
 // PendingGates implements WorkflowEngine.
-func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]GateStatus, error) {
+func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]domain.GateStatus, error) {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -503,7 +504,7 @@ func (v engineView) compareGateErrors(legacy error, ans gateAnswer) DivergenceCl
 	return CompareGateErrors(legacy, ans.Err)
 }
 
-func (v engineView) compareGateStatuses(legacy, enf []GateStatus) DivergenceClass {
+func (v engineView) compareGateStatuses(legacy, enf []domain.GateStatus) DivergenceClass {
 	cls := compareGateStatuses(legacy, enf)
 	if v.unchecked && cls == ClassGateExtra {
 		return classifyExtraGates(legacy, enf)
@@ -513,7 +514,7 @@ func (v engineView) compareGateStatuses(legacy, enf []GateStatus) DivergenceClas
 
 // classifyExtraGates returns guard_new when every extra unsatisfied gate is a
 // Default built-in guard, else gate_extra.
-func classifyExtraGates(legacy, enf []GateStatus) DivergenceClass {
+func classifyExtraGates(legacy, enf []domain.GateStatus) DivergenceClass {
 	d := unsatisfiedKeys(legacy)
 	for _, g := range enf {
 		if !g.Satisfied && !d[fmt.Sprintf("%s/%s", g.GateID, g.Kind)] && !strings.HasPrefix(g.GateID, builtInGateIDPrefix) {
@@ -592,7 +593,7 @@ func errText(err error) string {
 	return err.Error()
 }
 
-func unsatisfiedText(statuses []GateStatus) string {
+func unsatisfiedText(statuses []domain.GateStatus) string {
 	keys := make([]string, 0, len(statuses))
 	for k := range unsatisfiedKeys(statuses) {
 		keys = append(keys, k)
@@ -711,7 +712,7 @@ func CompareGateErrors(def, enf error) DivergenceClass {
 	}
 }
 
-func unsatisfiedKeys(statuses []GateStatus) map[string]bool {
+func unsatisfiedKeys(statuses []domain.GateStatus) map[string]bool {
 	keys := make(map[string]bool)
 	for _, g := range statuses {
 		if !g.Satisfied {
@@ -721,7 +722,7 @@ func unsatisfiedKeys(statuses []GateStatus) map[string]bool {
 	return keys
 }
 
-func compareGateStatuses(def, enf []GateStatus) DivergenceClass {
+func compareGateStatuses(def, enf []domain.GateStatus) DivergenceClass {
 	d, e := unsatisfiedKeys(def), unsatisfiedKeys(enf)
 	for k := range e {
 		if !d[k] {

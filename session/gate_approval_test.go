@@ -23,7 +23,7 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 	ctx := context.Background()
 
 	from, to := newCustomTransitionWithGates(t, client, engine,
-		[]GateKind{GateKindHumanApproval},
+		[]domain.GateKind{domain.GateKindHumanApproval},
 		[]bool{true},
 	)
 

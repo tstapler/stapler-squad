@@ -155,7 +155,7 @@ type Notifier interface {
 // already reported such a denial for a system caller.
 func IsGateDenial(err error) bool {
 	return errors.Is(err, ErrTransitionNotAllowed) ||
-		errors.Is(err, ErrGateNotSatisfied) ||
+		errors.Is(err, domain.ErrGateNotSatisfied) ||
 		errors.Is(err, ErrVerdictRequired)
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -32,7 +33,7 @@ func addApprovalGate(t *testing.T, repo *session.EntStageConfigRepository, cfg *
 	t.Helper()
 	edge := gateEdge(t, repo, cfg, from, to)
 	_, err := repo.CreateGate(t.Context(), session.GateCreateInput{
-		TransitionID: edge.ID, Kind: string(session.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
+		TransitionID: edge.ID, Kind: string(domain.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, cfg.InvalidateCache(t.Context()))

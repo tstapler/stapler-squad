@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"testing"
+)
 
 func TestGuardedTransitionAllowed(t *testing.T) {
 	t.Parallel()
@@ -74,7 +77,7 @@ func TestDefaultWorkflowEngine_PendingGates_should_TranslateTransitionGuard_When
 	if statuses[0].Satisfied {
 		t.Errorf("expected review->done with no verdict to be unsatisfied")
 	}
-	if statuses[0].Kind != GateKindStructural {
+	if statuses[0].Kind != domain.GateKindStructural {
 		t.Errorf("expected GateKindStructural, got %v", statuses[0].Kind)
 	}
 

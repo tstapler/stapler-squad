@@ -85,7 +85,7 @@ func (s *BacklogService) RecordGateApproval(
 }
 
 // gateStatusToProto converts a session.GateStatus to its proto representation.
-func gateStatusToProto(g session.GateStatus) *sessionv1.GateStatus {
+func gateStatusToProto(g domain.GateStatus) *sessionv1.GateStatus {
 	return &sessionv1.GateStatus{
 		GateId:      g.GateID,
 		Kind:        string(g.Kind),

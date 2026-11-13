@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // resolvedGate is a deep-copied-at-load-time snapshot of one enabled
@@ -17,7 +18,7 @@ import (
 // cache swap.
 type resolvedGate struct {
 	ID       uuid.UUID
-	Kind     GateKind
+	Kind     domain.GateKind
 	Stateful bool
 	// Config mirrors the persisted TransitionGate.Config column verbatim
 	// (map[string]interface{}) — added for Epic 2.4's structural-gate
@@ -115,7 +116,7 @@ func (c *stageConfigCache) refresh(ctx context.Context, repo StageConfigReposito
 		for _, g := range t.Edges.Gates {
 			gates = append(gates, resolvedGate{
 				ID:       g.ID,
-				Kind:     GateKind(g.Kind),
+				Kind:     domain.GateKind(g.Kind),
 				Stateful: g.Stateful,
 				Config:   g.Config,
 			})

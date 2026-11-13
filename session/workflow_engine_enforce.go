@@ -1,6 +1,9 @@
 package session
 
-import "sort"
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"sort"
+)
 
 // FallbackReason says why the enforce composition could not use the
 // Configured engine and answered from the Default engine instead.
@@ -195,7 +198,7 @@ func (a EnforceAnswer) validateGatesFor(pol callPolicy, item BacklogItemTransiti
 
 // pendingGates is Default's guard statuses plus the Configured operator gates
 // (omitted under override or when Configured is unusable).
-func (a EnforceAnswer) pendingGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) (statuses []GateStatus, skippedStateful bool, fallback FallbackReason, err error) {
+func (a EnforceAnswer) pendingGatesFor(pol callPolicy, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) (statuses []domain.GateStatus, skippedStateful bool, fallback FallbackReason, err error) {
 	cfg, reason := a.usableConfigured()
 	if pol.runsDefaultGuards() {
 		statuses, err = a.def.PendingGates(pol.defaultGuardInput(item), to, nil)
@@ -207,7 +210,7 @@ func (a EnforceAnswer) pendingGatesFor(pol callPolicy, item BacklogItemTransitio
 	return append(statuses, extra...), skipped, reason, nil
 }
 
-func configuredGates(cfg *ConfiguredWorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) ([]GateStatus, bool) {
+func configuredGates(cfg *ConfiguredWorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot, mode gateEvalMode) ([]domain.GateStatus, bool) {
 	if mode == evalAllGates {
 		statuses, _ := cfg.PendingGates(item, to, snap)
 		return statuses, false

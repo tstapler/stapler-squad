@@ -55,7 +55,7 @@ func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *session.ConfiguredWor
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, kind session.GateKind, config map[string]interface{}) {
+func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
 	tr, err := client.StageTransition.Query().

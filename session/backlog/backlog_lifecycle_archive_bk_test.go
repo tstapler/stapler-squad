@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -19,7 +20,7 @@ func TestArchiveStaleDoneItems_Enforce_OperatorGateHoldsItemThenArchivesWhenSati
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, session.ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusDone, session.BacklogStatusArchived, session.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusDone, session.BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	item := newDoneTestItem(t, h.storage, h.repo, maxDoneAge+1)
 
 	notifier := &sessiontest.FakeNotifier{}
@@ -48,7 +49,7 @@ func TestArchiveStaleDoneItems_Shadow_ArchivesDespiteOperatorGate(t *testing.T) 
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, session.ModeShadow)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusDone, session.BacklogStatusArchived, session.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, session.BacklogStatusDone, session.BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	item := newDoneTestItem(t, h.storage, h.repo, maxDoneAge+1)
 
 	NewBacklogLifecycleListener(h.storage).archiveStaleDoneItems(ctx)

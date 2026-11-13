@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -182,7 +183,7 @@ func (o replayGateOverlay) ListEnabledTransitions(ctx context.Context) ([]*ent.S
 		}
 		clone := *t
 		clone.Edges.Gates = append(append([]*ent.TransitionGate(nil), t.Edges.Gates...), &ent.TransitionGate{
-			ID: uuid.New(), Kind: string(GateKindHumanApproval), Config: map[string]interface{}{},
+			ID: uuid.New(), Kind: string(domain.GateKindHumanApproval), Config: map[string]interface{}{},
 			Stateful: true, OrderIndex: 1 << 20, Enabled: true,
 		})
 		out = append(out, &clone)

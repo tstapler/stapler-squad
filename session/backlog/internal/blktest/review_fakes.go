@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -95,7 +96,7 @@ func NewCustomCheckTestGate(t *testing.T, storage *session.Storage) uuid.UUID {
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindCustom)).
+		SetKind(string(domain.GateKindCustom)).
 		SetStateful(true).
 		Save(ctx)
 	require.NoError(t, err)

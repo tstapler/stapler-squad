@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -55,7 +56,7 @@ func enfSetEdge(t *testing.T, svc *BacklogService, id string, enabled bool) erro
 func enfAddApprovalGate(t *testing.T, svc *BacklogService, transitionID string, enabled bool) {
 	t.Helper()
 	_, err := svc.CreateTransitionGate(t.Context(), connect.NewRequest(&sessionv1.CreateTransitionGateRequest{
-		TransitionId: transitionID, Kind: string(session.GateKindHumanApproval), Enabled: enabled,
+		TransitionId: transitionID, Kind: string(domain.GateKindHumanApproval), Enabled: enabled,
 	}))
 	require.NoError(t, err)
 }
@@ -137,7 +138,7 @@ func TestEnforcement_OverrideReasonBypassesOperatorGateButNotDefaultSentinels(t 
 	item := enfItemAt(t, storage, session.BacklogStatusIdea)
 
 	err := enfTransition(t.Context(), svc, item.ID, session.BacklogStatusRefining, "")
-	require.ErrorIs(t, err, session.ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 	assert.Equal(t, string(session.BacklogStatusIdea), storedStatus(t, storage, item.ID))
 
 	require.NoError(t, enfTransition(t.Context(), svc, item.ID, session.BacklogStatusRefining, enfOverride))

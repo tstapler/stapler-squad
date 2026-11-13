@@ -1262,7 +1262,7 @@ type alwaysDenyWorkflowEngine struct{}
 func (alwaysDenyWorkflowEngine) CanTransition(from, to BacklogStatus, _ *StageConfigSnapshot) bool {
 	return false
 }
-func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]GateStatus, error) {
+func (alwaysDenyWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]domain.GateStatus, error) {
 	return nil, nil
 }
 func (alwaysDenyWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) error {
@@ -1494,7 +1494,7 @@ func TestTransitionBackward_GateOutcomes(t *testing.T) {
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
 	sl := &SyncLoop{storage: h.storage}
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	item := h.newItem(t, BacklogStatusIdea)
 
 	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
@@ -1525,7 +1525,7 @@ func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testi
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, BacklogStatusIdea, BacklogStatusArchived, domain.GateKindHumanApproval, nil)
 	plugin := &fakeSyncPlugin{id: "fake", items: []ExternalItem{{ExternalID: "ext-1", Title: "Issue", State: "closed", IssueUpdatedAt: time.Now()}}}
 	registry := NewPluginRegistry()
 	registry.Register(plugin)

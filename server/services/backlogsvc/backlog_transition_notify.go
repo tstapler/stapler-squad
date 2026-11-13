@@ -113,7 +113,7 @@ func (s *BacklogService) resolveTransitionDeniedLogged(ctx context.Context, item
 // transition (graph or gate) rather than a write failure; the gate has already
 // reported such a denial for an agent or system caller.
 func isEngineDenial(err error) bool {
-	return errors.Is(err, session.ErrTransitionNotAllowed) || errors.Is(err, session.ErrGateNotSatisfied)
+	return errors.Is(err, session.ErrTransitionNotAllowed) || errors.Is(err, domain.ErrGateNotSatisfied)
 }
 
 // heldByTransitionDenial is the one guard every spawn point calls (Story

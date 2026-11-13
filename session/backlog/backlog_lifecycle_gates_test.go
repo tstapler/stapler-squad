@@ -39,7 +39,7 @@ func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug st
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindCustom)).
+		SetKind(string(domain.GateKindCustom)).
 		SetStateful(true).
 		Save(ctx)
 	require.NoError(t, err)
@@ -190,7 +190,7 @@ func TestResolveCustomCheckGateContext_should_ReturnGateAndConfig_When_Transitio
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindCustom)).
+		SetKind(string(domain.GateKindCustom)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"skill": "review-feasibility"}).

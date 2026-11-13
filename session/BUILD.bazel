@@ -97,7 +97,6 @@ go_library(
         "gate_config.go",
         "gate_latch.go",
         "gate_satisfaction_repository.go",
-        "gate_status.go",
         "gate_structural.go",
         "gemini_adapter.go",
         "gesture_forward_strategy.go",

@@ -1,6 +1,9 @@
 package session
 
-import "sort"
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"sort"
+)
 
 // WorkflowEngine is the policy object that governs which backlog status
 // transitions are permitted and what guards must pass.
@@ -29,7 +32,7 @@ type WorkflowEngine interface {
 	// (deleted) can still report a synthetic blocking gate instead of
 	// silently reporting zero pending gates. DefaultWorkflowEngine ignores it
 	// entirely, same as CanTransition/AllowedTransitions.
-	PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) ([]GateStatus, error)
+	PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) ([]domain.GateStatus, error)
 	// ValidateGates runs guard rules for the transition. Returns nil if gates
 	// pass. fallback is the same optional StageConfigSnapshot documented on
 	// CanTransition/PendingGates above — DefaultWorkflowEngine ignores it,
@@ -80,7 +83,7 @@ func (e *DefaultWorkflowEngine) CanTransition(from, to BacklogStatus, _ *StageCo
 // guards) branch. fallback is unused: the built-in stage graph is static and
 // never deleted, so there is never a stage for a per-item snapshot to fall
 // back for — see CanTransition's identical fallback doc comment above.
-func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]GateStatus, error) {
+func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, _ *StageConfigSnapshot) ([]domain.GateStatus, error) {
 	id, description, ok := builtInGuardGate(item.Status, to)
 	if !ok {
 		return nil, nil
@@ -90,9 +93,9 @@ func (e *DefaultWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to
 	if !satisfied {
 		hint = "resolve the blocking condition, or supply an override reason where supported"
 	}
-	return []GateStatus{{
+	return []domain.GateStatus{{
 		GateID:      id,
-		Kind:        GateKindStructural,
+		Kind:        domain.GateKindStructural,
 		Satisfied:   satisfied,
 		Description: description,
 		ActionHint:  hint,

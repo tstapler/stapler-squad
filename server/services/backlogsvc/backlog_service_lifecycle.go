@@ -981,7 +981,7 @@ func isFailedPreconditionGuardError(guardErr error) bool {
 // (graph, Configured gate or Default guard) rather than a write failure.
 func isTransitionDenial(err error) bool {
 	return errors.Is(err, session.ErrTransitionNotAllowed) ||
-		errors.Is(err, session.ErrGateNotSatisfied) ||
+		errors.Is(err, domain.ErrGateNotSatisfied) ||
 		isFailedPreconditionGuardError(err)
 }
 

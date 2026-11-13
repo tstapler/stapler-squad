@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -60,7 +61,7 @@ func (h *systemGateHarness) blockWithGate(t *testing.T, from, to session.Backlog
 	ctx := context.Background()
 	gate, err := h.repo.CreateGate(ctx, session.GateCreateInput{
 		TransitionID: h.transitionID(t, from, to).ID,
-		Kind:         string(session.GateKindHumanApproval),
+		Kind:         string(domain.GateKindHumanApproval),
 		Enabled:      true,
 	})
 	require.NoError(t, err)
@@ -114,7 +115,7 @@ func TestForceResetItem_should_ReturnDenialAndLeaveStatus_When_OperatorGateBlock
 
 	_, err := svc.forceResetItem(context.Background(), item, session.TriggeredByUser)
 
-	require.ErrorIs(t, err, session.ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 	assert.Equal(t, "review", itemStatus(t, svc, item.ID))
 	assert.Empty(t, transitionDeniedRows(t, svc, item.ID), "an operator denial returns the error; it raises no stuck row")
 

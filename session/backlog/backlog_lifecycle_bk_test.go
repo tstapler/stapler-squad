@@ -4218,7 +4218,7 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 	require.NoError(t, err)
 	_, err = client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindAutomatedReview)).
+		SetKind(string(domain.GateKindAutomatedReview)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
@@ -4257,7 +4257,7 @@ func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransit
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindAutomatedReview)).
+		SetKind(string(domain.GateKindAutomatedReview)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).

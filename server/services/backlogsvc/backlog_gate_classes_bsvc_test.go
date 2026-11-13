@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -33,7 +34,7 @@ func (c *clsGateHarness) block(t *testing.T, from, to session.BacklogStatus) uui
 	t.Helper()
 	gate, err := c.h.repo.CreateGate(t.Context(), session.GateCreateInput{
 		TransitionID: c.h.transitionID(t, from, to).ID,
-		Kind:         string(session.GateKindHumanApproval),
+		Kind:         string(domain.GateKindHumanApproval),
 		Enabled:      true,
 	})
 	require.NoError(t, err)
@@ -91,7 +92,7 @@ func TestClassProof_Agent_GateOnInProgressToReviewDeniesRequestReviewAndApproval
 
 	err := c.move(t.Context(), session.CallerMCPRequestReview, item.ID, review)
 
-	require.ErrorIs(t, err, session.ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 	assert.Equal(t, string(inProgress), c.status(t, item.ID), "nothing was written")
 	clsDeniedRow(t, c, item.ID, session.CallerMCPRequestReview, session.SystemEdge{From: inProgress, To: review})
 
@@ -140,7 +141,7 @@ func TestClassProof_System_GateOnPRPendingToDoneDeniesTheMergeAdvanceUntilApprov
 
 	err := c.move(t.Context(), session.CallerReconcilePRPendingMerge, item.ID, done)
 
-	require.ErrorIs(t, err, session.ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 	assert.Equal(t, string(prPending), c.status(t, item.ID))
 	clsDeniedRow(t, c, item.ID, session.CallerReconcilePRPendingMerge, session.SystemEdge{From: prPending, To: done})
 
@@ -204,7 +205,7 @@ func TestEveryRegisteredCaller_DeniedByOperatorGate_IsReportedNotSwallowed(t *te
 
 			err := c.move(t.Context(), spec.Name, item.ID, to)
 
-			require.ErrorIs(t, err, session.ErrGateNotSatisfied, "%s %s->%s", spec.Name, from, to)
+			require.ErrorIs(t, err, domain.ErrGateNotSatisfied, "%s %s->%s", spec.Name, from, to)
 			assert.Equal(t, string(from), c.status(t, item.ID), "nothing was written")
 			clsDeniedRow(t, c, item.ID, spec.Name, edge)
 

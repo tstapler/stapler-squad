@@ -128,7 +128,7 @@ func TestSwitchableWorkflowEngine_ShadowNeverDivergesOnOrdinaryGuardDenial_WhenS
 func TestSwitchableWorkflowEngine_ShadowCountsGateExtra_WhenOperatorAddsStructuralGate(t *testing.T) {
 	t.Parallel()
 	h := newSeededSelectorHarness(t, ModeShadow)
-	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReady, BacklogStatusInProgress, GateKindStructural,
+	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReady, BacklogStatusInProgress, domain.GateKindStructural,
 		map[string]interface{}{"check_id": StructuralCheckACComplete})
 	item := BacklogItemTransitionInput{Status: BacklogStatusReady, SkipPlanning: true, PlanArtifactsPath: "/plan"}
 	require.NoError(t, NewDefaultWorkflowEngine().ValidateGates(item, BacklogStatusInProgress, nil), "fixture: Default must pass")
@@ -216,10 +216,10 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 	t.Run("operator gate is bypassed by override but blocks without it", func(t *testing.T) {
 		t.Parallel()
 		h := newSeededSelectorHarness(t, ModeEnforce)
-		addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReview, BacklogStatusDone, GateKindHumanApproval, nil)
+		addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReview, BacklogStatusDone, domain.GateKindHumanApproval, nil)
 
 		item := passingReviewItem()
-		require.ErrorIs(t, h.sel.ValidateGates(item, BacklogStatusDone, nil), ErrGateNotSatisfied)
+		require.ErrorIs(t, h.sel.ValidateGates(item, BacklogStatusDone, nil), domain.ErrGateNotSatisfied)
 		item.OverrideReason = "ship per owner"
 		require.NoError(t, h.sel.ValidateGates(item, BacklogStatusDone, nil))
 	})
@@ -231,7 +231,7 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 		item := BacklogItemTransitionInput{Status: "gone-stage"}
 
 		require.True(t, h.sel.CanTransition("gone-stage", BacklogStatusReady, snap))
-		require.ErrorIs(t, h.sel.ValidateGates(item, BacklogStatusReady, snap), ErrGateNotSatisfied)
+		require.ErrorIs(t, h.sel.ValidateGates(item, BacklogStatusReady, snap), domain.ErrGateNotSatisfied)
 		item.OverrideReason = "stage deleted, forcing"
 		require.NoError(t, h.sel.ValidateGates(item, BacklogStatusReady, snap))
 	})
@@ -284,10 +284,10 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 func TestSwitchableWorkflowEngine_LogsFromToReason_WhenTransitionDeniedByGraphOperatorGateOrDefaultGuard(t *testing.T) {
 	t.Parallel()
 	h := newSeededSelectorHarness(t, ModeEnforce)
-	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReady, BacklogStatusQueued, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReady, BacklogStatusQueued, domain.GateKindHumanApproval, nil)
 
 	require.False(t, h.sel.CanTransition(BacklogStatusIdea, BacklogStatusDone, nil))
-	require.ErrorIs(t, h.sel.ValidateGates(BacklogItemTransitionInput{Status: BacklogStatusReady}, BacklogStatusQueued, nil), ErrGateNotSatisfied)
+	require.ErrorIs(t, h.sel.ValidateGates(BacklogItemTransitionInput{Status: BacklogStatusReady}, BacklogStatusQueued, nil), domain.ErrGateNotSatisfied)
 	require.ErrorIs(t, h.sel.ValidateGates(BacklogItemTransitionInput{Status: BacklogStatusReview}, BacklogStatusDone, nil), domain.ErrVerdictRequired)
 
 	lines := strings.Join(h.infos.snapshot(), "\n")
@@ -309,7 +309,7 @@ func TestSwitchableWorkflowEngine_ShadowDoesNoStatefulGateIo_WhenStatefulGateOnE
 	cfg, err := NewConfiguredWorkflowEngine(NewEntStageConfigRepository(repo.Client), gateRepo, nil)
 	require.NoError(t, err)
 	from, to := newCustomTransitionWithGates(t, repo.Client, cfg,
-		[]GateKind{GateKindHumanApproval, GateKindAutomatedReview, GateKindCustom}, []bool{true, true, true})
+		[]domain.GateKind{domain.GateKindHumanApproval, domain.GateKindAutomatedReview, domain.GateKindCustom}, []bool{true, true, true})
 	h := newSelectorHarness(t, ModeShadow, cfg)
 	item := BacklogItemTransitionInput{Status: from, ItemID: uuid.NewString()}
 
@@ -479,16 +479,16 @@ func TestEnforceAnswerPolicy_OverrideTruthTable_PerClassAndGuardPolicy(t *testin
 		{"system with no guards passes", ClassSystem, GuardsNone, false, nil},
 		// A Configured operator gate: only the operator's override bypasses it.
 		{"operator override bypasses the Configured gate", ClassOperator, GuardsBuiltIn, true, nil},
-		{"agent override never bypasses the Configured gate", ClassAgent, GuardsBuiltIn, true, ErrGateNotSatisfied},
-		{"system hits the Configured gate", ClassSystem, GuardsNone, true, ErrGateNotSatisfied},
-		{"unknown class fails closed to agent", CallerClass("bogus"), GuardsBuiltIn, true, ErrGateNotSatisfied},
+		{"agent override never bypasses the Configured gate", ClassAgent, GuardsBuiltIn, true, domain.ErrGateNotSatisfied},
+		{"system hits the Configured gate", ClassSystem, GuardsNone, true, domain.ErrGateNotSatisfied},
+		{"unknown class fails closed to agent", CallerClass("bogus"), GuardsBuiltIn, true, domain.ErrGateNotSatisfied},
 	}
 	for _, tc := range rows {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
 			if tc.gated {
-				addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReview, BacklogStatusDone, GateKindHumanApproval, nil)
+				addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReview, BacklogStatusDone, domain.GateKindHumanApproval, nil)
 			}
 			err := viewFor(h, tc.class, tc.guards).ValidateGates(noPass, BacklogStatusDone, nil)
 			if tc.want == nil {
@@ -543,7 +543,7 @@ func TestEnforceAnswerPolicy_AgentOverrideFreesOnlyReviewAndPRPendingToReadyAndD
 func TestEnforceAnswerPolicy_PendingGatesOmitConfiguredGatesOnlyForOperatorOverride(t *testing.T) {
 	t.Parallel()
 	h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
-	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReview, BacklogStatusDone, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReview, BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := passingReviewItem()
 	item.OverrideReason = "owner approved"
 
@@ -622,7 +622,7 @@ func TestShadow_UncheckedCallerOperatorGate_IsGateExtraNotGuardNew(t *testing.T)
 	t.Parallel()
 	rec := newClassedShadow()
 	h := shadowAll(newSeededSelectorHarness(t, ModeShadow, WithShadowRecorder(rec)))
-	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReady, BacklogStatusInProgress, GateKindStructural,
+	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReady, BacklogStatusInProgress, domain.GateKindStructural,
 		map[string]interface{}{"check_id": StructuralCheckACComplete})
 	spec, _ := LookupTransitionCaller(CallerMCPResumeWork) // agent, unchecked, ready->in_progress, built-in guards
 	v := h.sel.ForCaller(spec)
@@ -694,10 +694,10 @@ func TestModeFor_FallsBackToOperatorModeAndCapsOtherClassesAtShadow_WhenSourceIs
 func TestOperatorMethods_AreTheOperatorPolicyView(t *testing.T) {
 	t.Parallel()
 	h := enforceAll(newSeededSelectorHarness(t, ModeEnforce))
-	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReview, BacklogStatusDone, GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReview, BacklogStatusDone, domain.GateKindHumanApproval, nil)
 	item := passingReviewItem()
 	item.OverrideReason = "owner approved"
 	require.NoError(t, h.sel.ValidateGates(item, BacklogStatusDone, nil))
 	require.NoError(t, viewFor(h, ClassOperator, GuardsBuiltIn).ValidateGates(item, BacklogStatusDone, nil))
-	require.ErrorIs(t, viewFor(h, ClassAgent, GuardsBuiltIn).ValidateGates(item, BacklogStatusDone, nil), ErrGateNotSatisfied)
+	require.ErrorIs(t, viewFor(h, ClassAgent, GuardsBuiltIn).ValidateGates(item, BacklogStatusDone, nil), domain.ErrGateNotSatisfied)
 }
