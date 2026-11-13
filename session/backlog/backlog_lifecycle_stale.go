@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -104,7 +105,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 				maxNoProgress = def.MaxNoProgressDuration
 			}
 		}
-		if !staleWork(lastProgress, time.Now(), maxNoProgress) {
+		if !stuck.StaleWork(lastProgress, time.Now(), maxNoProgress) {
 			continue
 		}
 		stillStale[item.ID] = true
@@ -285,7 +286,7 @@ func (l *BacklogLifecycleListener) reconcileBlockedByDependencyResolution(ctx co
 //
 // Deliberately does NOT add a second liveness check before dispatching
 // (e.g. re-querying Instance.TmuxAlive/PaneProcessDead here) — the caller
-// (reconcileStaleWorkSessions) already reconfirmed staleWork() true this
+// (reconcileStaleWorkSessions) already reconfirmed stuck.StaleWork() true this
 // tick, and RemediationDue's own backoff (minimum 30 minutes after the
 // first notification) has independently elapsed by the time due=true. A
 // second, independently-computed liveness heuristic here could disagree

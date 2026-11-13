@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -1533,7 +1534,7 @@ func duplicateRefPending(item *backlogdto.BacklogItemData) string {
 	if item.Status != string(session.BacklogStatusReview) {
 		return ""
 	}
-	return backlog.PendingDuplicateRef(item.ItemSessions)
+	return stuck.PendingDuplicateRef(item.ItemSessions)
 }
 
 // SetReviewSpawnGuard wires the lifecycle listener's review-spawn guard into the

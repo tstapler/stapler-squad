@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 )
 
 // TestDefaultLivenessEngine_should_ReturnThreeHourFifteenMinuteThreshold_When_StageIsIdeaDefaultMode
@@ -45,7 +46,7 @@ func TestDefaultLivenessEngine_should_ReturnTwoHourHeartbeat_When_StageIsInProgr
 // TestDefaultLivenessEngine_should_ReturnCycleFrequencyThreeInTwentyFourHours_When_StageIsReviewDefaultMode
 // covers Shape C (bouncing), keyed to BacklogStatusReview per this file's
 // documented judgment call (see NewDefaultLivenessEngine's comment). Values
-// must match today's bounceThreshold/bounceLookback (session/stuck_decisions.go).
+// must match today's stuck.BounceThreshold/stuck.BounceLookback (session/backlog/stuck/decisions.go).
 func TestDefaultLivenessEngine_should_ReturnCycleFrequencyThreeInTwentyFourHours_When_StageIsReviewDefaultMode(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
@@ -54,9 +55,9 @@ func TestDefaultLivenessEngine_should_ReturnCycleFrequencyThreeInTwentyFourHours
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindCycleFrequency, def.Kind)
 	assert.Equal(t, 3, def.CycleThreshold)
-	assert.Equal(t, bounceThreshold, def.CycleThreshold)
+	assert.Equal(t, stuck.BounceThreshold, def.CycleThreshold)
 	assert.Equal(t, 24*time.Hour, def.CycleLookback)
-	assert.Equal(t, bounceLookback, def.CycleLookback)
+	assert.Equal(t, stuck.BounceLookback, def.CycleLookback)
 }
 
 // TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageHasNoTimeoutConcept

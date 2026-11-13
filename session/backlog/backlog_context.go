@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -85,25 +86,25 @@ func reviewHadVerdictMostRecentFirst(priorSessions []backlogdto.ItemSessionSumma
 
 // escalationNotice returns an explicit "try something different" instruction
 // when priorSessions' review history shows a streak of exactly
-// RepeatedFailureEscalationThreshold consecutive identical failures — the ONE
+// stuck.RepeatedFailureEscalationThreshold consecutive identical failures — the ONE
 // escalated retry AutoReopenAfterFailedReview grants before parking the item
-// (see RepeatedFailureParkThreshold's doc comment in stuck_decisions.go).
+// (see stuck.RepeatedFailureParkThreshold's doc comment in stuck/decisions.go).
 // Requires no new field on SpawnSessionFromItemRequest: it recomputes the
 // identical streak AutoReopenAfterFailedReview already inspected, from the
 // same priorSessions history every prompt-building call site already passes
 // in. Deliberately fires only at streak == threshold, not >=: once the
-// streak reaches RepeatedFailureParkThreshold, AutoReopenAfterFailedReview
+// streak reaches stuck.RepeatedFailureParkThreshold, AutoReopenAfterFailedReview
 // parks the item and never respawns at all, so this never needs to render a
 // "third strike" framing.
 func escalationNotice(priorSessions []backlogdto.ItemSessionSummary) string {
 	verdicts := session.ReviewVerdictSummariesMostRecentFirst(priorSessions)
-	if streak := ReviewFailureStreakLen(verdicts); streak == RepeatedFailureEscalationThreshold {
+	if streak := stuck.ReviewFailureStreakLen(verdicts); streak == stuck.RepeatedFailureEscalationThreshold {
 		return fmt.Sprintf(
 			"## Escalation Notice\nThe last %d review attempts failed for the identical reason: %q. Repeating the same fix will fail again. Before writing any code, diagnose why the previous fix did not resolve this, and take a genuinely different approach this time (different root cause, different files touched, or a different fix strategy).\n\n",
 			streak, session.SanitizeField(verdicts[0].Summary, 300))
 	}
 
-	if streak := NoVerdictStreakLen(reviewHadVerdictMostRecentFirst(priorSessions)); streak == RepeatedFailureEscalationThreshold {
+	if streak := stuck.NoVerdictStreakLen(reviewHadVerdictMostRecentFirst(priorSessions)); streak == stuck.RepeatedFailureEscalationThreshold {
 		return fmt.Sprintf(
 			"## Escalation Notice\nThe last %d review sessions exited without ever recording a verdict (crash, kill, or turn cap). Before repeating the same review flow, consider whether the diff is too large, the worktree is broken, or the review step is hanging — and adjust your approach accordingly.\n\n",
 			streak)

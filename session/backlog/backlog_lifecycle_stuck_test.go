@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -26,8 +27,8 @@ import (
 
 // backdateStuckFirstDetected sets first_detected_at on the open
 // BacklogStuckState row for (itemID, reason) to when, so tests can simulate a
-// condition that has held past a pure-fn threshold (stuckPRReady,
-// abandonedReview) without sleeping in real time.
+// condition that has held past a pure-fn threshold (stuck.PRReady,
+// stuck.AbandonedReview) without sleeping in real time.
 func backdateStuckFirstDetected(t *testing.T, er *session.EntRepository, itemID string, reason domain.StuckReason, when time.Time) {
 	t.Helper()
 	parsedID, err := uuid.Parse(itemID)
@@ -837,7 +838,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRe
 		"tick 1 is a fresh detection and must log the WARNING once")
 
 	// Between ticks: a "bouncing" stuck row opens mid-backoff — mirrors
-	// reconcileBouncingItems tripping its own bounceThreshold independently.
+	// reconcileBouncingItems tripping its own stuck.BounceThreshold independently.
 	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bounced previously")
 	require.NoError(t, err)
 	future := time.Now().Add(2 * time.Hour)
@@ -2900,7 +2901,7 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 		require.NoError(t, err)
 	}
 
-	count, err := er.CountReviewCyclesSince(ctx, item.ID, time.Now().Add(-bounceLookback))
+	count, err := er.CountReviewCyclesSince(ctx, item.ID, time.Now().Add(-stuck.BounceLookback))
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 
@@ -2911,8 +2912,8 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 }
 
 // TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCyclesIn24hNoPass
-// verifies an item that bounced in_progress<->review >= bounceThreshold times
-// within bounceLookback with no PASS verdict is flagged bouncing and notified
+// verifies an item that bounced in_progress<->review >= stuck.BounceThreshold times
+// within stuck.BounceLookback with no PASS verdict is flagged bouncing and notified
 // once.
 func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCyclesIn24hNoPass(t *testing.T) {
 	t.Parallel()
@@ -3013,7 +3014,7 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 }
 
 // TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass verifies
-// an item with fewer than bounceThreshold cycles, and one with a recorded
+// an item with fewer than stuck.BounceThreshold cycles, and one with a recorded
 // PASS verdict, are not flagged bouncing.
 func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *testing.T) {
 	t.Parallel()
@@ -3040,7 +3041,7 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, open, "an item with fewer than bounceThreshold cycles must not be flagged")
+	assert.Empty(t, open, "an item with fewer than stuck.BounceThreshold cycles must not be flagged")
 }
 
 // TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerged
@@ -3100,7 +3101,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged", "")
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
-	// shape isBouncing flags.
+	// shape stuck.IsBouncing flags.
 	for i := 0; i < 3; i++ {
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
@@ -3164,7 +3165,7 @@ func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingRe
 	require.True(t, applied)
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
-	// shape isBouncing flags (mirrors the sibling merged-PR test above).
+	// shape stuck.IsBouncing flags (mirrors the sibling merged-PR test above).
 	for i := 0; i < 3; i++ {
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
@@ -3451,7 +3452,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
-	// shape isBouncing flags.
+	// shape stuck.IsBouncing flags.
 	for i := 0; i < 3; i++ {
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
@@ -4830,17 +4831,17 @@ func TestRunStuckDetector_should_recoverAndLogPanic_When_DetectorPanics(t *testi
 // structural regression test: the pure decision functions must exist with the
 // documented signatures and behavior (rather than threshold arithmetic being
 // re-inlined into a reconciler entangled with a DB read). Exercised via the
-// package-level pure-function unit tests in stuck_decisions_test.go; this
+// package-level pure-function unit tests in stuck/decisions_test.go; this
 // test asserts the specific boundary values the reconcilers rely on so a
 // future inlining regression (threshold moved back into a reconciler with a
 // different value) would be caught here too.
 func TestReconcilers_should_delegateThresholdDecisionsToPureFns_When_Reviewed(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.True(t, stuckPRReady(now.Add(-prReadyThreshold-time.Minute), now))
-	assert.True(t, abandonedReview(now.Add(-abandonedReviewGrace-time.Minute), now))
-	assert.True(t, staleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now, maxWorkSessionStaleness))
-	assert.True(t, isBouncing(bounceThreshold, bounceThreshold, false))
+	assert.True(t, stuck.PRReady(now.Add(-stuck.PRReadyThreshold-time.Minute), now))
+	assert.True(t, stuck.AbandonedReview(now.Add(-stuck.AbandonedReviewGrace-time.Minute), now))
+	assert.True(t, stuck.StaleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now, maxWorkSessionStaleness))
+	assert.True(t, stuck.IsBouncing(stuck.BounceThreshold, stuck.BounceThreshold, false))
 }
 
 // newDoneTestItem creates a BacklogItem in "done" status and backdates a
@@ -5341,7 +5342,7 @@ func TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_Blocker
 // verifies the escalate branch: an item with 2 simultaneously open,
 // independent (non-coupled) non-escalation reasons gets a durable
 // multiple_reasons row within one tick, but is NOT notified on the same tick
-// that created the row (multiReasonEscalationNotifyReady's dwell gate).
+// that created the row (stuck.MultiReasonEscalationNotifyReady's dwell gate).
 func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_ThresholdFirstCrossed(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -5378,7 +5379,7 @@ func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_Th
 
 // TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen
 // verifies the notify branch: once the multiple_reasons row has been open
-// past multiReasonNotifyDwell and the condition still holds, the next tick
+// past stuck.MultiReasonNotifyDwell and the condition still holds, the next tick
 // notifies exactly once and marks the row notified.
 func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen(t *testing.T) {
 	t.Parallel()
@@ -5430,7 +5431,7 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 // TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold
 // verifies the de-escalate branch: once one of the two underlying reasons
-// resolves (dropping the non-escalation count below multiReasonThreshold),
+// resolves (dropping the non-escalation count below stuck.MultiReasonThreshold),
 // the next tick resolves the multiple_reasons row.
 func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold(t *testing.T) {
 	t.Parallel()
@@ -5821,8 +5822,8 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDur
 
 // TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThreeCyclesInDefaultLookback
 // is Story 1.4.3's zero-regression happy path for Shape C (bouncing): with no LivenessEngine
-// override configured, an item with bounceThreshold (3) in_progress<->review cycles within
-// bounceLookback (24h) and no PASS verdict is still marked bouncing, exactly as before.
+// override configured, an item with stuck.BounceThreshold (3) in_progress<->review cycles within
+// stuck.BounceLookback (24h) and no PASS verdict is still marked bouncing, exactly as before.
 func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThreeCyclesInDefaultLookback(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -5835,7 +5836,7 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
-	for i := 0; i < bounceThreshold; i++ {
+	for i := 0; i < stuck.BounceThreshold; i++ {
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
@@ -5848,7 +5849,7 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBouncing)
-	assert.True(t, ok, "3 cycles in 24h with no PASS must still be flagged — unchanged from today's bounceThreshold=3/bounceLookback=24h")
+	assert.True(t, ok, "3 cycles in 24h with no PASS must still be flagged — unchanged from today's stuck.BounceThreshold=3/stuck.BounceLookback=24h")
 }
 
 // TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDefaultModeSibling_When_PerItemOverrideRaisesCycleThreshold
@@ -5856,10 +5857,10 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 // corrected key, see this file's Epic 1.4 Story 1.4.3 plan-correction note in
 // project_plans/backlog-custom-workflow-stages/implementation/plan.md) and proves resolution
 // is per-item, not a package-level override: an sdd-mode item with 4 cycles in 30h (past the
-// OLD bounceThreshold=3 but under the NEW CycleThreshold=5) is NOT flagged, while a
+// OLD stuck.BounceThreshold=3 but under the NEW CycleThreshold=5) is NOT flagged, while a
 // default-mode item with the IDENTICAL 4-cycles-in-30h shape, in the SAME reconcile tick, IS
 // still flagged via CachingLivenessEngine's fallback to DefaultLivenessEngine's built-in
-// bounceThreshold=3 for the unconfigured ("review", PipelineModeDefault) pair.
+// stuck.BounceThreshold=3 for the unconfigured ("review", PipelineModeDefault) pair.
 func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDefaultModeSibling_When_PerItemOverrideRaisesCycleThreshold(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -5910,7 +5911,7 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 	_, sddFlagged := session.FindOpenStuckStateFor(open, sddItem.ID, domain.StuckReasonBouncing)
 	_, defaultFlagged := session.FindOpenStuckStateFor(open, defaultItem.ID, domain.StuckReasonBouncing)
 	assert.False(t, sddFlagged, "sdd-mode item with 4 cycles must not be flagged under the per-item CycleThreshold=5 override")
-	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's DefaultLivenessEngine fallback (bounceThreshold=3) — proving per-item, not package-level, resolution")
+	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's DefaultLivenessEngine fallback (stuck.BounceThreshold=3) — proving per-item, not package-level, resolution")
 }
 
 func TestReconcileOrphanedTriageItems_should_includeErrorDetailInContext_When_EndReasonOther(t *testing.T) {

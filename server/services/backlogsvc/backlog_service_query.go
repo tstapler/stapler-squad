@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -606,7 +607,7 @@ func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []backlogdto.It
 	if p.Status != string(session.BacklogStatusReview) {
 		return
 	}
-	if ref := backlog.PendingDuplicateRef(sessions); ref != "" {
+	if ref := stuck.PendingDuplicateRef(sessions); ref != "" {
 		p.DuplicatePending = true
 		p.DuplicateRef = ref
 	}

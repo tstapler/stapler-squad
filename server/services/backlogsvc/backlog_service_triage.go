@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -251,10 +252,10 @@ func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, c
 	if s.storage == nil {
 		return
 	}
-	flip := backlog.IsFlakyVerdictFlipFlop(recentVerdicts)
+	flip := stuck.IsFlakyVerdictFlipFlop(recentVerdicts)
 	testOnly := false
 	if repoPath != "" {
-		testOnly = backlog.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, backlog.TestOnlyReworkMinAttempts))
+		testOnly = stuck.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, stuck.TestOnlyReworkMinAttempts))
 	}
 	if !flip && !testOnly {
 		return
@@ -1977,11 +1978,11 @@ func (s *BacklogService) evaluateReviewFailureBreakers(ctx context.Context, item
 	itemID := item.ID
 	if verdictErr != nil {
 		log.Warn("[AutoReopenAfterFailedReview] GetRecentReviewVerdictSummaries failed", "item", itemID, "error", verdictErr)
-	} else if streak := backlog.ReviewFailureStreakLen(recentVerdicts); streak >= backlog.RepeatedFailureParkThreshold {
+	} else if streak := stuck.ReviewFailureStreakLen(recentVerdicts); streak >= stuck.RepeatedFailureParkThreshold {
 		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", streak)
 		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
 		return escalateRetryReason, true
-	} else if streak >= backlog.RepeatedFailureEscalationThreshold {
+	} else if streak >= stuck.RepeatedFailureEscalationThreshold {
 		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly; granting one escalated retry before parking", "item", itemID, "streak", streak)
 		escalateRetryReason = recentVerdicts[0].Summary
 	}
@@ -2006,13 +2007,13 @@ func (s *BacklogService) evaluateReviewFailureBreakers(ctx context.Context, item
 	// picking one breaker over evaluating both isn't worth the added
 	// complexity here.
 	if escalateRetryReason == "" {
-		noVerdictStreak := backlog.NoVerdictStreakLen(recentReviewHadVerdict(sessions, backlog.RepeatedFailureParkThreshold))
+		noVerdictStreak := stuck.NoVerdictStreakLen(recentReviewHadVerdict(sessions, stuck.RepeatedFailureParkThreshold))
 		switch {
-		case noVerdictStreak >= backlog.RepeatedFailureParkThreshold:
+		case noVerdictStreak >= stuck.RepeatedFailureParkThreshold:
 			log.Info("[AutoReopenAfterFailedReview] review sessions all exited without ever writing a verdict (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", noVerdictStreak)
 			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
 			return escalateRetryReason, true
-		case noVerdictStreak >= backlog.RepeatedFailureEscalationThreshold:
+		case noVerdictStreak >= stuck.RepeatedFailureEscalationThreshold:
 			log.Info("[AutoReopenAfterFailedReview] review sessions exited without ever writing a verdict; granting one escalated retry before parking", "item", itemID, "streak", noVerdictStreak)
 			escalateRetryReason = "review session exited without ever writing a verdict, twice in a row"
 		}
@@ -2103,7 +2104,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// entries — enough for ReviewFailureStreakLen to observe the streak up to
 	// (and including) the park threshold itself; a streak can never be
 	// reported past that value since the query never returns more rows than that.
-	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, backlog.RepeatedFailureParkThreshold)
+	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, stuck.RepeatedFailureParkThreshold)
 
 	// Story 3.2.1: purely informational — evaluated unconditionally, on every
 	// call, regardless of whether a circuit breaker below trips and returns

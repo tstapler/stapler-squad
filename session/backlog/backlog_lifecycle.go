@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -241,7 +242,7 @@ type BacklogLifecycleListener struct {
 
 	// livenessEngine resolves per-stage/per-pipeline-mode stuck-detection thresholds (Epic 1.4 of
 	// backlog-custom-workflow-stages), replacing the flat maxHeadlessTriageSessionStaleness/
-	// maxWorkSessionStaleness/bounceThreshold/bounceLookback constants at their reconcile* call
+	// maxWorkSessionStaleness/stuck.BounceThreshold/stuck.BounceLookback constants at their reconcile* call
 	// sites. Optional — nil (the default for every constructor except
 	// NewBacklogLifecycleListenerWithPool, production's only caller) falls back to each call
 	// site's literal constant, unchanged from pre-Epic-1.4 behavior. Set once at construction,
@@ -1761,7 +1762,7 @@ func (l *BacklogLifecycleListener) liveHoldFromRows(ctx context.Context, er *ses
 }
 
 // reconcileBouncingItems flags items that have crossed in_progress->review
-// >= bounceThreshold times within bounceLookback with no recorded PASS
+// >= stuck.BounceThreshold times within stuck.BounceLookback with no recorded PASS
 // verdict — a non-converging rework cycle that never hits the rework cap
 // (root cause #4). Before flagging, it first checks whether the item's
 // linked PR has already merged (including a manual merge outside the app's
@@ -1793,8 +1794,8 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// definition, and a LivenessDefinition is a tagged union with exactly one Kind per
 		// stage — see this file's Epic 1.4 plan-correction note in
 		// project_plans/backlog-custom-workflow-stages/implementation/plan.md's Story 1.4.3.
-		cycleThreshold := bounceThreshold
-		cycleLookback := bounceLookback
+		cycleThreshold := stuck.BounceThreshold
+		cycleLookback := stuck.BounceLookback
 		if l.livenessEngine != nil {
 			if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusReview, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 				cycleThreshold = def.CycleThreshold
@@ -1911,7 +1912,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		}
 		hasPass := latestOutcome == string(session.ReviewOutcomePass)
 
-		if !isBouncing(count, cycleThreshold, hasPass) {
+		if !stuck.IsBouncing(count, cycleThreshold, hasPass) {
 			continue
 		}
 
@@ -2126,7 +2127,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 			// resolved by its own detector (reconcileMultiReasonEscalation's
 			// de-escalate branch), not a status-anchor case here — its
 			// "resolved" condition is "count of other open reasons dropped
-			// below multiReasonThreshold", which has no single item-status
+			// below stuck.MultiReasonThreshold", which has no single item-status
 			// anchor to check.
 			continue
 		}
@@ -2138,7 +2139,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 }
 
 // reconcileMultiReasonEscalation groups every open BacklogStuckState row by
-// item and, for any item with multiReasonThreshold or more simultaneously
+// item and, for any item with stuck.MultiReasonThreshold or more simultaneously
 // open *non-escalation* stuck reasons, marks/refreshes a durable
 // domain.StuckReasonMultipleReasons row (Signal 1 — see plan.md Epic 1.2).
 // Computed fresh from FindOpenStuckStates every tick (never a cached count,
@@ -2164,7 +2165,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 //     Failure #1, P1).
 //
 // Notification is dwell-gated and notify-once per row lifetime
-// (multiReasonEscalationNotifyReady, keyed off the row's FirstDetectedAt) so
+// (stuck.MultiReasonEscalationNotifyReady, keyed off the row's FirstDetectedAt) so
 // a single-tick threshold crossing doesn't notify immediately. De-escalation
 // (ResolveStuck) is NOT dwell-gated — it fires the same tick the count first
 // drops below threshold (see plan.md Pattern Decisions' "Flap control"
@@ -2267,7 +2268,7 @@ func excludeStructurallyCoupledAbandonedReview(set multiReasonRowSet) []backlogd
 // caller can stop processing the item, or whether escalation should still be
 // evaluated (false).
 func (l *BacklogLifecycleListener) deescalateMultiReasonIfNeeded(ctx context.Context, er *session.EntRepository, itemID string, hasExistingRow bool, openReasonsCount int) bool {
-	if isMultiReasonEscalated(openReasonsCount) {
+	if stuck.IsMultiReasonEscalated(openReasonsCount) {
 		return false
 	}
 	if hasExistingRow {
@@ -2294,7 +2295,7 @@ func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx contex
 	if existingRow.NotifiedAt != nil {
 		return
 	}
-	if !multiReasonEscalationNotifyReady(existingRow.FirstDetectedAt, time.Now()) {
+	if !stuck.MultiReasonEscalationNotifyReady(existingRow.FirstDetectedAt, time.Now()) {
 		return
 	}
 	l.notify(itemID,

@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -785,7 +786,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *t
 // called twice in a row on the same item, each triggering Run with an empty
 // committed diff and a duplicate_ref= marker. Before the fix, each call recorded
 // the guard's identical static FAIL summary and the second call tripped
-// IsRepeatedFailure, permanently parking the item in review. Confirms neither call
+// stuck.IsRepeatedFailure, permanently parking the item in review. Confirms neither call
 // produces that FAIL, so the breaker never even sees two comparable verdicts.
 func TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims(t *testing.T) {
 	t.Parallel()
@@ -816,7 +817,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims(t *te
 	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, item.ID, 5)
 	require.NoError(t, err)
 	assert.Empty(t, recent, "two duplicate-claim calls must never produce a comparable pair of FAIL verdicts")
-	assert.False(t, IsRepeatedFailure(recent), "IsRepeatedFailure must never trip for a duplicate claim")
+	assert.False(t, stuck.IsRepeatedFailure(recent), "stuck.IsRepeatedFailure must never trip for a duplicate claim")
 }
 
 // TestParseDuplicateRef covers backlog item e2373931 AC4: parseDuplicateRef must
@@ -1234,7 +1235,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 }
 
 // TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaIsRepeatedFailure
-// confirms IsRepeatedFailure's exact-summary-match dedup (session/stuck_decisions.go)
+// confirms stuck.IsRepeatedFailure's exact-summary-match dedup (session/backlog/stuck/decisions.go)
 // still trips against the new worktree-identity-mismatch verdict text: two consecutive
 // review attempts against the same unresolved mismatch must produce byte-identical
 // Summary strings, so the existing rework-cap backstop is not silently defeated by the
@@ -1293,7 +1294,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 	recent, err := storage.GetRecentReviewVerdictSummaries(ctx, createdItemData.ID, 2)
 	require.NoError(t, err)
 	require.Len(t, recent, 2)
-	assert.True(t, IsRepeatedFailure(recent), "IsRepeatedFailure must still trip against two consecutive worktree-identity-mismatch verdicts with identical Summary text")
+	assert.True(t, stuck.IsRepeatedFailure(recent), "stuck.IsRepeatedFailure must still trip against two consecutive worktree-identity-mismatch verdicts with identical Summary text")
 }
 
 // TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardBlock is a

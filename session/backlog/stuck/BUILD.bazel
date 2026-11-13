@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "stuck",
+    srcs = ["decisions.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/backlog/stuck",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//github",
+        "//session",
+        "//session/domain/backlogdto",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":stuck",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "stuck_test",
+    srcs = [
+        "decisions_noop_test.go",
+        "decisions_test.go",
+    ],
+    embed = [":stuck"],
+    deps = [
+        "//github",
+        "//session",
+        "//session/domain/backlogdto",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

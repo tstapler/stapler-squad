@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 )
 
 // LivenessEngine resolves the LivenessDefinition (session/liveness_definition.go,
@@ -104,7 +105,7 @@ func NewDefaultLivenessEngine() *DefaultLivenessEngine {
 	}
 
 	// Shape C: bouncing (in_progress<->review cycle count). Reproduces
-	// bounceThreshold/bounceLookback (3 cycles / 24h, session/stuck_decisions.go)
+	// stuck.BounceThreshold/stuck.BounceLookback (3 cycles / 24h, session/backlog/stuck/decisions.go)
 	// exactly.
 	//
 	// Judgment call: reconcileBouncingItems (session/backlog_lifecycle.go)
@@ -114,14 +115,14 @@ func NewDefaultLivenessEngine() *DefaultLivenessEngine {
 	// This table keys it to BacklogStatusReview rather than
 	// BacklogStatusInProgress (already occupied by stale_work above) because
 	// the "is this converging" question bouncing answers is fundamentally
-	// about review verdicts (isBouncing's own signature takes hasPass, derived
+	// about review verdicts (stuck.IsBouncing's own signature takes hasPass, derived
 	// from the item's most recent *review* verdict) — not because any survey
 	// document states this explicitly. A future epic reconciling the full
 	// stage/reason key space (including rework_blocked_stale, also
 	// review-anchored) may need to revisit this.
 	bouncingDef, err := NewLivenessDefinition(LivenessKindCycleFrequency,
-		WithCycleThreshold(bounceThreshold),
-		WithCycleLookback(bounceLookback),
+		WithCycleThreshold(stuck.BounceThreshold),
+		WithCycleLookback(stuck.BounceLookback),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("DefaultLivenessEngine: invalid built-in review-stage definition: %v", err))

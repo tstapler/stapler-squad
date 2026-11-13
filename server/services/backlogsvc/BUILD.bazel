@@ -54,6 +54,7 @@ go_library(
         "//server/workflows",
         "//session",
         "//session/backlog",
+        "//session/backlog/stuck",
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/git",

@@ -4,7 +4,7 @@ package session
 // remediation gate (backlog_remediation.go), Phase A of
 // docs/tasks/backlog-stuck-item-auto-remediation.md. Split into pure
 // table-driven tests for evaluateRemediation/nextRemediationAt (mirroring
-// stuck_decisions_test.go's style for the same reason: fuzzy
+// stuck/decisions_test.go's style for the same reason: fuzzy
 // threshold/schedule arithmetic deserves exhaustive DB-independent coverage)
 // and a Storage-level integration test proving the actual safety property
 // the design doc calls out: an item stuck 5 times in rapid succession

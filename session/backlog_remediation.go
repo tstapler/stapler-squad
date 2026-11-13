@@ -6,7 +6,7 @@ package session
 // docs/tasks/backlog-stuck-item-auto-remediation.md Phase A. Two concerns
 // live here deliberately together: the pure backoff-schedule arithmetic
 // (evaluateRemediation/nextRemediationAt — exhaustively table-driven-testable,
-// same rationale as session/stuck_decisions.go) and the DB-integrated gate
+// same rationale as session/backlog/stuck/decisions.go) and the DB-integrated gate
 // (Storage.RemediationDue) that every call site — inside package session and
 // outside it (server/services) — shares, so the accounting write happens in
 // exactly one place no matter which reason or which caller triggers it.
@@ -150,7 +150,7 @@ const (
 // evaluateRemediation decides whether row is eligible for a remediation
 // attempt right now, applying (in order) the attempt cap, the backoff timer,
 // and the restart-grace check. Pure and DB-independent — see
-// session/stuck_decisions.go's doc comment for why detector/gate arithmetic
+// session/backlog/stuck/decisions.go's doc comment for why detector/gate arithmetic
 // like this is kept exhaustively table-driven-testable outside any DB call.
 //
 // bootTime is the current process's serverStartTime, passed explicitly

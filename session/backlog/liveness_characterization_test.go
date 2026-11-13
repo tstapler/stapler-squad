@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -119,9 +120,9 @@ func testLivenessCharacterizationShapeB(t *testing.T) {
 }
 
 // testLivenessCharacterizationShapeC covers Shape C (cycle frequency): an
-// item that bounced in_progress<->review bounceThreshold times within
-// bounceLookback with no recorded PASS verdict
-// (session/stuck_decisions.go's isBouncing).
+// item that bounced in_progress<->review stuck.BounceThreshold times within
+// stuck.BounceLookback with no recorded PASS verdict
+// (session/backlog/stuck/decisions.go's stuck.IsBouncing).
 func testLivenessCharacterizationShapeC(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -136,7 +137,7 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 			Status: string(session.BacklogStatusInProgress),
 		})
 		require.NoError(t, err)
-		for i := 0; i < bounceThreshold; i++ {
+		for i := 0; i < stuck.BounceThreshold; i++ {
 			_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 			require.NoError(t, err)
 			_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
@@ -158,7 +159,7 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 	// After: the identical sweep, now wired to DefaultLivenessEngine (Epic 1.4 landed,
 	// keyed BacklogStatusReview — see this package's Epic 1.4 plan-correction note in
 	// project_plans/backlog-custom-workflow-stages/implementation/plan.md's Story 1.4.3).
-	// Zero rows configured, so the resolved bounceThreshold/bounceLookback must reproduce
+	// Zero rows configured, so the resolved stuck.BounceThreshold/stuck.BounceLookback must reproduce
 	// the "before" decision and reasonDetail exactly — this fixture records no review
 	// verdict at all, so hasPass is false on both paths, and reasonDetail embeds no
 	// per-fixture identifier (just the cycle count and lookback duration), so the two

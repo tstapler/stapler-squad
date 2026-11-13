@@ -1,4 +1,4 @@
-package backlog
+package stuck
 
 import (
 	"testing"
@@ -39,17 +39,17 @@ func TestConsecutiveNoopWorkSessions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, consecutiveNoopWorkSessions(tt.sessions))
+			assert.Equal(t, tt.want, ConsecutiveNoopWorkSessions(tt.sessions))
 		})
 	}
 }
 
 func TestIsRepeatedNoopDispatch(t *testing.T) {
-	assert.True(t, isRepeatedNoopDispatch(3, 3, true))
-	assert.True(t, isRepeatedNoopDispatch(70, 3, true))
-	assert.False(t, isRepeatedNoopDispatch(2, 3, true), "below threshold")
-	assert.False(t, isRepeatedNoopDispatch(5, 3, false), "no PASS verdict is bouncing's territory")
-	assert.False(t, isRepeatedNoopDispatch(5, 0, true), "non-positive threshold never fires")
+	assert.True(t, IsRepeatedNoopDispatch(3, 3, true))
+	assert.True(t, IsRepeatedNoopDispatch(70, 3, true))
+	assert.False(t, IsRepeatedNoopDispatch(2, 3, true), "below threshold")
+	assert.False(t, IsRepeatedNoopDispatch(5, 3, false), "no PASS verdict is bouncing's territory")
+	assert.False(t, IsRepeatedNoopDispatch(5, 0, true), "non-positive threshold never fires")
 }
 
 func TestPendingDuplicateRef(t *testing.T) {
