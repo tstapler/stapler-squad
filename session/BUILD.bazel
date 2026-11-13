@@ -156,6 +156,7 @@ go_library(
         "pane_activity_gate.go",
         "pane_submit.go",
         "pi_adapter.go",
+        "pi_events.go",
         "pi_exported.go",
         "pi_status_source.go",
         "pi_status_source_metrics.go",
