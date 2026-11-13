@@ -279,7 +279,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 
 	// ContextHealth / ContextHealthReason (fields 97–98): left UNSPECIFIED until a
 	// verdict with enough samples exists (e.g. never for non-Claude sessions).
-	if snap.ContextHealth.Level != tokens.HealthUnknown {
+	if snap.ContextHealth.Level != domain.HealthUnknown {
 		protoSession.ContextHealth = tokens.ContextHealthLevelToProto(snap.ContextHealth.Level)
 		protoSession.ContextHealthReason = snap.ContextHealth.Reason
 	}

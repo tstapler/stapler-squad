@@ -3,6 +3,8 @@ package tokens
 import (
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/session/pricing"
 )
 
@@ -25,7 +27,7 @@ type ParseResult struct {
 	ToolUsage        map[string]ToolTokenStats
 	SkillActivations []SkillActivation
 	// ContextHealth holds derived counts over the trailing assistant turns; no message content.
-	ContextHealth ContextHealthSignals
+	ContextHealth domain.ContextHealthSignals
 	CompactEvents []CompactEvent // compaction boundaries in transcript order
 
 	ParsedAt    time.Time

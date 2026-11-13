@@ -29,7 +29,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -874,7 +873,7 @@ type Instance struct {
 
 	// ContextHealth is the latest transcript-derived verdict, pushed by the
 	// server's TokenStore subscriber. Zero value is HealthUnknown. Protected by mu.
-	ContextHealth tokens.ContextHealthVerdict
+	ContextHealth domain.ContextHealthVerdict
 
 	// ExecutionTarget selects where this session's TmuxSession/GitWorktree
 	// subprocess commands run (session/execution_target.go, ssh-remote-workspaces
@@ -1482,7 +1481,7 @@ func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
 }
 
 // SetContextHealth atomically updates the transcript-derived ContextHealth verdict.
-func (i *Instance) SetContextHealth(v tokens.ContextHealthVerdict) {
+func (i *Instance) SetContextHealth(v domain.ContextHealthVerdict) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setContextHealthLocked(s, v)
 		return nil

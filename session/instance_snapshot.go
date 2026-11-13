@@ -35,7 +35,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // GitHubIntegration groups all GitHub PR / URL integration fields within
@@ -180,7 +179,7 @@ type InstanceSnapshot struct {
 	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
 	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
 	Artifacts        *artifacts.SessionArtifactsBlob
-	ContextHealth    tokens.ContextHealthVerdict // flat value; no deep copy needed
+	ContextHealth    domain.ContextHealthVerdict // flat value; no deep copy needed
 }
 
 // buildSnapshot builds a point-in-time InstanceSnapshot from i.

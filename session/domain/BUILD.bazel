@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "autonomous_stop.go",
         "backlog.go",
+        "context_health.go",
         "errors.go",
         "github_host.go",
         "github_pr_items.go",
