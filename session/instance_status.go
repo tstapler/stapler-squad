@@ -9,11 +9,12 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // InstanceStatusInfo provides extended status information for an instance.
 type InstanceStatusInfo struct {
-	BasicStatus        Status                   // Creating, Active, Paused, Stopped, Hibernated
+	BasicStatus        domain.Status            // Creating, Active, Paused, Stopped, Hibernated
 	ClaudeStatus       detection.DetectedStatus // If claudectl.ClaudeController is active
 	StatusContext      string                   // Context/details about current status (e.g., error message)
 	PendingApprovals   int                      // Number of pending approvals
@@ -46,7 +47,7 @@ type InstanceStatusManager struct {
 	// ReviewQueuePoller's approvalProvider field/mutex pattern
 	// (session/review_queue_poller.go).
 	approvalProviderMu sync.RWMutex
-	approvalProvider   ApprovalMetadataProvider
+	approvalProvider   domain.ApprovalMetadataProvider
 }
 
 // NewInstanceStatusManager creates a new status manager.
@@ -80,13 +81,13 @@ func (ism *InstanceStatusManager) GetPiStatusSource(instanceTitle string) (*PiSt
 // by GetStatus()'s pi-fallback branch to override an inferred Idle status
 // with NeedsApproval (Story 5.3.1). Optional: GetStatus() skips the override
 // entirely when no provider has been set (e.g. in tests that don't need it).
-func (ism *InstanceStatusManager) SetApprovalProvider(provider ApprovalMetadataProvider) {
+func (ism *InstanceStatusManager) SetApprovalProvider(provider domain.ApprovalMetadataProvider) {
 	ism.approvalProviderMu.Lock()
 	defer ism.approvalProviderMu.Unlock()
 	ism.approvalProvider = provider
 }
 
-func (ism *InstanceStatusManager) getApprovalProvider() ApprovalMetadataProvider {
+func (ism *InstanceStatusManager) getApprovalProvider() domain.ApprovalMetadataProvider {
 	ism.approvalProviderMu.RLock()
 	defer ism.approvalProviderMu.RUnlock()
 	return ism.approvalProvider
@@ -188,11 +189,11 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 func (info InstanceStatusInfo) GetStatusIcon() string {
 	if !info.IsControllerActive {
 		switch info.BasicStatus {
-		case Active:
+		case domain.Active:
 			return "●" // Active but no controller
-		case Paused:
+		case domain.Paused:
 			return "⏸"
-		case Hibernated:
+		case domain.Hibernated:
 			return "❄"
 		default:
 			return "?"
@@ -224,19 +225,19 @@ func (info InstanceStatusInfo) GetStatusIcon() string {
 func (info InstanceStatusInfo) GetStatusDescription() string {
 	if !info.IsControllerActive {
 		switch info.BasicStatus {
-		case Active:
+		case domain.Active:
 			return "Active"
-		case Creating:
+		case domain.Creating:
 			return "Creating"
-		case Paused:
+		case domain.Paused:
 			return "Paused"
-		case Stopped:
+		case domain.Stopped:
 			return "Stopped"
-		case Hibernated:
+		case domain.Hibernated:
 			return "Hibernated"
-		case Crashed:
+		case domain.Crashed:
 			return "Crashed"
-		case PermanentlyFailed:
+		case domain.PermanentlyFailed:
 			return "Failed"
 		default:
 			return "Unknown"
@@ -315,11 +316,11 @@ func (info InstanceStatusInfo) GetColorCode() string {
 		return "39" // Blue
 	}
 
-	if info.BasicStatus == Active && info.IsControllerActive {
+	if info.BasicStatus == domain.Active && info.IsControllerActive {
 		return "82" // Green
 	}
 
-	if info.BasicStatus == Paused || info.BasicStatus == Hibernated {
+	if info.BasicStatus == domain.Paused || info.BasicStatus == domain.Hibernated {
 		return "240" // Gray
 	}
 

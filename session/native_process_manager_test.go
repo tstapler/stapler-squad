@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -269,7 +270,7 @@ func TestNativeProcessManager_FanOut_DeliversPTYOutput(t *testing.T) {
 func TestNewProcessManager_ReturnsNativeProcessManager_WhenFlagIsNative(t *testing.T) {
 	t.Parallel()
 
-	pm, err := NewProcessManager(context.Background(), BackendNative, ProcessManagerOptions{
+	pm, err := NewProcessManager(context.Background(), domain.BackendNative, ProcessManagerOptions{
 		SessionName: "test-native",
 	})
 	require.NoError(t, err)

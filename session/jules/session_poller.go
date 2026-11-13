@@ -13,6 +13,7 @@ import (
 	julesapi "github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -88,7 +89,7 @@ type julesPollerStorage interface {
 	GatedTransition(ctx context.Context, req session.TransitionRequest) (*backlogdto.BacklogItemData, error)
 	// AttachItemPRLink records one Outputs[] PR as an item-direct link; attached is
 	// false when the item tombstoned that PR.
-	AttachItemPRLink(ctx context.Context, itemID, prURL string, source session.AttachSource) (attached bool, err error)
+	AttachItemPRLink(ctx context.Context, itemID, prURL string, source domain.AttachSource) (attached bool, err error)
 }
 
 // JulesSessionPollerConfig controls polling cadence and staleness thresholds.
@@ -542,7 +543,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 	// Links first: an upsert is idempotent, so a failure here retries cleanly on the
 	// next poll before any transition has happened.
 	for _, u := range prURLs {
-		attached, linkErr := p.storage.AttachItemPRLink(ctx, entry.ItemID, u, session.AttachSourceJules)
+		attached, linkErr := p.storage.AttachItemPRLink(ctx, entry.ItemID, u, domain.AttachSourceJules)
 		if linkErr != nil {
 			return fmt.Errorf("attach jules pr %s: %w", u, linkErr)
 		}
@@ -562,7 +563,7 @@ func (p *JulesSessionPoller) applyCompletedState(ctx context.Context, entry back
 	summary := fmt.Sprintf("Jules opened pull request %s.", prURL)
 	if err := p.storage.GatedSetPRAndTransition(ctx,
 		session.TransitionRequest{Caller: session.CallerJulesApplyCompleted, ItemID: entry.ItemID, Observed: reviewItem, TriggeredBy: session.TriggeredBySystem},
-		session.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Source: session.AttachSourceJules}); err != nil {
+		session.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Source: domain.AttachSourceJules}); err != nil {
 		return fmt.Errorf("record PR: %w", err)
 	}
 	if err := p.storage.UpdateItemSessionEndedWithReason(ctx, row.ID, now, "jules_completed"); err != nil {

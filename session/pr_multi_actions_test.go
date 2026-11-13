@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // newTwoPRInstance returns a session with #11 merged (terminal) and #12 open,
@@ -15,10 +16,10 @@ import (
 func newTwoPRInstance(t *testing.T) *Instance {
 	t.Helper()
 	inst := newPRTestInstance(t)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), AttachSourceCreatedFromURL,
-		PRInitial{State: PRStateMerged, Terminal: true}))
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery,
-		PRInitial{State: PRStateOpen}))
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceCreatedFromURL,
+		PRInitial{State: domain.PRStateMerged, Terminal: true}))
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery,
+		PRInitial{State: domain.PRStateOpen}))
 	return inst
 }
 

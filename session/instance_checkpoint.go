@@ -17,6 +17,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
@@ -26,8 +27,8 @@ import (
 // pass 0 if the caller does not have access to scrollback state.
 // Thread-safe: routed through the actor mailbox.
 // Returns an error if the instance is not started.
-func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkpoint, error) {
-	return sendSyncValue(i, func(s *instanceState) (*Checkpoint, error) {
+func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*domain.Checkpoint, error) {
+	return sendSyncValue(i, func(s *instanceState) (*domain.Checkpoint, error) {
 		return createCheckpointLocked(s, label, scrollbackSeq)
 	})
 }
@@ -35,7 +36,7 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 // createCheckpointLocked is the actor-safe body of CreateCheckpoint.
 // I/O-heavy adapter work is done before any field mutation (same discipline as the
 // old "before stateMutex" comment in the public method).
-func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64) (*Checkpoint, error) {
+func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64) (*domain.Checkpoint, error) { //nolint:gocognit // pre-existing complexity; only the Checkpoint type qualifier changed in the domain lowering
 	i := s.inst
 	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot create checkpoint on unstarted instance '%s'", i.Title)
@@ -129,7 +130,7 @@ func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64
 		}
 	}
 
-	cp := Checkpoint{
+	cp := domain.Checkpoint{
 		ID:                 cpID,
 		SessionID:          i.Title,
 		Label:              label,
@@ -294,10 +295,10 @@ func isPathUnderDir(path, dir string) bool {
 
 // GetCheckpoints returns a snapshot copy of the checkpoint list, safe for
 // concurrent reads from outside the instance's lock domain.
-func (i *Instance) GetCheckpoints() CheckpointList {
+func (i *Instance) GetCheckpoints() domain.CheckpointList {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	cp := make(CheckpointList, len(i.Checkpoints))
+	cp := make(domain.CheckpointList, len(i.Checkpoints))
 	copy(cp, i.Checkpoints)
 	return cp
 }

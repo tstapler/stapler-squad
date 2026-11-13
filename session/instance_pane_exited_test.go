@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -23,7 +24,7 @@ func (p exitedPM) CapturePaneContent() (string, error) {
 }
 
 func TestInstance_Preview_ShouldStillShowTheFinalGrid_WhenThePaneHasExited(t *testing.T) {
-	inst := &Instance{Title: "exited-preview", Status: Running}
+	inst := &Instance{Title: "exited-preview", Status: domain.Active}
 	inst.started.Store(true)
 	inst.processManager = exitedPM{screen: "last output"}
 
@@ -34,7 +35,7 @@ func TestInstance_Preview_ShouldStillShowTheFinalGrid_WhenThePaneHasExited(t *te
 }
 
 func TestInstance_CapturePaneContent_ShouldFailWithPaneExited_ButFinalVariantReturnsTheGrid(t *testing.T) {
-	inst := &Instance{Title: "exited-capture", Status: Running}
+	inst := &Instance{Title: "exited-capture", Status: domain.Active}
 	inst.started.Store(true)
 	inst.processManager = exitedPM{screen: "last output"}
 
@@ -47,7 +48,7 @@ func TestInstance_CapturePaneContent_ShouldFailWithPaneExited_ButFinalVariantRet
 }
 
 func TestInstance_CapturePaneContentPriority_ShouldReturnTheFinalGrid_WhenThePaneHasExited(t *testing.T) {
-	inst := &Instance{Title: "exited-priority", Status: Running}
+	inst := &Instance{Title: "exited-priority", Status: domain.Active}
 	inst.started.Store(true)
 	inst.processManager = exitedPM{screen: "last output"}
 
@@ -58,7 +59,7 @@ func TestInstance_CapturePaneContentPriority_ShouldReturnTheFinalGrid_WhenThePan
 }
 
 func TestWaitForRedrawQuiescence_ShouldSettleOnTheFinalGrid_WhenThePaneHasExited(t *testing.T) {
-	inst := &Instance{Title: "exited-scroll", Status: Running}
+	inst := &Instance{Title: "exited-scroll", Status: domain.Active}
 	inst.started.Store(true)
 	inst.processManager = exitedPM{screen: "last output"}
 

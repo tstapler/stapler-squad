@@ -553,18 +553,18 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	core.SessionService.SetRegistry(registry)
 
 	w := warren.NewWire("ServiceDeps")
-	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
+	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, domain.ApprovalMetadataProvider(core.ApprovalStore))
 	// Story 5.3.1: the same provider wired into StatusManager.GetStatus()'s
 	// pi-fallback branch, so a pi session actually blocked on a pending
 	// approval reports NeedsApproval instead of a stale Idle.
-	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
+	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, domain.ApprovalMetadataProvider(core.ApprovalStore))
 	warren.Set(w, "StatusManager", core.SessionService.SetStatusManager, statusManager)
 	warren.Set(w, "ReviewQueuePoller", core.SessionService.SetReviewQueuePoller, reviewQueuePoller)
 	// The session header's Refresh awaits one poll of a single PR row. There is no
 	// user_refresh observation source yet, so it uses reconciler_refresh.
 	// A successful fetch resolves an unverified-terminal row and resets
 	// poll_fail_count; a counted failure leaves it unverified and increments it.
-	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref session.PRRef) error {
+	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref domain.PRRef) error {
 		return prStatusPoller.Refresh(ctx, ref, session.PRSourceReconcilerRefresh)
 	})
 	if err := w.Validate(); err != nil {
@@ -1242,7 +1242,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		for _, inst := range instances {
 			started := inst.Started()
 			paused := inst.Paused()
-			if started && !paused && inst.GetLifecycleStatus() != session.Stopped {
+			if started && !paused && inst.GetLifecycleStatus() != domain.Stopped {
 				if inst.GetController() == nil {
 					if err := inst.StartController(); err != nil {
 						log.Warn("failed to start controller", "session", inst.Title, "err", err)
@@ -1266,7 +1266,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 				continue
 			}
 			status := inst.GetLifecycleStatus()
-			if status == session.Paused || status == session.Stopped || status == session.Hibernated {
+			if status == domain.Paused || status == domain.Stopped || status == domain.Hibernated {
 				continue
 			}
 			session.StartSessionDriver(inst, inst.GetEffectiveRootDir())
@@ -2315,7 +2315,7 @@ func shouldBootStart(inst *session.Instance) bool {
 
 func deferToReconcile(inst *session.Instance) bool {
 	switch inst.GetLifecycleStatus() {
-	case session.PermanentlyFailed, session.Failed:
+	case domain.PermanentlyFailed, domain.Failed:
 		return true
 	default:
 		return false

@@ -5,6 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/sshremote"
@@ -184,9 +185,9 @@ type Event struct {
 	// See FieldStatus for the well-known "status" entry.
 	UpdatedFields []string
 	// OldStatus for status change events
-	OldStatus session.Status
+	OldStatus domain.Status
 	// NewStatus for status change events
-	NewStatus session.Status
+	NewStatus domain.Status
 	// DetectedStatus is kept for legacy compatibility; no longer serialized to wire.
 	DetectedStatus string
 	// DetectedContext is the human-readable context from the terminal detector

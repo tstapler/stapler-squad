@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -47,7 +48,7 @@ func newBlockerHarness(t *testing.T, status session.BacklogStatus) *blockerHarne
 	h.path = filepath.Join(t.TempDir(), "wt")
 	now := time.Now()
 	require.NoError(t, repo.Create(t.Context(), session.InstanceData{
-		Title: h.uuid, UUID: h.uuid, Path: h.path, Status: session.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
+		Title: h.uuid, UUID: h.uuid, Path: h.path, Status: domain.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
 		Worktree: session.GitWorktreeData{RepoPath: filepath.Dir(h.path), WorktreePath: h.path, SessionName: h.uuid, BranchName: "backlog/x", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: h.uuid, SessionRole: session.SessionRoleWork})
@@ -62,12 +63,12 @@ func (h *blockerHarness) sessions() []backlogdto.ItemSessionSummary {
 	return s
 }
 
-func (h *blockerHarness) link(owner session.PROwner, n int, state session.PRState) {
+func (h *blockerHarness) link(owner session.PROwner, n int, state domain.PRState) {
 	h.t.Helper()
-	ref, err := session.NewPRRef("github.com", "acme", "app", n)
+	ref, err := domain.NewPRRef("github.com", "acme", "app", n)
 	require.NoError(h.t, err)
 	_, err = h.repo.UpsertSessionPR(h.t.Context(), owner, ref, session.PRLink{
-		Role: session.PRRolePrimary, Source: session.AttachSourceManual, Initial: session.PRInitial{State: state, Terminal: state.Terminal()},
+		Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: session.PRInitial{State: state, Terminal: state.Terminal()},
 	})
 	require.NoError(h.t, err)
 }
@@ -97,8 +98,8 @@ func TestCleanupGate_ShouldRetainWorktreeOnEveryPath_WhenOnePROpen(t *testing.T)
 			t.Run(name, func(t *testing.T) {
 				h := newBlockerHarness(t, session.BacklogStatusReview)
 				h.svc.cleanup.liveEnabled = func() bool { return scope }
-				h.link(session.SessionPROwner(h.uuid), 21, session.PRStateMerged)
-				h.link(session.SessionPROwner(h.uuid), 22, session.PRStateOpen)
+				h.link(session.SessionPROwner(h.uuid), 21, domain.PRStateMerged)
+				h.link(session.SessionPROwner(h.uuid), 22, domain.PRStateOpen)
 				before := session.CleanupBlockedCount(path)
 				ctx := uniquePath(h, path)
 
@@ -139,7 +140,7 @@ func TestCleanupGate_ShouldRetainWorktreeOnEveryPath_WhenOnePROpen(t *testing.T)
 func TestCleanupGate_ShouldNameTheItem_WhenOpenPRIsItemDirectOnly(t *testing.T) {
 	t.Parallel()
 	h := newBlockerHarness(t, session.BacklogStatusDone)
-	h.link(session.ItemPROwner(h.itemID), 22, session.PRStateOpen)
+	h.link(session.ItemPROwner(h.itemID), 22, domain.PRStateOpen)
 
 	out := h.svc.cleanupItemWorktrees(uniquePath(h, session.CleanupPathArchiveRPC), h.sessions())
 
@@ -168,11 +169,11 @@ func TestCleanupGate_ShouldFailClosed_WhenItemPrNumberHasNoLink(t *testing.T) {
 func TestCleanupGate_ShouldRemoveWorktree_WhenEveryPRTerminalAndRecoverAfterLastPRCloses(t *testing.T) {
 	t.Parallel()
 	h := newBlockerHarness(t, session.BacklogStatusDone)
-	h.link(session.SessionPROwner(h.uuid), 22, session.PRStateOpen)
+	h.link(session.SessionPROwner(h.uuid), 22, domain.PRStateOpen)
 	ctx := uniquePath(h, session.CleanupPathSweep)
 	require.Equal(t, session.CleanupBlocked, h.svc.cleanupItemWorktrees(ctx, h.sessions()).Status)
 
-	ref, err := session.NewPRRef("github.com", "acme", "app", 22)
+	ref, err := domain.NewPRRef("github.com", "acme", "app", 22)
 	require.NoError(t, err)
 	_, err = h.repo.DeleteSessionPR(t.Context(), session.SessionPROwner(h.uuid), ref)
 	require.NoError(t, err)
@@ -189,7 +190,7 @@ func TestCleanupGate_ShouldHoldWorktreeAndRulePane_WhileCurrentRoundSessionLive(
 	h.svc.cleanup.liveEnabled = func() bool { return true }
 	probe := &stubProbe{live: map[string]bool{h.uuid: true}}
 	h.svc.SetLiveWorkProbe(probe)
-	h.link(session.SessionPROwner(h.uuid), 21, session.PRStateMerged)
+	h.link(session.SessionPROwner(h.uuid), 21, domain.PRStateMerged)
 
 	out := h.svc.CleanupTerminalItem(uniquePath(h, session.CleanupPathHook), h.itemID)
 
@@ -226,14 +227,14 @@ func TestCleanupGate_ShouldRecheckBeforeEachRemoval_WhenPRAttachesMidCleanup(t *
 	now := time.Now()
 	path2 := filepath.Join(t.TempDir(), "wt2")
 	require.NoError(t, h.repo.Create(t.Context(), session.InstanceData{
-		Title: second, UUID: second, Path: path2, Status: session.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
+		Title: second, UUID: second, Path: path2, Status: domain.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
 		Worktree: session.GitWorktreeData{RepoPath: filepath.Dir(path2), WorktreePath: path2, SessionName: second, BranchName: "backlog/y", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
 	_, err := h.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: h.itemID, SessionUUID: second, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 	h.svc.cleanup.removeFn = func(wt session.GitWorktreeData) error {
 		h.removed = append(h.removed, wt.WorktreePath)
-		h.link(session.ItemPROwner(h.itemID), 77, session.PRStateOpen) // lands after the first removal
+		h.link(session.ItemPROwner(h.itemID), 77, domain.PRStateOpen) // lands after the first removal
 		return nil
 	}
 
@@ -254,7 +255,7 @@ func (s *stubProbe) IsLive(_ context.Context, id string, _ time.Time) (bool, err
 func TestStopLiveWorkAndReviewSessions_ShouldStopSession_AndNameItsOpenPR(t *testing.T) {
 	t.Parallel()
 	h := newBlockerHarness(t, session.BacklogStatusInProgress)
-	h.link(session.SessionPROwner(h.uuid), 12, session.PRStateOpen)
+	h.link(session.SessionPROwner(h.uuid), 12, domain.PRStateOpen)
 
 	warnings := h.svc.stopLiveWorkAndReviewSessions(t.Context(), h.itemID)
 
@@ -267,7 +268,7 @@ func TestStopLiveWorkAndReviewSessions_ShouldStopSession_AndNameItsOpenPR(t *tes
 func TestStopLiveWorkAndReviewSessions_ShouldWarnNothing_WhenEveryPRTerminal(t *testing.T) {
 	t.Parallel()
 	h := newBlockerHarness(t, session.BacklogStatusInProgress)
-	h.link(session.SessionPROwner(h.uuid), 12, session.PRStateMerged)
+	h.link(session.SessionPROwner(h.uuid), 12, domain.PRStateMerged)
 
 	assert.Empty(t, h.svc.stopLiveWorkAndReviewSessions(t.Context(), h.itemID))
 }

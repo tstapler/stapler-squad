@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type gateFunc func(string) bool
@@ -23,7 +24,7 @@ func (f gateFunc) AllowStatusChange(id string) bool { return f(id) }
 func stoppedEvent(title string, hidden bool) *events.Event {
 	return &events.Event{
 		Type:          events.EventSessionUpdated,
-		Session:       &session.Instance{ID: "id-" + title, Title: title, Status: session.Stopped, Hidden: hidden},
+		Session:       &session.Instance{ID: "id-" + title, Title: title, Status: domain.Stopped, Hidden: hidden},
 		UpdatedFields: []string{events.FieldStatus},
 	}
 }

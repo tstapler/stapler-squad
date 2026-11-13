@@ -12,10 +12,11 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-func addHiddenInstance(fix *forkTestFixture, title, uuid string, status session.Status) {
+func addHiddenInstance(fix *forkTestFixture, title, uuid string, status domain.Status) {
 	fix.poller.AddInstance(&session.Instance{
 		Title: title, UUID: uuid, Status: status, Program: "claude", Path: "/tmp/test", Hidden: true,
 	})
@@ -41,9 +42,9 @@ func TestListSessions_should_populateBackgroundOutcome_When_hiddenOnly_And_leave
 		backlogdto.ReviewVerdictData{OverallOutcome: "PASS"})
 	require.NoError(t, err)
 
-	addHiddenInstance(fix, "done", "c0000000-0000-0000-0000-000000000001", session.Stopped)
-	addHiddenInstance(fix, "crashed", "c0000000-0000-0000-0000-000000000002", session.Crashed)
-	addHiddenInstance(fix, "bare", "c0000000-0000-0000-0000-000000000003", session.Stopped)
+	addHiddenInstance(fix, "done", "c0000000-0000-0000-0000-000000000001", domain.Stopped)
+	addHiddenInstance(fix, "crashed", "c0000000-0000-0000-0000-000000000002", domain.Crashed)
+	addHiddenInstance(fix, "bare", "c0000000-0000-0000-0000-000000000003", domain.Stopped)
 
 	only, err := fix.svc.ListSessions(ctx, connect.NewRequest(&sessionv1.ListSessionsRequest{HiddenOnly: true}))
 	require.NoError(t, err)
@@ -71,7 +72,7 @@ func TestListSessions_should_callBatchLookupOnce_When_40HiddenSessions(t *testin
 	fake := &countingOutcomeLookup{}
 	fix.svc.outcomeLookup = fake
 	for i := 0; i < 40; i++ {
-		addHiddenInstance(fix, fmt.Sprintf("h-%02d", i), fmt.Sprintf("d0000000-0000-0000-0000-%012d", i), session.Stopped)
+		addHiddenInstance(fix, fmt.Sprintf("h-%02d", i), fmt.Sprintf("d0000000-0000-0000-0000-%012d", i), domain.Stopped)
 	}
 
 	resp, err := fix.svc.ListSessions(context.Background(), connect.NewRequest(&sessionv1.ListSessionsRequest{HiddenOnly: true}))

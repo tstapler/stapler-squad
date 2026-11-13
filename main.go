@@ -38,6 +38,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -450,7 +451,7 @@ var (
 							return true
 						}
 						for _, row := range rows {
-							if row.Backend == session.BackendTymux && row.ArchivedAt == nil && !row.Status.IsSuspended() {
+							if row.Backend == domain.BackendTymux && row.ArchivedAt == nil && !row.Status.IsSuspended() {
 								return true
 							}
 						}
@@ -997,8 +998,8 @@ func init() {
 // this process started must also trigger startup supervision, otherwise a
 // session already pinned to tymux from a prior process would find no daemon
 // running when it starts.
-func tymuxNeeded(cfg *config.Config, resolvedBackend session.ProcessManagerBackend) bool {
-	if resolvedBackend == session.BackendTymux {
+func tymuxNeeded(cfg *config.Config, resolvedBackend domain.ProcessManagerBackend) bool {
+	if resolvedBackend == domain.BackendTymux {
 		return true
 	}
 	if cfg == nil {

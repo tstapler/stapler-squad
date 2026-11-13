@@ -5,7 +5,7 @@ session files=264 loc=71500 imports=100
 session/claudectl files=3 loc=1400 imports=9
 session/claudectl/claudectltest files=1 loc=45 imports=3
 session/panereply files=6 loc=1303 imports=7
-session/jules files=1 loc=669 imports=4
+session/jules files=1 loc=670 imports=5
 session/wtconsistency files=1 loc=960 imports=9
 session/dialogpresence files=1 loc=149 imports=0
 session/summaries files=8 loc=1539 imports=12
@@ -29,7 +29,7 @@ server/services files=291 loc=72877 imports=68
 server/services/insights files=6 loc=1861 imports=9
 server/services/debugseed files=2 loc=828 imports=9
 server/services/internal/streammetrics files=2 loc=124 imports=3
-server/services/wsconn files=23 loc=9895 imports=21
+server/services/wsconn files=23 loc=9895 imports=22
 server/services/backlogsvc files=32 loc=15400 imports=28
 server/services/internal/svctest files=36 loc=1459 imports=17
 server/services/sessionbundle files=4 loc=862 imports=7

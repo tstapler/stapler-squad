@@ -558,7 +558,7 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		inst.FireLifecycleEvent(session.EventStarted, "")
+		inst.FireLifecycleEvent(domain.EventStarted, "")
 	}()
 	waitWithTimeout(t, done)
 
@@ -614,7 +614,7 @@ func TestBacklogLifecycleListener_WireToInstance_EventStopped_TransitionsToRevie
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		inst.FireLifecycleEvent(session.EventStopped, "operator-destroy")
+		inst.FireLifecycleEvent(domain.EventStopped, "operator-destroy")
 	}()
 	waitWithTimeout(t, done)
 
@@ -820,7 +820,7 @@ func TestBacklogLifecycleListener_IgnoresEventsWhenDisabled(t *testing.T) {
 	// Fire EventExited — the gate should stop processing immediately.
 	// Allow time for any goroutine that might have been started to settle.
 	wait.RequireEventually(t, func() bool {
-		inst.FireLifecycleEvent(session.EventExited, "")
+		inst.FireLifecycleEvent(domain.EventExited, "")
 		// Check that the item was NOT transitioned.
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
 		return ferr == nil && fetched.Status == string(session.BacklogStatusInProgress)
@@ -867,7 +867,7 @@ func TestBacklogLifecycleListener_ProcessesEventsWhenEnabled(t *testing.T) {
 	listener.WireToInstance(inst)
 
 	// Fire EventExited — the listener must process it and transition the item.
-	inst.FireLifecycleEvent(session.EventExited, "")
+	inst.FireLifecycleEvent(domain.EventExited, "")
 
 	wait.RequireEventually(t, func() bool {
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)

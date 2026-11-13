@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // newTestGoalStorage creates a temporary Storage for goal tool tests.
@@ -42,7 +43,7 @@ func makeTestInstance(title, uuid string) *session.Instance {
 		Title:   title,
 		UUID:    uuid,
 		Path:    "/tmp/test",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
 	return inst

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -38,16 +39,16 @@ func TestStopByUser_should_KillTmuxAndTransitionToStopped_When_SessionIsActive(t
 	t.Parallel()
 	inst := &Instance{
 		Title:       "test-stop-active",
-		Status:      Active,
+		Status:      domain.Active,
 		IsWorktree:  false,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 	inst.started.Store(true)
 
 	err := inst.StopByUser()
 
 	require.NoError(t, err, "StopByUser() on an Active session must not return an error")
-	assert.Equal(t, Stopped, inst.Status)
+	assert.Equal(t, domain.Stopped, inst.Status)
 }
 
 // TestStopByUser_should_RejectTransition_When_SessionIsRestoring is the regression
@@ -64,10 +65,10 @@ func TestStopByUser_should_RejectTransition_When_SessionIsRestoring(t *testing.T
 
 	inst := &Instance{
 		Title:       "test-stop-restoring",
-		Status:      Restoring,
+		Status:      domain.Restoring,
 		IsWorktree:  true,
 		Path:        repoPath,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 	inst.started.Store(true)
 	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
@@ -80,14 +81,14 @@ func TestStopByUser_should_RejectTransition_When_SessionIsRestoring(t *testing.T
 
 	err := inst.StopByUser()
 
-	var transErr ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	require.True(t, errors.As(err, &transErr), "expected ErrInvalidTransition, got %T: %v", err, err)
-	assert.Equal(t, Restoring, transErr.From)
-	assert.Equal(t, Stopped, transErr.To)
+	assert.Equal(t, domain.Restoring, transErr.From)
+	assert.Equal(t, domain.Stopped, transErr.To)
 
 	assert.False(t, pm.closeCalled, "rejected StopByUser must not kill the tmux session")
 	assert.True(t, pm.IsAlive(), "rejected StopByUser must leave the tmux session alive")
 	_, statErr = os.Stat(worktreePath)
 	assert.NoError(t, statErr, "rejected StopByUser must not remove the worktree directory")
-	assert.Equal(t, Restoring, inst.Status, "rejected StopByUser must not change the instance status")
+	assert.Equal(t, domain.Restoring, inst.Status, "rejected StopByUser must not change the instance status")
 }

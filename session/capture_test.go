@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -28,7 +29,7 @@ func TestCaptureCurrentState_Paused_IsNoOp(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "test-session"}
 	inst.started.Store(true)
-	inst.Status = Paused
+	inst.Status = domain.Paused
 
 	err := inst.CaptureCurrentState()
 

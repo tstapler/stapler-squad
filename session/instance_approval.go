@@ -115,7 +115,7 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 		// the actor. See runActor's doc comment in actor.go.
 		s.inst.mu.Lock()
 		prevMeaningful := s.inst.LastMeaningfulOutput
-		changed := s.inst.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, s.inst.Title)
+		changed := updateReviewTimestamps(&s.inst.ReviewState, content, filteredContent, shouldUpdateMeaningful, s.inst.Title)
 		if changed && !s.inst.LastMeaningfulOutput.Equal(prevMeaningful) {
 			s.inst.touchLocked(SessionEventOutput, s.inst.LastMeaningfulOutput)
 		}
@@ -137,7 +137,7 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 // i.mu-guarded read, since i.mu doesn't synchronize with actor commands' direct
 // field writes (see GetStatus's doc comment).
 func (i *Instance) GetTimeSinceLastMeaningfulOutput() time.Duration {
-	ns := i.loadLastMeaningfulOutputNs()
+	ns := i.LoadLastMeaningfulOutputNs()
 	if ns != 0 {
 		return time.Since(time.Unix(0, ns))
 	}

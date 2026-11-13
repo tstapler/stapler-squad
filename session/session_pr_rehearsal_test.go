@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -206,7 +207,7 @@ func rehearseTickerCancel(t *testing.T, repo *EntRepository, opts []goleak.Optio
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	clock := &prMaintenanceClock{}
-	storage.runPRStartupMaintenance(ctx, clock.config(func(PRRef) error { return errors.New("database is locked") }))
+	storage.runPRStartupMaintenance(ctx, clock.config(func(domain.PRRef) error { return errors.New("database is locked") }))
 	require.Equal(t, int64(1), storage.PRMaintenanceFailures())
 	cancel()
 	storage.StopPRMaintenance()
@@ -223,7 +224,7 @@ func rehearseFaultedMaintenance(t *testing.T, repo *EntRepository) time.Duration
 	failures := 4
 	clock := &prMaintenanceClock{}
 	require.NoError(t, func() error {
-		storage.runPRStartupMaintenance(context.Background(), clock.config(func(PRRef) error {
+		storage.runPRStartupMaintenance(context.Background(), clock.config(func(domain.PRRef) error {
 			if failures > 0 {
 				failures--
 				return errors.New("database is locked")
@@ -301,7 +302,7 @@ func buildSyntheticRehearsalDB(t *testing.T, repo *EntRepository, size rehearsal
 func syntheticSession(repo *EntRepository, i, withPR int) *ent.SessionCreate {
 	b := repo.Client.Session.Create().
 		SetTitle(fmt.Sprintf("syn-%05d", i)).SetUUID(fmt.Sprintf("syn-uuid-%05d", i)).
-		SetPath(fmt.Sprintf("/nonexistent/syn/%05d", i)).SetProgram("claude").SetStatus(int(Paused))
+		SetPath(fmt.Sprintf("/nonexistent/syn/%05d", i)).SetProgram("claude").SetStatus(int(domain.Paused))
 	if i >= withPR {
 		return b
 	}

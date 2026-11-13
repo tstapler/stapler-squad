@@ -47,6 +47,7 @@ go_test(
         "//proto/session/v1:sessionv1_go",
         "//server/events",
         "//session",
+        "//session/domain",
         "//tools/bzl/ent",
         "//tools/bzl/ent:session",
         "@com_connectrpc_connect//:connect",

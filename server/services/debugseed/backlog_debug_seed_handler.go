@@ -641,7 +641,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		UUID:        sessionUUID,
 		Path:        worktreePath,
 		Program:     "claude",
-		Status:      session.Stopped,
+		Status:      domain.Stopped,
 		SessionType: domain.SessionTypeDirectory,
 		CreatedAt:   now,
 		UpdatedAt:   now,

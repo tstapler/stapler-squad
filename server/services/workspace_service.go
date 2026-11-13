@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
@@ -33,7 +34,7 @@ import (
 // Inject this interface into services that need path resolution instead of
 // accessing session.Instance.Path directly.
 type WorkspaceProvider interface {
-	GetWorkspace(sessionID string) (session.Workspace, error)
+	GetWorkspace(sessionID string) (domain.Workspace, error)
 }
 
 // LiveInstanceFinder is satisfied by SessionService. It returns the live in-memory
@@ -146,10 +147,10 @@ func (ws *WorkspaceService) findInstanceFast(id string) (*session.Instance, erro
 }
 
 // GetWorkspace implements WorkspaceProvider.
-func (ws *WorkspaceService) GetWorkspace(sessionID string) (session.Workspace, error) {
+func (ws *WorkspaceService) GetWorkspace(sessionID string) (domain.Workspace, error) {
 	inst, err := ws.findInstanceFast(sessionID)
 	if err != nil {
-		return session.Workspace{}, err
+		return domain.Workspace{}, err
 	}
 	return inst.Workspace(), nil
 }

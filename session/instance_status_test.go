@@ -4,16 +4,17 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeApprovalMetadataProvider is a minimal ApprovalMetadataProvider stand-in
 // for tests, keyed by session ID (UUID or Title, matching how
 // GetStatus/ReviewQueuePoller look approvals up).
 type fakeApprovalMetadataProvider struct {
-	bySessionID map[string][]ApprovalMetadata
+	bySessionID map[string][]domain.ApprovalMetadata
 }
 
-func (f *fakeApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata {
+func (f *fakeApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID string) []domain.ApprovalMetadata {
 	return f.bySessionID[sessionID]
 }
 
@@ -72,7 +73,7 @@ func TestInstanceStatusManager_GetStatus_PendingApprovalOverridesIdle(t *testing
 	ism.RegisterPiStatusSource("pi-session", src)
 
 	provider := &fakeApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			"pi-session-uuid": {{ApprovalID: "appr-1", ToolName: "bash"}},
 		},
 	}
@@ -99,7 +100,7 @@ func TestInstanceStatusManager_GetStatus_NoPendingApprovalLeavesIdle(t *testing.
 	src.status.Store(int32(detection.StatusIdle))
 	ism.RegisterPiStatusSource("pi-session", src)
 
-	provider := &fakeApprovalMetadataProvider{bySessionID: map[string][]ApprovalMetadata{}}
+	provider := &fakeApprovalMetadataProvider{bySessionID: map[string][]domain.ApprovalMetadata{}}
 	ism.SetApprovalProvider(provider)
 
 	info := ism.GetStatus(inst)

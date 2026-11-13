@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // wireGuidanceMirror gives the approval handler its durable hook-question mirror
@@ -69,5 +70,5 @@ func (s storageSessionEnds) Ended(sessionUUID string) bool {
 	if !listed {
 		return false
 	}
-	return !ok || d.ArchivedAt != nil || d.Status == session.Stopped
+	return !ok || d.ArchivedAt != nil || d.Status == domain.Stopped
 }

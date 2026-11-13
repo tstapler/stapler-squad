@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/gitwt"
 )
@@ -23,9 +24,9 @@ func brokenWorktreeInstance(t *testing.T) (*Instance, string) {
 
 	inst := &Instance{
 		Title:       "dirty-check-fails",
-		Status:      Running,
+		Status:      domain.Active,
 		IsWorktree:  true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		GitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), wtDir, "dirty-check-fails", "branch", ""),
 		},
@@ -42,7 +43,7 @@ func TestPause_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *testing
 
 	require.ErrorIs(t, err, ErrDirtyStateUnknown)
 	assert.FileExists(t, precious)
-	assert.Equal(t, Running, inst.Status, "status must not advance when pause was refused")
+	assert.Equal(t, domain.Active, inst.Status, "status must not advance when pause was refused")
 }
 
 func TestStopByUser_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *testing.T) {
@@ -53,7 +54,7 @@ func TestStopByUser_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *te
 
 	require.ErrorIs(t, err, ErrDirtyStateUnknown)
 	assert.FileExists(t, precious)
-	assert.Equal(t, Running, inst.Status, "status must not advance when stop was refused")
+	assert.Equal(t, domain.Active, inst.Status, "status must not advance when stop was refused")
 }
 
 // An untracked file must be reported as work to commit and must survive
@@ -155,7 +156,7 @@ func TestForceStopByUser_should_StopAndKeepWorktree_When_DirtyCheckErrors(t *tes
 	err := inst.ForceStopByUser()
 
 	require.NoError(t, err)
-	assert.Equal(t, Stopped, inst.Status)
+	assert.Equal(t, domain.Stopped, inst.Status)
 	assert.FileExists(t, precious, "force stop must never delete the worktree contents")
 	assert.True(t, pm.closeCalled, "force stop must still kill the tmux session")
 }
@@ -163,13 +164,13 @@ func TestForceStopByUser_should_StopAndKeepWorktree_When_DirtyCheckErrors(t *tes
 func TestForceStopByUser_should_StillRefuse_When_TransitionIllegal(t *testing.T) {
 	t.Parallel()
 	inst, precious := brokenWorktreeInstance(t)
-	inst.Status = Restoring
+	inst.Status = domain.Restoring
 	pm := &fakeStopByUserProcessManager{hasSession: true}
 	inst.processManager = pm
 
 	err := inst.ForceStopByUser()
 
-	var transErr ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	require.ErrorAs(t, err, &transErr)
 	assert.False(t, pm.closeCalled)
 	assert.FileExists(t, precious)
@@ -186,8 +187,8 @@ func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testin
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
 	inst := &Instance{
-		Title: "force-known-dirty", Status: Running, IsWorktree: true,
-		Permissions: GetManagedPermissions(),
+		Title: "force-known-dirty", Status: domain.Active, IsWorktree: true,
+		Permissions: domain.GetManagedPermissions(),
 		GitManager:  gitwt.Manager{Worktree: wt},
 	}
 	inst.started.Store(true)
@@ -196,7 +197,7 @@ func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testin
 
 	require.NoError(t, inst.ForceStopByUser())
 
-	assert.Equal(t, Stopped, inst.Status)
+	assert.Equal(t, domain.Stopped, inst.Status)
 	repo, err := git.OpenRepo(repoPath)
 	require.NoError(t, err)
 	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)

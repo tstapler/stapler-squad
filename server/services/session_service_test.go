@@ -46,7 +46,7 @@ func addPausedSession(t *testing.T, fix *forkTestFixture, title string) {
 	inst := &session.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -261,7 +261,7 @@ func TestDeleteSession_RemovesFromReviewQueue(t *testing.T) {
 	testInstance := &session.Instance{
 		Title:     "test-session",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -389,7 +389,7 @@ func TestDeleteSession_ByUUID(t *testing.T) {
 		Title:     "my-session",
 		UUID:      sessionUUID,
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -426,7 +426,7 @@ func TestDeleteSession_PublishesDeletedEvent(t *testing.T) {
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "evt-session",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -467,7 +467,7 @@ func TestDeleteSession_ListInstanceDataExcludesDeleted(t *testing.T) {
 		require.NoError(t, storage.AddInstance(&session.Instance{
 			Title:     title,
 			Path:      "/tmp/test",
-			Status:    session.Paused,
+			Status:    domain.Paused,
 			Program:   "claude",
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -513,7 +513,7 @@ func TestDeleteSession_DestroyFailureIsNonFatal(t *testing.T) {
 	testInst := &session.Instance{
 		Title:     "stubborn-session",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -618,11 +618,11 @@ func TestCleanupPartialCreation_should_NotDeleteWorktree_When_ItLooksAliveDespit
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 
-	inst := &session.Instance{Title: "cleanup-alive-worktree-test", Status: session.Stopped}
+	inst := &session.Instance{Title: "cleanup-alive-worktree-test", Status: domain.Stopped}
 	inst.SetGitWorktree(wt) // sets started=true as a side effect -- see its doc comment
 	inst.RecoverFromStopped()
 	require.False(t, inst.Started(), "test setup must reproduce Started()==false with a live worktree still attached")
-	require.Equal(t, session.Creating, inst.Status, "RecoverFromStopped resets Stopped to Creating")
+	require.Equal(t, domain.Creating, inst.Status, "RecoverFromStopped resets Stopped to Creating")
 
 	err = cleanupPartialCreation(inst, false)
 
@@ -639,7 +639,7 @@ func TestCleanupPartialCreation_should_NotDeleteWorktree_When_ItLooksAliveDespit
 func TestCleanupPartialCreation_should_NotKillTmuxSession_When_ItLooksAliveDespiteNotStartedStatus(t *testing.T) {
 	t.Parallel()
 
-	inst := &session.Instance{Title: "cleanup-alive-tmux-test", Status: session.Stopped, Program: "bash"}
+	inst := &session.Instance{Title: "cleanup-alive-tmux-test", Status: domain.Stopped, Program: "bash"}
 	sess := tmux.NewTmuxSessionWithPrefix(inst.Title, inst.Program, "ssq-cleanup-alive-tmux-test-")
 	require.NoError(t, sess.Start(t.TempDir()))
 	t.Cleanup(func() { _ = sess.Close() })
@@ -669,7 +669,7 @@ func TestCleanupPartialCreation_should_NotKillTmuxSession_When_ItLooksAliveDespi
 func TestCleanupPartialCreation_should_StopSessionDriver_When_NotStarted(t *testing.T) {
 	t.Parallel()
 
-	inst := &session.Instance{Title: "cleanup-driver-test", Status: session.Stopped, Program: "bash"}
+	inst := &session.Instance{Title: "cleanup-driver-test", Status: domain.Stopped, Program: "bash"}
 	sess := tmux.NewTmuxSessionWithPrefix(inst.Title, inst.Program, "ssq-cleanup-driver-test-")
 	require.NoError(t, sess.Start(t.TempDir()))
 	t.Cleanup(func() { _ = sess.Close() })
@@ -731,7 +731,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstanceNil(t *testing.T) {
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "no-live-instance",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -783,7 +783,7 @@ func TestShutdown_WaitsForDeleteSessionCleanup_LiveInstancePresent(t *testing.T)
 	testInst := &session.Instance{
 		Title:     "live-instance",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -973,7 +973,7 @@ func TestDeleteSession_LiveInstance_LogsWarningOnSlowCleanupButStillWaits(t *tes
 	testInst := &session.Instance{
 		Title:     "live-instance-slow-cleanup",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -1017,7 +1017,7 @@ func TestDeleteSession_StorageDeletedBeforeResponse(t *testing.T) {
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "timing-session",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -1064,7 +1064,7 @@ func TestSessionExitedPublisher_PublishesUpdatedEvent(t *testing.T) {
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "thinking-session",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -1077,15 +1077,15 @@ func TestSessionExitedPublisher_PublishesUpdatedEvent(t *testing.T) {
 	inst := instances[0]
 
 	// Force the instance into Active status to simulate a live thinking session.
-	inst.ForceStatus(session.Active)
+	inst.ForceStatus(domain.Active)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch, _ := eventBus.Subscribe(ctx)
 
 	// Simulate an unexpected exit (PTY EOF / process crash).
-	inst.ForceStatus(session.Stopped)
-	inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+	inst.ForceStatus(domain.Stopped)
+	inst.FireLifecycleEventForTest(domain.EventExited, "pty-eof")
 
 	select {
 	case evt := <-ch:
@@ -1108,7 +1108,7 @@ func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "thinking-session-2",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -1119,14 +1119,14 @@ func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
 	require.Len(t, instances, 1)
 	inst := instances[0]
 
-	inst.ForceStatus(session.Active)
+	inst.ForceStatus(domain.Active)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch, _ := eventBus.Subscribe(ctx)
 
-	inst.ForceStatus(session.Stopped)
-	inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+	inst.ForceStatus(domain.Stopped)
+	inst.FireLifecycleEventForTest(domain.EventExited, "pty-eof")
 
 	select {
 	case evt := <-ch:
@@ -1192,7 +1192,7 @@ func TestUpdateSession_TagsUpdate_Replaces(t *testing.T) {
 	inst := &session.Instance{
 		Title:     "tagged-session",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		Tags:      []string{"old-tag"},
 		CreatedAt: time.Now(),
@@ -1725,9 +1725,9 @@ func TestUpdateSession_Pause_NeverStartedActiveInstance_NoOpSuccessNotInternal(t
 	inst := &session.Instance{
 		Title:       "never-started-active",
 		Path:        "/tmp/test",
-		Status:      session.Active,
+		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1754,9 +1754,9 @@ func TestUpdateSession_Pause_StoppedInstance_ReturnsFailedPrecondition(t *testin
 	inst := &session.Instance{
 		Title:       "stopped-session",
 		Path:        "/tmp/test",
-		Status:      session.Stopped,
+		Status:      domain.Stopped,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1786,9 +1786,9 @@ func TestUpdateSession_Pause_PermissionDenied_ReturnsFailedPrecondition(t *testi
 	inst := &session.Instance{
 		Title:       "external-session",
 		Path:        "/tmp/test",
-		Status:      session.Active,
+		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetExternalPermissions(false),
+		Permissions: domain.GetExternalPermissions(false),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1822,9 +1822,9 @@ func TestUpdateSession_Resume_PermissionDenied_ReturnsFailedPrecondition(t *test
 	inst := &session.Instance{
 		Title:       "external-paused-session",
 		Path:        "/tmp/test",
-		Status:      session.Paused,
+		Status:      domain.Paused,
 		Program:     "claude",
-		Permissions: session.GetExternalPermissions(false),
+		Permissions: domain.GetExternalPermissions(false),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1853,9 +1853,9 @@ func TestUpdateSession_should_StopSession_When_TargetIsStoppedFromActive(t *test
 	inst := &session.Instance{
 		Title:       "active-session-to-stop",
 		Path:        "/tmp/test",
-		Status:      session.Active,
+		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1885,10 +1885,10 @@ func TestUpdateSession_should_ForceStopBrokenWorktree_Only_When_ForceStopSet(t *
 	inst := &session.Instance{
 		Title:       "force-stop-session",
 		Path:        "/tmp/test",
-		Status:      session.Active,
+		Status:      domain.Active,
 		Program:     "claude",
 		IsWorktree:  true,
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1918,8 +1918,8 @@ func TestUpdateSession_should_RejectForceStop_When_StatusIsNotStopped(t *testing
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 	inst := &session.Instance{
-		Title: "force-stop-bad-status", Path: "/tmp/test", Status: session.Active, Program: "claude",
-		Permissions: session.GetManagedPermissions(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Title: "force-stop-bad-status", Path: "/tmp/test", Status: domain.Active, Program: "claude",
+		Permissions: domain.GetManagedPermissions(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	svctest.AddInstanceToPoller(fix.poller, inst)
 
@@ -1944,9 +1944,9 @@ func TestUpdateSession_should_RejectStop_When_TransitionIsIllegal(t *testing.T) 
 	inst := &session.Instance{
 		Title:       "restoring-session",
 		Path:        "/tmp/test",
-		Status:      session.Restoring,
+		Status:      domain.Restoring,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -1998,9 +1998,9 @@ func TestUpdateSession_SteerMessage_NonAutonomousSession_SendsViaSendKeys(t *tes
 	inst := &session.Instance{
 		Title:       "steerable-work-session",
 		Path:        t.TempDir(),
-		Status:      session.Paused,
+		Status:      domain.Paused,
 		Program:     "bash",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2036,9 +2036,9 @@ func TestUpdateSession_SteerMessage_NonAutonomousSession_SendKeysFailure_Returns
 	inst := &session.Instance{
 		Title:       "never-started-work-session",
 		Path:        "/tmp/test",
-		Status:      session.Active,
+		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2077,9 +2077,9 @@ func TestUpdateSession_SteerMessage_AutonomousSession_StillUsesController(t *tes
 	inst := &session.Instance{
 		Title:          "autonomous-session",
 		Path:           "/tmp/test",
-		Status:         session.Active,
+		Status:         domain.Active,
 		Program:        "claude",
-		Permissions:    session.GetManagedPermissions(),
+		Permissions:    domain.GetManagedPermissions(),
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
@@ -2109,9 +2109,9 @@ func TestUpdateSession_SteerMessage_AutonomousNilController_NowReturnsError(t *t
 	inst := &session.Instance{
 		Title:          "autonomous-no-controller",
 		Path:           "/tmp/test",
-		Status:         session.Active,
+		Status:         domain.Active,
 		Program:        "claude",
-		Permissions:    session.GetManagedPermissions(),
+		Permissions:    domain.GetManagedPermissions(),
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
@@ -2328,7 +2328,7 @@ func TestSessionService_SessionProgram_ReturnsProgramForLiveInstance(t *testing.
 	inst := &session.Instance{
 		Title:       "program-lookup-session",
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2378,7 +2378,7 @@ func TestSessionService_IsReadyForSteer_ReturnsFalse_When_StatusManagerNotWired(
 	inst := &session.Instance{
 		Title:       "no-status-manager-session",
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2402,7 +2402,7 @@ func TestSessionService_IsReadyForSteer_ReturnsFalse_When_ControllerNotRegistere
 	inst := &session.Instance{
 		Title:       "no-controller-session",
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2529,9 +2529,9 @@ func TestUpdateSession_SteerMessage_ExceedsMaxLength_ReturnsInvalidArgument(t *t
 	inst := &session.Instance{
 		Title:       "steer-too-long-session",
 		Path:        "/tmp/test",
-		Status:      session.Active,
+		Status:      domain.Active,
 		Program:     "claude",
-		Permissions: session.GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
@@ -2598,7 +2598,7 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 		Title:     "hibernated-session",
 		UUID:      "dddddddd-0000-0000-0000-000000000004",
 		Path:      "/tmp/test",
-		Status:    session.Hibernated,
+		Status:    domain.Hibernated,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -2608,7 +2608,7 @@ func TestResumeHibernatedSession_DoesNotTouchOtherSessions(t *testing.T) {
 	other := &session.Instance{
 		Title:     "hibernate-sibling-session",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -2677,7 +2677,7 @@ func TestResumeHibernatedSession_WiresProvider(t *testing.T) {
 		Title:     "hibernated-provider-session",
 		UUID:      sessionUUID,
 		Path:      "/tmp/test",
-		Status:    session.Hibernated,
+		Status:    domain.Hibernated,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -2725,7 +2725,7 @@ func TestResumeCrashedSession_TransitionsCrashedToActive(t *testing.T) {
 		Title:      "crashed-session",
 		UUID:       sessionUUID,
 		Path:       "/tmp/test",
-		Status:     session.Crashed,
+		Status:     domain.Crashed,
 		ExitReason: "signal SIGKILL (exit code 137)",
 		Program:    "claude",
 		CreatedAt:  time.Now(),
@@ -2769,7 +2769,7 @@ func TestResumeCrashedSession_WiresProvider(t *testing.T) {
 		Title:      "crashed-provider-session",
 		UUID:       sessionUUID,
 		Path:       "/tmp/test",
-		Status:     session.Crashed,
+		Status:     domain.Crashed,
 		ExitReason: "signal SIGKILL (exit code 137)",
 		Program:    "claude",
 		CreatedAt:  time.Now(),
@@ -2927,7 +2927,7 @@ func TestGetSession_FoundByTitle(t *testing.T) {
 	inst := &session.Instance{
 		Title:   "title-session",
 		UUID:    "aaaaaaaa-0000-0000-0000-000000000001",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 		Path:    "/tmp/test",
 	}
@@ -2952,7 +2952,7 @@ func TestGetSession_FoundByUUID(t *testing.T) {
 	inst := &session.Instance{
 		Title:   "uuid-session",
 		UUID:    testUUID,
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 		Path:    "/tmp/test",
 	}
@@ -2998,14 +2998,14 @@ func TestListSessions_ReturnsAllSessions(t *testing.T) {
 	fix.poller.AddInstance(&session.Instance{
 		Title:   "session-one",
 		UUID:    "cccccccc-0000-0000-0000-000000000001",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 		Path:    "/tmp/test",
 	})
 	fix.poller.AddInstance(&session.Instance{
 		Title:   "session-two",
 		UUID:    "cccccccc-0000-0000-0000-000000000002",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 		Path:    "/tmp/test",
 	})
@@ -3025,14 +3025,14 @@ func TestListSessions_WithStatusFilter(t *testing.T) {
 	fix.poller.AddInstance(&session.Instance{
 		Title:   "running-session",
 		UUID:    "dddddddd-0000-0000-0000-000000000001",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 		Path:    "/tmp/test",
 	})
 	fix.poller.AddInstance(&session.Instance{
 		Title:   "paused-session",
 		UUID:    "dddddddd-0000-0000-0000-000000000002",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 		Path:    "/tmp/test",
 	})
@@ -3056,7 +3056,7 @@ func TestListSessions_WithCategoryFilter(t *testing.T) {
 	fix.poller.AddInstance(&session.Instance{
 		Title:    "backend-session",
 		UUID:     "eeeeeeee-0000-0000-0000-000000000001",
-		Status:   session.Active,
+		Status:   domain.Active,
 		Program:  "claude",
 		Path:     "/tmp/test",
 		Category: "backend",
@@ -3064,7 +3064,7 @@ func TestListSessions_WithCategoryFilter(t *testing.T) {
 	fix.poller.AddInstance(&session.Instance{
 		Title:    "frontend-session",
 		UUID:     "eeeeeeee-0000-0000-0000-000000000002",
-		Status:   session.Active,
+		Status:   domain.Active,
 		Program:  "claude",
 		Path:     "/tmp/test",
 		Category: "frontend",
@@ -3275,7 +3275,7 @@ func TestCreateSession_HonorsExplicitBackendOverride(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(testDir, "config.json"),
 		[]byte(`{"tymux_session_overrides": {"`+sessionKey+`": false}}`), 0o644))
 
-	backendOverride := string(session.BackendTymux)
+	backendOverride := string(domain.BackendTymux)
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:           title,
 		Path:            t.TempDir(),
@@ -3287,7 +3287,7 @@ func TestCreateSession_HonorsExplicitBackendOverride(t *testing.T) {
 
 	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
 	require.NotNil(t, inst)
-	assert.Equal(t, session.BackendTymux, inst.Backend,
+	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"request backend_override must win even though this session's TymuxSessionOverrides entry forces tmux")
 }
 
@@ -3316,7 +3316,7 @@ func TestCreateSession_HonorsSessionNameOverrideMap(t *testing.T) {
 
 	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
 	require.NotNil(t, inst)
-	assert.Equal(t, session.BackendTymux, inst.Backend,
+	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend with no request override present")
 }
 
@@ -3342,7 +3342,7 @@ func TestCreateSession_FallsBackToGlobalDefaultWhenNoOverrides(t *testing.T) {
 
 	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
 	require.NotNil(t, inst)
-	assert.Equal(t, session.BackendTymux, inst.Backend,
+	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"with no request override and no session-name override, CreateSession must apply the process-wide registered default")
 }
 
@@ -3374,7 +3374,7 @@ func TestCreateDirectorySession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
-	assert.Equal(t, session.BackendTmux, inst.Backend,
+	assert.Equal(t, domain.BackendTmux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }
 
@@ -3398,7 +3398,7 @@ func TestCreateWorktreeSession_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = inst.Destroy() })
 
-	assert.Equal(t, session.BackendTmux, inst.Backend,
+	assert.Equal(t, domain.BackendTmux, inst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }
 
@@ -3530,7 +3530,7 @@ func TestCreateSession_RestartFromSessionId_DerivesPathFromSource(t *testing.T) 
 		Title:   "restart-source",
 		Path:    sourcePath,
 		Program: "claude",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 	}))
 
 	resp, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -3558,7 +3558,7 @@ func TestCreateSession_RestartFromSessionId_ExplicitPathWins(t *testing.T) {
 		Title:   "restart-source-explicit",
 		Path:    sourcePath,
 		Program: "claude",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 	}))
 
 	explicitPath := t.TempDir()
@@ -3612,7 +3612,7 @@ func TestCreateSession_RestartFromSessionId_RejectsStillLiveSourceWithoutConfirm
 		Title:   "restart-source-live",
 		Path:    t.TempDir(),
 		Program: "claude",
-		Status:  session.Active,
+		Status:  domain.Active,
 	}
 	svctest.AddInstanceToPoller(fix.poller, liveSource)
 
@@ -3649,7 +3649,7 @@ func TestCreateSession_RestartFromSessionId_ProceedsWhenLiveSourceConfirmed(t *t
 		Title:   "restart-source-live-confirmed",
 		Path:    sourcePath,
 		Program: "claude",
-		Status:  session.Active,
+		Status:  domain.Active,
 	}
 	svctest.AddInstanceToPoller(fix.poller, liveSource)
 
@@ -3686,7 +3686,7 @@ func TestDeleteSession_CancelsPendingApprovals(t *testing.T) {
 		Title:     "approval-session",
 		UUID:      sessionUUID,
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -3731,7 +3731,7 @@ func TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop(t *testing.T) {
 	require.NoError(t, storage.AddInstance(&session.Instance{
 		Title:     "clean-session",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -3916,7 +3916,7 @@ func newRateLimitHiddenTestFixture(t *testing.T, title string) (*SessionService,
 		Title:     title,
 		UUID:      title + "-uuid",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		Hidden:    true,
 		CreatedAt: time.Now(),
@@ -3977,7 +3977,7 @@ func TestWireRateLimitCallbacks_StillPublishesSessionUpdated_When_InstanceHidden
 			Title:     title,
 			UUID:      title + "-uuid",
 			Path:      "/tmp/test",
-			Status:    session.Paused,
+			Status:    domain.Paused,
 			Program:   "claude",
 			Hidden:    true,
 			CreatedAt: time.Now(),
@@ -4062,7 +4062,7 @@ func TestWireRateLimitCallbacks_StampsItemIDMetadata_When_BacklogLinkedAndNotHid
 		Title:     title,
 		UUID:      title + "-uuid",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		Hidden:    false,
 		CreatedAt: time.Now(),
@@ -4112,7 +4112,7 @@ func TestOnColdRestoreLostHistory_PublishesNotification(t *testing.T) {
 			Title:     title,
 			UUID:      title + "-uuid",
 			Path:      "/tmp/test",
-			Status:    session.Paused,
+			Status:    domain.Paused,
 			Program:   "claude",
 			Hidden:    hidden,
 			CreatedAt: time.Now(),
@@ -4153,7 +4153,7 @@ func TestColdRestoreOutcomeListener_FiltersOnReason(t *testing.T) {
 		Title:     "cold-restore-listener",
 		UUID:      "cold-restore-listener-uuid",
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -4166,13 +4166,13 @@ func TestColdRestoreOutcomeListener_FiltersOnReason(t *testing.T) {
 	defer cancel()
 	ch, _ := eventBus.Subscribe(subCtx)
 
-	listener.OnLifecycleEvent(session.EventStarted, "")
+	listener.OnLifecycleEvent(domain.EventStarted, "")
 	assert.Empty(t, drainNotificationEvents(ch), "a normal start (empty reason) must not notify")
 
-	listener.OnLifecycleEvent(session.EventExited, session.ReasonColdRestoreLostHistory)
+	listener.OnLifecycleEvent(domain.EventExited, domain.ReasonColdRestoreLostHistory)
 	assert.Empty(t, drainNotificationEvents(ch), "the reason must only be honored on EventStarted")
 
-	listener.OnLifecycleEvent(session.EventStarted, session.ReasonColdRestoreLostHistory)
+	listener.OnLifecycleEvent(domain.EventStarted, domain.ReasonColdRestoreLostHistory)
 	notifs := drainNotificationEvents(ch)
 	require.Len(t, notifs, 1, "EventStarted with the lost-history reason must notify")
 }
@@ -4433,7 +4433,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 			Title:   "epic61-restart-source",
 			Path:    sourcePath,
 			Program: "sh",
-			Status:  session.Paused,
+			Status:  domain.Paused,
 		}))
 
 		// Phase text is captured via creationPhaseHook (the same test-only seam
@@ -4547,7 +4547,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 
 		// The pre-existing sibling's own state must be untouched -- proving
 		// no cross-attach occurred in the OTHER direction either.
-		assert.Equal(t, session.Active, session.Status(preExisting.GetStatus()))
+		assert.Equal(t, domain.Active, domain.Status(preExisting.GetStatus()))
 		assert.Equal(t, repoDir, preExisting.Workspace().ActiveDir)
 		assert.Equal(t, preExistingUUID, preExisting.GetClaudeConversationUUID())
 	})
@@ -4798,18 +4798,18 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		inst := fix.svc.FindLiveInstance(id)
 		require.NotNil(t, inst)
 		wait.RequireEventually(t, func() bool {
-			return session.Status(inst.GetStatus()) == session.Active
+			return domain.Status(inst.GetStatus()) == domain.Active
 		}, awaitTimeout, pollInterval, "precondition: fixture instance must reach Active before being forced to Failed")
 
 		for r := 0; r < retriesPerRun; r++ {
-			inst.ForceStatus(session.Failed)
+			inst.ForceStatus(domain.Failed)
 			_, retryErr := fix.svc.RetrySessionCreation(context.Background(), connect.NewRequest(&sessionv1.RetrySessionCreationRequest{
 				Id: id,
 			}))
 			require.NoError(t, retryErr)
 			wait.RequireEventually(t, func() bool {
-				status := session.Status(inst.GetStatus())
-				return status == session.Active || status == session.Failed
+				status := domain.Status(inst.GetStatus())
+				return status == domain.Active || status == domain.Failed
 			}, awaitTimeout, pollInterval, "retried pipeline must reach a terminal status")
 		}
 
@@ -4848,7 +4848,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
 			wait.RequireEventually(t, func() bool {
-				return session.Status(inst.GetStatus()) == session.Failed
+				return domain.Status(inst.GetStatus()) == domain.Failed
 			}, awaitTimeout, pollInterval, "pipeline must still reach Failed after losing the cancel race")
 		}
 	}
@@ -4876,7 +4876,7 @@ func TestCreateSession_should_LeaveNoGoroutines_When_HammeredWithFailRetryCancel
 		inst := fix.svc.FindLiveInstance(id)
 		if inst != nil {
 			wait.RequireEventually(t, func() bool {
-				return session.Status(inst.GetStatus()) == session.Active
+				return domain.Status(inst.GetStatus()) == domain.Active
 			}, awaitTimeout, pollInterval, "pipeline must still reach Active after winning the cancel race")
 		}
 	}
@@ -4910,7 +4910,7 @@ func assertReachesActiveViaPipeline(t *testing.T, svc *SessionService, created *
 
 	outcome, err := svc.awaitCreationTerminal(context.Background(), created.Id, awaitTimeout, pollInterval)
 	require.NoError(t, err, "AwaitCreationTerminal must not error before the pipeline reaches a terminal status")
-	assert.Equal(t, session.Active, outcome.Status,
+	assert.Equal(t, domain.Active, outcome.Status,
 		"session must reach Active via the Background Resolution Pipeline, not %v (failure_reason=%q)",
 		outcome.Status, outcome.FailureReason)
 }
@@ -4938,7 +4938,7 @@ func TestCreateSession_should_PersistCreationProgressUpdatedAt_When_PhaseTransit
 		Title:   "epic11-story114-restart-source",
 		Path:    sourcePath,
 		Program: "sh",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 	}))
 
 	// Restart mode's first two phases ("Resolving defaults...", "Setting up

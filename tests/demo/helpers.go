@@ -14,6 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // DemoServer manages a stapler-squad server instance for demo recording.
@@ -162,7 +163,7 @@ func mockSessions() []session.InstanceData {
 			Title:                "payment-stripe-integration",
 			Path:                 "/Users/dev/services/payment-service",
 			Branch:               "feature/stripe-webhooks",
-			Status:               session.Paused,
+			Status:               domain.Paused,
 			Program:              "claude",
 			Category:             "Backend",
 			Tags:                 []string{"Payments", "API", "Priority"},
@@ -177,7 +178,7 @@ func mockSessions() []session.InstanceData {
 			Title:                "fix-api-timeout",
 			Path:                 "/Users/dev/services/api-gateway",
 			Branch:               "fix/connection-pool-exhaustion",
-			Status:               session.Active,
+			Status:               domain.Active,
 			Program:              "claude",
 			Category:             "Backend",
 			Tags:                 []string{"Bug", "API", "Urgent"},
@@ -192,7 +193,7 @@ func mockSessions() []session.InstanceData {
 			Title:                "auth-refactor",
 			Path:                 "/Users/dev/services/auth-service",
 			Branch:               "feature/oauth2-pkce",
-			Status:               session.Paused,
+			Status:               domain.Paused,
 			Program:              "claude",
 			Category:             "Backend",
 			Tags:                 []string{"Auth", "Security"},
@@ -207,7 +208,7 @@ func mockSessions() []session.InstanceData {
 			Title:                "dashboard-redesign",
 			Path:                 "/Users/dev/apps/web-client",
 			Branch:               "feature/analytics-dashboard",
-			Status:               session.Paused,
+			Status:               domain.Paused,
 			Program:              "claude",
 			Category:             "Frontend",
 			Tags:                 []string{"React", "UX", "Priority"},
@@ -222,7 +223,7 @@ func mockSessions() []session.InstanceData {
 			Title:                "k8s-autoscaling",
 			Path:                 "/Users/dev/infra/terraform-modules",
 			Branch:               "feature/hpa-config",
-			Status:               session.Active,
+			Status:               domain.Active,
 			Program:              "claude",
 			Category:             "Infrastructure",
 			Tags:                 []string{"DevOps", "Kubernetes"},
@@ -237,7 +238,7 @@ func mockSessions() []session.InstanceData {
 			Title:                "payment-email-notifications",
 			Path:                 "/Users/dev/services/notification-service",
 			Branch:               "feature/payment-receipts",
-			Status:               session.Paused,
+			Status:               domain.Paused,
 			Program:              "aider",
 			Category:             "Backend",
 			Tags:                 []string{"Payments", "Notifications"},

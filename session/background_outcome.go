@@ -1,6 +1,9 @@
 package session
 
-import "github.com/tstapler/stapler-squad/session/domain/backlogdto"
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+)
 
 // BackgroundOutcome is the server-computed result of a hidden (background)
 // session, surfaced as Session.background_outcome. See ADR-001 decision 6.
@@ -53,14 +56,14 @@ func IsFailureEndReason(endReason string) bool {
 // ComputeBackgroundOutcome derives a hidden session's outcome. is is nil when
 // the session has no ItemSession. A recorded verdict wins over a failure
 // reason; the diagnose role records no verdict, so it is always unknown.
-func ComputeBackgroundOutcome(status Status, is *backlogdto.ItemSessionSummary) BackgroundOutcome {
+func ComputeBackgroundOutcome(status domain.Status, is *backlogdto.ItemSessionSummary) BackgroundOutcome {
 	if is != nil && is.Role == SessionRoleDiagnose {
 		return BackgroundOutcomeUnknown
 	}
 	if is != nil && hasRecordedResult(is) {
 		return BackgroundOutcomeCompleted
 	}
-	if status == Crashed || (is != nil && IsFailureEndReason(is.EndReason)) {
+	if status == domain.Crashed || (is != nil && IsFailureEndReason(is.EndReason)) {
 		return BackgroundOutcomeFailed
 	}
 	return BackgroundOutcomeUnknown

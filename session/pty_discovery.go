@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/claudectl"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -553,7 +554,7 @@ func (pd *PTYDiscovery) discoverSquadPTYsWithCache(paneInfoMap map[string]paneEn
 
 	var pending []pendingEntry
 	for sessionName, instance := range pd.sessionMap {
-		if instance.Status != Active {
+		if instance.Status != domain.Active {
 			continue
 		}
 		tmuxName := tmux.ToStaplerSquadTmuxName(instance.Title)

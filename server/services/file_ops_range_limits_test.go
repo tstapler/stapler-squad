@@ -10,14 +10,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // anySessionProvider maps every session id to the same worktree.
 type anySessionProvider struct{ dir string }
 
-func (p anySessionProvider) GetWorkspace(string) (session.Workspace, error) {
-	return session.Workspace{ExistingDir: p.dir}, nil
+func (p anySessionProvider) GetWorkspace(string) (domain.Workspace, error) {
+	return domain.Workspace{ExistingDir: p.dir}, nil
 }
 
 func rangeBusyReason(t *testing.T, err error) string {

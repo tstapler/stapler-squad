@@ -9,6 +9,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -81,11 +82,11 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		Title:       "test-uncommitted-changes",
 		Path:        repoPath,
 		Branch:      branchName,
-		Status:      Running,
+		Status:      domain.Active,
 		GitManager:  gitwt.Manager{Worktree: worktree},
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}
 	instance.started.Store(true)
 
@@ -256,11 +257,11 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 		Title:       "test-no-worktree",
 		Path:        "/tmp/test-path",
 		Branch:      "",
-		Status:      Running,
+		Status:      domain.Active,
 		GitManager:  gitwt.Manager{Worktree: nil}, // No worktree
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}
 	instance.started.Store(true)
 
@@ -321,11 +322,11 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		Title:       "integration-test",
 		Path:        repoPath,
 		Branch:      branchName,
-		Status:      Running,
+		Status:      domain.Active,
 		GitManager:  gitwt.Manager{Worktree: worktree},
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}
 	instance.started.Store(true)
 

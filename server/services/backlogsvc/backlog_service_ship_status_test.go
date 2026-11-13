@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -38,7 +39,7 @@ func attachWorkSessionWithCommit(t *testing.T, storage *session.Storage, repo *s
 		Path:       worktreePath,
 		WorkingDir: worktreePath,
 		Branch:     branchName,
-		Status:     session.Paused,
+		Status:     domain.Paused,
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,

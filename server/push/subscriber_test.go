@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -133,7 +134,7 @@ func TestRenotifyComplete(t *testing.T) {
 // internal title (e.g. "diagnose:e32264b0:...") whose deep link has nowhere
 // useful to go. The delivery gate, not the push builder, drops it.
 func TestDeliverEvent_should_NotPush_When_HiddenSessionCompletesAndGateOn(t *testing.T) {
-	inst := &session.Instance{ID: "diagnose-1", Title: "diagnose:abc123:1", Status: session.Stopped, Hidden: true}
+	inst := &session.Instance{ID: "diagnose-1", Title: "diagnose:abc123:1", Status: domain.Stopped, Hidden: true}
 	event := &events.Event{
 		Type:          events.EventSessionUpdated,
 		Session:       inst,
@@ -152,7 +153,7 @@ func TestDeliverEvent_should_NotPush_When_HiddenSessionCompletesAndGateOn(t *tes
 }
 
 func TestBuildStatusChangeNotification_should_Deliver_When_SessionNotHidden(t *testing.T) {
-	inst := &session.Instance{ID: "normal-1", Title: "My Session", Status: session.Stopped, Hidden: false}
+	inst := &session.Instance{ID: "normal-1", Title: "My Session", Status: domain.Stopped, Hidden: false}
 	event := &events.Event{
 		Type:          events.EventSessionUpdated,
 		Session:       inst,
@@ -333,14 +334,14 @@ func TestUrgentPriorityTriggersPush(t *testing.T) {
 func TestSessionUpdatedPushGateTable(t *testing.T) {
 	tests := []struct {
 		name          string
-		status        session.Status
+		status        domain.Status
 		updatedFields []string
 		wantCalls     int
 	}{
-		{"Stopped + status field → push", session.Stopped, []string{"status"}, 1},
-		{"Stopped + unrelated field → suppressed", session.Stopped, []string{"goal"}, 0},
-		{"Active + status field → suppressed", session.Active, []string{"status"}, 0},
-		{"Active + no UpdatedFields → suppressed", session.Active, nil, 0},
+		{"Stopped + status field → push", domain.Stopped, []string{"status"}, 1},
+		{"Stopped + unrelated field → suppressed", domain.Stopped, []string{"goal"}, 0},
+		{"Active + status field → suppressed", domain.Active, []string{"status"}, 0},
+		{"Active + no UpdatedFields → suppressed", domain.Active, nil, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -352,7 +353,7 @@ func TestSessionUpdatedPushGateTable(t *testing.T) {
 // assertPushGateCase publishes a single EventSessionUpdated event and asserts
 // the delivered push count matches wantCalls, waiting for delivery when a
 // push is expected and for the context deadline otherwise.
-func assertPushGateCase(t *testing.T, status session.Status, updatedFields []string, wantCalls int) {
+func assertPushGateCase(t *testing.T, status domain.Status, updatedFields []string, wantCalls int) {
 	t.Helper()
 	bus := events.NewEventBus(10)
 	n := &mockNotifier{name: "test"}

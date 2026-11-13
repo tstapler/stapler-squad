@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type githubHandlers struct {
@@ -254,7 +255,7 @@ func (gh *githubHandlers) createSessionForPRWithAwaitTimeout(ctx context.Context
 			Session: &SessionDetail{SessionSummary: SessionSummary{
 				ID:     sessionID,
 				Title:  title,
-				Status: session.Creating.String(),
+				Status: domain.Creating.String(),
 			}},
 			StillCreating:  true,
 			ProgramWarning: programWarning,

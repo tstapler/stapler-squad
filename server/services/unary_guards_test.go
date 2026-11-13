@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Story 5.2 unary guards: a hidden (background) session is read-only for the UI
@@ -47,7 +48,7 @@ func TestWriteToSession_ShouldReturnFailedPreconditionWhenHiddenAndSucceedWhenVi
 func TestRestartSessionAndShell_ShouldReturnFailedPrecondition_WhenHiddenAndInternalCallersUnaffected(t *testing.T) {
 	fix := setupShellsFixture(t)
 	hidden := &session.Instance{
-		Title: "restart-hidden", Path: "/tmp/test", Status: session.Paused, Program: "claude",
+		Title: "restart-hidden", Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		Hidden: true, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, fix.storage.AddInstance(hidden))
@@ -75,7 +76,7 @@ func TestSwitchWorkspace_ShouldReturnFailedPreconditionWithZeroWritesZeroCheckpo
 	e := newSteerEnv(t)
 	hidden := e.addSession("switch-hidden", true, "")
 	// Paused, so the visible switch takes no checkpoint through the fake pane.
-	e.addSession("switch-visible", false, "", func(i *session.Instance) { i.Status = session.Paused })
+	e.addSession("switch-visible", false, "", func(i *session.Instance) { i.Status = domain.Paused })
 
 	types := map[string]sessionv1.WorkspaceSwitchType{
 		"directory": sessionv1.WorkspaceSwitchType_WORKSPACE_SWITCH_TYPE_DIRECTORY,
@@ -163,16 +164,16 @@ func TestGuardsFlag_ShouldBeAnInjectedInterfaceNotABoolAndFailClosed_WhenConfigU
 // ClearTerminalStatusIfLive guard row (same guard as RestartSession, T-RO-13).
 func TestClearTerminalStatusIfLive_ShouldRefuseHiddenAndReviveVisible(t *testing.T) {
 	t.Parallel()
-	hidden := session.NewHotRestorableInstanceForTest(t, "clear-hidden", session.Failed)
+	hidden := session.NewHotRestorableInstanceForTest(t, "clear-hidden", domain.Failed)
 	session.SetHiddenForTest(t, hidden, true)
-	visible := session.NewHotRestorableInstanceForTest(t, "clear-visible", session.Failed)
+	visible := session.NewHotRestorableInstanceForTest(t, "clear-visible", domain.Failed)
 	svc := newClearTerminalService(hidden, visible)
 
 	_, err := svc.ClearTerminalStatusIfLive(context.Background(), connect.NewRequest(&sessionv1.ClearTerminalStatusIfLiveRequest{SessionIds: []string{"clear-hidden"}}))
 	requireReadOnlyRefusal(t, err, "ClearTerminalStatusIfLive")
-	assert.Equal(t, session.Failed, hidden.GetLifecycleStatus())
+	assert.Equal(t, domain.Failed, hidden.GetLifecycleStatus())
 
 	_, err = svc.ClearTerminalStatusIfLive(context.Background(), connect.NewRequest(&sessionv1.ClearTerminalStatusIfLiveRequest{SessionIds: []string{"clear-visible"}}))
 	require.NoError(t, err)
-	assert.Equal(t, session.Active, visible.GetLifecycleStatus())
+	assert.Equal(t, domain.Active, visible.GetLifecycleStatus())
 }

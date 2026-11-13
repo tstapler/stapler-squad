@@ -59,26 +59,26 @@ func (i *Instance) actionClient() prActionClient {
 
 // ResolveTargetPR names the PR an action targets: ref when given (it must belong
 // to the session), else the session's active PR, else the legacy single PR.
-func (i *Instance) ResolveTargetPR(ref *PRRef) (PRRef, error) { return i.resolvePR(ref) }
+func (i *Instance) ResolveTargetPR(ref *domain.PRRef) (domain.PRRef, error) { return i.resolvePR(ref) }
 
 // resolvePR names the PR an action targets. A nil ref means the session's active
 // PR (the legacy scalars for a session without links). An explicit ref must be
 // attached to the session, so an action never reaches a PR the session does not
 // hold. A session with no PR at all fails with ErrNoPullRequest.
-func (i *Instance) resolvePR(ref *PRRef) (PRRef, error) {
+func (i *Instance) resolvePR(ref *domain.PRRef) (domain.PRRef, error) {
 	snap := i.Snapshot()
 	if ref != nil {
 		return i.resolveExplicitPR(snap, *ref)
 	}
-	if active := ActivePR(snap.GitHub.PRs, snap.Branch); active != nil {
+	if active := domain.ActivePR(snap.GitHub.PRs, snap.Branch); active != nil {
 		return active.Ref, nil
 	}
 	return i.legacyPRRef()
 }
 
-func (i *Instance) resolveExplicitPR(snap *InstanceSnapshot, ref PRRef) (PRRef, error) {
+func (i *Instance) resolveExplicitPR(snap *InstanceSnapshot, ref domain.PRRef) (domain.PRRef, error) {
 	if ref.IsZero() {
-		return PRRef{}, ErrZeroPRRef
+		return domain.PRRef{}, ErrZeroPRRef
 	}
 	if indexOfPR(snap.GitHub.PRs, ref) >= 0 {
 		return ref, nil
@@ -88,29 +88,29 @@ func (i *Instance) resolveExplicitPR(snap *InstanceSnapshot, ref PRRef) (PRRef, 
 			return ref, nil
 		}
 	}
-	return PRRef{}, fmt.Errorf("%w: %s", ErrPRNotAttached, ref)
+	return domain.PRRef{}, fmt.Errorf("%w: %s", ErrPRNotAttached, ref)
 }
 
-func (i *Instance) legacyPRRef() (PRRef, error) {
+func (i *Instance) legacyPRRef() (domain.PRRef, error) {
 	gh := i.GitHub()
 	if !gh.IsPRSession() {
-		return PRRef{}, fmt.Errorf("instance '%s' is not a PR session: %w", i.Title, ErrNoPullRequest)
+		return domain.PRRef{}, fmt.Errorf("instance '%s' is not a PR session: %w", i.Title, ErrNoPullRequest)
 	}
-	resolved, err := NewPRRef(gh.Host, gh.Owner, gh.Repo, gh.PRNumber)
+	resolved, err := domain.NewPRRef(gh.Host, gh.Owner, gh.Repo, gh.PRNumber)
 	if err != nil {
-		return PRRef{}, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
+		return domain.PRRef{}, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
 	return resolved, nil
 }
 
-// repoRef converts a PRRef to the github package's repo reference. github.com is
+// PRRepoRef converts a PRRef to the github package's repo reference. github.com is
 // the empty host there, matching what the legacy scalars carried.
-func (r PRRef) RepoRef() (github.RepoRef, error) {
-	host := r.host
+func PRRepoRef(r domain.PRRef) (github.RepoRef, error) {
+	host := r.Host()
 	if domain.IsGitHubCom(host) {
 		host = ""
 	}
-	return github.NewRepoRefWithHost(r.owner, r.repo, host)
+	return github.NewRepoRefWithHost(r.Owner(), r.Repo(), host)
 }
 
 // RefreshPRInfo fetches the latest PR information from GitHub
@@ -123,10 +123,10 @@ func (i *Instance) RefreshPRInfo(ctx context.Context) (*github.PRInfo, error) {
 	return i.refreshPRInfoFor(ctx, pr)
 }
 
-func (i *Instance) refreshPRInfoFor(ctx context.Context, pr PRRef) (*github.PRInfo, error) {
+func (i *Instance) refreshPRInfoFor(ctx context.Context, pr domain.PRRef) (*github.PRInfo, error) {
 	log.Info("refreshing PR info", "session", i.Title, "pr", pr.Number(), "owner", pr.Owner(), "repo", pr.Repo())
 
-	ref, err := pr.RepoRef()
+	ref, err := PRRepoRef(pr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -142,7 +142,7 @@ func (i *Instance) refreshPRInfoFor(ctx context.Context, pr PRRef) (*github.PRIn
 
 // GetPRComments fetches all comments on the PR
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) GetPRComments(ctx context.Context, target *PRRef) ([]github.PRComment, error) {
+func (i *Instance) GetPRComments(ctx context.Context, target *domain.PRRef) ([]github.PRComment, error) {
 	pr, err := i.resolvePR(target)
 	if err != nil {
 		return nil, err
@@ -150,7 +150,7 @@ func (i *Instance) GetPRComments(ctx context.Context, target *PRRef) ([]github.P
 
 	log.Info("fetching PR comments", "session", i.Title, "pr", pr.Number(), "owner", pr.Owner(), "repo", pr.Repo())
 
-	ref, err := pr.RepoRef()
+	ref, err := PRRepoRef(pr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -166,7 +166,7 @@ func (i *Instance) GetPRComments(ctx context.Context, target *PRRef) ([]github.P
 
 // GetPRDiff fetches the diff for the PR
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) GetPRDiff(ctx context.Context, target *PRRef) (string, error) {
+func (i *Instance) GetPRDiff(ctx context.Context, target *domain.PRRef) (string, error) {
 	pr, err := i.resolvePR(target)
 	if err != nil {
 		return "", err
@@ -174,7 +174,7 @@ func (i *Instance) GetPRDiff(ctx context.Context, target *PRRef) (string, error)
 
 	log.Info("fetching PR diff", "session", i.Title, "pr", pr.Number(), "owner", pr.Owner(), "repo", pr.Repo())
 
-	ref, err := pr.RepoRef()
+	ref, err := PRRepoRef(pr)
 	if err != nil {
 		return "", fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -190,7 +190,7 @@ func (i *Instance) GetPRDiff(ctx context.Context, target *PRRef) (string, error)
 
 // PostComment posts a comment to the PR
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) PostComment(ctx context.Context, target *PRRef, body string) error {
+func (i *Instance) PostComment(ctx context.Context, target *domain.PRRef, body string) error {
 	pr, err := i.resolvePR(target)
 	if err != nil {
 		return err
@@ -202,7 +202,7 @@ func (i *Instance) PostComment(ctx context.Context, target *PRRef, body string) 
 
 	log.Info("posting comment to PR", "pr", pr.Number(), "session", i.Title)
 
-	ref, err := pr.RepoRef()
+	ref, err := PRRepoRef(pr)
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -238,7 +238,7 @@ func (i *Instance) SetCommitStatus(ctx context.Context, state github.CommitStatu
 		return fmt.Errorf("invalid commit status request for instance '%s': %w", i.Title, err)
 	}
 
-	repo, err := pr.RepoRef()
+	repo, err := PRRepoRef(pr)
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -257,7 +257,7 @@ func (i *Instance) SetCommitStatus(ctx context.Context, state github.CommitStatu
 // MergePR merges the PR using the specified merge method
 // method can be: "merge", "squash", or "rebase"
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) MergePR(ctx context.Context, target *PRRef, method string) error {
+func (i *Instance) MergePR(ctx context.Context, target *domain.PRRef, method string) error {
 	pr, err := i.resolvePR(target)
 	if err != nil {
 		return err
@@ -275,7 +275,7 @@ func (i *Instance) MergePR(ctx context.Context, target *PRRef, method string) er
 
 	log.Info("merging PR", "pr", pr.Number(), "session", i.Title, "method", method)
 
-	ref, err := pr.RepoRef()
+	ref, err := PRRepoRef(pr)
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -290,7 +290,7 @@ func (i *Instance) MergePR(ctx context.Context, target *PRRef, method string) er
 
 // ClosePR closes the PR without merging
 // Returns an error if this is not a PR session or if the GitHub API call fails
-func (i *Instance) ClosePR(ctx context.Context, target *PRRef) error {
+func (i *Instance) ClosePR(ctx context.Context, target *domain.PRRef) error {
 	pr, err := i.resolvePR(target)
 	if err != nil {
 		return err
@@ -298,7 +298,7 @@ func (i *Instance) ClosePR(ctx context.Context, target *PRRef) error {
 
 	log.Info("closing PR without merging", "pr", pr.Number(), "session", i.Title)
 
-	ref, err := pr.RepoRef()
+	ref, err := PRRepoRef(pr)
 	if err != nil {
 		return fmt.Errorf("invalid repo ref for instance '%s': %w", i.Title, err)
 	}
@@ -317,7 +317,7 @@ func (i *Instance) ClosePR(ctx context.Context, target *PRRef) error {
 //
 // Currently has no non-test callers; an untagged ctx inherits GitHubCallOriginFrom's
 // background default until a caller exists.
-func (i *Instance) GeneratePRContextPrompt(ctx context.Context, target *PRRef) (string, error) {
+func (i *Instance) GeneratePRContextPrompt(ctx context.Context, target *domain.PRRef) (string, error) {
 	pr, err := i.resolvePR(target)
 	if err != nil {
 		return "", err

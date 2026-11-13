@@ -21,6 +21,7 @@ import (
 	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeWorkspaceProvider implements WorkspaceProvider for tests.
@@ -28,11 +29,11 @@ type fakeWorkspaceProvider struct {
 	existingDir string
 }
 
-func (f *fakeWorkspaceProvider) GetWorkspace(sessionID string) (session.Workspace, error) {
+func (f *fakeWorkspaceProvider) GetWorkspace(sessionID string) (domain.Workspace, error) {
 	if sessionID != "test-session" {
-		return session.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
+		return domain.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
 	}
-	return session.Workspace{ExistingDir: f.existingDir}, nil
+	return domain.Workspace{ExistingDir: f.existingDir}, nil
 }
 
 // testFileService wraps FileService with a fake findInstance for unit tests.

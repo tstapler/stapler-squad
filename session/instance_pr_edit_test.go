@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakePRSetEditor is a persister that also implements the user-edit calls.
@@ -27,18 +28,18 @@ func (f *fakePRSetEditor) record(e string) {
 	f.emu.Unlock()
 }
 
-func (f *fakePRSetEditor) DetachSessionPR(_ context.Context, _ string, ref PRRef) error {
+func (f *fakePRSetEditor) DetachSessionPR(_ context.Context, _ string, ref domain.PRRef) error {
 	f.record("detach " + ref.String())
 	return f.editErr
 }
 
-func (f *fakePRSetEditor) SetSessionPRPinned(_ context.Context, _ string, ref PRRef, pinned bool) error {
+func (f *fakePRSetEditor) SetSessionPRPinned(_ context.Context, _ string, ref domain.PRRef, pinned bool) error {
 	f.record("pin " + ref.String())
 	f.pinCalls = append(f.pinCalls, pinned)
 	return f.editErr
 }
 
-func (f *fakePRSetEditor) ClearSessionPRTombstone(_ context.Context, _ string, ref PRRef) error {
+func (f *fakePRSetEditor) ClearSessionPRTombstone(_ context.Context, _ string, ref domain.PRRef) error {
 	f.record("untombstone " + ref.String())
 	return f.tombErr
 }
@@ -55,8 +56,8 @@ func editorInstance(t *testing.T) (*Instance, *fakePRSetEditor) {
 	inst := newPRTestInstance(t)
 	ed := &fakePRSetEditor{}
 	inst.SetPRPersister(ed)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen}))
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), AttachSourceManual, PRInitial{State: PRStateOpen}))
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), domain.AttachSourceManual, PRInitial{State: domain.PRStateOpen}))
 	return inst, ed
 }
 
@@ -103,12 +104,12 @@ func TestPinPRPersisted_ShouldPinThenUnpin(t *testing.T) {
 	pinsBefore, unpinsBefore := PRPinCount("pin"), PRPinCount("unpin")
 
 	require.NoError(t, inst.PinPRPersisted(context.Background(), r12, true))
-	active := ActivePR(inst.Snapshot().GitHub.PRs, "")
+	active := domain.ActivePR(inst.Snapshot().GitHub.PRs, "")
 	require.NotNil(t, active)
 	assert.Equal(t, 12, active.Ref.Number(), "the pinned PR wins over the newer #13")
 
 	require.NoError(t, inst.PinPRPersisted(context.Background(), r12, false))
-	active = ActivePR(inst.Snapshot().GitHub.PRs, "")
+	active = domain.ActivePR(inst.Snapshot().GitHub.PRs, "")
 	assert.Equal(t, 13, active.Ref.Number())
 	assert.Equal(t, []bool{true, false}, ed.pinCalls)
 	assert.GreaterOrEqual(t, PRPinCount("pin"), pinsBefore+1, "ssq_pr_pin_total{action=pin}")
@@ -120,7 +121,7 @@ func TestPinPRPersisted_ShouldNotPinInMemory_WhenRepositoryFails(t *testing.T) {
 	inst, ed := editorInstance(t)
 	ed.editErr = errors.New("db down")
 	require.Error(t, inst.PinPRPersisted(context.Background(), mustPRRef(t, "", "acme", "app", 12), true))
-	assert.Equal(t, 13, ActivePR(inst.Snapshot().GitHub.PRs, "").Ref.Number())
+	assert.Equal(t, 13, domain.ActivePR(inst.Snapshot().GitHub.PRs, "").Ref.Number())
 }
 
 func TestAttachPRManual_ShouldClearTombstoneBeforeAttaching(t *testing.T) {
@@ -130,12 +131,12 @@ func TestAttachPRManual_ShouldClearTombstoneBeforeAttaching(t *testing.T) {
 	inst.SetPRPersister(ed)
 	r30 := mustPRRef(t, "", "acme", "app", 30)
 
-	require.NoError(t, inst.AttachPRManual(context.Background(), r30, PRInitial{State: PRStateOpen}))
+	require.NoError(t, inst.AttachPRManual(context.Background(), r30, PRInitial{State: domain.PRStateOpen}))
 
 	require.NotEmpty(t, ed.events)
 	assert.Equal(t, "untombstone "+r30.String(), ed.events[0])
 	assert.Equal(t, []int{30}, attachNumbers(t, inst))
-	assert.Equal(t, AttachSourceManual, inst.Snapshot().GitHub.PRs[0].AttachSource)
+	assert.Equal(t, domain.AttachSourceManual, inst.Snapshot().GitHub.PRs[0].AttachSource)
 }
 
 func TestPRSetEdits_ShouldFail_WhenPersisterCannotEdit(t *testing.T) {

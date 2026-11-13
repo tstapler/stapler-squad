@@ -52,6 +52,7 @@ go_test(
         "//config",
         "//proto/session/v1:sessionv1_go",
         "//session",
+        "//session/domain",
         "//session/git",
         "//session/headless",
         "//session/tokens",

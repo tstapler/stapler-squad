@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
@@ -66,7 +67,7 @@ func newReplyEnv(t *testing.T) *replyEnv {
 	inst := session.NewStartedInstanceForTest(t, "reply-hidden", pm)
 	inst.UUID = "reply-hidden-uuid"
 	inst.Path = t.TempDir()
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	inst.Program = "claude"
 	inst.Hidden = true
 	inst.CreatedAt, inst.UpdatedAt = time.Now(), time.Now()

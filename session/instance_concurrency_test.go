@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestPause_should_skipGitOps_When_IsWorktreeIsFalse verifies that Pause() on a
@@ -18,9 +19,9 @@ func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title:       "test-non-worktree",
-		Status:      Active,
+		Status:      domain.Active,
 		IsWorktree:  false,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		// gitManager left as zero value — IsDirty() returns error if called
 	}
 	inst.started.Store(true)
@@ -30,7 +31,7 @@ func TestPause_should_skipGitOps_When_IsWorktreeIsFalse(t *testing.T) {
 	// Pause must succeed: no tmux session (DetachSafely is a no-op when session==nil),
 	// no git operations, transitionTo(Paused) sets the status.
 	require.NoError(t, err, "Pause() on a non-worktree session must not return an error")
-	assert.Equal(t, Paused, inst.Status, "instance should be Paused after successful Pause()")
+	assert.Equal(t, domain.Paused, inst.Status, "instance should be Paused after successful Pause()")
 }
 
 // TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized verifies
@@ -40,9 +41,9 @@ func TestPause_should_returnGitError_When_IsWorktreeIsTrueAndGitUninitialized(t 
 	t.Parallel()
 	inst := &Instance{
 		Title:       "test-worktree-uninit",
-		Status:      Active,
+		Status:      domain.Active,
 		IsWorktree:  true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		// gitManager.worktree == nil → IsDirty returns "git worktree not initialized"
 	}
 	inst.started.Store(true)
@@ -64,7 +65,7 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 	// and Paused->Paused is not a valid transition).
 	inst := &Instance{
 		Title:  "test-concurrent",
-		Status: Active,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 
@@ -79,7 +80,7 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 			defer wg.Done()
 			// Use the public-facing mutex pattern matching Approve/Deny
 			inst.mu.Lock()
-			err := inst.transitionTo(context.Background(), Paused)
+			err := inst.transitionTo(context.Background(), domain.Paused)
 			inst.mu.Unlock()
 
 			if err == nil {
@@ -97,7 +98,7 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 	if failCount != int32(numGoroutines-1) {
 		t.Errorf("expected %d failed transitions, got %d", numGoroutines-1, failCount)
 	}
-	if inst.Status != Paused {
+	if inst.Status != domain.Paused {
 		t.Errorf("expected final status Paused, got %s", inst.Status)
 	}
 }
@@ -110,7 +111,7 @@ func TestTransitionTo_ConcurrentApprove(t *testing.T) {
 	// Uses LiveInstance so the actor goroutine serializes concurrent commands.
 	inst := &Instance{
 		Title:  "test-concurrent-approve",
-		Status: Paused,
+		Status: domain.Paused,
 	}
 	inst.started.Store(true)
 	li := NewLiveInstance(inst)
@@ -137,7 +138,7 @@ func TestTransitionTo_ConcurrentApprove(t *testing.T) {
 	if successCount != 1 {
 		t.Errorf("expected exactly 1 successful Approve, got %d", successCount)
 	}
-	if inst.Status != Active {
+	if inst.Status != domain.Active {
 		t.Errorf("expected final status Active, got %s", inst.Status)
 	}
 }
@@ -157,7 +158,7 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 	// Uses LiveInstance so the actor goroutine serializes concurrent commands.
 	inst := &Instance{
 		Title:  "test-concurrent-mixed",
-		Status: Paused,
+		Status: domain.Paused,
 	}
 	inst.started.Store(true)
 	li := NewLiveInstance(inst)
@@ -193,7 +194,7 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 
 	// The final status must be either Active or Paused (the only reachable
 	// states via Approve/Deny cycles).
-	if inst.Status != Active && inst.Status != Paused {
+	if inst.Status != domain.Active && inst.Status != domain.Paused {
 		t.Errorf("expected final status Active or Paused, got %s", inst.Status)
 	}
 }

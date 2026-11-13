@@ -357,7 +357,7 @@ func (l *BacklogLifecycleListener) recordOrphanedAgentPR(ctx context.Context, it
 	}
 	return l.storage.GatedSetPRAndTransition(ctx,
 		session.TransitionRequest{Caller: session.CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: session.TriggeredBySystem},
-		session.PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary, Source: session.AttachSourcePRCreationService})
+		session.PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary, Source: domain.AttachSourcePRCreationService})
 }
 
 // mostRecentWorkCommitShippedToMain finds itemID's most recent work session
@@ -619,7 +619,7 @@ func (l *BacklogLifecycleListener) shipViaAgentOrFallback(ctx context.Context, i
 			fmt.Errorf("could not parse a PR number from the one-shot ship output"))
 		return
 	}
-	if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, session.AttachSourcePRCreationService); updateErr != nil {
+	if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, domain.AttachSourcePRCreationService); updateErr != nil {
 		l.stayInReviewAndNotify(ctx, item.ID, item.Title,
 			fmt.Sprintf("failed to persist PR #%d fields from agent-driven ship", prNumber), updateErr)
 		return
@@ -761,7 +761,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 		// end.
 		// The item-direct link and state row go in the same transaction as the fields
 		// (BUG-058 narrowed), so the refresher polls the PR and the gate sees it.
-		if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, session.AttachSourcePRCreationService); updateErr != nil {
+		if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, domain.AttachSourcePRCreationService); updateErr != nil {
 			l.stayInReviewAndNotify(ctx, item.ID, item.Title, fmt.Sprintf("failed to persist new PR #%d fields", prNumber), updateErr)
 			return
 		}
@@ -1397,7 +1397,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 		return
 	}
 
-	if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, session.AttachSourcePRCreationService); updateErr != nil {
+	if updateErr := l.storage.SetItemPRFieldsWithLink(ctx, item.ID, prURL, prNumber, domain.AttachSourcePRCreationService); updateErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] RecordPRCreatedOutOfBand store PR fields item=%s: %v", item.ID, updateErr)
 	}
 

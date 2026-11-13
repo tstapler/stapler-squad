@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func mustPRRef(t *testing.T, host, owner, repo string, n int) session.PRRef {
+func mustPRRef(t *testing.T, host, owner, repo string, n int) domain.PRRef {
 	t.Helper()
-	ref, err := session.NewPRRef(host, owner, repo, n)
+	ref, err := domain.NewPRRef(host, owner, repo, n)
 	if err != nil {
 		t.Fatalf("NewPRRef(%q,%q,%q,%d): %v", host, owner, repo, n, err)
 	}

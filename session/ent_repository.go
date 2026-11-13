@@ -1154,7 +1154,7 @@ func (r *EntRepository) List(ctx context.Context) ([]InstanceData, error) {
 }
 
 // ListByStatus retrieves sessions filtered by status
-func (r *EntRepository) ListByStatus(ctx context.Context, status Status) ([]InstanceData, error) {
+func (r *EntRepository) ListByStatus(ctx context.Context, status domain.Status) ([]InstanceData, error) {
 	// Query sessions by status with relationships
 	sessions, err := applyLoadOptions(
 		r.Client.Session.Query().Where(session.Status(int(status))),
@@ -1555,7 +1555,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		Path:                sess.Path,
 		WorkingDir:          sess.WorkingDir,
 		Branch:              sess.Branch,
-		Status:              Status(sess.Status),
+		Status:              domain.Status(sess.Status),
 		Height:              sess.Height,
 		Width:               sess.Width,
 		CreatedAt:           sess.CreatedAt,
@@ -1571,7 +1571,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		Note:                sess.Note,
 		IsExpanded:          sess.IsExpanded,
 		TmuxPrefix:          sess.TmuxPrefix,
-		Backend:             ProcessManagerBackend(sess.Backend),
+		Backend:             domain.ProcessManagerBackend(sess.Backend),
 		TymuxSessionID:      sess.TymuxSessionID,
 		LastOutputSignature: sess.LastOutputSignature,
 		MCPServerURL:        sess.McpServerURL,
@@ -1780,7 +1780,7 @@ func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions
 }
 
 // ListByStatusWithOptions retrieves sessions filtered by status with selective loading.
-func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status Status, options LoadOptions) ([]InstanceData, error) {
+func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status domain.Status, options LoadOptions) ([]InstanceData, error) {
 	sessions, err := applyLoadOptions(
 		r.Client.Session.Query().Where(session.Status(int(status))),
 		options,

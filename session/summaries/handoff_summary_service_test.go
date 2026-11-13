@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/handoffsummary"
 	"github.com/tstapler/stapler-squad/session/ent/hook"
@@ -659,7 +660,7 @@ func TestHandoffSummarySchema_should_SurviveSessionDeletion_When_NoEdgeExists(t 
 	now := time.Now()
 	sessionData := session.InstanceData{
 		Title: "handoff-fk-test-session", Path: "/home/user/project", WorkingDir: "/home/user/project",
-		Branch: "main", Status: session.Paused, Height: 24, Width: 80,
+		Branch: "main", Status: domain.Paused, Height: 24, Width: 80,
 		CreatedAt: now, UpdatedAt: now, Program: "claude", Category: "Test", Tags: []string{},
 	}
 	if err := repo.Create(ctx, sessionData); err != nil {

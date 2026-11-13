@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 )
 
@@ -81,7 +82,7 @@ func TestInstanceRestart(t *testing.T) {
 	tests := []struct {
 		name           string
 		started        bool
-		status         Status
+		status         domain.Status
 		preserveOutput bool
 		wantErr        bool
 		errType        error
@@ -89,7 +90,7 @@ func TestInstanceRestart(t *testing.T) {
 		{
 			name:           "restart unstarted instance",
 			started:        false,
-			status:         Ready,
+			status:         domain.Active,
 			preserveOutput: false,
 			wantErr:        true,
 			errType:        ErrCannotRestart,
@@ -100,7 +101,7 @@ func TestInstanceRestart(t *testing.T) {
 		{
 			name:           "restart paused instance",
 			started:        true,
-			status:         Paused,
+			status:         domain.Paused,
 			preserveOutput: false,
 			wantErr:        true,
 			errType:        nil, // any error is acceptable; ErrCannotRestart is no longer returned

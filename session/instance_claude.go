@@ -48,26 +48,6 @@ type claudeExtension struct {
 	conversationClearedAt time.Time
 }
 
-// ReviveOutcome records the outcome of the most recent start/cold-restore
-// decision (session-revive-uuid-loss AC3). See Instance.LastReviveOutcome.
-type ReviveOutcome string
-
-const (
-	ReviveOutcomeUnspecified ReviveOutcome = ""
-	// ReviveOutcomeResumeLive means a conversation UUID was already in memory;
-	// no disk-based recovery was needed.
-	ReviveOutcomeResumeLive ReviveOutcome = "resume_live"
-	// ReviveOutcomeResumeRecovered means no UUID was in memory, but
-	// tryExtractConversationUUID's disk-based fallback found one before launch.
-	ReviveOutcomeResumeRecovered ReviveOutcome = "resume_recovered"
-	// ReviveOutcomeFreshExpected means the session started fresh with no prior
-	// conversation history to lose (first-time setup or genuinely no history).
-	ReviveOutcomeFreshExpected ReviveOutcome = "fresh_expected"
-	// ReviveOutcomeFreshLostHistory means the session started fresh even though
-	// EverHadConversationHistory was true — recovery ran and found nothing.
-	ReviveOutcomeFreshLostHistory ReviveOutcome = "fresh_lost_history"
-)
-
 // isStaleResumeExit returns true when the PTY exit tail contains CLI errors
 // indicating a stale or expired resume argument for program.
 func isStaleResumeExit(program string, exitContent []byte) bool {

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateLimitDetectionFires
@@ -40,7 +41,7 @@ func TestQuotaGate_EndToEndSmokeTest_ShouldPauseThenResumeBacklog_When_RealRateL
 		Title:     "smoke-test-session",
 		UUID:      "smoke-test-uuid",
 		Path:      "/tmp/test",
-		Status:    session.Active,
+		Status:    domain.Active,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

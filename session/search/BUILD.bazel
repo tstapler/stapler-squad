@@ -48,7 +48,6 @@ go_test(
     embed = [":search"],
     deps = [
         "//config",
-        "//session",
         "//session/domain",
     ],
 )

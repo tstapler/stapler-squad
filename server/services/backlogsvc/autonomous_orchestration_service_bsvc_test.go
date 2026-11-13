@@ -44,7 +44,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_WorkStuck_Res
 	const title = "autonomous-work-respawn-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: repoPath,
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))

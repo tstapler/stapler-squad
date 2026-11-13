@@ -9,6 +9,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -30,9 +31,9 @@ func holdKinds(item *sessionv1.BacklogItem) []sessionv1.PrHold_Kind {
 func TestGetBacklogItem_ShouldFillPullRequestsAndHolds_OnlyWhenBacklogScopeOn(t *testing.T) {
 	t.Parallel()
 	h := newBlockerHarness(t, session.BacklogStatusPRPending)
-	h.link(session.ItemPROwner(h.itemID), 21, session.PRStateMerged)
-	h.link(session.ItemPROwner(h.itemID), 22, session.PRStateOpen)
-	h.link(session.ItemPROwner(h.itemID), 23, session.PRStateUnknown)
+	h.link(session.ItemPROwner(h.itemID), 21, domain.PRStateMerged)
+	h.link(session.ItemPROwner(h.itemID), 22, domain.PRStateOpen)
+	h.link(session.ItemPROwner(h.itemID), 23, domain.PRStateUnknown)
 
 	h.svc.cleanup.liveEnabled = func() bool { return false }
 	off := h.getItem()
@@ -52,10 +53,10 @@ func TestGetBacklogItem_ShouldNameSupersededRoundPR_AndLiveSession(t *testing.T)
 	h.svc.SetLiveWorkProbe(&stubProbe{live: map[string]bool{"round-two": true}})
 	// Round 1 links open #30; round 2 (the newest, live) links merged #31, so #30 is no
 	// longer in the item's set but still holds round 1's worktree.
-	h.link(session.SessionPROwner(h.uuid), 30, session.PRStateOpen)
+	h.link(session.SessionPROwner(h.uuid), 30, domain.PRStateOpen)
 	_, err := h.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: h.itemID, SessionUUID: "round-two", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
-	h.link(session.SessionPROwner("round-two"), 31, session.PRStateMerged)
+	h.link(session.SessionPROwner("round-two"), 31, domain.PRStateMerged)
 
 	item := h.getItem()
 

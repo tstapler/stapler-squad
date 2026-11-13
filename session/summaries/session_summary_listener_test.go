@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeSummaryGenerator is a test double satisfying the summaryGenerator interface.
@@ -27,10 +28,10 @@ func TestOnLifecycleEvent_should_DispatchGenerateAndPersist_When_EventExitedOrEv
 	t.Parallel()
 	tests := []struct {
 		name  string
-		event session.LifecycleEvent
+		event domain.LifecycleEvent
 	}{
-		{"session.EventExited", session.EventExited},
-		{"session.EventStopped", session.EventStopped},
+		{"session.EventExited", domain.EventExited},
+		{"session.EventStopped", domain.EventStopped},
 	}
 	for _, tc := range tests {
 		event := tc.event
@@ -60,7 +61,7 @@ func TestOnLifecycleEvent_should_NotDispatch_When_ReasonIsReconcileSessionMissin
 	inst := &session.Instance{Title: "test-session", UUID: "sess-456", CreatedAt: time.Now()}
 	l := &sessionSummaryListener{generator: gen, instance: inst}
 
-	l.OnLifecycleEvent(session.EventExited, reasonReconcileSessionMissing)
+	l.OnLifecycleEvent(domain.EventExited, reasonReconcileSessionMissing)
 
 	select {
 	case uuid := <-gen.calls:
@@ -76,7 +77,7 @@ func TestOnLifecycleEvent_should_NotDispatch_When_EventStarted(t *testing.T) {
 	inst := &session.Instance{Title: "test-session", UUID: "sess-789", CreatedAt: time.Now()}
 	l := &sessionSummaryListener{generator: gen, instance: inst}
 
-	l.OnLifecycleEvent(session.EventStarted, "")
+	l.OnLifecycleEvent(domain.EventStarted, "")
 
 	select {
 	case uuid := <-gen.calls:

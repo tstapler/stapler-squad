@@ -46,7 +46,7 @@ func addPausedAutonomousInstance(t *testing.T, storage *session.Storage, title s
 		Title:          title,
 		UUID:           title + "-uuid-1234",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -188,7 +188,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -261,7 +261,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -310,7 +310,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -423,7 +423,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 	const title = "not-linked-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -453,7 +453,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	const title = "dangling-item-session-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -505,7 +505,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	const title = "unrecognized-role-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -573,7 +573,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -632,7 +632,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -690,7 +690,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -742,7 +742,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -803,7 +803,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -865,7 +865,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	const title = "triage-stuck-metadata-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -927,7 +927,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		Hidden:         true,
@@ -977,7 +977,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		Hidden:         false,
@@ -1155,7 +1155,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	const title = "autonomous-respawn-failure-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))

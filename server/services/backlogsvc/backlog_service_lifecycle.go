@@ -507,7 +507,7 @@ func (s *BacklogService) UpdateBacklogItem(
 			Caller:      session.CallerOperatorPRAssociation,
 			Observed:    updated,
 			TriggeredBy: session.TriggeredByUser,
-		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: session.AttachSourceManual})
+		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: domain.AttachSourceManual})
 		if setErr != nil {
 			if isTransitionDenial(setErr) {
 				return nil, transitionConnectError(setErr, req.Msg.ItemId, "associate PR")

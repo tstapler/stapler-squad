@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -410,7 +411,7 @@ func addPausedInstanceWithUUID(t *testing.T, storage *session.Storage, title, uu
 		Title:     title,
 		UUID:      uuid,
 		Path:      path,
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -468,7 +469,7 @@ func TestHandlePermissionRequest_StaleCIStatus_TreatedAsUnknown(t *testing.T) {
 		Title:                 "stale-ci-session",
 		UUID:                  uuid,
 		Path:                  "/projects/stale-ci",
-		Status:                session.Paused,
+		Status:                domain.Paused,
 		Program:               "claude",
 		CreatedAt:             now,
 		UpdatedAt:             now,
@@ -512,7 +513,7 @@ func TestHandlePermissionRequest_FreshCIStatus_Populated(t *testing.T) {
 		Title:                 "fresh-ci-session",
 		UUID:                  uuid,
 		Path:                  "/projects/fresh-ci",
-		Status:                session.Paused,
+		Status:                domain.Paused,
 		Program:               "claude",
 		CreatedAt:             now,
 		UpdatedAt:             now,
@@ -1110,7 +1111,7 @@ func TestHandlePermissionRequest_DeniesBasedOnSessionIdleTime_EndToEnd(t *testin
 		Title:     "idle-45",
 		UUID:      uuid,
 		Path:      "/projects/idle-45",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: now.Add(-45 * time.Minute), // no meaningful output recorded — falls back to time since creation
 		UpdatedAt: now,

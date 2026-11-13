@@ -5,11 +5,12 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestSessionActivity_Should_AdvanceWithEventLogFlagOff_When_OutputArrives(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "activity", Status: Running}
+	inst := &Instance{Title: "activity", Status: domain.Active}
 	at := time.Date(2026, 10, 24, 14, 2, 11, 0, time.UTC)
 
 	inst.Touch(SessionEventOutput, at)

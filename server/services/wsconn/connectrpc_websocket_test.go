@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -966,7 +967,7 @@ func TestStreamViaHub_should_SendHubStartFailedError_When_HubCreationAndLegacyFa
 	// reconnect — this scenario is exactly the ErrWorkDirMissing path
 	// (streamViaControlMode's fallback check above), so assert on it here
 	// rather than only on the unrelated HubStartFailedErrorCode frame.
-	require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
+	require.Equal(t, domain.PermanentlyFailed, inst.Snapshot().Status,
 		"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
 }
 
@@ -1030,10 +1031,10 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 	// Stopped (a plain exported-field write, bypassing the state machine,
 	// same as the session-level self-heal tests' bare &Instance{} literals)
 	// and let RecoverFromStopped reset it to Creating with started=false.
-	inst.Status = session.Stopped
+	inst.Status = domain.Stopped
 	inst.RecoverFromStopped()
 	require.False(t, inst.Started(), "test premise requires Started()==false before streamViaHub runs")
-	require.Equal(t, session.Creating, inst.Snapshot().Status)
+	require.Equal(t, domain.Creating, inst.Snapshot().Status)
 
 	serverStream, clientConn, cleanup := createTestWebSocketPair(t)
 	defer cleanup()
@@ -1087,7 +1088,7 @@ func TestStreamViaHub_should_SelfHealAndStreamSuccessfully_When_StartedFalseButT
 	require.True(t, inst.Started(), "self-heal must flip Started() to true before streaming proceeds")
 	// The fake tmux's control mode ends at once, which the exit callback self-heal now wires
 	// reports as Stopped; the invariant here is that Creating was left, not that it stays Active.
-	require.NotEqual(t, session.Creating, inst.Snapshot().Status)
+	require.NotEqual(t, domain.Creating, inst.Snapshot().Status)
 
 	// The regression this test guards: before the self-heal branch existed, Started() stayed
 	// false forever, so every capture call returned streamhub.ErrSessionNotStarted.
@@ -1240,7 +1241,7 @@ func TestEnsureHubBackendAlive(t *testing.T) {
 		require.Error(t, restoreErr, "a restore that genuinely fails (missing work dir) must propagate an error")
 		require.ErrorIs(t, restoreErr, tmux.ErrWorkDirMissing)
 		require.False(t, alive)
-		require.Equal(t, session.PermanentlyFailed, inst.Snapshot().Status,
+		require.Equal(t, domain.PermanentlyFailed, inst.Snapshot().Status,
 			"handleTmuxRestoreFailure must mark the session PermanentlyFailed when its working directory is missing")
 	})
 }
@@ -1286,10 +1287,10 @@ func TestEnsureHubInstanceStarted_should_NotWait_When_InstanceIsNotCreating(t *t
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	// SetTmuxSession flips started true; reset it the way the self-heal test does,
 	// then park the instance in PermanentlyFailed with tmux still attached.
-	inst.Status = session.Stopped
+	inst.Status = domain.Stopped
 	inst.RecoverFromStopped()
 	_ = handleTmuxRestoreFailure(inst, fmt.Errorf("restore: %w", tmux.ErrWorkDirMissing))
-	require.Equal(t, session.PermanentlyFailed, inst.GetLifecycleStatus())
+	require.Equal(t, domain.PermanentlyFailed, inst.GetLifecycleStatus())
 	require.False(t, inst.Started())
 
 	done := make(chan struct{})

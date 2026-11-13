@@ -18,7 +18,7 @@ func TestSessionJSONSerialization(t *testing.T) {
 		Title:     "Test Session",
 		CreatedAt: now,
 		UpdatedAt: now,
-		Status:    Running,
+		Status:    domain.Active,
 		Program:   "claude",
 		AutoYes:   true,
 		Prompt:    "help me code",
@@ -170,7 +170,7 @@ func TestSessionMinimalSerialization(t *testing.T) {
 		Title:     "Minimal Session",
 		CreatedAt: now,
 		UpdatedAt: now,
-		Status:    Loading,
+		Status:    domain.Creating,
 		Program:   "aider",
 		// All contexts are nil
 	}
@@ -216,7 +216,7 @@ func TestInstanceToSessionConversion(t *testing.T) {
 		Path:             "/home/user/project",
 		WorkingDir:       "/home/user/project/src",
 		Branch:           "main",
-		Status:           Running,
+		Status:           domain.Active,
 		Program:          "claude",
 		Height:           24,
 		Width:            80,
@@ -236,7 +236,7 @@ func TestInstanceToSessionConversion(t *testing.T) {
 		GitHubSourceRef:  "refs/pull/42/head",
 		IsWorktree:       true,
 		MainRepoPath:     "/home/user/main",
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   now,
 			LastMeaningfulOutput: now.Add(-5 * time.Minute),
 			LastViewed:           now.Add(-10 * time.Minute),
@@ -321,7 +321,7 @@ func TestSessionToInstanceConversion(t *testing.T) {
 		Title:     "Test Session",
 		CreatedAt: now,
 		UpdatedAt: now,
-		Status:    Ready,
+		Status:    domain.Active,
 		Program:   "aider",
 		AutoYes:   false,
 		Prompt:    "help",
@@ -425,7 +425,7 @@ func TestRoundTripConversion(t *testing.T) {
 		Path:           "/test/path",
 		WorkingDir:     "/test/path/subdir",
 		Branch:         "feature",
-		Status:         Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		Height:         40,
 		Width:          160,
@@ -443,7 +443,7 @@ func TestRoundTripConversion(t *testing.T) {
 		GitHubRepo:     "b",
 		IsWorktree:     true,
 		MainRepoPath:   "/main/repo",
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   now,
 			LastMeaningfulOutput: now,
 			LastOutputSignature:  "roundtrip",
@@ -497,7 +497,7 @@ func TestContextHelperMethods(t *testing.T) {
 	empty := &Session{
 		ID:      "empty",
 		Title:   "Empty",
-		Status:  Loading,
+		Status:  domain.Creating,
 		Program: "test",
 	}
 
@@ -521,7 +521,7 @@ func TestContextHelperMethods(t *testing.T) {
 	full := &Session{
 		ID:      "full",
 		Title:   "Full",
-		Status:  Running,
+		Status:  domain.Active,
 		Program: "claude",
 		Git: &GitContext{
 			Branch: "main",

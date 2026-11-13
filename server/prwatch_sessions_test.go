@@ -25,7 +25,7 @@ func (f fakeSessionView) SessionProgram(id string) (string, bool) { return "clau
 func (f fakeSessionView) IsHiddenSession(id string) bool          { return f.hidden[id] }
 func (f fakeSessionView) IsReadyForSteer(id string) bool          { return f.ready[id] }
 
-func prSnap(id string, st session.Status) *session.InstanceSnapshot {
+func prSnap(id string, st domain.Status) *session.InstanceSnapshot {
 	return &session.InstanceSnapshot{
 		UUID: id, Title: id, Status: st,
 		GitHub: session.GitHubIntegration{GitHubOwner: "acme", GitHubRepo: "widget", GitHubPRNumber: 5},
@@ -49,22 +49,22 @@ func (noBacklog) GetBacklogItem(context.Context, string) (*backlogdto.BacklogIte
 }
 
 func TestPRWatchSessions_should_ReportResumedAt_When_PausedSessionBecomesActive(t *testing.T) {
-	snap := prSnap("a", session.Active)
+	snap := prSnap("a", domain.Active)
 	s := newTestPRWatchSessions([]*session.InstanceSnapshot{snap}, noBacklog{})
 	refs, err := s.List(context.Background())
 	require.NoError(t, err)
 	assert.True(t, refs[0].ResumedAt.IsZero(), "live at startup is not a resume")
-	snap.Status = session.Paused
+	snap.Status = domain.Paused
 	refs, _ = s.List(context.Background())
 	assert.Equal(t, prwatch.StateSuspended, refs[0].State)
-	snap.Status = session.Active
+	snap.Status = domain.Active
 	refs, _ = s.List(context.Background())
 	assert.False(t, refs[0].ResumedAt.IsZero())
 	assert.Equal(t, prwatch.StateLive, refs[0].State)
 }
 
 func TestPRWatchSessions_should_ResolveRepoFromRemoteOnce_When_OwnerRepoMissing(t *testing.T) {
-	snap := prSnap("a", session.Active)
+	snap := prSnap("a", domain.Active)
 	snap.GitHub.GitHubOwner, snap.GitHub.GitHubRepo = "", ""
 	snap.Path = "/x"
 	s := newTestPRWatchSessions([]*session.InstanceSnapshot{snap}, noBacklog{})
@@ -138,7 +138,7 @@ func TestBacklogLinkLookup_should_UseBatchedLinkQueryAndOneItemReadPerDistinctIt
 }
 
 func TestPRWatchSessions_should_SkipAsPRTerminal_When_SnapshotPRIsTerminal(t *testing.T) {
-	snap := prSnap("a", session.Active)
+	snap := prSnap("a", domain.Active)
 	snap.GitHub.GitHubPRStatusTerminal = true
 	s := newTestPRWatchSessions([]*session.InstanceSnapshot{snap}, noBacklog{})
 	refs, err := s.List(context.Background())
@@ -147,7 +147,7 @@ func TestPRWatchSessions_should_SkipAsPRTerminal_When_SnapshotPRIsTerminal(t *te
 }
 
 func unresolvedSnap(id, path string) *session.InstanceSnapshot {
-	sn := prSnap(id, session.Active)
+	sn := prSnap(id, domain.Active)
 	sn.GitHub.GitHubOwner, sn.GitHub.GitHubRepo = "", ""
 	sn.Path = path
 	return sn
@@ -235,17 +235,17 @@ func TestDetectRemote_should_ServeOtherSessions_When_ProbeBlocks(t *testing.T) {
 
 func twoPRSnap(t *testing.T, id string, merged, open int) *session.InstanceSnapshot {
 	t.Helper()
-	ref := func(n int) session.PRRef {
-		r, err := session.NewPRRef("", "acme", "widget", n)
+	ref := func(n int) domain.PRRef {
+		r, err := domain.NewPRRef("", "acme", "widget", n)
 		require.NoError(t, err)
 		return r
 	}
-	snap := prSnap(id, session.Active)
+	snap := prSnap(id, domain.Active)
 	snap.GitHub.GitHubPRNumber, snap.GitHub.GitHubPRStatusTerminal = open, false
-	snap.GitHub.PRs = []session.PRView{
-		{Ref: ref(merged), State: session.PRStateMerged, StoredTerminal: true},
-		{Ref: ref(open), State: session.PRStateOpen},
-		{Ref: ref(open + 1), State: session.PRStateOpen},
+	snap.GitHub.PRs = []domain.PRView{
+		{Ref: ref(merged), State: domain.PRStateMerged, StoredTerminal: true},
+		{Ref: ref(open), State: domain.PRStateOpen},
+		{Ref: ref(open + 1), State: domain.PRStateOpen},
 	}
 	return snap
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Proof entries (ADR-006) for the quota tuning fields. Each saves the value via
@@ -121,7 +122,7 @@ func TestConfigSurfaceProof_QuotaForegroundThrottleDelaySeconds_ChangesThrottleD
 	svctest.WithIsolatedStateDir(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		prfSaveQuota(t, &sessionv1.QuotaSettings{ForegroundThrottleDelaySeconds: proto.Int32(int32(setting.(int)))})
-		poller := &svctest.MockInstancePoller{Instances: []*session.Instance{{Category: "", Status: session.Active}}}
+		poller := &svctest.MockInstancePoller{Instances: []*session.Instance{{Category: "", Status: domain.Active}}}
 		r := prfNewQuotaRun(0, poller)
 		r.reconcile(1)
 		r.gate.mu.Lock()

@@ -10,6 +10,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
@@ -733,7 +734,7 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 	// For OneShot sessions that have completed (Stopped) and have a conversation UUID,
 	// use claude --resume subprocess instead of PTY send-keys.
 	uuid := inst.GetClaudeConversationUUID()
-	if inst.OneShot && uuid != "" && inst.GetEffectiveStatus() == session.Stopped {
+	if inst.OneShot && uuid != "" && inst.GetEffectiveStatus() == domain.Stopped {
 		resumeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 		result, err := inst.RunWithResume(resumeCtx, message)

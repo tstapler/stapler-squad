@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,10 +10,10 @@ import (
 
 // funcLifecycleListener is a test-only LifecycleListener that invokes a function.
 type funcLifecycleListener struct {
-	fn func(LifecycleEvent, string)
+	fn func(domain.LifecycleEvent, string)
 }
 
-func (f *funcLifecycleListener) OnLifecycleEvent(event LifecycleEvent, reason string) {
+func (f *funcLifecycleListener) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
 	f.fn(event, reason)
 }
 
@@ -24,7 +25,7 @@ func TestLifecycleCallbackConcurrency(t *testing.T) {
 
 	var counter int64
 	inst.RegisterLifecycleListener(&funcLifecycleListener{
-		fn: func(_ LifecycleEvent, _ string) {
+		fn: func(_ domain.LifecycleEvent, _ string) {
 			atomic.AddInt64(&counter, 1)
 		},
 	})
@@ -42,7 +43,7 @@ func TestLifecycleCallbackConcurrency(t *testing.T) {
 					panicked <- r
 				}
 			}()
-			inst.FireLifecycleEvent(EventStarted, "concurrent-test")
+			inst.FireLifecycleEvent(domain.EventStarted, "concurrent-test")
 		}()
 	}
 
@@ -72,15 +73,15 @@ func TestLifecycleCallbackConcurrency(t *testing.T) {
 func TestTransitionToErrorInCallback(t *testing.T) {
 	t.Parallel()
 	// Stopped is a terminal state — Stopped→Stopped must return an error.
-	inst := &Instance{Title: "transition-test", Status: Stopped}
+	inst := &Instance{Title: "transition-test", Status: domain.Stopped}
 
-	err := inst.transitionTo(context.Background(), Stopped)
+	err := inst.transitionTo(context.Background(), domain.Stopped)
 	if err == nil {
 		t.Error("expected ErrInvalidTransition for Stopped→Stopped, got nil")
 	}
 
 	// Confirm the instance is still in Stopped status after the failed self-transition.
-	if inst.Status != Stopped {
+	if inst.Status != domain.Stopped {
 		t.Errorf("test setup: instance should be Stopped, got %s", inst.Status)
 	}
 }
@@ -96,11 +97,11 @@ func TestDestroy_FiresEventStopped_EvenWhenNeverStarted(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "destroy-event-test"}
 
-	var gotEvent LifecycleEvent
+	var gotEvent domain.LifecycleEvent
 	var gotReason string
 	fired := false
 	inst.RegisterLifecycleListener(&funcLifecycleListener{
-		fn: func(event LifecycleEvent, reason string) {
+		fn: func(event domain.LifecycleEvent, reason string) {
 			fired = true
 			gotEvent = event
 			gotReason = reason
@@ -114,7 +115,7 @@ func TestDestroy_FiresEventStopped_EvenWhenNeverStarted(t *testing.T) {
 	if !fired {
 		t.Fatal("expected Destroy() to fire a lifecycle event, but none was fired")
 	}
-	if gotEvent != EventStopped {
+	if gotEvent != domain.EventStopped {
 		t.Errorf("expected EventStopped, got %v", gotEvent)
 	}
 	if gotReason == "" {

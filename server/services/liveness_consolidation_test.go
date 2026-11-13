@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -94,7 +95,7 @@ func newProbeInstance(t *testing.T, title, paneCWD, liveSessionName string) *ses
 func TestFindConfirmedLiveInstance_MapHit_ReturnsWithoutStorageFallback(t *testing.T) {
 	t.Parallel()
 
-	inst := &session.Instance{Title: "map-hit", UUID: "uuid-map-hit", Path: "/tmp/test", Status: session.Active}
+	inst := &session.Instance{Title: "map-hit", UUID: "uuid-map-hit", Path: "/tmp/test", Status: domain.Active}
 	poller := svctest.NewEmptyPoller()
 	poller.SetInstances([]*session.Instance{inst})
 
@@ -133,7 +134,7 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsDead_ReturnsNil(t *test
 		Title:  "shadow-dead-" + t.Name(),
 		UUID:   uuid,
 		Path:   t.TempDir(),
-		Status: session.Active,
+		Status: domain.Active,
 		// No tmux session by this (test-name-unique) title exists on the
 		// per-process isolated socket every tmux call in a `go test` binary
 		// resolves to, so the shadow's list-sessions probe answers "absent"
@@ -171,7 +172,7 @@ func TestFindConfirmedLiveInstance_MapMiss_ShadowConfirmsAlive_ReturnsInstance(t
 		Title:            title,
 		UUID:             uuid,
 		Path:             t.TempDir(),
-		Status:           session.Active,
+		Status:           domain.Active,
 		TmuxServerSocket: socket,
 		TmuxPrefix:       tmux.TmuxPrefix,
 		Program:          "claude",
@@ -212,7 +213,7 @@ func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
 		Title:            title,
 		UUID:             uuid,
 		Path:             t.TempDir(),
-		Status:           session.Active,
+		Status:           domain.Active,
 		TmuxServerSocket: socket,
 		TmuxPrefix:       tmux.TmuxPrefix,
 		Program:          "claude",
@@ -554,9 +555,9 @@ func TestFindConfirmedLiveInstance_MapMiss_TymuxShadowWithLiveStoredSession_Retu
 		Title:          "tymux-stored-live",
 		UUID:           uuid,
 		Path:           t.TempDir(),
-		Status:         session.Active,
+		Status:         domain.Active,
 		Program:        "claude",
-		Backend:        session.BackendTymux,
+		Backend:        domain.BackendTymux,
 		TymuxSessionID: "d-1",
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),

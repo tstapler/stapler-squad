@@ -41,7 +41,7 @@ func seedCandidateInstance(t *testing.T, storage *session.Storage, title string,
 	inst := &session.Instance{
 		Title:     title,
 		Path:      "/tmp/test-" + title,
-		Status:    session.Active,
+		Status:    domain.Active,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -60,7 +60,7 @@ func withBranch(branch string) func(*session.Instance) {
 	return func(i *session.Instance) { i.Branch = branch }
 }
 
-func withStatus(status session.Status) func(*session.Instance) {
+func withStatus(status domain.Status) func(*session.Instance) {
 	return func(i *session.Instance) { i.Status = status }
 }
 
@@ -126,7 +126,7 @@ func TestListConsistencyCandidates_should_IncludeSession_When_WorktreeRowMissing
 	seedCandidateInstance(t, storage, "missing-row",
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/b8ccca59"),
-		withStatus(session.Active),
+		withStatus(domain.Active),
 	)
 
 	candidates, err := listConsistencyCandidates(context.Background(), storage)
@@ -145,7 +145,7 @@ func TestListConsistencyCandidates_should_ExcludeSession_When_StatusCreatingWith
 	seedCandidateInstance(t, storage, "fresh-creating",
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/fresh"),
-		withStatus(session.Creating),
+		withStatus(domain.Creating),
 		withUUID("fresh-creating-uuid"),
 	)
 	session.TestBackdateCreationProgress(t, storage, "fresh-creating-uuid", time.Now().Add(-30*time.Second))
@@ -168,7 +168,7 @@ func TestListConsistencyCandidates_should_IncludeSession_When_StatusCreatingPast
 	seedCandidateInstance(t, storage, "stale-creating",
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/stale"),
-		withStatus(session.Creating),
+		withStatus(domain.Creating),
 		withUUID("stale-creating-uuid"),
 	)
 	session.TestBackdateCreationProgress(t, storage, "stale-creating-uuid", time.Now().Add(-10*time.Minute))
@@ -187,7 +187,7 @@ func TestListConsistencyCandidates_should_ExcludeSession_When_SessionTypeDirecto
 	storage := newWorktreeConsistencyTestStorage(t)
 	seedCandidateInstance(t, storage, "plain-directory",
 		withSessionType(domain.SessionTypeDirectory),
-		withStatus(session.Active),
+		withStatus(domain.Active),
 	)
 
 	candidates, err := listConsistencyCandidates(context.Background(), storage)
@@ -239,7 +239,7 @@ func TestSweep_NoRaceWithConcurrentActorWrites(t *testing.T) {
 
 	inst := session.NewPausedTestInstance(t.Name())
 	session.FinishInstanceForTest(inst)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	inst.Path = "/tmp/test-" + inst.Title
 	inst.SessionType = domain.SessionTypeNewWorktree
 	inst.Branch = "work/race"
@@ -252,7 +252,7 @@ func TestSweep_NoRaceWithConcurrentActorWrites(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
-			inst.SetGitHubResolution(session.GitHubResolution{
+			inst.SetGitHubResolution(domain.GitHubResolution{
 				Path:   "/tmp/race-path",
 				Branch: "work/race-actor-write",
 			})
@@ -326,7 +326,7 @@ func TestMatchLiveWorktree_should_ReturnNilWithCountZero_When_NoEntriesMatch(t *
 func TestClassifyIssues_should_ReturnMissingWorktreeRowFinding_When_WorktreeNilAndLiveEntryMatches(t *testing.T) {
 	t.Parallel()
 	candidate := SessionWorktreeCandidate{
-		Data: session.InstanceData{UUID: "sess-1", Branch: "work/b8ccca59", Status: session.Active},
+		Data: session.InstanceData{UUID: "sess-1", Branch: "work/b8ccca59", Status: domain.Active},
 	}
 	entries := []git.NativeWorktreeEntry{
 		{BranchRef: "refs/heads/work/b8ccca59", WorktreePath: "/tmp/sess-1"},
@@ -347,7 +347,7 @@ func TestClassifyIssues_should_ReturnMissingWorktreeRowFinding_When_WorktreeNilA
 func TestClassifyIssues_should_ReturnFlaggedFinding_When_MissingRowHasNoLiveMatch(t *testing.T) {
 	t.Parallel()
 	candidate := SessionWorktreeCandidate{
-		Data: session.InstanceData{UUID: "sess-2", Branch: "work/gone", Status: session.Active},
+		Data: session.InstanceData{UUID: "sess-2", Branch: "work/gone", Status: domain.Active},
 	}
 
 	findings := classifyIssues(candidate, nil)
@@ -359,7 +359,7 @@ func TestClassifyIssues_should_ReturnFlaggedFinding_When_MissingRowHasNoLiveMatc
 func TestClassifyIssues_should_ReturnFlaggedFinding_When_MissingRowMatchesAmbiguously(t *testing.T) {
 	t.Parallel()
 	candidate := SessionWorktreeCandidate{
-		Data: session.InstanceData{UUID: "sess-3", Branch: "work/ambiguous", Status: session.Active},
+		Data: session.InstanceData{UUID: "sess-3", Branch: "work/ambiguous", Status: domain.Active},
 	}
 	entries := []git.NativeWorktreeEntry{
 		{BranchRef: "refs/heads/work/ambiguous", WorktreePath: "/tmp/a"},
@@ -380,7 +380,7 @@ func TestClassifyIssues_should_ReturnNoFinding_When_SessionPausedAndDirectoryGon
 	t.Parallel()
 	gone := filepath.Join(t.TempDir(), "does-not-exist")
 	candidate := SessionWorktreeCandidate{
-		Data: session.InstanceData{UUID: "sess-4", Branch: "work/paused", Status: session.Paused},
+		Data: session.InstanceData{UUID: "sess-4", Branch: "work/paused", Status: domain.Paused},
 		Worktree: &session.GitWorktreeData{
 			WorktreePath: gone,
 			RepoPath:     filepath.Join(t.TempDir(), "also-does-not-exist"),
@@ -397,7 +397,7 @@ func TestClassifyIssues_should_ReturnRepoPathUnresolvableFinding_When_ActiveAndD
 	t.Parallel()
 	gone := filepath.Join(t.TempDir(), "does-not-exist")
 	candidate := SessionWorktreeCandidate{
-		Data: session.InstanceData{UUID: "sess-5", Branch: "work/active-gone", Status: session.Active},
+		Data: session.InstanceData{UUID: "sess-5", Branch: "work/active-gone", Status: domain.Active},
 		Worktree: &session.GitWorktreeData{
 			WorktreePath: gone,
 			RepoPath:     filepath.Join(t.TempDir(), "also-does-not-exist"),
@@ -418,7 +418,7 @@ func TestClassifyIssues_should_ReturnBaseCommitShaUnresolvableFinding_When_ShaGe
 	t.Parallel()
 	repoPath := sessiontest.SetupTestGitRepo(t)
 	candidate := SessionWorktreeCandidate{
-		Data: session.InstanceData{UUID: "sess-6", Branch: "work/sha-gone", Status: session.Active},
+		Data: session.InstanceData{UUID: "sess-6", Branch: "work/sha-gone", Status: domain.Active},
 		Worktree: &session.GitWorktreeData{
 			RepoPath:      repoPath,
 			WorktreePath:  repoPath, // exists — isolates this test to the sha branch alone
@@ -447,7 +447,7 @@ func TestClassifyIssues_should_ReturnNoFindings_When_RepoPathCheckErrorsTransien
 	repoPath := sessiontest.SetupTestGitRepo(t)
 	sha := strings.TrimSpace(sessiontest.RunGitOutputOrFail(t, repoPath, "rev-parse", "HEAD"))
 	candidate := SessionWorktreeCandidate{
-		Data: session.InstanceData{UUID: "sess-transient-path", Branch: "work/transient", Status: session.Active},
+		Data: session.InstanceData{UUID: "sess-transient-path", Branch: "work/transient", Status: domain.Active},
 		Worktree: &session.GitWorktreeData{
 			WorktreePath:  filepath.Join(blocked, "worktree"), // stat fails with EACCES, not ENOENT
 			RepoPath:      repoPath,
@@ -471,7 +471,7 @@ func TestClassifyIssues_should_ReturnNoFindings_When_BaseCommitShaCheckErrorsTra
 	repoPath := sessiontest.SetupTestGitRepo(t)
 	unrelated := filepath.Join(t.TempDir(), "not-a-repo")
 	candidate := SessionWorktreeCandidate{
-		Data: session.InstanceData{UUID: "sess-transient-sha", Branch: "work/transient-sha", Status: session.Active},
+		Data: session.InstanceData{UUID: "sess-transient-sha", Branch: "work/transient-sha", Status: domain.Active},
 		Worktree: &session.GitWorktreeData{
 			WorktreePath:  repoPath,  // exists, isolates this test to the sha branch
 			RepoPath:      unrelated, // no .git anywhere in its ancestry — CommitInfo fails to *open*, not "object not found"
@@ -508,7 +508,7 @@ func TestResolveFinding_should_CreateWorktreeRowAndNotify_When_UniqueMatchOnNonI
 		withUUID(sessionUUID),
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch(realBranch),
-		withStatus(session.Active),
+		withStatus(domain.Active),
 	)
 
 	finding := &WorktreeConsistencyFinding{
@@ -516,7 +516,7 @@ func TestResolveFinding_should_CreateWorktreeRowAndNotify_When_UniqueMatchOnNonI
 		IssueKind:  IssueMissingWorktreeRow,
 		Resolution: ResolutionRepaired,
 		Candidate: SessionWorktreeCandidate{
-			Data: session.InstanceData{UUID: sessionUUID, Title: "repair-target", Branch: realBranch, Status: session.Active},
+			Data: session.InstanceData{UUID: sessionUUID, Title: "repair-target", Branch: realBranch, Status: domain.Active},
 		},
 		Match: &entries[0],
 	}
@@ -597,7 +597,7 @@ func TestResolveFinding_should_FlagWithErrorSeverity_When_DerivedBaseCommitShaSt
 		IssueKind:  IssueMissingWorktreeRow,
 		Resolution: ResolutionRepaired,
 		Candidate: SessionWorktreeCandidate{
-			Data: session.InstanceData{UUID: sessionUUID, Title: "repair-degraded", Branch: "repair-degraded", Status: session.Active},
+			Data: session.InstanceData{UUID: sessionUUID, Title: "repair-degraded", Branch: "repair-degraded", Status: domain.Active},
 		},
 		Match: &git.NativeWorktreeEntry{BranchRef: entries[0].BranchRef, WorktreePath: worktreePath},
 	}
@@ -757,7 +757,7 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 		withUUID(sessionUUID),
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch(realBranch),
-		withStatus(session.Active),
+		withStatus(domain.Active),
 	)
 
 	repairFinding := &WorktreeConsistencyFinding{
@@ -765,7 +765,7 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 		IssueKind:  IssueMissingWorktreeRow,
 		Resolution: ResolutionRepaired,
 		Candidate: SessionWorktreeCandidate{
-			Data: session.InstanceData{UUID: sessionUUID, Title: "flag-then-repair-stuck", Branch: realBranch, Status: session.Active},
+			Data: session.InstanceData{UUID: sessionUUID, Title: "flag-then-repair-stuck", Branch: realBranch, Status: domain.Active},
 		},
 		Match: &entries[0],
 	}
@@ -796,7 +796,7 @@ func TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBac
 			withUUID(sessionUUID),
 			withSessionType(domain.SessionTypeNewWorktree),
 			withBranch("unlinked-repair"),
-			withStatus(session.Active),
+			withStatus(domain.Active),
 		)
 
 		finding := &WorktreeConsistencyFinding{
@@ -804,7 +804,7 @@ func TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBac
 			IssueKind:  IssueMissingWorktreeRow,
 			Resolution: ResolutionRepaired,
 			Candidate: SessionWorktreeCandidate{
-				Data: session.InstanceData{UUID: sessionUUID, Title: "unlinked-repair", Branch: "unlinked-repair", Status: session.Active},
+				Data: session.InstanceData{UUID: sessionUUID, Title: "unlinked-repair", Branch: "unlinked-repair", Status: domain.Active},
 			},
 			Match: &git.NativeWorktreeEntry{BranchRef: "refs/heads/unlinked-repair", WorktreePath: worktreePath},
 		}
@@ -947,7 +947,7 @@ func TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAnd
 		withUUID(sessionUUID),
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch(realBranch),
-		withStatus(session.Active),
+		withStatus(domain.Active),
 	)
 
 	repairFinding := &WorktreeConsistencyFinding{
@@ -955,7 +955,7 @@ func TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAnd
 		IssueKind:  IssueMissingWorktreeRow,
 		Resolution: ResolutionRepaired,
 		Candidate: SessionWorktreeCandidate{
-			Data: session.InstanceData{UUID: sessionUUID, Title: "flag-then-repair", Branch: realBranch, Status: session.Active},
+			Data: session.InstanceData{UUID: sessionUUID, Title: "flag-then-repair", Branch: realBranch, Status: domain.Active},
 		},
 		Match: &entries[0],
 	}
@@ -1091,7 +1091,7 @@ func TestSweep_should_ProceedPastFlagGate_When_FeatureFlagOn(t *testing.T) {
 	seedCandidateInstance(t, storage, "flag-on-candidate",
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/flag-on"),
-		withStatus(session.Active),
+		withStatus(domain.Active),
 	)
 
 	notifier := &sessiontest.FakeNotifier{}
@@ -1119,7 +1119,7 @@ func TestResolveFinding_should_DowngradeToFlagged_When_IsolatedInstanceAndUnique
 		IssueKind:  IssueMissingWorktreeRow,
 		Resolution: ResolutionRepaired,
 		Candidate: SessionWorktreeCandidate{
-			Data: session.InstanceData{UUID: sessionUUID, Title: "isolated-candidate", Branch: "work/isolated", Status: session.Active},
+			Data: session.InstanceData{UUID: sessionUUID, Title: "isolated-candidate", Branch: "work/isolated", Status: domain.Active},
 		},
 		Match: &git.NativeWorktreeEntry{BranchRef: "refs/heads/work/isolated", WorktreePath: "/tmp/does-not-matter"},
 	}
@@ -1200,7 +1200,7 @@ func TestSweep_ShouldRepairRegressionPR625_When_WorktreeRowMissingButOnDiskWorkt
 		withUUID(sessionUUID),
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch(branch),
-		withStatus(session.Active),
+		withStatus(domain.Active),
 		withPath(repoPath),
 	)
 	// No storage.UpdateInstance call here — that's the call PR #625's non-atomic window
@@ -1252,7 +1252,7 @@ func TestSweep_ShouldFlagRegressionPR625_When_WorktreeRowAndOnDiskWorktreeBothMi
 		withUUID(sessionUUID),
 		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/b8ccca59-gone"),
-		withStatus(session.Active),
+		withStatus(domain.Active),
 		withPath(repoPath),
 	)
 

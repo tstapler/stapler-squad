@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // isClaudeAntigravityFamily reports whether program belongs to the Claude/Antigravity
@@ -96,7 +97,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 		}
 	}
 
-	if i.Status == Active {
+	if i.Status == domain.Active {
 		if restartErr := i.Restart(true, ""); restartErr != nil {
 			return true, resolvedProgram, restartErr
 		}

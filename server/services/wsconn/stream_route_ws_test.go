@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Every (backend, managed, STAPLER_SQUAD_USE_CONTROL_MODE) combination: only tymux overrides
@@ -14,17 +14,17 @@ func TestControlModeStreamingFor_Matrix(t *testing.T) {
 		name    string
 		env     string
 		managed bool
-		backend session.ProcessManagerBackend
+		backend domain.ProcessManagerBackend
 		want    bool
 	}{
-		{"tmux default", "", true, session.BackendTmux, true},
-		{"tmux explicit true", "true", true, session.BackendTmux, true},
-		{"tmux opted out", "false", true, session.BackendTmux, false},
+		{"tmux default", "", true, domain.BackendTmux, true},
+		{"tmux explicit true", "true", true, domain.BackendTmux, true},
+		{"tmux opted out", "false", true, domain.BackendTmux, false},
 		{"unpinned opted out", "false", true, "", false},
-		{"tymux default", "", true, session.BackendTymux, true},
-		{"tymux opted out still streams", "false", true, session.BackendTymux, true},
-		{"unmanaged tmux", "", false, session.BackendTmux, false},
-		{"unmanaged tymux", "", false, session.BackendTymux, false},
+		{"tymux default", "", true, domain.BackendTymux, true},
+		{"tymux opted out still streams", "false", true, domain.BackendTymux, true},
+		{"unmanaged tmux", "", false, domain.BackendTmux, false},
+		{"unmanaged tymux", "", false, domain.BackendTymux, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, controlModeStreamingFor(tc.env, tc.managed, tc.backend))

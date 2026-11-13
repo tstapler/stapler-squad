@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"runtime"
 	"strings"
@@ -412,7 +413,7 @@ func pruneOldSnapshots(dir string) {
 	}
 }
 
-func describePRs(prs []session.PRView) []string {
+func describePRs(prs []domain.PRView) []string {
 	out := make([]string, 0, len(prs))
 	for _, v := range prs {
 		out = append(out, fmt.Sprintf("%s %s", v.Ref, v.State))

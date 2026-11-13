@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -87,7 +88,7 @@ type GateOptions struct {
 
 // CleanupGateSource is the storage slice the gate reads; *Storage implements it.
 type CleanupGateSource interface {
-	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error)
+	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error)
 	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error)
 	FindInstanceDataByID(id string) (*InstanceData, error)
 }
@@ -186,7 +187,7 @@ func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []backlogdto.Ite
 // OwnPRsBlockReason is the ordered PR decision for one session's own links (first
 // match wins); "" means they permit deleting its worktree. rows are its link views.
 // Shared by the cleanup gate and the retention sweeper so they cannot disagree.
-func OwnPRsBlockReason(d InstanceData, rows []PRView) string {
+func OwnPRsBlockReason(d InstanceData, rows []domain.PRView) string {
 	switch {
 	case len(rows) == 0 && d.GitHubPRNumber == 0:
 		return ""
@@ -227,8 +228,8 @@ func ItemGuardBlockReason(itemID string, g ItemGuardView, ok bool) string {
 
 // OpenPRRefs returns the refs of the views that are not terminal (open, unknown or
 // unverified), for the warnings on intentionally ungated removals.
-func OpenPRRefs(views []PRView) []PRRef {
-	var open []PRRef
+func OpenPRRefs(views []domain.PRView) []domain.PRRef {
+	var open []domain.PRRef
 	for _, v := range views {
 		if !v.Terminal() {
 			open = append(open, v.Ref)
@@ -239,7 +240,7 @@ func OpenPRRefs(views []PRView) []PRRef {
 
 // OpenPRsOfSession lists the open or unknown PR refs a session links, read-only,
 // for the warnings on intentionally ungated removals (T5.4.5). Never blocks.
-func (g *PRCleanupGate) OpenPRsOfSession(ctx context.Context, sessionUUID string) ([]PRRef, error) {
+func (g *PRCleanupGate) OpenPRsOfSession(ctx context.Context, sessionUUID string) ([]domain.PRRef, error) {
 	views, err := g.src.ListSessionPRViewsByUUIDs(ctx, []string{sessionUUID})
 	if err != nil {
 		return nil, err

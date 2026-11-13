@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestNewRegistry(t *testing.T) {
@@ -38,7 +38,7 @@ func TestRegistryRegisterAndGet(t *testing.T) {
 		Path:           "/test/workspace",
 		RepositoryRoot: "/test",
 		SessionTitle:   "test-session",
-		SessionStatus:  session.Active,
+		SessionStatus:  domain.Active,
 	}
 
 	err := registry.Register(ctx, ws)
@@ -78,19 +78,19 @@ func TestRegistryList(t *testing.T) {
 			Path:           "/repo1/ws1",
 			RepositoryRoot: "/repo1",
 			SessionTitle:   "session-1",
-			SessionStatus:  session.Active,
+			SessionStatus:  domain.Active,
 		},
 		{
 			Path:           "/repo1/ws2",
 			RepositoryRoot: "/repo1",
 			SessionTitle:   "session-2",
-			SessionStatus:  session.Paused,
+			SessionStatus:  domain.Paused,
 		},
 		{
 			Path:           "/repo2/ws3",
 			RepositoryRoot: "/repo2",
 			SessionTitle:   "session-3",
-			SessionStatus:  session.Active,
+			SessionStatus:  domain.Active,
 			IsOrphaned:     true,
 		},
 	}
@@ -134,13 +134,13 @@ func TestRegistryFilter(t *testing.T) {
 		{
 			Path:           "/ws1",
 			RepositoryRoot: "/ws1",
-			SessionStatus:  session.Active,
+			SessionStatus:  domain.Active,
 			IsOrphaned:     false,
 		},
 		{
 			Path:           "/ws2",
 			RepositoryRoot: "/ws2",
-			SessionStatus:  session.Paused,
+			SessionStatus:  domain.Paused,
 			IsOrphaned:     true,
 		},
 	}

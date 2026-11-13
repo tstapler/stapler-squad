@@ -1,6 +1,8 @@
 package interfaces
 
-import "github.com/tstapler/stapler-squad/session"
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+)
 
 // CommandContext provides context and state to command handlers
 type CommandContext struct {
@@ -17,7 +19,7 @@ type CommandHandler func(ctx *CommandContext) error
 // Instance represents a session instance with permission checks
 // This interface allows command filtering without importing the full session package
 type Instance interface {
-	GetPermissions() session.InstancePermissions
+	GetPermissions() domain.InstancePermissions
 }
 
 // ContextID identifies different application contexts/modes

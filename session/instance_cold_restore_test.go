@@ -111,7 +111,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold restore")
 	// DoesSessionExist slow path has a 3s timeout; deadline must exceed that to guarantee
 	// at least one successful check before the Eventually deadline fires.
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
@@ -159,7 +159,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold start")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold start")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold start")
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold start")
 }
 
@@ -239,7 +239,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold restore")
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
 
 	assert.Contains(t, inst.LaunchCommand, "--resume", "launch command must embed --resume when a same-path JSONL was recoverable")
@@ -320,7 +320,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 	}()
 
 	assert.True(t, inst2.Started(), "inst2 must be marked as started after hot restore")
-	assert.Equal(t, Running, inst2.Status, "inst2 status must be Running after hot restore")
+	assert.Equal(t, domain.Active, inst2.Status, "inst2 status must be Running after hot restore")
 }
 
 // TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHasLiveTmuxPane
@@ -345,12 +345,12 @@ func TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHas
 
 	t.Run("oneshot_review_tag_stays_stopped", func(t *testing.T) {
 		t.Parallel()
-		assertStoppedReloadOutcome(t, []string{"backlog:review"}, Stopped, true)
+		assertStoppedReloadOutcome(t, []string{"backlog:review"}, domain.Stopped, true)
 	})
 
 	t.Run("non_oneshot_control_revives_to_active", func(t *testing.T) {
 		t.Parallel()
-		assertStoppedReloadOutcome(t, nil, Active, false)
+		assertStoppedReloadOutcome(t, nil, domain.Active, false)
 	})
 }
 
@@ -360,7 +360,7 @@ func TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHas
 // alive" probe — and asserts the resulting status/started flags. A live pane
 // (not a mock) so the assertion exercises the actual IsAlive()/
 // PaneExitStatus() probe the production respawn loop hit.
-func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus Status, wantStarted bool) {
+func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus domain.Status, wantStarted bool) {
 	t.Helper()
 	inst, title, tmpDir, prefix, socket := newLiveSleepInstance(t)
 
@@ -369,7 +369,7 @@ func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus Status, 
 	data := InstanceData{
 		Title:            title,
 		Path:             tmpDir,
-		Status:           Stopped,
+		Status:           domain.Stopped,
 		Program:          "sleep 300",
 		TmuxPrefix:       prefix,
 		TmuxServerSocket: socket,

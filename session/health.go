@@ -80,7 +80,7 @@ const restartGracePeriod = 60 * time.Second
 // startup failures (see server/services/session_service.go).
 func markStartFailed(instance *Instance, err error) {
 	instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", err.Error()))
-	instance.ForceStatus(Stopped)
+	instance.ForceStatus(domain.Stopped)
 	log.ForSession(instance.Title).Error("session failed: working directory missing, giving up", "err", err)
 }
 
@@ -262,15 +262,15 @@ func healthCheckSkipReason(instance *Instance) (string, bool) {
 		return "", false
 	}
 	switch status {
-	case Paused:
+	case domain.Paused:
 		return "Skipped (session is paused)", true
-	case Hibernated:
+	case domain.Hibernated:
 		return "Skipped (session is hibernated)", true
-	case Stopped:
+	case domain.Stopped:
 		return "Skipped (session is stopped)", true
-	case Crashed:
+	case domain.Crashed:
 		return "Skipped (session has crashed, awaiting resume)", true
-	case PermanentlyFailed:
+	case domain.PermanentlyFailed:
 		return "Skipped (session is permanently failed, awaiting retry)", true
 	default:
 		return "Skipped (session is suspended)", true
@@ -306,7 +306,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// exists to catch. instance here is a throwaway copy LoadInstances()
 	// constructs fresh on every call (not the live, actor-managed instance),
 	// so marking it started has no effect beyond this health check.
-	if instance.Status == Active && !instance.Started() {
+	if instance.Status == domain.Active && !instance.Started() {
 		instance.started.Store(true)
 	}
 

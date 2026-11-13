@@ -33,10 +33,10 @@ type charFixture struct {
 // newUnlinkedCharFixture is an autonomous session with no linked backlog item.
 func newUnlinkedCharFixture(t *testing.T, title string) *charFixture {
 	t.Helper()
-	return newUnlinkedCharFixtureWithStatus(t, title, session.Paused)
+	return newUnlinkedCharFixtureWithStatus(t, title, domain.Paused)
 }
 
-func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status session.Status) *charFixture {
+func newUnlinkedCharFixtureWithStatus(t *testing.T, title string, status domain.Status) *charFixture {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	ctx, cancel := context.WithCancel(context.Background())

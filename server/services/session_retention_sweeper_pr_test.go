@@ -12,19 +12,20 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeSweepPRSource wraps the real storage and lets a test replace or break any
 // of the three bulk reads the sweeper makes once per cycle.
 type fakeSweepPRSource struct {
 	real     sweepPRSource
-	views    func(map[string][]session.PRView) (map[string][]session.PRView, error)
+	views    func(map[string][]domain.PRView) (map[string][]domain.PRView, error)
 	itemIDs  func(map[string][]string) (map[string][]string, error)
 	guards   func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error)
 	viewCall int
 }
 
-func (f *fakeSweepPRSource) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]session.PRView, error) {
+func (f *fakeSweepPRSource) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error) {
 	f.viewCall++
 	got, err := f.real.ListSessionPRViewsByUUIDs(ctx, uuids)
 	if err != nil || f.views == nil {
@@ -54,7 +55,7 @@ func newPRSweeper(fix *forkTestFixture) (*SessionRetentionSweeper, *fakeSweepPRS
 	fake := &fakeSweepPRSource{real: sweeper.prSource}
 	sweeper.prSource = fake
 	// Never reach GitHub from a test: closed PRs stay closed unless a test says otherwise.
-	sweeper.reverifyClosed = func(context.Context, session.PRRef) (bool, error) { return false, nil }
+	sweeper.reverifyClosed = func(context.Context, domain.PRRef) (bool, error) { return false, nil }
 	return sweeper, fake
 }
 
@@ -68,17 +69,17 @@ func addArchivedWithUUID(t *testing.T, fix *forkTestFixture, title, uuid string,
 
 // linkPR links number to the session. State rows are shared by PR identity, so
 // each test uses PR numbers no other test session in the same fixture uses.
-func linkPR(t *testing.T, fix *forkTestFixture, uuid string, number int, state session.PRState, terminal bool) {
+func linkPR(t *testing.T, fix *forkTestFixture, uuid string, number int, state domain.PRState, terminal bool) {
 	t.Helper()
 	linkPRKeepingMirror(t, fix, uuid, number, state, terminal, session.PRMirror{})
 }
 
-func linkPRKeepingMirror(t *testing.T, fix *forkTestFixture, uuid string, number int, state session.PRState, terminal bool, mirror session.PRMirror) {
+func linkPRKeepingMirror(t *testing.T, fix *forkTestFixture, uuid string, number int, state domain.PRState, terminal bool, mirror session.PRMirror) {
 	t.Helper()
-	ref, err := session.NewPRRef("", "acme", "app", number)
+	ref, err := domain.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
 	_, err = fix.storage.AttachSessionPR(context.Background(), uuid, ref,
-		session.PRLink{Role: session.PRRolePrimary, Source: session.AttachSourceManual, Initial: session.PRInitial{State: state, Terminal: terminal}},
+		session.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: session.PRInitial{State: state, Terminal: terminal}},
 		mirror)
 	require.NoError(t, err)
 }
@@ -88,11 +89,11 @@ func TestRetentionSweeper_ShouldNotDelete_WhenOneLinkedPROpen(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	addArchivedWithUUID(t, fix, "mixed", "u-mixed")
-	linkPR(t, fix, "u-mixed", 11, session.PRStateMerged, true)
-	linkPR(t, fix, "u-mixed", 12, session.PRStateOpen, false)
+	linkPR(t, fix, "u-mixed", 11, domain.PRStateMerged, true)
+	linkPR(t, fix, "u-mixed", 12, domain.PRStateOpen, false)
 	addArchivedWithUUID(t, fix, "both-terminal", "u-done")
-	linkPR(t, fix, "u-done", 21, session.PRStateMerged, true)
-	linkPR(t, fix, "u-done", 22, session.PRStateClosed, true)
+	linkPR(t, fix, "u-done", 21, domain.PRStateMerged, true)
+	linkPR(t, fix, "u-done", 22, domain.PRStateClosed, true)
 
 	sweeper, _ := newPRSweeper(fix)
 	sweeper.sweep(context.Background())
@@ -120,11 +121,11 @@ func TestRetentionSweeper_ShouldFailClosed_WhenUnknownOrUnverifiedTerminal(t *te
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	addArchivedWithUUID(t, fix, "unknown", "u-unk")
-	linkPR(t, fix, "u-unk", 12, session.PRStateUnknown, false)
+	linkPR(t, fix, "u-unk", 12, domain.PRStateUnknown, false)
 	addArchivedWithUUID(t, fix, "unverified", "u-unv")
-	linkPR(t, fix, "u-unv", 13, session.PRStateUnknown, true)
+	linkPR(t, fix, "u-unv", 13, domain.PRStateUnknown, true)
 	addArchivedWithUUID(t, fix, "exhausted", "u-exh")
-	linkPR(t, fix, "u-exh", 14, session.PRStateUnknown, true)
+	linkPR(t, fix, "u-exh", 14, domain.PRStateUnknown, true)
 
 	sweeper, _ := newPRSweeper(fix)
 	sweeper.sweep(context.Background())
@@ -133,10 +134,10 @@ func TestRetentionSweeper_ShouldFailClosed_WhenUnknownOrUnverifiedTerminal(t *te
 	assert.True(t, hasStoredTitle(t, fix, "exhausted"), "not exhausted yet")
 
 	start := time.Now().Add(-2 * time.Hour)
-	sweeper.prSource.(*fakeSweepPRSource).views = func(m map[string][]session.PRView) (map[string][]session.PRView, error) {
+	sweeper.prSource.(*fakeSweepPRSource).views = func(m map[string][]domain.PRView) (map[string][]domain.PRView, error) {
 		for _, v := range m["u-exh"] {
 			v.PollFailCount, v.FirstFailAt, v.LastPolledAt = 5, start, start.Add(time.Hour)
-			m["u-exh"] = []session.PRView{v}
+			m["u-exh"] = []domain.PRView{v}
 		}
 		return m, nil
 	}
@@ -151,17 +152,17 @@ func TestRetentionSweeper_ShouldFailClosed_WhenItemDirectPROpen(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	addArchivedWithUUID(t, fix, "worker", "u-w")
-	linkPR(t, fix, "u-w", 11, session.PRStateMerged, true)
+	linkPR(t, fix, "u-w", 11, domain.PRStateMerged, true)
 	sweeper, fake := newPRSweeper(fix)
 	fake.itemIDs = func(map[string][]string) (map[string][]string, error) {
 		return map[string][]string{"u-w": {"item-x", "item-y"}}, nil
 	}
-	merged := session.PRView{State: session.PRStateMerged, StoredTerminal: true}
-	open := session.PRView{State: session.PRStateOpen}
+	merged := domain.PRView{State: domain.PRStateMerged, StoredTerminal: true}
+	open := domain.PRView{State: domain.PRStateOpen}
 	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
 		return map[string]session.ItemGuardView{
-			"item-x": {Direct: []session.PRView{merged}},
-			"item-y": {Direct: []session.PRView{open}},
+			"item-x": {Direct: []domain.PRView{merged}},
+			"item-y": {Direct: []domain.PRView{open}},
 		}, nil
 	}
 	sweeper.sweep(context.Background())
@@ -169,8 +170,8 @@ func TestRetentionSweeper_ShouldFailClosed_WhenItemDirectPROpen(t *testing.T) {
 
 	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
 		return map[string]session.ItemGuardView{
-			"item-x": {Direct: []session.PRView{merged}},
-			"item-y": {Direct: []session.PRView{merged}},
+			"item-x": {Direct: []domain.PRView{merged}},
+			"item-y": {Direct: []domain.PRView{merged}},
 		}, nil
 	}
 	sweeper.sweep(context.Background())
@@ -182,7 +183,7 @@ func TestRetentionSweeper_ShouldFailClosed_WhenLinkOrItemLookupErrors(t *testing
 	boom := errors.New("injected")
 	cases := map[string]func(*fakeSweepPRSource){
 		"links": func(f *fakeSweepPRSource) {
-			f.views = func(map[string][]session.PRView) (map[string][]session.PRView, error) { return nil, boom }
+			f.views = func(map[string][]domain.PRView) (map[string][]domain.PRView, error) { return nil, boom }
 		},
 		"itemIDs": func(f *fakeSweepPRSource) {
 			f.itemIDs = func(map[string][]string) (map[string][]string, error) { return nil, boom }
@@ -222,9 +223,9 @@ func TestRetentionSweeper_ShouldFailClosed_WhenRepresentationMismatch(t *testing
 		}
 	}
 	addArchivedWithUUID(t, fix, "unrepresented", "u-m", legacy(false))
-	linkPRKeepingMirror(t, fix, "u-m", 31, session.PRStateMerged, true, session.PRMirror{Number: 32})
+	linkPRKeepingMirror(t, fix, "u-m", 31, domain.PRStateMerged, true, session.PRMirror{Number: 32})
 	addArchivedWithUUID(t, fix, "unrepresented-safe", "u-ms", legacy(true))
-	linkPRKeepingMirror(t, fix, "u-ms", 31, session.PRStateMerged, true, session.PRMirror{Number: 32, Terminal: true})
+	linkPRKeepingMirror(t, fix, "u-ms", 31, domain.PRStateMerged, true, session.PRMirror{Number: 32, Terminal: true})
 	addArchivedWithUUID(t, fix, "bad-item-ref", "u-b")
 
 	sweeper, fake := newPRSweeper(fix)
@@ -247,7 +248,7 @@ func TestRetentionSweeper_ShouldFailClosed_WhenAllScopesOff(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	addArchivedWithUUID(t, fix, "open", "u-o")
-	linkPR(t, fix, "u-o", 12, session.PRStateOpen, false)
+	linkPR(t, fix, "u-o", 12, domain.PRStateOpen, false)
 
 	// DefaultConfig leaves every session_multi_pr scope off; the sweeper reads none.
 	sweeper, _ := newPRSweeper(fix)
@@ -291,8 +292,8 @@ func TestRetentionSweeper_ShouldSurfaceItemPRHold_OnlyAfterMaxHold_AndNeverRelea
 	}
 	attached := base.Add(-30 * time.Minute)
 	fake.guards = func(map[string]session.ItemGuardView) (map[string]session.ItemGuardView, error) {
-		open := session.PRView{State: session.PRStateOpen, AttachedAt: attached}
-		return map[string]session.ItemGuardView{"item-h": {Direct: []session.PRView{open}}}, nil
+		open := domain.PRView{State: domain.PRStateOpen, AttachedAt: attached}
+		return map[string]session.ItemGuardView{"item-h": {Direct: []domain.PRView{open}}}, nil
 	}
 	globalBefore := ItemPRHoldOverMaxCount()
 
@@ -317,10 +318,10 @@ func TestRetentionSweeper_ShouldNotDelete_WhenPRLinkAppearsAfterCycleLoad(t *tes
 	addArchivedWithUUID(t, fix, "raced", "u-race")
 	sweeper, fake := newPRSweeper(fix)
 	calls := 0
-	fake.views = func(m map[string][]session.PRView) (map[string][]session.PRView, error) {
+	fake.views = func(m map[string][]domain.PRView) (map[string][]domain.PRView, error) {
 		calls++
 		if calls > 1 { // a report_pr_created lands after the cycle prefilter
-			m["u-race"] = []session.PRView{{State: session.PRStateOpen}}
+			m["u-race"] = []domain.PRView{{State: domain.PRStateOpen}}
 		}
 		return m, nil
 	}
@@ -336,14 +337,14 @@ func TestRetentionSweeper_ShouldKeepSession_WhenClosedPRWasReopenedOrCheckFails(
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	addArchivedWithUUID(t, fix, "reopened", "u-reo")
-	linkPR(t, fix, "u-reo", 61, session.PRStateClosed, true)
+	linkPR(t, fix, "u-reo", 61, domain.PRStateClosed, true)
 	addArchivedWithUUID(t, fix, "errored", "u-err")
-	linkPR(t, fix, "u-err", 62, session.PRStateClosed, true)
+	linkPR(t, fix, "u-err", 62, domain.PRStateClosed, true)
 	addArchivedWithUUID(t, fix, "stays-closed", "u-ok")
-	linkPR(t, fix, "u-ok", 63, session.PRStateClosed, true)
+	linkPR(t, fix, "u-ok", 63, domain.PRStateClosed, true)
 
 	sweeper, _ := newPRSweeper(fix)
-	sweeper.reverifyClosed = func(_ context.Context, ref session.PRRef) (bool, error) {
+	sweeper.reverifyClosed = func(_ context.Context, ref domain.PRRef) (bool, error) {
 		switch ref.Number() {
 		case 61:
 			return true, nil
@@ -377,7 +378,7 @@ func TestRetentionSweeper_ShouldSurfaceSessionPRHold_OnceWhenOverMax(t *testing.
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	addArchivedWithUUID(t, fix, "held", "u-held")
-	linkPR(t, fix, "u-held", 71, session.PRStateOpen, false)
+	linkPR(t, fix, "u-held", 71, domain.PRStateOpen, false)
 	sweeper, _ := newPRSweeper(fix)
 	sweeper.now = func() time.Time { return time.Now().Add(48 * time.Hour) }
 
@@ -418,28 +419,28 @@ func TestRetentionSweeper_ShouldReleaseSession_OnlyAfterClosedPRStaysUnverifiabl
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	addArchivedWithUUID(t, fix, "no-token", "u-nt")
-	linkPR(t, fix, "u-nt", 81, session.PRStateClosed, true)
+	linkPR(t, fix, "u-nt", 81, domain.PRStateClosed, true)
 	addArchivedWithUUID(t, fix, "rate-limited", "u-rl")
-	linkPR(t, fix, "u-rl", 82, session.PRStateClosed, true)
+	linkPR(t, fix, "u-rl", 82, domain.PRStateClosed, true)
 
 	sweeper, _ := newPRSweeper(fix)
 	clock := time.Now()
 	sweeper.now = func() time.Time { return clock }
-	sweeper.reverifyClosed = func(_ context.Context, ref session.PRRef) (bool, error) {
+	sweeper.reverifyClosed = func(_ context.Context, ref domain.PRRef) (bool, error) {
 		if ref.Number() == 81 {
 			return false, githubpkg.ErrNotAuthenticated
 		}
 		return false, errors.New("GitHub API: rate limited (429)")
 	}
 	before := ClosedPRUnverifiableCount()
-	for i := 0; i < session.VerifyAttemptLimit; i++ {
+	for i := 0; i < domain.VerifyAttemptLimit; i++ {
 		assert.True(t, hasStoredTitle(t, fix, "no-token"), "held on sweep %d", i)
 		sweeper.sweep(context.Background())
 		clock = clock.Add(reverifyUnverifiableSpan/2 + time.Minute)
 	}
 	assert.False(t, hasStoredTitle(t, fix, "no-token"), "released once unverifiable for the count and span")
 	assert.True(t, hasStoredTitle(t, fix, "rate-limited"), "a transient failure never releases")
-	assert.GreaterOrEqual(t, ClosedPRUnverifiableCount()-before, int64(session.VerifyAttemptLimit))
+	assert.GreaterOrEqual(t, ClosedPRUnverifiableCount()-before, int64(domain.VerifyAttemptLimit))
 }
 
 func TestClosedPRReverifier_ShouldBoundChecksPerSweep(t *testing.T) {

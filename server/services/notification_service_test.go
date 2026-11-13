@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // newNotificationTestServer creates an httptest server running a real SessionService
@@ -135,7 +136,7 @@ func TestSendNotification_PollerMissFallsBackToStorage(t *testing.T) {
 		Title:     sessionTitle,
 		UUID:      sessionUUID,
 		Path:      t.TempDir(),
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -261,7 +262,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallba
 		Title:     sessionTitle,
 		UUID:      "hidden-uuid-storage-fallback",
 		Path:      t.TempDir(),
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		Hidden:    true,
 		CreatedAt: time.Now(),

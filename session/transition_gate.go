@@ -221,7 +221,7 @@ type PRAssociation struct {
 	Guard *backlogdto.PRReassignmentGuard
 	// Source says which writer recorded the PR (the item-direct link's attach source);
 	// empty means manual.
-	Source AttachSource
+	Source domain.AttachSource
 	// Additive adds URL as a follow-up PR of an item already in pr_pending instead of
 	// reassigning its tracked PR: no guard, status unchanged, the item mirror follows the
 	// derived active PR. Only the report_pr_created handler sets it, and only with the

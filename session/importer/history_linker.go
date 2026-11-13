@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
@@ -146,7 +147,7 @@ func (hl *HistoryLinker) rescanNeeded(filePath string) bool {
 	claimedByLive, awaitingLink := false, false
 	for _, inst := range hl.Instances() {
 		snap := inst.Snapshot()
-		live := snap.Status == session.Active && snap.ArchivedAt == nil
+		live := snap.Status == domain.Active && snap.ArchivedAt == nil
 		if !inst.HasClaudeSession() {
 			// isClaude reads config from disk, so only evaluate it for the
 			// few live unlinked sessions. A parked session still counts: the
@@ -391,7 +392,7 @@ func (hl *HistoryLinker) detectLink(inst *session.Instance, alreadyLinked bool) 
 	// Active sessions still use the fallback so that /clear-triggered UUID changes
 	// (new conversation file created while the session is live) are detected promptly.
 	pathFallbackAllowed := !alreadyLinked ||
-		(inst.Status != session.Paused && inst.Status != session.Hibernated && inst.Status != session.Stopped)
+		(inst.Status != domain.Paused && inst.Status != domain.Hibernated && inst.Status != domain.Stopped)
 	if info == nil && pathFallbackAllowed {
 		if effectivePath := inst.GetEffectiveRootDir(); effectivePath != "" {
 			info, err = hl.detectUnclaimedByPath(inst, effectivePath, !alreadyLinked)

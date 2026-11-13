@@ -4,6 +4,7 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "domain",
     srcs = [
+        "approval_metadata.go",
         "artifact_records.go",
         "artifacts_blob.go",
         "autonomous_stop.go",
@@ -14,7 +15,13 @@ go_library(
         "github_pr_items.go",
         "guidance_cancel_reason.go",
         "guidance_request_source.go",
+        "instance_types.go",
+        "instance_values.go",
+        "pr_set.go",
+        "process_manager_backend.go",
+        "review_state.go",
         "session_type.go",
+        "status.go",
         "wake_trigger.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/domain",

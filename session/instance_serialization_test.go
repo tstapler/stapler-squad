@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"log/slog"
 	"testing"
 	"time"
@@ -19,24 +20,24 @@ func TestToInstanceData_PreservesBackend(t *testing.T) {
 	instance := &Instance{
 		Title:     "backend-roundtrip",
 		Path:      "/path/to/repo",
-		Status:    Paused,
+		Status:    domain.Paused,
 		CreatedAt: now,
 		UpdatedAt: now,
 		Program:   "claude",
-		Backend:   BackendTymux,
+		Backend:   domain.BackendTymux,
 	}
 
 	data := instance.ToInstanceData()
-	if data.Backend != BackendTymux {
-		t.Fatalf("ToInstanceData(): expected Backend %q, got %q", BackendTymux, data.Backend)
+	if data.Backend != domain.BackendTymux {
+		t.Fatalf("ToInstanceData(): expected Backend %q, got %q", domain.BackendTymux, data.Backend)
 	}
 
 	restored, err := FromInstanceData(data)
 	if err != nil {
 		t.Fatalf("FromInstanceData: %v", err)
 	}
-	if restored.Backend != BackendTymux {
-		t.Fatalf("FromInstanceData(): expected Backend %q, got %q", BackendTymux, restored.Backend)
+	if restored.Backend != domain.BackendTymux {
+		t.Fatalf("FromInstanceData(): expected Backend %q, got %q", domain.BackendTymux, restored.Backend)
 	}
 }
 
@@ -148,20 +149,20 @@ func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_Wh
 
 	tests := []struct {
 		name        string
-		status      Status
+		status      domain.Status
 		archived    bool
-		wantStatus  Status
+		wantStatus  domain.Status
 		wantStarted bool
 	}{
-		{name: "active_archived_heals_to_stopped", status: Active, archived: true, wantStatus: Stopped, wantStarted: true},
-		{name: "creating_archived_heals_to_stopped", status: Creating, archived: true, wantStatus: Stopped, wantStarted: true},
-		{name: "restoring_archived_preserves_status", status: Restoring, archived: true, wantStatus: Restoring, wantStarted: true},
-		{name: "permanently_failed_archived_preserves_status", status: PermanentlyFailed, archived: true, wantStatus: PermanentlyFailed, wantStarted: true},
-		{name: "failed_archived_preserves_status", status: Failed, archived: true, wantStatus: Failed, wantStarted: true},
+		{name: "active_archived_heals_to_stopped", status: domain.Active, archived: true, wantStatus: domain.Stopped, wantStarted: true},
+		{name: "creating_archived_heals_to_stopped", status: domain.Creating, archived: true, wantStatus: domain.Stopped, wantStarted: true},
+		{name: "restoring_archived_preserves_status", status: domain.Restoring, archived: true, wantStatus: domain.Restoring, wantStarted: true},
+		{name: "permanently_failed_archived_preserves_status", status: domain.PermanentlyFailed, archived: true, wantStatus: domain.PermanentlyFailed, wantStarted: true},
+		{name: "failed_archived_preserves_status", status: domain.Failed, archived: true, wantStatus: domain.Failed, wantStarted: true},
 		// Controls: an unarchived row is untouched, and Paused is handled by its
 		// own earlier branch so the new guard must not reach it.
-		{name: "active_not_archived_control", status: Active, archived: false, wantStatus: Active, wantStarted: false},
-		{name: "paused_archived_control", status: Paused, archived: true, wantStatus: Paused, wantStarted: true},
+		{name: "active_not_archived_control", status: domain.Active, archived: false, wantStatus: domain.Active, wantStarted: false},
+		{name: "paused_archived_control", status: domain.Paused, archived: true, wantStatus: domain.Paused, wantStarted: true},
 	}
 
 	for _, tt := range tests {
@@ -211,7 +212,7 @@ func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_Wh
 // ToInstanceData used to dereference the resulting nil snapshot.
 func TestToInstanceData_should_ReturnCurrentFields_When_ActorAlreadyStopped(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "actor-stopped", Path: "/path/to/repo", Status: Creating, Program: "claude"}
+	inst := &Instance{Title: "actor-stopped", Path: "/path/to/repo", Status: domain.Creating, Program: "claude"}
 	li := NewLiveInstance(inst)
 	li.Stop()
 

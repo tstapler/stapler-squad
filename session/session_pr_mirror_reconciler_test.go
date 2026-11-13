@@ -8,12 +8,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func linkPR(t *testing.T, s *Storage, uuid string, n int, role PRRole, at time.Time) {
+func linkPR(t *testing.T, s *Storage, uuid string, n int, role domain.PRRole, at time.Time) {
 	t.Helper()
 	_, err := s.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid), mustPRRef(t, "", "acme", "app", n),
-		PRLink{Role: role, Source: AttachSourceManual, AttachedAt: at, Initial: PRInitial{State: PRStateOpen}})
+		PRLink{Role: role, Source: domain.AttachSourceManual, AttachedAt: at, Initial: PRInitial{State: domain.PRStateOpen}})
 	require.NoError(t, err)
 }
 
@@ -40,8 +41,8 @@ func TestMirrorReconciler_ShouldCorrectViaActor_WhenLegacyNumberDriftsFromActive
 	defer cleanup()
 	prLoadFixture(t, storage, "drifted", "u-drift", "acme", "app", 11)
 	now := time.Now()
-	linkPR(t, storage, "u-drift", 11, PRRolePrimary, now)
-	linkPR(t, storage, "u-drift", 12, PRRoleFollowup, now.Add(time.Minute))
+	linkPR(t, storage, "u-drift", 11, domain.PRRolePrimary, now)
+	linkPR(t, storage, "u-drift", 12, domain.PRRoleFollowup, now.Add(time.Minute))
 	inst := loadByTitle(t, storage, "drifted")
 	require.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber, "the snapshot already projects the active PR")
 	require.Equal(t, 11, sessionMirror(t, storage, "drifted").GitHubPRNumber)
@@ -83,7 +84,7 @@ func TestMirrorReconciler_ShouldOverwriteTombstonedValue_WhenSessionHasOtherLink
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 	prLoadFixture(t, storage, "tombstoned", "u-tomb", "acme", "app", 12)
-	linkPR(t, storage, "u-tomb", 11, PRRolePrimary, time.Now())
+	linkPR(t, storage, "u-tomb", 11, domain.PRRolePrimary, time.Now())
 	_, err := storage.Repo.DeleteSessionPR(context.Background(), SessionPROwner("u-tomb"), mustPRRef(t, "", "acme", "app", 12))
 	require.NoError(t, err)
 	inst := loadByTitle(t, storage, "tombstoned")
@@ -112,7 +113,7 @@ func TestMirrorReconciler_ShouldEndWithMirrorEqualToActivePR_WhenAttachApplyAndR
 		ref := mustPRRef(t, "", "acme", "app", n)
 		go func() {
 			defer wg.Done()
-			_ = inst.AttachPR(ref, AttachSourceBranchDiscovery, PRInitial{State: PRStateOpen})
+			_ = inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, PRInitial{State: domain.PRStateOpen})
 		}()
 		go func() { defer wg.Done(); inst.ApplyPRUpdate(ref, PRStatusUpdate{State: "merged", Terminal: true}) }()
 		go func() { defer wg.Done(); rec.RunOnce(ctx) }()

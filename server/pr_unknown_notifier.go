@@ -8,11 +8,12 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // prSessionLookup resolves the sessions linked to a PR (session.Storage satisfies it).
 type prSessionLookup interface {
-	SessionUUIDsByPR(ctx context.Context, ref session.PRRef) ([]string, error)
+	SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]string, error)
 }
 
 const prUnknownLookupTimeout = 5 * time.Second
@@ -20,8 +21,8 @@ const prUnknownLookupTimeout = 5 * time.Second
 // newPRUnknownNotifier returns the PRStatusPoller.SetOnPRUnknown callback: it
 // raises one warning per session linked to the PR, or one keyed by the PR when
 // only an item holds it. The poller already fires this once per transition.
-func newPRUnknownNotifier(lookup prSessionLookup, n session.Notifier) func(session.PRView) {
-	return func(v session.PRView) {
+func newPRUnknownNotifier(lookup prSessionLookup, n session.Notifier) func(domain.PRView) {
+	return func(v domain.PRView) {
 		ctx, cancel := context.WithTimeout(context.Background(), prUnknownLookupTimeout)
 		defer cancel()
 		uuids, err := lookup.SessionUUIDsByPR(ctx, v.Ref)

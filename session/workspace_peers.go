@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -27,7 +28,7 @@ type WorkspacePeer struct {
 	Title       string
 	Branch      string
 	Path        string
-	Status      Status
+	Status      domain.Status
 	Goal        *SessionGoalData // nil when the peer has never set a goal
 
 	// InstanceLive is a best-effort liveness signal: false when the session's Status is
@@ -79,7 +80,7 @@ func (s *Storage) ListWorkspacePeers(ctx context.Context, workspaceKey string, e
 			Branch:       d.Branch,
 			Path:         d.Path,
 			Status:       d.Status,
-			InstanceLive: d.Status != Stopped,
+			InstanceLive: d.Status != domain.Stopped,
 		})
 		peerUUIDs = append(peerUUIDs, d.UUID)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -34,15 +35,15 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 	_, err = storage.RawTransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
-	ref := func(n int) session.PRRef {
-		r, rerr := session.NewPRRef("github.com", "acme", "app", n)
+	ref := func(n int) domain.PRRef {
+		r, rerr := domain.NewPRRef("github.com", "acme", "app", n)
 		require.NoError(t, rerr)
 		return r
 	}
 	link := func(owner session.PROwner, n int) {
 		res, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), session.PRLink{
-			Role: session.PRRolePrimary, Source: session.AttachSourceManual,
-			Initial: session.PRInitial{State: session.PRStateOpen},
+			Role: domain.PRRolePrimary, Source: domain.AttachSourceManual,
+			Initial: session.PRInitial{State: domain.PRStateOpen},
 		})
 		require.NoError(t, lerr)
 		require.False(t, res.Tombstoned)

@@ -48,7 +48,7 @@ func (i *Instance) RepoName() (string, error) {
 	if !i.started.Load() {
 		return "", fmt.Errorf("cannot get repo name for instance that has not been started")
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		return "", fmt.Errorf("cannot get repo name for paused instance")
 	}
 	if !i.GitManager.HasWorktree() {
@@ -534,7 +534,7 @@ func (i *Instance) GetCreationWarning() string {
 // Workspace type for which field answers which question — in particular
 // ActiveDir to compare sessions, ExistingDir to open files. Prefer it to
 // reading inst.Path directly, which is wrong for worktree sessions.
-func (i *Instance) Workspace() Workspace {
+func (i *Instance) Workspace() domain.Workspace {
 	repoRoot := i.GetPath()
 	worktreeDir := ""
 	if i.GitManager.HasWorktree() {
@@ -558,7 +558,7 @@ func (i *Instance) Workspace() Workspace {
 			existingDir = repoRoot
 		}
 	}
-	return Workspace{
+	return domain.Workspace{
 		RepoRoot:    repoRoot,
 		WorktreeDir: worktreeDir,
 		ActiveDir:   activeDir,
@@ -642,7 +642,7 @@ func (i *Instance) UpdateDiffStats() error {
 		i.mu.RUnlock()
 		return nil
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		i.mu.RUnlock()
 		return nil
 	}
@@ -695,9 +695,9 @@ func (i *Instance) UpdateDiffStats() error {
 	var transitionErr error
 	var didTransitionToPaused bool
 	if needsPause {
-		if i.Status != Paused {
+		if i.Status != domain.Paused {
 			didTransitionToPaused = true
-			transitionErr = i.transitionTo(context.Background(), Paused)
+			transitionErr = i.transitionTo(context.Background(), domain.Paused)
 		}
 		i.GitManager.ClearDiffStats()
 		i.mu.Unlock()

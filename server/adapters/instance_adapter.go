@@ -260,7 +260,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 
 	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
 	var statusInfo session.InstanceStatusInfo
-	if snap.Status == session.Active {
+	if snap.Status == domain.Active {
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			statusInfo = mgr.GetStatus(inst)
 		}
@@ -372,8 +372,8 @@ func mapCDPStatus(status cdp.CDPStatus) sessionv1.CDPStatus {
 // toProtoSubStatusFromInfo derives the SubStatus proto enum from pre-computed status info.
 // Returns SUB_STATUS_UNSPECIFIED for non-Active sessions or when no detection data is available.
 // Rate limit state takes precedence over ClaudeController-detected sub-status.
-func toProtoSubStatusFromInfo(basicStatus session.Status, rateLimitState int, info session.InstanceStatusInfo) sessionv1.SubStatus {
-	if basicStatus != session.Active {
+func toProtoSubStatusFromInfo(basicStatus domain.Status, rateLimitState int, info session.InstanceStatusInfo) sessionv1.SubStatus {
+	if basicStatus != domain.Active {
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}
 	// Rate limit state takes precedence.
@@ -433,25 +433,25 @@ func rateLimitStateToProto(state ratelimit.RateLimitState) sessionv1.RateLimitSt
 // comment for why this is enforced at the code level here rather than via the
 // linter, which is deliberately disabled repo-wide for iota-typed switches with
 // intentional default arms).
-func StatusToProto(status session.Status) (sessionv1.SessionStatus, error) {
+func StatusToProto(status domain.Status) (sessionv1.SessionStatus, error) {
 	switch status {
-	case session.Active:
+	case domain.Active:
 		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, nil // wire value 1 (same as legacy RUNNING)
-	case session.Paused:
+	case domain.Paused:
 		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED, nil
-	case session.Creating:
+	case domain.Creating:
 		return sessionv1.SessionStatus_SESSION_STATUS_CREATING, nil
-	case session.Stopped:
+	case domain.Stopped:
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED, nil
-	case session.Hibernated:
+	case domain.Hibernated:
 		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, nil
-	case session.Restoring:
+	case domain.Restoring:
 		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING, nil
-	case session.Crashed:
+	case domain.Crashed:
 		return sessionv1.SessionStatus_SESSION_STATUS_CRASHED, nil
-	case session.PermanentlyFailed:
+	case domain.PermanentlyFailed:
 		return sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED, nil
-	case session.Failed:
+	case domain.Failed:
 		return sessionv1.SessionStatus_SESSION_STATUS_FAILED, nil
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED, fmt.Errorf("adapters.StatusToProto: unrecognized session.Status %d", int(status))
@@ -463,7 +463,7 @@ func StatusToProto(status session.Status) (sessionv1.SessionStatus, error) {
 // (it should never happen — every session.Status value is handled above) and
 // mapped to UNSPECIFIED rather than propagated, matching this wrapper's
 // original no-error contract.
-func statusToProto(status session.Status) sessionv1.SessionStatus {
+func statusToProto(status domain.Status) sessionv1.SessionStatus {
 	proto, err := StatusToProto(status)
 	if err != nil {
 		log.Error("statusToProto: unrecognized session.Status", "status", int(status), "err", err)
@@ -512,15 +512,15 @@ func sessionTypeToProto(sessionType domain.SessionType) sessionv1.SessionType {
 }
 
 // reviveOutcomeToProto converts session.ReviveOutcome to the proto ReviveOutcome enum.
-func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome {
+func reviveOutcomeToProto(outcome domain.ReviveOutcome) sessionv1.ReviveOutcome {
 	switch outcome {
-	case session.ReviveOutcomeResumeLive:
+	case domain.ReviveOutcomeResumeLive:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE
-	case session.ReviveOutcomeResumeRecovered:
+	case domain.ReviveOutcomeResumeRecovered:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED
-	case session.ReviveOutcomeFreshExpected:
+	case domain.ReviveOutcomeFreshExpected:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED
-	case session.ReviveOutcomeFreshLostHistory:
+	case domain.ReviveOutcomeFreshLostHistory:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY
 	default:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED
@@ -530,45 +530,45 @@ func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome
 // ProtoToStatus converts proto SessionStatus enum to session.Status.
 // Legacy wire values from older clients (READY=2, NEEDS_APPROVAL=5, LOADING=3) are
 // mapped to the appropriate new lifecycle states.
-func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
+func ProtoToStatus(status sessionv1.SessionStatus) domain.Status {
 	switch status {
 	case sessionv1.SessionStatus_SESSION_STATUS_ACTIVE:
 		// Also handles RUNNING(1) which shares the same integer wire value.
-		return session.Active
+		return domain.Active
 	case 2: // SESSION_STATUS_READY — deprecated legacy wire value → Active
-		return session.Active
+		return domain.Active
 	case 5: // SESSION_STATUS_NEEDS_APPROVAL — deprecated legacy wire value → Active (sub-status only now)
-		return session.Active
+		return domain.Active
 	case 3: // SESSION_STATUS_LOADING — deprecated legacy wire value → Creating
-		return session.Creating
+		return domain.Creating
 	case sessionv1.SessionStatus_SESSION_STATUS_CREATING:
-		return session.Creating
+		return domain.Creating
 	case sessionv1.SessionStatus_SESSION_STATUS_PAUSED:
-		return session.Paused
+		return domain.Paused
 	case sessionv1.SessionStatus_SESSION_STATUS_STOPPED:
-		return session.Stopped
+		return domain.Stopped
 	case sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED:
-		return session.Hibernated
+		return domain.Hibernated
 	case sessionv1.SessionStatus_SESSION_STATUS_RESTORING:
-		return session.Restoring
+		return domain.Restoring
 	case sessionv1.SessionStatus_SESSION_STATUS_CRASHED:
 		// Collateral fix: this case was missing before session-retry-backoff
 		// touched this switch — a round-tripped CRASHED session silently fell
 		// to the default: below and reopened as Creating.
-		return session.Crashed
+		return domain.Crashed
 	case sessionv1.SessionStatus_SESSION_STATUS_PERMANENTLY_FAILED:
-		return session.PermanentlyFailed
+		return domain.PermanentlyFailed
 	default:
-		return session.Creating // Default to Creating for unknown statuses
+		return domain.Creating // Default to Creating for unknown statuses
 	}
 }
 
 // instanceTypeToProto converts session.InstanceType to proto InstanceType enum.
-func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceType {
+func instanceTypeToProto(instanceType domain.InstanceType) sessionv1.InstanceType {
 	switch instanceType {
-	case session.InstanceTypeManaged:
+	case domain.InstanceTypeManaged:
 		return sessionv1.InstanceType_INSTANCE_TYPE_MANAGED
-	case session.InstanceTypeExternal:
+	case domain.InstanceTypeExternal:
 		return sessionv1.InstanceType_INSTANCE_TYPE_EXTERNAL
 	default:
 		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
@@ -594,7 +594,7 @@ func reviewFeedbackToProto(reviews []domain.GitHubReviewItem) []*sessionv1.Githu
 }
 
 // externalMetadataToProto converts session.ExternalInstanceMetadata to proto ExternalInstanceMetadata.
-func externalMetadataToProto(metadata *session.ExternalInstanceMetadata) *sessionv1.ExternalInstanceMetadata {
+func externalMetadataToProto(metadata *domain.ExternalInstanceMetadata) *sessionv1.ExternalInstanceMetadata {
 	if metadata == nil {
 		return nil
 	}

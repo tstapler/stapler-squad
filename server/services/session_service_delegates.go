@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/search"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -554,7 +555,7 @@ func (s *SessionService) ForkSession(
 	go func() {
 		if startErr := newInst.Start(true); startErr != nil {
 			log.Warn("ForkSession: failed to start forked session", "session", newInst.Title, "err", startErr)
-			newInst.Status = session.Stopped
+			newInst.Status = domain.Stopped
 			if saveErr := s.storage.SaveInstances(s.allInstances()); saveErr != nil {
 				log.Warn("ForkSession: failed to persist Stopped status", "session", newInst.Title, "err", saveErr)
 			}

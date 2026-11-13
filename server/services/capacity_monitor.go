@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbpool"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -215,7 +216,7 @@ func (m *CapacityMonitor) evaluate(ctx context.Context) {
 		}
 		// Use a lock-free snapshot read instead of accessing inst.Status directly.
 		snap := inst.Snapshot()
-		if snap.Status != session.Active {
+		if snap.Status != domain.Active {
 			continue
 		}
 		active[snap.UUID] = true

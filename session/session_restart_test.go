@@ -90,7 +90,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 
 	// Verify the restart also used the --resume flag
 	assert.True(t, instance.Started(), "Instance should be started after restart")
-	assert.Equal(t, Running, instance.Status, "Instance should be running after restart")
+	assert.Equal(t, domain.Active, instance.Status, "Instance should be running after restart")
 
 	t.Logf("✓ Session restarted successfully with conversation continuity")
 }
@@ -268,7 +268,7 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 
 	// Verify session is restored
 	assert.True(t, instance.Started(), "Instance should be started after restart")
-	assert.Equal(t, Running, instance.Status, "Instance should be running after restart")
+	assert.Equal(t, domain.Active, instance.Status, "Instance should be running after restart")
 
 	t.Logf("✓ Health checker automatic restart succeeded with conversation continuity")
 }
@@ -713,7 +713,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 	}()
 
 	require.True(t, instance.TmuxAlive(), "tmux session should be alive after Start")
-	require.Equal(t, Active, instance.Status, "instance should be Active after Start")
+	require.Equal(t, domain.Active, instance.Status, "instance should be Active after Start")
 
 	// A freshly-created tmux server socket can transiently fail "list-sessions"
 	// for a few ms right after creation (server startup lag), independent of

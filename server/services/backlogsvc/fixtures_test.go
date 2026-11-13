@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -99,7 +100,7 @@ func newCharFixture(t *testing.T, title string, role string, itemStatus session.
 
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))

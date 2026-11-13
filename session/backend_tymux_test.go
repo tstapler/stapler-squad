@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -183,16 +184,16 @@ func TestInstanceRestart_MigratesBackendWhenOverrideDiffersFromCurrent(t *testin
 		Title:   "migrate-test",
 		Path:    t.TempDir(),
 		Program: "bash",
-		Status:  Active,
-		Backend: BackendTmux,
+		Status:  domain.Active,
+		Backend: domain.BackendTmux,
 	}
 	inst.started.Store(true)
 	require.NoError(t, inst.initializeBaselineForRestartTest())
 
-	err := inst.Restart(false, BackendTymux)
+	err := inst.Restart(false, domain.BackendTymux)
 
 	require.Error(t, err, "Start() against an unreachable tymuxd must fail in this sandboxed test environment")
-	assert.Equal(t, BackendTymux, inst.Backend,
+	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"Backend must be updated to the migration target even though the subsequent Start() failed -- the migration decision happens before Start() is attempted")
 	_, ok := inst.processManager.(*TymuxBackend)
 	assert.True(t, ok, "processManager must be swapped to *TymuxBackend, not left as the original *TmuxBackend")
@@ -227,8 +228,8 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 		Title:            "no-migrate-test",
 		Path:             t.TempDir(),
 		Program:          "bash",
-		Status:           Active,
-		Backend:          BackendTmux,
+		Status:           domain.Active,
+		Backend:          domain.BackendTmux,
 		TmuxServerSocket: testTmuxSocket(t),
 	}
 	inst.started.Store(true)
@@ -237,7 +238,7 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 
 	require.NoError(t, inst.Restart(false, ""))
 
-	assert.Equal(t, BackendTmux, inst.Backend)
+	assert.Equal(t, domain.BackendTmux, inst.Backend)
 	_, ok := inst.processManager.(*TmuxBackend)
 	assert.True(t, ok, "processManager must remain a *TmuxBackend when no migration was requested")
 }
@@ -247,7 +248,7 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 // i.Backend) without going through the rest of NewInstance's worktree/VNC/
 // CDP machinery this test has no use for.
 func (i *Instance) initializeBaselineForRestartTest() error {
-	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: i.Backend})
 	if err != nil {
 		return err
 	}
@@ -339,15 +340,15 @@ func TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCo
 		Title:   "already-tymux-test",
 		Path:    t.TempDir(),
 		Program: "bash",
-		Status:  Active,
-		Backend: BackendTymux,
+		Status:  domain.Active,
+		Backend: domain.BackendTymux,
 	}
 	inst.started.Store(true)
 	inst.processManager = NewTymuxBackend(fake)
 
 	require.NoError(t, inst.Restart(false, ""))
 
-	assert.Equal(t, BackendTymux, inst.Backend)
+	assert.Equal(t, domain.BackendTymux, inst.Backend)
 	assert.NotEmpty(t, fake.gotCommand, "SetCommand must be called with the rebuilt launch command on an in-place tymux respawn")
 }
 

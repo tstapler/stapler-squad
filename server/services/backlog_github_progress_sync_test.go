@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/itemsources"
@@ -252,10 +253,10 @@ func (s stubHostRecorder) LocalHostID() string                                  
 
 func TestProgressSync_ShouldLinkAllPRs_WhenTwoPRs(t *testing.T) {
 	body := progressReviewComments([]progressPR{
-		{URL: "https://github.com/acme/app/pull/21", State: session.PRStateMerged},
-		{URL: "https://github.com/acme/app/pull/22", State: session.PRStateOpen},
+		{URL: "https://github.com/acme/app/pull/21", State: domain.PRStateMerged},
+		{URL: "https://github.com/acme/app/pull/22", State: domain.PRStateOpen},
 		{URL: "https://github.com/acme/app/pull/23"},
-		{URL: "javascript:alert(1)//pull/9", State: session.PRStateOpen},
+		{URL: "javascript:alert(1)//pull/9", State: domain.PRStateOpen},
 	})
 	assert.Contains(t, body, "- https://github.com/acme/app/pull/21 (merged)")
 	assert.Contains(t, body, "- https://github.com/acme/app/pull/22 (open)")
@@ -265,7 +266,7 @@ func TestProgressSync_ShouldLinkAllPRs_WhenTwoPRs(t *testing.T) {
 
 func TestProgressSync_ShouldKeepSinglePRWording(t *testing.T) {
 	assert.Equal(t, progressReviewComment("https://github.com/acme/app/pull/21"),
-		progressReviewComments([]progressPR{{URL: "https://github.com/acme/app/pull/21", State: session.PRStateOpen}}))
+		progressReviewComments([]progressPR{{URL: "https://github.com/acme/app/pull/21", State: domain.PRStateOpen}}))
 }
 
 func TestResolveProgressTarget_SourcelessSkipsWhenPluginMissingOrRegistryNil(t *testing.T) {

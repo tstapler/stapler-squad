@@ -8,11 +8,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 type fakeGateSource struct {
-	views    map[string][]PRView
+	views    map[string][]domain.PRView
 	guards   map[string]ItemGuardView
 	data     map[string]*InstanceData
 	viewsErr error
@@ -20,7 +21,7 @@ type fakeGateSource struct {
 	dataErr  error
 }
 
-func (f *fakeGateSource) ListSessionPRViewsByUUIDs(context.Context, []string) (map[string][]PRView, error) {
+func (f *fakeGateSource) ListSessionPRViewsByUUIDs(context.Context, []string) (map[string][]domain.PRView, error) {
 	return f.views, f.viewsErr
 }
 
@@ -55,20 +56,20 @@ func gateWith(src *fakeGateSource, probe LiveWorkProbe, live bool) *PRCleanupGat
 
 func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *testing.T) {
 	t.Parallel()
-	open := prRow(t, 22, PRStateOpen, "")
-	merged := prRow(t, 21, PRStateMerged, "")
-	unknown := prRow(t, 23, PRStateUnknown, "")
+	open := prRow(t, 22, domain.PRStateOpen, "")
+	merged := prRow(t, 21, domain.PRStateMerged, "")
+	unknown := prRow(t, 23, domain.PRStateUnknown, "")
 	tests := []struct {
 		name       string
 		src        *fakeGateSource
 		wantReason string // substring; "" means not blocked
 	}{
-		{"all terminal", &fakeGateSource{views: map[string][]PRView{"s1": {merged}}}, ""},
+		{"all terminal", &fakeGateSource{views: map[string][]domain.PRView{"s1": {merged}}}, ""},
 		{"no PRs at all", &fakeGateSource{}, ""},
-		{"session link open", &fakeGateSource{views: map[string][]PRView{"s1": {merged, open}}}, "session s1"},
-		{"session link unknown", &fakeGateSource{views: map[string][]PRView{"s1": {unknown}}}, "session s1"},
-		{"item-direct open, no session link", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {Direct: []PRView{open}}}}, "item i1"},
-		{"item-direct unknown", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {Direct: []PRView{unknown}}}}, "item i1"},
+		{"session link open", &fakeGateSource{views: map[string][]domain.PRView{"s1": {merged, open}}}, "session s1"},
+		{"session link unknown", &fakeGateSource{views: map[string][]domain.PRView{"s1": {unknown}}}, "session s1"},
+		{"item-direct open, no session link", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {Direct: []domain.PRView{open}}}}, "item i1"},
+		{"item-direct unknown", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {Direct: []domain.PRView{unknown}}}}, "item i1"},
 		{"item pr_number no link represents", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {LegacyUnrepresented: true}}}, "item i1"},
 		{"session legacy number, no link, flag not true", &fakeGateSource{data: map[string]*InstanceData{"s1": {UUID: "s1", GitHubPRNumber: 5}}}, "session s1"},
 		{"session legacy number, no link, flag true", &fakeGateSource{data: map[string]*InstanceData{"s1": {UUID: "s1", GitHubPRNumber: 5, GitHubPRStatusTerminal: true}}}, ""},
@@ -93,7 +94,7 @@ func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *test
 
 func TestPRCleanupGate_Blocked_ShouldIgnoreNonWorkSessions_AndSupersededRoundStillHolds(t *testing.T) {
 	t.Parallel()
-	src := &fakeGateSource{views: map[string][]PRView{"s1": {prRow(t, 30, PRStateOpen, "")}}}
+	src := &fakeGateSource{views: map[string][]domain.PRView{"s1": {prRow(t, 30, domain.PRStateOpen, "")}}}
 	review := backlogdto.ItemSessionSummary{ID: "r", SessionUUID: "s1", BacklogItemID: "i1", Role: SessionRoleReview}
 	_, blocked := gateWith(src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{review}, GateOptions{})
 	assert.False(t, blocked, "only work-role links count")
@@ -101,7 +102,7 @@ func TestPRCleanupGate_Blocked_ShouldIgnoreNonWorkSessions_AndSupersededRoundSti
 	b, blocked := gateWith(src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
 	require.True(t, blocked, "round 1's open #30 holds s1 even though the item verdict ignores it")
 	assert.Contains(t, b.Reason, "session s1")
-	src.views = map[string][]PRView{}
+	src.views = map[string][]domain.PRView{}
 	_, blocked = gateWith(src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
 	assert.False(t, blocked, "after DeleteSessionPR the next attempt is clear")
 }
@@ -139,7 +140,7 @@ func TestPRCleanupGate_Blocked_ShouldBlockOnPRClausesOnlyOnReworkPath_WhenJustSp
 	assert.False(t, blocked, "rework: a live session never blocks purely for being live")
 	assert.Empty(t, probe.calls)
 
-	src := &fakeGateSource{views: map[string][]PRView{"old": {prRow(t, 30, PRStateOpen, "")}}}
+	src := &fakeGateSource{views: map[string][]domain.PRView{"old": {prRow(t, 30, domain.PRStateOpen, "")}}}
 	b, blocked := gateWith(src, probe, true).Blocked(ctx, prior, GateOptions{IgnoreLive: true})
 	require.True(t, blocked, "rework: a prior round's open PR still holds its worktree")
 	assert.False(t, b.LiveOnly)
@@ -147,7 +148,7 @@ func TestPRCleanupGate_Blocked_ShouldBlockOnPRClausesOnlyOnReworkPath_WhenJustSp
 
 func TestPRCleanupGate_Blocked_ShouldReportPRBlockNotLive_WhenBothHold(t *testing.T) {
 	t.Parallel()
-	src := &fakeGateSource{views: map[string][]PRView{"s1": {prRow(t, 22, PRStateOpen, "")}}}
+	src := &fakeGateSource{views: map[string][]domain.PRView{"s1": {prRow(t, 22, domain.PRStateOpen, "")}}}
 	b, blocked := gateWith(src, &fakeProbe{live: map[string]bool{"s1": true}}, true).Blocked(context.Background(), []backlogdto.ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
 	require.True(t, blocked)
 	assert.False(t, b.LiveOnly, "a PR hold settles for the TTL; only a pure live hold stays unsettled")

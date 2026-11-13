@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ─── CreateCheckpoint ─────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ func TestCreateCheckpoint_SessionNotStarted(t *testing.T) {
 	inst := &session.Instance{
 		Title:   "not-started-session",
 		Path:    "/tmp/test",
-		Status:  session.Stopped,
+		Status:  domain.Stopped,
 		Program: "claude",
 	}
 	svctest.AddInstanceToPoller(fix.poller, inst)
@@ -143,7 +144,7 @@ func TestListCheckpoints_EmptyWhenNoCheckpoints(t *testing.T) {
 	inst := &session.Instance{
 		Title:   "no-checkpoints-session",
 		Path:    "/tmp/test",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	}
 	svctest.AddInstanceToPoller(fix.poller, inst)

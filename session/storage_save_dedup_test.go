@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func countSessionUpdates(t *testing.T, storage *Storage) *atomic.Int64 {
@@ -184,7 +185,7 @@ func TestUpdateInstanceIfEpoch_Should_OnlyForgetMatchingSession(t *testing.T) {
 	require.NoError(t, storage.AddInstance(b))
 	require.NoError(t, storage.SaveInstances([]*Instance{a, b}))
 
-	_, err := storage.UpdateInstanceIfEpoch(context.Background(), a.Title, 0, Stopped, "x")
+	_, err := storage.UpdateInstanceIfEpoch(context.Background(), a.Title, 0, domain.Stopped, "x")
 	require.NoError(t, err)
 	updates := countSessionUpdates(t, storage)
 

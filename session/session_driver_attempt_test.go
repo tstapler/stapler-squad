@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestDriverAttempt_WaitingForOperatorDoesNotEscalate(t *testing.T) {
@@ -19,7 +20,7 @@ func TestDriverAttempt_WaitingForOperatorDoesNotEscalate(t *testing.T) {
 			t.Parallel()
 			now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 			old := now.Add(-time.Hour)
-			inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, InitialPromptSentAt: old}
+			inst := &Instance{Title: t.Name(), Program: "pi", Status: domain.Active, InitialPromptSentAt: old}
 			inst.SetLastMeaningfulOutput(old)
 			source := NewPiStatusSource(inst.Title, nil)
 			source.status.Store(int32(status))
@@ -28,7 +29,7 @@ func TestDriverAttempt_WaitingForOperatorDoesNotEscalate(t *testing.T) {
 			inst.SetStatusManager(manager)
 			attempt := newDriverAttempt(inst, "task", old)
 			cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
-			if cont || ret || inst.Snapshot().Status != Active {
+			if cont || ret || inst.Snapshot().Status != domain.Active {
 				t.Fatalf("waiting status %v must not fail or skip approval handling", status)
 			}
 			if idle := attempt.idleDuration(now, old); idle != 0 {
@@ -45,7 +46,7 @@ func TestDriverAttempt_BacklogApprovalWaitResetsBudget(t *testing.T) {
 			t.Parallel()
 			now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 			old := now.Add(-time.Hour)
-			inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
+			inst := &Instance{Title: t.Name(), Program: "pi", Status: domain.Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
 			inst.SetLastMeaningfulOutput(old)
 			source := NewPiStatusSource(inst.Title, nil)
 			source.status.Store(int32(status))
@@ -79,7 +80,7 @@ func TestDriverAttempt_BacklogIdleStillEscalates(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 	old := now.Add(-time.Hour)
-	inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
+	inst := &Instance{Title: t.Name(), Program: "pi", Status: domain.Active, Tags: []string{TagBacklogWork}, InitialPromptSentAt: old}
 	inst.SetLastMeaningfulOutput(old)
 	source := NewPiStatusSource(inst.Title, nil)
 	source.status.Store(int32(detection.StatusIdle))
@@ -88,7 +89,7 @@ func TestDriverAttempt_BacklogIdleStillEscalates(t *testing.T) {
 	inst.SetStatusManager(manager)
 	attempt := newDriverAttempt(inst, "task", old)
 	cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now)
-	if !cont || ret || inst.Snapshot().Status != Active || attempt.nudgeSentAt.IsZero() {
+	if !cont || ret || inst.Snapshot().Status != domain.Active || attempt.nudgeSentAt.IsZero() {
 		t.Fatal("idle backlog work must retain its inactivity nudge policy")
 	}
 }
@@ -97,11 +98,11 @@ func TestDriverAttempt_StalePersistedPromptDoesNotImmediatelyEscalate(t *testing
 	t.Parallel()
 	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 	old := now.Add(-time.Hour)
-	inst := &Instance{Title: "fresh-driver-stale-activity", Status: Active, InitialPromptSentAt: old}
+	inst := &Instance{Title: "fresh-driver-stale-activity", Status: domain.Active, InitialPromptSentAt: old}
 	inst.SetLastMeaningfulOutput(old)
 	attempt := newDriverAttempt(inst, "task", now)
 	cont, ret := handleInactivityTick(context.Background(), inst, "", RetryPolicy{}, nil, &attempt, now.Add(2*time.Second))
-	if cont || ret || inst.Snapshot().Status != Active {
+	if cont || ret || inst.Snapshot().Status != domain.Active {
 		t.Fatalf("fresh driver immediately escalated stale persisted activity: continue=%v return=%v status=%v", cont, ret, inst.Snapshot().Status)
 	}
 }
@@ -128,7 +129,7 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			inst := &Instance{Title: tc.name, Status: Active, InitialPromptSentAt: tc.promptAt}
+			inst := &Instance{Title: tc.name, Status: domain.Active, InitialPromptSentAt: tc.promptAt}
 			inst.processManager = &livenessPM{alive: false} // interactive escalation requires a dead pane
 			if tc.backlog {
 				inst.Tags = []string{TagBacklogWork}
@@ -148,7 +149,7 @@ func TestDriverAttempt_InactivityBaseline(t *testing.T) {
 			if cont || ret != (tc.wantEscalation || tc.archived) {
 				t.Errorf("loop signal=(%v,%v), want (false,%v)", cont, ret, tc.wantEscalation || tc.archived)
 			}
-			if failed := inst.Snapshot().Status == PermanentlyFailed; failed != tc.wantEscalation {
+			if failed := inst.Snapshot().Status == domain.PermanentlyFailed; failed != tc.wantEscalation {
 				t.Fatalf("escalated=%v, want %v", failed, tc.wantEscalation)
 			}
 		})

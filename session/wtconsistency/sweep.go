@@ -147,7 +147,7 @@ func listConsistencyCandidates(ctx context.Context, storage *session.Storage) ([
 		if !ExpectsWorktree(data) {
 			continue
 		}
-		if data.Status == session.Creating && time.Since(data.CreationProgressUpdatedAt) < creatingGracePeriod {
+		if data.Status == domain.Creating && time.Since(data.CreationProgressUpdatedAt) < creatingGracePeriod {
 			continue
 		}
 
@@ -222,7 +222,7 @@ func classifyIssues(candidate SessionWorktreeCandidate, entries []git.NativeWork
 	}
 
 	var findings []WorktreeConsistencyFinding
-	if candidate.Data.Status != session.Paused {
+	if candidate.Data.Status != domain.Paused {
 		if f, ok := classifyRepoPathUnresolvable(candidate); ok {
 			findings = append(findings, f)
 		}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -23,7 +24,7 @@ const (
 // config itself: LoadConfig can write a default file, which a metrics
 // collection must never do.
 type backendInfoState struct {
-	global        ProcessManagerBackend
+	global        domain.ProcessManagerBackend
 	overrideTymux bool // some session pinned onto tymux
 	overrideTmux  bool // some session pinned onto tmux
 }
@@ -49,7 +50,7 @@ func RecordBackendInfo(cfg *config.Config) {
 	}
 	global := selectedBackendFromConfig(cfg)
 	if global == "" {
-		global = BackendTmux
+		global = domain.BackendTmux
 	}
 	st := &backendInfoState{global: global}
 	for _, forceTymux := range cfg.TymuxSessionOverrides {
@@ -67,17 +68,17 @@ func observeBackendInfo(_ context.Context, o metric.Int64Observer) error {
 	if st == nil {
 		return nil
 	}
-	observe := func(backend ProcessManagerBackend, source string) {
+	observe := func(backend domain.ProcessManagerBackend, source string) {
 		o.Observe(1, metric.WithAttributes(
 			attribute.String("backend", string(backend)),
 			attribute.String("source", source)))
 	}
 	observe(st.global, backendInfoSourceGlobal)
 	if st.overrideTymux {
-		observe(BackendTymux, backendInfoSourceSessionOverride)
+		observe(domain.BackendTymux, backendInfoSourceSessionOverride)
 	}
 	if st.overrideTmux {
-		observe(BackendTmux, backendInfoSourceSessionOverride)
+		observe(domain.BackendTmux, backendInfoSourceSessionOverride)
 	}
 	return nil
 }

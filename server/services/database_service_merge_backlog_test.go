@@ -14,6 +14,7 @@ import (
 
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -168,7 +169,7 @@ func TestMergeDatabase_should_stillPersistCopiedItems_When_EventPublishIsSuppres
 		Title:     "merged-session-1",
 		Path:      "/tmp/merge-test-session-1",
 		Program:   "claude",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}))
@@ -213,7 +214,7 @@ func TestMergeDatabase_should_makeCopiedItemsVisibleOnNextSnapshot_When_ClientRe
 		Title:     "merged-session-2",
 		Path:      "/tmp/merge-test-session-2",
 		Program:   "claude",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}))

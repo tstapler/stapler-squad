@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -31,7 +32,7 @@ func startLoopDriverWith(t *testing.T, title string, status detection.DetectedSt
 	t.Cleanup(func() { testDriverTiming.Store(nil) })
 
 	pm := &stuckDialogProcessManager{dialogText: pane}
-	inst := &Instance{Title: title, Status: Ready, Tags: tags, processManager: pm}
+	inst := &Instance{Title: title, Status: domain.Active, Tags: tags, processManager: pm}
 	inst.started.Store(true)
 	source := NewPiStatusSource(inst.Title, nil)
 	source.status.Store(int32(status))
@@ -74,7 +75,7 @@ func TestSessionDriverLoop_InteractiveEndsOnArchiveEvenWhenIdle(t *testing.T) {
 }
 
 func TestSessionDriverLoop_InteractiveEndsOnHibernateAndCrash(t *testing.T) {
-	for _, st := range []Status{Hibernated, Crashed} {
+	for _, st := range []domain.Status{domain.Hibernated, domain.Crashed} {
 		t.Run(st.String(), func(t *testing.T) {
 			inst := startLoopDriver(t, "loop-"+st.String(), detection.StatusExecuting)
 			inst.mu.Lock()

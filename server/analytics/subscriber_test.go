@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // recordingProvider captures all Record calls for assertion.
@@ -111,7 +112,7 @@ func TestSubscriber_StatusChanged(t *testing.T) {
 
 	StartAnalyticsSubscriber(ctx, bus, provider)
 
-	inst := &session.Instance{ID: "sess-status", Title: "status-session", Status: session.Active}
+	inst := &session.Instance{ID: "sess-status", Title: "status-session", Status: domain.Active}
 
 	// First event: seeds lastStatusByID — no transition recorded.
 	bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
@@ -119,7 +120,7 @@ func TestSubscriber_StatusChanged(t *testing.T) {
 	// The subscriber drains a single FIFO channel, so the second event is
 	// always processed after the first; no wait needed in between.
 	// Second event: status changes Active → Stopped — transition should be recorded.
-	inst2 := &session.Instance{ID: "sess-status", Title: "status-session", Status: session.Stopped}
+	inst2 := &session.Instance{ID: "sess-status", Title: "status-session", Status: domain.Stopped}
 	bus.Publish(events.NewSessionUpdatedEvent(inst2, []string{"status"}))
 
 	if !provider.waitForCount(1, 500*time.Millisecond) {
@@ -130,11 +131,11 @@ func TestSubscriber_StatusChanged(t *testing.T) {
 	if ev.EventName != "session.status_changed" {
 		t.Errorf("want EventName=session.status_changed, got %q", ev.EventName)
 	}
-	if ev.Labels["old_status"] != session.Active.String() {
-		t.Errorf("want old_status=%q, got %q", session.Active.String(), ev.Labels["old_status"])
+	if ev.Labels["old_status"] != domain.Active.String() {
+		t.Errorf("want old_status=%q, got %q", domain.Active.String(), ev.Labels["old_status"])
 	}
-	if ev.Labels["new_status"] != session.Stopped.String() {
-		t.Errorf("want new_status=%q, got %q", session.Stopped.String(), ev.Labels["new_status"])
+	if ev.Labels["new_status"] != domain.Stopped.String() {
+		t.Errorf("want new_status=%q, got %q", domain.Stopped.String(), ev.Labels["new_status"])
 	}
 }
 

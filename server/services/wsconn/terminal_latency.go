@@ -8,6 +8,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/session/domain"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -57,9 +58,9 @@ func (s *streamLatency) setListener(listener string) {
 	s.update(func(l *termlat.Labels) { l.Listener = termlat.NormalizeListener(listener) })
 }
 
-func (s *streamLatency) setBackend(b session.ProcessManagerBackend) {
+func (s *streamLatency) setBackend(b domain.ProcessManagerBackend) {
 	if b == "" {
-		b = session.BackendTmux // an unset backend is the tmux default
+		b = domain.BackendTmux // an unset backend is the tmux default
 	}
 	s.update(func(l *termlat.Labels) { l.Backend = termlat.NormalizeBackend(string(b)) })
 }

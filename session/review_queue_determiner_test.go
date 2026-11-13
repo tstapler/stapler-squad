@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestDefaultStatusDeterminer_Determine verifies the pure detection logic of DefaultStatusDeterminer.
@@ -310,7 +311,7 @@ func TestDefaultStatusDeterminer_Determine(t *testing.T) {
 			inst := &Instance{
 				Title:  "test-session",
 				UUID:   "test-uuid",
-				Status: Running,
+				Status: domain.Active,
 			}
 			inst.started.Store(true)
 			// Set a sensible default so staleness doesn't fire unexpectedly
@@ -355,7 +356,7 @@ func TestDefaultStatusDeterminer_ControllerStatusTakesPriorityOverIdleActive(t *
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
@@ -383,7 +384,7 @@ func TestDefaultStatusDeterminer_StatusContextPassedThrough(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
@@ -409,7 +410,7 @@ func TestDefaultStatusDeterminer_NeedsApprovalDefaultContext(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
@@ -433,7 +434,7 @@ func TestDefaultStatusDeterminer_InputRequired(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
@@ -462,7 +463,7 @@ func TestDefaultStatusDeterminer_Error(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
@@ -492,7 +493,7 @@ func TestDefaultStatusDeterminer_UnknownStatusWithNoIdleStateSkips(t *testing.T)
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	// Fresh output — below staleness threshold and idle threshold
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
@@ -525,7 +526,7 @@ func TestDetermine_ReturnsSkip_When_InstanceHiddenAndReasonIsTaskCompleteIdleOrS
 		inst := &Instance{
 			Title:  "review:153f8eac",
 			UUID:   "aaaa1111-2222-3333-4444-555566667777",
-			Status: Running,
+			Status: domain.Active,
 			Hidden: true,
 		}
 		inst.started.Store(true)
@@ -641,7 +642,7 @@ func TestDefaultStatusDeterminer_NoControllerApprovalInTerminal(t *testing.T) {
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps() // keep atomic shadow in sync — see Determine()'s atomic-only reads
@@ -679,7 +680,7 @@ func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_RecentlyUpdated_Sti
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.UpdatedAt = time.Now().Add(-1 * time.Second)
@@ -707,7 +708,7 @@ func TestDefaultStatusDeterminer_NoControllerWaitingForAgent_Stale_FallsThroughT
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
 	inst.UpdatedAt = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
@@ -740,7 +741,7 @@ func TestDefaultStatusDeterminer_ControllerWaitingForAgent_RecentlyUpdated_Remov
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.UpdatedAt = time.Now().Add(-2 * time.Minute)
@@ -768,7 +769,7 @@ func TestDefaultStatusDeterminer_ControllerWaitingForAgent_Stale_FallsThroughToI
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
 	inst.UpdatedAt = time.Now().Add(-waitingForAgentStuckThreshold - time.Minute)
@@ -799,7 +800,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_StaysOutUntilNewOutput(t *te
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "sess-a1b2c3", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "sess-a1b2c3", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 
 	t0 := time.Now().Add(-30 * time.Second)
@@ -840,7 +841,7 @@ func TestDefaultStatusDeterminer_IdleAckSuppression_ControllerActive_StaysOutUnt
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "sess-a1b2c3", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "sess-a1b2c3", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 
 	t0 := time.Now().Add(-30 * time.Second)
@@ -887,7 +888,7 @@ func TestDefaultStatusDeterminer_ApprovalPending_NeverReachesIdleSuppression(t *
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 
-	inst := &Instance{Title: "test", UUID: "uuid", Status: Running}
+	inst := &Instance{Title: "test", UUID: "uuid", Status: domain.Active}
 	inst.started.Store(true)
 
 	t0 := time.Now().Add(-30 * time.Second)
@@ -930,7 +931,7 @@ func TestDetermine_HiddenGateReadsSnapshot_NoRaceWithWriter(t *testing.T) {
 	t.Parallel()
 	detector := detection.NewStatusDetector()
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
-	inst := &Instance{Title: "review:race", UUID: "bbbb1111-2222-3333-4444-555566667777", Status: Running}
+	inst := &Instance{Title: "review:race", UUID: "bbbb1111-2222-3333-4444-555566667777", Status: domain.Active}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-1 * time.Second)
 	inst.SyncAtomicTimestamps()

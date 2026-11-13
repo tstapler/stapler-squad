@@ -6,12 +6,13 @@ import (
 	"sort"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // sweepPRSource is the three bulk reads the retention sweeper makes once per
 // cycle; *session.Storage is the production implementation.
 type sweepPRSource interface {
-	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]session.PRView, error)
+	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error)
 	ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error)
 	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]session.ItemGuardView, error)
 }
@@ -20,7 +21,7 @@ type sweepPRSource interface {
 // Any read error aborts the whole cycle (loadSweepPRData), so a missing key is
 // real absence, except in guards, where a missing item is treated as unknown.
 type sweepPRData struct {
-	views   map[string][]session.PRView
+	views   map[string][]domain.PRView
 	itemIDs map[string][]string
 	guards  map[string]session.ItemGuardView
 }

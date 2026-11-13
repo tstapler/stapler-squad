@@ -67,7 +67,7 @@ type GitHubIntegration struct {
 	// Multi-PR set. PRs is a private copy per snapshot (PRView holds only
 	// values); the scalars above mirror ActivePR(PRs) whenever PRs is non-empty.
 	// LegacyPRUnrepresented and HasPRLinks are carried, never derived here.
-	PRs                   []PRView
+	PRs                   []domain.PRView
 	LegacyPRUnrepresented bool
 	HasPRLinks            bool
 }
@@ -103,7 +103,7 @@ type InstanceSnapshot struct {
 	CreationWarning       string
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
-	Status                Status
+	Status                domain.Status
 	Program               string
 	AltScreenActive       bool
 	AltScreenBootstrapped bool
@@ -120,7 +120,7 @@ type InstanceSnapshot struct {
 	SessionType           domain.SessionType
 	TmuxPrefix            string
 	TmuxServerSocket      string
-	Backend               ProcessManagerBackend
+	Backend               domain.ProcessManagerBackend
 	Tags                  []string // defensive deep copy — see buildSnapshot
 
 	// RuleTagProvenance/SuppressedRuleTags mirror Instance's ADR-002 tag-provenance
@@ -135,7 +135,7 @@ type InstanceSnapshot struct {
 	GitHub GitHubIntegration
 
 	// Checkpoints
-	Checkpoints      CheckpointList // defensive deep copy — see buildSnapshot
+	Checkpoints      domain.CheckpointList // defensive deep copy — see buildSnapshot
 	ActiveCheckpoint string
 	ForkedFromID     string
 	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
@@ -148,7 +148,7 @@ type InstanceSnapshot struct {
 	ProjectID                  string
 	HistoryFilePath            string
 	EverHadConversationHistory bool
-	LastReviveOutcome          ReviveOutcome
+	LastReviveOutcome          domain.ReviveOutcome
 	MCPServerURL               string
 	AppendSystemPrompt         string
 	AllowedTools               string
@@ -167,16 +167,16 @@ type InstanceSnapshot struct {
 
 	// LastMeaningfulChangeAt and TurnEnded mirror the Instance fields of the same name.
 	LastMeaningfulChangeAt time.Time
-	TurnEnded              TurnEnded
+	TurnEnded              domain.TurnEnded
 
 	// Review queue / activity state (embedded value — copied by value)
-	ReviewState
+	domain.ReviewState
 
 	// Instance type and management metadata
-	InstanceType     InstanceType
+	InstanceType     domain.InstanceType
 	IsManaged        bool
-	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
-	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
+	ExternalMetadata *domain.ExternalInstanceMetadata // copy of pointee — see buildSnapshot
+	Permissions      domain.InstancePermissions       // RequiresConfirmation map deep-copied
 	Artifacts        *domain.SessionArtifactsBlob
 	ContextHealth    domain.ContextHealthVerdict // flat value; no deep copy needed
 }
@@ -245,11 +245,11 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubMergeable:        i.GitHubMergeable,
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,
-			PRs:                    append([]PRView(nil), i.PRs...),
+			PRs:                    append([]domain.PRView(nil), i.PRs...),
 			LegacyPRUnrepresented:  i.LegacyPRUnrepresented,
 			HasPRLinks:             i.HasPRLinks,
 		},
-		Checkpoints:                append(CheckpointList(nil), i.Checkpoints...),
+		Checkpoints:                append(domain.CheckpointList(nil), i.Checkpoints...),
 		ActiveCheckpoint:           i.ActiveCheckpoint,
 		ForkedFromID:               i.ForkedFromID,
 		RestartedFromSessionID:     i.RestartedFromSessionID,

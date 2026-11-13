@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // summaryGenerator is the narrow consumer-side interface sessionSummaryListener needs
@@ -36,9 +37,9 @@ type sessionSummaryListener struct {
 // OnLifecycleEvent implements LifecycleListener. It fires on both EventExited and
 // EventStopped (natural exit and explicit stop dispatch identically — ADR-002),
 // excluding reconciler-driven spurious exits.
-func (l *sessionSummaryListener) OnLifecycleEvent(event session.LifecycleEvent, reason string) {
+func (l *sessionSummaryListener) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
 	switch event {
-	case session.EventExited, session.EventStopped:
+	case domain.EventExited, domain.EventStopped:
 	default:
 		return
 	}

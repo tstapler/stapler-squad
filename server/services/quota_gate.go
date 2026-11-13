@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -184,7 +185,7 @@ func foregroundSessionActive(instances []*session.Instance) bool {
 			continue
 		}
 		snap := inst.Snapshot()
-		if snap.Category != session.CategoryBacklog && snap.Status == session.Active {
+		if snap.Category != session.CategoryBacklog && snap.Status == domain.Active {
 			return true
 		}
 	}

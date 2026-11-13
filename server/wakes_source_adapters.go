@@ -20,9 +20,9 @@ import (
 // never imports the services these wrap.
 
 // sessionStateLabel is the lowercase wake vocabulary for a lifecycle status.
-func sessionStateLabel(s session.Status) string {
+func sessionStateLabel(s domain.Status) string {
 	switch s {
-	case session.PermanentlyFailed:
+	case domain.PermanentlyFailed:
 		return "permanently_failed"
 	default:
 		return strings.ToLower(s.String())
@@ -41,7 +41,7 @@ func (w wakeSessionStates) SessionState(_ context.Context, sessionUUID string) (
 		if inst.IsActive() && w.svc.IsReadyForSteer(sessionUUID) {
 			return wakes.SessionFacts{Exists: true, State: "idle"}, nil
 		}
-		return wakes.SessionFacts{Exists: true, State: sessionStateLabel(session.Status(inst.GetStatus()))}, nil
+		return wakes.SessionFacts{Exists: true, State: sessionStateLabel(domain.Status(inst.GetStatus()))}, nil
 	}
 	data, err := w.storage.FindInstanceDataByID(sessionUUID)
 	switch {

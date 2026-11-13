@@ -1,6 +1,9 @@
 package session
 
-import "github.com/tstapler/stapler-squad/session/detection"
+import (
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+)
 
 // status_mapping.go documents the relationship between the three status types:
 //
@@ -40,7 +43,7 @@ func AttentionReasonFromDetected(detected detection.DetectedStatus) AttentionRea
 // All detected states map to Active because the instance process is still executing.
 // NeedsApproval, InputRequired, Error, and TestsFailing are sub-status signals
 // surfaced via GetEffectiveStatus() — they do not change the lifecycle state.
-func StatusFromDetected(detected detection.DetectedStatus) Status {
+func StatusFromDetected(detected detection.DetectedStatus) domain.Status {
 	// All detected states indicate an active process.
-	return Active
+	return domain.Active
 }

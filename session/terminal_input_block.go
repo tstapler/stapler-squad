@@ -1,5 +1,7 @@
 package session
 
+import "github.com/tstapler/stapler-squad/session/domain"
+
 // TerminalInputBlock reports whether a UI terminal stream attached to snap must be
 // read-only, and whether that can end without a new attach. It is the one predicate
 // behind both the stream's writer decision and Session.terminal_read_only, so the
@@ -14,7 +16,7 @@ func TerminalInputBlock(snap *InstanceSnapshot) (blocked, recoverable bool) {
 	if snap.ArchivedAt != nil {
 		return true, true // clears on unarchive
 	}
-	if snap.Backend == BackendTymux && snap.Status != Active {
+	if snap.Backend == domain.BackendTymux && snap.Status != domain.Active {
 		return true, true
 	}
 	return false, false

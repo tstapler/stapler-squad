@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"google.golang.org/protobuf/proto"
 )
@@ -1032,8 +1033,8 @@ func TestArchiveWorkflowSessions_should_PublishSnapshotSoIsArchivedIsTrue_When_A
 
 	workflowID := uuid.New().String()
 
-	stopped := &session.Instance{Title: "wf-archive-stopped", Status: session.Stopped, WorkflowID: workflowID}
-	active := &session.Instance{Title: "wf-archive-active", Status: session.Active, WorkflowID: workflowID}
+	stopped := &session.Instance{Title: "wf-archive-stopped", Status: domain.Stopped, WorkflowID: workflowID}
+	active := &session.Instance{Title: "wf-archive-active", Status: domain.Active, WorkflowID: workflowID}
 
 	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), nil, nil)
 	poller.SetInstances([]*session.Instance{stopped, active})

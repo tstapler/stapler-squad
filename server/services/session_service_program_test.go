@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // addHibernatedThenForceActive persists inst with Status=Hibernated (whose reload path
@@ -36,7 +37,7 @@ func addHibernatedThenForceActive(t *testing.T, fix *forkTestFixture, title, pat
 	inst := &session.Instance{
 		Title:     title,
 		Path:      path,
-		Status:    session.Hibernated,
+		Status:    domain.Hibernated,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -47,7 +48,7 @@ func addHibernatedThenForceActive(t *testing.T, fix *forkTestFixture, title, pat
 	require.NoError(t, err)
 	for _, li := range loaded {
 		if li.Title == title {
-			li.ForceStatus(session.Active)
+			li.ForceStatus(domain.Active)
 			svctest.AddInstanceToPoller(fix.poller, li)
 			return li
 		}
@@ -120,7 +121,7 @@ func TestUpdateSession_ProgramUpdate_StoppedSession_NoRestart(t *testing.T) {
 	inst := &session.Instance{
 		Title:     "stopped-program-session",
 		Path:      "/tmp/test",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -170,7 +171,7 @@ func TestUpdateSession_ProgramUpdate_EmptyString_ResolvesDefault(t *testing.T) {
 	inst := &session.Instance{
 		Title:     "default-resolve-session",
 		Path:      "/tmp/test",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		Program:   "aider",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

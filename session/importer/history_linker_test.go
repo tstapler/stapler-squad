@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestHistoryLinker_SetHistoryInfo_UpdatesInstance(t *testing.T) {
@@ -55,7 +56,7 @@ func TestHistoryLinker_AlreadyLinked_NoUpdate(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, newUUID+".jsonl"), []byte("{}"), 0644))
 
 	// Instance already linked to originalUUID.
-	inst := &session.Instance{Title: "linked-session", Path: sessionPath, Status: session.Active}
+	inst := &session.Instance{Title: "linked-session", Path: sessionPath, Status: domain.Active}
 	inst.SetHistoryInfo(originalUUID, "/some/path.jsonl")
 	require.True(t, inst.HasClaudeSession())
 
@@ -93,7 +94,7 @@ func TestHistoryLinker_CorrelateSession_Force_UpdatesUUIDAfterClear(t *testing.T
 	require.NoError(t, os.Chtimes(oldPath, past, past))
 
 	// Instance was linked to the old UUID (e.g., from before /clear).
-	inst := &session.Instance{Title: "cleared-session", Path: sessionPath, Status: session.Active}
+	inst := &session.Instance{Title: "cleared-session", Path: sessionPath, Status: domain.Active}
 	inst.SetHistoryInfo(oldUUID, filepath.Join(projectDir, oldUUID+".jsonl"))
 	require.True(t, inst.HasClaudeSession())
 
@@ -305,7 +306,7 @@ func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.
 	inst := &session.Instance{
 		Title:  "feature-session",
 		Path:   repoPath,
-		Status: session.Active,
+		Status: domain.Active,
 	}
 	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
@@ -349,7 +350,7 @@ func TestHistoryLinker_CorrelateSession_PausedSession_PreservesUUID(t *testing.T
 	require.NoError(t, os.Chtimes(originalPath, past, past))
 
 	// The paused session already has the correct UUID stored.
-	inst := &session.Instance{Title: "wiki-session", Path: sessionPath, Status: session.Paused}
+	inst := &session.Instance{Title: "wiki-session", Path: sessionPath, Status: domain.Paused}
 	inst.SetHistoryInfo(originalUUID, originalPath)
 	require.True(t, inst.HasClaudeSession())
 
@@ -386,7 +387,7 @@ func TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID(t *testi
 	past := time.Now().Add(-1 * time.Second)
 	require.NoError(t, os.Chtimes(originalPath, past, past))
 
-	inst := &session.Instance{Title: "hibernated-session", Path: sessionPath, Status: session.Hibernated}
+	inst := &session.Instance{Title: "hibernated-session", Path: sessionPath, Status: domain.Hibernated}
 	inst.SetHistoryInfo(originalUUID, originalPath)
 	require.True(t, inst.HasClaudeSession())
 
@@ -422,7 +423,7 @@ func TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID(t *testing.
 	past := time.Now().Add(-1 * time.Second)
 	require.NoError(t, os.Chtimes(originalPath, past, past))
 
-	inst := &session.Instance{Title: "stopped-session", Path: sessionPath, Status: session.Stopped}
+	inst := &session.Instance{Title: "stopped-session", Path: sessionPath, Status: domain.Stopped}
 	inst.SetHistoryInfo(originalUUID, originalPath)
 	require.True(t, inst.HasClaudeSession())
 
@@ -451,7 +452,7 @@ func TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree(t *te
 	inst := &session.Instance{
 		Title:  "plain-session",
 		Path:   sessionPath,
-		Status: session.Active,
+		Status: domain.Active,
 	}
 	// No worktree set — gitManager.HasWorktree() returns false.
 
@@ -470,7 +471,7 @@ func TestHistoryLinker_ShouldEnqueueFileAndScan_WhenSetHistoryInfoAfterFileExist
 	toolResult := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"created ` + prURL + `"}]}}` + "\n"
 	path := f.write(t, claimOwnStart, toolResult, time.Second)
 
-	fresh := &session.Instance{Title: "late-link", Path: "/repo/late", Status: session.Active}
+	fresh := &session.Instance{Title: "late-link", Path: "/repo/late", Status: domain.Active}
 	linker.SetInstances([]*session.Instance{fresh})
 
 	stored := make(chan string, 4)

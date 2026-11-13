@@ -159,13 +159,13 @@ func (s *prwatchSessions) remoteOf(sn *session.InstanceSnapshot) (owner, repo, h
 	return o, rp, h
 }
 
-func lifecycleOf(st session.Status) prwatch.Lifecycle {
+func lifecycleOf(st domain.Status) prwatch.Lifecycle {
 	switch st {
-	case session.Paused, session.Hibernated, session.Crashed:
+	case domain.Paused, domain.Hibernated, domain.Crashed:
 		return prwatch.LifeSuspended
-	case session.Stopped, session.PermanentlyFailed, session.Failed:
+	case domain.Stopped, domain.PermanentlyFailed, domain.Failed:
 		return prwatch.LifeGone
-	case session.Creating, session.Restoring:
+	case domain.Creating, domain.Restoring:
 		return prwatch.LifeTransitional
 	}
 	return prwatch.LifeLive

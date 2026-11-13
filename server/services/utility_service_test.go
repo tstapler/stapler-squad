@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --------------------------------------------------------------------------
@@ -94,7 +95,7 @@ func TestGetLogs_WithUUID_MatchingInstance(t *testing.T) {
 			UUID:    testUUID,
 			Title:   "my-resolved-session",
 			Path:    "/tmp/test",
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 		},
 	})
@@ -137,7 +138,7 @@ func TestGetLogs_WithTitle_FindsLogByTitle(t *testing.T) {
 		{
 			Title:   "title-session",
 			Path:    "/tmp/test",
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 		},
 	})

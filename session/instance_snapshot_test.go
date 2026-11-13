@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/domain"
 	"os"
 	"sync"
 	"testing"
@@ -33,7 +34,7 @@ func TestSnapshotNonNilAfterSessionToInstance(t *testing.T) {
 	t.Parallel()
 	s := &Session{
 		Title:     "session-to-instance",
-		Status:    Creating,
+		Status:    domain.Creating,
 		Program:   "echo",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -88,8 +89,8 @@ func TestSnapshotReflectsSetLastMeaningfulOutput(t *testing.T) {
 func TestSnapshotReflectsForceStatus(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	inst.ForceStatus(Paused)
-	if inst.Snapshot().Status != Paused {
+	inst.ForceStatus(domain.Paused)
+	if inst.Snapshot().Status != domain.Paused {
 		t.Fatalf("Snapshot().Status = %v, want Paused", inst.Snapshot().Status)
 	}
 }
@@ -311,12 +312,12 @@ func minimalInstance(t *testing.T) *Instance {
 	t.Helper()
 	i := &Instance{
 		Title:       t.Name(),
-		Status:      Creating,
+		Status:      domain.Creating,
 		Program:     "echo",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 		IsManaged:   true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 	}
 	i.tagManager = NewTagManager(&i.Tags)
 	finishInstanceConstruction(i)
@@ -328,14 +329,14 @@ func TestBuildSnapshot_ShouldCopyPRsDeeply_WhenPublished(t *testing.T) {
 	inst := &Instance{Title: "pr-snap", Path: t.TempDir(), Program: "echo", Branch: "feat/x"}
 	finishInstanceConstruction(inst)
 	ref := mustPRRef(t, "", "acme", "app", 12)
-	inst.PRs = []PRView{{StateID: 1, Ref: ref, State: PRStateOpen, HeadBranch: "feat/x"}}
+	inst.PRs = []domain.PRView{{StateID: 1, Ref: ref, State: domain.PRStateOpen, HeadBranch: "feat/x"}}
 	inst.LegacyPRUnrepresented = true
 	inst.HasPRLinks = true
 
 	snap := buildSnapshot(inst)
-	inst.PRs[0].State = PRStateMerged // mutate the live set after the build
+	inst.PRs[0].State = domain.PRStateMerged // mutate the live set after the build
 
-	if got := snap.GitHub.PRs[0].State; got != PRStateOpen {
+	if got := snap.GitHub.PRs[0].State; got != domain.PRStateOpen {
 		t.Errorf("snapshot PR aliased the live slice: state = %q", got)
 	}
 	if !snap.GitHub.LegacyPRUnrepresented || !snap.GitHub.HasPRLinks {
@@ -355,7 +356,7 @@ func TestBuildSnapshot_ShouldCopyPRsDeeply_WhenPublished(t *testing.T) {
 func TestToInstanceData_ShouldCarryPRFlagsOut_WhenSnapshotHasLinks(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "pr-out", Path: t.TempDir(), Program: "echo"}
-	inst.PRs = []PRView{{StateID: 1, Ref: mustPRRef(t, "", "acme", "app", 12), State: PRStateOpen}}
+	inst.PRs = []domain.PRView{{StateID: 1, Ref: mustPRRef(t, "", "acme", "app", 12), State: domain.PRStateOpen}}
 	inst.LegacyPRUnrepresented, inst.HasPRLinks = true, true
 	finishInstanceConstruction(inst)
 

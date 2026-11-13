@@ -9,6 +9,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // setupRQSFixture creates a ReviewQueueService wired with real SQLite storage and a
@@ -48,7 +49,7 @@ func TestAcknowledgeSession_UpdatesLiveInstance(t *testing.T) {
 	persisted := &session.Instance{
 		Title:   "sess-1",
 		Path:    "/tmp/test",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
 	require.NoError(t, storage.AddInstance(persisted))

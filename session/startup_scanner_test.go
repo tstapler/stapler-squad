@@ -6,6 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeStatusProvider is a test double for StatusProvider that returns predetermined statuses.
@@ -50,7 +51,7 @@ func makeStartedInstance(title string) *Instance {
 	inst := &Instance{
 		Title:  title,
 		UUID:   "uuid-" + title,
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	return inst
@@ -124,7 +125,7 @@ func TestStartupScanner_Scan_SkipsPausedInstances(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title:  "paused-session",
-		Status: Paused,
+		Status: domain.Paused,
 	}
 	inst.started.Store(true)
 

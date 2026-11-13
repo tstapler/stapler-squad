@@ -9,7 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func latencyTotal(stage string, l termlat.Labels) uint64 {
@@ -24,7 +24,7 @@ func latencyTotal(stage string, l termlat.Labels) uint64 {
 func TestStreamLatency_should_RecordEchoOnlyForTheFirstOutputAfterAKeystroke(t *testing.T) {
 	t.Parallel()
 	var sl streamLatency
-	sl.setBackend(session.BackendNative)
+	sl.setBackend(domain.BackendNative)
 	sl.setListener(services.ListenerRemote)
 	l := sl.labels()
 	assert.Equal(t, termlat.Labels{Backend: "native", Listener: "remote"}, l)
@@ -43,7 +43,7 @@ func TestStreamLatency_should_RecordEchoOnlyForTheFirstOutputAfterAKeystroke(t *
 func TestStreamLatency_should_IgnoreOutputTooLongAfterTheKeystroke(t *testing.T) {
 	t.Parallel()
 	var sl streamLatency
-	sl.setBackend(session.BackendTymux)
+	sl.setBackend(domain.BackendTymux)
 	sl.setListener(services.ListenerLocal)
 	before := latencyTotal(termlat.StageEchoServer, sl.labels())
 

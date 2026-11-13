@@ -106,7 +106,7 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 		Title:     "uuid-roundtrip",
 		UUID:      "my-stable-uuid",
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -139,11 +139,11 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 	inst := &Instance{
 		Title:     "backend-roundtrip",
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
-		Backend:   BackendTymux,
+		Backend:   domain.BackendTymux,
 	}
 	inst.started.Store(true)
 
@@ -153,7 +153,7 @@ func TestStorage_Backend_PersistedThroughAddAndLoad(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
 
-	assert.Equal(t, BackendTymux, loaded[0].Backend,
+	assert.Equal(t, domain.BackendTymux, loaded[0].Backend,
 		"Backend must survive AddInstance → LoadInstances round-trip through the ent repository")
 }
 
@@ -168,7 +168,7 @@ func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
 		Title:     "multi-load",
 		UUID:      "consistent-uuid",
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -203,7 +203,7 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 		Title:     "legacy-no-uuid",
 		UUID:      "", // explicitly empty — legacy session
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -243,7 +243,7 @@ func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 	inst := &Instance{
 		Title:   "my-session-title",
 		UUID:    "test-uuid-lookup",
-		Status:  Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
 	inst.started.Store(true)
@@ -266,7 +266,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 	existing := &Instance{
 		Title:   "existing-session",
 		UUID:    "existing-uuid",
-		Status:  Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
 	existing.started.Store(true)
@@ -275,7 +275,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 	newcomer := &Instance{
 		Title:   "new-session",
 		UUID:    "new-uuid",
-		Status:  Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
 	newcomer.started.Store(true)
@@ -437,7 +437,7 @@ func newTestInstance(title string) *Instance {
 	inst := &Instance{
 		Title:     title,
 		Path:      "/tmp/test",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -730,7 +730,7 @@ func TestStorage_ArchiveInstanceDataByID_should_setArchivedAt_When_SessionExists
 	data, err := storage.FindInstanceDataByID("storage-only-session")
 	require.NoError(t, err)
 	require.NotNil(t, data.ArchivedAt, "ArchivedAt should be set after archiving")
-	assert.Equal(t, Stopped, data.Status, "Status should transition to Stopped")
+	assert.Equal(t, domain.Stopped, data.Status, "Status should transition to Stopped")
 }
 
 // TestStorage_ArchiveInstanceDataByID_should_preserveOtherFields_When_Archiving guards the
@@ -1107,21 +1107,21 @@ func TestUpdateInstanceIfEpoch_should_ApplyWrite_When_EpochMatches(t *testing.T)
 		Title:     "epoch-match",
 		UUID:      "uuid-epoch-match",
 		Path:      "/tmp/test",
-		Status:    Creating,
+		Status:    domain.Creating,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
 
-	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-match", 0, Active, "")
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-match", 0, domain.Active, "")
 	require.NoError(t, err)
 	assert.True(t, applied)
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
-	assert.Equal(t, Active, loaded[0].Status, "the persisted row must now read Active")
+	assert.Equal(t, domain.Active, loaded[0].Status, "the persisted row must now read Active")
 }
 
 // TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale covers Task
@@ -1137,7 +1137,7 @@ func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 		Title:     "epoch-stale",
 		UUID:      "uuid-epoch-stale",
 		Path:      "/tmp/test",
-		Status:    Creating,
+		Status:    domain.Creating,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -1147,14 +1147,14 @@ func TestUpdateInstanceIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 	// The persisted row's creation_epoch defaults to 0; present a stale
 	// captured value of 2 (as if a cancel had already bumped it past this
 	// caller's captured value).
-	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-stale", 2, Active, "")
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-epoch-stale", 2, domain.Active, "")
 	require.NoError(t, err)
 	assert.False(t, applied)
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
-	assert.Equal(t, Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
+	assert.Equal(t, domain.Creating, loaded[0].Status, "the persisted row must be unchanged when epochs mismatch")
 }
 
 // ── Epic 2.2: TaggingRule Storage CRUD ──────────────────────────────────────
@@ -1338,7 +1338,7 @@ func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActive
 	inst := &Instance{
 		Title:      "archived-active-roundtrip",
 		Path:       "/tmp/test",
-		Status:     Active,
+		Status:     domain.Active,
 		Program:    "claude",
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
@@ -1354,7 +1354,7 @@ func TestSaveInstances_should_PersistSelfHealedStoppedStatus_When_ArchivedActive
 
 	persisted, err := storage.FindInstanceDataByID("archived-active-roundtrip")
 	require.NoError(t, err)
-	assert.Equal(t, Stopped, persisted.Status,
+	assert.Equal(t, domain.Stopped, persisted.Status,
 		"the archived Active row must be self-healed to Stopped and that heal must be persisted")
 	require.NotNil(t, persisted.ArchivedAt, "archival itself must be untouched by the heal")
 }
@@ -1402,7 +1402,7 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 func prLoadFixture(t *testing.T, storage *Storage, title, uuid, owner, repo string, legacyNumber int) {
 	t.Helper()
 	data := InstanceData{
-		Title: title, UUID: uuid, Path: "/tmp/test", Status: Paused, Program: "claude",
+		Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(), GitHubOwner: owner, GitHubRepo: repo,
 	}
 	if legacyNumber > 0 {
@@ -1421,7 +1421,7 @@ func TestLoadInstances_ShouldBulkHydrate_WhenTwoHundredSessions(t *testing.T) {
 		uuid := fmt.Sprintf("uuid-%03d", i)
 		prLoadFixture(t, storage, fmt.Sprintf("bulk-%03d", i), uuid, "acme", "app", 0)
 		_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid),
-			mustPRRef(t, "", "acme", "app", 1000+i), PRLink{Source: AttachSourceManual, Initial: PRInitial{State: PRStateOpen}})
+			mustPRRef(t, "", "acme", "app", 1000+i), PRLink{Source: domain.AttachSourceManual, Initial: PRInitial{State: domain.PRStateOpen}})
 		require.NoError(t, err)
 	}
 
@@ -1451,7 +1451,7 @@ func TestLoadSaveLoad_ShouldKeepUnrepresentedLegacyNumber_WhenSkippedClass(t *te
 	// A represented legacy number for contrast.
 	prLoadFixture(t, storage, "represented", "uuid-represented", "acme", "app", 42)
 	_, err := storage.Repo.UpsertSessionPR(context.Background(), SessionPROwner("uuid-represented"),
-		mustPRRef(t, "", "acme", "app", 42), PRLink{Source: AttachSourceBackfill})
+		mustPRRef(t, "", "acme", "app", 42), PRLink{Source: domain.AttachSourceBackfill})
 	require.NoError(t, err)
 
 	byTitle := func(insts []*Instance) map[string]*Instance {

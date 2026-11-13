@@ -151,7 +151,7 @@ func TestCheckAllSessions_SkipsPausedHibernatedStoppedInstances(t *testing.T) {
 	poller.cancel = func() {}
 	poller.authState.Store(pollerAuthResult{ok: true, checkedAt: time.Now()})
 
-	makeInst := func(title string, status session.Status) *session.Instance {
+	makeInst := func(title string, status domain.Status) *session.Instance {
 		return &session.Instance{
 			Title:          title,
 			Status:         status,
@@ -163,11 +163,11 @@ func TestCheckAllSessions_SkipsPausedHibernatedStoppedInstances(t *testing.T) {
 
 	skipped := make([]*session.Instance, 0, 4)
 	skipped = append(skipped,
-		makeInst("paused-session", session.Paused),
-		makeInst("hibernated-session", session.Hibernated),
-		makeInst("stopped-session", session.Stopped),
+		makeInst("paused-session", domain.Paused),
+		makeInst("hibernated-session", domain.Hibernated),
+		makeInst("stopped-session", domain.Stopped),
 	)
-	active := makeInst("active-session", session.Active)
+	active := makeInst("active-session", domain.Active)
 
 	poller.SetInstances(append(skipped, active))
 	poller.checkAllSessions()
@@ -534,7 +534,7 @@ func (b *blockingGHClient) GetPRInfoConditional(context.Context, github.RepoRef,
 func TestPollerMutex_ShouldBeFreeDuringInFlightPoll(t *testing.T) {
 	t.Parallel()
 	client := &blockingGHClient{entered: make(chan struct{}, 1), release: make(chan struct{})}
-	inst := &session.Instance{Title: "mutex-free", Status: session.Active, GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 11}
+	inst := &session.Instance{Title: "mutex-free", Status: domain.Active, GitHubOwner: "acme", GitHubRepo: "app", GitHubPRNumber: 11}
 	poller := newLegacyTestPoller(client, inst)
 
 	done := make(chan struct{})

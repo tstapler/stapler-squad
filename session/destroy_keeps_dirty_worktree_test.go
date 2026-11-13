@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/gitwt"
 )
@@ -25,9 +26,9 @@ func startedWorktreeInstance(t *testing.T, name string) *Instance {
 
 	inst := &Instance{
 		Title:       name,
-		Status:      Running,
+		Status:      domain.Active,
 		IsWorktree:  true,
-		Permissions: GetManagedPermissions(),
+		Permissions: domain.GetManagedPermissions(),
 		GitManager:  gitwt.Manager{Worktree: wt},
 	}
 	inst.started.Store(true)

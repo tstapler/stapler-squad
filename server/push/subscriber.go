@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // SessionDeliveryGate decides whether the status-change push (the path the bus
@@ -209,7 +210,7 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 	// Read via the locked accessor, not the raw field: Status is written under
 	// Instance.stateMutex (see transitionTo), and this runs on the EventBus
 	// subscriber goroutine, concurrently with the instance's own goroutine.
-	if session.Status(sess.GetStatus()) != session.Stopped {
+	if domain.Status(sess.GetStatus()) != domain.Stopped {
 		return DeliveryNotification{}, false
 	}
 	// A hidden session's completion is dropped by the SessionDeliveryGate in

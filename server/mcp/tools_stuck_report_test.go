@@ -219,22 +219,22 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessUUID, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 
-	ref := func(n int) session.PRRef {
-		r, rerr := session.NewPRRef("github.com", "acme", "app", n)
+	ref := func(n int) domain.PRRef {
+		r, rerr := domain.NewPRRef("github.com", "acme", "app", n)
 		require.NoError(t, rerr)
 		return r
 	}
-	link := func(owner session.PROwner, n int, st session.PRState, at time.Time) {
+	link := func(owner session.PROwner, n int, st domain.PRState, at time.Time) {
 		_, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), session.PRLink{
-			Role: session.PRRolePrimary, Source: session.AttachSourceManual, AttachedAt: at,
+			Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, AttachedAt: at,
 			Initial: session.PRInitial{State: st, Terminal: st.Terminal()},
 		})
 		require.NoError(t, lerr)
 	}
-	link(session.ItemPROwner(item.ID), 21, session.PRStateMerged, time.Time{})
+	link(session.ItemPROwner(item.ID), 21, domain.PRStateMerged, time.Time{})
 	old := time.Now().Add(-2 * time.Hour)
-	link(session.ItemPROwner(item.ID), 23, session.PRStateUnknown, old)
-	link(session.SessionPROwner(sessUUID), 23, session.PRStateUnknown, old)
+	link(session.ItemPROwner(item.ID), 23, domain.PRStateUnknown, old)
+	link(session.SessionPROwner(sessUUID), 23, domain.PRStateUnknown, old)
 
 	run := func(on bool) string {
 		h := &backlogHandlers{storage: storage, backlogReaderOverride: func() bool { return on }}

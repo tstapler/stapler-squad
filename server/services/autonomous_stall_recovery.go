@@ -133,7 +133,7 @@ func canRestart(ctx context.Context, inst *session.Instance) bool {
 		return false
 	}
 	snap := inst.Snapshot()
-	return snap.Status == session.Active && snap.ArchivedAt == nil && snap.Autonomous.AutonomousMode && !inst.IsRetryPending()
+	return snap.Status == domain.Active && snap.ArchivedAt == nil && snap.Autonomous.AutonomousMode && !inst.IsRetryPending()
 }
 
 // reattachDriver starts a fresh driver on inst unless one is already registered.

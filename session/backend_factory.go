@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -27,16 +28,16 @@ var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBac
 // each force BackendTymux; otherwise cfg.ProcessManagerBackend passes
 // through as-is (so "native" still works), and "" falls through to
 // NewProcessManager's defaultBackend/BackendTmux.
-func getSelectedBackend() ProcessManagerBackend {
+func getSelectedBackend() domain.ProcessManagerBackend {
 	return selectedBackendFromConfig(config.LoadConfig())
 }
 
 // selectedBackendFromConfig is getSelectedBackend's pure core over an
 // already-loaded config.
-func selectedBackendFromConfig(cfg *config.Config) ProcessManagerBackend {
-	backend := ProcessManagerBackend(cfg.ProcessManagerBackend)
-	if backend == BackendTymux || config.EffectiveTymuxEnabled(cfg) {
-		return BackendTymux
+func selectedBackendFromConfig(cfg *config.Config) domain.ProcessManagerBackend {
+	backend := domain.ProcessManagerBackend(cfg.ProcessManagerBackend)
+	if backend == domain.BackendTymux || config.EffectiveTymuxEnabled(cfg) {
+		return domain.BackendTymux
 	}
 	return backend
 }
@@ -56,7 +57,7 @@ func selectedBackendFromConfig(cfg *config.Config) ProcessManagerBackend {
 // global (set at package init to BackendTmux and never empty in production) is always
 // checked first. See plan.md Epic 2.1 Story 2.1.3 for why defaultBackend's precedence
 // position is otherwise unchanged.
-func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, opts ProcessManagerOptions) (ProcessManager, error) {
+func NewProcessManager(_ context.Context, defaultBackend domain.ProcessManagerBackend, opts ProcessManagerOptions) (ProcessManager, error) {
 	backend := opts.Backend
 	if backend == "" {
 		backend = getSelectedBackend()
@@ -65,7 +66,7 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 		backend = defaultBackend
 	}
 	if backend == "" {
-		backend = BackendTmux
+		backend = domain.BackendTmux
 	}
 
 	return buildBackend(backend, opts)

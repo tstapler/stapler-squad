@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -64,10 +65,10 @@ func TestSessionService_Shutdown_KillsTestTmuxServer(t *testing.T) {
 	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
 	require.NotNil(t, inst)
 	wait.RequireEventually(t, func() bool {
-		switch session.Status(inst.GetStatus()) {
-		case session.Active:
+		switch domain.Status(inst.GetStatus()) {
+		case domain.Active:
 			return true
-		case session.Stopped:
+		case domain.Stopped:
 			t.Fatalf("session reached Stopped instead of Active: spawn failed")
 		}
 		return false

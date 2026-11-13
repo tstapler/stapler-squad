@@ -43,14 +43,14 @@ var (
 // classifiedQuery is a query reduced to its shape.
 type classifiedQuery struct {
 	kind string
-	pr   session.PRRef // set for queryKindPR
-	sha  string        // set for queryKindSHA, lowercased
+	pr   domain.PRRef // set for queryKindPR
+	sha  string       // set for queryKindSHA, lowercased
 }
 
 func classifyArtifactQuery(q string) classifiedQuery {
 	if m := prQueryPattern.FindStringSubmatch(q); m != nil {
 		if n, err := strconv.Atoi(m[4]); err == nil {
-			if ref, err := session.NewPRRef(m[1], m[2], m[3], n); err == nil {
+			if ref, err := domain.NewPRRef(m[1], m[2], m[3], n); err == nil {
 				return classifiedQuery{kind: queryKindPR, pr: ref}
 			}
 		}
@@ -178,12 +178,12 @@ func (a *ArtifactService) addExactMatches(ctx context.Context, g *hitGroups, cq 
 // exactMatchScore outranks any BM25 score: the identifier was typed in full.
 const exactMatchScore = 1e6
 
-func prDisplay(ref session.PRRef) string {
+func prDisplay(ref domain.PRRef) string {
 	return fmt.Sprintf("%s/%s#%d", ref.Owner(), ref.Repo(), ref.Number())
 }
 
 // sessionsForPR is the set of visible sessions tied to ref by either source.
-func (a *ArtifactService) sessionsForPR(ctx context.Context, ref session.PRRef, vis visibleSet) (map[string]struct{}, error) {
+func (a *ArtifactService) sessionsForPR(ctx context.Context, ref domain.PRRef, vis visibleSet) (map[string]struct{}, error) {
 	found, err := a.index.SessionsForPR(ctx, ref)
 	if err != nil {
 		return nil, err
