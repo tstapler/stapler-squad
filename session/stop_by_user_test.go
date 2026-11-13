@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -71,7 +73,7 @@ func TestStopByUser_should_RejectTransition_When_SessionIsRestoring(t *testing.T
 		Permissions: domain.GetManagedPermissions(),
 	}
 	inst.started.Store(true)
-	inst.GitManager().SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+	inst.GitManager().SetWorktree(sessiontest.NewTestGitWorktree(repoPath, worktreePath))
 
 	pm := &fakeStopByUserProcessManager{hasSession: true}
 	inst.processManager = pm

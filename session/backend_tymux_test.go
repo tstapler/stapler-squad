@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -221,7 +223,7 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	sessiontest.CheckTmuxAvailable(t)
 	// A private server socket means this respawn hits a real but
 	// test-isolated tmux server rather than the host's default one.
 	inst := &Instance{

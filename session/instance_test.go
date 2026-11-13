@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +21,6 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/gitwt"
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -732,7 +733,7 @@ func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 }
 
 func TestLogPTYUnavailableIfUnexpected_should_SkipLogging_when_TymuxBackendUnsupported(t *testing.T) {
-	buf := captureLogInfo(t)
+	buf := sessiontest.CaptureLogInfo(t)
 
 	logPTYUnavailableIfUnexpected("cold-restored session: pty attach failed, controller and sendkeys unavailable",
 		"sess-1", tymux.ErrNotSupportedOnTymuxBackend)
@@ -743,7 +744,7 @@ func TestLogPTYUnavailableIfUnexpected_should_SkipLogging_when_TymuxBackendUnsup
 }
 
 func TestLogPTYUnavailableIfUnexpected_should_LogError_when_GenuinePTYFailure(t *testing.T) {
-	buf := captureLogInfo(t)
+	buf := sessiontest.CaptureLogInfo(t)
 	wantErr := errors.New("ptmx: device busy")
 
 	logPTYUnavailableIfUnexpected("new session: pty attach failed after retries, controller and sendkeys unavailable",
@@ -881,7 +882,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	sessiontest.CheckTmuxAvailable(t)
 
 	repoDir := t.TempDir()
 	require.NoError(t, git.InitializeProjectDirectory(repoDir))
@@ -894,7 +895,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 		SessionType:      domain.SessionTypeNewWorktree,
 		Branch:           "feature-guard-ok",
 		TmuxPrefix:       fmt.Sprintf("test_newworktreeguardok_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() { _ = cleanup() }()
@@ -959,7 +960,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testin
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	sessiontest.CheckTmuxAvailable(t)
 
 	repoDir := t.TempDir()
 	require.NoError(t, git.InitializeProjectDirectory(repoDir))
@@ -972,7 +973,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testin
 		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: repoDir,
 		TmuxPrefix:       fmt.Sprintf("test_noguardcollision_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() { _ = cleanup() }()

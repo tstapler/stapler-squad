@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -36,7 +38,7 @@ import (
 //     spawned process receives the full, untruncated prompt content.
 func TestBuildLaunchCommand_LargePromptSurvivesRealTmuxNewSession(t *testing.T) {
 	t.Parallel()
-	checkTmuxAvailable(t)
+	sessiontest.CheckTmuxAvailable(t)
 
 	// Two distinct sockets, not one shared between steps 1 and 2: tmux's
 	// default exit-empty behavior tears the server down as soon as it has

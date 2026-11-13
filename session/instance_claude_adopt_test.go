@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
@@ -118,7 +120,7 @@ func newClaimFixture(t *testing.T, repoPath string) *claimFixture {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".claude", "projects", ClaudeProjectDirName(repoPath))
 	require.NoError(t, os.MkdirAll(dir, 0755))
-	detector := NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, home)
+	detector := NewHistoryFileDetectorWithHomeDir(&sessiontest.MockProcessInspector{Files: []string{}}, home)
 	return &claimFixture{detector: detector, dir: dir, now: time.Now()}
 }
 

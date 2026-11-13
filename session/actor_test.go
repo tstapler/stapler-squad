@@ -10,25 +10,11 @@ package session
 import (
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
-
-// knownBackgroundGoroutines lists process-wide goroutines started by the log
-// package and lumberjack at init/first-log time, plus the signal-handler
-// goroutine started by TestMain that blocks on a signal channel for the
-// lifetime of the test binary.  These are not actor leaks; goleak must be
-// told to ignore them so the actor-leak assertions stay tight.
-var knownBackgroundGoroutines = []goleak.Option{
-	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.newAsyncWriter.func1"),
-	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.(*AsyncHandler).StartDrain.func1"),
-	goleak.IgnoreAnyFunction("gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun"),
-	// TestMain spawns a signal-handler goroutine (integration_test.go) that
-	// blocks on <-sigCh for the entire test-binary lifetime.  It cannot be
-	// stopped without os.Exit, so we tell goleak to ignore it.
-	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/session.TestMain.func1"),
-	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/session.TestMain.func2"),
-}
 
 // newActorTestInstance constructs a minimal *Instance suitable for actor tests.
 // It uses a real temp directory and a no-op program so NewInstance succeeds
@@ -70,7 +56,7 @@ func newActorTestInstance(t *testing.T) *Instance {
 // open, closing that race entirely.
 func TestActorNoLeak(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
+	defer goleak.VerifyNone(t, append(sessiontest.KnownBackgroundGoroutines, baseline)...)
 
 	inst := newActorTestInstance(t)
 	li := NewLiveInstance(inst)
@@ -103,7 +89,7 @@ func TestActorSendSync(t *testing.T) {
 // t.Parallel() in this package's shared test binary.
 func TestActorStopIdempotent(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
+	defer goleak.VerifyNone(t, append(sessiontest.KnownBackgroundGoroutines, baseline)...)
 
 	inst := newActorTestInstance(t)
 	li := NewLiveInstance(inst)

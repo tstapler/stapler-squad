@@ -6,11 +6,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -172,24 +173,13 @@ func TestInstance_SetArchivedAt_should_ClearPinned_When_Archiving(t *testing.T) 
 
 // --- Story 3.3.1: reclassifyTagsLocked fixpoint hook ---
 
-// bugfixSeedRule is a minimal TaggingRule mirroring SeedTaggingRules()' seed-tag-bugfix entry,
-// used directly (rather than the full seed set) so these tests assert against one predictable
-// rule instead of every seed rule's incidental side effects.
-func bugfixSeedRule() classifier.TaggingRule {
-	return classifier.TaggingRule{
-		RuleMeta:      classifier.RuleMeta{ID: "seed-bugfix", Name: "Bugfix branch", Priority: 100, Enabled: true, Source: "seed"},
-		BranchPattern: regexp.MustCompile(`^(bugfix|fix)/`),
-		OutputTag:     "Bugfix",
-	}
-}
-
 func TestReclassifyTagsLocked_should_ApplyMatchingSeedRuleTagSynchronously_When_BranchSetterCalled(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
 	inst.Branch = "main"
 	engine := classifier.NewTaggingEngine()
-	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	engine.ReplaceRules([]classifier.TaggingRule{sessiontest.BugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 
 	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "bugfix/pr-poller"})
@@ -204,7 +194,7 @@ func TestReclassifyTagsLocked_should_RetractRuleOwnedTag_When_ConditionNoLongerH
 	inst.Branch = "bugfix/x"
 	inst.Tags = []string{"Important"}
 	engine := classifier.NewTaggingEngine()
-	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	engine.ReplaceRules([]classifier.TaggingRule{sessiontest.BugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 
 	// Prime: apply the rule via a mutating setter (SetGitHubResolution with an unchanged
@@ -226,7 +216,7 @@ func TestReclassifyTagsLocked_should_NotReAddSuppressedTag_When_RuleConditionMat
 	inst.Branch = "bugfix/x"
 	inst.SuppressedRuleTags = map[string]bool{"Bugfix": true}
 	engine := classifier.NewTaggingEngine()
-	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	engine.ReplaceRules([]classifier.TaggingRule{sessiontest.BugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 
 	inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: "bugfix/x"})
@@ -256,7 +246,7 @@ func TestReclassifyTagsLocked_should_RetractTag_When_OwningRuleDeletedViaCRUD(t 
 	inst.Tags = []string{"Bugfix"}
 	inst.RuleTagProvenance = map[string]string{"Bugfix": "seed-bugfix"}
 	engine := classifier.NewTaggingEngine()
-	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	engine.ReplaceRules([]classifier.TaggingRule{sessiontest.BugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 
 	// Simulate a CRUD DeleteTaggingRule: the rule with ID "seed-bugfix" no longer exists.
@@ -354,7 +344,7 @@ func TestDropUnclassifiedIfOtherTagsPresentLocked_should_RemoveUnclassified_When
 	inst.Tags = []string{UnclassifiedTag}
 	inst.RuleTagProvenance = map[string]string{UnclassifiedTag: llmSentinelRuleID}
 	engine := classifier.NewTaggingEngine()
-	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	engine.ReplaceRules([]classifier.TaggingRule{sessiontest.BugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 
 	inst.SetProgram("aider")
@@ -396,7 +386,7 @@ func TestReclassifyTagsLocked_should_RecordTagFire_When_RuleMatchesRegardlessOfS
 	inst.Branch = "bugfix/x"
 	inst.SuppressedRuleTags = map[string]bool{"Bugfix": true}
 	engine := classifier.NewTaggingEngine()
-	engine.ReplaceRules([]classifier.TaggingRule{bugfixSeedRule()})
+	engine.ReplaceRules([]classifier.TaggingRule{sessiontest.BugfixSeedRule()})
 	inst.SetTaggingEngine(engine)
 	recorder := &fakeTagFireRecorder{}
 	inst.SetTagFireRecorder(recorder)

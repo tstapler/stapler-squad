@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"go.uber.org/goleak"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -1330,7 +1332,7 @@ func TestSessionDriver_DialogGaveUp_FallsThroughToInactivityEscalation(t *testin
 	inst, policy := newDialogGiveUpEscalationInstance(fakePM)
 
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
+	defer goleak.VerifyNone(t, append(sessiontest.KnownBackgroundGoroutines, baseline)...)
 
 	// startSessionDriverForTest exists because StartSessionDriver always
 	// resolves RetryPolicy fresh from config — see its doc comment for why.
@@ -1397,7 +1399,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 	// See TestActorNoLeak (actor_test.go) for why this baselines via
 	// goleak.IgnoreCurrent() instead of a bare process-wide goleak.VerifyNone().
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
+	defer goleak.VerifyNone(t, append(sessiontest.KnownBackgroundGoroutines, baseline)...)
 
 	fakePM := &stuckDialogProcessManager{pollEntered: make(chan struct{})}
 
@@ -1480,7 +1482,7 @@ func simulateHandleDriverFailureRetryInterleaving(inst *Instance, stopper *sessi
 
 func TestStopSessionDriver_WaitsForHandleDriverFailureRetryGoroutine_NoGoroutineLeak(t *testing.T) {
 	baseline := goleak.IgnoreCurrent()
-	defer goleak.VerifyNone(t, append(knownBackgroundGoroutines, baseline)...)
+	defer goleak.VerifyNone(t, append(sessiontest.KnownBackgroundGoroutines, baseline)...)
 
 	inst := &Instance{Title: "test-stop-waits-for-retry"}
 	stopper := &sessionDriverStopper{stop: make(chan struct{})}

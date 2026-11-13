@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/git"
 )
 
 func writeConversationFixture(t *testing.T, root, project, name, content string) string {
@@ -69,10 +68,4 @@ func makeTestInstance(title string) *Instance {
 		Title:  title,
 		Status: domain.Active,
 	}
-}
-
-// newTestGitWorktree builds a GitWorktree value for use in unit tests without
-// touching the real filesystem or running git commands.
-func newTestGitWorktree(repoPath, worktreePath string) *git.GitWorktree {
-	return git.NewGitWorktreeFromStorage(repoPath, worktreePath, "test-session", "test-branch", "abc123")
 }

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -91,7 +93,7 @@ func TestScanAndLinkPRURL_ShouldNotAttach_WhenRepoMismatchOrBareMention(t *testi
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := installRecordingHandler(t)
+			h := sessiontest.InstallRecordingHandler(t)
 			inst := &Instance{Title: "scan-mismatch", UUID: "u-mismatch", Path: t.TempDir(), Program: "echo", GitHubOwner: "acme", GitHubRepo: "app"}
 			if tt.configure != nil {
 				tt.configure(inst)
@@ -103,8 +105,8 @@ func TestScanAndLinkPRURL_ShouldNotAttach_WhenRepoMismatchOrBareMention(t *testi
 			assert.Empty(t, inst.Snapshot().GitHub.PRs)
 			assert.Zero(t, inst.Snapshot().GitHub.GitHubPRNumber)
 			var debugNamesURL bool
-			for _, r := range h.recordsAtLevel(slog.LevelDebug) {
-				if _, ok := r.attrs["url"]; ok {
+			for _, r := range h.RecordsAtLevel(slog.LevelDebug) {
+				if _, ok := r.Attrs["url"]; ok {
 					debugNamesURL = true
 				}
 			}

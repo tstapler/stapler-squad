@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -14,9 +16,9 @@ import (
 
 // findRecordByMessage returns the first record in records whose msg matches,
 // or nil if none does.
-func findRecordByMessage(records []capturedRecord, msg string) *capturedRecord {
+func findRecordByMessage(records []sessiontest.CapturedRecord, msg string) *sessiontest.CapturedRecord {
 	for i := range records {
-		if records[i].msg == msg {
+		if records[i].Msg == msg {
 			return &records[i]
 		}
 	}
@@ -40,14 +42,14 @@ func (want scrollForwardAttemptLabels) matches(attrs attribute.Set) bool {
 }
 
 // sumScrollForwardAttempts sums scroll_forward_attempts_total's current data
-// points matching want, via the package's shared testPiMetricReader
+// points matching want, via the package's shared sessiontest.TestPiMetricReader
 // (pi_status_source_metrics_test.go) -- the single real MeterProvider
 // installed for this test binary.
 func sumScrollForwardAttempts(t *testing.T, want scrollForwardAttemptLabels) int64 {
 	t.Helper()
 
 	var rm metricdata.ResourceMetrics
-	require.NoError(t, testPiMetricReader.Collect(context.Background(), &rm))
+	require.NoError(t, sessiontest.TestPiMetricReader.Collect(context.Background(), &rm))
 	m := findMetricByName(rm, "scroll_forward_attempts_total")
 	if m == nil {
 		return 0
@@ -81,7 +83,7 @@ func findMetricByName(rm metricdata.ResourceMetrics, name string) *metricdata.Me
 // structured log line records which path served the request -- DELIVERED
 // maps to "app_forwarded" -- on every ForwardScroll call, not just errors.
 func TestForwardScroll_should_LogPathAndOutcome_When_AnyRequestCompletes(t *testing.T) {
-	h := installRecordingHandler(t)
+	h := sessiontest.InstallRecordingHandler(t)
 	fakePM := &fakeScrollForwardProcessManager{captureSeq: []string{"settled", "settled"}}
 	inst := newForwardScrollTestInstance(t, fakePM)
 
@@ -93,18 +95,18 @@ func TestForwardScroll_should_LogPathAndOutcome_When_AnyRequestCompletes(t *test
 		t.Fatalf("outcome = %v, want DELIVERED", outcome)
 	}
 
-	found := findRecordByMessage(h.recordsAtLevel(slog.LevelInfo), "scroll_forward: request completed")
+	found := findRecordByMessage(h.RecordsAtLevel(slog.LevelInfo), "scroll_forward: request completed")
 	if found == nil {
 		t.Fatalf("expected a %q log.Info record", "scroll_forward: request completed")
 	}
-	if found.attrs["path"] != "app_forwarded" {
-		t.Fatalf("path = %v, want app_forwarded", found.attrs["path"])
+	if found.Attrs["path"] != "app_forwarded" {
+		t.Fatalf("path = %v, want app_forwarded", found.Attrs["path"])
 	}
-	if found.attrs["outcome"] != "delivered" {
-		t.Fatalf("outcome = %v, want delivered", found.attrs["outcome"])
+	if found.Attrs["outcome"] != "delivered" {
+		t.Fatalf("outcome = %v, want delivered", found.Attrs["outcome"])
 	}
-	if found.attrs["adapter"] != "claude" {
-		t.Fatalf("adapter = %v, want claude", found.attrs["adapter"])
+	if found.Attrs["adapter"] != "claude" {
+		t.Fatalf("adapter = %v, want claude", found.Attrs["adapter"])
 	}
 }
 
@@ -112,7 +114,7 @@ func TestForwardScroll_should_LogPathAndOutcome_When_AnyRequestCompletes(t *test
 // is REQ-15's coverage-gap test: a session whose program has no registered
 // ScrollAdapter gets exactly one log.Warn, not one per scroll attempt.
 func TestForwardScroll_should_LogCoverageGapWarningOnlyOnce_When_ProgramHasNoRegisteredScrollAdapter(t *testing.T) {
-	h := installRecordingHandler(t)
+	h := sessiontest.InstallRecordingHandler(t)
 	program := "bash-" + t.Name() // unique per test: scrollForwardCoverageGapLogged is a package-level, cross-test sync.Map
 	inst := &Instance{Title: t.Name(), Program: program}
 
@@ -128,8 +130,8 @@ func TestForwardScroll_should_LogCoverageGapWarningOnlyOnce_When_ProgramHasNoReg
 
 	const wantMsg = "scroll_forward: no ScrollAdapter registered for program, scroll-forwarding unavailable"
 	var matches int
-	for _, r := range h.recordsAtLevel(slog.LevelWarn) {
-		if r.msg == wantMsg && r.attrs["program"] == program {
+	for _, r := range h.RecordsAtLevel(slog.LevelWarn) {
+		if r.Msg == wantMsg && r.Attrs["program"] == program {
 			matches++
 		}
 	}

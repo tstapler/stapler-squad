@@ -7,44 +7,13 @@ import (
 	"testing"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
-
-// initTestRepoForReviewQueue creates and commits a minimal git repository for the
-// uncommitted-changes detection tests below.
-//
-// Uses go-git directly rather than shelling out — see
-// the `prefer-go-git-over-subshells` skill.
-func initTestRepoForReviewQueue(t *testing.T, repoPath string) {
-	t.Helper()
-	repo, err := gogit.PlainInit(repoPath, false)
-	if err != nil {
-		t.Fatalf("Failed to initialize git repo: %v", err)
-	}
-
-	testFile := filepath.Join(repoPath, "test.txt")
-	if err := os.WriteFile(testFile, []byte("initial content"), 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("Failed to get worktree: %v", err)
-	}
-	if _, err := wt.Add("."); err != nil {
-		t.Fatalf("Failed to git add: %v", err)
-	}
-	if _, err := wt.Commit("Initial commit", &gogit.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
-	}); err != nil {
-		t.Fatalf("Failed to git commit: %v", err)
-	}
-}
 
 // TestReviewQueue_UncommittedChangesDetection verifies that uncommitted changes are detected
 func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
@@ -59,7 +28,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 	}
 
 	// Initialize git repo, configure user, and create initial commit
-	initTestRepoForReviewQueue(t, repoPath)
+	sessiontest.InitTestRepoForReviewQueue(t, repoPath)
 
 	// Create worktree for testing
 	worktree, branchName, err := git.NewGitWorktree(repoPath, "test-session")
@@ -298,7 +267,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 
-	initTestRepoForReviewQueue(t, repoPath)
+	sessiontest.InitTestRepoForReviewQueue(t, repoPath)
 
 	// Create worktree
 	worktree, branchName, err := git.NewGitWorktree(repoPath, "integration-session")

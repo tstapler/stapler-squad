@@ -7,26 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// mockProcessInspector is a test double for ProcessFileInspector.
-type mockProcessInspector struct {
-	files []string
-	err   error
-}
-
-func (m *mockProcessInspector) OpenFiles(pid int32) ([]string, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.files, nil
-}
-
-func (m *mockProcessInspector) IsAlive(pid int32, expectedCreateTimeMs int64) bool {
-	return m.err == nil
-}
 
 func TestHistoryFileDetector_Detect_MatchesClaudePattern(t *testing.T) {
 	t.Parallel()
@@ -37,8 +22,8 @@ func TestHistoryFileDetector_Detect_MatchesClaudePattern(t *testing.T) {
 	projectDir := "-Users-alice-myproject"
 	historyPath := filepath.Join(homeDir, ".claude", "projects", projectDir, uuid+".jsonl")
 
-	inspector := &mockProcessInspector{
-		files: []string{
+	inspector := &sessiontest.MockProcessInspector{
+		Files: []string{
 			"/dev/null",
 			"/tmp/some-other-file.txt",
 			historyPath,
@@ -57,8 +42,8 @@ func TestHistoryFileDetector_Detect_MatchesClaudePattern(t *testing.T) {
 
 func TestHistoryFileDetector_Detect_NoJSONLReturnsNilNil(t *testing.T) {
 	t.Parallel()
-	inspector := &mockProcessInspector{
-		files: []string{
+	inspector := &sessiontest.MockProcessInspector{
+		Files: []string{
 			"/dev/null",
 			"/tmp/some-file.txt",
 			"/usr/lib/libsystem.dylib",
@@ -79,8 +64,8 @@ func TestHistoryFileDetector_Detect_FiltersAgentJSONL(t *testing.T) {
 	projectDir := "-Users-alice-myproject"
 	agentPath := filepath.Join(homeDir, ".claude", "projects", projectDir, "agent-abc123.jsonl")
 
-	inspector := &mockProcessInspector{
-		files: []string{agentPath},
+	inspector := &sessiontest.MockProcessInspector{
+		Files: []string{agentPath},
 	}
 
 	detector := NewHistoryFileDetector(inspector)
@@ -127,8 +112,8 @@ func TestHistoryFileDetector_ExtractsUUIDFromFilename(t *testing.T) {
 			projectDir := "-Users-alice-myproject"
 			historyPath := filepath.Join(homeDir, ".claude", "projects", projectDir, tc.uuid+".jsonl")
 
-			inspector := &mockProcessInspector{
-				files: []string{historyPath},
+			inspector := &sessiontest.MockProcessInspector{
+				Files: []string{historyPath},
 			}
 
 			detector := NewHistoryFileDetector(inspector)
@@ -147,8 +132,8 @@ func TestHistoryFileDetector_ExtractsUUIDFromFilename(t *testing.T) {
 
 func TestHistoryFileDetector_ProcessDeadReturnsNilNil(t *testing.T) {
 	t.Parallel()
-	inspector := &mockProcessInspector{
-		err: fmt.Errorf("process 9999999 not found"),
+	inspector := &sessiontest.MockProcessInspector{
+		Err: fmt.Errorf("process 9999999 not found"),
 	}
 
 	detector := NewHistoryFileDetector(inspector)
@@ -289,8 +274,8 @@ func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
 	path1 := filepath.Join(homeDir, ".claude", "projects", projectDir, uuid1+".jsonl")
 	path2 := filepath.Join(homeDir, ".claude", "projects", projectDir, uuid2+".jsonl")
 
-	inspector := &mockProcessInspector{
-		files: []string{path1, path2},
+	inspector := &sessiontest.MockProcessInspector{
+		Files: []string{path1, path2},
 	}
 
 	detector := NewHistoryFileDetector(inspector)
@@ -304,7 +289,7 @@ func TestHistoryFileDetector_Detect_ReturnsFirstMatch(t *testing.T) {
 func TestHistoryFileDetector_ResolveFilePath_ReconstructsPath_When_HomeDirOverridden(t *testing.T) {
 	t.Parallel()
 	tmpHome := t.TempDir()
-	detector := NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, tmpHome)
+	detector := NewHistoryFileDetectorWithHomeDir(&sessiontest.MockProcessInspector{}, tmpHome)
 
 	projectPath := "/Users/alice/myproject"
 	uuid := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
@@ -326,7 +311,7 @@ func TestHistoryFileDetector_ResolveFilePath_UsesRealHomeDir_When_NoOverride(t *
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	detector := NewHistoryFileDetector(&mockProcessInspector{})
+	detector := NewHistoryFileDetector(&sessiontest.MockProcessInspector{})
 	uuid := "11111111-2222-3333-4444-555555555555"
 
 	got, err := detector.ResolveFilePath("/Users/alice/myproject", uuid)

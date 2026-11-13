@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
@@ -31,17 +33,17 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	sessiontest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-spike-%d", time.Now().UnixNano())
 	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
-		Program:          stubClaudeBinary(t),
+		Program:          sessiontest.StubClaudeBinary(t),
 		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_spike_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: sessiontest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {

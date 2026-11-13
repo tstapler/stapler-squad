@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -431,7 +432,7 @@ func TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails(t *testing
 	// reaching Start(false).
 	repoPath := t.TempDir()
 	worktreePath := filepath.Join(t.TempDir(), "nonexistent-worktree")
-	wt := newTestGitWorktree(repoPath, worktreePath)
+	wt := sessiontest.NewTestGitWorktree(repoPath, worktreePath)
 
 	inst := (&Instance{
 		Title:  "t",

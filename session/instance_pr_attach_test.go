@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -129,7 +131,7 @@ func TestAttachPR_ShouldNotMutatePublishedSnapshot_WhenAdding(t *testing.T) {
 
 func TestAttachPR_ShouldProjectActivePRToLegacyFields_WhenAnyScopeState(t *testing.T) {
 	t.Parallel()
-	h := installRecordingHandler(t)
+	h := sessiontest.InstallRecordingHandler(t)
 	inst := newPRTestInstance(t)
 	r11 := mustPRRef(t, "", "acme", "app", 11)
 	if err := inst.AttachPR(r11, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}); err != nil {
@@ -146,13 +148,13 @@ func TestAttachPR_ShouldProjectActivePRToLegacyFields_WhenAnyScopeState(t *testi
 		t.Errorf("mirror = %d %q terminal=%v, want 12 + url + false", g.GitHubPRNumber, g.GitHubPRURL, g.GitHubPRStatusTerminal)
 	}
 	if !loggedActivePRChange(h, 11, 12) {
-		t.Errorf("no 'session active pr changed' record with from=11 to=12 in %v", h.all())
+		t.Errorf("no 'session active pr changed' record with from=11 to=12 in %v", h.All())
 	}
 }
 
-func loggedActivePRChange(h *recordingHandler, from, to int64) bool {
-	for _, r := range h.recordsAtLevel(slog.LevelInfo) {
-		if r.msg != "session active pr changed" {
+func loggedActivePRChange(h *sessiontest.RecordingHandler, from, to int64) bool {
+	for _, r := range h.RecordsAtLevel(slog.LevelInfo) {
+		if r.Msg != "session active pr changed" {
 			continue
 		}
 		if intAttr(r, "from") == from && intAttr(r, "to") == to {
@@ -335,8 +337,8 @@ func TestDetachPR_ShouldClearLegacyScalars_WhenLastLinkRemoved(t *testing.T) {
 	assert.False(t, snap.GitHubPRStatusTerminal)
 }
 
-func intAttr(r capturedRecord, key string) int64 {
-	switch v := r.attrs[key].(type) {
+func intAttr(r sessiontest.CapturedRecord, key string) int64 {
+	switch v := r.Attrs[key].(type) {
 	case int:
 		return int64(v)
 	case int64:

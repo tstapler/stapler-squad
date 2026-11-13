@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
@@ -1010,7 +1012,7 @@ func TestBuildClaudeCommand_FallsBackToSnapshotWhenNoProvider(t *testing.T) {
 // log line.
 func TestBuildClaudeCommand_NoProviderNoLog_DuringBootWindow(t *testing.T) {
 	envtest.NewIsolatedStateDir(t) // LoadConfig must not write default config under the real state dir
-	buf := captureLogInfo(t)
+	buf := sessiontest.CaptureLogInfo(t)
 	inst := &Instance{Program: "claude", UUID: "test-uuid-boot"}
 
 	got := inst.buildLaunchCommand("")
@@ -1028,7 +1030,7 @@ func TestBuildClaudeCommand_NoProviderNoLog_DuringBootWindow(t *testing.T) {
 // race), with no static-field fallback either, must log loudly so a
 // permanently-stranded session is visible instead of silent.
 func TestBuildClaudeCommand_LogsWhenBothProviderAndSnapshotEmpty(t *testing.T) {
-	buf := captureLogInfo(t)
+	buf := sessiontest.CaptureLogInfo(t)
 	inst := &Instance{Program: "claude", UUID: "test-uuid-empty"}
 	inst.SetMCPServerURLProvider(func() string { return "" })
 
@@ -1047,7 +1049,7 @@ func TestBuildClaudeCommand_LogsWhenBothProviderAndSnapshotEmpty(t *testing.T) {
 // resolution or emit its log line.
 func TestBuildLaunchCommand_PiProgramSkipsMCPResolution(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
-	buf := captureLogInfo(t)
+	buf := sessiontest.CaptureLogInfo(t)
 	inst := &Instance{Program: "pi", UUID: "test-uuid-pi"}
 	inst.SetMCPServerURLProvider(func() string { return "" })
 

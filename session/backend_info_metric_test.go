@@ -5,6 +5,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
@@ -20,7 +22,7 @@ import (
 func collectBackendInfo(t *testing.T) []string {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
-	require.NoError(t, testPiMetricReader.Collect(context.Background(), &rm))
+	require.NoError(t, sessiontest.TestPiMetricReader.Collect(context.Background(), &rm))
 	var pairs []string
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
