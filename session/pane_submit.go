@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // DefaultPaneSettlePollInterval and DefaultPaneSettleMaxWait mirror
@@ -296,3 +299,87 @@ func waitForPaneUpdate(ctx context.Context, inst paneSettleChecker, pollInterval
 	}
 	return false
 }
+
+// paneSettleChecker is the narrow interface waitForPaneSettle needs — satisfied
+// by *Instance's existing HasUpdated method.
+type paneSettleChecker interface {
+	HasUpdated() (updated bool, hasPrompt bool)
+}
+
+// waitForPaneSettle polls inst until its pane content stops changing for two
+// consecutive polls, or maxWait elapses — whichever first. Used between
+// writing a turn's content and sending the submit keystroke (BUG-031): a
+// large paste can still be landing/rendering in the TUI's paste-detection
+// window when a follow-up "\r" arrives, so giving the pane a chance to settle
+// first shrinks the race that folds the submit keystroke into the paste block
+// instead of ending it. Best-effort: a pane that never settles (e.g. a
+// permanently busy session) is left alone once the deadline passes — the
+// caller still sends "\r" either way.
+func waitForPaneSettle(ctx context.Context, inst paneSettleChecker, pollInterval, maxWait time.Duration) {
+	deadline := time.Now().Add(maxWait)
+	stableCount := 0
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+		}
+		updated, _ := inst.HasUpdated()
+		if updated {
+			stableCount = 0
+			continue
+		}
+		stableCount++
+		if stableCount >= 2 {
+			return
+		}
+	}
+}
+
+// VerifyPaneOwnershipBeforeWrite re-reads the target tmux pane's
+// STAPLER_SESSION_UUID marker via `tmux show-environment` and confirms it
+// still matches inst's own UUID, immediately before a nudge write is sent.
+//
+// This exists because CheckNudgeEligible's idle check (and any earlier
+// identity check made when the diagnostic agent selected its nudge target)
+// can go stale: a tmux session-name collision can cause a completely
+// different Instance's pane to be reattached under the name this Instance
+// expects (the stapler-squad-backlog-devbug incident, backlog item
+// ce71ad1a) between the eligibility check and the write itself. Re-reading
+// the marker right before the write — rather than trusting a value cached
+// at attach or eligibility-check time — is the only way to catch that
+// window. Deliberately independent of the tmux pane-ownership fix landed on
+// the (as of this writing, unmerged) backlog/stapler-squad-verify-tmux-session-ownership
+// branch (commit 6c9026e81), which hardens reattach/kill call sites, not
+// this one — this check reads the same STAPLER_SESSION_UUID marker via the
+// same technique already used on main (LiveTmuxSessionUUIDs,
+// session/workspace_peers.go), so it does not depend on that branch merging.
+func VerifyPaneOwnershipBeforeWrite(ctx context.Context, inst *Instance) error {
+	if inst == nil {
+		return fmt.Errorf("nudge target session not found")
+	}
+	expected := inst.Snapshot().UUID
+	name := inst.GetTmuxSessionName()
+	if expected == "" || name == "" {
+		return fmt.Errorf("nudge target session %s has no tmux identity to verify", inst.UUID)
+	}
+
+	envCtx, cancel := context.WithTimeout(ctx, ownershipCheckTimeout)
+	defer cancel()
+	socketArgs := tmux.ResolveSocket("").Args
+	out, err := safeexec.CommandContext(envCtx, tmux.Binary(), socketArgs("show-environment", "-t", name, "STAPLER_SESSION_UUID")...).Output()
+	if err != nil {
+		return fmt.Errorf("could not re-verify pane ownership for session %s (tmux target %s): %w", inst.UUID, name, err)
+	}
+	actual := strings.TrimPrefix(strings.TrimSpace(string(out)), "STAPLER_SESSION_UUID=")
+	if actual == "" || actual != expected {
+		return fmt.Errorf("pane ownership mismatch: tmux target %q now reports owner %q, expected %q — refusing to write", name, actual, expected)
+	}
+	return nil
+}
+
+// ownershipCheckTimeout bounds the tmux show-environment call
+// VerifyPaneOwnershipBeforeWrite makes, mirroring the timeout used by the
+// existing STAPLER_SESSION_UUID readers (LiveTmuxSessionUUIDs,
+// ReconcileOrphanedTmuxSessions) this function's technique is modeled on.
+const ownershipCheckTimeout = 5 * time.Second

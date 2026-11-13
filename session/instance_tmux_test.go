@@ -284,9 +284,9 @@ func TestIsPi(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
 			t.Parallel()
-			got := isPi(tc.program)
+			got := IsPi(tc.program)
 			if got != tc.want {
-				t.Errorf("isPi(%q) = %v, want %v", tc.program, got, tc.want)
+				t.Errorf("IsPi(%q) = %v, want %v", tc.program, got, tc.want)
 			}
 		})
 	}

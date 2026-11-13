@@ -50,7 +50,7 @@ func prTargetService(t *testing.T, prs ...prSpec) (*GitHubService, *recordingPRA
 		ref, err := domain.NewPRRef("", "acme", "app", p.number)
 		require.NoError(t, err)
 		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery,
-			session.PRInitial{State: p.state, Terminal: p.terminal}), "pr %d", i)
+			domain.PRInitial{State: p.state, Terminal: p.terminal}), "pr %d", i)
 	}
 	rec := &recordingPRActions{}
 	inst.SetPRActionClient(rec)

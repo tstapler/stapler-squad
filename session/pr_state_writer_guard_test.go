@@ -38,7 +38,7 @@ func staleSession(t *testing.T, storage *Storage, title, uuid string, ref domain
 	inst.UUID = uuid
 	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
 	finishInstanceConstruction(inst)
-	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, PRInitial{State: domain.PRStateUnknown, Terminal: true}))
+	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}))
 	require.NoError(t, storage.AddInstance(inst)) // create path
 	return inst
 }
@@ -50,7 +50,7 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	inst.SetPRPersister(storage)
 	ref := mustPRRef(t, "", "acme", "app", 12)
 
-	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, PRInitial{State: domain.PRStateUnknown, Terminal: true}))
+	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}))
 	stateRowIs(t, storage.Repo, ref, domain.PRStateUnknown, true, "seeded")
 	// The poll core arrives in a later wave: apply its observation directly.
 	res, err := storage.Repo.UpdatePullRequestState(ctx, ref, fetchObs(PRSourceTick, domain.PRStateOpen, prRepoT0))

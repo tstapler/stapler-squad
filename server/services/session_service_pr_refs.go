@@ -91,9 +91,9 @@ func prSetError(err error) error {
 	switch {
 	case errors.Is(err, session.ErrPRNotAttached):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
-	case errors.Is(err, session.ErrPRPersisterUnavailable), errors.Is(err, session.ErrNoSessionUUID):
+	case errors.Is(err, session.ErrPRPersisterUnavailable), errors.Is(err, domain.ErrNoSessionUUID):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
-	case errors.Is(err, session.ErrSessionPRLinkCap):
+	case errors.Is(err, domain.ErrSessionPRLinkCap):
 		return connect.NewError(connect.CodeResourceExhausted, err)
 	case errors.Is(err, session.ErrZeroPRRef):
 		return connect.NewError(connect.CodeInvalidArgument, err)
@@ -205,12 +205,12 @@ func (s *SessionService) AttachSessionPullRequest(
 	}), nil
 }
 
-func prInitialFromInfo(info *github.PRInfo) session.PRInitial {
+func prInitialFromInfo(info *github.PRInfo) domain.PRInitial {
 	state, err := domain.ParsePRState(strings.ToLower(info.State))
 	if err != nil {
 		state = domain.PRStateUnknown
 	}
-	initial := session.PRInitial{State: state, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
+	initial := domain.PRInitial{State: state, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
 	// An observed state is verified; `unknown` stays non-terminal, never seeded terminal.
 	initial.Terminal = state.Terminal()
 	return initial

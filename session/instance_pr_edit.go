@@ -88,7 +88,7 @@ func (i *Instance) PinPRPersisted(ctx context.Context, ref domain.PRRef, pinned 
 // AttachPRManual attaches ref on the user's explicit request: it first clears
 // this session's tombstone for ref (a manual attach overrides an earlier detach)
 // and then attaches with source manual.
-func (i *Instance) AttachPRManual(ctx context.Context, ref domain.PRRef, initial PRInitial) error {
+func (i *Instance) AttachPRManual(ctx context.Context, ref domain.PRRef, initial domain.PRInitial) error {
 	i.prPersistMu.Lock()
 	ed, err := i.editorLocked()
 	if err == nil {
@@ -110,7 +110,7 @@ var ErrPRNotAttached = errors.New("session: pull request is not attached to this
 func (i *Instance) persistMirrorLocked() {
 	snap := i.Snapshot()
 	g := snap.GitHub
-	if err := i.prPersister.PersistPRMirror(snap.UUID, g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRStatusTerminal); err != nil && !errors.Is(err, ErrSessionNotPersisted) {
+	if err := i.prPersister.PersistPRMirror(snap.UUID, g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRStatusTerminal); err != nil && !errors.Is(err, domain.ErrSessionNotPersisted) {
 		log.Warn("persist PR mirror after edit failed; the next pass retries", "session", snap.Title, "err", err)
 	}
 }

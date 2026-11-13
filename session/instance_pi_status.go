@@ -21,7 +21,7 @@ import (
 // piExtension holds pi-coding-agent controller and session state, and
 // implements programExtension (instance_controller.go) so
 // StartController/StopController dispatch to it instead of growing another
-// if-branch when isPi(i.Program) and config.FeaturePiSupport is enabled --
+// if-branch when IsPi(i.Program) and config.FeaturePiSupport is enabled --
 // see StartController's doc comment for why the two are mutually exclusive
 // per instance rather than layered.
 //
@@ -32,7 +32,7 @@ import (
 type piExtension struct {
 	// piSession holds pi-coding-agent session information for
 	// resume-on-restart (see buildPiCommand). Populated only when
-	// isPi(i.Program) and the config.FeaturePiSupport flag is enabled -- see
+	// IsPi(i.Program) and the config.FeaturePiSupport flag is enabled -- see
 	// the capture in Restart. Guarded by piSessionMu, not i.mu.
 	piSession *domain.PiSessionData
 	// piSessionMu protects piSession. Separate from i.mu: SetPiSessionID is
@@ -73,7 +73,7 @@ var _ programExtension = (*piExtension)(nil)
 // subprocess/goroutines and racing Restart's unsynchronized piSession
 // access (see SetPiSessionID's doc comment).
 func (e *piExtension) Supported(i *Instance) bool {
-	return isPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)
+	return IsPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)
 }
 
 // Running reports whether a PiStatusSource is currently registered.

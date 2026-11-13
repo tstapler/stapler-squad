@@ -40,7 +40,7 @@ func newAskFixFixture(t *testing.T, status domain.Status) *askFixFixture {
 	for _, n := range []int{11, 12} {
 		ref, err := domain.NewPRRef("", "acme", "app", n)
 		require.NoError(t, err)
-		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, session.PRInitial{State: domain.PRStateOpen}))
+		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen}))
 	}
 	svctest.AddInstanceToPoller(fix.poller, inst)
 	rec := &guardedSteerRecorder{}

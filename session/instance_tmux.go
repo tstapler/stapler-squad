@@ -110,7 +110,7 @@ func (b *claudeLaunchBuilder) PromptChannel() promptChannel { return promptChann
 // piLaunchBuilder implements launchCommandBuilder for the pi binary.
 type piLaunchBuilder struct{}
 
-func (b *piLaunchBuilder) Matches(program string) bool { return isPi(program) }
+func (b *piLaunchBuilder) Matches(program string) bool { return IsPi(program) }
 
 func (b *piLaunchBuilder) Build(i *Instance, base, _ string) launchcmd.ExecCommand {
 	i.piSessionMu.Lock()
@@ -268,12 +268,12 @@ func IsClaude(program string) bool {
 	return false
 }
 
-// isPi reports whether the program command invokes the pi binary. Mirrors
+// IsPi reports whether the program command invokes the pi binary. Mirrors
 // isClaude: it checks each whitespace-delimited token's basename, so it
 // matches bare ("pi") and path-qualified ("/usr/local/bin/pi") invocations
 // while rejecting lookalikes like "pipenv" or "mypi" whose basename isn't
 // exactly "pi". Custom program IDs are resolved first.
-func isPi(program string) bool {
+func IsPi(program string) bool {
 	cfg := config.LoadConfig()
 	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
 		program = res.Command
@@ -330,7 +330,7 @@ func AutoApproveSupported(program string) bool {
 // loudly via log.Error (not silently swallowed) and then recovered by
 // constructing the guaranteed-valid BackendTmux explicitly, preserving the
 // non-nil contract every caller of pm() depends on. Construction paths that
-// DO have an error return (NewInstance, fromInstanceData) propagate
+// DO have an error return (NewInstance, instanceFromData) propagate
 // NewProcessManager's error directly instead of going through this
 // fallback — see backend_factory.go's ErrUnrecognizedBackend.
 func (i *Instance) pm() ProcessManager {
@@ -727,7 +727,7 @@ func (i *Instance) GetMCPServerURL() string {
 // environment and the claude --settings override -- always agree on the same
 // resolved set.
 func (i *Instance) resolveExtraEnvVars() map[string]string {
-	// Snapshot() also serves pre-publication callers (fromInstanceData): it lazily builds one.
+	// Snapshot() also serves pre-publication callers (instanceFromData): it lazily builds one.
 	snap := i.Snapshot()
 	envVars := make(map[string]string)
 	cfg := config.LoadConfig()

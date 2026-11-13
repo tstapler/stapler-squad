@@ -56,3 +56,24 @@ func (i *Instance) pinResolvedBackend() {
 	}
 	i.Backend = processManagerBackendKey(i.processManager)
 }
+
+// getSelectedBackend resolves the process-wide default backend live, on
+// every call — no process restart required to change it. cfg.ProcessManagerBackend
+// (hand-editable in config.json) or the "tymux" feature flag
+// (config.EffectiveTymuxEnabled, live-settable via SetTymuxGlobalOverride)
+// each force BackendTymux; otherwise cfg.ProcessManagerBackend passes
+// through as-is (so "native" still works), and "" falls through to
+// NewProcessManager's defaultBackend/BackendTmux.
+func getSelectedBackend() domain.ProcessManagerBackend {
+	return selectedBackendFromConfig(config.LoadConfig())
+}
+
+// selectedBackendFromConfig is getSelectedBackend's pure core over an
+// already-loaded config.
+func selectedBackendFromConfig(cfg *config.Config) domain.ProcessManagerBackend {
+	backend := domain.ProcessManagerBackend(cfg.ProcessManagerBackend)
+	if backend == domain.BackendTymux || config.EffectiveTymuxEnabled(cfg) {
+		return domain.BackendTymux
+	}
+	return backend
+}

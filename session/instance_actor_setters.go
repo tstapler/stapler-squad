@@ -293,7 +293,7 @@ func (i *Instance) SetGitHubPR(prURL string, prNumber int) {
 // setLegacyPR attaches the PR with source, or writes the legacy scalars alone when
 // the session cannot hold a link.
 func (i *Instance) setLegacyPR(prURL string, prNumber int, source domain.AttachSource) {
-	if i.attachLegacyPR(prNumber, source, PRInitial{URL: prURL}) {
+	if i.attachLegacyPR(prNumber, source, domain.PRInitial{URL: prURL}) {
 		return
 	}
 	_ = i.sendSyncErr(func(s *instanceState) error {
@@ -319,7 +319,7 @@ func setGitHubPRNumberLocked(s *instanceState, n int) {
 // Like SetGitHubPR it attaches through AttachPR (as a branch discovery) when the
 // session can hold a link, and writes only the scalar when it cannot.
 func (i *Instance) SetGitHubPRNumber(n int) {
-	if i.attachLegacyPR(n, domain.AttachSourceBranchDiscovery, PRInitial{}) {
+	if i.attachLegacyPR(n, domain.AttachSourceBranchDiscovery, domain.PRInitial{}) {
 		return
 	}
 	_ = i.sendSyncErr(func(s *instanceState) error {

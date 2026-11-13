@@ -41,9 +41,9 @@ func TestRoundMembership_ShouldHoldThenSwitch_WhenAttachSessionToItemCreatesWork
 		return r
 	}
 	link := func(owner session.PROwner, n int) {
-		res, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), session.PRLink{
+		res, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), domain.PRLink{
 			Role: domain.PRRolePrimary, Source: domain.AttachSourceManual,
-			Initial: session.PRInitial{State: domain.PRStateOpen},
+			Initial: domain.PRInitial{State: domain.PRStateOpen},
 		})
 		require.NoError(t, lerr)
 		require.False(t, res.Tombstoned)

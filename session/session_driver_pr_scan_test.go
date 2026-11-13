@@ -22,7 +22,7 @@ func TestScanAndLinkPRURL_ShouldAttachAndClearTerminal_WhenNumberChanges(t *test
 		fake := &fakePRPersister{}
 		inst.SetPRPersister(fake)
 		require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery,
-			PRInitial{State: domain.PRStateMerged, Terminal: true}))
+			domain.PRInitial{State: domain.PRStateMerged, Terminal: true}))
 		require.True(t, inst.Snapshot().GitHub.GitHubPRStatusTerminal)
 
 		scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, pushLine12)
@@ -149,7 +149,7 @@ func TestScanAndLinkPRURL_ShouldSkipTombstonedRef_WhenOwnerDetachedItBefore(t *t
 	inst.SetPRPersister(storage)
 	ctx := context.Background()
 	owner := SessionPROwner(inst.UUID)
-	_, err := storage.Repo.UpsertSessionPR(ctx, owner, mustPRRef(t, "", "acme", "app", 12), PRLink{Source: domain.AttachSourceManual})
+	_, err := storage.Repo.UpsertSessionPR(ctx, owner, mustPRRef(t, "", "acme", "app", 12), domain.PRLink{Source: domain.AttachSourceManual})
 	require.NoError(t, err)
 	_, err = storage.Repo.DeleteSessionPR(ctx, owner, mustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
