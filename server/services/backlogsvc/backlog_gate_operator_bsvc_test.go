@@ -104,7 +104,7 @@ func TestTransitionHandler_Enforce_OperatorOverrideBypassesGateAgentDoesNot(t *t
 	assert.Equal(t, string(session.BacklogStatusReady), storedStatus(t, storage, item.ID))
 	rows := transitionDeniedRows(t, svc, item.ID)
 	require.Len(t, rows, 1, "an agent denial reaches the reporter")
-	assert.Equal(t, string(session.CallerMCPTransitionDelegate), rows[0].DeniedCaller)
+	assert.Equal(t, string(domain.CallerMCPTransitionDelegate), rows[0].DeniedCaller)
 
 	_, err = svc.TransitionBacklogItemStatus(ctx, req(item.ID, "owner says so"))
 	require.NoError(t, err)
@@ -213,12 +213,12 @@ func TestBacklogDecider_Transition_ReachesHandlerAsNotificationActionCaller(t *t
 	svc, storage, repo, cfg := newEnforcedGateService(t)
 	addApprovalGate(t, repo, cfg, session.BacklogStatusReview, session.BacklogStatusReady)
 	item := newItemAt(t, storage, session.BacklogStatusReview)
-	before := session.GateCallsTotal(session.ClassOperator, session.CallerOperatorNotificationAction, session.ModeEnforce)
+	before := session.GateCallsTotal(domain.ClassOperator, domain.CallerOperatorNotificationAction, session.ModeEnforce)
 
 	// "rework" is Review -> Ready under the same operator caller, through the exported entry point.
 	decider := services.NewBacklogDecider(services.BacklogDeciderDeps{Status: services.NewItemStatusReader(storage), Transitions: svc})
 	res, err := decider.Decide(t.Context(), services.BacklogDecision{ItemID: item.ID, Choice: services.ChoiceRework})
 	require.NoError(t, err)
 	assert.Equal(t, sessionv1.ActionOutcome_ACTION_OUTCOME_INVALID, res.Outcome, "the operator gate denies the click")
-	assert.Equal(t, before+1, session.GateCallsTotal(session.ClassOperator, session.CallerOperatorNotificationAction, session.ModeEnforce))
+	assert.Equal(t, before+1, session.GateCallsTotal(domain.ClassOperator, domain.CallerOperatorNotificationAction, session.ModeEnforce))
 }

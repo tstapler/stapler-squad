@@ -25,6 +25,7 @@ go_library(
         "review_state.go",
         "session_type.go",
         "status.go",
+        "transition_callers.go",
         "wake_trigger.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/domain",

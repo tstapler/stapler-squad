@@ -135,9 +135,9 @@ func OpenReplayCopy(path string, liveDirs []string) (*ent.Client, func(), error)
 
 // ReplayDecision is one registered caller's enforced answer on one edge.
 type ReplayDecision struct {
-	Caller    TransitionCaller
-	Class     CallerClass
-	Edge      SystemEdge
+	Caller    domain.TransitionCaller
+	Class     domain.CallerClass
+	Edge      domain.SystemEdge
 	Live      string // "allowed" or "denied:<reason>"
 	Synthetic string // answer with a human_approval gate on the edge; "-" when not applicable
 }
@@ -159,14 +159,14 @@ func (r *ReplayReport) Failed() bool { return len(r.Failures) > 0 }
 
 type replayEnforceAll struct{}
 
-func (replayEnforceAll) Mode() EngineMode               { return ModeEnforce }
-func (replayEnforceAll) ModeFor(CallerClass) EngineMode { return ModeEnforce }
+func (replayEnforceAll) Mode() EngineMode                      { return ModeEnforce }
+func (replayEnforceAll) ModeFor(domain.CallerClass) EngineMode { return ModeEnforce }
 
 // replayGateOverlay adds one unsatisfied human_approval gate to the from->to
 // transition on every read; nothing is written.
 type replayGateOverlay struct {
 	StageConfigRepository
-	edge SystemEdge
+	edge domain.SystemEdge
 }
 
 func (o replayGateOverlay) ListEnabledTransitions(ctx context.Context) ([]*ent.StageTransition, error) {
@@ -204,16 +204,16 @@ func newReplaySelector(repo StageConfigRepository) (*SwitchableWorkflowEngine, e
 
 // replayEdges expands a caller's declared edges: the archive wildcard becomes
 // one edge per built-in stage.
-func replayEdges(spec TransitionCallerSpec) []SystemEdge {
-	var out []SystemEdge
+func replayEdges(spec domain.TransitionCallerSpec) []domain.SystemEdge {
+	var out []domain.SystemEdge
 	for _, e := range spec.Edges {
-		if e.From != AnyStatus {
+		if e.From != domain.AnyStatus {
 			out = append(out, e)
 			continue
 		}
 		for _, from := range BuiltInStageOrder {
 			if from != e.To {
-				out = append(out, SystemEdge{From: from, To: e.To})
+				out = append(out, domain.SystemEdge{From: from, To: e.To})
 			}
 		}
 	}
@@ -222,9 +222,9 @@ func replayEdges(spec TransitionCallerSpec) []SystemEdge {
 
 // replayAnswer is the enforced decision for caller on edge, Default guards off
 // (the recorded reasons are the graph and Configured gates).
-func replayAnswer(sel *SwitchableWorkflowEngine, spec TransitionCallerSpec, edge SystemEdge) string {
+func replayAnswer(sel *SwitchableWorkflowEngine, spec domain.TransitionCallerSpec, edge domain.SystemEdge) string {
 	item := &backlogdto.BacklogItemData{ID: "replay-item", Status: string(edge.From)}
-	v := decideTransition(sel.ForClass(spec.Class, GuardsNone), item, TransitionRequest{Caller: spec.Name, To: edge.To})
+	v := decideTransition(sel.ForClass(spec.Class, domain.GuardsNone), item, TransitionRequest{Caller: spec.Name, To: edge.To})
 	if v.Err == nil {
 		return "allowed"
 	}
@@ -238,9 +238,9 @@ const replayDeniedPrefix = "denied:"
 type replayRun struct {
 	repo           StageConfigRepository
 	live           *SwitchableWorkflowEngine
-	systemRequired map[SystemEdge]bool
-	synthetic      map[SystemEdge]*SwitchableWorkflowEngine
-	stored         map[SystemEdge]bool
+	systemRequired map[domain.SystemEdge]bool
+	synthetic      map[domain.SystemEdge]*SwitchableWorkflowEngine
+	stored         map[domain.SystemEdge]bool
 	report         *ReplayReport
 }
 
@@ -249,21 +249,21 @@ type replayRun struct {
 // gate can attach to it, so configuration cannot change its answer.
 const replayNoStoredTransition = "n/a:no_stored_transition"
 
-func replayStoredEdges(ctx context.Context, repo StageConfigRepository) (map[SystemEdge]bool, error) {
+func replayStoredEdges(ctx context.Context, repo StageConfigRepository) (map[domain.SystemEdge]bool, error) {
 	transitions, err := repo.ListEnabledTransitions(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[SystemEdge]bool, len(transitions))
+	out := make(map[domain.SystemEdge]bool, len(transitions))
 	for _, t := range transitions {
 		if t.Edges.FromStage != nil && t.Edges.ToStage != nil {
-			out[SystemEdge{From: BacklogStatus(t.Edges.FromStage.Slug), To: BacklogStatus(t.Edges.ToStage.Slug)}] = true
+			out[domain.SystemEdge{From: BacklogStatus(t.Edges.FromStage.Slug), To: BacklogStatus(t.Edges.ToStage.Slug)}] = true
 		}
 	}
 	return out, nil
 }
 
-func (r *replayRun) syntheticFor(edge SystemEdge) (*SwitchableWorkflowEngine, error) {
+func (r *replayRun) syntheticFor(edge domain.SystemEdge) (*SwitchableWorkflowEngine, error) {
 	if sel, ok := r.synthetic[edge]; ok {
 		return sel, nil
 	}
@@ -275,7 +275,7 @@ func (r *replayRun) syntheticFor(edge SystemEdge) (*SwitchableWorkflowEngine, er
 	return sel, nil
 }
 
-func (r *replayRun) decide(spec TransitionCallerSpec, edge SystemEdge) (ReplayDecision, error) {
+func (r *replayRun) decide(spec domain.TransitionCallerSpec, edge domain.SystemEdge) (ReplayDecision, error) {
 	d := ReplayDecision{Caller: spec.Name, Class: spec.Class, Edge: edge, Live: replayAnswer(r.live, spec, edge), Synthetic: "-"}
 	if !r.systemRequired[edge] {
 		return d, nil
@@ -297,7 +297,7 @@ func (r *replayRun) decide(spec TransitionCallerSpec, edge SystemEdge) (ReplayDe
 // with no gate involved; operator callers choose their edge, so a denial there
 // is the configuration working.
 func (d ReplayDecision) failure() (string, bool) {
-	if d.Class == ClassOperator || (d.Live != replayDeniedPrefix+DeniedConfigGraph && d.Live != replayDeniedPrefix+DeniedTargetStageRemoved) {
+	if d.Class == domain.ClassOperator || (d.Live != replayDeniedPrefix+DeniedConfigGraph && d.Live != replayDeniedPrefix+DeniedTargetStageRemoved) {
 		return "", false
 	}
 	return fmt.Sprintf("%s (%s) %s->%s is %s by the stored configuration with no gate involved", d.Caller, d.Class, d.Edge.From, d.Edge.To, d.Live), true
@@ -325,13 +325,13 @@ func BuildWorkflowEngineReplay(ctx context.Context, client *ent.Client, newRepo 
 		return nil, fmt.Errorf("list stored transitions: %w", err)
 	}
 	run := &replayRun{
-		repo: repo, live: live, stored: stored, systemRequired: map[SystemEdge]bool{},
-		synthetic: map[SystemEdge]*SwitchableWorkflowEngine{}, report: &ReplayReport{Config: diff.Label},
+		repo: repo, live: live, stored: stored, systemRequired: map[domain.SystemEdge]bool{},
+		synthetic: map[domain.SystemEdge]*SwitchableWorkflowEngine{}, report: &ReplayReport{Config: diff.Label},
 	}
 	for _, e := range SystemRequiredEdges() {
 		run.systemRequired[e] = true
 	}
-	for _, spec := range TransitionCallers() {
+	for _, spec := range domain.TransitionCallers() {
 		for _, edge := range replayEdges(spec) {
 			d, err := run.decide(spec, edge)
 			if err != nil {

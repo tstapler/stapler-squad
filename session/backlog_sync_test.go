@@ -1500,7 +1500,7 @@ func TestTransitionBackward_GateOutcomes(t *testing.T) {
 	require.Equal(t, backwardSyncOutcome{skipped: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
 	require.Equal(t, string(BacklogStatusIdea), h.status(t, item.ID))
 	require.Len(t, h.rep.snapshot(), 1)
-	require.Equal(t, CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
+	require.Equal(t, domain.CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
 
 	sessDisableGates(t, h)
 	require.Equal(t, backwardSyncOutcome{updated: 1}, sl.transitionBackward(ctx, item.ID, BacklogStatusIdea, BacklogStatusArchived))
@@ -1541,5 +1541,5 @@ func TestSyncOne_BackwardSync_SelectorEngineDenialReachesGateAndReports(t *testi
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
 	require.Equal(t, string(BacklogStatusIdea), h.status(t, created.ID))
 	require.Len(t, h.rep.snapshot(), 1, "the gate, not the pre-check, must deny and report")
-	require.Equal(t, CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
+	require.Equal(t, domain.CallerSyncLoopBackward, h.rep.snapshot()[0].caller)
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/interceptors"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type probeStubHandler struct {
@@ -449,38 +450,38 @@ func TestModeFor_ComposesFourFlagsPerClass_AndDefaultsToShadow(t *testing.T) {
 
 	cases := []struct {
 		name  string
-		class session.CallerClass
+		class domain.CallerClass
 		cfg   *config.Config
 		want  session.EngineMode
 	}{
-		{"operator, empty config", session.ClassOperator, set(nil), session.ModeShadow},
-		{"operator, nil config", session.ClassOperator, nil, session.ModeShadow},
-		{"operator, shadow off", session.ClassOperator, set(map[string]bool{shadow: false}), session.ModeOff},
-		{"operator, enforce wins over shadow on", session.ClassOperator, set(map[string]bool{shadow: true, enforce: true}), session.ModeEnforce},
-		{"operator, enforce wins over shadow off", session.ClassOperator, set(map[string]bool{shadow: false, enforce: true}), session.ModeEnforce},
-		{"operator, shadow on enforce off", session.ClassOperator, set(map[string]bool{shadow: true, enforce: false}), session.ModeShadow},
-		{"agent, empty config", session.ClassAgent, set(nil), session.ModeShadow},
-		{"agent, nil config", session.ClassAgent, nil, session.ModeShadow},
-		{"agent, shadow off", session.ClassAgent, set(map[string]bool{shadow: false}), session.ModeOff},
-		{"agent, enforce wins over shadow on", session.ClassAgent, set(map[string]bool{shadow: true, enforceAgent: true}), session.ModeEnforce},
-		{"agent, enforce wins over shadow off", session.ClassAgent, set(map[string]bool{shadow: false, enforceAgent: true}), session.ModeEnforce},
-		{"agent, shadow on enforce off", session.ClassAgent, set(map[string]bool{shadow: true, enforceAgent: false}), session.ModeShadow},
+		{"operator, empty config", domain.ClassOperator, set(nil), session.ModeShadow},
+		{"operator, nil config", domain.ClassOperator, nil, session.ModeShadow},
+		{"operator, shadow off", domain.ClassOperator, set(map[string]bool{shadow: false}), session.ModeOff},
+		{"operator, enforce wins over shadow on", domain.ClassOperator, set(map[string]bool{shadow: true, enforce: true}), session.ModeEnforce},
+		{"operator, enforce wins over shadow off", domain.ClassOperator, set(map[string]bool{shadow: false, enforce: true}), session.ModeEnforce},
+		{"operator, shadow on enforce off", domain.ClassOperator, set(map[string]bool{shadow: true, enforce: false}), session.ModeShadow},
+		{"agent, empty config", domain.ClassAgent, set(nil), session.ModeShadow},
+		{"agent, nil config", domain.ClassAgent, nil, session.ModeShadow},
+		{"agent, shadow off", domain.ClassAgent, set(map[string]bool{shadow: false}), session.ModeOff},
+		{"agent, enforce wins over shadow on", domain.ClassAgent, set(map[string]bool{shadow: true, enforceAgent: true}), session.ModeEnforce},
+		{"agent, enforce wins over shadow off", domain.ClassAgent, set(map[string]bool{shadow: false, enforceAgent: true}), session.ModeEnforce},
+		{"agent, shadow on enforce off", domain.ClassAgent, set(map[string]bool{shadow: true, enforceAgent: false}), session.ModeShadow},
 		// The operator flag must not leak into the agent class, nor the agent flag into the operator.
-		{"agent, operator enforce on", session.ClassAgent, set(map[string]bool{enforce: true}), session.ModeShadow},
-		{"operator, agent enforce on", session.ClassOperator, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
-		{"system, empty config", session.ClassSystem, set(nil), session.ModeShadow},
-		{"system, nil config", session.ClassSystem, nil, session.ModeShadow},
-		{"system, shadow off", session.ClassSystem, set(map[string]bool{shadow: false}), session.ModeOff},
-		{"system, enforce wins over shadow on", session.ClassSystem, set(map[string]bool{shadow: true, enforceSystem: true}), session.ModeEnforce},
-		{"system, enforce wins over shadow off", session.ClassSystem, set(map[string]bool{shadow: false, enforceSystem: true}), session.ModeEnforce},
-		{"system, shadow on enforce off", session.ClassSystem, set(map[string]bool{shadow: true, enforceSystem: false}), session.ModeShadow},
+		{"agent, operator enforce on", domain.ClassAgent, set(map[string]bool{enforce: true}), session.ModeShadow},
+		{"operator, agent enforce on", domain.ClassOperator, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
+		{"system, empty config", domain.ClassSystem, set(nil), session.ModeShadow},
+		{"system, nil config", domain.ClassSystem, nil, session.ModeShadow},
+		{"system, shadow off", domain.ClassSystem, set(map[string]bool{shadow: false}), session.ModeOff},
+		{"system, enforce wins over shadow on", domain.ClassSystem, set(map[string]bool{shadow: true, enforceSystem: true}), session.ModeEnforce},
+		{"system, enforce wins over shadow off", domain.ClassSystem, set(map[string]bool{shadow: false, enforceSystem: true}), session.ModeEnforce},
+		{"system, shadow on enforce off", domain.ClassSystem, set(map[string]bool{shadow: true, enforceSystem: false}), session.ModeShadow},
 		// No class's flag leaks into another.
-		{"system, agent enforce on", session.ClassSystem, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
-		{"system, operator enforce on", session.ClassSystem, set(map[string]bool{enforce: true}), session.ModeShadow},
-		{"agent, system enforce on", session.ClassAgent, set(map[string]bool{enforceSystem: true}), session.ModeShadow},
-		{"operator, system enforce on", session.ClassOperator, set(map[string]bool{enforceSystem: true}), session.ModeShadow},
+		{"system, agent enforce on", domain.ClassSystem, set(map[string]bool{enforceAgent: true}), session.ModeShadow},
+		{"system, operator enforce on", domain.ClassSystem, set(map[string]bool{enforce: true}), session.ModeShadow},
+		{"agent, system enforce on", domain.ClassAgent, set(map[string]bool{enforceSystem: true}), session.ModeShadow},
+		{"operator, system enforce on", domain.ClassOperator, set(map[string]bool{enforceSystem: true}), session.ModeShadow},
 		// A class with no registered enforce flag resolves from the shadow flag alone.
-		{"unknown class, system enforce on", session.CallerClass("bogus"), set(map[string]bool{enforceSystem: true}), session.ModeShadow},
+		{"unknown class, system enforce on", domain.CallerClass("bogus"), set(map[string]bool{enforceSystem: true}), session.ModeShadow},
 	}
 	for _, tc := range cases {
 		require.Equal(t, tc.want, session.ModeForClassFlags(tc.class, tc.cfg), tc.name)
@@ -501,7 +502,7 @@ func TestModeFor_OperatorRowMatchesProductionReader_ForEveryFlagCombination(t *t
 				flags[enforce] = *e
 			}
 			cfg := &config.Config{FeatureFlags: flags}
-			require.Equalf(t, WorkflowEngineModeFromConfig(cfg), session.ModeForClassFlags(session.ClassOperator, cfg), "flags=%v", flags)
+			require.Equalf(t, WorkflowEngineModeFromConfig(cfg), session.ModeForClassFlags(domain.ClassOperator, cfg), "flags=%v", flags)
 		}
 	}
 }
@@ -510,12 +511,12 @@ func ptrBool(b bool) *bool { return &b }
 
 func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault(t *testing.T) {
 	t.Parallel()
-	name, def, ok := session.ClassEnforceFlag(session.ClassOperator)
+	name, def, ok := session.ClassEnforceFlag(domain.ClassOperator)
 	require.True(t, ok)
 	require.Equal(t, config.WorkflowEngineEnforceFeatureFlag, name, "operator is bound to the existing enforce flag")
 	require.Equal(t, FeatureFlagDefault(name), def, "table default equals the registry default")
 
-	for _, class := range []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem} {
+	for _, class := range []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem} {
 		name, _, ok := session.ClassEnforceFlag(class)
 		if !ok {
 			continue // not registered yet: Task 1.5.8g (system)
@@ -526,12 +527,12 @@ func TestClassEnforceFlagTable_EveryRowIsARegisteredFlagWithTheRegisteredDefault
 		}
 		require.Truef(t, registered, "class %s row names %q, which must be in knownFeatureFlags", class, name)
 	}
-	agentName, agentDef, ok := session.ClassEnforceFlag(session.ClassAgent)
+	agentName, agentDef, ok := session.ClassEnforceFlag(domain.ClassAgent)
 	require.True(t, ok, "the agent flag is registered in Task 1.5.3c")
 	require.Equal(t, config.WorkflowEngineEnforceAgentFeatureFlag, agentName)
 	require.Equal(t, FeatureFlagDefault(agentName), agentDef, "table default equals the registry default")
 	require.False(t, agentDef, "the agent flag ships off")
-	systemName, systemDef, ok := session.ClassEnforceFlag(session.ClassSystem)
+	systemName, systemDef, ok := session.ClassEnforceFlag(domain.ClassSystem)
 	require.True(t, ok, "the system flag is registered in Task 1.5.8g")
 	require.Equal(t, config.WorkflowEngineEnforceSystemFeatureFlag, systemName)
 	require.Equal(t, FeatureFlagDefault(systemName), systemDef, "table default equals the registry default")
@@ -543,31 +544,31 @@ func TestFlagClassModeSource_IsLivePerClass_AndOperatorIsMode(t *testing.T) {
 	clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
 	src := session.NewFlagClassModeSource(config.LoadConfig, workflowEngineModeTTL, clock)
 	svc := NewFeatureFlagService()
-	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassOperator))
-	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassAgent))
-	require.Equal(t, session.ModeOff, src.ModeFor(session.CallerClass("bogus")))
+	require.Equal(t, session.ModeShadow, src.ModeFor(domain.ClassOperator))
+	require.Equal(t, session.ModeShadow, src.ModeFor(domain.ClassAgent))
+	require.Equal(t, session.ModeOff, src.ModeFor(domain.CallerClass("bogus")))
 
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
-	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassOperator), "cached inside the TTL")
+	require.Equal(t, session.ModeShadow, src.ModeFor(domain.ClassOperator), "cached inside the TTL")
 	clock.Advance(workflowEngineModeTTL + time.Millisecond)
-	require.Equal(t, session.ModeEnforce, src.ModeFor(session.ClassOperator))
+	require.Equal(t, session.ModeEnforce, src.ModeFor(domain.ClassOperator))
 	require.Equal(t, session.ModeEnforce, src.Mode(), "Mode() is the operator class")
-	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassAgent), "the operator flag does not enforce another class")
-	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassSystem))
+	require.Equal(t, session.ModeShadow, src.ModeFor(domain.ClassAgent), "the operator flag does not enforce another class")
+	require.Equal(t, session.ModeShadow, src.ModeFor(domain.ClassSystem))
 
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceAgentFeatureFlag, true))
 	clock.Advance(workflowEngineModeTTL + time.Millisecond)
-	require.Equal(t, session.ModeEnforce, src.ModeFor(session.ClassAgent))
-	require.Equal(t, session.ModeShadow, src.ModeFor(session.ClassSystem), "the agent flag does not enforce the system class")
+	require.Equal(t, session.ModeEnforce, src.ModeFor(domain.ClassAgent))
+	require.Equal(t, session.ModeShadow, src.ModeFor(domain.ClassSystem), "the agent flag does not enforce the system class")
 
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceSystemFeatureFlag, true))
 	clock.Advance(workflowEngineModeTTL + time.Millisecond)
-	require.Equal(t, session.ModeEnforce, src.ModeFor(session.ClassSystem))
+	require.Equal(t, session.ModeEnforce, src.ModeFor(domain.ClassSystem))
 }
 
 func TestConfigSurfaceProof_WorkflowEngineEnforceSystem_ChangesSystemTransitionAnswer(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	spec, ok := session.LookupTransitionCaller(session.CallerAutonomousComplete) // system, unchecked today
+	spec, ok := domain.LookupTransitionCaller(domain.CallerAutonomousComplete) // system, unchecked today
 	require.True(t, ok)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		clock := &modeTestClock{now: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
@@ -584,7 +585,7 @@ func TestConfigSurfaceProof_WorkflowEngineEnforceSystem_ChangesSystemTransitionA
 
 func TestConfigSurfaceProof_WorkflowEngineEnforceAgent_ChangesAgentTransitionAnswer(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	spec, ok := session.LookupTransitionCaller(session.CallerMCPResumeWork) // agent, unchecked today
+	spec, ok := domain.LookupTransitionCaller(domain.CallerMCPResumeWork) // agent, unchecked today
 	require.True(t, ok)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		clock := &modeTestClock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
@@ -605,8 +606,8 @@ func TestSelectorModeFor_UsesTheClassAwareSource(t *testing.T) {
 	require.NoError(t, flagUpdate(svc, config.WorkflowEngineEnforceFeatureFlag, true))
 	sel := session.NewSwitchableWorkflowEngine(session.NewDefaultWorkflowEngine(), nil,
 		session.NewFlagClassModeSource(config.LoadConfig, workflowEngineModeTTL, clock))
-	require.Equal(t, session.ModeEnforce, sel.ModeFor(session.ClassOperator))
-	require.Equal(t, session.ModeShadow, sel.ModeFor(session.ClassAgent))
+	require.Equal(t, session.ModeEnforce, sel.ModeFor(domain.ClassOperator))
+	require.Equal(t, session.ModeShadow, sel.ModeFor(domain.ClassAgent))
 }
 
 func TestFilesFlags_ShouldDefaultOffAndOnAndBeLiveSettable_When_UpdateFeatureFlag(t *testing.T) {

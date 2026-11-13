@@ -69,18 +69,18 @@ type EnforceAnswer struct {
 // A forwarding caller (the generic MCP delegate) is governed by the Configured
 // graph alone: it gets no SystemRequiredEdges() union.
 type callPolicy struct {
-	Class      CallerClass
-	Guards     GuardPolicy
+	Class      domain.CallerClass
+	Guards     domain.GuardPolicy
 	Forwarding bool
 }
 
-var operatorPolicy = callPolicy{Class: ClassOperator, Guards: GuardsBuiltIn}
+var operatorPolicy = callPolicy{Class: domain.ClassOperator, Guards: domain.GuardsBuiltIn}
 
-func (p callPolicy) runsDefaultGuards() bool { return p.Guards != GuardsNone }
+func (p callPolicy) runsDefaultGuards() bool { return p.Guards != domain.GuardsNone }
 
 // defaultGuardInput is the input the Default TransitionGuard sees.
 func (p callPolicy) defaultGuardInput(item BacklogItemTransitionInput) BacklogItemTransitionInput {
-	if p.Class == ClassSystem {
+	if p.Class == domain.ClassSystem {
 		item.OverrideReason = ""
 	}
 	return item
@@ -88,14 +88,14 @@ func (p callPolicy) defaultGuardInput(item BacklogItemTransitionInput) BacklogIt
 
 // bypassesOperatorGates reports whether item's override frees Configured gates.
 func (p callPolicy) bypassesOperatorGates(item BacklogItemTransitionInput) bool {
-	return p.Class == ClassOperator && item.OverrideReason != ""
+	return p.Class == domain.ClassOperator && item.OverrideReason != ""
 }
 
 // bypassesGraph reports whether an override frees the graph check: operator
 // class only, non-empty reason, and only toward a known stage so an override
 // cannot write a status that exists nowhere.
 func (a EnforceAnswer) bypassesGraph(pol callPolicy, overrideReason string, to BacklogStatus) bool {
-	return pol.Class == ClassOperator && overrideReason != "" && a.knownStage(to)
+	return pol.Class == domain.ClassOperator && overrideReason != "" && a.knownStage(to)
 }
 
 func (a EnforceAnswer) knownStage(s BacklogStatus) bool {

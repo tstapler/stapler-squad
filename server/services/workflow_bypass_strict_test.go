@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --- rule (a): legacy writer names ---------------------------------------------
@@ -225,7 +226,7 @@ func clsRequestViolations(lits []clsRequestLiteral, consts map[string]string, dy
 		case l.caller == "":
 			problems = append(problems, fmt.Sprintf("%s builds a TransitionRequest with no Caller: name a registered caller (session/transition_callers.go)", l.key))
 		case isConst:
-			if _, ok := session.LookupTransitionCaller(session.TransitionCaller(value)); !ok {
+			if _, ok := domain.LookupTransitionCaller(domain.TransitionCaller(value)); !ok {
 				problems = append(problems, fmt.Sprintf("%s uses %s (%q), which is not in the caller registry", l.key, l.constRef, value))
 			}
 		case dynamic[l.key] != "":
@@ -275,10 +276,10 @@ func Dynamic(c string)  { _ = TransitionRequest{Caller: pick(c)} }
 func TestWorkflowBypassStrict_ResolveTransitionCallerReturnsRegisteredCallers(t *testing.T) {
 	for _, actor := range []string{session.TriggeredByUser, session.TriggeredByAgent, session.TriggeredBySystem, "robot", ""} {
 		ctx := WithTransitionActor(t.Context(), actor)
-		_, ok := session.LookupTransitionCaller(ResolveTransitionCaller(ctx))
+		_, ok := domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q", actor)
-		ctx = WithTransitionCaller(ctx, session.CallerOperatorNotificationAction)
-		_, ok = session.LookupTransitionCaller(ResolveTransitionCaller(ctx))
+		ctx = WithTransitionCaller(ctx, domain.CallerOperatorNotificationAction)
+		_, ok = domain.LookupTransitionCaller(ResolveTransitionCaller(ctx))
 		assert.True(t, ok, "actor %q with the notification caller", actor)
 	}
 }
@@ -323,7 +324,7 @@ var clsDynamicProducerKeys = []string{
 
 // clsUnusedCallers returns the non-forwarding registry entries with no call path:
 // no owned site or origin, or a constant mentioned nowhere a write can start.
-func clsUnusedCallers(specs []session.TransitionCallerSpec, consts map[string]string, lits []clsRequestLiteral, refs map[string]map[string]bool) []string {
+func clsUnusedCallers(specs []domain.TransitionCallerSpec, consts map[string]string, lits []clsRequestLiteral, refs map[string]map[string]bool) []string {
 	constFor := map[string]string{}
 	for name, value := range consts {
 		constFor[value] = name
@@ -343,7 +344,7 @@ func clsUnusedCallers(specs []session.TransitionCallerSpec, consts map[string]st
 			continue
 		}
 		reached := literal[name]
-		for _, cs := range append(append([]session.CallSite{}, spec.Sites...), spec.Origins...) {
+		for _, cs := range append(append([]domain.CallSite{}, spec.Sites...), spec.Origins...) {
 			reached = reached || refs[name][cs.File+" "+cs.Func]
 		}
 		for _, key := range clsDynamicProducerKeys {
@@ -363,14 +364,14 @@ func clsUnusedCallers(specs []session.TransitionCallerSpec, consts map[string]st
 func TestWorkflowBypassStrict_EveryNonForwardingRegisteredCallerHasACallSite(t *testing.T) {
 	root := moduleRoot(t)
 	consts := clsRegistryConstants(t, root)
-	problems := clsUnusedCallers(session.TransitionCallers(), consts, clsScanRequestLiterals(t, root), clsCallerRefs(t, root, consts))
+	problems := clsUnusedCallers(domain.TransitionCallers(), consts, clsScanRequestLiterals(t, root), clsCallerRefs(t, root, consts))
 	assert.Empty(t, problems, strings.Join(problems, "\n"))
 
 	forwarding := 0
-	for _, c := range session.TransitionCallers() {
+	for _, c := range domain.TransitionCallers() {
 		if c.Forwarding {
 			forwarding++
-			assert.Equal(t, session.CallerMCPTransitionDelegate, c.Name, "only the MCP delegate is exempt; its coverage is the handler caller-resolution test")
+			assert.Equal(t, domain.CallerMCPTransitionDelegate, c.Name, "only the MCP delegate is exempt; its coverage is the handler caller-resolution test")
 		}
 	}
 	assert.Equal(t, 1, forwarding)
@@ -378,12 +379,12 @@ func TestWorkflowBypassStrict_EveryNonForwardingRegisteredCallerHasACallSite(t *
 
 func TestWorkflowBypassStrict_UnusedCallerRuleFlagsAnEntryWithNoPath(t *testing.T) {
 	consts := map[string]string{"CallerGhost": "ghost", "CallerLive": "live", "CallerFwd": "fwd"}
-	specs := []session.TransitionCallerSpec{
-		{Name: "ghost", Sites: []session.CallSite{{File: "a.go", Func: "F", Calls: 1}}},
-		{Name: "live", Sites: []session.CallSite{{File: "a.go", Func: "G", Calls: 1}}},
+	specs := []domain.TransitionCallerSpec{
+		{Name: "ghost", Sites: []domain.CallSite{{File: "a.go", Func: "F", Calls: 1}}},
+		{Name: "live", Sites: []domain.CallSite{{File: "a.go", Func: "G", Calls: 1}}},
 		{Name: "fwd", Forwarding: true},
 		{Name: "nosite"},
-		{Name: "noconst", Sites: []session.CallSite{{File: "a.go", Func: "H", Calls: 1}}},
+		{Name: "noconst", Sites: []domain.CallSite{{File: "a.go", Func: "H", Calls: 1}}},
 	}
 	lits := []clsRequestLiteral{{key: "a.go G", caller: "CallerLive", constRef: "CallerLive"}, {key: "a.go H", caller: "pick(...)"}}
 	problems := clsUnusedCallers(specs, consts, lits, map[string]map[string]bool{})

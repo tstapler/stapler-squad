@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/shadowledger"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -109,7 +110,7 @@ func transitionGateStartupLine(storage *session.Storage, reporterWired bool, mod
 		return "unwired"
 	}
 	classModes := make([]string, 0, 3)
-	for _, c := range []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem} {
+	for _, c := range []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem} {
 		classModes = append(classModes, fmt.Sprintf("%s:%s", c, engineModeName(modes.ModeFor(c))))
 	}
 	return fmt.Sprintf("workflow engine gate: transition_gate=%s reporter=%s class_modes=%s",

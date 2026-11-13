@@ -1,17 +1,13 @@
 package session
 
-import "sort"
-
-// SystemEdge is a (from,to) transition that automation or storage-direct
-// writers depend on, so no operator edit may remove it.
-type SystemEdge struct {
-	From BacklogStatus
-	To   BacklogStatus
-}
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"sort"
+)
 
 // systemRequiredCore lists the non-archive edges (ADR-002 §3): engine-checked
 // automation callers first, then storage-direct writers kept for UI honesty.
-var systemRequiredCore = []SystemEdge{
+var systemRequiredCore = []domain.SystemEdge{
 	// Group 1: engine-checked automation.
 	{BacklogStatusReady, BacklogStatusQueued},
 	{BacklogStatusQueued, BacklogStatusInProgress},
@@ -39,7 +35,7 @@ var systemRequiredCore = []SystemEdge{
 // but real callers write (Task 1.5.1b audit, ADR-007 D7): SkipReviewGate
 // completion, the pushAndCreatePR fallback, and drift recovery to pr_pending.
 // Like the archive group they never reach the UI-facing allowed list.
-var systemRequiredOffGraph = []SystemEdge{
+var systemRequiredOffGraph = []domain.SystemEdge{
 	{BacklogStatusInProgress, BacklogStatusDone},
 	{BacklogStatusReady, BacklogStatusDone},
 	{BacklogStatusIdea, BacklogStatusPRPending},
@@ -54,12 +50,12 @@ var systemRequiredOffGraph = []SystemEdge{
 // archived->archived) and the off-graph recovery edges. It does not list
 // custom-stage archive edges; use IsSystemRequired for those. validTransitions
 // is deliberately unchanged, so Off and Shadow keep answering exactly as before.
-func SystemRequiredEdges() []SystemEdge {
-	edges := make([]SystemEdge, 0, len(systemRequiredCore)+len(systemRequiredOffGraph)+len(BuiltInStageOrder))
+func SystemRequiredEdges() []domain.SystemEdge {
+	edges := make([]domain.SystemEdge, 0, len(systemRequiredCore)+len(systemRequiredOffGraph)+len(BuiltInStageOrder))
 	edges = append(edges, systemRequiredCore...)
 	edges = append(edges, systemRequiredOffGraph...)
 	for _, from := range BuiltInStageOrder {
-		edges = append(edges, SystemEdge{from, BacklogStatusArchived})
+		edges = append(edges, domain.SystemEdge{from, BacklogStatusArchived})
 	}
 	sort.Slice(edges, func(i, j int) bool {
 		if edges[i].From != edges[j].From {
@@ -77,7 +73,7 @@ func IsSystemRequired(from, to BacklogStatus) bool {
 	if to == BacklogStatusArchived {
 		return true
 	}
-	for _, group := range [][]SystemEdge{systemRequiredCore, systemRequiredOffGraph} {
+	for _, group := range [][]domain.SystemEdge{systemRequiredCore, systemRequiredOffGraph} {
 		for _, e := range group {
 			if e.From == from && e.To == to {
 				return true

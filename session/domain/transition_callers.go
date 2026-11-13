@@ -1,4 +1,4 @@
-package session
+package domain
 
 // transition_callers.go is the closed caller registry (ADR-007 D2): every code
 // path that writes a backlog item's status is one entry here, with its class,
@@ -9,8 +9,6 @@ package session
 
 import (
 	"sort"
-
-	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TransitionCaller is the registered name of a status-write caller; it is also
@@ -163,7 +161,7 @@ func site(file, fn string, calls int) []CallSite {
 // operator callers choose their edge at request time, so the graph governs them.
 func everyGraphEdge() []SystemEdge {
 	var out []SystemEdge
-	for from, tos := range domain.ValidTransitions() {
+	for from, tos := range ValidTransitions() {
 		for to := range tos {
 			out = append(out, edge(from, to))
 		}
@@ -334,4 +332,21 @@ func SharedGuardHelperSites() []CallSite { return append([]CallSite(nil), shared
 // KnownOffGraphCallerEdges returns the tolerated caller bugs.
 func KnownOffGraphCallerEdges() []KnownOffGraphEdge {
 	return append([]KnownOffGraphEdge(nil), knownOffGraphCallerEdges...)
+}
+
+// CallerClass is the caller class a ledger section is kept for; the recorder
+// keeps one section per class.
+type CallerClass string
+
+const (
+	ClassOperator CallerClass = "operator"
+	ClassAgent    CallerClass = "agent"
+	ClassSystem   CallerClass = "system"
+)
+
+// SystemEdge is a (from,to) transition that automation or storage-direct
+// writers depend on, so no operator edit may remove it.
+type SystemEdge struct {
+	From BacklogStatus
+	To   BacklogStatus
 }

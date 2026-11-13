@@ -504,7 +504,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		// merged one) with zero verification.
 		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
 		setErr := s.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
-			Caller:      session.CallerOperatorPRAssociation,
+			Caller:      domain.CallerOperatorPRAssociation,
 			Observed:    updated,
 			TriggeredBy: session.TriggeredByUser,
 		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: domain.AttachSourceManual})
@@ -568,7 +568,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 	// The gate decides first; work branches are then pushed before the write so
 	// changes are durable. A denied archive pushes nothing and cleans up nothing.
 	archived, err := s.storage.GatedArchive(ctx, session.TransitionRequest{
-		Caller:      session.CallerOperatorArchiveRPC,
+		Caller:      domain.CallerOperatorArchiveRPC,
 		ItemID:      req.Msg.ItemId,
 		TriggeredBy: session.TriggeredByUser,
 		BeforeCommit: func(ctx context.Context) error {
@@ -606,7 +606,7 @@ func (s *BacklogService) UnarchiveBacklogItem(
 	}
 
 	unarchived, err := s.storage.GatedUnarchive(ctx, session.TransitionRequest{
-		Caller:      session.CallerOperatorUnarchiveRPC,
+		Caller:      domain.CallerOperatorUnarchiveRPC,
 		ItemID:      req.Msg.ItemId,
 		TriggeredBy: session.TriggeredByUser,
 	})
@@ -1435,7 +1435,7 @@ func (s *BacklogService) OverrideVerdict(
 		// this write.
 		updatedAt := currentItem.UpdatedAt
 		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{ //nolint:silenttransition a denial is returned below; any other write failure is shown by the fallback reload, which returns the item's true post-transition state in the RPC response
-			Caller:   session.CallerOperatorOverrideVerdict,
+			Caller:   domain.CallerOperatorOverrideVerdict,
 			ItemID:   itemID,
 			Observed: currentItem,
 			To:       toStatus,
@@ -1573,7 +1573,7 @@ func (s *BacklogService) SubmitManualReview(
 				guard := session.NewBacklogItemTransitionInput(item, session.BacklogStatusReview)
 				guard.OverallOutcome = overall
 				if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-					Caller:       session.CallerOperatorManualReview,
+					Caller:       domain.CallerOperatorManualReview,
 					ItemID:       req.Msg.ItemId,
 					To:           session.BacklogStatusDone,
 					Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)},

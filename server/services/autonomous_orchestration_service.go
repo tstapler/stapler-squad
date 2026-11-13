@@ -922,7 +922,7 @@ func (a *AutonomousOrchestrationService) resolveAutonomousStuck(ctx context.Cont
 // failed" notification.
 func (a *AutonomousOrchestrationService) advanceItemOnDriverComplete(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, toStatus session.BacklogStatus, expectedStatus string, done bool) error {
 	_, err := storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller:       session.CallerAutonomousComplete,
+		Caller:       domain.CallerAutonomousComplete,
 		ItemID:       item.ID,
 		To:           toStatus,
 		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: expectedStatus},

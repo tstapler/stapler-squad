@@ -48,7 +48,7 @@ func mustEmptyConfigured(t *testing.T) *session.ConfiguredWorkflowEngine {
 }
 
 func (r *shadowRig) operator() *session.ClassLedger {
-	return r.rec.Snapshot().Classes[string(session.ClassOperator)]
+	return r.rec.Snapshot().Classes[string(domain.ClassOperator)]
 }
 
 func totalDivergenceCount(cl *session.ClassLedger) int64 {
@@ -117,7 +117,7 @@ func TestShadowRecorder_CountsGateMissing_WhenCompositionDefectInjected(t *testi
 
 	cl := rig.operator()
 	require.Equal(t, int64(1), cl.Divergence["ValidateGates|gate_missing|seeded|transition"])
-	v := session.EvaluateSoak(session.ClassOperator, rig.rec.Snapshot(), session.DefaultSoakParams(session.ClassOperator, rig.clock.Now()))
+	v := session.EvaluateSoak(domain.ClassOperator, rig.rec.Snapshot(), session.DefaultSoakParams(domain.ClassOperator, rig.clock.Now()))
 	require.Equal(t, 1, v.ExitCode)
 	require.Equal(t, int64(1), v.Alarms[string(session.ClassGateMissing)])
 }
@@ -169,8 +169,8 @@ func TestShadowRecorderLedger_ResumesCountersAndBinaryStartedAt_WhenRestarted(t 
 	second.RecordObservation(session.ShadowObservation{Method: session.MethodCanTransition, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusQueued, Config: session.ConfigSeeded})
 
 	snap := second.Snapshot()
-	require.Equal(t, int64(2), snap.Classes[string(session.ClassOperator)].Calls["CanTransition|transition"], "counters resume from the ledger")
-	require.Equal(t, int64(2), snap.Classes[string(session.ClassOperator)].Edges["ready->queued"].TransitionSamples)
+	require.Equal(t, int64(2), snap.Classes[string(domain.ClassOperator)].Calls["CanTransition|transition"], "counters resume from the ledger")
+	require.Equal(t, int64(2), snap.Classes[string(domain.ClassOperator)].Edges["ready->queued"].TransitionSamples)
 	require.Len(t, snap.BinaryStarts, 2)
 	require.Equal(t, firstStart, snap.BinaryStarts[0], "the earliest start is kept")
 	require.True(t, snap.BinaryStarts[1].After(firstStart))
@@ -204,7 +204,7 @@ func TestShadowRecorderLedger_KeepsRingOf200ReproRecords_UsesConfigDirAndStartsF
 	corruptDir := t.TempDir()
 	require.NoError(t, os.WriteFile(ShadowLedgerPath(corruptDir), []byte("{not json"), 0o600))
 	fresh := NewShadowLedgerRecorder(corruptDir, warn)
-	require.Empty(t, fresh.Snapshot().Classes[string(session.ClassOperator)].Calls)
+	require.Empty(t, fresh.Snapshot().Classes[string(domain.ClassOperator)].Calls)
 	require.Len(t, warns, 1)
 
 	oversizedDir := t.TempDir()
@@ -219,8 +219,8 @@ func TestShadowLedgerRecorder_BoundsDistinctEdges_WhenCustomStagesExplode(t *tes
 	for i := 0; i < maxLedgerEdges+50; i++ {
 		rec.RecordObservation(session.ShadowObservation{Path: session.PathTransition, From: session.BacklogStatus(string(rune('a'+i%26)) + strings.Repeat("x", i)), To: session.BacklogStatusDone})
 	}
-	require.LessOrEqual(t, len(rec.Snapshot().Classes[string(session.ClassOperator)].Edges), maxLedgerEdges+1)
-	require.Positive(t, rec.Snapshot().Classes[string(session.ClassOperator)].Edges[otherEdgeKey].TransitionSamples)
+	require.LessOrEqual(t, len(rec.Snapshot().Classes[string(domain.ClassOperator)].Edges), maxLedgerEdges+1)
+	require.Positive(t, rec.Snapshot().Classes[string(domain.ClassOperator)].Edges[otherEdgeKey].TransitionSamples)
 }
 
 func TestShadowLedgerRecorder_IsRaceFree_WhenRecordedAndSnapshottedConcurrently(t *testing.T) {
@@ -243,7 +243,7 @@ func TestShadowLedgerRecorder_IsRaceFree_WhenRecordedAndSnapshottedConcurrently(
 		}()
 	}
 	wg.Wait()
-	require.Equal(t, int64(1600), rec.Snapshot().Classes[string(session.ClassOperator)].Calls["CanTransition|transition"])
+	require.Equal(t, int64(1600), rec.Snapshot().Classes[string(domain.ClassOperator)].Calls["CanTransition|transition"])
 }
 
 func TestNewConfigLabeler_LabelsSeededEditedAndUnlabeled_AndCachesFingerprint(t *testing.T) {
@@ -270,8 +270,8 @@ func TestNewConfigLabeler_LabelsSeededEditedAndUnlabeled_AndCachesFingerprint(t 
 func TestShadowLedger_KeepsSeparateSectionPerClass_AndCountsDivergencePerCaller(t *testing.T) {
 	t.Parallel()
 	rig := newShadowRig(t, session.ConfigSeeded)
-	rig.sel.Modes = classModes{session.ClassOperator: session.ModeShadow, session.ClassAgent: session.ModeShadow, session.ClassSystem: session.ModeShadow}
-	spec, ok := session.LookupTransitionCaller(session.CallerMCPResumeWork) // agent, unchecked, built-in guards
+	rig.sel.Modes = classModes{domain.ClassOperator: session.ModeShadow, domain.ClassAgent: session.ModeShadow, domain.ClassSystem: session.ModeShadow}
+	spec, ok := domain.LookupTransitionCaller(domain.CallerMCPResumeWork) // agent, unchecked, built-in guards
 	require.True(t, ok)
 	agent := rig.sel.ForCaller(spec)
 
@@ -281,20 +281,20 @@ func TestShadowLedger_KeepsSeparateSectionPerClass_AndCountsDivergencePerCaller(
 	_ = rig.sel.CanTransition(session.BacklogStatusReady, session.BacklogStatusQueued, nil) // operator policy
 
 	snap := rig.rec.Snapshot()
-	ag, op := snap.Classes[string(session.ClassAgent)], snap.Classes[string(session.ClassOperator)]
+	ag, op := snap.Classes[string(domain.ClassAgent)], snap.Classes[string(domain.ClassOperator)]
 	require.NotNil(t, ag)
 	require.Equal(t, int64(3), ag.Calls["ValidateGates|transition"])
 	require.Equal(t, int64(3), ag.Divergence["ValidateGates|guard_new|seeded|transition"])
-	require.Equal(t, int64(3), ag.CallerDivergence[string(session.CallerMCPResumeWork)+"|guard_new"])
+	require.Equal(t, int64(3), ag.CallerDivergence[string(domain.CallerMCPResumeWork)+"|guard_new"])
 	require.Equal(t, int64(3), ag.Edges["ready->in_progress"].Divergences)
 	require.Equal(t, int64(1), op.Calls["CanTransition|transition"], "operator section holds only the operator call")
 	require.Zero(t, totalDivergenceCount(op))
-	require.Nil(t, snap.Classes[string(session.ClassSystem)], "an untouched class gets no section")
+	require.Nil(t, snap.Classes[string(domain.ClassSystem)], "an untouched class gets no section")
 
 	require.NotEmpty(t, snap.Repro)
 	last := snap.Repro[len(snap.Repro)-1]
-	require.Equal(t, string(session.ClassAgent), last.Class)
-	require.Equal(t, string(session.CallerMCPResumeWork), last.Caller)
+	require.Equal(t, string(domain.ClassAgent), last.Class)
+	require.Equal(t, string(domain.CallerMCPResumeWork), last.Caller)
 	require.Equal(t, string(session.ClassGuardNew), last.Divergence)
 }
 
@@ -303,27 +303,27 @@ func TestShadowLedger_PerClassSectionsSurviveFlushAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	clock := sessiontest.NewSelectorClock()
 	first := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
-	first.RecordShadowCallFor(session.ClassAgent, session.MethodValidateGates, session.PathTransition)
-	first.RecordDivergenceFor(session.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
+	first.RecordShadowCallFor(domain.ClassAgent, session.MethodValidateGates, session.PathTransition)
+	first.RecordDivergenceFor(domain.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
 	first.RecordObservation(session.ShadowObservation{
 		Method: session.MethodValidateGates, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusInProgress,
-		Class: session.ClassGuardNew, Config: session.ConfigSeeded, CallerClass: session.ClassAgent, Caller: session.CallerMCPResumeWork,
+		Class: session.ClassGuardNew, Config: session.ConfigSeeded, CallerClass: domain.ClassAgent, Caller: domain.CallerMCPResumeWork,
 	})
-	first.RecordShadowCallFor(session.ClassSystem, session.MethodCanTransition, session.PathTransition)
+	first.RecordShadowCallFor(domain.ClassSystem, session.MethodCanTransition, session.PathTransition)
 	require.NoError(t, first.Flush())
 
 	second := NewShadowLedgerRecorder(dir, WithShadowClock(clock))
-	second.RecordShadowCallFor(session.ClassAgent, session.MethodValidateGates, session.PathTransition)
+	second.RecordShadowCallFor(domain.ClassAgent, session.MethodValidateGates, session.PathTransition)
 	snap := second.Snapshot()
-	require.Equal(t, int64(2), snap.Classes[string(session.ClassAgent)].Calls["ValidateGates|transition"])
-	require.Equal(t, int64(1), snap.Classes[string(session.ClassAgent)].CallerDivergence[string(session.CallerMCPResumeWork)+"|guard_new"])
-	require.Equal(t, int64(1), snap.Classes[string(session.ClassSystem)].Calls["CanTransition|transition"])
+	require.Equal(t, int64(2), snap.Classes[string(domain.ClassAgent)].Calls["ValidateGates|transition"])
+	require.Equal(t, int64(1), snap.Classes[string(domain.ClassAgent)].CallerDivergence[string(domain.CallerMCPResumeWork)+"|guard_new"])
+	require.Equal(t, int64(1), snap.Classes[string(domain.ClassSystem)].Calls["CanTransition|transition"])
 }
 
 func TestShadowLedgerRecorder_UnclassedMethodsRecordIntoTheRecordersOwnClass(t *testing.T) {
 	t.Parallel()
-	rec := NewShadowLedgerRecorder("", WithShadowClass(session.ClassAgent))
+	rec := NewShadowLedgerRecorder("", WithShadowClass(domain.ClassAgent))
 	rec.RecordShadowCall(session.MethodCanTransition, session.PathTransition)
-	rec.RecordShadowCallFor(session.CallerClass("bogus"), session.MethodCanTransition, session.PathTransition)
-	require.Equal(t, int64(2), rec.Snapshot().Classes[string(session.ClassAgent)].Calls["CanTransition|transition"], "an unknown class falls back to the recorder's own")
+	rec.RecordShadowCallFor(domain.CallerClass("bogus"), session.MethodCanTransition, session.PathTransition)
+	require.Equal(t, int64(2), rec.Snapshot().Classes[string(domain.ClassAgent)].Calls["CanTransition|transition"], "an unknown class falls back to the recorder's own")
 }

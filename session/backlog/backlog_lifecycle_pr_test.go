@@ -499,7 +499,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 	reports := h.rep.snapshot()
 	require.Len(t, reports, 2)
 	for _, r := range reports {
-		assert.Equal(t, session.CallerReconcilePRPendingMerge, r.caller)
+		assert.Equal(t, domain.CallerReconcilePRPendingMerge, r.caller)
 		assert.Equal(t, session.DeniedOperatorGate, r.reason)
 	}
 	for _, c := range notifier.Calls {
@@ -528,7 +528,7 @@ func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(
 	assert.Equal(t, string(session.BacklogStatusReview), got.Status)
 	assert.Zero(t, got.PrNumber)
 	require.Len(t, h.rep.snapshot(), 1)
-	assert.Equal(t, session.CallerOrphanedAgentPR, h.rep.snapshot()[0].caller)
+	assert.Equal(t, domain.CallerOrphanedAgentPR, h.rep.snapshot()[0].caller)
 
 	sessDisableGates(t, h)
 	require.NoError(t, listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found"))

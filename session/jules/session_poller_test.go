@@ -133,7 +133,7 @@ type fakeJulesPollerStorage struct {
 	links      []fakeLinkRecord
 	tombstoned map[string]bool
 	// gatedCallers records the registry caller of every gated write, in order.
-	gatedCallers []session.TransitionCaller
+	gatedCallers []domain.TransitionCaller
 }
 
 func newFakeJulesPollerStorage() *fakeJulesPollerStorage {
@@ -565,7 +565,7 @@ func TestApplyJulesState_should_SurfaceMissingPR_When_CompletedWithEmptyOutputs(
 	require.NoError(t, p.applyJulesState(context.Background(), entry, row, s))
 
 	assert.Empty(t, storage.prRecorded, "no PR output must never call SetBacklogItemPRAndTransition")
-	assert.Equal(t, []session.TransitionCaller{session.CallerJulesApplyCompleted}, storage.gatedCallers, "the no-PR review move goes through the gate as jules_apply_completed")
+	assert.Equal(t, []domain.TransitionCaller{domain.CallerJulesApplyCompleted}, storage.gatedCallers, "the no-PR review move goes through the gate as jules_apply_completed")
 	require.Contains(t, storage.ended, "row-1")
 	assert.Equal(t, "jules_completed_no_pr", storage.ended["row-1"])
 	notes := storage.notesFor("item-1")
@@ -768,7 +768,7 @@ func TestApplyJulesState_should_ReturnItemToReadyWithJulesMessage_When_StateIsFa
 	lastTransition := storage.transitions[len(storage.transitions)-1]
 	assert.Equal(t, session.BacklogStatusReady, lastTransition.toStatus)
 	assert.Equal(t, string(session.BacklogStatusInProgress), lastTransition.expectedStatus)
-	assert.Equal(t, []session.TransitionCaller{session.CallerJulesFailSession}, storage.gatedCallers, "the failure write goes through the gate as jules_fail_session")
+	assert.Equal(t, []domain.TransitionCaller{domain.CallerJulesFailSession}, storage.gatedCallers, "the failure write goes through the gate as jules_fail_session")
 
 	notes := storage.notesFor("item-1")
 	require.NotEmpty(t, notes)

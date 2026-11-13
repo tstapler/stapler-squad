@@ -20,8 +20,8 @@ import (
 
 type enforceEveryClass struct{}
 
-func (enforceEveryClass) Mode() session.EngineMode                       { return session.ModeEnforce }
-func (enforceEveryClass) ModeFor(session.CallerClass) session.EngineMode { return session.ModeEnforce }
+func (enforceEveryClass) Mode() session.EngineMode                      { return session.ModeEnforce }
+func (enforceEveryClass) ModeFor(domain.CallerClass) session.EngineMode { return session.ModeEnforce }
 
 type gateFixture struct {
 	storage *session.Storage

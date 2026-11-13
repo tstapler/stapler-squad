@@ -95,12 +95,12 @@ func TestGuardedTransitionCaller_should_NameQueueClaimAndJulesDispatch_When_Give
 		name        string
 		to          session.BacklogStatus
 		triggeredBy string
-		want        session.TransitionCaller
+		want        domain.TransitionCaller
 	}{
-		{"queue", session.BacklogStatusQueued, session.TriggeredByUser, session.CallerQueueBacklogItem},
-		{"queue autonomous", session.BacklogStatusQueued, session.TriggeredBySystem, session.CallerQueueBacklogItem},
-		{"dequeue claim", session.BacklogStatusInProgress, session.TriggeredBySystem, session.CallerClaimAndSpawn},
-		{"jules dispatch", session.BacklogStatusInProgress, session.TriggeredByUser, session.CallerJulesDispatchStart},
+		{"queue", session.BacklogStatusQueued, session.TriggeredByUser, domain.CallerQueueBacklogItem},
+		{"queue autonomous", session.BacklogStatusQueued, session.TriggeredBySystem, domain.CallerQueueBacklogItem},
+		{"dequeue claim", session.BacklogStatusInProgress, session.TriggeredBySystem, domain.CallerClaimAndSpawn},
+		{"jules dispatch", session.BacklogStatusInProgress, session.TriggeredByUser, domain.CallerJulesDispatchStart},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, guardedTransitionCaller(tc.to, tc.triggeredBy), tc.name)
@@ -154,7 +154,7 @@ func TestMaybeTriggerTriage_should_ReportOnceUnderItsOwnCallerAndStartNoTriage_W
 
 	require.NotEmpty(t, newItemTriageSkipReason(item), "the fixture must hit a skip rule")
 	assert.Equal(t, "idea", itemStatus(t, svc, item.ID))
-	assert.Equal(t, []string{string(session.CallerMaybeTriggerTriage)}, deniedCallers(t, svc, item.ID), "one row for the repeated denial")
+	assert.Equal(t, []string{string(domain.CallerMaybeTriggerTriage)}, deniedCallers(t, svc, item.ID), "one row for the repeated denial")
 }
 
 func TestAttachSessionToItem_should_ReportDenialAndKeepStatus_When_SystemGateBlocksReadyToInProgress(t *testing.T) {
@@ -176,7 +176,7 @@ func TestAttachSessionToItem_should_ReportDenialAndKeepStatus_When_SystemGateBlo
 
 	require.NoError(t, err, "the attach itself succeeds; only the follow-on transition is denied")
 	assert.Equal(t, "ready", itemStatus(t, svc, itemID))
-	assert.Equal(t, []string{string(session.CallerAttachSessionToItem)}, deniedCallers(t, svc, itemID))
+	assert.Equal(t, []string{string(domain.CallerAttachSessionToItem)}, deniedCallers(t, svc, itemID))
 }
 
 func TestRollbackFailedReopen_should_RestoreReviewEvenWhenAGateBlocksInProgressToReview(t *testing.T) {
@@ -184,7 +184,7 @@ func TestRollbackFailedReopen_should_RestoreReviewEvenWhenAGateBlocksInProgressT
 	h := wireEnforcedGate(t, svc)
 	item := systemItemAt(t, svc, session.BacklogStatusReview)
 	inProgress, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
-		Caller: session.CallerAutoReopenFailedReview, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerAutoReopenFailedReview, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
 	})
 	require.NoError(t, err)
 	h.blockWithGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
@@ -201,7 +201,7 @@ func TestRollbackFailedPRFixReopen_should_RestorePRPendingAndNotOverwriteAConcur
 	wireEnforcedGate(t, svc)
 	item := systemItemAt(t, svc, session.BacklogStatusPRPending)
 	_, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
-		Caller: session.CallerAutoReopenForPRFix, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerAutoReopenForPRFix, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
 	})
 	require.NoError(t, err)
 

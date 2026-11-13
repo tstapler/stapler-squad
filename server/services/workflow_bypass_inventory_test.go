@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // bypassPrimitives are the six status writers (ADR-007 D1); a call is matched
@@ -354,16 +355,16 @@ const delegateFile = "server/mcp/tools_backlog_dependencies.go"
 // keyed like the inventory ("file function").
 func registryCallCounts() map[string]int {
 	counts := map[string]int{}
-	add := func(cs session.CallSite) { counts[cs.File+" "+cs.Func] += cs.Calls }
-	for _, c := range session.TransitionCallers() {
+	add := func(cs domain.CallSite) { counts[cs.File+" "+cs.Func] += cs.Calls }
+	for _, c := range domain.TransitionCallers() {
 		for _, cs := range c.Sites {
 			add(cs)
 		}
 	}
-	for _, e := range session.ExemptTransitionSites() {
+	for _, e := range domain.ExemptTransitionSites() {
 		add(e.CallSite)
 	}
-	for _, cs := range session.SharedGuardHelperSites() {
+	for _, cs := range domain.SharedGuardHelperSites() {
 		add(cs)
 	}
 	return counts
@@ -401,9 +402,9 @@ func TestWorkflowBypassInventory_EveryGatedAndEngineRoutedSiteIsRegistered(t *te
 // GuardedTransitionAllowed is an edge some registered caller declares, and the
 // functions making those calls are registered as an Origin or Site.
 func TestWorkflowBypassInventory_GuardedTransitionCallersAreRegisteredWithTheirTargets(t *testing.T) {
-	owners := map[string][]session.TransitionCallerSpec{}
+	owners := map[string][]domain.TransitionCallerSpec{}
 	origins := map[string]bool{}
-	for _, c := range session.TransitionCallers() {
+	for _, c := range domain.TransitionCallers() {
 		for _, cs := range c.Origins {
 			owners[cs.File+" "+cs.Func] = append(owners[cs.File+" "+cs.Func], c)
 			origins[cs.File+" "+cs.Func] = true
@@ -463,7 +464,7 @@ func statusLiteralName(e ast.Expr) string {
 	return ""
 }
 
-func anyDeclaresTarget(specs []session.TransitionCallerSpec, to string) bool {
+func anyDeclaresTarget(specs []domain.TransitionCallerSpec, to string) bool {
 	for _, c := range specs {
 		for _, e := range c.Edges {
 			if string(e.To) == to {
@@ -496,13 +497,13 @@ func TestWorkflowBypassInventory_AutonomousCompleteTargetSetIsExactlyReady(t *te
 	})
 	assert.Equal(t, []string{"ready"}, assigned, "a new toStatus assignment needs a registry edge and a new pin")
 
-	c, ok := session.LookupTransitionCaller(session.CallerAutonomousComplete)
+	c, ok := domain.LookupTransitionCaller(domain.CallerAutonomousComplete)
 	require.True(t, ok)
-	assert.Equal(t, []session.SystemEdge{{From: session.BacklogStatusIdea, To: session.BacklogStatusReady}}, c.Edges)
+	assert.Equal(t, []domain.SystemEdge{{From: session.BacklogStatusIdea, To: session.BacklogStatusReady}}, c.Edges)
 }
 
 func TestRecordEngineBypass_IncrementsCounter(t *testing.T) {
-	const c = session.TransitionCaller("inventory_test_caller")
+	const c = domain.TransitionCaller("inventory_test_caller")
 	before := session.EngineBypassCount(c)
 	session.RecordEngineBypass(c)
 	session.RecordEngineBypass(c)

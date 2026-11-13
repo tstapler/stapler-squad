@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers(t *testing.T) {
@@ -15,7 +16,7 @@ func TestWorkflowBypassStrict_GuardedTransitionCallerReturnsRegisteredCallers(t 
 	}
 	for _, to := range statuses {
 		for _, actor := range []string{session.TriggeredByUser, session.TriggeredByAgent, session.TriggeredBySystem, ""} {
-			_, ok := session.LookupTransitionCaller(guardedTransitionCaller(to, actor))
+			_, ok := domain.LookupTransitionCaller(guardedTransitionCaller(to, actor))
 			assert.True(t, ok, "to=%s actor=%q", to, actor)
 		}
 	}

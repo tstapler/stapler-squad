@@ -28,11 +28,11 @@ import (
 // Labels of the exempt entry points on workflow_engine_bypass_total{caller}.
 // They are not registry entries: a registry entry names a path the engine decides.
 const (
-	CallerRollback TransitionCaller = "rollback"
-	CallerDebug    TransitionCaller = "debug"
+	CallerRollback domain.TransitionCaller = "rollback"
+	CallerDebug    domain.TransitionCaller = "debug"
 	// CallerDebugCreate labels Storage.CreateBacklogItemForDebug: creation has no
 	// "from" status, so it is exempt but counted.
-	CallerDebugCreate TransitionCaller = "debug_create"
+	CallerDebugCreate domain.TransitionCaller = "debug_create"
 )
 
 // Denial reasons recorded on a transition_denied row (denied_reason).
@@ -55,13 +55,13 @@ var (
 // (item, caller, from, to, reason): the gate calls it once per denial and the
 // implementation, not the gate, suppresses repeats while a row stays open.
 type TransitionDeniedReporter interface {
-	Report(ctx context.Context, item *backlogdto.BacklogItemData, caller TransitionCaller, from, to BacklogStatus, reason string, denyErr error)
+	Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to BacklogStatus, reason string, denyErr error)
 }
 
 // TransitionRequest is one status change asked of GatedTransition.
 type TransitionRequest struct {
 	// Caller must be a registry entry.
-	Caller TransitionCaller
+	Caller domain.TransitionCaller
 	// ItemID names the item; Observed may replace it.
 	ItemID string
 	// Observed is the caller's own read of the item, which saves the gate a
@@ -252,7 +252,7 @@ func (s *Storage) GatedArchive(ctx context.Context, req TransitionRequest) (*bac
 	return s.gated(ctx, req, s.writeGatedArchive)
 }
 
-func (s *Storage) writeGatedArchive(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) writeGatedArchive(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	pre := gatePrecondition(req, spec, item)
 	return s.Repo.rawArchiveBacklogItem(ctx, req.ItemID, &pre, req.TriggeredBy, pre.Note)
 }
@@ -270,7 +270,7 @@ func (s *Storage) GatedUnarchive(ctx context.Context, req TransitionRequest) (*b
 	return s.gated(ctx, req, s.writeGatedUnarchive)
 }
 
-func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	pre := gatePrecondition(req, spec, item)
 	if pre.ExpectedStatus != string(BacklogStatusArchived) {
 		return nil, fmt.Errorf("%w: item is %q, not archived", domain.ErrPreconditionFailed, pre.ExpectedStatus)
@@ -285,7 +285,7 @@ func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest
 // reassignment (observed pr_pending) is a status-preserving field write that
 // PRReassignmentGuard, not the engine, decides (ADR-007 Decision 7).
 func (s *Storage) GatedSetPRAndTransition(ctx context.Context, req TransitionRequest, pr PRAssociation) error {
-	if _, ok := LookupTransitionCaller(req.Caller); !ok {
+	if _, ok := domain.LookupTransitionCaller(req.Caller); !ok {
 		return fmt.Errorf("%w: %q", ErrUnregisteredTransitionCaller, req.Caller)
 	}
 	if err := pinTarget(&req, BacklogStatusPRPending); err != nil {
@@ -298,7 +298,7 @@ func (s *Storage) GatedSetPRAndTransition(ctx context.Context, req TransitionReq
 	if observed.Status == string(BacklogStatusPRPending) {
 		return s.setPRAndTransition(ctx, observed, pr)
 	}
-	_, err := s.gated(ctx, req, func(ctx context.Context, _ TransitionRequest, _ TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+	_, err := s.gated(ctx, req, func(ctx context.Context, _ TransitionRequest, _ domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 		return nil, s.setPRAndTransition(ctx, item, pr)
 	})
 	return err
@@ -319,7 +319,7 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 	moved := 0
 	for _, c := range candidates {
 		_, err := s.gated(ctx, TransitionRequest{
-			Caller:       CallerReconcileStuck,
+			Caller:       domain.CallerReconcileStuck,
 			ItemID:       c.ID,
 			To:           BacklogStatusReview,
 			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(BacklogStatusInProgress), Note: "all work sessions ended"},
@@ -337,18 +337,18 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 	return moved, nil
 }
 
-func (s *Storage) writeGatedReconcile(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) writeGatedReconcile(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	pre := gatePrecondition(req, spec, item)
 	return s.Repo.rawTransitionBacklogItemStatusWithNote(ctx, req.ItemID, req.To, &pre, req.TriggeredBy, reconcileStuckNote)
 }
 
 // gateWriter performs the raw write once the engine allowed req.
-type gateWriter func(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error)
+type gateWriter func(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error)
 
 // gated is the one decision function behind every Gated* entry point: they
 // differ only in the target status they pin and the raw writer they call.
 func (s *Storage) gated(ctx context.Context, req TransitionRequest, write gateWriter) (*backlogdto.BacklogItemData, error) {
-	spec, ok := LookupTransitionCaller(req.Caller)
+	spec, ok := domain.LookupTransitionCaller(req.Caller)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnregisteredTransitionCaller, req.Caller)
 	}
@@ -380,7 +380,7 @@ func (s *Storage) gated(ctx context.Context, req TransitionRequest, write gateWr
 // gateCall is what one GatedTransition invocation decides with.
 type gateCall struct {
 	req      TransitionRequest
-	spec     TransitionCallerSpec
+	spec     domain.TransitionCallerSpec
 	engine   *SwitchableWorkflowEngine
 	reporter TransitionDeniedReporter
 	write    gateWriter
@@ -437,7 +437,7 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *backlogdt
 }
 
 func (c *gateCall) reportDenial(ctx context.Context, item *backlogdto.BacklogItemData, v gateVerdict) {
-	if c.reporter == nil || c.spec.Class == ClassOperator {
+	if c.reporter == nil || c.spec.Class == domain.ClassOperator {
 		return
 	}
 	defer func() {
@@ -449,14 +449,14 @@ func (c *gateCall) reportDenial(ctx context.Context, item *backlogdto.BacklogIte
 }
 
 // writeGated derives the CAS from the decided "from" and calls the raw writer.
-func (s *Storage) writeGated(ctx context.Context, req TransitionRequest, spec TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) writeGated(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	pre := gatePrecondition(req, spec, item)
 	return s.Repo.RawTransitionBacklogItemStatus(ctx, req.ItemID, req.To, &pre, req.TriggeredBy)
 }
 
 // gatePrecondition derives the raw writer's compare-and-swap from the request
 // and the decided "from".
-func gatePrecondition(req TransitionRequest, spec TransitionCallerSpec, item *backlogdto.BacklogItemData) backlogdto.BacklogItemPrecondition {
+func gatePrecondition(req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) backlogdto.BacklogItemPrecondition {
 	pre := backlogdto.BacklogItemPrecondition{}
 	if req.Precondition != nil {
 		pre = *req.Precondition
@@ -467,7 +467,7 @@ func gatePrecondition(req TransitionRequest, spec TransitionCallerSpec, item *ba
 	// Guard input read from item fields goes stale if an unrelated field is
 	// edited between read and write; pin updated_at only then, so GuardsNone
 	// callers keep a status-only CAS.
-	if pre.ExpectedUpdatedAt == nil && req.Guard != nil && req.Observed != nil && spec.Guards == GuardsBuiltIn {
+	if pre.ExpectedUpdatedAt == nil && req.Guard != nil && req.Observed != nil && spec.Guards == domain.GuardsBuiltIn {
 		observedAt := item.UpdatedAt
 		pre.ExpectedUpdatedAt = &observedAt
 	}
@@ -514,8 +514,8 @@ func (s *Storage) DebugForce(ctx context.Context, itemID string, to BacklogStatu
 // --- metrics ---------------------------------------------------------------
 
 type gateCallKey struct {
-	Class  CallerClass
-	Caller TransitionCaller
+	Class  domain.CallerClass
+	Caller domain.TransitionCaller
 	Mode   string
 }
 
@@ -550,7 +550,7 @@ func modeLabel(m EngineMode) string {
 	}
 }
 
-func noteGateCall(class CallerClass, caller TransitionCaller, mode EngineMode) {
+func noteGateCall(class domain.CallerClass, caller domain.TransitionCaller, mode EngineMode) {
 	label := modeLabel(mode)
 	gateMu.Lock()
 	gateCallCounts[gateCallKey{class, caller, label}]++
@@ -560,7 +560,7 @@ func noteGateCall(class CallerClass, caller TransitionCaller, mode EngineMode) {
 }
 
 // GateCallsTotal is the in-process workflow_engine_gate_calls_total{class,caller,mode}.
-func GateCallsTotal(class CallerClass, caller TransitionCaller, mode EngineMode) int64 {
+func GateCallsTotal(class domain.CallerClass, caller domain.TransitionCaller, mode EngineMode) int64 {
 	gateMu.Lock()
 	defer gateMu.Unlock()
 	return gateCallCounts[gateCallKey{class, caller, modeLabel(mode)}]

@@ -46,7 +46,7 @@ func TestHasOpenTransitionDenied_should_MatchOnlyARowWhoseFromIsTheCurrentStatus
 	require.NoError(t, err)
 	assert.False(t, held, "no row")
 
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
 	held, err = h.storage.HasOpenTransitionDenied(ctx, item.ID, BacklogStatusIdea)
 	require.NoError(t, err)
 	assert.True(t, held, "row from idea, item in idea")
@@ -60,7 +60,7 @@ func TestHasOpenTransitionDenied_should_IgnoreADefaultGuardDenial(t *testing.T) 
 	t.Parallel()
 	h := newGateHarness(t, ModeEnforce)
 	item := h.newItem(t, BacklogStatusReady)
-	denOpenDenial(t, h, item.ID, CallerAttachSessionToItem, BacklogStatusReady, BacklogStatusInProgress, DeniedDefaultGuard)
+	denOpenDenial(t, h, item.ID, domain.CallerAttachSessionToItem, BacklogStatusReady, BacklogStatusInProgress, DeniedDefaultGuard)
 
 	held, err := h.storage.HasOpenTransitionDenied(context.Background(), item.ID, BacklogStatusReady)
 
@@ -73,7 +73,7 @@ func TestHasOpenTransitionDenied_should_IgnoreASnoozedRow(t *testing.T) {
 	h := newGateHarness(t, ModeEnforce)
 	ctx := context.Background()
 	item := h.newItem(t, BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
 	_, err := h.storage.SnoozeStuckState(ctx, item.ID, domain.StuckReasonTransitionDenied, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
@@ -91,7 +91,7 @@ func TestTransitionDenialHolds_should_HoldWhileDeniedAndResolveTheRowOnceLifted(
 	ctx := context.Background()
 	denBlock(t, h, BacklogStatusIdea, BacklogStatusReady)
 	item := h.newItem(t, BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
 
 	assert.True(t, h.storage.TransitionDenialHolds(ctx, item), "the gate is still unsatisfied")
 	assert.Len(t, denOpenRows(t, h, item.ID, domain.StuckReasonTransitionDenied), 1)
@@ -107,7 +107,7 @@ func TestTransitionDenialHolds_should_Release_When_TheClassIsNoLongerEnforced(t 
 	ctx := context.Background()
 	denBlock(t, h, BacklogStatusIdea, BacklogStatusReady)
 	item := h.newItem(t, BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
 	require.True(t, h.storage.TransitionDenialHolds(ctx, item))
 
 	h.sel.Modes = allClasses(ModeShadow)
@@ -121,7 +121,7 @@ func TestRedriveTransitionDenials_should_MoveTheItemThroughTheGate_When_TheGateI
 	ctx := context.Background()
 	denBlock(t, h, BacklogStatusIdea, BacklogStatusReady)
 	item := h.newItem(t, BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
 
 	for range 3 {
 		assert.Zero(t, h.storage.RedriveTransitionDenials(ctx), "a persisting denial resolves nothing")
@@ -143,7 +143,7 @@ func TestRedriveTransitionDenials_should_OnlyResolveTheRow_When_TheCallerIsNotAP
 	ctx := context.Background()
 	denBlock(t, h, BacklogStatusQueued, BacklogStatusInProgress)
 	item := h.newItem(t, BacklogStatusQueued)
-	denOpenDenial(t, h, item.ID, CallerClaimAndSpawn, BacklogStatusQueued, BacklogStatusInProgress, DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerClaimAndSpawn, BacklogStatusQueued, BacklogStatusInProgress, DeniedOperatorGate)
 
 	denLiftGates(t, h)
 	assert.Equal(t, 1, h.storage.RedriveTransitionDenials(ctx))
@@ -158,7 +158,7 @@ func TestRedriveTransitionDenials_should_ReReportWithTheNewReason_When_TheTarget
 	ctx := context.Background()
 	rigs := denialRigs()
 	item, to := rigs[len(rigs)-1].setup(t, h) // the target-stage-removed rig
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatus("gone-from"), to, DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, BacklogStatus("gone-from"), to, DeniedOperatorGate)
 
 	assert.Zero(t, h.storage.RedriveTransitionDenials(ctx))
 

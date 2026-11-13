@@ -89,7 +89,7 @@ func (s *BacklogService) TransitionDeniedReporter() session.TransitionDeniedRepo
 }
 
 // Report implements session.TransitionDeniedReporter.
-func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
 	r.svc.notifyTransitionDenied(ctx, item, domain.TransitionDenial{
 		Caller: string(caller),
 		From:   string(from),

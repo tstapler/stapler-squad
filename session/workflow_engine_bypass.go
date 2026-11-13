@@ -13,12 +13,13 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
 var (
 	engineBypassMu     sync.Mutex
-	engineBypassCounts = map[TransitionCaller]int64{}
+	engineBypassCounts = map[domain.TransitionCaller]int64{}
 )
 
 var engineBypassTotal = mustEngineBypassCounter()
@@ -35,7 +36,7 @@ func mustEngineBypassCounter() metric.Int64Counter {
 
 // RecordEngineBypass increments workflow_engine_bypass_total{caller}. Call it
 // only from exempt entry points, never from a site pending migration.
-func RecordEngineBypass(caller TransitionCaller) {
+func RecordEngineBypass(caller domain.TransitionCaller) {
 	engineBypassMu.Lock()
 	engineBypassCounts[caller]++
 	engineBypassMu.Unlock()
@@ -43,7 +44,7 @@ func RecordEngineBypass(caller TransitionCaller) {
 }
 
 // EngineBypassCount returns the in-process count for one caller.
-func EngineBypassCount(caller TransitionCaller) int64 {
+func EngineBypassCount(caller domain.TransitionCaller) int64 {
 	engineBypassMu.Lock()
 	defer engineBypassMu.Unlock()
 	return engineBypassCounts[caller]

@@ -356,7 +356,7 @@ func (l *BacklogLifecycleListener) recordOrphanedAgentPR(ctx context.Context, it
 		return fmt.Errorf("%w: item %s is %q, not review", domain.ErrPreconditionFailed, itemID, observed.Status)
 	}
 	return l.storage.GatedSetPRAndTransition(ctx,
-		session.TransitionRequest{Caller: session.CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: session.TriggeredBySystem},
+		session.TransitionRequest{Caller: domain.CallerOrphanedAgentPR, ItemID: itemID, Observed: observed, TriggeredBy: session.TriggeredBySystem},
 		session.PRAssociation{URL: info.HTMLURL, Number: info.Number, Summary: summary, Source: domain.AttachSourcePRCreationService})
 }
 
@@ -649,7 +649,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 		// No status precondition: item may be at review or ready depending on when
 		// the PASS verdict was delivered relative to other transitions.
 		if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerPushCreatePRFallback, ItemID: item.ID, To: session.BacklogStatusDone, TriggeredBy: session.TriggeredBySystem,
+			Caller: domain.CallerPushCreatePRFallback, ItemID: item.ID, To: session.BacklogStatusDone, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			logSystemTransitionFailure("pushAndCreatePR fallback done", item.ID, session.BacklogStatusDone, transErr)
 			if errors.Is(transErr, domain.ErrPreconditionFailed) {
@@ -986,7 +986,7 @@ func (l *BacklogLifecycleListener) stayInReviewAndNotify(ctx context.Context, it
 func (l *BacklogLifecycleListener) resolveToPRPending(ctx context.Context, itemID, note, caller string) error {
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: note}
 	if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerResolveToPRPending, ItemID: itemID, To: session.BacklogStatusPRPending, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerResolveToPRPending, ItemID: itemID, To: session.BacklogStatusPRPending, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); transErr != nil {
 		return transErr
 	}
@@ -1017,7 +1017,7 @@ func (l *BacklogLifecycleListener) recoverDriftedPRItem(ctx context.Context, ite
 			caller, item.PrNumber, item.PrURL, item.Status),
 	}
 	if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerRecoverDriftedPR, ItemID: item.ID, To: session.BacklogStatusPRPending, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerRecoverDriftedPR, ItemID: item.ID, To: session.BacklogStatusPRPending, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); transErr != nil {
 		if session.IsGateDenial(transErr) {
 			log.Debug("[BacklogLifecycle] recoverDriftedPRItem: transition denied, will retry next tick", "caller", caller, "item", item.ID, "error", transErr)
@@ -1798,7 +1798,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusPRPending)}
 		if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerReconcilePRPendingMerge, ItemID: item.ID.String(), To: session.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+			Caller: domain.CallerReconcilePRPendingMerge, ItemID: item.ID.String(), To: session.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			// A gate denial is reported once by the gate; the item stays pr_pending and is retried next tick.
 			logSystemTransitionFailure("ReconcilePRPending done", item.ID.String(), session.BacklogStatusDone, transErr)
@@ -2507,7 +2507,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 			closedPrNum, lastCommitSha, session.BounceMainBranch),
 	}
 	if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerCloseSupersededPR, ItemID: item.ID, To: session.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerCloseSupersededPR, ItemID: item.ID, To: session.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); transErr != nil {
 		logSystemTransitionFailure("closeIfSupersededByMain done", item.ID, session.BacklogStatusDone, transErr)
 		return false

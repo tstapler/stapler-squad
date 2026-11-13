@@ -77,8 +77,8 @@ func passingReviewItem() session.BacklogItemTransitionInput {
 	return session.BacklogItemTransitionInput{Status: session.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
 }
 
-type classModes map[session.CallerClass]session.EngineMode
+type classModes map[domain.CallerClass]session.EngineMode
 
-func (c classModes) Mode() session.EngineMode { return c[session.ClassOperator] }
+func (c classModes) Mode() session.EngineMode { return c[domain.ClassOperator] }
 
-func (c classModes) ModeFor(k session.CallerClass) session.EngineMode { return c[k] }
+func (c classModes) ModeFor(k domain.CallerClass) session.EngineMode { return c[k] }

@@ -34,7 +34,7 @@ func TestArchiveStaleDoneItems_Enforce_OperatorGateHoldsItemThenArchivesWhenSati
 	reports := h.rep.snapshot()
 	require.Len(t, reports, 3, "the gate reports each denied attempt; the reporter implementation dedupes")
 	for _, r := range reports {
-		assert.Equal(t, session.CallerArchiveStaleDone, r.caller)
+		assert.Equal(t, domain.CallerArchiveStaleDone, r.caller)
 		assert.Equal(t, session.DeniedOperatorGate, r.reason)
 		assert.Equal(t, session.BacklogStatusArchived, r.to)
 	}

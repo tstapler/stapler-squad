@@ -1528,7 +1528,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	if recoverFromReview {
 		reopen := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview), Note: "request_review recovering stale/blocked review"}
 		_, reopenErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerMCPRequestReview, ItemID: itemID, Observed: item,
+			Caller: domain.CallerMCPRequestReview, ItemID: itemID, Observed: item,
 			To: session.BacklogStatusInProgress, Precondition: reopen, TriggeredBy: session.TriggeredByAgent,
 		})
 		if reopenErr != nil {
@@ -1544,7 +1544,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// Past a recovery reopen the item changed, so the gate re-reads it.
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(validStatus), Note: fmt.Sprintf("request_review from %s", message)}
 	transitionReq := session.TransitionRequest{
-		Caller: session.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+		Caller: domain.CallerMCPRequestReview, ItemID: itemID, To: targetStatus, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
 	}
 	if !recoverFromReview {
 		transitionReq.Observed = item
@@ -1729,7 +1729,7 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	if targetStatus != currentStatus {
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(currentStatus), Note: fmt.Sprintf("report_blocked from %s", rationale)}
 		if _, transErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerMCPReportBlocked, ItemID: itemID, Observed: item, To: targetStatus, Precondition: precondition,
+			Caller: domain.CallerMCPReportBlocked, ItemID: itemID, Observed: item, To: targetStatus, Precondition: precondition,
 			TriggeredBy: session.TriggeredByAgent,
 		}); transErr != nil {
 			log.InfoLog().Printf("[mcp:report_blocked] transition to %s failed: %v", targetStatus, transErr)
@@ -1875,7 +1875,7 @@ func (h *backlogHandlers) resumeWork(ctx context.Context, req mcpgo.CallToolRequ
 
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "resume_work"}
 	if _, transErr := h.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerMCPResumeWork, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress, Precondition: precondition,
+		Caller: domain.CallerMCPResumeWork, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress, Precondition: precondition,
 		TriggeredBy: session.TriggeredByAgent,
 	}); transErr != nil {
 		log.InfoLog().Printf("[mcp:resume_work] transition to in_progress failed: %v", transErr)
@@ -2659,7 +2659,7 @@ func (h *backlogHandlers) reportDuplicate(ctx context.Context, req mcpgo.CallToo
 	note := fmt.Sprintf("%s%s — archived by session %s", duplicateClosureNotePrefix(duplicateRef), reason, callerUUID)
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(status), Note: note}
 	if _, archErr := h.storage.GatedArchive(ctx, session.TransitionRequest{
-		Caller: session.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
+		Caller: domain.CallerMCPReportDuplicate, ItemID: itemID, Observed: item, Precondition: precondition, TriggeredBy: session.TriggeredByAgent,
 	}); archErr != nil {
 		log.InfoLog().Printf("[mcp:report_duplicate] archive failed item=%s: %v", itemID, archErr)
 		if isTransitionDenied(archErr) {

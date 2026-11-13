@@ -313,7 +313,7 @@ type backwardSyncOutcome struct{ updated, skipped, errored int }
 // live item that moved since the sync read from being archived.
 func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from, target BacklogStatus) backwardSyncOutcome {
 	_, err := sl.storage.GatedTransition(ctx, TransitionRequest{
-		Caller: CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: TriggeredByGitHubSync,
+		Caller: domain.CallerSyncLoopBackward, ItemID: itemID, To: target, TriggeredBy: TriggeredByGitHubSync,
 		Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(from)},
 	})
 	switch {

@@ -16,7 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 )
 
-func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller session.TransitionCaller, from, to session.BacklogStatus, reason string) {
+func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller domain.TransitionCaller, from, to session.BacklogStatus, reason string) {
 	t.Helper()
 	applied, err := h.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonTransitionDenied, from,
 		domain.FormatTransitionDeniedContext(domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: reason}, "test"))
@@ -136,7 +136,7 @@ func createTestEntRepository(t *testing.T) (*session.EntRepository, func()) {
 
 type reportedDenial struct {
 	itemID       string
-	caller       session.TransitionCaller
+	caller       domain.TransitionCaller
 	from, to     session.BacklogStatus
 	reason       string
 	err          error
@@ -152,7 +152,7 @@ type recordingReporter struct {
 	panics  bool
 }
 
-func (r *recordingReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+func (r *recordingReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
 	cur, _ := r.storage.GetBacklogItem(ctx, item.ID)
 	r.mu.Lock()
 	r.calls = append(r.calls, reportedDenial{item.ID, caller, from, to, reason, denyErr, cur.Status})
@@ -232,12 +232,12 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.Configur
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-type classModes map[session.CallerClass]session.EngineMode
+type classModes map[domain.CallerClass]session.EngineMode
 
-func (c classModes) Mode() session.EngineMode { return c[session.ClassOperator] }
+func (c classModes) Mode() session.EngineMode { return c[domain.ClassOperator] }
 
-func (c classModes) ModeFor(k session.CallerClass) session.EngineMode { return c[k] }
+func (c classModes) ModeFor(k domain.CallerClass) session.EngineMode { return c[k] }
 
 func allClasses(m session.EngineMode) classModes {
-	return classModes{session.ClassOperator: m, session.ClassAgent: m, session.ClassSystem: m, "bogus": m}
+	return classModes{domain.ClassOperator: m, domain.ClassAgent: m, domain.ClassSystem: m, "bogus": m}
 }

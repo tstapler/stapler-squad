@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 var statNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
@@ -26,15 +27,15 @@ func statReadyLedger(reproAges ...time.Duration) session.ShadowLedger {
 		ConfigSeen:    map[string]int64{session.ConfigSeeded: 300},
 		FirstSampleAt: statNow.Add(-8 * 24 * time.Hour),
 	}
-	for _, e := range session.ExpectedEdgesForClass(session.ClassOperator) {
+	for _, e := range session.ExpectedEdgesForClass(domain.ClassOperator) {
 		cl.Edges[session.EdgeKey(e.From, e.To)] = session.EdgeStats{TransitionSamples: 25}
 	}
 	l := session.ShadowLedger{
 		BinaryStarts: []time.Time{statNow.Add(-8 * 24 * time.Hour)},
-		Classes:      map[string]*session.ClassLedger{string(session.ClassOperator): cl},
+		Classes:      map[string]*session.ClassLedger{string(domain.ClassOperator): cl},
 	}
 	for _, age := range reproAges {
-		l.Repro = append(l.Repro, session.ReproRecord{At: statNow.Add(-age), Class: string(session.ClassOperator), Divergence: "graph"})
+		l.Repro = append(l.Repro, session.ReproRecord{At: statNow.Add(-age), Class: string(domain.ClassOperator), Divergence: "graph"})
 	}
 	return l
 }
@@ -43,9 +44,9 @@ func statReadyLedger(reproAges ...time.Duration) session.ShadowLedger {
 // on one edge inside an edited-config window.
 func statEditedDivergentLedger() session.ShadowLedger {
 	l := statReadyLedger()
-	cl := l.Classes[string(session.ClassOperator)]
+	cl := l.Classes[string(domain.ClassOperator)]
 	cl.ConfigSeen[session.ConfigEdited] = 5
-	e := session.ExpectedEdgesForClass(session.ClassOperator)[0]
+	e := session.ExpectedEdgesForClass(domain.ClassOperator)[0]
 	key := session.EdgeKey(e.From, e.To)
 	st := cl.Edges[key]
 	st.Divergences = 1
@@ -54,19 +55,19 @@ func statEditedDivergentLedger() session.ShadowLedger {
 	return l
 }
 
-func statModes(op, agent, system session.EngineMode) func(session.CallerClass) session.EngineMode {
-	return func(c session.CallerClass) session.EngineMode {
+func statModes(op, agent, system session.EngineMode) func(domain.CallerClass) session.EngineMode {
+	return func(c domain.CallerClass) session.EngineMode {
 		switch c {
-		case session.ClassOperator:
+		case domain.ClassOperator:
 			return op
-		case session.ClassAgent:
+		case domain.ClassAgent:
 			return agent
 		}
 		return system
 	}
 }
 
-func statSource(ledger func() (session.ShadowLedger, error), modes func(session.CallerClass) session.EngineMode) *WorkflowEngineStatusSource {
+func statSource(ledger func() (session.ShadowLedger, error), modes func(domain.CallerClass) session.EngineMode) *WorkflowEngineStatusSource {
 	return &WorkflowEngineStatusSource{
 		ModeFor:          modes,
 		Ledger:           ledger,
@@ -166,7 +167,7 @@ func TestGetWorkflowEngineStatus_ClassReadiness_FollowsSoakVerdict(t *testing.T)
 func TestGetWorkflowEngineStatus_ClassReadiness_CountsDivergencePerClass(t *testing.T) {
 	t.Parallel()
 	l := statReadyLedger(time.Hour, time.Hour)
-	l.Repro = append(l.Repro, session.ReproRecord{At: statNow.Add(-time.Hour), Class: string(session.ClassAgent), Divergence: "graph"})
+	l.Repro = append(l.Repro, session.ReproRecord{At: statNow.Add(-time.Hour), Class: string(domain.ClassAgent), Divergence: "graph"})
 	msg, err := statCall(t, statSource(statLedgerOf(l), statModes(session.ModeShadow, session.ModeShadow, session.ModeShadow)))
 	require.NoError(t, err)
 	require.Equal(t, int64(3), msg.Divergence_24H)
@@ -182,7 +183,7 @@ func TestGetWorkflowEngineStatus_ReviewFields(t *testing.T) {
 	shadow := statModes(session.ModeShadow, session.ModeShadow, session.ModeShadow)
 	cases := map[string]struct {
 		now      time.Time
-		modes    func(session.CallerClass) session.EngineMode
+		modes    func(domain.CallerClass) session.EngineMode
 		ledger   func() (session.ShadowLedger, error)
 		state    sessionv1.WorkflowEngineReviewState
 		overdue  bool

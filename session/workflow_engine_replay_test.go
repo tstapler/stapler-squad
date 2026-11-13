@@ -40,7 +40,7 @@ func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, Sta
 	return path
 }
 
-func replayDisableEdge(t *testing.T, edge SystemEdge) func(context.Context, StageCRUDRepository) {
+func replayDisableEdge(t *testing.T, edge domain.SystemEdge) func(context.Context, StageCRUDRepository) {
 	return func(ctx context.Context, repo StageCRUDRepository) {
 		t.Helper()
 		ts, err := repo.ListAllTransitions(ctx, string(edge.From))
@@ -84,7 +84,7 @@ func replayReport(t *testing.T, path string) *ReplayReport {
 	return report
 }
 
-func (r *ReplayReport) find(caller TransitionCaller, from, to BacklogStatus) (ReplayDecision, bool) {
+func (r *ReplayReport) find(caller domain.TransitionCaller, from, to BacklogStatus) (ReplayDecision, bool) {
 	for _, d := range r.Decisions {
 		if d.Caller == caller && d.Edge.From == from && d.Edge.To == to {
 			return d, true
@@ -178,12 +178,12 @@ func TestReplay_SeededCopy_AllowsEveryAgentAndSystemEdgeAndGatesEachSystemRequir
 	assert.Zero(t, report.StrandedAll)
 
 	want := 0
-	for _, spec := range TransitionCallers() {
+	for _, spec := range domain.TransitionCallers() {
 		want += len(replayEdges(spec))
 	}
 	assert.Len(t, report.Decisions, want, "one row per registered caller and declared edge")
 
-	merge, ok := report.find(CallerReconcilePRPendingMerge, BacklogStatusPRPending, BacklogStatusDone)
+	merge, ok := report.find(domain.CallerReconcilePRPendingMerge, BacklogStatusPRPending, BacklogStatusDone)
 	require.True(t, ok)
 	assert.Equal(t, "allowed", merge.Live)
 	assert.Equal(t, "denied:"+DeniedOperatorGate, merge.Synthetic, "the edited path: an unsatisfied operator gate denies the merge advance")
@@ -197,10 +197,10 @@ func TestReplay_SeededCopy_AllowsEveryAgentAndSystemEdgeAndGatesEachSystemRequir
 }
 
 func TestReplayDecision_Failure_FlagsOnlyAgentAndSystemGraphDenials(t *testing.T) {
-	denied := func(class CallerClass, reason string) ReplayDecision {
-		return ReplayDecision{Caller: "c", Class: class, Edge: SystemEdge{From: BacklogStatusIdea, To: BacklogStatusReady}, Live: replayDeniedPrefix + reason}
+	denied := func(class domain.CallerClass, reason string) ReplayDecision {
+		return ReplayDecision{Caller: "c", Class: class, Edge: domain.SystemEdge{From: BacklogStatusIdea, To: BacklogStatusReady}, Live: replayDeniedPrefix + reason}
 	}
-	for _, class := range []CallerClass{ClassAgent, ClassSystem} {
+	for _, class := range []domain.CallerClass{domain.ClassAgent, domain.ClassSystem} {
 		msg, failed := denied(class, DeniedConfigGraph).failure()
 		assert.True(t, failed, class)
 		assert.Contains(t, msg, "no gate involved")
@@ -209,9 +209,9 @@ func TestReplayDecision_Failure_FlagsOnlyAgentAndSystemGraphDenials(t *testing.T
 		_, failed = denied(class, DeniedOperatorGate).failure()
 		assert.False(t, failed, "a denial by a real operator gate is the configuration working")
 	}
-	_, failed := denied(ClassOperator, DeniedConfigGraph).failure()
+	_, failed := denied(domain.ClassOperator, DeniedConfigGraph).failure()
 	assert.False(t, failed, "operators choose their edge, so a disabled edge denies them by design")
-	_, failed = (ReplayDecision{Class: ClassSystem, Live: "allowed"}).failure()
+	_, failed = (ReplayDecision{Class: domain.ClassSystem, Live: "allowed"}).failure()
 	assert.False(t, failed)
 }
 
@@ -230,7 +230,7 @@ func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing
 	report := replayReport(t, replayFixture(t, 0, addGate))
 
 	assert.Equal(t, "edited", report.Config)
-	merge, ok := report.find(CallerReconcilePRPendingMerge, BacklogStatusPRPending, BacklogStatusDone)
+	merge, ok := report.find(domain.CallerReconcilePRPendingMerge, BacklogStatusPRPending, BacklogStatusDone)
 	require.True(t, ok)
 	assert.Equal(t, "denied:"+DeniedOperatorGate, merge.Live)
 	assert.False(t, report.Failed(), strings.Join(report.Failures, "\n"))
@@ -239,14 +239,14 @@ func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing
 func TestReplay_SystemRequiredEdgeWithNoStoredTransitionCannotCarryAGate(t *testing.T) {
 	report := replayReport(t, replayFixture(t, 0, nil))
 
-	d, ok := report.find(CallerRecoverDriftedPR, BacklogStatusReady, BacklogStatusPRPending)
+	d, ok := report.find(domain.CallerRecoverDriftedPR, BacklogStatusReady, BacklogStatusPRPending)
 	require.True(t, ok)
 	assert.Equal(t, "allowed", d.Live)
 	assert.Equal(t, replayNoStoredTransition, d.Synthetic)
 }
 
 func TestReplay_PreviewsItemsStrandedByAnEditedGraph(t *testing.T) {
-	report := replayReport(t, replayFixture(t, 2, replayDisableEdge(t, SystemEdge{From: BacklogStatusIdea, To: BacklogStatusRefining})))
+	report := replayReport(t, replayFixture(t, 2, replayDisableEdge(t, domain.SystemEdge{From: BacklogStatusIdea, To: BacklogStatusRefining})))
 
 	assert.Equal(t, 2, report.LiveItems)
 	assert.Equal(t, 2, report.Stranded[BacklogStatusIdea], "both idea items lose idea->refining under enforce")
@@ -258,7 +258,7 @@ func TestReplay_PreviewsItemsStrandedByAnEditedGraph(t *testing.T) {
 func TestReplay_RenderListsEveryCallerAndTheVerdict(t *testing.T) {
 	out := replayReport(t, replayFixture(t, 0, nil)).Render()
 
-	for _, spec := range TransitionCallers() {
+	for _, spec := range domain.TransitionCallers() {
 		if len(replayEdges(spec)) > 0 {
 			assert.Contains(t, out, string(spec.Name))
 		}
@@ -290,7 +290,7 @@ func TestReplayGateOverlay_AddsOneUnsatisfiedGateInMemoryOnly(t *testing.T) {
 	require.NoError(t, err)
 	defer closeFn()
 	base := NewEntStageConfigRepository(client)
-	edge := SystemEdge{From: BacklogStatusReady, To: BacklogStatusQueued}
+	edge := domain.SystemEdge{From: BacklogStatusReady, To: BacklogStatusQueued}
 
 	plain, err := base.ListEnabledTransitions(context.Background())
 	require.NoError(t, err)

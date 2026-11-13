@@ -1076,7 +1076,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		ExpectedUpdatedAt: &updatedAt,
 	}
 	if _, err := l.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerSessionExited, ItemID: item.ID, To: toStatus, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerSessionExited, ItemID: item.ID, To: toStatus, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
 		logSystemTransitionFailure("onSessionExited", item.ID, toStatus, err)
 		return
@@ -1719,7 +1719,7 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 	if status == string(session.BacklogStatusInProgress) {
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: status}
 		if _, err := l.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerBouncingToDone, ItemID: item.ID, To: session.BacklogStatusReview, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+			Caller: domain.CallerBouncingToDone, ItemID: item.ID, To: session.BacklogStatusReview, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); err != nil {
 			return fmt.Errorf("in_progress->review: %w", err)
 		}
@@ -1728,7 +1728,7 @@ func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Cont
 
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: status}
 	if _, err := l.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerBouncingToDone, ItemID: item.ID, To: session.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerBouncingToDone, ItemID: item.ID, To: session.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
 		return fmt.Errorf("review->done: %w", err)
 	}

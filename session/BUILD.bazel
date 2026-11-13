@@ -247,7 +247,6 @@ go_library(
         "tmux_backend.go",
         "tmux_process_manager.go",
         "tmux_socket_querier.go",
-        "transition_callers.go",
         "transition_gate.go",
         "trigger_fire_event_repository.go",
         "turn_end.go",

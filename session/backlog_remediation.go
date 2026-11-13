@@ -526,7 +526,7 @@ func (s *Storage) resolveLiftedDenial(ctx context.Context, itemID string) {
 // was counted when it was recorded, so a probe adds nothing to the soak signal.
 func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d domain.TransitionDenial) (gateVerdict, bool) {
 	g := s.gate.Load()
-	spec, known := LookupTransitionCaller(TransitionCaller(d.Caller))
+	spec, known := domain.LookupTransitionCaller(domain.TransitionCaller(d.Caller))
 	if g == nil || !known || g.engine.ModeFor(spec.Class) != ModeEnforce {
 		return gateVerdict{}, false
 	}
@@ -534,7 +534,7 @@ func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d do
 	if err != nil {
 		return gateVerdict{}, true // unknown: keep holding, retry next tick
 	}
-	v := decideTransition(g.engine.ForClassQuiet(spec.Class, GuardsNone), item, TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
+	v := decideTransition(g.engine.ForClassQuiet(spec.Class, domain.GuardsNone), item, TransitionRequest{Caller: spec.Name, To: BacklogStatus(d.To)})
 	return v, v.Err != nil
 }
 
@@ -542,10 +542,10 @@ func (s *Storage) transitionStillDenied(ctx context.Context, itemID string, d do
 // that nothing retries once denied (the triage session behind them has ended).
 // Every other caller either retries on each sweep tick or re-runs through its
 // spawn point, so lifting its denial only resolves the row.
-var redriveByWrite = map[TransitionCaller]bool{
-	CallerAutonomousComplete: true,
-	CallerMaybeTriggerTriage: true,
-	CallerTriageComplete:     true,
+var redriveByWrite = map[domain.TransitionCaller]bool{
+	domain.CallerAutonomousComplete: true,
+	domain.CallerMaybeTriggerTriage: true,
+	domain.CallerTriageComplete:     true,
 }
 
 // RedriveTransitionDenials is the sweep over recorded denials (Task 1.5.8e): a
@@ -581,7 +581,7 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 		s.reportChangedDenial(ctx, itemID, d, verdict)
 		return false
 	}
-	caller := TransitionCaller(d.Caller)
+	caller := domain.TransitionCaller(d.Caller)
 	if redriveByWrite[caller] {
 		_, err := s.GatedTransition(ctx, TransitionRequest{
 			Caller:       caller,
@@ -611,5 +611,5 @@ func (s *Storage) reportChangedDenial(ctx context.Context, itemID string, d doma
 	if err != nil {
 		return
 	}
-	g.reporter.Report(ctx, item, TransitionCaller(d.Caller), BacklogStatus(d.From), BacklogStatus(d.To), v.Reason, v.Err)
+	g.reporter.Report(ctx, item, domain.TransitionCaller(d.Caller), BacklogStatus(d.From), BacklogStatus(d.To), v.Reason, v.Err)
 }
