@@ -81,6 +81,12 @@ type ShellData struct {
 	TmuxSessionName string
 	// OrderIndex is the display order for the tab.
 	OrderIndex int
+
+	// Status, ExitCode and StartedAt are read-side only: populated by
+	// ShellRepository.ListShells, ignored by CreateShell.
+	Status    string
+	ExitCode  *int
+	StartedAt time.Time
 }
 
 // SpawnShellRequest carries the parameters for Instance.SpawnShell.

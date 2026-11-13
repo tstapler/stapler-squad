@@ -684,7 +684,7 @@ func (i *Instance) UpdateDiffStats() error {
 			// file (documented in session/worktree_pr_poller.go). Fails open
 			// (HasCommitsAheadOfMain returns true on error by contract) — ignore
 			// the error and trust the bool.
-			hasCommits, _ = wt.HasCommitsAheadOfMain(BounceMainBranch)
+			hasCommits, _ = wt.HasCommitsAheadOfMain(instanceMainBranch)
 		}
 	}
 
@@ -866,3 +866,7 @@ func (i *Instance) populateWorktreeInfoOnLoad() {
 		log.Info("auto-detected github info", "session", i.Title, "owner", i.GitHubOwner, "repo", i.GitHubRepo, "worktree", i.IsWorktree)
 	}
 }
+
+// instanceMainBranch duplicates BounceMainBranch (backlog_shared.go) so Instance
+// code does not depend on the backlog-owned constant; keep the two in sync.
+const instanceMainBranch = "main"
