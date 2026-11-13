@@ -151,3 +151,19 @@ func (o ProcessManagerOptions) launchCommand() launchcmd.LaunchCommand {
 	}
 	return shellLaunch(o.Program)
 }
+
+// ProcessManagerFactory builds the ProcessManager for a session. Instance code builds
+// its ProcessManager through processManagerFactoryHook so it does not name
+// backend_factory.go (tmux, tymux and native backends), which stays above it. A
+// genuine seam: three production backends plus test fakes.
+type ProcessManagerFactory func(ctx context.Context, defaultBackend domain.ProcessManagerBackend, opts ProcessManagerOptions) (ProcessManager, error)
+
+// processManagerFactoryHook is assigned once, in backend_factory.go's init().
+var processManagerFactoryHook ProcessManagerFactory
+
+func newProcessManager(ctx context.Context, defaultBackend domain.ProcessManagerBackend, opts ProcessManagerOptions) (ProcessManager, error) {
+	if processManagerFactoryHook == nil {
+		panic("session: ProcessManagerFactory not registered (backend_factory.go's init must set processManagerFactoryHook)")
+	}
+	return processManagerFactoryHook(ctx, defaultBackend, opts)
+}

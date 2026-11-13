@@ -115,7 +115,7 @@ func resumeFromCrashLocked(s *instanceState, _ context.Context) {
 				log.Warn("crash resume: failed to start controller", "session", i.Title, "err", err)
 			}
 		}
-		StartSessionDriver(i, i.GetEffectiveRootDir())
+		driverControl().Start(i, i.GetEffectiveRootDir())
 		i.SetExitReason("")
 	}()
 }

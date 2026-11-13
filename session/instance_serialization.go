@@ -553,7 +553,7 @@ func instanceFromData(data domain.InstanceData, deferStart bool) (*Instance, err
 	// Sessions created before a per-session tymux override was configured have no
 	// persisted backend; honor the override here or it is silently ignored forever.
 	resolveRestoredBackend(instance, data)
-	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
+	pm, err := newProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title, TymuxSessionID: data.TymuxSessionID})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for restored instance %q: %w", instance.Title, err)
 	}

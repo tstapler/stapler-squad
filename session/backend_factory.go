@@ -108,3 +108,5 @@ func SetTymuxManagerFactoryForTest(tb testing.TB, fn func() tymux.TymuxManager) 
 	newTymuxSessionFn = fn
 	tb.Cleanup(func() { newTymuxSessionFn = orig })
 }
+
+func init() { processManagerFactoryHook = NewProcessManager }

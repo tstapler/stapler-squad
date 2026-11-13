@@ -341,10 +341,10 @@ func (i *Instance) pm() ProcessManager {
 	}
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		mgr, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
+		mgr, err := newProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
 		if err != nil {
 			log.Error("unrecognized process manager backend; falling back to BackendTmux", "session", i.Title, "backend", i.Backend, "err", err)
-			mgr, _ = NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{})
+			mgr, _ = newProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{})
 		}
 		i.processManager = mgr
 	}
@@ -867,7 +867,7 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 	// A different backend means a different daemon entirely (tmux vs.
 	// tymuxd) -- no live hand-off is possible, so build a brand-new
 	// ProcessManager via the same factory CreateSession uses.
-	newPM, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{
+	newPM, err := newProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{
 		Backend:      backendOverride,
 		SessionName:  i.Title,
 		Program:      shellString(command),
