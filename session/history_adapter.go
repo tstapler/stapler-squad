@@ -16,9 +16,7 @@ func DefaultHistoryAdapters() *HistoryAdapterRegistry {
 	return r
 }
 
-func (i *Instance) historyRegistry() *HistoryAdapterRegistry {
-	return defaultHistoryRegistry
-}
-
 // defaultHistoryRegistry is shared: adapters are stateless and the registry is read-only.
 var defaultHistoryRegistry = DefaultHistoryAdapters()
+
+func init() { historyRegistryHook = defaultHistoryRegistry }

@@ -76,7 +76,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 
 	switch {
 	case isClaudeAntigravityCrossSwitch(i.historyRegistry(), oldProgram, resolvedProgram):
-		if portErr := PortSessionHistory(ctx, oldProgram, resolvedProgram, i); portErr != nil {
+		if portErr := portSessionHistory(ctx, oldProgram, resolvedProgram, i); portErr != nil {
 			if portHistoryFailureIsExpected(portErr) {
 				// Low-severity: the family-gate above and each adapter's CanHandle
 				// have drifted out of sync. Best-effort porting still no-ops safely.
@@ -160,3 +160,31 @@ func (r *HistoryAdapterRegistry) CrossesAdapters(oldProgram, newProgram string) 
 // AgyAdapter.CanHandle), none of which have a canonical history format to port. Callers should
 // treat this as an expected, low-severity no-op (log and continue), not a hard failure.
 var ErrNoHistoryAdapter = errors.New("no history adapter resolves for this program")
+
+// HistoryPorter translates a session's history from oldProgram's format to newProgram's.
+// SwitchProgram calls it through historyPorterHook so Instance code does not name
+// history_transfer.go and the concrete adapters it drives, which stay above it. A
+// marginal seam: one production implementation (PortSessionHistory), no fake yet.
+type HistoryPorter func(ctx context.Context, oldProgram, newProgram string, inst *Instance) error
+
+// historyPorterHook is assigned once, in history_transfer.go's init().
+var historyPorterHook HistoryPorter
+
+func portSessionHistory(ctx context.Context, oldProgram, newProgram string, inst *Instance) error {
+	if historyPorterHook == nil {
+		panic("session: HistoryPorter not registered (history_transfer.go's init must set historyPorterHook)")
+	}
+	return historyPorterHook(ctx, oldProgram, newProgram, inst)
+}
+
+// historyRegistryHook is the registry the Instance resolves history adapters through;
+// assigned once, in history_adapter.go's init(), because the concrete adapters stay
+// above the Instance file set.
+var historyRegistryHook *HistoryAdapterRegistry
+
+func (i *Instance) historyRegistry() *HistoryAdapterRegistry {
+	if historyRegistryHook == nil {
+		panic("session: history adapter registry not registered (history_adapter.go's init must set historyRegistryHook)")
+	}
+	return historyRegistryHook
+}
