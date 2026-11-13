@@ -125,7 +125,7 @@ type gateVerdict struct {
 
 // decideTransition asks the engine whether spec may move item to req.To. It does
 // no I/O beyond what a Configured operator gate itself reads.
-func decideTransition(view WorkflowEngine, item *backlogdto.BacklogItemData, req TransitionRequest) gateVerdict {
+func decideTransition(view domain.WorkflowEngine, item *backlogdto.BacklogItemData, req TransitionRequest) gateVerdict {
 	from := BacklogStatus(item.Status)
 	snap := BuildStageConfigSnapshotFallback(item)
 	in := guardInputFor(req, item, from)
@@ -144,8 +144,8 @@ func decideTransition(view WorkflowEngine, item *backlogdto.BacklogItemData, req
 // graphAllows is the graph check. It evaluates quietly and counts a denial only
 // when no operator override frees it, so an overridden transition is not
 // recorded as a denied one.
-func graphAllows(view WorkflowEngine, from, to BacklogStatus, snap *StageConfigSnapshot, overrideReason string) bool {
-	q, quietable := view.(interface{ Quiet() WorkflowEngine })
+func graphAllows(view domain.WorkflowEngine, from, to BacklogStatus, snap *domain.StageConfigSnapshot, overrideReason string) bool {
+	q, quietable := view.(interface{ Quiet() domain.WorkflowEngine })
 	if !quietable {
 		return view.CanTransition(from, to, snap) || operatorGraphOverride(view, overrideReason, to)
 	}
@@ -164,7 +164,7 @@ type graphOverrider interface {
 	OverridesGraph(overrideReason string, to BacklogStatus) bool
 }
 
-func operatorGraphOverride(view WorkflowEngine, overrideReason string, to BacklogStatus) bool {
+func operatorGraphOverride(view domain.WorkflowEngine, overrideReason string, to BacklogStatus) bool {
 	o, ok := view.(graphOverrider)
 	return ok && o.OverridesGraph(overrideReason, to)
 }
@@ -194,7 +194,7 @@ func guardInputFor(req TransitionRequest, item *backlogdto.BacklogItemData, from
 func classifyGateDenial(err error) string {
 	switch {
 	case errors.Is(err, domain.ErrGateNotSatisfied):
-		if strings.Contains(err.Error(), `"`+stageConfigUnresolvableGateID+`"`) {
+		if strings.Contains(err.Error(), `"`+domain.StageConfigUnresolvableGateID+`"`) {
 			return DeniedTargetStageRemoved
 		}
 		return DeniedOperatorGate

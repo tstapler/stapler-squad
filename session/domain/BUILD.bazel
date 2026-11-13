@@ -27,6 +27,7 @@ go_library(
         "status.go",
         "transition_callers.go",
         "wake_trigger.go",
+        "workflow_engine_iface.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/domain",
     visibility = ["//visibility:public"],

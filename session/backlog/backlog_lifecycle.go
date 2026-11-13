@@ -282,7 +282,7 @@ type BacklogLifecycleListener struct {
 	// never the SwitchableWorkflowEngine selector: the .(*ConfiguredWorkflowEngine)
 	// assertions below would fail and silently disable gate-context resolution.
 	// Wired via SetWorkflowEngine.
-	workflowEngine session.WorkflowEngine
+	workflowEngine domain.WorkflowEngine
 	// wrongEngineWarn limits the "not a ConfiguredWorkflowEngine" WARN to once.
 	wrongEngineWarn sync.Once
 
@@ -292,7 +292,7 @@ type BacklogLifecycleListener struct {
 // SetWorkflowEngine wires the WorkflowEngine transitionHasAutomatedReviewGate
 // consults for a custom transition's automated-review gate. nil (the
 // default) is safe — see the field's doc comment.
-func (l *BacklogLifecycleListener) SetWorkflowEngine(engine session.WorkflowEngine) {
+func (l *BacklogLifecycleListener) SetWorkflowEngine(engine domain.WorkflowEngine) {
 	l.workflowEngineMu.Lock()
 	defer l.workflowEngineMu.Unlock()
 	l.workflowEngine = engine
@@ -315,12 +315,12 @@ func (l *BacklogLifecycleListener) configuredWorkflowEngine() (*session.Configur
 
 // WorkflowEngine returns the wired engine (nil if none); exported for the
 // production-wiring test in server/.
-func (l *BacklogLifecycleListener) WorkflowEngine() session.WorkflowEngine {
+func (l *BacklogLifecycleListener) WorkflowEngine() domain.WorkflowEngine {
 	return l.getWorkflowEngine()
 }
 
 // getWorkflowEngine returns the currently-wired WorkflowEngine (nil if none).
-func (l *BacklogLifecycleListener) getWorkflowEngine() session.WorkflowEngine {
+func (l *BacklogLifecycleListener) getWorkflowEngine() domain.WorkflowEngine {
 	l.workflowEngineMu.RLock()
 	defer l.workflowEngineMu.RUnlock()
 	return l.workflowEngine

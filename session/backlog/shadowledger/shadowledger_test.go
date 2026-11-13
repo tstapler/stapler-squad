@@ -125,7 +125,7 @@ func TestShadowRecorder_CountsGateMissing_WhenCompositionDefectInjected(t *testi
 // guardDroppingEngine is a composition defect: the Default guard half drops every guard.
 type guardDroppingEngine struct{ *session.DefaultWorkflowEngine }
 
-func (guardDroppingEngine) ValidateGates(session.BacklogItemTransitionInput, session.BacklogStatus, *session.StageConfigSnapshot) error {
+func (guardDroppingEngine) ValidateGates(session.BacklogItemTransitionInput, session.BacklogStatus, *domain.StageConfigSnapshot) error {
 	return nil
 }
 

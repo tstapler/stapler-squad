@@ -66,25 +66,7 @@ type ConfiguredWorkflowEngine struct {
 // deadline lives here; a timeout leaves the gate unsatisfied (fail closed).
 const defaultGateLookupTimeout = 2 * time.Second
 
-var _ WorkflowEngine = (*ConfiguredWorkflowEngine)(nil)
-
-// StageConfigSnapshot is a frozen, per-item snapshot of the stage config a
-// BacklogItem's current stage carried when captured, used as a fallback
-// answer for CanTransition/AllowedTransitions when that stage has since been
-// deleted from the live stageConfigCache (Epic 2.5, Story 2.5.2). Mirrors
-// AcSnapshot's "history/behavior survives later config edits" discipline —
-// see plan.md's Domain Glossary entry for StageConfigSnapshot. Building and
-// persisting this snapshot per item is a follow-up concern; this type only
-// defines the shape CanTransition/AllowedTransitions consume when a caller
-// already has one in hand.
-type StageConfigSnapshot struct {
-	// StageName is the stage's human-readable name at snapshot time — the
-	// same value Story 2.5.1 freezes onto BacklogStatusEvent.StageNameSnapshot.
-	StageName string
-	// AllowedTransitions is the set of destination stages that were legal
-	// from this stage at snapshot time.
-	AllowedTransitions []BacklogStatus
-}
+var _ domain.WorkflowEngine = (*ConfiguredWorkflowEngine)(nil)
 
 // NewConfiguredWorkflowEngine constructs a ConfiguredWorkflowEngine backed by
 // repo, doing one synchronous cache.Load at construction time. Mirrors
@@ -169,7 +151,7 @@ func (e *ConfiguredWorkflowEngine) lookupGateRecord(itemID, gateID uuid.UUID) (*
 // the live config is stale. A from-stage still present in the live cache
 // (even with a different edge set than the snapshot) never consults the
 // fallback — the live graph is always authoritative when it has an opinion.
-func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallback *StageConfigSnapshot) bool {
+func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallback *domain.StageConfigSnapshot) bool {
 	if _, ok := e.cache.Get(from, to); ok {
 		return true
 	}
@@ -195,7 +177,7 @@ func (e *ConfiguredWorkflowEngine) CanTransition(from, to BacklogStatus, fallbac
 // slice, logging a Warn that the live config is stale. A from-stage still
 // present in the live cache (even with zero live edges, e.g. a legitimate
 // dead-end) never consults the fallback.
-func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallback *StageConfigSnapshot) []BacklogStatus {
+func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallback *domain.StageConfigSnapshot) []BacklogStatus {
 	result := e.cache.AllowedTransitions(from)
 	if !e.cache.HasStage(from) {
 		if fallback != nil {
@@ -209,13 +191,6 @@ func (e *ConfiguredWorkflowEngine) AllowedTransitions(from BacklogStatus, fallba
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
 }
-
-// stageConfigUnresolvableGateID identifies the single synthetic blocking gate
-// PendingGates returns when the live stageConfigCache has no edge for
-// (item.Status, to) but a supplied fallback confirms the edge legally existed
-// when the item entered its current stage (ADR-004, Decision 4 — the
-// adversarial review's fail-closed-for-gates fix).
-const stageConfigUnresolvableGateID = "stage-config-unresolvable"
 
 // PendingGates implements WorkflowEngine. It looks up the configured edge for
 // (item.Status, to) and evaluates each of its gates in order_index order. An
@@ -232,7 +207,7 @@ const stageConfigUnresolvableGateID = "stage-config-unresolvable"
 // single synthetic blocking GateStatus instead. When the fallback doesn't
 // contain to either (never a legal edge), today's nil, nil is preserved —
 // CanTransition already governs legality separately.
-func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	statuses, _ := e.collectGates(item, to, fallback, true)
 	return statuses, nil
 }
@@ -241,7 +216,7 @@ func (e *ConfiguredWorkflowEngine) PendingGates(item BacklogItemTransitionInput,
 // kinds (human_approval, automated_review, custom) are skipped rather than
 // evaluated, and skippedStateful reports that at least one was. Shadow
 // evaluation uses it so comparing engines never reads the database.
-func (e *ConfiguredWorkflowEngine) PendingGatesStructuralOnly(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) (statuses []domain.GateStatus, skippedStateful bool) {
+func (e *ConfiguredWorkflowEngine) PendingGatesStructuralOnly(item BacklogItemTransitionInput, to BacklogStatus, fallback *domain.StageConfigSnapshot) (statuses []domain.GateStatus, skippedStateful bool) {
 	return e.collectGates(item, to, fallback, false)
 }
 
@@ -265,7 +240,7 @@ func (g resolvedGate) effectiveStateful() bool {
 	return EffectiveGateStateful(g.Kind, g.Stateful)
 }
 
-func (e *ConfiguredWorkflowEngine) collectGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot, evalStateful bool) (statuses []domain.GateStatus, skippedStateful bool) {
+func (e *ConfiguredWorkflowEngine) collectGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *domain.StageConfigSnapshot, evalStateful bool) (statuses []domain.GateStatus, skippedStateful bool) {
 	edge, ok := e.cache.Get(item.Status, to)
 	if !ok {
 		if status, blocked := stageConfigUnresolvableGateStatus(to, fallback); blocked {
@@ -301,7 +276,7 @@ func (e *ConfiguredWorkflowEngine) collectGates(item BacklogItemTransitionInput,
 // from the item's current stage, or ok=false when snap is nil or doesn't
 // contain to — preserving PendingGates' "not a legal edge" nil, nil case for
 // a transition that never existed even in the frozen snapshot.
-func stageConfigUnresolvableGateStatus(to BacklogStatus, snap *StageConfigSnapshot) (status domain.GateStatus, ok bool) {
+func stageConfigUnresolvableGateStatus(to BacklogStatus, snap *domain.StageConfigSnapshot) (status domain.GateStatus, ok bool) {
 	if snap == nil {
 		return domain.GateStatus{}, false
 	}
@@ -310,7 +285,7 @@ func stageConfigUnresolvableGateStatus(to BacklogStatus, snap *StageConfigSnapsh
 			continue
 		}
 		return domain.GateStatus{
-			GateID:      stageConfigUnresolvableGateID,
+			GateID:      domain.StageConfigUnresolvableGateID,
 			Kind:        domain.GateKindStructural,
 			Satisfied:   false,
 			Description: fmt.Sprintf("This item's current stage configuration is no longer available (the stage may have been deleted or disabled) — the transition to %s cannot be automatically evaluated.", to),
@@ -323,7 +298,7 @@ func stageConfigUnresolvableGateStatus(to BacklogStatus, snap *StageConfigSnapsh
 // ValidateGates implements WorkflowEngine as a thin wrapper over PendingGates
 // (ADR-002's Decision 2): nil exactly when every gate PendingGates reports
 // for this transition is satisfied.
-func (e *ConfiguredWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *StageConfigSnapshot) error {
+func (e *ConfiguredWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, fallback *domain.StageConfigSnapshot) error {
 	statuses, err := e.PendingGates(item, to, fallback)
 	if err != nil {
 		return err

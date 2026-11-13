@@ -194,7 +194,7 @@ type SwitchableWorkflowEngine struct {
 	shadowErrors atomic.Int64
 }
 
-var _ WorkflowEngine = (*SwitchableWorkflowEngine)(nil)
+var _ domain.WorkflowEngine = (*SwitchableWorkflowEngine)(nil)
 
 // SelectorOption customizes a SwitchableWorkflowEngine.
 type SelectorOption func(*SwitchableWorkflowEngine)
@@ -264,22 +264,22 @@ func (s *SwitchableWorkflowEngine) EnforceDeniedTotal(src DenialSource) int64 {
 func (s *SwitchableWorkflowEngine) ShadowErrorsTotal() int64 { return s.shadowErrors.Load() }
 
 // CanTransition implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) CanTransition(from, to BacklogStatus, snap *StageConfigSnapshot) bool {
+func (s *SwitchableWorkflowEngine) CanTransition(from, to BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	return s.operatorView().CanTransition(from, to, snap)
 }
 
 // AllowedTransitions implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) AllowedTransitions(from BacklogStatus, snap *StageConfigSnapshot) []BacklogStatus {
+func (s *SwitchableWorkflowEngine) AllowedTransitions(from BacklogStatus, snap *domain.StageConfigSnapshot) []BacklogStatus {
 	return s.operatorView().AllowedTransitions(from, snap)
 }
 
 // PendingGates implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (s *SwitchableWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	return s.operatorView().PendingGates(item, to, snap)
 }
 
 // ValidateGates implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) error {
+func (s *SwitchableWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	return s.operatorView().ValidateGates(item, to, snap)
 }
 
@@ -304,20 +304,20 @@ func (s *SwitchableWorkflowEngine) ModeFor(class domain.CallerClass) EngineMode 
 // ForClass returns a WorkflowEngine bound to class and guard policy, so the
 // gate and legacy callers share one interface. The legacy answer is the
 // Default engine's.
-func (s *SwitchableWorkflowEngine) ForClass(class domain.CallerClass, guards domain.GuardPolicy) WorkflowEngine {
+func (s *SwitchableWorkflowEngine) ForClass(class domain.CallerClass, guards domain.GuardPolicy) domain.WorkflowEngine {
 	return engineView{s: s, pol: callPolicy{Class: class, Guards: guards}}
 }
 
 // ForClassQuiet is ForClass without enforce-denial counting, for re-deciding or
 // probing a denial that was already counted.
-func (s *SwitchableWorkflowEngine) ForClassQuiet(class domain.CallerClass, guards domain.GuardPolicy) WorkflowEngine {
+func (s *SwitchableWorkflowEngine) ForClassQuiet(class domain.CallerClass, guards domain.GuardPolicy) domain.WorkflowEngine {
 	return engineView{s: s, pol: callPolicy{Class: class, Guards: guards}, quiet: true}
 }
 
 // ForCaller returns a WorkflowEngine bound to a registry entry: its class,
 // guard policy and forwarding flag, with an Unchecked caller's legacy answer
 // being "allow".
-func (s *SwitchableWorkflowEngine) ForCaller(spec domain.TransitionCallerSpec) WorkflowEngine {
+func (s *SwitchableWorkflowEngine) ForCaller(spec domain.TransitionCallerSpec) domain.WorkflowEngine {
 	return engineView{
 		s:      s,
 		pol:    callPolicy{Class: spec.Class, Guards: spec.Guards, Forwarding: spec.Forwarding},
@@ -342,7 +342,7 @@ type engineView struct {
 }
 
 // Quiet returns the same view without denial counting.
-func (v engineView) Quiet() WorkflowEngine {
+func (v engineView) Quiet() domain.WorkflowEngine {
 	v.quiet = true
 	return v
 }
@@ -356,22 +356,22 @@ func (v engineView) NoteGraphDenied(from, to BacklogStatus) {
 	v.s.noteDenied(from, to, DenialConfigGraph)
 }
 
-var _ WorkflowEngine = engineView{}
+var _ domain.WorkflowEngine = engineView{}
 
 func (v engineView) mode() EngineMode { return v.s.ModeFor(v.pol.Class) }
 
-func (v engineView) legacyCan(from, to BacklogStatus, snap *StageConfigSnapshot) bool {
+func (v engineView) legacyCan(from, to BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	return v.unchecked || v.s.def.CanTransition(from, to, snap)
 }
 
-func (v engineView) legacyGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (v engineView) legacyGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	if v.unchecked {
 		return nil, nil
 	}
 	return v.s.def.PendingGates(item, to, snap)
 }
 
-func (v engineView) legacyValidate(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) error {
+func (v engineView) legacyValidate(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	if v.unchecked {
 		return nil
 	}
@@ -379,7 +379,7 @@ func (v engineView) legacyValidate(item BacklogItemTransitionInput, to BacklogSt
 }
 
 // CanTransition implements WorkflowEngine.
-func (v engineView) CanTransition(from, to BacklogStatus, snap *StageConfigSnapshot) bool {
+func (v engineView) CanTransition(from, to BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -420,7 +420,7 @@ func (v engineView) OverridesGraph(overrideReason string, to BacklogStatus) bool
 
 // AllowedTransitions implements WorkflowEngine. It is a read: Default answers
 // in Off and Shadow whatever the caller's legacy policy.
-func (v engineView) AllowedTransitions(from BacklogStatus, snap *StageConfigSnapshot) []BacklogStatus {
+func (v engineView) AllowedTransitions(from BacklogStatus, snap *domain.StageConfigSnapshot) []BacklogStatus {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -444,7 +444,7 @@ func (v engineView) AllowedTransitions(from BacklogStatus, snap *StageConfigSnap
 }
 
 // PendingGates implements WorkflowEngine.
-func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]domain.GateStatus, error) {
+func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -468,7 +468,7 @@ func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStat
 }
 
 // ValidateGates implements WorkflowEngine.
-func (v engineView) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) error {
+func (v engineView) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:

@@ -143,7 +143,7 @@ func resolveStageSnapshotFields(ctx context.Context, stageClient *ent.BacklogSta
 // destination of a recorded transition — which is already
 // ConfiguredWorkflowEngine's "no fallback" case, so callers degrade to
 // today's live-cache-only behavior rather than crashing.
-func BuildStageConfigSnapshotFallback(item *backlogdto.BacklogItemData) *StageConfigSnapshot {
+func BuildStageConfigSnapshotFallback(item *backlogdto.BacklogItemData) *domain.StageConfigSnapshot {
 	var latest *backlogdto.BacklogStatusEventData
 	for i := range item.StatusEvents {
 		ev := &item.StatusEvents[i]
@@ -166,7 +166,7 @@ func BuildStageConfigSnapshotFallback(item *backlogdto.BacklogItemData) *StageCo
 	for _, s := range latest.AllowedTransitionsSnapshot {
 		allowed = append(allowed, BacklogStatus(s))
 	}
-	return &StageConfigSnapshot{
+	return &domain.StageConfigSnapshot{
 		StageName:          stageName,
 		AllowedTransitions: allowed,
 	}

@@ -153,7 +153,7 @@ func (v engineView) TransitionCommitted(item BacklogItemTransitionInput, to Back
 	}
 }
 
-func notifyTransitionCommitted(view WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) {
+func notifyTransitionCommitted(view domain.WorkflowEngine, item BacklogItemTransitionInput, to BacklogStatus) {
 	if o, ok := view.(commitObserver); ok {
 		o.TransitionCommitted(item, to)
 	}

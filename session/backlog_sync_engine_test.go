@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -13,7 +14,7 @@ import (
 // SyncLoop consults the engine it was given rather than a private default.
 type denyAllEngine struct{ DefaultWorkflowEngine }
 
-func (denyAllEngine) CanTransition(BacklogStatus, BacklogStatus, *StageConfigSnapshot) bool {
+func (denyAllEngine) CanTransition(BacklogStatus, BacklogStatus, *domain.StageConfigSnapshot) bool {
 	return false
 }
 
@@ -30,7 +31,7 @@ func TestSyncLoop_SetWorkflowEngine_UsesInjectedEngineForBackwardSync(t *testing
 	sl.SetWorkflowEngine(nil) // nil must not clear the engine
 	require.NotNil(t, sl.WorkflowEngine())
 	sl.SetWorkflowEngine(denier)
-	require.Same(t, WorkflowEngine(denier), sl.WorkflowEngine())
+	require.Same(t, domain.WorkflowEngine(denier), sl.WorkflowEngine())
 
 	ctx := context.Background()
 	created, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{

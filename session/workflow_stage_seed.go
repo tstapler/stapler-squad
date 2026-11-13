@@ -368,7 +368,7 @@ type StrandedItem struct {
 // StrandedItemPreview lists, read-only, every item whose enforce-mode allowed
 // transitions are empty or smaller than Default's. A non-empty OverrideReason
 // skips operator gates only, never the graph, so it cannot free a lost edge.
-func StrandedItemPreview(def WorkflowEngine, cfg *ConfiguredWorkflowEngine, items []ItemStatusRef, disabledStages map[BacklogStatus]bool) []StrandedItem {
+func StrandedItemPreview(def domain.WorkflowEngine, cfg *ConfiguredWorkflowEngine, items []ItemStatusRef, disabledStages map[BacklogStatus]bool) []StrandedItem {
 	enf := EnforceAnswer{def: def, cfg: cfg}
 	var out []StrandedItem
 	for _, it := range items {

@@ -227,7 +227,7 @@ func TestSwitchableWorkflowEngine_BypassesGuardsNotGraph_WhenOverrideReasonNonEm
 	t.Run("synthetic deleted-stage gate is bypassed by override", func(t *testing.T) {
 		t.Parallel()
 		h := newSeededSelectorHarness(t, ModeEnforce)
-		snap := &StageConfigSnapshot{StageName: "Gone", AllowedTransitions: []BacklogStatus{BacklogStatusReady}}
+		snap := &domain.StageConfigSnapshot{StageName: "Gone", AllowedTransitions: []BacklogStatus{BacklogStatusReady}}
 		item := BacklogItemTransitionInput{Status: "gone-stage"}
 
 		require.True(t, h.sel.CanTransition("gone-stage", BacklogStatusReady, snap))
@@ -432,7 +432,7 @@ func shadowAll(h *selectorHarness) *selectorHarness {
 	h.sel.Modes = allClasses(ModeShadow)
 	return h
 }
-func viewFor(h *selectorHarness, class domain.CallerClass, g domain.GuardPolicy) WorkflowEngine {
+func viewFor(h *selectorHarness, class domain.CallerClass, g domain.GuardPolicy) domain.WorkflowEngine {
 	return h.sel.ForClass(class, g)
 }
 

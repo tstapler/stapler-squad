@@ -179,7 +179,7 @@ func TestTransitionCallerAudit_AutonomousCompleteEdgeSetIsIdeaToReady(t *testing
 	t.Parallel()
 	c, ok := domain.LookupTransitionCaller(domain.CallerAutonomousComplete)
 	require.True(t, ok)
-	require.Equal(t, []domain.SystemEdge{{BacklogStatusIdea, BacklogStatusReady}}, c.Edges)
+	require.Equal(t, []domain.SystemEdge{{From: BacklogStatusIdea, To: BacklogStatusReady}}, c.Edges)
 	require.Equal(t, domain.ClassSystem, c.Class)
 }
 

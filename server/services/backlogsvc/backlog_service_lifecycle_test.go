@@ -1454,11 +1454,11 @@ func TestOverrideVerdict_should_TransitionSuccessfully_When_CalledOnce(t *testin
 // across this file and backlog_service_sync_test.go — both call sites must
 // consult the injected engine, not session.CanTransitionBacklog directly.
 type disabledEdgeWorkflowEngine struct {
-	session.WorkflowEngine
+	domain.WorkflowEngine
 	deniedFrom, deniedTo session.BacklogStatus
 }
 
-func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus, fallback *session.StageConfigSnapshot) bool {
+func (e disabledEdgeWorkflowEngine) CanTransition(from, to session.BacklogStatus, fallback *domain.StageConfigSnapshot) bool {
 	if from == e.deniedFrom && to == e.deniedTo {
 		return false
 	}

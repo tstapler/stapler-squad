@@ -274,7 +274,7 @@ func TestAllowedTransitions_should_ReturnSnapshottedTransitionsWithWarnLog_When_
 
 	// With the item's own captured StageConfigSnapshot: the transitions legal
 	// at the moment it entered the now-deleted stage.
-	fallback := &StageConfigSnapshot{
+	fallback := &domain.StageConfigSnapshot{
 		StageName:          "Design Review",
 		AllowedTransitions: []BacklogStatus{BacklogStatusReady},
 	}
@@ -471,13 +471,13 @@ func TestPendingGates_should_ReturnSyntheticBlockingGate_When_CacheMissButFallba
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	from, to := deletedEdgeFixture(t, client, engine)
 
-	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+	fallback := &domain.StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
 	statuses, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, fallback)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1, "expected exactly one synthetic blocking gate, not an empty slice")
 
 	got := statuses[0]
-	assert.Equal(t, stageConfigUnresolvableGateID, got.GateID)
+	assert.Equal(t, domain.StageConfigUnresolvableGateID, got.GateID)
 	assert.Equal(t, domain.GateKindStructural, got.Kind)
 	assert.False(t, got.Satisfied, "the synthetic gate must always report unsatisfied — a deleted stage's config can never be automatically evaluated")
 	assert.Contains(t, got.Description, "no longer available")
@@ -507,7 +507,7 @@ func TestValidateGates_should_FailClosed_When_CacheMissButFallbackConfirmsEdgeOn
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	from, to := deletedEdgeFixture(t, client, engine)
 
-	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+	fallback := &domain.StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
 	err := engine.ValidateGates(BacklogItemTransitionInput{Status: from}, to, fallback)
 	require.Error(t, err, "ValidateGates must fail closed for a deleted-stage item whose edge once existed, not silently allow the transition")
 	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
@@ -577,11 +577,11 @@ func TestWorkflowEngine_should_TakePlainStageConfigSnapshotPointer_When_CalledWi
 	t.Parallel()
 	engine, client := newSeededConfiguredWorkflowEngine(t)
 	from, to := deletedEdgeFixture(t, client, engine)
-	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
+	fallback := &domain.StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{to}}
 
 	for _, tc := range []struct {
 		name     string
-		fallback *StageConfigSnapshot
+		fallback *domain.StageConfigSnapshot
 	}{
 		{"nil fallback", nil},
 		{"real fallback", fallback},
@@ -607,7 +607,7 @@ func TestPendingGates_should_ReturnNilNil_When_CacheMissAndFallbackDoesNotContai
 	from, to := deletedEdgeFixture(t, client, engine)
 	require.NotEqual(t, BacklogStatusDone, to, "test fixture bug: deletedEdgeFixture's to-stage must not collide with the destination probed below")
 
-	fallback := &StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{BacklogStatusReady}}
+	fallback := &domain.StageConfigSnapshot{StageName: "Gone From", AllowedTransitions: []BacklogStatus{BacklogStatusReady}}
 	statuses, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, BacklogStatusDone, fallback)
 	require.NoError(t, err)
 	assert.Empty(t, statuses, "a destination never present in the snapshot must not trigger the synthetic blocking gate")
@@ -687,7 +687,7 @@ func TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIs
 	gates, err := engine.PendingGates(BacklogItemTransitionInput{Status: from}, to, fallback)
 	require.NoError(t, err)
 	require.Len(t, gates, 1, "PendingGates must report the synthetic blocking gate, not silently pass the item through")
-	assert.Equal(t, stageConfigUnresolvableGateID, gates[0].GateID)
+	assert.Equal(t, domain.StageConfigUnresolvableGateID, gates[0].GateID)
 	assert.False(t, gates[0].Satisfied)
 }
 
@@ -721,7 +721,7 @@ func TestConfiguredWorkflowEngine_should_NeverConsultFallback_When_StageIsLiveBu
 	// A fallback that (incorrectly, if honored) claims fabricatedTo was once
 	// legal from this stage — must never be consulted for a stage the live
 	// cache still knows about, dead-end or not.
-	fallback := &StageConfigSnapshot{
+	fallback := &domain.StageConfigSnapshot{
 		StageName:          deadEndStage.Name,
 		AllowedTransitions: []BacklogStatus{fabricatedTo},
 	}
