@@ -6,12 +6,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // SetNoopDispatchThresholdFn overrides the consecutive no-op work-session
-// count that flags repeated_noop_dispatch (default DefaultNoopDispatchThreshold).
+// count that flags repeated_noop_dispatch (default stuck.DefaultNoopDispatchThreshold).
 func (l *BacklogLifecycleListener) SetNoopDispatchThresholdFn(fn func() int) {
 	l.noopThresholdMu.Lock()
 	defer l.noopThresholdMu.Unlock()
@@ -27,7 +28,7 @@ func (l *BacklogLifecycleListener) noopDispatchThreshold() int {
 			return n
 		}
 	}
-	return DefaultNoopDispatchThreshold
+	return stuck.DefaultNoopDispatchThreshold
 }
 
 // reconcileRepeatedNoopDispatch flags PASS-verdict items in review/in_progress
@@ -55,15 +56,15 @@ func (l *BacklogLifecycleListener) reconcileRepeatedNoopDispatch(ctx context.Con
 			continue
 		}
 		hasPass := len(verdicts) > 0 && verdicts[0].OverallOutcome == string(session.ReviewOutcomePass)
-		noops := consecutiveNoopWorkSessions(sessions)
+		noops := stuck.ConsecutiveNoopWorkSessions(sessions)
 
-		if !isRepeatedNoopDispatch(noops, threshold, hasPass) {
+		if !stuck.IsRepeatedNoopDispatch(noops, threshold, hasPass) {
 			l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonRepeatedNoopDispatch, "reconcileRepeatedNoopDispatch/cleared")
 			continue
 		}
 
 		detail := fmt.Sprintf("%d consecutive work sessions ended with no new commits on an item with a PASS verdict", noops)
-		if ref := PendingDuplicateRef(sessions); ref != "" && item.Status == string(session.BacklogStatusReview) {
+		if ref := stuck.PendingDuplicateRef(sessions); ref != "" && item.Status == string(session.BacklogStatusReview) {
 			detail += fmt.Sprintf("; a duplicate of %s is awaiting operator confirmation", ref)
 		}
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonRepeatedNoopDispatch, session.BacklogStatus(item.Status), detail)

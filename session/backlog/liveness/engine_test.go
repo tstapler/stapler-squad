@@ -1,4 +1,4 @@
-package backlog
+package liveness
 
 import (
 	"bytes"
@@ -9,54 +9,56 @@ import (
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestDefaultLivenessEngine_should_ReturnThreeHourFifteenMinuteThreshold_When_StageIsIdeaDefaultMode
 // is the Story 1.2.1 zero-regression assertion for Shape A: the idea stage's
 // duration-budget-plus-margin definition must derive to exactly today's
-// maxHeadlessTriageSessionStaleness (session/backlog_lifecycle_triage.go,
+// MaxHeadlessTriageSessionStaleness (session/backlog_lifecycle_triage.go,
 // 3h15m as of the 2026-09-08 triageCallBudget raise).
 func TestDefaultLivenessEngine_should_ReturnThreeHourFifteenMinuteThreshold_When_StageIsIdeaDefaultMode(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatusIdea, PipelineModeDefault)
+	def, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindDurationBudget, def.Kind)
 	assert.Equal(t, 3*time.Hour+15*time.Minute, def.StalenessThreshold())
-	assert.Equal(t, maxHeadlessTriageSessionStaleness, def.StalenessThreshold())
+	assert.Equal(t, MaxHeadlessTriageSessionStaleness, def.StalenessThreshold())
 }
 
 // TestDefaultLivenessEngine_should_ReturnTwoHourHeartbeat_When_StageIsInProgressDefaultMode
 // is Story 1.2.1's second named acceptance criterion (Shape B): the
 // in_progress stage's heartbeat definition must match today's
-// maxWorkSessionStaleness (session/backlog_lifecycle_stale.go).
+// MaxWorkSessionStaleness (session/backlog_lifecycle_stale.go).
 func TestDefaultLivenessEngine_should_ReturnTwoHourHeartbeat_When_StageIsInProgressDefaultMode(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatusInProgress, PipelineModeDefault)
+	def, err := engine.LivenessFor(session.BacklogStatusInProgress, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindHeartbeat, def.Kind)
 	assert.Equal(t, 2*time.Hour, def.MaxNoProgressDuration)
-	assert.Equal(t, maxWorkSessionStaleness, def.MaxNoProgressDuration)
+	assert.Equal(t, MaxWorkSessionStaleness, def.MaxNoProgressDuration)
 }
 
 // TestDefaultLivenessEngine_should_ReturnCycleFrequencyThreeInTwentyFourHours_When_StageIsReviewDefaultMode
 // covers Shape C (bouncing), keyed to BacklogStatusReview per this file's
 // documented judgment call (see NewDefaultLivenessEngine's comment). Values
-// must match today's bounceThreshold/bounceLookback (session/stuck_decisions.go).
+// must match today's stuck.BounceThreshold/stuck.BounceLookback (session/backlog/stuck/decisions.go).
 func TestDefaultLivenessEngine_should_ReturnCycleFrequencyThreeInTwentyFourHours_When_StageIsReviewDefaultMode(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatusReview, PipelineModeDefault)
+	def, err := engine.LivenessFor(session.BacklogStatusReview, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindCycleFrequency, def.Kind)
 	assert.Equal(t, 3, def.CycleThreshold)
-	assert.Equal(t, bounceThreshold, def.CycleThreshold)
+	assert.Equal(t, stuck.BounceThreshold, def.CycleThreshold)
 	assert.Equal(t, 24*time.Hour, def.CycleLookback)
-	assert.Equal(t, bounceLookback, def.CycleLookback)
+	assert.Equal(t, stuck.BounceLookback, def.CycleLookback)
 }
 
 // TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageHasNoTimeoutConcept
@@ -67,7 +69,7 @@ func TestDefaultLivenessEngine_should_ReturnCycleFrequencyThreeInTwentyFourHours
 func TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageHasNoTimeoutConcept(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatusQueued, PipelineModeDefault)
+	def, err := engine.LivenessFor(session.BacklogStatusQueued, backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.True(t, def.IsNoTimeout())
@@ -83,7 +85,7 @@ func TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageHasNoTim
 func TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageIsCompletelyUnmapped(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	def, err := engine.LivenessFor(session.BacklogStatus("some_future_custom_stage"), PipelineModeDefault)
+	def, err := engine.LivenessFor(session.BacklogStatus("some_future_custom_stage"), backlogdto.PipelineModeDefault)
 
 	require.NoError(t, err)
 	assert.True(t, def.IsNoTimeout())
@@ -97,9 +99,9 @@ func TestDefaultLivenessEngine_should_ReturnNoTimeoutSentinel_When_StageIsComple
 func TestDefaultLivenessEngine_should_IgnorePipelineMode_When_NoOverrideTableExists(t *testing.T) {
 	engine := NewDefaultLivenessEngine()
 
-	defDefault, err := engine.LivenessFor(session.BacklogStatusIdea, PipelineModeDefault)
+	defDefault, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineModeDefault)
 	require.NoError(t, err)
-	defSDD, err := engine.LivenessFor(session.BacklogStatusIdea, PipelineMode("sdd"))
+	defSDD, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 	require.NoError(t, err)
 
 	assert.Equal(t, defDefault, defSDD)
@@ -136,7 +138,7 @@ func TestLivenessFor_should_EmitExactlyOneWarnLine_When_FallingBackToDefaultEngi
 	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
 	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
-	got, err := engine.LivenessFor(session.BacklogStatusIdea, PipelineMode("sdd"))
+	got, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindDurationBudget, got.Kind)
@@ -166,7 +168,7 @@ func TestLivenessFor_should_NotEmitDuplicateWarnLines_When_CalledRepeatedlyForSa
 
 	const calls = 3
 	for i := 0; i < calls; i++ {
-		_, err := engine.LivenessFor(session.BacklogStatusIdea, PipelineMode("sdd"))
+		_, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 		require.NoError(t, err)
 	}
 

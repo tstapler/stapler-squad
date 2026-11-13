@@ -1,4 +1,4 @@
-package backlog
+package liveness
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // LivenessEngine resolves the LivenessDefinition (session/liveness_definition.go,
@@ -19,13 +21,13 @@ import (
 // project_plans/backlog-custom-workflow-stages/research/architecture.md §3a.
 type LivenessEngine interface {
 	// LivenessFor resolves the liveness definition for stage, given the item's
-	// current pipeline mode (PipelineModeDefault = no override). Implementations
+	// current pipeline mode (backlogdto.PipelineModeDefault = no override). Implementations
 	// must never return an error for a resolvable-to-a-safe-default case (an
 	// unconfigured stage/mode resolves to NoTimeoutLiveness or a built-in
 	// default, never a zero/infinite threshold) — error is reserved for
 	// implementations backed by a real repository (Epic 1.3) whose lookup
 	// itself can fail (e.g. a DB error), not for "no override configured."
-	LivenessFor(stage session.BacklogStatus, mode PipelineMode) (LivenessDefinition, error)
+	LivenessFor(stage session.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error)
 }
 
 // NoTimeoutLiveness is the sentinel LivenessDefinition value for a stage with
@@ -56,7 +58,7 @@ func (d LivenessDefinition) IsNoTimeout() bool {
 // constant's own doc comment) — the headless triage call's own timeout. That
 // constant is unexported in a different package (server/services), so its
 // value is duplicated here as a literal rather than imported; StalenessMargin
-// below is derived by subtraction from maxHeadlessTriageSessionStaleness
+// below is derived by subtraction from MaxHeadlessTriageSessionStaleness
 // (this package's own constant) rather than a second hardcoded literal, so
 // the two numbers can never drift apart from the 3h15m total BUG-055
 // requires.
@@ -83,28 +85,28 @@ type DefaultLivenessEngine struct {
 func NewDefaultLivenessEngine() *DefaultLivenessEngine {
 	// Shape A: idea stage, headless triage call. ExpectedDuration (3h) +
 	// StalenessMargin (3h15m - 3h = 15m) reproduces
-	// maxHeadlessTriageSessionStaleness (3h15m) exactly — see that constant's
+	// MaxHeadlessTriageSessionStaleness (3h15m) exactly — see that constant's
 	// doc comment (session/backlog_lifecycle_triage.go) for why it must stay
 	// strictly greater than the call budget, with real margin.
 	orphanedTriage, err := NewLivenessDefinition(LivenessKindDurationBudget,
 		WithExpectedDuration(defaultTriageExpectedDuration),
-		WithStalenessMargin(maxHeadlessTriageSessionStaleness-defaultTriageExpectedDuration),
+		WithStalenessMargin(MaxHeadlessTriageSessionStaleness-defaultTriageExpectedDuration),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("DefaultLivenessEngine: invalid built-in idea-stage definition: %v", err))
 	}
 
 	// Shape B: in_progress stage, live tmux-backed work session. Reproduces
-	// maxWorkSessionStaleness (2h, session/backlog_lifecycle_stale.go) exactly.
+	// MaxWorkSessionStaleness (2h, session/backlog_lifecycle_stale.go) exactly.
 	staleWorkDef, err := NewLivenessDefinition(LivenessKindHeartbeat,
-		WithMaxNoProgressDuration(maxWorkSessionStaleness),
+		WithMaxNoProgressDuration(MaxWorkSessionStaleness),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("DefaultLivenessEngine: invalid built-in in_progress-stage definition: %v", err))
 	}
 
 	// Shape C: bouncing (in_progress<->review cycle count). Reproduces
-	// bounceThreshold/bounceLookback (3 cycles / 24h, session/stuck_decisions.go)
+	// stuck.BounceThreshold/stuck.BounceLookback (3 cycles / 24h, session/backlog/stuck/decisions.go)
 	// exactly.
 	//
 	// Judgment call: reconcileBouncingItems (session/backlog_lifecycle.go)
@@ -114,14 +116,14 @@ func NewDefaultLivenessEngine() *DefaultLivenessEngine {
 	// This table keys it to BacklogStatusReview rather than
 	// BacklogStatusInProgress (already occupied by stale_work above) because
 	// the "is this converging" question bouncing answers is fundamentally
-	// about review verdicts (isBouncing's own signature takes hasPass, derived
+	// about review verdicts (stuck.IsBouncing's own signature takes hasPass, derived
 	// from the item's most recent *review* verdict) — not because any survey
 	// document states this explicitly. A future epic reconciling the full
 	// stage/reason key space (including rework_blocked_stale, also
 	// review-anchored) may need to revisit this.
 	bouncingDef, err := NewLivenessDefinition(LivenessKindCycleFrequency,
-		WithCycleThreshold(bounceThreshold),
-		WithCycleLookback(bounceLookback),
+		WithCycleThreshold(stuck.BounceThreshold),
+		WithCycleLookback(stuck.BounceLookback),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("DefaultLivenessEngine: invalid built-in review-stage definition: %v", err))
@@ -145,9 +147,9 @@ func NewDefaultLivenessEngine() *DefaultLivenessEngine {
 // NoTimeoutLiveness, never an error: an unresolvable stage must fail closed to
 // "no timeout enforced," not to a zero/infinite threshold or a hard error that
 // would abort a reconcile* sweep tick.
-func (e *DefaultLivenessEngine) LivenessFor(stage session.BacklogStatus, mode PipelineMode) (LivenessDefinition, error) {
+func (e *DefaultLivenessEngine) LivenessFor(stage session.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error) {
 	def := e.resolve(stage)
-	log.InfoLog().Printf("[LivenessEngine] resolved liveness for stage=%s mode=%s kind=%s", stage, ResolvedModeLabel(string(mode)), def.Kind)
+	log.InfoLog().Printf("[LivenessEngine] resolved liveness for stage=%s mode=%s kind=%s", stage, backlogdto.ResolvedModeLabel(string(mode)), def.Kind)
 	return def, nil
 }
 
@@ -215,8 +217,8 @@ func (e *CachingLivenessEngine) InvalidateCache(ctx context.Context) error {
 
 // LivenessFor implements LivenessEngine, applying the two-level fallback
 // described in this type's doc comment.
-func (e *CachingLivenessEngine) LivenessFor(stage session.BacklogStatus, mode PipelineMode) (LivenessDefinition, error) {
-	modeLabel := ResolvedModeLabel(string(mode))
+func (e *CachingLivenessEngine) LivenessFor(stage session.BacklogStatus, mode backlogdto.PipelineMode) (LivenessDefinition, error) {
+	modeLabel := backlogdto.ResolvedModeLabel(string(mode))
 
 	if rd, ok := e.cache.Get(string(stage), mode); ok {
 		log.InfoLog().Printf("[LivenessEngine] resolved liveness for stage=%s mode=%s kind=%s", stage, modeLabel, rd.Kind)

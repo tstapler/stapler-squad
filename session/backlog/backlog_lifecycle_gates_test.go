@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -70,10 +71,10 @@ func newGateTimeoutTestFixture(t *testing.T, storage *session.Storage, toSlug st
 
 // TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_CustomCheckExceedsExpectedDurationPlusMargin
 // covers Story 2.4.4's Task 2.4.4d/validation.md scenario: a custom-check
-// invocation bounded by a LivenessDefinition{ExpectedDuration: 10m,
+// invocation bounded by a liveness.LivenessDefinition{ExpectedDuration: 10m,
 // StalenessMargin: 5m} that has been open 16m is caught by the same
 // reconcile* sweep infrastructure Epic 1.4 built, via a live
-// LivenessEngine.LivenessFor resolution for the gate's bound target stage —
+// liveness.LivenessEngine.LivenessFor resolution for the gate's bound target stage —
 // not a new detector.
 func TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_CustomCheckExceedsExpectedDurationPlusMargin(t *testing.T) {
 	t.Parallel()
@@ -83,17 +84,17 @@ func TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_Custom
 	er := storage.Repo
 
 	const toSlug = "gate-timeout-ready"
-	livenessRepo := NewEntLivenessRepository(storage.GetEntClient())
-	_, err := livenessRepo.Create(ctx, LivenessCreateInput{
+	livenessRepo := liveness.NewEntLivenessRepository(storage.GetEntClient())
+	_, err := livenessRepo.Create(ctx, liveness.LivenessCreateInput{
 		StageSlug: toSlug,
-		Definition: LivenessDefinition{
-			Kind:             LivenessKindDurationBudget,
+		Definition: liveness.LivenessDefinition{
+			Kind:             liveness.LivenessKindDurationBudget,
 			ExpectedDuration: 10 * time.Minute,
 			StalenessMargin:  5 * time.Minute,
 		},
 	})
 	require.NoError(t, err)
-	engine, err := NewCachingLivenessEngine(livenessRepo)
+	engine, err := liveness.NewCachingLivenessEngine(livenessRepo)
 	require.NoError(t, err)
 
 	item, gateID := newGateTimeoutTestFixture(t, storage, toSlug, 16*time.Minute, 10*time.Minute, 5*time.Minute)

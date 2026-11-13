@@ -438,7 +438,7 @@ func (s *BacklogService) TriggerTriage(
 		triagePrompt = s.triagePromptFor(item, artifactAbsPath)
 	}
 
-	log.Info("[PipelineEngine] stage=triage", "item", item.ID, "mode", backlog.ResolvedModeLabel(item.PipelineMode))
+	log.Info("[PipelineEngine] stage=triage", "item", item.ID, "mode", backlogdto.ResolvedModeLabel(item.PipelineMode))
 
 	// 8. Create ItemSession synchronously before goroutine (prevents TOCTOU on orphan guard).
 	// Snapshot the resolved PipelineMode slug + content hash — see the comment on the
@@ -446,7 +446,7 @@ func (s *BacklogService) TriggerTriage(
 	triageSessionUUID := services.HeadlessTriageUUIDPrefix + uuid.New().String()
 	var triagePipelineModeSnapshotHash string
 	if s.pipelineEngine != nil {
-		triagePipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlog.PipelineMode(item.PipelineMode))
+		triagePipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlogdto.PipelineMode(item.PipelineMode))
 	}
 
 	// Resolve this stage's configured (program, model) executor before creating
@@ -533,7 +533,7 @@ func (s *BacklogService) TriggerTriage(
 		// byte-for-byte unchanged from before.
 		callBudget := triageCallBudget
 		if s.livenessEngine != nil {
-			if def, defErr := s.livenessEngine.LivenessFor(session.BacklogStatusIdea, backlog.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+			if def, defErr := s.livenessEngine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 				callBudget = def.ExpectedDuration
 			}
 		}

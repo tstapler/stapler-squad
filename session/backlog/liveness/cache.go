@@ -1,4 +1,4 @@
-package backlog
+package liveness
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // resolvedLivenessDefinition is an unexported, immutable snapshot of one
@@ -24,7 +25,7 @@ type resolvedLivenessDefinition struct {
 // printable character like ":") because it can never appear in either a
 // stage slug or a PipelineMode slug, so no legitimate combination of the two
 // can collide with a different pair.
-func livenessCacheKey(stageSlug string, mode PipelineMode) string {
+func livenessCacheKey(stageSlug string, mode backlogdto.PipelineMode) string {
 	return stageSlug + "\x00" + string(mode)
 }
 
@@ -84,9 +85,9 @@ func (c *livenessCache) refresh(ctx context.Context, repo LivenessRepository) er
 			log.WarningLog().Printf("[LivenessEngine] skipping malformed stage_liveness_definitions row id=%s: %v", row.ID, err)
 			continue
 		}
-		mode := PipelineModeDefault
+		mode := backlogdto.PipelineModeDefault
 		if row.PipelineMode != nil {
-			mode = PipelineMode(*row.PipelineMode)
+			mode = backlogdto.PipelineMode(*row.PipelineMode)
 		}
 		next[livenessCacheKey(row.StageSlug, mode)] = resolvedLivenessDefinition{LivenessDefinition: def}
 	}
@@ -103,21 +104,21 @@ func (c *livenessCache) refresh(ctx context.Context, repo LivenessRepository) er
 // Never logs; the caller (CachingLivenessEngine.LivenessFor) is responsible
 // for any Warn-log-and-fallback-to-DefaultLivenessEngine behavior when Get
 // itself returns a miss.
-func (c *livenessCache) Get(stageSlug string, mode PipelineMode) (resolvedLivenessDefinition, bool) {
+func (c *livenessCache) Get(stageSlug string, mode backlogdto.PipelineMode) (resolvedLivenessDefinition, bool) {
 	m := c.ptr.Load()
 	if m == nil {
 		return resolvedLivenessDefinition{}, false
 	}
 
-	if mode != PipelineModeDefault {
+	if mode != backlogdto.PipelineModeDefault {
 		if rd, ok := (*m)[livenessCacheKey(stageSlug, mode)]; ok {
 			return rd, true
 		}
 	}
 
 	// Mode-less fallback: a (stageSlug, mode) row is absent (or mode was
-	// already PipelineModeDefault, making this the same lookup) — try
+	// already backlogdto.PipelineModeDefault, making this the same lookup) — try
 	// (stageSlug, nil) before reporting a miss.
-	rd, ok := (*m)[livenessCacheKey(stageSlug, PipelineModeDefault)]
+	rd, ok := (*m)[livenessCacheKey(stageSlug, backlogdto.PipelineModeDefault)]
 	return rd, ok
 }

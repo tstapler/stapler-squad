@@ -375,7 +375,7 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 	})
 	require.NoError(t, err)
 
-	_, ok := engine.ContentHashFor(backlog.PipelineMode("quick"))
+	_, ok := engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	require.True(t, ok, "setup: 'quick' must resolve before delete")
 
 	_, err = svc.DeletePipelineMode(ctx, connect.NewRequest(&sessionv1.DeletePipelineModeRequest{Id: id}))
@@ -386,7 +386,7 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 	assert.Empty(t, all)
 
 	// Cache invalidated synchronously: the mode no longer resolves.
-	_, ok = engine.ContentHashFor(backlog.PipelineMode("quick"))
+	_, ok = engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	assert.False(t, ok, "expected the cache to no longer resolve 'quick' after delete+invalidate")
 }
 

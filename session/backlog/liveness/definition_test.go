@@ -1,7 +1,8 @@
-package backlog
+package liveness
 
 import (
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"strings"
 	"testing"
 	"time"
@@ -176,7 +177,7 @@ func TestLivenessDefinition_should_HaveStalenessThresholdGreaterThanExpectedDura
 
 	checked := 0
 	for _, stage := range stages {
-		def, err := engine.LivenessFor(stage, PipelineModeDefault)
+		def, err := engine.LivenessFor(stage, backlogdto.PipelineModeDefault)
 		if err != nil {
 			t.Fatalf("LivenessFor(%q) unexpected error: %v", stage, err)
 		}

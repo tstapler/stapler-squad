@@ -1608,7 +1608,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 
 // blockedCycleThreshold caps how many times report_blocked may return the
 // same item to ready before escalating to review instead. Mirrors
-// session/stuck_decisions.go's bounceThreshold precedent (3) — an item that
+// session/backlog/stuck/decisions.go's bounceThreshold precedent (3) — an item that
 // keeps landing back in ready for the same external-blocker reason needs a
 // human/reviewer to look at it rather than looping through work sessions
 // indefinitely (the same failure shape the 78-bounce incident documented in
@@ -1658,7 +1658,7 @@ func countBlockedCycles(notes string) int {
 // a session stopped is an external dependency, not completed work.
 //
 // Deliberately does NOT call CountReviewCyclesSince or isBouncing
-// (session/stuck_decisions.go) — those track work<->review round trips
+// (session/backlog/stuck/decisions.go) — those track work<->review round trips
 // looking for non-converging rework, which is a different failure shape than
 // external blocking. Escalation here is driven purely by
 // blockedNoteMarker-prefixed lines in this item's own Notes.

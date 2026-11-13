@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -37,7 +38,7 @@ type TriageRespawner interface {
 	// reconcileOrphanedTriageItems' shape-1 staleness gate (BUG-055): a headless
 	// triage session has no live tmux instance to query, so before this existed
 	// that gate had no way to tell a session still open past
-	// maxHeadlessTriageSessionStaleness because it's genuinely still running
+	// liveness.MaxHeadlessTriageSessionStaleness because it's genuinely still running
 	// apart from one that's actually dead — it assumed the latter unconditionally.
 	IsTriageLive(itemID string) bool
 
@@ -65,22 +66,6 @@ type TriageRespawner interface {
 // genuinely still running — so they warrant a much shorter staleness threshold than the
 // general 2h ceiling below.
 const headlessTriageSessionUUIDPrefix = "headless-triage-"
-
-// maxHeadlessTriageSessionStaleness bounds how long an open headless-triage session is
-// trusted before reconcileOrphanedTriageItems flags it as orphaned. MUST stay strictly
-// greater than server/services.triageCallBudget (the real per-call LLM budget, currently
-// 3h — raised 2026-09-08 alongside headless.idleTimeout, which is now the primary defense
-// against a hung call; see triageCallBudget's own doc comment) with real margin —
-// confirmed live 2026-08-01 (BUG-055) that headless triage calls routinely run right up
-// to their full call budget (27m41s, 27m53s, 30m38s observed against the old 30m budget
-// in one incident), not the 7-15 minutes this constant was originally tuned against. At a
-// value equal to or below triageCallBudget, this sweep's periodic tick races the call's
-// own natural completion/timeout on every slow call. IsTriageLive (checked by the shape-1
-// branch below) is the structural fix for that race — this margin is a defense-in-depth
-// belt-and-suspenders measure on top of it, not a substitute: even with a real liveness
-// check, there's no reason to court the race in the first place when a full call is still
-// plausibly finishing.
-const maxHeadlessTriageSessionStaleness = 3*time.Hour + 15*time.Minute
 
 // latestTriageSession returns the most recent triage-role ItemSession (by
 // CreatedAt), regardless of whether it has ended yet, or nil if none exists.
@@ -234,8 +219,8 @@ func (l *BacklogLifecycleListener) recordTriageParkAndMaybeEscalate(itemID strin
 //     call can legitimately run up to triageCallBudget (3h) now, so per-tick
 //     liveness signals are noisy here; staleness alone is the reliable signal.
 //     Headless-triage sessions (the common case) get the shorter
-//     maxHeadlessTriageSessionStaleness (3h15m)
-//     rather than the general-purpose maxWorkSessionStaleness (2h): an open
+//     liveness.MaxHeadlessTriageSessionStaleness (3h15m)
+//     rather than the general-purpose liveness.MaxWorkSessionStaleness (2h): an open
 //     headless row found later reliably means dead, not slow (see that constant's
 //     doc comment). Not generalized beyond idea: nothing in this codebase creates
 //     a new triage-role session while an item is queued, so an open session found
@@ -310,14 +295,14 @@ func (l *BacklogLifecycleListener) reconcileOrphanedTriageItems(ctx context.Cont
 				continue
 			}
 			isHeadless := strings.HasPrefix(latestTriage.SessionUUID, headlessTriageSessionUUIDPrefix)
-			staleness := maxWorkSessionStaleness
+			staleness := liveness.MaxWorkSessionStaleness
 			if isHeadless {
-				// Shape A (LivenessKindDurationBudget), keyed BacklogStatusIdea — Epic 1.4,
+				// Shape A (liveness.LivenessKindDurationBudget), keyed BacklogStatusIdea — Epic 1.4,
 				// Story 1.4.1. Nil-guarded: an unwired/unresolvable engine falls back to the
-				// literal maxHeadlessTriageSessionStaleness constant, unchanged from before.
-				staleness = maxHeadlessTriageSessionStaleness
+				// literal liveness.MaxHeadlessTriageSessionStaleness constant, unchanged from before.
+				staleness = liveness.MaxHeadlessTriageSessionStaleness
 				if l.livenessEngine != nil {
-					if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusIdea, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+					if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 						staleness = def.StalenessThreshold()
 					}
 				}

@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstuckstate"
@@ -26,8 +28,8 @@ import (
 
 // backdateStuckFirstDetected sets first_detected_at on the open
 // BacklogStuckState row for (itemID, reason) to when, so tests can simulate a
-// condition that has held past a pure-fn threshold (stuckPRReady,
-// abandonedReview) without sleeping in real time.
+// condition that has held past a pure-fn threshold (stuck.PRReady,
+// stuck.AbandonedReview) without sleeping in real time.
 func backdateStuckFirstDetected(t *testing.T, er *session.EntRepository, itemID string, reason domain.StuckReason, when time.Time) {
 	t.Helper()
 	parsedID, err := uuid.Parse(itemID)
@@ -45,7 +47,7 @@ func backdateStuckFirstDetected(t *testing.T, er *session.EntRepository, itemID 
 
 // newStaleWorkTestItem creates an in_progress BacklogItem with a single active
 // (EndedAt nil) work-role ItemSession whose last_progress_at is backdated
-// beyond maxWorkSessionStaleness, matching the shape reconcileStaleWorkSessions
+// beyond liveness.MaxWorkSessionStaleness, matching the shape reconcileStaleWorkSessions
 // (and BackfillStuckStates' mirror of it) looks for.
 func newStaleWorkTestItem(t *testing.T, storage *session.Storage, er *session.EntRepository) *backlogdto.BacklogItemData {
 	t.Helper()
@@ -68,7 +70,7 @@ func newStaleWorkTestItem(t *testing.T, storage *session.Storage, er *session.En
 
 	parsedID, err := uuid.Parse(workIS.ID)
 	require.NoError(t, err)
-	stale := time.Now().Add(-3 * time.Hour) // beyond maxWorkSessionStaleness (2h)
+	stale := time.Now().Add(-3 * time.Hour) // beyond liveness.MaxWorkSessionStaleness (2h)
 	_, err = er.Client.ItemSession.UpdateOneID(parsedID).SetLastProgressAt(stale).Save(ctx)
 	require.NoError(t, err)
 
@@ -145,7 +147,7 @@ func newEndedTriageTestItem(t *testing.T, storage *session.Storage, er *session.
 // Scope note (deviation from the literal plan wording): this Epic (1.1) seeds
 // only abandoned_review and stale_work — the two reasons with a detection
 // query that already exists as of this Epic (FindStuckReviewItems, and the
-// maxWorkSessionStaleness check mirrored from reconcileStaleWorkSessions).
+// liveness.MaxWorkSessionStaleness check mirrored from reconcileStaleWorkSessions).
 // rework_cap, bouncing, and push_failed detection logic is introduced by
 // Phase 2 (Stories 2.1.2, 2.1.4, 2.1.6) and does not exist yet — seeding them
 // here would mean fabricating that not-yet-built detection logic ahead of
@@ -837,7 +839,7 @@ func TestReconcileUnprocessedReviewVerdicts_should_LogDetectionOnlyOnce_AcrossRe
 		"tick 1 is a fresh detection and must log the WARNING once")
 
 	// Between ticks: a "bouncing" stuck row opens mid-backoff — mirrors
-	// reconcileBouncingItems tripping its own bounceThreshold independently.
+	// reconcileBouncingItems tripping its own stuck.BounceThreshold independently.
 	_, err = er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bounced previously")
 	require.NoError(t, err)
 	future := time.Now().Add(2 * time.Hour)
@@ -899,7 +901,7 @@ func TestReconcileStuckReviewItems_should_resolveAbandonedRow_When_ReviewGateBac
 // TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveSessionStale
 // verifies a durable stale_work row is opened (DB-backed, not the removed
 // in-memory map) for an in_progress item whose active work session has gone
-// quiet past maxWorkSessionStaleness.
+// quiet past liveness.MaxWorkSessionStaleness.
 func TestReconcileStaleWorkSessions_should_writeDurableStaleWorkRow_When_ActiveSessionStale(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -985,7 +987,7 @@ func (f *fakeStaleWorkRemediator) RemediateStaleWorkSession(ctx context.Context,
 
 // TestReconcileStaleWorkSessions_should_notRemediateOnFirstSighting_When_RowJustOpened
 // verifies the tick that first opens (and notifies) a stale_work row does NOT
-// also dispatch remediation — the existing maxWorkSessionStaleness threshold
+// also dispatch remediation — the existing liveness.MaxWorkSessionStaleness threshold
 // is already the "give it a chance" window; remediation only starts on a
 // subsequent tick that reconfirms the row is still open, matching how
 // autoReopenWithBackoffGate/retryPushFailedWithBackoffGate are always
@@ -1093,7 +1095,7 @@ func TestRemediateStaleWorkWithBackoffGate_should_respectBackoffSchedule_When_Ca
 
 // TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressIsRecent
 // verifies requirement (c): a work session correctly identified as still
-// active/healthy (LastProgressAt recent, under maxWorkSessionStaleness) is
+// active/healthy (LastProgressAt recent, under liveness.MaxWorkSessionStaleness) is
 // never marked stuck, notified, or handed to the remediator — no kill, no
 // notify, no remediation attempt.
 func TestReconcileStaleWorkSessions_should_notTouchHealthySession_When_ProgressIsRecent(t *testing.T) {
@@ -1418,7 +1420,7 @@ func TestReconcileOrphanedTriageItems_should_writeDurableRowNotifyOnce_When_Tria
 	ctx := context.Background()
 	er := storage.Repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond liveness.MaxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &sessiontest.FakeNotifier{}
@@ -1454,7 +1456,7 @@ func TestReconcileOrphanedTriageItems_should_tombstoneStaleSession_When_Detected
 	ctx := context.Background()
 	er := storage.Repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond liveness.MaxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.reconcileOrphanedTriageItems(ctx, er)
@@ -1509,7 +1511,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t 
 	ctx := context.Background()
 	er := storage.Repo
 
-	// A triage session that just started (well within maxWorkSessionStaleness)
+	// A triage session that just started (well within liveness.MaxWorkSessionStaleness)
 	// must not be flagged — it is plausibly still running.
 	newOrphanedTriageTestItem(t, storage, er, 5*time.Minute)
 
@@ -1524,10 +1526,10 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_TriageSessionRecent(t 
 // TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwnLongerThreshold
 // guards headless triage sessions' dedicated staleness threshold in the OTHER direction
 // from its original 2026-08-01 intent: originally (30m real call budget) the headless
-// threshold was much SHORTER than the general-purpose maxWorkSessionStaleness (2h), so this
+// threshold was much SHORTER than the general-purpose liveness.MaxWorkSessionStaleness (2h), so this
 // test proved headless sessions got flagged sooner, not held to the slower general ceiling.
 // 2026-09-08 (this session) raised triageCallBudget to 3h alongside headless.idleTimeout
-// becoming the primary hang defense, which pushed maxHeadlessTriageSessionStaleness (now
+// becoming the primary hang defense, which pushed liveness.MaxHeadlessTriageSessionStaleness (now
 // 3h15m, kept in sync per TestMaxHeadlessTriageSessionStaleness_..._ExceedRealTriageCallBudgetWithMargin
 // below) past the general 2h ceiling — inverting the relationship. This test now guards the
 // inverse regression: a headless session must NOT be flagged merely for outliving the
@@ -1539,8 +1541,8 @@ func TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwn
 	ctx := context.Background()
 	er := storage.Repo
 
-	// 2h30m: past the general-purpose maxWorkSessionStaleness (2h) but still short of
-	// maxHeadlessTriageSessionStaleness (3h15m) — must NOT be flagged if the headless
+	// 2h30m: past the general-purpose liveness.MaxWorkSessionStaleness (2h) but still short of
+	// liveness.MaxHeadlessTriageSessionStaleness (3h15m) — must NOT be flagged if the headless
 	// override is still correctly applied instead of silently falling through to the
 	// shorter general threshold.
 	newOrphanedTriageTestItem(t, storage, er, 2*time.Hour+30*time.Minute)
@@ -1559,7 +1561,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagHeadlessSession_BeforeItsOwn
 
 // TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionStaleButGenuinelyLive
 // guards the fix for BUG-055: before IsTriageLive existed, this shape-1 branch tombstoned
-// ANY headless triage session past maxHeadlessTriageSessionStaleness unconditionally, with
+// ANY headless triage session past liveness.MaxHeadlessTriageSessionStaleness unconditionally, with
 // no way to tell "genuinely dead" apart from "still running, just slow" — confirmed live
 // 2026-08-01 that headless triage calls routinely run right up to their full 30m budget,
 // so this staleness-only gate raced the call's own natural completion on every slow call.
@@ -1571,7 +1573,7 @@ func TestReconcileOrphanedTriageItems_should_notTombstone_When_HeadlessSessionSt
 	ctx := context.Background()
 	er := storage.Repo
 
-	// 4 hours: past maxHeadlessTriageSessionStaleness (3h15m) — would have been
+	// 4 hours: past liveness.MaxHeadlessTriageSessionStaleness (3h15m) — would have been
 	// tombstoned unconditionally before BUG-055's fix.
 	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour)
 
@@ -1606,8 +1608,8 @@ func TestMaxHeadlessTriageSessionStaleness_should_ExceedRealTriageCallBudgetWith
 	t.Parallel()
 	const knownTriageCallBudget = 3 * time.Hour
 	const minMargin = 2 * time.Minute
-	assert.Greater(t, maxHeadlessTriageSessionStaleness, knownTriageCallBudget+minMargin,
-		"maxHeadlessTriageSessionStaleness must exceed the real triage call budget with real margin, not race it")
+	assert.Greater(t, liveness.MaxHeadlessTriageSessionStaleness, knownTriageCallBudget+minMargin,
+		"liveness.MaxHeadlessTriageSessionStaleness must exceed the real triage call budget with real margin, not race it")
 }
 
 // TestReconcileOrphanedTriageItems_should_flagImmediately_When_TriageSessionEndedWithoutTransition
@@ -2000,7 +2002,7 @@ func TestReconcileOrphanedTriageRemediation_should_dispatchRetryThroughBackoffGa
 	ctx := context.Background()
 	er := storage.Repo
 
-	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond maxHeadlessTriageSessionStaleness (3h15m)
+	item := newOrphanedTriageTestItem(t, storage, er, 4*time.Hour) // beyond liveness.MaxHeadlessTriageSessionStaleness (3h15m)
 
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetNotifier(&sessiontest.FakeNotifier{})
@@ -2179,7 +2181,7 @@ func TestReconcileOrphanedTriageItems_should_notFlagQueuedItem_When_TriageResult
 // own status guard only accepts idea/ready), so an open session found on a queued
 // item is an unmodeled anomaly this detector must never act on — no staleness
 // flag, no tombstone. The session here is backdated well past
-// maxWorkSessionStaleness so this test would fail loudly (a false-positive flag)
+// liveness.MaxWorkSessionStaleness so this test would fail loudly (a false-positive flag)
 // if that guard were ever removed or narrowed, rather than passing vacuously.
 func TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriageSession(t *testing.T) {
 	t.Parallel()
@@ -2207,7 +2209,7 @@ func TestReconcileOrphanedTriageItems_should_notFlag_When_QueuedItemHasOpenTriag
 		SetSessionUUID("headless-triage-" + uuid.New().String()).
 		SetSessionRole(string(session.SessionRoleTriage)).
 		SetBacklogItemID(parsedItemID).
-		SetCreatedAt(time.Now().Add(-3 * time.Hour)). // beyond maxWorkSessionStaleness (2h)
+		SetCreatedAt(time.Now().Add(-3 * time.Hour)). // beyond liveness.MaxWorkSessionStaleness (2h)
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -2900,7 +2902,7 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 		require.NoError(t, err)
 	}
 
-	count, err := er.CountReviewCyclesSince(ctx, item.ID, time.Now().Add(-bounceLookback))
+	count, err := er.CountReviewCyclesSince(ctx, item.ID, time.Now().Add(-stuck.BounceLookback))
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 
@@ -2911,8 +2913,8 @@ func TestCountReviewCyclesSince_should_countInProgressToReviewTransitions_When_W
 }
 
 // TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCyclesIn24hNoPass
-// verifies an item that bounced in_progress<->review >= bounceThreshold times
-// within bounceLookback with no PASS verdict is flagged bouncing and notified
+// verifies an item that bounced in_progress<->review >= stuck.BounceThreshold times
+// within stuck.BounceLookback with no PASS verdict is flagged bouncing and notified
 // once.
 func TestReconcileBouncingItems_should_writeBouncingRowNotifyOnce_When_ThreeCyclesIn24hNoPass(t *testing.T) {
 	t.Parallel()
@@ -3013,7 +3015,7 @@ func TestReconcileBouncingItems_should_surfaceVerdictOutcomeAndSummaryInContext_
 }
 
 // TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass verifies
-// an item with fewer than bounceThreshold cycles, and one with a recorded
+// an item with fewer than stuck.BounceThreshold cycles, and one with a recorded
 // PASS verdict, are not flagged bouncing.
 func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *testing.T) {
 	t.Parallel()
@@ -3040,7 +3042,7 @@ func TestReconcileBouncingItems_should_notFlag_When_BelowThresholdOrHasPass(t *t
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	assert.Empty(t, open, "an item with fewer than bounceThreshold cycles must not be flagged")
+	assert.Empty(t, open, "an item with fewer than stuck.BounceThreshold cycles must not be flagged")
 }
 
 // TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerged
@@ -3100,7 +3102,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_LinkedPRAlreadyMerg
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged", "")
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
-	// shape isBouncing flags.
+	// shape stuck.IsBouncing flags.
 	for i := 0; i < 3; i++ {
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
@@ -3164,7 +3166,7 @@ func TestReconcileBouncingItems_should_ResolveBounceCapExhausted_When_BouncingRe
 	require.True(t, applied)
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
-	// shape isBouncing flags (mirrors the sibling merged-PR test above).
+	// shape stuck.IsBouncing flags (mirrors the sibling merged-PR test above).
 	for i := 0; i < 3; i++ {
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
@@ -3451,7 +3453,7 @@ func TestReconcileBouncingItems_should_transitionToDone_When_ShippedWithoutPR(t 
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	// 3 in_progress->review round trips with no PASS verdict — the exact
-	// shape isBouncing flags.
+	// shape stuck.IsBouncing flags.
 	for i := 0; i < 3; i++ {
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
@@ -4830,17 +4832,17 @@ func TestRunStuckDetector_should_recoverAndLogPanic_When_DetectorPanics(t *testi
 // structural regression test: the pure decision functions must exist with the
 // documented signatures and behavior (rather than threshold arithmetic being
 // re-inlined into a reconciler entangled with a DB read). Exercised via the
-// package-level pure-function unit tests in stuck_decisions_test.go; this
+// package-level pure-function unit tests in stuck/decisions_test.go; this
 // test asserts the specific boundary values the reconcilers rely on so a
 // future inlining regression (threshold moved back into a reconciler with a
 // different value) would be caught here too.
 func TestReconcilers_should_delegateThresholdDecisionsToPureFns_When_Reviewed(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	assert.True(t, stuckPRReady(now.Add(-prReadyThreshold-time.Minute), now))
-	assert.True(t, abandonedReview(now.Add(-abandonedReviewGrace-time.Minute), now))
-	assert.True(t, staleWork(now.Add(-maxWorkSessionStaleness-time.Minute), now, maxWorkSessionStaleness))
-	assert.True(t, isBouncing(bounceThreshold, bounceThreshold, false))
+	assert.True(t, stuck.PRReady(now.Add(-stuck.PRReadyThreshold-time.Minute), now))
+	assert.True(t, stuck.AbandonedReview(now.Add(-stuck.AbandonedReviewGrace-time.Minute), now))
+	assert.True(t, stuck.StaleWork(now.Add(-liveness.MaxWorkSessionStaleness-time.Minute), now, liveness.MaxWorkSessionStaleness))
+	assert.True(t, stuck.IsBouncing(stuck.BounceThreshold, stuck.BounceThreshold, false))
 }
 
 // newDoneTestItem creates a BacklogItem in "done" status and backdates a
@@ -5341,7 +5343,7 @@ func TestReconcileBlockedByDependencyResolution_should_leaveRowOpen_When_Blocker
 // verifies the escalate branch: an item with 2 simultaneously open,
 // independent (non-coupled) non-escalation reasons gets a durable
 // multiple_reasons row within one tick, but is NOT notified on the same tick
-// that created the row (multiReasonEscalationNotifyReady's dwell gate).
+// that created the row (stuck.MultiReasonEscalationNotifyReady's dwell gate).
 func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_ThresholdFirstCrossed(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -5378,7 +5380,7 @@ func TestReconcileMultiReasonEscalation_should_MarkStuckWithoutNotifying_When_Th
 
 // TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen
 // verifies the notify branch: once the multiple_reasons row has been open
-// past multiReasonNotifyDwell and the condition still holds, the next tick
+// past stuck.MultiReasonNotifyDwell and the condition still holds, the next tick
 // notifies exactly once and marks the row notified.
 func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillOpen(t *testing.T) {
 	t.Parallel()
@@ -5430,7 +5432,7 @@ func TestReconcileMultiReasonEscalation_should_Notify_When_DwellElapsedAndStillO
 
 // TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold
 // verifies the de-escalate branch: once one of the two underlying reasons
-// resolves (dropping the non-escalation count below multiReasonThreshold),
+// resolves (dropping the non-escalation count below stuck.MultiReasonThreshold),
 // the next tick resolves the multiple_reasons row.
 func TestReconcileMultiReasonEscalation_should_ResolveStuck_When_CountDropsBelowThreshold(t *testing.T) {
 	t.Parallel()
@@ -5649,7 +5651,7 @@ func newOrphanedTriageTestItemWithMode(t *testing.T, storage *session.Storage, e
 }
 
 // TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_NoOverrideConfiguredAndSessionAgeUnder35Min
-// is Story 1.4.1's zero-regression happy path: with no LivenessEngine override
+// is Story 1.4.1's zero-regression happy path: with no liveness.LivenessEngine override
 // row configured (listener.livenessEngine left nil, matching every pre-Epic-1.4
 // call site), an sdd-mode item's open headless-triage session at 34m — still
 // under the flat 35m constant — is not marked stuck, exactly as before.
@@ -5673,7 +5675,7 @@ func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_NoOverrideConfigu
 
 // TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_SddModeOverrideRaisesThresholdPast40Min
 // is the concrete Milestone 1 fix (the 12 parked items this epic exists for): with a
-// ("idea","sdd") CachingLivenessEngine override row of ExpectedDuration=45m,
+// ("idea","sdd") liveness.CachingLivenessEngine override row of ExpectedDuration=45m,
 // StalenessMargin=10m (StalenessThreshold=55m) configured, an sdd-mode item's session at
 // 40m — past the OLD flat 35m constant, but under the NEW 55m derived threshold — is not
 // marked stuck.
@@ -5684,19 +5686,19 @@ func TestReconcileOrphanedTriageItems_should_NotMarkStuck_When_SddModeOverrideRa
 	ctx := context.Background()
 	er := storage.Repo
 
-	repo := NewEntLivenessRepository(storage.GetEntClient())
+	repo := liveness.NewEntLivenessRepository(storage.GetEntClient())
 	mode := "sdd"
-	_, err := repo.Create(ctx, LivenessCreateInput{
+	_, err := repo.Create(ctx, liveness.LivenessCreateInput{
 		StageSlug:    string(session.BacklogStatusIdea),
 		PipelineMode: &mode,
-		Definition: LivenessDefinition{
-			Kind:             LivenessKindDurationBudget,
+		Definition: liveness.LivenessDefinition{
+			Kind:             liveness.LivenessKindDurationBudget,
 			ExpectedDuration: 45 * time.Minute,
 			StalenessMargin:  10 * time.Minute,
 		},
 	})
 	require.NoError(t, err)
-	engine, err := NewCachingLivenessEngine(repo)
+	engine, err := liveness.NewCachingLivenessEngine(repo)
 	require.NoError(t, err)
 
 	item := newOrphanedTriageTestItemWithMode(t, storage, er, 40*time.Minute, "sdd")
@@ -5745,7 +5747,7 @@ func newStaleWorkTestItemWithAge(t *testing.T, storage *session.Storage, er *ses
 
 // TestReconcileStaleWorkSessions_should_NotMarkStuck_When_NoOverrideConfiguredAndProgressAgeUnder2Hours
 // is Story 1.4.3's zero-regression happy path for Shape B (stale_work): with no
-// LivenessEngine override configured, an in_progress item's active work session at
+// liveness.LivenessEngine override configured, an in_progress item's active work session at
 // 1h59m — still under the flat 2h constant — is not marked stale, exactly as before.
 func TestReconcileStaleWorkSessions_should_NotMarkStuck_When_NoOverrideConfiguredAndProgressAgeUnder2Hours(t *testing.T) {
 	t.Parallel()
@@ -5777,18 +5779,18 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDur
 	ctx := context.Background()
 	er := storage.Repo
 
-	repo := NewEntLivenessRepository(storage.GetEntClient())
+	repo := liveness.NewEntLivenessRepository(storage.GetEntClient())
 	mode := "sdd"
-	_, err := repo.Create(ctx, LivenessCreateInput{
+	_, err := repo.Create(ctx, liveness.LivenessCreateInput{
 		StageSlug:    string(session.BacklogStatusInProgress),
 		PipelineMode: &mode,
-		Definition: LivenessDefinition{
-			Kind:                  LivenessKindHeartbeat,
+		Definition: liveness.LivenessDefinition{
+			Kind:                  liveness.LivenessKindHeartbeat,
 			MaxNoProgressDuration: 3 * time.Hour,
 		},
 	})
 	require.NoError(t, err)
-	engine, err := NewCachingLivenessEngine(repo)
+	engine, err := liveness.NewCachingLivenessEngine(repo)
 	require.NoError(t, err)
 
 	notStale := newStaleWorkTestItemWithAge(t, storage, er, 2*time.Hour+time.Minute, "sdd")
@@ -5803,7 +5805,7 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDur
 	assert.False(t, ok, "2h1m-old sdd-mode progress must not be flagged under the 3h resolved threshold")
 
 	// Now push a second sdd-mode item past the resolved 3h threshold and confirm the
-	// notify body interpolates "3h0m0s", not the bare maxWorkSessionStaleness ("2h0m0s").
+	// notify body interpolates "3h0m0s", not the bare liveness.MaxWorkSessionStaleness ("2h0m0s").
 	pastResolved := newStaleWorkTestItemWithAge(t, storage, er, 3*time.Hour+time.Minute, "sdd")
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -5816,13 +5818,13 @@ func TestReconcileStaleWorkSessions_should_NotMarkStuckAndInterpolateResolvedDur
 	require.Len(t, notifier.Calls, 1, "expected exactly one notify call for the newly-stale item")
 	notifyBody := notifier.Calls[0].Message
 	assert.Contains(t, notifyBody, "3h0m0s", "notify body must interpolate the resolved 3h duration")
-	assert.NotContains(t, notifyBody, "2h0m0s", "notify body must not fall back to the bare maxWorkSessionStaleness constant")
+	assert.NotContains(t, notifyBody, "2h0m0s", "notify body must not fall back to the bare liveness.MaxWorkSessionStaleness constant")
 }
 
 // TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThreeCyclesInDefaultLookback
-// is Story 1.4.3's zero-regression happy path for Shape C (bouncing): with no LivenessEngine
-// override configured, an item with bounceThreshold (3) in_progress<->review cycles within
-// bounceLookback (24h) and no PASS verdict is still marked bouncing, exactly as before.
+// is Story 1.4.3's zero-regression happy path for Shape C (bouncing): with no liveness.LivenessEngine
+// override configured, an item with stuck.BounceThreshold (3) in_progress<->review cycles within
+// stuck.BounceLookback (24h) and no PASS verdict is still marked bouncing, exactly as before.
 func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThreeCyclesInDefaultLookback(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -5835,7 +5837,7 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 		Status: string(session.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
-	for i := 0; i < bounceThreshold; i++ {
+	for i := 0; i < stuck.BounceThreshold; i++ {
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
 		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
@@ -5848,7 +5850,7 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBouncing)
-	assert.True(t, ok, "3 cycles in 24h with no PASS must still be flagged — unchanged from today's bounceThreshold=3/bounceLookback=24h")
+	assert.True(t, ok, "3 cycles in 24h with no PASS must still be flagged — unchanged from today's stuck.BounceThreshold=3/stuck.BounceLookback=24h")
 }
 
 // TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDefaultModeSibling_When_PerItemOverrideRaisesCycleThreshold
@@ -5856,10 +5858,10 @@ func TestReconcileBouncingItems_should_MarkStuck_When_NoOverrideConfiguredAndThr
 // corrected key, see this file's Epic 1.4 Story 1.4.3 plan-correction note in
 // project_plans/backlog-custom-workflow-stages/implementation/plan.md) and proves resolution
 // is per-item, not a package-level override: an sdd-mode item with 4 cycles in 30h (past the
-// OLD bounceThreshold=3 but under the NEW CycleThreshold=5) is NOT flagged, while a
+// OLD stuck.BounceThreshold=3 but under the NEW CycleThreshold=5) is NOT flagged, while a
 // default-mode item with the IDENTICAL 4-cycles-in-30h shape, in the SAME reconcile tick, IS
-// still flagged via CachingLivenessEngine's fallback to DefaultLivenessEngine's built-in
-// bounceThreshold=3 for the unconfigured ("review", PipelineModeDefault) pair.
+// still flagged via liveness.CachingLivenessEngine's fallback to liveness.DefaultLivenessEngine's built-in
+// stuck.BounceThreshold=3 for the unconfigured ("review", backlogdto.PipelineModeDefault) pair.
 func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDefaultModeSibling_When_PerItemOverrideRaisesCycleThreshold(t *testing.T) {
 	t.Parallel()
 	storage, cleanup := createTestStorage(t)
@@ -5867,19 +5869,19 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 	ctx := context.Background()
 	er := storage.Repo
 
-	repo := NewEntLivenessRepository(storage.GetEntClient())
+	repo := liveness.NewEntLivenessRepository(storage.GetEntClient())
 	mode := "sdd"
-	_, err := repo.Create(ctx, LivenessCreateInput{
+	_, err := repo.Create(ctx, liveness.LivenessCreateInput{
 		StageSlug:    string(session.BacklogStatusReview),
 		PipelineMode: &mode,
-		Definition: LivenessDefinition{
-			Kind:           LivenessKindCycleFrequency,
+		Definition: liveness.LivenessDefinition{
+			Kind:           liveness.LivenessKindCycleFrequency,
 			CycleThreshold: 5,
 			CycleLookback:  48 * time.Hour,
 		},
 	})
 	require.NoError(t, err)
-	engine, err := NewCachingLivenessEngine(repo)
+	engine, err := liveness.NewCachingLivenessEngine(repo)
 	require.NoError(t, err)
 
 	newFourCycleItem := func(pipelineMode string) *backlogdto.BacklogItemData {
@@ -5910,7 +5912,7 @@ func TestReconcileBouncingItems_should_NotMarkStuckForSddModeItemButStillMarkDef
 	_, sddFlagged := session.FindOpenStuckStateFor(open, sddItem.ID, domain.StuckReasonBouncing)
 	_, defaultFlagged := session.FindOpenStuckStateFor(open, defaultItem.ID, domain.StuckReasonBouncing)
 	assert.False(t, sddFlagged, "sdd-mode item with 4 cycles must not be flagged under the per-item CycleThreshold=5 override")
-	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's DefaultLivenessEngine fallback (bounceThreshold=3) — proving per-item, not package-level, resolution")
+	assert.True(t, defaultFlagged, "default-mode sibling with the identical 4-cycles-in-30h shape must still be flagged via the unconfigured pair's liveness.DefaultLivenessEngine fallback (stuck.BounceThreshold=3) — proving per-item, not package-level, resolution")
 }
 
 func TestReconcileOrphanedTriageItems_should_includeErrorDetailInContext_When_EndReasonOther(t *testing.T) {

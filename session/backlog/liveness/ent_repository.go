@@ -1,4 +1,4 @@
-package backlog
+package liveness
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/stagelivenessdefinition"
 )
@@ -115,11 +116,11 @@ func (r *EntLivenessRepository) Delete(ctx context.Context, id uuid.UUID) error 
 // GetByStageAndMode performs an exact-match lookup only — see
 // LivenessRepository's doc comment for why the (stage, mode) -> (stage, nil)
 // fallback is deliberately NOT implemented here.
-func (r *EntLivenessRepository) GetByStageAndMode(ctx context.Context, stageSlug string, mode PipelineMode) (*LivenessDefinitionRecord, error) {
+func (r *EntLivenessRepository) GetByStageAndMode(ctx context.Context, stageSlug string, mode backlogdto.PipelineMode) (*LivenessDefinitionRecord, error) {
 	q := r.client.StageLivenessDefinition.Query().
 		Where(stagelivenessdefinition.StageSlug(stageSlug))
 
-	if mode == PipelineModeDefault {
+	if mode == backlogdto.PipelineModeDefault {
 		q = q.Where(stagelivenessdefinition.PipelineModeIsNil())
 	} else {
 		q = q.Where(stagelivenessdefinition.PipelineMode(string(mode)))
