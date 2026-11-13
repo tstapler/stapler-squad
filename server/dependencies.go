@@ -551,11 +551,11 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	core.SessionService.SetRegistry(registry)
 
 	w := warren.NewWire("ServiceDeps")
-	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
+	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, domain.ApprovalMetadataProvider(core.ApprovalStore))
 	// Story 5.3.1: the same provider wired into StatusManager.GetStatus()'s
 	// pi-fallback branch, so a pi session actually blocked on a pending
 	// approval reports NeedsApproval instead of a stale Idle.
-	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
+	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, domain.ApprovalMetadataProvider(core.ApprovalStore))
 	warren.Set(w, "StatusManager", core.SessionService.SetStatusManager, statusManager)
 	warren.Set(w, "ReviewQueuePoller", core.SessionService.SetReviewQueuePoller, reviewQueuePoller)
 	// The session header's Refresh awaits one poll of a single PR row. There is no

@@ -74,34 +74,6 @@ func baseReviewQueuePollerConfig() ReviewQueuePollerConfig {
 	}
 }
 
-// ApprovalMetadata holds metadata about a pending approval for enriching review queue items.
-type ApprovalMetadata struct {
-	ApprovalID string
-	ToolName   string
-	ToolInput  map[string]interface{}
-	Cwd        string
-	Orphaned   bool
-
-	// EscalationReason and EscalationCategory explain why this request was
-	// escalated for manual review (no-match/explicit-rule/domain-age/
-	// unclassifiable/unexpected). Copied from PendingApproval via
-	// ApprovalStore.GetApprovalMetadataBySession.
-	EscalationReason   string
-	EscalationCategory string
-
-	// RiskLevel is the classifier-assigned risk level ("low"/"medium"/"high"/"critical"),
-	// copied from PendingApproval.RiskLevel. "" means not recorded — never treated as "low".
-	RiskLevel string
-}
-
-// ApprovalMetadataProvider provides approval metadata for enriching review queue items.
-// This interface decouples the poller (session package) from the ApprovalStore (services package).
-type ApprovalMetadataProvider interface {
-	// GetApprovalMetadataBySession returns approval metadata for the given session ID.
-	// Returns nil if no approvals exist for the session.
-	GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata
-}
-
 // riskLevelRankTable orders RiskLevel strings by severity, highest first. Unrecorded ("")
 // ranks alongside "high" — fail-safe, since an unclassified request must never be treated as
 // safe. Never read this map directly — use riskLevelRank(), which falls back to the
@@ -131,7 +103,7 @@ func riskLevelRank(level string) int {
 // approval, since approvals is already in creation order.
 //
 // Panics if approvals is empty — the only call site guards with len(approvals) > 0 first.
-func highestRiskApproval(approvals []ApprovalMetadata) ApprovalMetadata {
+func highestRiskApproval(approvals []domain.ApprovalMetadata) domain.ApprovalMetadata {
 	best := approvals[0]
 	for _, a := range approvals[1:] {
 		if riskLevelRank(a.RiskLevel) > riskLevelRank(best.RiskLevel) {
@@ -149,14 +121,14 @@ type ReviewQueuePoller struct {
 	storage          *Storage
 	instances        []*Instance
 	config           ReviewQueuePollerConfig
-	statusDetector   detection.TerminalDetector // For detecting status in sessions without claudectl.ClaudeController
-	approvalProvider ApprovalMetadataProvider   // Optional: enriches approval items with hook metadata
-	contentProvider  ContentProvider            // Fetches and caches terminal content
-	statusDeterminer StatusDeterminer           // Evaluates whether session should be in queue
-	tmuxSocket       TmuxSocketQuerier          // Tmux server-socket queries for reconcileSessions; fakeable in tests
-	optionsSource    FlagOptionsSource          // Attention flags, read once per poll cycle; nil = all off
-	explain          suppressionExplainer       // Why-suppressed and why-skipped visibility
-	recorder         SessionEventRecorder       // Attention raised/cleared sink; nil = no-op
+	statusDetector   detection.TerminalDetector      // For detecting status in sessions without claudectl.ClaudeController
+	approvalProvider domain.ApprovalMetadataProvider // Optional: enriches approval items with hook metadata
+	contentProvider  ContentProvider                 // Fetches and caches terminal content
+	statusDeterminer StatusDeterminer                // Evaluates whether session should be in queue
+	tmuxSocket       TmuxSocketQuerier               // Tmux server-socket queries for reconcileSessions; fakeable in tests
+	optionsSource    FlagOptionsSource               // Attention flags, read once per poll cycle; nil = all off
+	explain          suppressionExplainer            // Why-suppressed and why-skipped visibility
+	recorder         SessionEventRecorder            // Attention raised/cleared sink; nil = no-op
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -275,7 +247,7 @@ func (rqp *ReviewQueuePoller) RemoveInstance(instanceTitle string) {
 }
 
 // SetApprovalProvider sets the approval metadata provider for enriching review queue items.
-func (rqp *ReviewQueuePoller) SetApprovalProvider(provider ApprovalMetadataProvider) {
+func (rqp *ReviewQueuePoller) SetApprovalProvider(provider domain.ApprovalMetadataProvider) {
 	rqp.mu.Lock()
 	defer rqp.mu.Unlock()
 	rqp.approvalProvider = provider

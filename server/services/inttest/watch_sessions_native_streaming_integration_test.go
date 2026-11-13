@@ -78,7 +78,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueue := sessionService.GetReviewQueueInstance()
 	reviewQueuePoller := session.NewReviewQueuePoller(reviewQueue, statusManager, storage)
-	reviewQueuePoller.SetApprovalProvider(session.ApprovalMetadataProvider(sessionService.GetApprovalStore()))
+	reviewQueuePoller.SetApprovalProvider(domain.ApprovalMetadataProvider(sessionService.GetApprovalStore()))
 	sessionService.SetStatusManager(statusManager)
 	sessionService.SetReviewQueuePoller(reviewQueuePoller)
 

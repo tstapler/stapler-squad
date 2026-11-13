@@ -1237,11 +1237,11 @@ func TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed
 // stubApprovalMetadataProvider is a minimal ApprovalMetadataProvider for tests. It records
 // each key it was queried with so tests can assert lookup order.
 type stubApprovalMetadataProvider struct {
-	bySessionID map[string][]ApprovalMetadata
+	bySessionID map[string][]domain.ApprovalMetadata
 	queried     []string
 }
 
-func (s *stubApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata {
+func (s *stubApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID string) []domain.ApprovalMetadata {
 	s.queried = append(s.queried, sessionID)
 	return s.bySessionID[sessionID]
 }
@@ -1273,7 +1273,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 	statusMgr.RegisterController(inst.Title, ctrl)
 
 	provider := &stubApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			inst.UUID: {{
 				ApprovalID:         "approval-1",
 				ToolName:           "Bash",
@@ -1326,7 +1326,7 @@ func TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataH
 	statusMgr.RegisterController(inst.Title, ctrl)
 
 	provider := &stubApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			inst.UUID: {{ApprovalID: "approval-risk-set", RiskLevel: "critical"}},
 		},
 	}
@@ -1358,7 +1358,7 @@ func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadata
 	statusMgr.RegisterController(inst.Title, ctrl)
 
 	provider := &stubApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			inst.UUID: {{ApprovalID: "approval-risk-empty", RiskLevel: ""}},
 		},
 	}
@@ -1380,7 +1380,7 @@ func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadata
 // pending approvals, the queue must surface the most dangerous one, not just the first.
 func TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrentApprovalsAtMixedRisk(t *testing.T) {
 	t.Parallel()
-	approvals := []ApprovalMetadata{
+	approvals := []domain.ApprovalMetadata{
 		{ApprovalID: "a-medium", RiskLevel: "medium"},
 		{ApprovalID: "b-critical", RiskLevel: "critical"},
 		{ApprovalID: "c-low", RiskLevel: "low"},
@@ -1395,7 +1395,7 @@ func TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrent
 // the tiebreak rule: ties keep the earliest (first-inserted) approval.
 func TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShareTopRisk(t *testing.T) {
 	t.Parallel()
-	approvals := []ApprovalMetadata{
+	approvals := []domain.ApprovalMetadata{
 		{ApprovalID: "first-high"},
 		{ApprovalID: "second-high"},
 	}
@@ -1411,7 +1411,7 @@ func TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShar
 // fail-safe rank: "" (not recorded) must rank alongside "high", never sort below "medium".
 func TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium(t *testing.T) {
 	t.Parallel()
-	approvals := []ApprovalMetadata{
+	approvals := []domain.ApprovalMetadata{
 		{ApprovalID: "medium-item", RiskLevel: "medium"},
 		{ApprovalID: "unrecorded-item", RiskLevel: ""},
 	}
@@ -1481,7 +1481,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 	statusMgr.RegisterController(inst.Title, ctrl)
 
 	provider := &stubApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			inst.Title: {{
 				ApprovalID:         "approval-title-fallback",
 				EscalationReason:   "No matching rule; escalated for manual review.",

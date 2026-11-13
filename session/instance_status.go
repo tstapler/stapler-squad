@@ -47,7 +47,7 @@ type InstanceStatusManager struct {
 	// ReviewQueuePoller's approvalProvider field/mutex pattern
 	// (session/review_queue_poller.go).
 	approvalProviderMu sync.RWMutex
-	approvalProvider   ApprovalMetadataProvider
+	approvalProvider   domain.ApprovalMetadataProvider
 }
 
 // NewInstanceStatusManager creates a new status manager.
@@ -81,13 +81,13 @@ func (ism *InstanceStatusManager) GetPiStatusSource(instanceTitle string) (*PiSt
 // by GetStatus()'s pi-fallback branch to override an inferred Idle status
 // with NeedsApproval (Story 5.3.1). Optional: GetStatus() skips the override
 // entirely when no provider has been set (e.g. in tests that don't need it).
-func (ism *InstanceStatusManager) SetApprovalProvider(provider ApprovalMetadataProvider) {
+func (ism *InstanceStatusManager) SetApprovalProvider(provider domain.ApprovalMetadataProvider) {
 	ism.approvalProviderMu.Lock()
 	defer ism.approvalProviderMu.Unlock()
 	ism.approvalProvider = provider
 }
 
-func (ism *InstanceStatusManager) getApprovalProvider() ApprovalMetadataProvider {
+func (ism *InstanceStatusManager) getApprovalProvider() domain.ApprovalMetadataProvider {
 	ism.approvalProviderMu.RLock()
 	defer ism.approvalProviderMu.RUnlock()
 	return ism.approvalProvider

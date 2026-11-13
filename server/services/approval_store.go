@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"os"
 	"path/filepath"
 	"sync"
@@ -159,14 +159,14 @@ func (s *ApprovalStore) ListAll() []*PendingApproval {
 
 // GetApprovalMetadataBySession implements session.ApprovalMetadataProvider.
 // Returns approval metadata for all pending approvals matching the given session ID.
-func (s *ApprovalStore) GetApprovalMetadataBySession(sessionID string) []session.ApprovalMetadata {
+func (s *ApprovalStore) GetApprovalMetadataBySession(sessionID string) []domain.ApprovalMetadata {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ids := s.bySession[sessionID]
-	result := make([]session.ApprovalMetadata, 0, len(ids))
+	result := make([]domain.ApprovalMetadata, 0, len(ids))
 	for _, id := range ids {
 		if a, ok := s.pending[id]; ok {
-			result = append(result, session.ApprovalMetadata{
+			result = append(result, domain.ApprovalMetadata{
 				ApprovalID:         a.ID,
 				ToolName:           a.ToolName,
 				ToolInput:          a.ToolInput,
