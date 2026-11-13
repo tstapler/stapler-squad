@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -883,7 +884,7 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 	}
 	if wt.WorktreePath != "" {
 		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
-			if sha, headErr := backlog.GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+			if sha, headErr := pipeline.GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
 				return sha
 			}
 		}

@@ -15,7 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
@@ -80,7 +80,7 @@ func NewCore(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener backlog.AutoReopenSpawner,
+	autoReopener reviewgate.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
@@ -174,7 +174,7 @@ func NewHTTPHandler(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener backlog.AutoReopenSpawner,
+	autoReopener reviewgate.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,
@@ -207,7 +207,7 @@ func RunServer(
 	eventBus *events.EventBus,
 	prCache *githubpkg.UserPRCache,
 	backlogEnabled func() bool,
-	autoReopener backlog.AutoReopenSpawner,
+	autoReopener reviewgate.AutoReopenSpawner,
 	backlogSvc *backlogsvc.BacklogService,
 	liveCheck func(sessionUUID string) bool,
 	opts ...CoreOption,

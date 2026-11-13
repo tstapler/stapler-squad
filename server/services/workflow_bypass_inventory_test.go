@@ -195,7 +195,7 @@ func walkModuleFuncs(t *testing.T, root string, visit func(rel string, fd *ast.F
 				return nil
 			case strings.HasPrefix(d.Name(), "."), d.Name() == "node_modules", d.Name() == "vendor",
 				rel == "web-app", rel == "tools/lint", rel == "gen",
-				rel == "server/services/internal/svctest": // testonly support code, scanned like the _test.go files it came from
+				rel == "server/services/internal/svctest", rel == "session/backlog/internal/blktest": // testonly support code, scanned like the _test.go files it came from
 				return filepath.SkipDir
 			}
 			return nil

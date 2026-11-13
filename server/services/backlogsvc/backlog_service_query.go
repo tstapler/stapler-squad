@@ -17,7 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -483,7 +483,7 @@ func (s *BacklogService) GetBacklogItemDiff(
 	// makes the diff work identically whether the work session's worktree
 	// directory still exists or has already been cleaned up (the normal state
 	// once an item is done) — see GetGitDiffRef's doc comment.
-	diffContent, _, diffErr := backlog.GetGitDiffRef(ctx, item.RepoPath, diffBaseSHA, headRef)
+	diffContent, _, diffErr := pipeline.GetGitDiffRef(ctx, item.RepoPath, diffBaseSHA, headRef)
 	if diffErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to compute diff: %w", diffErr))
 	}

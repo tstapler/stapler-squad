@@ -2,7 +2,6 @@ package backlog
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -133,41 +132,6 @@ func createTestEntRepository(t *testing.T) (*session.EntRepository, func()) {
 	require.Empty(t, sessions, "Database should be empty but has %d sessions", len(sessions))
 
 	return repo, func() {}
-}
-
-// fakePipelineModeRepository is a test double for PipelineModeRepository.
-// Only ListEnabled is exercised by pipeline_engine.go — the remaining methods
-// return an error if called, since no test in this file should reach them.
-type fakePipelineModeRepository struct {
-	listEnabledFn func(ctx context.Context) ([]*ent.PipelineMode, error)
-}
-
-func (f *fakePipelineModeRepository) Create(context.Context, session.PipelineModeCreateInput) (*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.Create: not implemented")
-}
-
-func (f *fakePipelineModeRepository) Update(context.Context, uuid.UUID, session.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.Update: not implemented")
-}
-
-func (f *fakePipelineModeRepository) Delete(context.Context, uuid.UUID) error {
-	return errors.New("fakePipelineModeRepository.Delete: not implemented")
-}
-
-func (f *fakePipelineModeRepository) GetByID(context.Context, uuid.UUID) (*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.GetByID: not implemented")
-}
-
-func (f *fakePipelineModeRepository) GetBySlug(context.Context, string) (*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.GetBySlug: not implemented")
-}
-
-func (f *fakePipelineModeRepository) ListAll(context.Context) ([]*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.ListAll: not implemented")
-}
-
-func (f *fakePipelineModeRepository) ListEnabled(ctx context.Context) ([]*ent.PipelineMode, error) {
-	return f.listEnabledFn(ctx)
 }
 
 type reportedDenial struct {

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -225,19 +226,19 @@ func TestRunCustomGateCheckWithCaller_should_InvokeCallerAndRecordOutcome_When_T
 	ctx := context.Background()
 	client := storage.GetEntClient()
 
-	gateID := newCustomCheckTestGate(t, storage)
-	item := newCustomCheckTestItem(t, storage, "runCustomGateCheckWithCaller wiring test")
+	gateID := blktest.NewCustomCheckTestGate(t, storage)
+	item := blktest.NewCustomCheckTestItem(t, storage, "runCustomGateCheckWithCaller wiring test")
 
 	repo := session.NewEntGateSatisfactionRepository(client)
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetGateSatisfactionRepository(repo)
 
-	caller := &fakeCustomCheckCaller{output: "Looks buildable.\n\nVERDICT: PASS"}
+	caller := &blktest.FakeCustomCheckCaller{Output: "Looks buildable.\n\nVERDICT: PASS"}
 	cfg := session.CustomCheckConfig{SkillID: "review-feasibility"}
 
 	listener.runCustomGateCheckWithCaller(ctx, caller, gateID, cfg, session.BacklogStatusReady, item)
 
-	assert.True(t, caller.called, "InvokeCustomGateCheck must actually invoke the caller")
+	assert.True(t, caller.Called, "InvokeCustomGateCheck must actually invoke the caller")
 
 	record, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), gateID)
 	require.NoError(t, getErr)

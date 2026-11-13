@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -40,7 +41,7 @@ func TestItemSessionSnapshot_should_RemainFrozen_When_ItemPipelineModeReassigned
 	})
 	require.NoError(t, err)
 
-	engine, err := NewPipelineEngine(pmRepo)
+	engine, err := pipeline.NewPipelineEngine(pmRepo)
 	require.NoError(t, err)
 	spawnTimeHash, ok := engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	require.True(t, ok)
@@ -164,7 +165,7 @@ func TestMigrationShouldBeReversible_WhenPipelineModeAndItemSessionGainStageExec
 
 	// --- (2) Behavior parity: ExecutorFor must never invent overrides for a mode that never configured any ---
 
-	engine, err := NewPipelineEngine(pipelineModeRepo)
+	engine, err := pipeline.NewPipelineEngine(pipelineModeRepo)
 	require.NoError(t, err)
 	itemOnPreExistingMode := &backlogdto.BacklogItemData{ID: preExistingItem.ID, PipelineMode: preExistingMode.Slug}
 

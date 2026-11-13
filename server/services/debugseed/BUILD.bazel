@@ -10,7 +10,7 @@ go_library(
         "//log",
         "//server/services",
         "//session",
-        "//session/backlog",
+        "//session/backlog/pipeline",
         "//session/domain",
         "//session/domain/backlogdto",
         "//session/git",

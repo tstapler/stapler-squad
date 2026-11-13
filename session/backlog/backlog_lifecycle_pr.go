@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -484,7 +485,7 @@ func prFooter(origin PRFooterOrigin, item *backlogdto.BacklogItemData) string {
 // newline, followed by the item footer.
 func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *backlogdto.BacklogItemData, prRemoteURL string) string {
 	body := strings.TrimRight(drafted, "\n") + "\n\n"
-	if line := closingKeywordWithRepo(item.ExternalURL, prRemoteURL); line != "" {
+	if line := pipeline.ClosingKeywordWithRepo(item.ExternalURL, prRemoteURL); line != "" {
 		body += line + "\n\n"
 	}
 	return body + prFooter(origin, item)
@@ -502,7 +503,7 @@ func appendBacklogFooter(drafted string, origin PRFooterOrigin, item *backlogdto
 func buildFallbackPRBody(item *backlogdto.BacklogItemData, origin PRFooterOrigin, prRemoteURL string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Summary\n%s\n", session.SanitizeField(item.Description, 1000))
-	if line := closingKeywordWithRepo(item.ExternalURL, prRemoteURL); line != "" {
+	if line := pipeline.ClosingKeywordWithRepo(item.ExternalURL, prRemoteURL); line != "" {
 		fmt.Fprintf(&sb, "\n%s\n", line)
 	}
 	sb.WriteString("\n" + prFooter(origin, item))
@@ -720,7 +721,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 		prRemoteURL, _ := git.RemoteURL(wt.RepoPath, "origin")
 		prBody := buildFallbackPRBody(item, origin, prRemoteURL)
 		if pool := l.getHeadlessCaller(); pool != nil {
-			diff, _, diffErr := GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+			diff, _, diffErr := pipeline.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 			if diffErr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR GetGitDiff for description item=%s: %v; using fallback body", item.ID, diffErr)
 			} else {
@@ -1827,10 +1828,10 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			// gone by now (Instance.Kill/Pause deletes it independently),
 			// in which case these are no-ops.
 			if wt != nil && wt.WorktreePath != "" {
-				if cleanupErr := CleanupBacklogContextFile(wt.WorktreePath); cleanupErr != nil {
+				if cleanupErr := pipeline.CleanupBacklogContextFile(wt.WorktreePath); cleanupErr != nil {
 					log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending CleanupBacklogContextFile item=%s: %v", item.ID, cleanupErr)
 				}
-				if cleanupErr := CleanupSlashCommands(wt.WorktreePath); cleanupErr != nil {
+				if cleanupErr := pipeline.CleanupSlashCommands(wt.WorktreePath); cleanupErr != nil {
 					log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending CleanupSlashCommands item=%s: %v", item.ID, cleanupErr)
 				}
 			}

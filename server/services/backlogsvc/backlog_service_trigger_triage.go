@@ -28,7 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -430,9 +430,9 @@ func (s *BacklogService) TriggerTriage(
 	var triagePrompt string
 	if feedback != "" {
 		if req.Msg.ChatMode {
-			triagePrompt = backlog.BuildHeadlessChatRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+			triagePrompt = pipeline.BuildHeadlessChatRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
 		} else {
-			triagePrompt = backlog.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+			triagePrompt = pipeline.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
 		}
 	} else {
 		triagePrompt = s.triagePromptFor(item, artifactAbsPath)
@@ -460,7 +460,7 @@ func (s *BacklogService) TriggerTriage(
 	if s.pipelineEngine != nil {
 		triageExecProgram, triageExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleTriage)
 	}
-	triageExecutorHash := backlog.ComputeExecutorHash(triageExecProgram, triageExecModel)
+	triageExecutorHash := pipeline.ComputeExecutorHash(triageExecProgram, triageExecModel)
 	triageCaller, triageConfiguredProgram, triageFallbackReason := s.resolveHeadlessCaller(triageExecProgram, item.ID, "triage")
 	triageResolvedModel := resolveTriageModel(s.cfg, s.modelFamilies, triageExecProgram, triageExecModel)
 
@@ -687,7 +687,7 @@ func (s *BacklogService) TriggerTriage(
 			return
 		}
 
-		result, parseErr := backlog.ParseHeadlessTriageResult(raw)
+		result, parseErr := pipeline.ParseHeadlessTriageResult(raw)
 		if parseErr != nil {
 			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
 			log.Error("[TriggerTriage] parse result failed",
@@ -953,18 +953,18 @@ func (s *BacklogService) CancelTriage(
 
 // findPriorTriageResult returns the most recent successfully-parsed triage result from
 // the provided sessions, along with a boolean indicating whether one was found.
-func findPriorTriageResult(sessions []backlogdto.ItemSessionSummary) (backlog.HeadlessTriageResult, bool) {
+func findPriorTriageResult(sessions []backlogdto.ItemSessionSummary) (pipeline.HeadlessTriageResult, bool) {
 	for i := len(sessions) - 1; i >= 0; i-- {
 		is := sessions[i]
 		if is.Role != string(session.SessionRoleTriage) || is.TriageResult == "" {
 			continue
 		}
-		var result backlog.HeadlessTriageResult
+		var result pipeline.HeadlessTriageResult
 		if jsonErr := json.Unmarshal([]byte(is.TriageResult), &result); jsonErr == nil {
 			return result, true
 		}
 	}
-	return backlog.HeadlessTriageResult{}, false
+	return pipeline.HeadlessTriageResult{}, false
 }
 
 // applyTriageResultToUpdate re-indexes and status-normalises the AC criteria from a
@@ -977,7 +977,7 @@ func findPriorTriageResult(sessions []backlogdto.ItemSessionSummary) (backlog.He
 // value leaves the item's existing priority/category untouched rather than
 // clobbering it with a zero value — same convention AcceptanceCriteria already uses
 // here (an empty result means "no assessment", not "clear the existing value").
-func applyTriageResultToUpdate(result *backlog.HeadlessTriageResult, update *backlogdto.BacklogItemUpdate) {
+func applyTriageResultToUpdate(result *pipeline.HeadlessTriageResult, update *backlogdto.BacklogItemUpdate) {
 	if len(result.AcceptanceCriteria) > 0 {
 		// Re-index to ensure 0-based contiguous indices regardless of what the model output.
 		for i := range result.AcceptanceCriteria {

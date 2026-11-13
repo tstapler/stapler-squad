@@ -24,7 +24,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/itemsources"
@@ -357,7 +358,7 @@ type backlogHandlers struct {
 	// the pre-existing session-exit/sweep paths. The same
 	// session.AutoReopenSpawner *services.BacklogService already implements
 	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
-	autoReopener backlog.AutoReopenSpawner
+	autoReopener reviewgate.AutoReopenSpawner
 
 	// verifyGitHubRef backs report_duplicate's GitHub existence check for
 	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists
@@ -439,7 +440,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	// Build human-readable text output.
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# %s\n", backlog.SanitizeForAgentContext(item.Title, 200))
+	fmt.Fprintf(&sb, "# %s\n", pipeline.SanitizeForAgentContext(item.Title, 200))
 	fmt.Fprintf(&sb, "Priority: %d | Status: %s\n\n", item.Priority, item.Status)
 
 	// Acceptance criteria checklist.
@@ -456,14 +457,14 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			default:
 				marker = "[ ]"
 			}
-			fmt.Fprintf(&sb, "%d. %s %s\n", i+1, marker, backlog.SanitizeForAgentContext(c.Text, 500))
+			fmt.Fprintf(&sb, "%d. %s %s\n", i+1, marker, pipeline.SanitizeForAgentContext(c.Text, 500))
 		}
 		sb.WriteString("\n")
 	}
 
 	// Description.
 	if item.Description != "" {
-		backlog.WriteDescriptionSection(&sb, item.Description, 2000)
+		pipeline.WriteDescriptionSection(&sb, item.Description, 2000)
 	}
 
 	h.writeDependenciesSection(ctx, &sb, itemID)
@@ -475,7 +476,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 		sb.WriteString("## Latest Review Verdict\n")
 		fmt.Fprintf(&sb, "Outcome: %s\n", verdict.OverallOutcome)
 		if verdict.Summary != "" {
-			fmt.Fprintf(&sb, "Reviewer summary: %s\n", backlog.SanitizeForAgentContext(verdict.Summary, 500))
+			fmt.Fprintf(&sb, "Reviewer summary: %s\n", pipeline.SanitizeForAgentContext(verdict.Summary, 500))
 		}
 		var perCriterion []session.CriterionVerdict
 		if verdict.PerCriterion != "" {
@@ -487,7 +488,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			if v.Outcome == session.ReviewOutcomePass {
 				continue
 			}
-			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, backlog.SanitizeForAgentContext(v.Evidence, 300))
+			fmt.Fprintf(&sb, "  Criterion %d (%s): %s\n", v.CriterionIndex, v.Outcome, pipeline.SanitizeForAgentContext(v.Evidence, 300))
 		}
 		sb.WriteString("\n")
 	}
@@ -534,7 +535,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			if author == "" {
 				author = manualCallerSentinel
 			}
-			fmt.Fprintf(&sb, "- note from %s at %s: %s\n", author, n.CreatedAt.Format(time.RFC3339), backlog.SanitizeForAgentContext(n.Message, 500))
+			fmt.Fprintf(&sb, "- note from %s at %s: %s\n", author, n.CreatedAt.Format(time.RFC3339), pipeline.SanitizeForAgentContext(n.Message, 500))
 		}
 		sb.WriteString("\n")
 	}
@@ -1435,7 +1436,7 @@ func (h *backlogHandlers) requestReview(ctx context.Context, req mcpgo.CallToolR
 	// matching this belt-and-suspenders check's pre-existing fail-open behavior; it's
 	// still logged so a silent failure to reject a genuinely dirty worktree is visible.
 	if wt, wtErr := h.storage.GetWorktreeDataBySessionUUID(ctx, callerUUID); wtErr == nil && wt.WorktreePath != "" {
-		paths, pathsErr := backlog.GetWorktreeDirtyPaths(wt.WorktreePath)
+		paths, pathsErr := pipeline.GetWorktreeDirtyPaths(wt.WorktreePath)
 		if pathsErr != nil {
 			log.WarningLog().Printf("[mcp:request_review] GetWorktreeDirtyPaths failed for session=%s worktree=%s: %v", callerUUID, wt.WorktreePath, pathsErr)
 		}
@@ -2238,7 +2239,7 @@ func (h *backlogHandlers) postBacklogUpdate(ctx context.Context, req mcpgo.CallT
 	// get_backlog_item's render-time truncation-to-500-chars for this same field. maxLen
 	// is the same 2000 already enforced above, so this call only strips tags here; it
 	// never truncates since message is already known to be <= maxPostBacklogUpdateMessageLen.
-	sanitizedMessage := backlog.SanitizeForAgentContext(message, maxPostBacklogUpdateMessageLen)
+	sanitizedMessage := pipeline.SanitizeForAgentContext(message, maxPostBacklogUpdateMessageLen)
 
 	// Resolve the author's identity: an explicit session_id param takes precedence over
 	// the caller's own session UUID (mirrors set_session_goal's pattern), since a session
@@ -2799,7 +2800,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse suggestions.
-	var suggestions []backlog.TriageSuggestion
+	var suggestions []pipeline.TriageSuggestion
 	if rawSuggestions, exists := args["suggestions"]; exists {
 		if arr, ok := rawSuggestions.([]interface{}); ok {
 			for i, rs := range arr {
@@ -2807,7 +2808,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var ts backlog.TriageSuggestion
+				var ts pipeline.TriageSuggestion
 				if err := json.Unmarshal(b, &ts); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -2817,7 +2818,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse tasks (optional).
-	var tasks []backlog.TriageTask
+	var tasks []pipeline.TriageTask
 	if rawTasks, exists := args["tasks"]; exists {
 		if arr, ok := rawTasks.([]interface{}); ok {
 			for i, rt := range arr {
@@ -2825,7 +2826,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var tt backlog.TriageTask
+				var tt pipeline.TriageTask
 				if err := json.Unmarshal(b, &tt); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -2840,9 +2841,9 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 	// Build triage result JSON payload using canonical struct (prevents schema drift).
 	type triageResultPayload struct {
-		Summary     string                     `json:"summary"`
-		Suggestions []backlog.TriageSuggestion `json:"suggestions"`
-		Tasks       []backlog.TriageTask       `json:"tasks,omitempty"`
+		Summary     string                      `json:"summary"`
+		Suggestions []pipeline.TriageSuggestion `json:"suggestions"`
+		Tasks       []pipeline.TriageTask       `json:"tasks,omitempty"`
 	}
 	triagePayload := triageResultPayload{
 		Summary:     summary,
