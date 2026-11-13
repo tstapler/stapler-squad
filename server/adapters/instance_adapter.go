@@ -9,7 +9,6 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
@@ -53,12 +52,12 @@ func getPiExtensionHealthResolver() func(sessionID, program string) sessionv1.Pi
 // no blob reports why: "scanning" when a transcript is linked and awaiting its
 // first scan, otherwise "not_linked". supportsTranscript is only consulted for
 // the unlinked case, since it reads program config from disk.
-func artifactsToProto(a *artifacts.SessionArtifactsBlob, linked bool, supportsTranscript func() bool) *sessionv1.SessionArtifacts {
+func artifactsToProto(a *domain.SessionArtifactsBlob, linked bool, supportsTranscript func() bool) *sessionv1.SessionArtifacts {
 	if a == nil {
 		if linked {
-			return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateScanning), TranscriptSupported: true}
+			return &sessionv1.SessionArtifacts{ScanState: string(domain.ScanStateScanning), TranscriptSupported: true}
 		}
-		return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateNotLinked), TranscriptSupported: supportsTranscript()}
+		return &sessionv1.SessionArtifacts{ScanState: string(domain.ScanStateNotLinked), TranscriptSupported: supportsTranscript()}
 	}
 	return &sessionv1.SessionArtifacts{
 		PrUrls:              validUTF8All(a.PRURLs),

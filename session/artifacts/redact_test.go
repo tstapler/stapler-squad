@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestRedact_ShouldReplaceSecretValues_WhenTokenInURLOrFlag(t *testing.T) {
@@ -30,7 +32,7 @@ func TestScan_ShouldNotStoreSecrets_WhenCommandOrURLCarriesToken(t *testing.T) {
 		toolUseLine(t, "2026-11-04T10:00:00Z", "a", `git commit -m "x" --token abcd1234`),
 		toolResultLine(t, "2026-11-04T10:00:01Z", "a", "see https://x.io/cb?token=abcd1234 [main 1a2b3c4] x"),
 	)
-	blob := &SessionArtifactsBlob{ExternalURLs: f.externalURLs, Commands: f.commands, Records: f.records}
+	blob := &domain.SessionArtifactsBlob{ExternalURLs: f.externalURLs, Commands: f.commands, Records: f.records}
 	raw, _ := json.Marshal(blob)
 	if strings.Contains(string(raw), "abcd1234") {
 		t.Fatalf("secret stored: %s", raw)
@@ -42,12 +44,12 @@ func TestScan_ShouldNotStoreSecrets_WhenCommandOrURLCarriesToken(t *testing.T) {
 
 func TestBlobRedacted_ShouldCleanLegacyBlobsForExport(t *testing.T) {
 	t.Parallel()
-	b := &SessionArtifactsBlob{
+	b := &domain.SessionArtifactsBlob{
 		ExternalURLs: []string{"https://x.io/cb?token=abcd1234"},
-		Commands:     []CommandArtifact{{Command: "x --token abcd1234", Detail: "d"}},
-		Records:      RecordList{CILinkRecord{URL: "https://x.io/actions/runs/1?token=abcd1234"}},
+		Commands:     []domain.CommandArtifact{{Command: "x --token abcd1234", Detail: "d"}},
+		Records:      domain.RecordList{domain.CILinkRecord{URL: "https://x.io/actions/runs/1?token=abcd1234"}},
 	}
-	raw, _ := json.Marshal(b.Redacted())
+	raw, _ := json.Marshal(RedactBlob(b))
 	if strings.Contains(string(raw), "abcd1234") {
 		t.Fatalf("export leaks: %s", raw)
 	}
@@ -111,12 +113,12 @@ func TestRedact_ShouldLeaveOrdinaryText_WhenNoSecretIsPresent(t *testing.T) {
 
 func TestRedactedRecords_ShouldScrubWithoutMutatingInput(t *testing.T) {
 	t.Parallel()
-	in := RecordList{CILinkRecord{URL: "https://x.io/r?token=abcd1234"}}
+	in := domain.RecordList{domain.CILinkRecord{URL: "https://x.io/r?token=abcd1234"}}
 	out := RedactedRecords(in)
-	if got := out[0].(CILinkRecord).URL; strings.Contains(got, "abcd1234") {
+	if got := out[0].(domain.CILinkRecord).URL; strings.Contains(got, "abcd1234") {
 		t.Fatalf("leak: %s", got)
 	}
-	if !strings.Contains(in[0].(CILinkRecord).URL, "abcd1234") {
+	if !strings.Contains(in[0].(domain.CILinkRecord).URL, "abcd1234") {
 		t.Fatal("input mutated")
 	}
 }

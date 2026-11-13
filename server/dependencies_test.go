@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/search"
@@ -28,7 +30,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prpoller"
@@ -690,7 +691,7 @@ func TestOnScanComplete_ShouldNotSeedSessionPR_WhenFlagOn(t *testing.T) {
 			}
 			handler := artifactScanCompleteHandler(func() []*session.Instance { return []*session.Instance{inst} }, serverevents.NewEventBus(4))
 
-			handler("scan-no-seed", &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/acme/app/pull/99"}})
+			handler("scan-no-seed", &domain.SessionArtifactsBlob{PRURLs: []string{"https://github.com/acme/app/pull/99"}})
 
 			gh := inst.Snapshot().GitHub
 			assert.Empty(t, gh.PRs)
@@ -707,19 +708,19 @@ func TestIndexScannedArtifacts_ShouldMakeANewScanSearchable_WithoutRestart(t *te
 	idx := search.NewArtifactIndex(nil)
 	handler := indexScannedArtifacts(func() []*session.Instance { return []*session.Instance{inst} }, idx)
 
-	handler("indexed", &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-fresh"}}})
+	handler("indexed", &domain.SessionArtifactsBlob{Records: domain.RecordList{domain.BranchRecord{Name: "feat-fresh"}}})
 	hits := idx.Search("feat-fresh", 5)
 	require.Len(t, hits, 1)
 	assert.Equal(t, "uuid-indexed", hits[0].SessionID)
 
-	handler("someone-else", &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-ignored"}}})
+	handler("someone-else", &domain.SessionArtifactsBlob{Records: domain.RecordList{domain.BranchRecord{Name: "feat-ignored"}}})
 	assert.Equal(t, 1, idx.DocCount(), "a title with no live session indexes nothing")
 }
 
 func TestBuildArtifactIndexInBackground_ShouldWaitForTheListener_ThenIndexStoredBlobs(t *testing.T) {
 	t.Parallel()
 	inst := &session.Instance{Title: "stored", UUID: "uuid-stored",
-		Artifacts: &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-stored"}}}}
+		Artifacts: &domain.SessionArtifactsBlob{Records: domain.RecordList{domain.BranchRecord{Name: "feat-stored"}}}}
 	idx := search.NewArtifactIndex(nil)
 	ready := make(chan struct{})
 	buildArtifactIndexInBackground(func() []*session.Instance { return []*session.Instance{inst, {Title: "no-blob", UUID: "u2"}} }, idx, ready)

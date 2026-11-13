@@ -16,7 +16,6 @@ import (
 	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -510,7 +509,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 				if raw == "" {
 					continue
 				}
-				var blob artifacts.SessionArtifactsBlob
+				var blob domain.SessionArtifactsBlob
 				if err := json.Unmarshal([]byte(raw), &blob); err == nil {
 					inst.Artifacts = &blob
 				}
@@ -1066,7 +1065,7 @@ func (s *Storage) GetAllInstanceArtifacts() (map[string]string, error) {
 // GetSessionArtifactsByUUID loads and parses the artifact blob for the session
 // identified by its stable UUID. Returns (nil, nil) when the session exists but
 // has no stored artifacts.
-func (s *Storage) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error) {
+func (s *Storage) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*domain.SessionArtifactsBlob, error) {
 	return s.Repo.GetSessionArtifactsByUUID(ctx, sessionUUID)
 }
 

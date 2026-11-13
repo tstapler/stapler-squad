@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // offsetOf is the scan offset recorded for path (0 when none).
@@ -80,7 +82,7 @@ func TestScanFile_IncrementalOffset(t *testing.T) {
 	if len(stored) == 0 {
 		t.Fatal("expected storeFn to be called after first scan")
 	}
-	var blob1 SessionArtifactsBlob
+	var blob1 domain.SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(stored[0]), &blob1); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +113,7 @@ func TestScanFile_IncrementalOffset(t *testing.T) {
 	if len(stored) <= prevCount {
 		t.Fatal("expected storeFn to be called after second scan")
 	}
-	var blob2 SessionArtifactsBlob
+	var blob2 domain.SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(stored[len(stored)-1]), &blob2); err != nil {
 		t.Fatal(err)
 	}
@@ -171,13 +173,13 @@ func TestScanFile_CallsOnScanComplete(t *testing.T) {
 	}
 
 	var completedTitle string
-	var completedBlob *SessionArtifactsBlob
+	var completedBlob *domain.SessionArtifactsBlob
 	ae := NewArtifactExtractor(
 		func(title, blob string) error { return nil },
 		func(title string) (string, error) { return "", nil },
 		func(filePath string) (string, bool) { return "my-session", true },
 	)
-	ae.OnScanComplete = func(title string, blob *SessionArtifactsBlob) {
+	ae.OnScanComplete = func(title string, blob *domain.SessionArtifactsBlob) {
 		completedTitle = title
 		completedBlob = blob
 	}
@@ -197,7 +199,7 @@ func TestScanFile_CallsOnScanComplete(t *testing.T) {
 // C-4: TestSeedOffsets_RestoresOffsetFromStoredBlob verifies startup hydration.
 func TestSeedOffsets_RestoresOffsetFromStoredBlob(t *testing.T) {
 	t.Parallel()
-	storedBlob := SessionArtifactsBlob{
+	storedBlob := domain.SessionArtifactsBlob{
 		PRURLs:          []string{"https://github.com/o/r/pull/1"},
 		ScanOffsetBytes: 1234,
 	}
@@ -242,7 +244,7 @@ func TestMergeAndPersist_ExternalURLCapAt50(t *testing.T) {
 	for i := range existing {
 		existing[i] = fmt.Sprintf("https://existing.com/%d", i)
 	}
-	storedBlob := SessionArtifactsBlob{ExternalURLs: existing}
+	storedBlob := domain.SessionArtifactsBlob{ExternalURLs: existing}
 	raw, _ := json.Marshal(storedBlob)
 
 	ae := NewArtifactExtractor(
@@ -377,9 +379,9 @@ func TestMerge_ShouldKeepLastFifty_WhenSixtyURLs(t *testing.T) {
 
 func TestMerge_ShouldKeepNewestCommands_WhenOverMaxCommands(t *testing.T) {
 	t.Parallel()
-	cmds := make([]CommandArtifact, maxCommands+5)
+	cmds := make([]domain.CommandArtifact, maxCommands+5)
 	for i := range cmds {
-		cmds[i] = CommandArtifact{Type: "git_commit", Detail: fmt.Sprintf("c%d", i)}
+		cmds[i] = domain.CommandArtifact{Type: "git_commit", Detail: fmt.Sprintf("c%d", i)}
 	}
 	ae := NewArtifactExtractor(
 		func(string, string) error { return nil },
@@ -436,7 +438,7 @@ func TestScan_ShouldRecordSubagentPRCreate_WhenAgentJsonlMapsToParent(t *testing
 	stored = `{"scan_offset_bytes":777}`
 	ae.scanFile(agent)
 
-	var blob SessionArtifactsBlob
+	var blob domain.SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(stored), &blob); err != nil {
 		t.Fatal(err)
 	}

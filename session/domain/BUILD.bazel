@@ -4,6 +4,8 @@ load("//tools/bzl:go_test.bzl", "go_test")
 go_library(
     name = "domain",
     srcs = [
+        "artifact_records.go",
+        "artifacts_blob.go",
         "autonomous_stop.go",
         "backlog.go",
         "context_health.go",

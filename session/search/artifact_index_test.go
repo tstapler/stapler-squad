@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 )
 
 type fakeLinks map[session.PRRef][]string
@@ -26,12 +27,12 @@ func mustRef(t *testing.T, owner, repo string, n int) session.PRRef {
 	return ref
 }
 
-func blobOf(recs ...artifacts.ArtifactRecord) *artifacts.SessionArtifactsBlob {
-	return &artifacts.SessionArtifactsBlob{Records: recs}
+func blobOf(recs ...domain.ArtifactRecord) *domain.SessionArtifactsBlob {
+	return &domain.SessionArtifactsBlob{Records: recs}
 }
 
-func prRec(owner, repo string, n int, src artifacts.PRSource) artifacts.PRRecord {
-	return artifacts.PRRecord{Host: "github.com", Owner: owner, Repo: repo, Number: n, Source: src}
+func prRec(owner, repo string, n int, src domain.PRSource) domain.PRRecord {
+	return domain.PRRecord{Host: "github.com", Owner: owner, Repo: repo, Number: n, Source: src}
 }
 
 func sessionsOf(hits []ArtifactHit) []string {
@@ -45,21 +46,21 @@ func sessionsOf(hits []ArtifactHit) []string {
 func TestArtifactIndex_Search_ShouldRetrieveByPRRefSHAPrefixAndBranch(t *testing.T) {
 	t.Parallel()
 	x := NewArtifactIndex(nil)
-	x.Update("u42", blobOf(prRec("acme", "app", 42, artifacts.PRSourceCreated)))
-	x.Update("u43", blobOf(prRec("acme", "app", 43, artifacts.PRSourceCreated)))
-	x.Update("usha", blobOf(artifacts.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", Subject: "fix login"}))
-	x.Update("ufb", blobOf(artifacts.BranchRecord{Name: "feat-b", Action: "pushed"}))
-	x.Update("ufa", blobOf(artifacts.BranchRecord{Name: "feat-a", Action: "pushed"}))
+	x.Update("u42", blobOf(prRec("acme", "app", 42, domain.PRSourceCreated)))
+	x.Update("u43", blobOf(prRec("acme", "app", 43, domain.PRSourceCreated)))
+	x.Update("usha", blobOf(domain.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", Subject: "fix login"}))
+	x.Update("ufb", blobOf(domain.BranchRecord{Name: "feat-b", Action: "pushed"}))
+	x.Update("ufa", blobOf(domain.BranchRecord{Name: "feat-a", Action: "pushed"}))
 
 	tests := []struct {
 		query     string
 		wantFirst string
-		wantType  artifacts.RecordKind
+		wantType  domain.RecordKind
 	}{
-		{"acme/app#42", "u42", artifacts.KindPR},
-		{"Acme/App#42", "u42", artifacts.KindPR},
-		{"1a2b3c4", "usha", artifacts.KindCommit},
-		{"feat-b", "ufb", artifacts.KindBranch},
+		{"acme/app#42", "u42", domain.KindPR},
+		{"Acme/App#42", "u42", domain.KindPR},
+		{"1a2b3c4", "usha", domain.KindCommit},
+		{"feat-b", "ufb", domain.KindBranch},
 	}
 	for _, tt := range tests {
 		hits := x.Search(tt.query, 10)
@@ -72,8 +73,8 @@ func TestArtifactIndex_Search_ShouldRetrieveByPRRefSHAPrefixAndBranch(t *testing
 func TestArtifactIndex_Update_ShouldReplaceASessionWithoutRestart(t *testing.T) {
 	t.Parallel()
 	x := NewArtifactIndex(nil)
-	x.Update("u1", blobOf(artifacts.BranchRecord{Name: "old-branch"}))
-	x.Update("u1", blobOf(artifacts.BranchRecord{Name: "new-branch"}))
+	x.Update("u1", blobOf(domain.BranchRecord{Name: "old-branch"}))
+	x.Update("u1", blobOf(domain.BranchRecord{Name: "new-branch"}))
 	for _, h := range x.Search("old-branch", 5) {
 		if h.Text == "old-branch" {
 			t.Fatalf("stale document still indexed: %+v", h)
@@ -95,9 +96,9 @@ func TestArtifactIndex_SessionsForPR_ShouldUnionBothStoresAndDedupe(t *testing.T
 	t.Parallel()
 	ref := mustRef(t, "acme", "app", 12)
 	x := NewArtifactIndex(fakeLinks{ref: {"u1", "u3"}})
-	x.Update("u2", blobOf(prRec("acme", "app", 12, artifacts.PRSourceCreated)))
-	x.Update("u3", blobOf(prRec("Acme", "App", 12, artifacts.PRSourceMentioned)))
-	x.Update("u4", blobOf(prRec("acme", "app", 13, artifacts.PRSourceCreated)))
+	x.Update("u2", blobOf(prRec("acme", "app", 12, domain.PRSourceCreated)))
+	x.Update("u3", blobOf(prRec("Acme", "App", 12, domain.PRSourceMentioned)))
+	x.Update("u4", blobOf(prRec("acme", "app", 13, domain.PRSourceCreated)))
 
 	got, err := x.SessionsForPR(context.Background(), ref)
 	if err != nil {
@@ -116,7 +117,7 @@ func TestArtifactIndex_SessionsForPR_ShouldNeverSeedSessionPRFromArtifacts(t *te
 	ref := mustRef(t, "acme", "app", 12)
 	links := fakeLinks{}
 	x := NewArtifactIndex(links)
-	x.Update("u2", blobOf(prRec("acme", "app", 12, artifacts.PRSourceCreated)))
+	x.Update("u2", blobOf(prRec("acme", "app", 12, domain.PRSourceCreated)))
 	if _, err := x.SessionsForPR(context.Background(), ref); err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +132,8 @@ func TestArtifactIndex_SessionsForPR_ShouldNeverSeedSessionPRFromArtifacts(t *te
 func TestArtifactIndex_SessionsForSHAPrefix_ShouldMatchSevenCharPrefixAndLonger(t *testing.T) {
 	t.Parallel()
 	x := NewArtifactIndex(nil)
-	x.Update("u1", blobOf(artifacts.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b"}))
-	x.Update("u2", blobOf(artifacts.CommitRecord{SHA: "1a2b3c4ffffffffffffffffffffffffffffffffff"}))
+	x.Update("u1", blobOf(domain.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b"}))
+	x.Update("u2", blobOf(domain.CommitRecord{SHA: "1a2b3c4ffffffffffffffffffffffffffffffffff"}))
 	for prefix, want := range map[string][]string{
 		"1a2b3c4":   {"u1", "u2"},
 		"1A2B3C4D5": {"u1"},
@@ -181,9 +182,9 @@ func TestArtifactIndex_ShouldLeaveHistorySearchUnchanged(t *testing.T) {
 	x := NewArtifactIndex(nil)
 	for i := range 100 {
 		x.Update(fmt.Sprintf("a%d", i), blobOf(
-			prRec("acme", "app", 42, artifacts.PRSourceCreated),
-			artifacts.BranchRecord{Name: "feat-b"},
-			artifacts.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", Subject: "login"},
+			prRec("acme", "app", 42, domain.PRSourceCreated),
+			domain.BranchRecord{Name: "feat-b"},
+			domain.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", Subject: "login"},
 		))
 	}
 	if x.DocCount() != 300 {
@@ -199,7 +200,7 @@ func TestArtifactIndex_ShouldLeaveHistorySearchUnchanged(t *testing.T) {
 
 func TestArtifactIndex_ShouldReportDocCountMetric(t *testing.T) {
 	x := NewArtifactIndex(nil)
-	x.Update("u1", blobOf(artifacts.BranchRecord{Name: "a-branch"}, artifacts.PlanDocRecord{Path: "docs/x.md"}))
+	x.Update("u1", blobOf(domain.BranchRecord{Name: "a-branch"}, domain.PlanDocRecord{Path: "docs/x.md"}))
 	if got := ArtifactIndexDocsObserved(); got != 2 {
 		t.Fatalf("ssq_artifact_index_docs = %d, want 2", got)
 	}
@@ -208,7 +209,7 @@ func TestArtifactIndex_ShouldReportDocCountMetric(t *testing.T) {
 func TestArtifactIndex_Update_ShouldNotIndexSecrets_WhenLegacyBlobIsUnredacted(t *testing.T) {
 	t.Parallel()
 	x := NewArtifactIndex(nil)
-	x.Update("u1", blobOf(artifacts.CILinkRecord{URL: "https://ci.example.com/runs/9?token=abcd1234secret"}))
+	x.Update("u1", blobOf(domain.CILinkRecord{URL: "https://ci.example.com/runs/9?token=abcd1234secret"}))
 	hits := x.Search("runs", 10)
 	if len(hits) != 1 {
 		t.Fatalf("hits = %d, want 1", len(hits))

@@ -33,7 +33,6 @@ package session
 import (
 	"time"
 
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -178,7 +177,7 @@ type InstanceSnapshot struct {
 	IsManaged        bool
 	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
 	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
-	Artifacts        *artifacts.SessionArtifactsBlob
+	Artifacts        *domain.SessionArtifactsBlob
 	ContextHealth    domain.ContextHealthVerdict // flat value; no deep copy needed
 }
 

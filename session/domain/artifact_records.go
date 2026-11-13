@@ -1,4 +1,4 @@
-package artifacts
+package domain
 
 import (
 	"bytes"
@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
-
-	"github.com/tstapler/stapler-squad/log"
 )
 
 // RecordKind tags a record's variant in the stored JSON.
@@ -126,6 +124,13 @@ var unknownRecords atomic.Uint64
 // UnknownRecordsSkipped is how many unparseable records this process has skipped.
 func UnknownRecordsSkipped() uint64 { return unknownRecords.Load() }
 
+// recordSkipObserver lets a higher layer log a skipped record; the domain
+// package cannot import the logger.
+var recordSkipObserver atomic.Pointer[func(error)]
+
+// SetRecordSkipObserver registers fn to be told about each unparseable record.
+func SetRecordSkipObserver(fn func(error)) { recordSkipObserver.Store(&fn) }
+
 // ParseRecord is the single decode point for stored records, shared by every
 // reader. It returns the variant its "kind" names; fields that variant does
 // not declare are dropped.
@@ -196,7 +201,7 @@ func (l RecordList) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// UnmarshalJSON parses every element and skips (with a counted warning) the ones
+// UnmarshalJSON parses every element and skips (counted, and reported to the skip observer) the ones
 // no variant claims, so one bad record never loses the blob.
 func (l *RecordList) UnmarshalJSON(data []byte) error {
 	var raws []json.RawMessage
@@ -208,7 +213,9 @@ func (l *RecordList) UnmarshalJSON(data []byte) error {
 		r, err := ParseRecord(raw)
 		if err != nil {
 			unknownRecords.Add(1)
-			log.Warn("[ArtifactExtractor] skipping unparseable artifact record", "err", err)
+			if fn := recordSkipObserver.Load(); fn != nil {
+				(*fn)(err)
+			}
 			continue
 		}
 		out = append(out, r)
@@ -217,10 +224,10 @@ func (l *RecordList) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// mergeRecords appends add to existing, keeping the first of each key in order.
+// MergeRecords appends add to existing, keeping the first of each key in order.
 // A PR seen again keeps its earliest time, and a "created" sighting upgrades a
 // "mentioned" one and fills its empty branch and base.
-func mergeRecords(existing, add []ArtifactRecord) []ArtifactRecord {
+func MergeRecords(existing, add []ArtifactRecord) []ArtifactRecord {
 	out := make([]ArtifactRecord, 0, len(existing)+len(add))
 	index := make(map[string]int, len(existing)+len(add))
 	for _, r := range append(append([]ArtifactRecord{}, existing...), add...) {

@@ -16,7 +16,6 @@ import (
 	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -1287,7 +1286,7 @@ func (r *EntRepository) GetAllSessionArtifacts(ctx context.Context) (map[string]
 // identified by its stable UUID (not its title). Returns (nil, nil) when the
 // session exists but has no stored artifacts. Returns ErrNotFound when no
 // session with that UUID exists.
-func (r *EntRepository) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error) {
+func (r *EntRepository) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*domain.SessionArtifactsBlob, error) {
 	sess, err := r.Client.Session.Query().
 		Where(session.UUIDEQ(sessionUUID)).
 		Select(session.FieldSessionArtifacts).
@@ -1298,7 +1297,7 @@ func (r *EntRepository) GetSessionArtifactsByUUID(ctx context.Context, sessionUU
 	if sess.SessionArtifacts == "" {
 		return nil, nil //nolint:nilnil // documented contract: no stored artifacts is not an error
 	}
-	var blob artifacts.SessionArtifactsBlob
+	var blob domain.SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(sess.SessionArtifacts), &blob); err != nil {
 		return nil, fmt.Errorf("GetSessionArtifactsByUUID: unmarshal: %w", err)
 	}

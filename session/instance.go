@@ -20,7 +20,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -869,7 +868,7 @@ type Instance struct {
 
 	// Artifacts holds structured artifacts extracted from the session's JSONL history.
 	// Populated asynchronously by ArtifactExtractor. Protected by mu.
-	Artifacts *artifacts.SessionArtifactsBlob
+	Artifacts *domain.SessionArtifactsBlob
 
 	// ContextHealth is the latest transcript-derived verdict, pushed by the
 	// server's TokenStore subscriber. Zero value is HealthUnknown. Protected by mu.
@@ -1473,7 +1472,7 @@ func (i *Instance) HasGitHubPR() bool {
 }
 
 // SetArtifacts atomically updates the in-memory Artifacts cache.
-func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
+func (i *Instance) SetArtifacts(blob *domain.SessionArtifactsBlob) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		s.inst.Artifacts = blob
 		return nil
