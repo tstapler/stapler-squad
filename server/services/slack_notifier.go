@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // maxSlackBlockTextLen caps a single Slack Block Kit text block at 2900 runes,
@@ -74,7 +75,7 @@ func resolveSlackWebhookURL(cfg *config.Config) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve slack webhook url: %w", err)
 	}
-	return session.DecryptToken(key, cfg.Slack.WebhookURLEncrypted)
+	return domain.DecryptToken(key, cfg.Slack.WebhookURLEncrypted)
 }
 
 // resolveSlackSigningSecret returns the effective Slack app signing secret,
@@ -90,7 +91,7 @@ func resolveSlackSigningSecret(cfg *config.Config) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve slack signing secret: %w", err)
 	}
-	return session.DecryptToken(key, cfg.Slack.SigningSecretEncrypted)
+	return domain.DecryptToken(key, cfg.Slack.SigningSecretEncrypted)
 }
 
 // slackWebhookPayload is a Slack Incoming Webhook Block Kit message body.

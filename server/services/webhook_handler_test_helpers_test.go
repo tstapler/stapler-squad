@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeTriggerSessionService is a test double for workflows.SessionServiceInterface
@@ -102,7 +103,7 @@ func (infra *webhookTestInfra) encryptSecret(t *testing.T, secret string) string
 	t.Helper()
 	key, err := infra.cfg.GetOrCreateEncryptionKey()
 	require.NoError(t, err)
-	enc, err := session.EncryptToken(key, secret)
+	enc, err := domain.EncryptToken(key, secret)
 	require.NoError(t, err)
 	return enc
 }

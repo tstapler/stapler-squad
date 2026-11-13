@@ -77,7 +77,7 @@ func encryptAndMergeToken(cfg *config.Config, token, existingConfig string) (str
 		if err != nil {
 			return "", fmt.Errorf("get encryption key: %w", err)
 		}
-		encrypted, err := session.EncryptToken(key, token)
+		encrypted, err := domain.EncryptToken(key, token)
 		if err != nil {
 			return "", fmt.Errorf("encrypt token: %w", err)
 		}

@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -112,7 +113,7 @@ func TestCreateItemSourceEncryptsToken(t *testing.T) {
 	}
 
 	// Verify we can decrypt it with the key
-	decrypted, err := session.DecryptToken(key, token_str)
+	decrypted, err := domain.DecryptToken(key, token_str)
 	if err != nil {
 		t.Fatalf("decrypt token: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestUpdateItemSourceEncryptsToken(t *testing.T) {
 		t.Fatal("token is not a string")
 	}
 
-	decrypted, err := session.DecryptToken(key, token_str)
+	decrypted, err := domain.DecryptToken(key, token_str)
 	if err != nil {
 		t.Fatalf("decrypt token: %v", err)
 	}
@@ -281,7 +282,7 @@ func TestCreateItemSourceEncryptionRoundTrip(t *testing.T) {
 	}
 
 	// Decrypt the token using the same key and verify it matches the original.
-	decrypted, err := session.DecryptToken(key, tokenStr)
+	decrypted, err := domain.DecryptToken(key, tokenStr)
 	if err != nil {
 		t.Fatalf("decrypt stored token: %v", err)
 	}
@@ -301,7 +302,7 @@ func TestSyncLoopDecryptsToken(t *testing.T) {
 	}
 
 	plainToken := "ghp_verysecrettoken123456789"
-	encrypted, err := session.EncryptToken(key, plainToken)
+	encrypted, err := domain.EncryptToken(key, plainToken)
 	if err != nil {
 		t.Fatalf("encrypt token: %v", err)
 	}

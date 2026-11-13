@@ -13,7 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // newIsolatedSlackConfigService creates a SlackConfigService backed by a fresh
@@ -90,7 +90,7 @@ func TestUpdateSlackConfig_ReEncryptsAndPersists_When_NewWebhookURLProvided(t *t
 	cfg := config.LoadConfig()
 	key, err := cfg.GetOrCreateEncryptionKey()
 	require.NoError(t, err)
-	decrypted, err := session.DecryptToken(key, cfg.Slack.WebhookURLEncrypted)
+	decrypted, err := domain.DecryptToken(key, cfg.Slack.WebhookURLEncrypted)
 	require.NoError(t, err)
 	assert.Equal(t, newURL, decrypted)
 }

@@ -311,7 +311,7 @@ func TestSyncOne_DecryptsEncryptedConfigTokenBeforeFetch(t *testing.T) {
 	keyFunc := func() ([]byte, error) { return key, nil }
 	sl := NewSyncLoopWithKeyProvider(storage, registry, keyFunc)
 
-	encToken, err := EncryptToken(key, "plaintext-token")
+	encToken, err := domain.EncryptToken(key, "plaintext-token")
 	require.NoError(t, err)
 
 	ctx := context.Background()

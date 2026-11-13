@@ -5104,7 +5104,7 @@ func TestTriggerSync_DecryptsTokenThroughServiceLayer(t *testing.T) {
 	key := make([]byte, 32)
 	svc.SetSyncKeyFunc(func() ([]byte, error) { return key, nil })
 
-	encToken, err := session.EncryptToken(key, "plaintext-token")
+	encToken, err := domain.EncryptToken(key, "plaintext-token")
 	require.NoError(t, err)
 
 	src, err := storage.CreateItemSource(t.Context(), backlogdto.ItemSourceData{

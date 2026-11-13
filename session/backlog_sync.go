@@ -174,7 +174,7 @@ func (sl *SyncLoop) DecryptConfigToken(raw string) (string, error) {
 		return "", fmt.Errorf("get key: %w", err)
 	}
 
-	plainToken, err := DecryptToken(key, encToken)
+	plainToken, err := domain.DecryptToken(key, encToken)
 	if err != nil {
 		return "", fmt.Errorf("decrypt token: %w", err)
 	}
