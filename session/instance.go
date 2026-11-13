@@ -509,7 +509,7 @@ type Instance struct {
 	// ReviewState holds all review queue and terminal activity timestamps.
 	// Fields are embedded (promoted) so external code can still access inst.LastViewed etc.
 	// Protected by mu (via sendSyncErr / Snapshot).
-	ReviewState
+	domain.ReviewState
 
 	// RetryState holds the automated crash/stall retry lifecycle (attempt
 	// count, resolved max, last failure reason, pending-retry timestamp,
@@ -1132,7 +1132,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		IsManaged:        true,
 		ExternalMetadata: nil,                     // Only set for external instances
 		Permissions:      GetManagedPermissions(), // Full permissions for managed instances
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   t, // Initialize to creation time
 			LastMeaningfulOutput: t, // Initialize to creation time
 		},

@@ -236,7 +236,7 @@ func TestInstanceToSessionConversion(t *testing.T) {
 		GitHubSourceRef:  "refs/pull/42/head",
 		IsWorktree:       true,
 		MainRepoPath:     "/home/user/main",
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   now,
 			LastMeaningfulOutput: now.Add(-5 * time.Minute),
 			LastViewed:           now.Add(-10 * time.Minute),
@@ -443,7 +443,7 @@ func TestRoundTripConversion(t *testing.T) {
 		GitHubRepo:     "b",
 		IsWorktree:     true,
 		MainRepoPath:   "/main/repo",
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   now,
 			LastMeaningfulOutput: now,
 			LastOutputSignature:  "roundtrip",

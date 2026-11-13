@@ -25,7 +25,7 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Program:   "claude",
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastAcknowledged: lastAck,
 		},
 	}
@@ -78,7 +78,7 @@ func TestLastAcknowledgedZeroValue(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Program:   "claude",
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastAcknowledged: time.Time{}, // Explicitly set to zero value
 		},
 	}
@@ -152,7 +152,7 @@ func TestLastAcknowledgedComparison(t *testing.T) {
 				Path:   "/path/to/repo",
 				Branch: "test-branch",
 				Status: domain.Ready,
-				ReviewState: ReviewState{
+				ReviewState: domain.ReviewState{
 					LastAcknowledged:     tc.lastAcknowledged,
 					LastMeaningfulOutput: tc.lastMeaningfulOutput,
 				},

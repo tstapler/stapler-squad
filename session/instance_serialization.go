@@ -329,7 +329,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		TmuxPrefix:         data.TmuxPrefix,
 		TmuxServerSocket:   data.TmuxServerSocket,
 		Backend:            data.Backend,
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
 			LastOutputSignature:  data.LastOutputSignature,

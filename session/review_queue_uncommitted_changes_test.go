@@ -86,7 +86,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		GitManager:  gitwt.Manager{Worktree: worktree},
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}
 	instance.started.Store(true)
 
@@ -261,7 +261,7 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 		GitManager:  gitwt.Manager{Worktree: nil}, // No worktree
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}
 	instance.started.Store(true)
 
@@ -326,7 +326,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		GitManager:  gitwt.Manager{Worktree: worktree},
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		ReviewState: ReviewState{LastMeaningfulOutput: now},
+		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
 	}
 	instance.started.Store(true)
 

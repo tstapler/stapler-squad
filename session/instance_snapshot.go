@@ -170,7 +170,7 @@ type InstanceSnapshot struct {
 	TurnEnded              domain.TurnEnded
 
 	// Review queue / activity state (embedded value — copied by value)
-	ReviewState
+	domain.ReviewState
 
 	// Instance type and management metadata
 	InstanceType     domain.InstanceType

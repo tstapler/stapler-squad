@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -319,7 +318,7 @@ func (i *Instance) MarkAcknowledged() {
 	// from goroutines outside the actor pattern (e.g. ReviewQueuePoller's own goroutine via
 	// review_queue_determiner.go's Determine()) — same discipline as UpdateTimestamps()
 	// storing lastMeaningfulOutputNs alongside LastMeaningfulOutput.
-	atomic.StoreInt64(&i.lastAcknowledgedNs, now.UnixNano())
+	i.StoreLastAcknowledgedNs(now.UnixNano())
 	i.snapshot.Store(buildSnapshot(i))
 }
 
@@ -336,7 +335,7 @@ func (i *Instance) MarkNeedsApproval() error {
 // Fallback: Snapshot(), not a fresh i.mu-guarded read — i.mu doesn't synchronize
 // with actor commands' direct field writes (see GetStatus's doc comment).
 func (i *Instance) LastMeaningfulOutputTime() time.Time {
-	if ns := i.loadLastMeaningfulOutputNs(); ns != 0 {
+	if ns := i.LoadLastMeaningfulOutputNs(); ns != 0 {
 		return time.Unix(0, ns)
 	}
 	return i.Snapshot().LastMeaningfulOutput

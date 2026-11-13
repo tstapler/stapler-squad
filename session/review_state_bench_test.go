@@ -17,7 +17,7 @@ func TestGetTimeSinceLastMeaningfulOutput_ZeroAllocsHotPath(t *testing.T) {
 		CreatedAt: time.Now().Add(-5 * time.Minute),
 	}
 	// Seed the atomic shadow so the hot path (ns != 0) is taken.
-	inst.lastMeaningfulOutputNs = time.Now().Add(-1 * time.Second).UnixNano()
+	inst.StoreLastMeaningfulOutputNs(time.Now().Add(-1 * time.Second).UnixNano())
 
 	allocs := testing.AllocsPerRun(100, func() {
 		_ = inst.GetTimeSinceLastMeaningfulOutput()
@@ -36,7 +36,7 @@ func BenchmarkGetTimeSinceLastMeaningfulOutput_HotPath(b *testing.B) {
 		UUID:      "bench-uuid",
 		CreatedAt: time.Now().Add(-5 * time.Minute),
 	}
-	inst.lastMeaningfulOutputNs = time.Now().Add(-1 * time.Second).UnixNano()
+	inst.StoreLastMeaningfulOutputNs(time.Now().Add(-1 * time.Second).UnixNano())
 
 	b.ResetTimer()
 	for b.Loop() {

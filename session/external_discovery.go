@@ -157,7 +157,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Tags:         []string{"external", "mux"},
 		CreatedAt:    now, // Initialize timestamps to avoid stale notifications
 		UpdatedAt:    now,
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   now,
 			LastMeaningfulOutput: now, // Initialize to now - external sessions have output when discovered
 		},

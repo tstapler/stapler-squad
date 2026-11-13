@@ -17,6 +17,7 @@ go_library(
         "guidance_request_source.go",
         "instance_types.go",
         "process_manager_backend.go",
+        "review_state.go",
         "session_type.go",
         "status.go",
         "wake_trigger.go",
