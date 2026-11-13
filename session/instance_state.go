@@ -283,20 +283,21 @@ func (i *Instance) TransitionToStoppedIfActiveOrLoad(ctx context.Context) error 
 // transitionIf runs on the actor, so the snapshot is stale inside the closure and the
 // status is read under i.mu.RLock, the same read transitionToLocked does.
 func (i *Instance) transitionIf(ctx context.Context, from, to domain.Status, loadOnError bool) error {
-	terr, _ := sendCtxValue(ctx, i, func(s *instanceState) (error, error) {
+	type result struct{ err error }
+	res, _ := sendCtxValue(ctx, i, func(s *instanceState) (result, error) {
 		s.inst.mu.RLock()
 		status := s.inst.Status
 		s.inst.mu.RUnlock()
 		if status != from {
-			return nil, nil
+			return result{}, nil
 		}
 		err := transitionToLocked(s, context.Background(), to)
 		if err != nil && loadOnError {
 			s.inst.loadStatus(to)
 		}
-		return err, nil
+		return result{err}, nil
 	})
-	return terr
+	return res.err
 }
 
 // HibernationIdleDuration is how long the instance has been idle (no meaningful output and no
