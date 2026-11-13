@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -262,7 +264,7 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 	}
 
 	instance, cleanup, err := NewTestInstance(t, "switch-workspace-deadlock-regression").
-		WithSessionType(SessionTypeDirectory).
+		WithSessionType(domain.SessionTypeDirectory).
 		Build()
 	require.NoError(t, err)
 	if cleanup != nil {

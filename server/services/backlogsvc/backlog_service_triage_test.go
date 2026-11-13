@@ -2952,7 +2952,7 @@ func TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowM
 		Branch:      "work/missing-row",
 		Status:      session.Paused,
 		Program:     "claude",
-		SessionType: session.SessionTypeNewWorktree,
+		SessionType: domain.SessionTypeNewWorktree,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		// Deliberately no Worktree field — reproduces the missing-row gap: a session
@@ -3012,7 +3012,7 @@ func TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotE
 		Path:        t.TempDir(),
 		Status:      session.Paused,
 		Program:     "claude",
-		SessionType: session.SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}))

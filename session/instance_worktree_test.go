@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -123,7 +125,7 @@ func TestSetupFirstTimeWorktree_NewWorktree_AlwaysFailsOnMissingPath(t *testing.
 				Title:           "missing-repo",
 				Path:            target,
 				Program:         "claude",
-				SessionType:     SessionTypeNewWorktree,
+				SessionType:     domain.SessionTypeNewWorktree,
 				CreateIfMissing: createIfMissing,
 			})
 			require.NoError(t, err)
@@ -163,7 +165,7 @@ func TestSetupFirstTimeWorktree_NewWorktree_BranchesFromOriginDefault_NotAmbient
 		Title:       "divergence-check",
 		Path:        work,
 		Program:     "claude",
-		SessionType: SessionTypeNewWorktree,
+		SessionType: domain.SessionTypeNewWorktree,
 	})
 	require.NoError(t, err)
 
@@ -198,7 +200,7 @@ func TestSetupFirstTimeWorktree_NewWorktree_NoWarning_When_AmbientHEADMatchesBas
 		Title:       "no-divergence-check",
 		Path:        work,
 		Program:     "claude",
-		SessionType: SessionTypeNewWorktree,
+		SessionType: domain.SessionTypeNewWorktree,
 	})
 	require.NoError(t, err)
 
@@ -225,7 +227,7 @@ func TestSetupFirstTimeWorktree_NewProject_CreatesWorktree_When_BranchSet(t *tes
 		Title:       "steam-controls",
 		Path:        target,
 		Program:     "claude",
-		SessionType: SessionTypeNewProject,
+		SessionType: domain.SessionTypeNewProject,
 		Branch:      "steam-controls",
 	})
 	require.NoError(t, err)
@@ -251,7 +253,7 @@ func TestSetupFirstTimeWorktree_NewProject_NoWorktree_When_BranchEmpty(t *testin
 		Title:       "new-directory-project",
 		Path:        target,
 		Program:     "claude",
-		SessionType: SessionTypeNewProject,
+		SessionType: domain.SessionTypeNewProject,
 	})
 	require.NoError(t, err)
 
@@ -275,7 +277,7 @@ func TestSetupFirstTimeWorktree_should_ReturnError_When_SessionTypeUnrecognized(
 	inst := &Instance{
 		Title:       "bogus-session-type",
 		Path:        t.TempDir(),
-		SessionType: SessionType("bogus"),
+		SessionType: domain.SessionType("bogus"),
 	}
 
 	err := inst.setupFirstTimeWorktree()
@@ -297,7 +299,7 @@ func TestSetupFirstTimeWorktree_should_PublishUpdatedSnapshot_When_SessionTypeDi
 		Title:       "snapshot-republish-directory",
 		Path:        dir,
 		Program:     "claude",
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 	})
 	require.NoError(t, err)
 

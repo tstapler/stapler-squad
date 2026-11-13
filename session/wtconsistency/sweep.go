@@ -112,8 +112,8 @@ const creatingGracePeriod = 5 * time.Minute
 // and Epic 1.2's issue classification both depend on (single source of truth, avoids
 // duplicated logic across the two files this project touches).
 func ExpectsWorktree(data session.InstanceData) bool {
-	isWorktreeSession := data.SessionType == session.SessionTypeNewWorktree ||
-		data.SessionType == session.SessionTypeExistingWorktree ||
+	isWorktreeSession := data.SessionType == domain.SessionTypeNewWorktree ||
+		data.SessionType == domain.SessionTypeExistingWorktree ||
 		data.IsWorktree
 	return isWorktreeSession && data.Branch != ""
 }

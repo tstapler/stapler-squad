@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -72,7 +74,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -131,7 +133,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -200,7 +202,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          stubClaudeBinary(t),
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -256,7 +258,7 @@ func sleepInstanceOptions(title, tmpDir, prefix, socket string) InstanceOptions 
 		Title:            title,
 		Path:             tmpDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       prefix,
 		TmuxServerSocket: socket,
@@ -493,7 +495,7 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			inst := &Instance{
 				Title:           "test-clearedat-guard",
 				Path:            tmpDir,
-				SessionType:     SessionTypeDirectory,
+				SessionType:     domain.SessionTypeDirectory,
 				claudeExtension: claudeExtension{conversationClearedAt: clearedAt},
 				historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 			}
@@ -573,7 +575,7 @@ func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwn
 		Title:           "session-b",
 		UUID:            "session-b-uuid",
 		Path:            sharedPath,
-		SessionType:     SessionTypeDirectory,
+		SessionType:     domain.SessionTypeDirectory,
 		historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 	}
 	instB.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(instB.UUID,
@@ -606,7 +608,7 @@ func TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfReco
 		Title:           "cold-restore-self-recovery",
 		UUID:            "cold-restore-self-uuid",
 		Path:            tmpDir,
-		SessionType:     SessionTypeDirectory,
+		SessionType:     domain.SessionTypeDirectory,
 		historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 	}
 	inst.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(inst.UUID,

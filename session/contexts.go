@@ -2,6 +2,8 @@ package session
 
 import (
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // GitContext represents the Git-related context for a session.
@@ -65,7 +67,7 @@ type FilesystemContext struct {
 	ExistingWorktree string `json:"existing_worktree,omitempty"`
 
 	// SessionType indicates the type of session workflow
-	SessionType SessionType `json:"session_type,omitempty"`
+	SessionType domain.SessionType `json:"session_type,omitempty"`
 }
 
 // IsEmpty returns true if the FilesystemContext has no meaningful data

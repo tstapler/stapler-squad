@@ -498,13 +498,13 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 }
 
 // sessionTypeToProto converts session.SessionType to proto SessionType enum.
-func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
+func sessionTypeToProto(sessionType domain.SessionType) sessionv1.SessionType {
 	switch sessionType {
-	case session.SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
-	case session.SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
-	case session.SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED

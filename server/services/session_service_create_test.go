@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +37,7 @@ func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeDirectory, got)
+	assert.Equal(t, domain.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
@@ -45,7 +47,7 @@ func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "my-branch")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeNewWorktree, got)
+	assert.Equal(t, domain.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
@@ -56,7 +58,7 @@ func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeExistingWorktree, got)
+	assert.Equal(t, domain.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
@@ -66,7 +68,7 @@ func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeDirectory, got)
+	assert.Equal(t, domain.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
@@ -77,7 +79,7 @@ func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "feat/my-feature")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeNewWorktree, got)
+	assert.Equal(t, domain.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t *testing.T) {
@@ -89,7 +91,7 @@ func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t 
 	}
 	got, err := resolveSessionType(msg, "feat/branch")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeExistingWorktree, got)
+	assert.Equal(t, domain.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
@@ -100,7 +102,7 @@ func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "some-branch")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeOneOff, got)
+	assert.Equal(t, domain.SessionTypeOneOff, got)
 }
 
 func TestResolveSessionType_should_ReturnError_When_SessionTypeUnrecognized(t *testing.T) {
@@ -112,7 +114,7 @@ func TestResolveSessionType_should_ReturnError_When_SessionTypeUnrecognized(t *t
 	}
 	got, err := resolveSessionType(msg, "")
 	require.Error(t, err)
-	assert.Equal(t, session.SessionType(""), got)
+	assert.Equal(t, domain.SessionType(""), got)
 }
 
 // ---------------------------------------------------------------------------
@@ -892,7 +894,7 @@ func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T)
 		Title:            "wirecallbacks-nil-poller-" + t.Name(),
 		Path:             repoDir,
 		Program:          "sh",
-		SessionType:      session.SessionTypeExistingWorktree,
+		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: repoDir,
 		TmuxServerSocket: svc.testTmuxServerSocket,
 	})

@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -88,7 +90,7 @@ func TestColdRestore_SignalsFreshLostHistory_When_RecoveryFailsButEverHadHistory
 				Title:            title,
 				Path:             t.TempDir(),
 				Program:          "sleep 300",
-				SessionType:      SessionTypeDirectory,
+				SessionType:      domain.SessionTypeDirectory,
 				AutoYes:          false,
 				TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 				TmuxServerSocket: coldRestoreSocket(t),
@@ -139,7 +141,7 @@ func TestColdRestore_NoSignal_When_GenuinelyNeverHadHistory(t *testing.T) {
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -185,7 +187,7 @@ func TestColdRestore_LastReviveOutcomeClears_When_LaterCycleIsHotRestore(t *test
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),

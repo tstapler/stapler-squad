@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
@@ -33,7 +35,7 @@ func TestCreateManagedInstance_CreatesPersistedInstance_When_ParamsValid(t *test
 			Title:       "cmi-happy-path",
 			Path:        dir,
 			Program:     "claude",
-			SessionType: session.SessionTypeDirectory,
+			SessionType: domain.SessionTypeDirectory,
 		},
 		Storage:  storage,
 		Registry: registry,
@@ -80,7 +82,7 @@ func TestCreateManagedInstance_ReturnsErrPathNotExist_When_DirectoryMissingAndNo
 			Title:       "cmi-missing-path",
 			Path:        missingPath,
 			Program:     "claude",
-			SessionType: session.SessionTypeDirectory,
+			SessionType: domain.SessionTypeDirectory,
 		},
 		Storage:         storage,
 		CreateIfMissing: false,
@@ -118,7 +120,7 @@ func TestCreateManagedInstance_ReturnsErrPathNotExist_When_NewWorktreeMissing(t 
 					Title:       "cmi-new-worktree-missing-path",
 					Path:        missingPath,
 					Program:     "claude",
-					SessionType: session.SessionTypeNewWorktree,
+					SessionType: domain.SessionTypeNewWorktree,
 				},
 				Storage:         storage,
 				CreateIfMissing: createIfMissing,
@@ -148,7 +150,7 @@ func TestCreateManagedInstance_ReturnsErrResumePathNotExist_When_ResumingMissing
 			Title:       "cmi-missing-resume-path",
 			Path:        missingPath,
 			Program:     "claude",
-			SessionType: session.SessionTypeDirectory,
+			SessionType: domain.SessionTypeDirectory,
 		},
 		Storage:  storage,
 		ResumeID: "abc-123",

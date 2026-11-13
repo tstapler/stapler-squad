@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -137,7 +139,7 @@ func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCal
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_markstarted_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),

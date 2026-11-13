@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -42,7 +44,7 @@ func TestNewSessionLivenessChecker_should_SkipRegistry_When_LiveInstanceIsTracke
 		Title:       "review:93565fa1",
 		Path:        t.TempDir(),
 		Program:     "true",
-		SessionType: session.SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 	})
 	if err != nil {
 		t.Fatalf("session.NewInstance: %v", err)

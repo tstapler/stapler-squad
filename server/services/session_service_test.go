@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 
@@ -2816,7 +2818,7 @@ func TestWireCallbacks_WiresMCPServerURLProvider(t *testing.T) {
 		UUID:        "11111111-0000-0000-0000-000000000007",
 		Path:        "/tmp/test",
 		Program:     "claude",
-		SessionType: session.SessionTypeDirectory, // NewInstance() would default this; this raw literal must too, or setupFirstTimeWorktree's stricter default: (worktree-envvars-hijack Story 3.2.1) now errors on the zero value instead of silently treating it as directory
+		SessionType: domain.SessionTypeDirectory, // NewInstance() would default this; this raw literal must too, or setupFirstTimeWorktree's stricter default: (worktree-envvars-hijack Story 3.2.1) now errors on the zero value instead of silently treating it as directory
 		// MCPServerURL deliberately left empty -- exercises the provider
 		// path, not the one-shot-field fallback.
 	}
@@ -4503,7 +4505,7 @@ func TestCreateSession_should_ReachActiveViaPipeline(t *testing.T) {
 			Title:            "epic61-preexisting-directory",
 			Path:             repoDir,
 			Program:          "sh",
-			SessionType:      session.SessionTypeDirectory,
+			SessionType:      domain.SessionTypeDirectory,
 			TmuxServerSocket: fix.svc.testTmuxServerSocket,
 		})
 		require.NoError(t, err)

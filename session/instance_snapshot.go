@@ -117,7 +117,7 @@ type InstanceSnapshot struct {
 	InitialPromptSentAt   time.Time
 	Category              string
 	Note                  string
-	SessionType           SessionType
+	SessionType           domain.SessionType
 	TmuxPrefix            string
 	TmuxServerSocket      string
 	Backend               ProcessManagerBackend

@@ -409,7 +409,7 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (session.Webhook
 	if b.InputTemplate != nil && len(*b.InputTemplate) > maxWebhookTemplateBytes {
 		return invalid("webhook.input_template exceeds its size limit")
 	}
-	if b.SessionType != nil && !config.SessionType(*b.SessionType).IsValid() {
+	if b.SessionType != nil && !domain.SessionType(*b.SessionType).IsValid() {
 		return invalid("webhook.session_type is not supported")
 	}
 	if b.Model != nil {

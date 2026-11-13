@@ -64,7 +64,7 @@ type InstanceData struct {
 	SuppressedRuleTags map[string]bool   `json:"suppressed_rule_tags,omitempty"`
 
 	// Session type determines the workflow (directory, new_worktree, existing_worktree)
-	SessionType SessionType `json:"session_type,omitempty"`
+	SessionType domain.SessionType `json:"session_type,omitempty"`
 
 	// GitHub integration fields for PR/URL-based session creation
 	GitHubPRNumber  int    `json:"github_pr_number,omitempty"`

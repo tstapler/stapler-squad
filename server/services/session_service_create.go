@@ -196,8 +196,8 @@ func (s *SessionService) resolveAliasSessionDefaults(
 	program string,
 	autoYes bool,
 	instanceEnvVars map[string]string,
-) (outProgram string, outAutoYes bool, outCLIFlags string, outResolvedPath string, aliasSessionType config.SessionType, err error) {
-	aliasSessionType = config.SessionTypeDefault
+) (outProgram string, outAutoYes bool, outCLIFlags string, outResolvedPath string, aliasSessionType domain.SessionType, err error) {
+	aliasSessionType = domain.SessionTypeDefault
 	resolved, aliasErr := config.ResolveAlias(cfg, msg.AliasName, msg.Branch, msg.Title, "")
 	if aliasErr != nil {
 		if errors.Is(aliasErr, config.ErrAliasNotFound) {
@@ -236,12 +236,12 @@ func (s *SessionService) resolveAliasSessionDefaults(
 }
 
 func (s *SessionService) resolveSessionDefaults(cfg *config.Config, msg *sessionv1.CreateSessionRequest, resolvedPath string, remoteRequested bool) (
-	program string, autoYes bool, instanceEnvVars map[string]string, instanceCLIFlags string, aliasSessionType config.SessionType, outPath string, err error,
+	program string, autoYes bool, instanceEnvVars map[string]string, instanceCLIFlags string, aliasSessionType domain.SessionType, outPath string, err error,
 ) {
 	program = msg.Program
 	autoYes = msg.AutoYes
 	instanceEnvVars = make(map[string]string)
-	aliasSessionType = config.SessionTypeDefault // session type from alias config (empty = no override)
+	aliasSessionType = domain.SessionTypeDefault // session type from alias config (empty = no override)
 	if !msg.SkipDefaults {
 		if msg.AliasName != "" {
 			var aliasErr error
@@ -310,31 +310,31 @@ func (s *SessionService) resolveSessionDefaults(cfg *config.Config, msg *session
 // would break the --resume lookup). requestedNewWorktree is captured before
 // any of these remaps run, so it names the wire-level request itself -- feeds
 // startLocked's Epic 1.5 invariant check.
-func remapSessionTypeForSpecialCases(msg *sessionv1.CreateSessionRequest, branch string, aliasSessionType config.SessionType, deferredGitHubURL bool) (session.SessionType, bool, error) {
+func remapSessionTypeForSpecialCases(msg *sessionv1.CreateSessionRequest, branch string, aliasSessionType domain.SessionType, deferredGitHubURL bool) (domain.SessionType, bool, error) {
 	sessionType, err := resolveSessionType(msg, branch)
 	if err != nil {
 		return "", false, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	requestedNewWorktree := msg.SessionType == sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
-	if aliasSessionType != config.SessionTypeDefault && msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
+	if aliasSessionType != domain.SessionTypeDefault && msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		sessionType = aliasSessionType
 	}
 
 	// One-off sessions run as directory sessions — the path was already generated above.
-	if sessionType == session.SessionTypeOneOff {
-		sessionType = session.SessionTypeDirectory
+	if sessionType == domain.SessionTypeOneOff {
+		sessionType = domain.SessionTypeDirectory
 	}
 
 	if deferredGitHubURL && msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED &&
 		msg.ExistingWorktree == "" {
-		sessionType = session.SessionTypeNewWorktree
+		sessionType = domain.SessionTypeNewWorktree
 	}
 
 	// For resume sessions, force DIRECTORY type — we must not create a new worktree
 	// that would produce a different project path and break the --resume lookup.
 	if msg.ResumeId != "" && msg.ForkSourceId == "" &&
 		msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
-		sessionType = session.SessionTypeDirectory
+		sessionType = domain.SessionTypeDirectory
 	}
 
 	return sessionType, requestedNewWorktree, nil
@@ -442,11 +442,11 @@ func (s *SessionService) setupRemoteSessionTarget(
 	cfg *config.Config,
 	resolvedRemote *session.RemoteTarget,
 	remoteRequested bool,
-	sessionType session.SessionType,
+	sessionType domain.SessionType,
 	resolvedPath string,
 	branch string,
 	program string,
-) (executionTarget session.ExecutionTarget, existingWorktreeOverride string, remoteCreationWarning string, outSessionType session.SessionType, outBranch string, err error) {
+) (executionTarget session.ExecutionTarget, existingWorktreeOverride string, remoteCreationWarning string, outSessionType domain.SessionType, outBranch string, err error) {
 	executionTarget = session.LocalTarget{}
 	existingWorktreeOverride = msg.ExistingWorktree
 	if !remoteRequested {
@@ -454,17 +454,17 @@ func (s *SessionService) setupRemoteSessionTarget(
 	}
 
 	switch sessionType {
-	case session.SessionTypeNewWorktree, session.SessionTypeExistingWorktree, session.SessionTypeDirectory, session.SessionTypeNewProject:
+	case domain.SessionTypeNewWorktree, domain.SessionTypeExistingWorktree, domain.SessionTypeDirectory, domain.SessionTypeNewProject:
 		// supported, handled below
 	default:
 		return nil, "", "", "", "", connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("remote sessions do not support session_type=%q (supported: new_worktree, existing_worktree, directory, new_project)", sessionType))
 	}
-	if sessionType == session.SessionTypeExistingWorktree && msg.ExistingWorktree == "" {
+	if sessionType == domain.SessionTypeExistingWorktree && msg.ExistingWorktree == "" {
 		return nil, "", "", "", "", connect.NewError(connect.CodeInvalidArgument,
 			errors.New("existing_worktree path is required for remote session_type=existing_worktree"))
 	}
-	if sessionType == session.SessionTypeNewProject && resolvedPath == "" {
+	if sessionType == domain.SessionTypeNewProject && resolvedPath == "" {
 		// Local NewProject can leave resolvedPath empty and still resolve one later
 		// via alias config (see the "path is required" exemption above and the
 		// alias-resolution block below) -- but a remote NewProject has no such
@@ -505,7 +505,7 @@ func (s *SessionService) setupRemoteSessionTarget(
 		createdWorktree   bool
 	)
 	switch sessionType {
-	case session.SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		var newWTErr error
 		remoteWorkingPath, worktreeOps, remoteWT, remoteCreationWarning, branch, newWTErr =
 			s.createRemoteNewWorktree(ctx, msg, cfg, resolvedRemote, runner, resolvedPath, branch)
@@ -513,11 +513,11 @@ func (s *SessionService) setupRemoteSessionTarget(
 			return nil, "", "", "", "", newWTErr
 		}
 		createdWorktree = true
-	case session.SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		remoteWorkingPath = msg.ExistingWorktree
-	case session.SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		remoteWorkingPath = resolvedPath
-	case session.SessionTypeNewProject:
+	case domain.SessionTypeNewProject:
 		remoteWorkingPath = resolvedPath
 		// No createdWorktree/rollback bookkeeping here, matching
 		// InitializeProjectDirectory's own doc comment: unlike CreateWorktree
@@ -588,8 +588,8 @@ func (s *SessionService) setupRemoteSessionTarget(
 	// setupFirstTimeWorktree's existing default/NewProject cases
 	// (SetWorktree(nil), no worktree persisted), identical to their local
 	// counterparts, with no ent schema change needed.
-	if sessionType != session.SessionTypeDirectory && sessionType != session.SessionTypeNewProject {
-		sessionType = session.SessionTypeExistingWorktree
+	if sessionType != domain.SessionTypeDirectory && sessionType != domain.SessionTypeNewProject {
+		sessionType = domain.SessionTypeExistingWorktree
 	}
 	existingWorktreeOverride = remoteWorkingPath
 
@@ -750,7 +750,7 @@ func (s *SessionService) CreateSession(
 	// the remote mode-specific block below), and existence is the remote host's to answer,
 	// not this process's local filesystem.
 	// create_if_missing=true falls through this whole check; setupFirstTimeWorktree handles creation.
-	if sessionType == session.SessionTypeDirectory && !remoteRequested && !req.Msg.CreateIfMissing {
+	if sessionType == domain.SessionTypeDirectory && !remoteRequested && !req.Msg.CreateIfMissing {
 		if _, statErr := os.Stat(resolvedPath); os.IsNotExist(statErr) {
 			if req.Msg.ResumeId != "" {
 				return nil, connect.NewError(connect.CodeNotFound,
@@ -1107,19 +1107,19 @@ func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config
 // Priority: explicit session_type > inference from branch/existing_worktree.
 // ONE_OFF is returned as SessionTypeOneOff; callers are responsible for converting it to
 // SessionTypeDirectory after the one-off directory has been generated.
-func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (session.SessionType, error) {
+func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (domain.SessionType, error) {
 	if msg.SessionType != sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		switch msg.SessionType {
 		case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-			return session.SessionTypeDirectory, nil
+			return domain.SessionTypeDirectory, nil
 		case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-			return session.SessionTypeNewWorktree, nil
+			return domain.SessionTypeNewWorktree, nil
 		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-			return session.SessionTypeExistingWorktree, nil
+			return domain.SessionTypeExistingWorktree, nil
 		case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
-			return session.SessionTypeNewProject, nil
+			return domain.SessionTypeNewProject, nil
 		case sessionv1.SessionType_SESSION_TYPE_ONE_OFF:
-			return session.SessionTypeOneOff, nil
+			return domain.SessionTypeOneOff, nil
 		default:
 			// Fail loudly instead of silently downgrading an unrecognized enum value
 			// to SessionTypeDirectory -- this exact silent-substitution shape has
@@ -1129,12 +1129,12 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) (ses
 		}
 	}
 	if msg.ExistingWorktree != "" {
-		return session.SessionTypeExistingWorktree, nil
+		return domain.SessionTypeExistingWorktree, nil
 	}
 	if branch != "" {
-		return session.SessionTypeNewWorktree, nil
+		return domain.SessionTypeNewWorktree, nil
 	}
-	return session.SessionTypeDirectory, nil
+	return domain.SessionTypeDirectory, nil
 }
 
 // enterpriseHosts unions statically-configured GitHub Enterprise hosts with hosts

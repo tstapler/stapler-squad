@@ -530,7 +530,7 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 
 func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When_RunningAndPausedInstances(t *testing.T) {
 	inst, err := session.NewInstance(session.InstanceOptions{
-		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: session.SessionTypeDirectory,
+		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: domain.SessionTypeDirectory,
 	})
 	require.NoError(t, err)
 	snap := inst.Snapshot()

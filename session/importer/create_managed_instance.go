@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/session"
 	"os"
+
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Sentinel errors returned by CreateManagedInstance, wrapped with
@@ -128,9 +130,9 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 	// nonexistent path in the first place (BUG discovered 2026-09-05:
 	// "steam-controls" session; that flow now correctly routes through
 	// SessionTypeNewProject instead, which does support bootstrapping).
-	if !params.DeferredPathResolution && (opts.SessionType == session.SessionTypeDirectory || opts.SessionType == session.SessionTypeNewWorktree) {
+	if !params.DeferredPathResolution && (opts.SessionType == domain.SessionTypeDirectory || opts.SessionType == domain.SessionTypeNewWorktree) {
 		if _, statErr := os.Stat(opts.Path); os.IsNotExist(statErr) {
-			if opts.SessionType == session.SessionTypeNewWorktree || !params.CreateIfMissing {
+			if opts.SessionType == domain.SessionTypeNewWorktree || !params.CreateIfMissing {
 				if opts.ResumeId != "" {
 					return nil, fmt.Errorf("%w: %s", ErrResumePathNotExist, opts.Path)
 				}

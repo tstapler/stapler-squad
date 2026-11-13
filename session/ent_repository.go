@@ -1625,7 +1625,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 
 	// Set session type
 	if sess.SessionType != "" {
-		data.SessionType = SessionType(sess.SessionType)
+		data.SessionType = domain.SessionType(sess.SessionType)
 	}
 
 	// Convert worktree if present

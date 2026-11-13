@@ -14,6 +14,7 @@ go_library(
         "github_pr_items.go",
         "guidance_cancel_reason.go",
         "guidance_request_source.go",
+        "session_type.go",
         "wake_trigger.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/domain",

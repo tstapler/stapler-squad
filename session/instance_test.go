@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -306,7 +308,7 @@ func TestNewInstance_PopulatesEnvVars_WhenPassedInOptions(t *testing.T) {
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 		EnvVars:     map[string]string{"X": "1", "Y": "2"},
 	}
 	inst, err := NewInstance(opts)
@@ -323,7 +325,7 @@ func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 		CLIFlags:    "--foo --bar",
 	}
 	inst, err := NewInstance(opts)
@@ -340,7 +342,7 @@ func TestNewInstance_should_PreserveExtraArgsExactly_When_OptionsIncludeExtraArg
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 		ExtraArgs:   []string{"-t", "host", "cd ~/repo && exec claude"},
 	}
 	inst, err := NewInstance(opts)
@@ -363,7 +365,7 @@ func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testi
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 	}
 	inst, err := NewInstance(opts)
 	if err != nil {
@@ -866,7 +868,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoo
 		UUID:            "guard-structural-fail-uuid",
 		Path:            repoDir,
 		Program:         "sleep 300",
-		SessionType:     SessionTypeNewWorktree,
+		SessionType:     domain.SessionTypeNewWorktree,
 		Branch:          "existing-branch",
 		Permissions:     GetManagedPermissions(),
 		ExecutionTarget: forceWorktreeAddFailureTarget{},
@@ -900,7 +902,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 		Title:            title,
 		Path:             repoDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		Branch:           "feature-guard-ok",
 		TmuxPrefix:       fmt.Sprintf("test_newworktreeguardok_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -945,7 +947,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturn
 		UUID:             "guard-collision-fail-uuid",
 		Path:             repoDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeExistingWorktree,
+		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: repoDir,
 		Permissions:      GetManagedPermissions(),
 	}
@@ -978,7 +980,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testin
 		Title:            title,
 		Path:             repoDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeExistingWorktree,
+		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: repoDir,
 		TmuxPrefix:       fmt.Sprintf("test_noguardcollision_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),

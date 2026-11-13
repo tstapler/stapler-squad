@@ -287,7 +287,7 @@ type Instance struct {
 	// IsExpanded indicates whether this session's category is expanded in the UI
 	IsExpanded bool
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
-	SessionType SessionType
+	SessionType domain.SessionType
 	// CreateIfMissing: when SessionTypeDirectory, create the directory and run git init
 	// if the path does not exist. Set from the request's create_if_missing field.
 	// Not persisted — only relevant during initial session start.
@@ -1010,23 +1010,6 @@ const (
 	PermissionModeManual            = "manual"
 )
 
-// SessionType is an alias for config.SessionType so callers can use either package.
-type SessionType = config.SessionType
-
-const (
-	// SessionTypeDirectory creates a simple directory session without git worktree
-	SessionTypeDirectory = config.SessionTypeDirectory
-	// SessionTypeNewWorktree creates a new git worktree for the session
-	SessionTypeNewWorktree = config.SessionTypeNewWorktree
-	// SessionTypeExistingWorktree uses an existing git worktree
-	SessionTypeExistingWorktree = config.SessionTypeExistingWorktree
-	// SessionTypeNewProject creates a new directory, initializes a git repo with an
-	// initial commit, and opens the session. The directory need not exist beforehand.
-	SessionTypeNewProject = config.SessionTypeNewProject
-	// SessionTypeOneOff generates a fresh temporary directory under one_off_base_dir.
-	SessionTypeOneOff = config.SessionTypeOneOff
-)
-
 // Options for creating a new instance
 type InstanceOptions struct {
 	// Title is the title of the instance.
@@ -1069,7 +1052,7 @@ type InstanceOptions struct {
 	// Tags are multi-valued labels for flexible organization
 	Tags []string
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
-	SessionType SessionType
+	SessionType domain.SessionType
 	// TmuxPrefix is the prefix to use for tmux session names (e.g., "staplersquad_")
 	TmuxPrefix string
 	// TmuxServerSocket is the server socket name for tmux isolation (used with -L flag)
@@ -1202,11 +1185,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	// Default to directory session if not specified for backward compatibility
 	sessionType := opts.SessionType
 	if sessionType == "" {
-		sessionType = SessionTypeDirectory
+		sessionType = domain.SessionTypeDirectory
 	}
 	if !sessionType.IsValid() {
 		return nil, fmt.Errorf("invalid session type %q: must be one of %q, %q, %q, %q",
-			sessionType, SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree, SessionTypeNewProject)
+			sessionType, domain.SessionTypeDirectory, domain.SessionTypeNewWorktree, domain.SessionTypeExistingWorktree, domain.SessionTypeNewProject)
 	}
 
 	instance := &Instance{
@@ -1659,7 +1642,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// resolve to SessionTypeNewWorktree by here — a remote target is deliberately
 	// remapped to ExistingWorktree (see setupFirstTimeWorktree), the one known
 	// exception. See research/architecture.md Q1/Q2 for why this is otherwise impossible.
-	if resolvedType := i.Snapshot().SessionType; firstTimeSetup && i.RequestedNewWorktree && !i.executionTarget().IsRemote() && resolvedType != SessionTypeNewWorktree {
+	if resolvedType := i.Snapshot().SessionType; firstTimeSetup && i.RequestedNewWorktree && !i.executionTarget().IsRemote() && resolvedType != domain.SessionTypeNewWorktree {
 		recordSessionCreationWorktreeTypeMismatch(resolvedType)
 		log.Warn("session_creation_worktree_type_mismatch: SESSION_TYPE_NEW_WORKTREE request resolved to a non-NewWorktree SessionType",
 			"session", i.Title, "uuid", i.UUID, "resolved_session_type", resolvedType)
@@ -1759,7 +1742,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		basePath := i.Path
 		if i.GitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
-			if i.SessionType != SessionTypeExistingWorktree {
+			if i.SessionType != domain.SessionTypeExistingWorktree {
 				log.Info("setting up git worktree", "session", i.Title)
 				if err := i.GitManager.Setup(); err != nil {
 					log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
@@ -1774,7 +1757,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		// resolved basePath is still the bare repo root means no real worktree was
 		// actually created. Fail loudly and BEFORE any tmux/process spawn instead
 		// of silently running in the shared repo directory.
-		if repoPath := i.GetPath(); i.SessionType == SessionTypeNewWorktree && basePath == repoPath {
+		if repoPath := i.GetPath(); i.SessionType == domain.SessionTypeNewWorktree && basePath == repoPath {
 			setupErr = fmt.Errorf("%w: session %q resolved to no real worktree (basePath == repo root %q)",
 				ErrWorktreeResolutionFailed, i.Title, repoPath)
 			return setupErr
@@ -2057,7 +2040,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		basePath := i.Path
 		if i.GitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
-			if i.SessionType != SessionTypeExistingWorktree {
+			if i.SessionType != domain.SessionTypeExistingWorktree {
 				log.Info("setting up git worktree", "session", i.Title)
 				if err := i.GitManager.Setup(); err != nil {
 					log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
@@ -2701,7 +2684,7 @@ func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *s
 			}
 		}
 		worktreePath = i.GitManager.GetWorktreePath()
-	} else if i.SessionType == SessionTypeExistingWorktree && i.ExistingWorktree != "" {
+	} else if i.SessionType == domain.SessionTypeExistingWorktree && i.ExistingWorktree != "" {
 		worktreePath = i.ExistingWorktree
 	} else {
 		worktreePath = i.Path
