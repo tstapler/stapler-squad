@@ -11,6 +11,7 @@ go_library(
         "backlog.go",
         "context_health.go",
         "errors.go",
+        "gate_config.go",
         "gate_status.go",
         "github_host.go",
         "github_pr_items.go",
@@ -40,6 +41,7 @@ go_test(
     srcs = [
         "autonomous_stop_test.go",
         "backlog_test.go",
+        "gate_config_test.go",
         "github_host_test.go",
         "guidance_request_source_test.go",
         "purity_test.go",

@@ -1187,10 +1187,10 @@ func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to session.Bac
 // resolveReviewGateContext's shape for the sibling stateful gate kind. ok is
 // false when no WorkflowEngine is wired, it isn't a *ConfiguredWorkflowEngine,
 // or the edge carries no custom-check gate.
-func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to session.BacklogStatus) (uuid.UUID, session.CustomCheckConfig, bool) {
+func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to session.BacklogStatus) (uuid.UUID, domain.CustomCheckConfig, bool) {
 	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
-		return uuid.Nil, session.CustomCheckConfig{}, false
+		return uuid.Nil, domain.CustomCheckConfig{}, false
 	}
 	return cwe.ResolveCustomCheckGateContext(from, to)
 }

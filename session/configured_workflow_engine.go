@@ -456,7 +456,7 @@ func (e *ConfiguredWorkflowEngine) checkAutomatedReviewGateConfig(g resolvedGate
 	if err != nil {
 		return gateConfigErrorStatus(g, fmt.Sprintf("this gate's automated-review configuration is invalid: %v", err)), true
 	}
-	cfg, _ := parsed.(AutomatedReviewConfig)
+	cfg, _ := parsed.(domain.AutomatedReviewConfig)
 	if cfg.PipelineMode == "" {
 		return domain.GateStatus{}, false
 	}
@@ -526,10 +526,10 @@ func describeGateSatisfactionRecord(record *GateSatisfactionData, kindLabel stri
 // AutomatedReviewConfig for the first GateKindAutomatedReview gate configured
 // on the (from,to) edge, or ok=false when the edge doesn't exist in the
 // loaded graph or carries no such gate (Epic 2.4, Story 2.4.3's follow-up).
-func (e *ConfiguredWorkflowEngine) ResolveAutomatedReviewGateContext(from, to BacklogStatus) (gateID string, cfg AutomatedReviewConfig, ok bool) {
+func (e *ConfiguredWorkflowEngine) ResolveAutomatedReviewGateContext(from, to BacklogStatus) (gateID string, cfg domain.AutomatedReviewConfig, ok bool) {
 	edge, found := e.cache.Get(from, to)
 	if !found {
-		return "", AutomatedReviewConfig{}, false
+		return "", domain.AutomatedReviewConfig{}, false
 	}
 	for _, g := range edge.Gates {
 		if g.Kind != domain.GateKindAutomatedReview {
@@ -540,10 +540,10 @@ func (e *ConfiguredWorkflowEngine) ResolveAutomatedReviewGateContext(from, to Ba
 			log.WarningLog().Printf("[ConfiguredWorkflowEngine] gate %s: %v", g.ID, err)
 			continue
 		}
-		arCfg, _ := parsed.(AutomatedReviewConfig)
+		arCfg, _ := parsed.(domain.AutomatedReviewConfig)
 		return g.ID.String(), arCfg, true
 	}
-	return "", AutomatedReviewConfig{}, false
+	return "", domain.AutomatedReviewConfig{}, false
 }
 
 // ResolveCustomCheckGateContext returns the GateID and parsed
@@ -551,10 +551,10 @@ func (e *ConfiguredWorkflowEngine) ResolveAutomatedReviewGateContext(from, to Ba
 // (from,to) edge, or ok=false when the edge doesn't exist in the loaded graph
 // or carries no such gate. Sibling to ResolveAutomatedReviewGateContext above
 // (Epic 2.4, Story 2.4.4's follow-up).
-func (e *ConfiguredWorkflowEngine) ResolveCustomCheckGateContext(from, to BacklogStatus) (gateID uuid.UUID, cfg CustomCheckConfig, ok bool) {
+func (e *ConfiguredWorkflowEngine) ResolveCustomCheckGateContext(from, to BacklogStatus) (gateID uuid.UUID, cfg domain.CustomCheckConfig, ok bool) {
 	edge, found := e.cache.Get(from, to)
 	if !found {
-		return uuid.Nil, CustomCheckConfig{}, false
+		return uuid.Nil, domain.CustomCheckConfig{}, false
 	}
 	for _, g := range edge.Gates {
 		if g.Kind != domain.GateKindCustom {
@@ -565,10 +565,10 @@ func (e *ConfiguredWorkflowEngine) ResolveCustomCheckGateContext(from, to Backlo
 			log.WarningLog().Printf("[ConfiguredWorkflowEngine] gate %s: %v", g.ID, err)
 			continue
 		}
-		ccCfg, _ := parsed.(CustomCheckConfig)
+		ccCfg, _ := parsed.(domain.CustomCheckConfig)
 		return g.ID, ccCfg, true
 	}
-	return uuid.Nil, CustomCheckConfig{}, false
+	return uuid.Nil, domain.CustomCheckConfig{}, false
 }
 
 // parseResolvedGateConfig re-marshals g.Config (the deep-copied
@@ -576,12 +576,12 @@ func (e *ConfiguredWorkflowEngine) ResolveCustomCheckGateContext(from, to Backlo
 // back to JSON and decodes it via ParseGateConfig (session/gate_config.go) —
 // reusing the same save-time validator rather than a second ad hoc decode
 // path for the read side.
-func parseResolvedGateConfig(g resolvedGate) (GateConfig, error) {
+func parseResolvedGateConfig(g resolvedGate) (domain.GateConfig, error) {
 	raw, err := json.Marshal(g.Config)
 	if err != nil {
 		return nil, fmt.Errorf("marshal config for gate %s: %w", g.ID, err)
 	}
-	return ParseGateConfig(g.Kind, raw)
+	return domain.ParseGateConfig(g.Kind, raw)
 }
 
 // evaluateStructuralGate dispatches to Story 2.4.2's closed set of named

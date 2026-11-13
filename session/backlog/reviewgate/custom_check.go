@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
@@ -118,12 +119,12 @@ func InvokeCustomGateCheck(
 	repo session.GateSatisfactionRepository,
 	item *backlogdto.BacklogItemData,
 	gateID uuid.UUID,
-	cfg session.CustomCheckConfig,
+	cfg domain.CustomCheckConfig,
 	livenessDef liveness.LivenessDefinition,
 	targetStage session.BacklogStatus,
 	mode backlogdto.PipelineMode,
 ) (CustomCheckOutcome, error) {
-	if !session.RegisteredCustomCheckSkills[cfg.SkillID] {
+	if !domain.RegisteredCustomCheckSkills[cfg.SkillID] {
 		return CustomCheckOutcome{}, fmt.Errorf("gate_custom_check: skill %q is not in the pre-registered allowlist", cfg.SkillID)
 	}
 	systemPrompt, ok := customCheckSystemPrompts[cfg.SkillID]

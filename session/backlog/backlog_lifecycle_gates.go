@@ -38,7 +38,7 @@ const (
 // Best-effort: errors are logged, never returned — this runs on its own
 // goroutine off onSessionExited's synchronous path, bounded by
 // l.customCheckSem.
-func (l *BacklogLifecycleListener) runCustomGateCheck(ctx context.Context, gateID uuid.UUID, cfg session.CustomCheckConfig, targetStage session.BacklogStatus, item *backlogdto.BacklogItemData) {
+func (l *BacklogLifecycleListener) runCustomGateCheck(ctx context.Context, gateID uuid.UUID, cfg domain.CustomCheckConfig, targetStage session.BacklogStatus, item *backlogdto.BacklogItemData) {
 	pool := l.getHeadlessCaller()
 	if pool == nil {
 		log.WarningLog().Printf("[BacklogLifecycle] runCustomGateCheck item=%s gate=%s: no headless pool configured", item.ID, gateID)
@@ -53,7 +53,7 @@ func (l *BacklogLifecycleListener) runCustomGateCheck(ctx context.Context, gateI
 // (mirrors resolveCustomCheckStalenessThresholdWithEngine's identical
 // extraction below, done for the same reason: l.headlessPool is a concrete
 // *headless.Pool, not an interface, so it can't be substituted in tests).
-func (l *BacklogLifecycleListener) runCustomGateCheckWithCaller(ctx context.Context, caller reviewgate.CustomCheckCaller, gateID uuid.UUID, cfg session.CustomCheckConfig, targetStage session.BacklogStatus, item *backlogdto.BacklogItemData) {
+func (l *BacklogLifecycleListener) runCustomGateCheckWithCaller(ctx context.Context, caller reviewgate.CustomCheckCaller, gateID uuid.UUID, cfg domain.CustomCheckConfig, targetStage session.BacklogStatus, item *backlogdto.BacklogItemData) {
 	mode := backlogdto.PipelineMode(item.PipelineMode)
 	livenessDef := l.resolveCustomCheckLivenessDef(targetStage, mode)
 	if _, err := reviewgate.InvokeCustomGateCheck(ctx, caller, l.getGateSatisfactionRepo(), item, gateID, cfg, livenessDef, targetStage, mode); err != nil {

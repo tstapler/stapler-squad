@@ -102,7 +102,7 @@ func validateGateConfig(kind string, config map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("marshal gate config: %w", err)
 	}
-	if _, err := session.ParseGateConfig(domain.GateKind(kind), raw); err != nil {
+	if _, err := domain.ParseGateConfig(domain.GateKind(kind), raw); err != nil {
 		return err
 	}
 	return nil

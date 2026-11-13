@@ -1,4 +1,4 @@
-package session
+package domain
 
 // gate_config.go — Task 2.7.2g's typed GateConfig sum type and
 // ParseGateConfig validator. Each TransitionGate row's raw JSON `config`
@@ -22,7 +22,6 @@ package session
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/tstapler/stapler-squad/session/domain"
 	"strconv"
 )
 
@@ -89,11 +88,11 @@ var RegisteredCustomCheckSkills = map[string]bool{
 // set. A key outside this set is rejected by ParseGateConfig — this is what
 // stops a "custom" gate config from smuggling an extra field (e.g. a raw
 // shell command) past validation under an innocuous-looking name.
-var gateConfigAllowedKeys = map[domain.GateKind]map[string]bool{
-	domain.GateKindHumanApproval:   {},
-	domain.GateKindAutomatedReview: {"pipeline_mode": true, "requires_diff": true},
-	domain.GateKindStructural:      {"check_id": true},
-	domain.GateKindCustom:          {"skill": true},
+var gateConfigAllowedKeys = map[GateKind]map[string]bool{
+	GateKindHumanApproval:   {},
+	GateKindAutomatedReview: {"pipeline_mode": true, "requires_diff": true},
+	GateKindStructural:      {"check_id": true},
+	GateKindCustom:          {"skill": true},
 }
 
 // decodeConfigString decodes raw as a string, tolerating a raw JSON scalar
@@ -140,7 +139,7 @@ func decodeConfigBool(raw json.RawMessage) (bool, error) {
 // 2.7.2g3) before persisting — not only at InvokeCustomGateCheck's
 // invocation time — so a config mistake surfaces at the moment of the save
 // that caused it, matching graph_validator.go's ValidateGraph convention.
-func ParseGateConfig(kind domain.GateKind, raw json.RawMessage) (GateConfig, error) {
+func ParseGateConfig(kind GateKind, raw json.RawMessage) (GateConfig, error) {
 	allowed, ok := gateConfigAllowedKeys[kind]
 	if !ok {
 		return nil, fmt.Errorf("gate_config: unknown gate kind %q", kind)
@@ -159,10 +158,10 @@ func ParseGateConfig(kind domain.GateKind, raw json.RawMessage) (GateConfig, err
 	}
 
 	switch kind {
-	case domain.GateKindHumanApproval:
+	case GateKindHumanApproval:
 		return HumanApprovalConfig{}, nil
 
-	case domain.GateKindAutomatedReview:
+	case GateKindAutomatedReview:
 		cfg := AutomatedReviewConfig{}
 		if v, ok := fields["pipeline_mode"]; ok {
 			s, err := decodeConfigString(v)
@@ -180,7 +179,7 @@ func ParseGateConfig(kind domain.GateKind, raw json.RawMessage) (GateConfig, err
 		}
 		return cfg, nil
 
-	case domain.GateKindStructural:
+	case GateKindStructural:
 		cfg := StructuralConfig{}
 		if v, ok := fields["check_id"]; ok {
 			s, err := decodeConfigString(v)
@@ -194,7 +193,7 @@ func ParseGateConfig(kind domain.GateKind, raw json.RawMessage) (GateConfig, err
 		}
 		return cfg, nil
 
-	case domain.GateKindCustom:
+	case GateKindCustom:
 		cfg := CustomCheckConfig{}
 		if v, ok := fields["skill"]; ok {
 			s, err := decodeConfigString(v)

@@ -234,7 +234,7 @@ func TestRunCustomGateCheckWithCaller_should_InvokeCallerAndRecordOutcome_When_T
 	listener.SetGateSatisfactionRepository(repo)
 
 	caller := &blktest.FakeCustomCheckCaller{Output: "Looks buildable.\n\nVERDICT: PASS"}
-	cfg := session.CustomCheckConfig{SkillID: "review-feasibility"}
+	cfg := domain.CustomCheckConfig{SkillID: "review-feasibility"}
 
 	listener.runCustomGateCheckWithCaller(ctx, caller, gateID, cfg, session.BacklogStatusReady, item)
 
