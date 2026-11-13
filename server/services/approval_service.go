@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -236,7 +237,7 @@ func (as *ApprovalService) ResolveApprovalReconciled(ctx context.Context, approv
 		_ = as.notificationStore.SetMetadata(approvalID, "reconciled", "true")
 	}
 	if as.reviewQueueRemover != nil && sessionID != "" {
-		as.reviewQueueRemover.RemoveWithInfo(sessionID, session.AutoResolvedByRuleRemoval(ruleName))
+		as.reviewQueueRemover.RemoveWithInfo(sessionID, queue.AutoResolvedByRuleRemoval(ruleName))
 	}
 	return nil
 }

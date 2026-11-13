@@ -21,9 +21,9 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	ssqlog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -233,10 +233,10 @@ func TestNotifyReviewQueueItem_TruncatesOversizedDiff(t *testing.T) {
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
 
-	item := &session.ReviewItem{
+	item := &queue.ReviewItem{
 		SessionID:   "sess-1",
 		SessionName: "fix-login-bug",
-		Reason:      session.ReasonTestsFailing,
+		Reason:      queue.ReasonTestsFailing,
 		DiffStats:   &git.DiffStats{Content: strings.Repeat("+line\n", 2000)},
 	}
 
@@ -262,7 +262,7 @@ func TestNotifyReviewQueueItem_NoOps_When_WebhookNotConfigured(t *testing.T) {
 	cfg := slackConfigWithoutWebhook(t)
 	n := NewSlackNotifier()
 
-	item := &session.ReviewItem{SessionID: "sess-1", SessionName: "fix-login-bug", Reason: session.ReasonTestsFailing}
+	item := &queue.ReviewItem{SessionID: "sess-1", SessionName: "fix-login-bug", Reason: queue.ReasonTestsFailing}
 	n.NotifyReviewQueueItem(context.Background(), cfg, item, "https://dash.example.com")
 
 	require.Never(t, func() bool {
@@ -278,10 +278,10 @@ func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
 
-	item := &session.ReviewItem{
+	item := &queue.ReviewItem{
 		SessionID:   "sess-1",
 		SessionName: "fix-login-bug",
-		Reason:      session.ReasonTestsFailing,
+		Reason:      queue.ReasonTestsFailing,
 	}
 	n.NotifyReviewQueueItem(context.Background(), cfg, item, "https://dash.example.com")
 	req := waitForCapturedRequest(t, ch)
@@ -291,7 +291,7 @@ func TestNotifyReviewQueueItem_PostsExpectedBlockKitPayload_ToHTTPTestServer(t *
 
 	var found bool
 	for _, b := range decoded.Blocks {
-		if b.Text != nil && strings.Contains(b.Text.Text, "fix-login-bug") && strings.Contains(b.Text.Text, session.ReasonTestsFailing.String()) {
+		if b.Text != nil && strings.Contains(b.Text.Text, "fix-login-bug") && strings.Contains(b.Text.Text, queue.ReasonTestsFailing.String()) {
 			found = true
 		}
 	}
@@ -384,10 +384,10 @@ func TestNotifyReviewQueueItem_And_NotifyApprovalPending_UseDescriptiveLinkText_
 		cfg := slackConfigWithWebhook(t, srv.URL)
 		n := NewSlackNotifier()
 
-		item := &session.ReviewItem{
+		item := &queue.ReviewItem{
 			SessionID:   "sess-1",
 			SessionName: "fix-login-bug",
-			Reason:      session.ReasonTestsFailing,
+			Reason:      queue.ReasonTestsFailing,
 		}
 		dashboardURL := "https://dash.example.com"
 		wantLink := dashboardURL + "/?session=" + item.SessionID
@@ -505,7 +505,7 @@ func TestSlackNotifier_SendFailure_DoesNotBlockCaller(t *testing.T) {
 
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
-	item := &session.ReviewItem{SessionID: "sess-1", SessionName: "fix-login-bug", Reason: session.ReasonTestsFailing}
+	item := &queue.ReviewItem{SessionID: "sess-1", SessionName: "fix-login-bug", Reason: queue.ReasonTestsFailing}
 
 	start := time.Now()
 	n.NotifyReviewQueueItem(context.Background(), cfg, item, "https://dash.example.com")
@@ -789,10 +789,10 @@ func TestNotifyReviewQueueItem_EscapesInjectedSlackDirective_InSessionName(t *te
 	cfg := slackConfigWithWebhook(t, srv.URL)
 	n := NewSlackNotifier()
 
-	item := &session.ReviewItem{
+	item := &queue.ReviewItem{
 		SessionID:   "sess-1",
 		SessionName: "<!channel> urgent-fix",
-		Reason:      session.ReasonTestsFailing,
+		Reason:      queue.ReasonTestsFailing,
 		Context:     "contains <b>html</b> & an ampersand",
 	}
 	n.NotifyReviewQueueItem(context.Background(), cfg, item, "https://dash.example.com")

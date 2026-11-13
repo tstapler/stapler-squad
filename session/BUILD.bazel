@@ -780,6 +780,7 @@ go_test(
         "//session/migrations",
         "//session/mux",
         "//session/ptyio",
+        "//session/queue",
         "//session/scrollback",
         "//session/sendkeysguard",
         "//session/streamhub",

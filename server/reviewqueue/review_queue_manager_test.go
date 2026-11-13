@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -31,7 +32,7 @@ import (
 // directly instead of the baseContext() helper already used elsewhere in this file to guard
 // exactly this case.
 func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.T) {
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
@@ -53,7 +54,7 @@ func TestOnControllerStatusChange_NilContextBeforeStart_DoesNotPanic(t *testing.
 // TestReactiveQueueManagerIntegration tests the full reactive queue workflow
 func TestReactiveQueueManagerIntegration(t *testing.T) {
 	// Setup components
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
@@ -104,11 +105,11 @@ func TestReactiveQueueManagerIntegration(t *testing.T) {
 	drainEvents(eventCh, 100*time.Millisecond)
 
 	// Test 2: Add item to queue and verify event
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:   "test-session-1",
 		SessionName: "Test Session",
-		Reason:      session.ReasonApprovalPending,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 		Context:     "Test context",
 	}
@@ -179,7 +180,7 @@ func TestReactiveQueueManagerIntegration(t *testing.T) {
 // Publishing a second event here creates duplicate notification cards in the UI.
 // All other reasons SHOULD publish to the EventBus for history/toast routing.
 func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
@@ -192,10 +193,10 @@ func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
 	eventCh, _ := eventBus.Subscribe(ctx)
 
 	// ── Case 1: ReasonApprovalPending → NO EventBus event ──────────────────
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:  "session-approval",
-		Reason:     session.ReasonApprovalPending,
-		Priority:   session.PriorityHigh,
+		Reason:     queuepkg.ReasonApprovalPending,
+		Priority:   queuepkg.PriorityHigh,
 		DetectedAt: time.Now(),
 	})
 
@@ -207,10 +208,10 @@ func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
 	}
 
 	// ── Case 2: ReasonInputRequired → EventBus notification SHOULD fire ────
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:  "session-input",
-		Reason:     session.ReasonInputRequired,
-		Priority:   session.PriorityHigh,
+		Reason:     queuepkg.ReasonInputRequired,
+		Priority:   queuepkg.PriorityHigh,
 		DetectedAt: time.Now(),
 	})
 
@@ -224,10 +225,10 @@ func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
 	}
 
 	// ── Case 3: ReasonErrorState → EventBus notification SHOULD fire ────────
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:  "session-error",
-		Reason:     session.ReasonErrorState,
-		Priority:   session.PriorityMedium,
+		Reason:     queuepkg.ReasonErrorState,
+		Priority:   queuepkg.PriorityMedium,
 		DetectedAt: time.Now(),
 	})
 
@@ -259,10 +260,10 @@ func TestReactiveQueueManager_EventSessionDeleted_RemovesFromQueue(t *testing.T)
 
 	// Add a session to the queue.
 	const sessionID = "delete-target-session"
-	mgr.queue.Add(&session.ReviewItem{
+	mgr.queue.Add(&queuepkg.ReviewItem{
 		SessionID:  sessionID,
-		Reason:     session.ReasonInputRequired,
-		Priority:   session.PriorityMedium,
+		Reason:     queuepkg.ReasonInputRequired,
+		Priority:   queuepkg.PriorityMedium,
 		DetectedAt: time.Now(),
 	})
 
@@ -302,10 +303,10 @@ func TestReactiveQueueManager_EventSessionArchived_RemovesFromQueue(t *testing.T
 	defer mgr.Stop()
 
 	const sessionID = "archive-target-session"
-	mgr.queue.Add(&session.ReviewItem{
+	mgr.queue.Add(&queuepkg.ReviewItem{
 		SessionID:  sessionID,
-		Reason:     session.ReasonStale,
-		Priority:   session.PriorityLow,
+		Reason:     queuepkg.ReasonStale,
+		Priority:   queuepkg.PriorityLow,
 		DetectedAt: time.Now(),
 	})
 
@@ -338,7 +339,7 @@ func drainEvents(ch <-chan *sessionv1.ReviewQueueEvent, timeout time.Duration) {
 // TestReactiveQueueManagerMultipleClients tests multiple concurrent clients
 func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 	// Setup
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
@@ -390,11 +391,11 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 	}
 
 	// Add item to queue
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:   "test-multi-1",
 		SessionName: "Multi Test",
-		Reason:      session.ReasonApprovalPending,
-		Priority:    session.PriorityMedium,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityMedium,
 		DetectedAt:  time.Now(),
 	}
 	queue.Add(item)
@@ -429,7 +430,7 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 // TestReactiveQueueManagerFiltering tests client-side filtering
 func TestReactiveQueueManagerFiltering(t *testing.T) {
 	// Setup
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
@@ -462,7 +463,7 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 	defer clientCancel()
 
 	filters := &WatchReviewQueueFilters{
-		PriorityFilter:    []session.Priority{session.PriorityHigh},
+		PriorityFilter:    []queuepkg.Priority{queuepkg.PriorityHigh},
 		InitialSnapshot:   false,
 		IncludeStatistics: false,
 	}
@@ -471,10 +472,10 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 	defer reactiveQueueMgr.RemoveStreamClient(clientID)
 
 	// Add HIGH priority item - should be received
-	highItem := &session.ReviewItem{
+	highItem := &queuepkg.ReviewItem{
 		SessionID:  "high-priority",
-		Reason:     session.ReasonApprovalPending,
-		Priority:   session.PriorityHigh,
+		Reason:     queuepkg.ReasonApprovalPending,
+		Priority:   queuepkg.PriorityHigh,
 		DetectedAt: time.Now(),
 	}
 	queue.Add(highItem)
@@ -487,10 +488,10 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 	}
 
 	// Add LOW priority item - should NOT be received
-	lowItem := &session.ReviewItem{
+	lowItem := &queuepkg.ReviewItem{
 		SessionID:  "low-priority",
-		Reason:     session.ReasonIdleTimeout,
-		Priority:   session.PriorityLow,
+		Reason:     queuepkg.ReasonIdleTimeout,
+		Priority:   queuepkg.PriorityLow,
 		DetectedAt: time.Now(),
 	}
 	queue.Add(lowItem)
@@ -508,7 +509,7 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 // TestReactiveQueueManagerEventTypes tests all event types
 func TestReactiveQueueManagerEventTypes(t *testing.T) {
 	// Setup
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
@@ -548,10 +549,10 @@ func TestReactiveQueueManagerEventTypes(t *testing.T) {
 	defer reactiveQueueMgr.RemoveStreamClient(clientID)
 
 	// Test ItemAdded
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:  "test-events",
-		Priority:   session.PriorityMedium,
-		Reason:     session.ReasonInputRequired,
+		Priority:   queuepkg.PriorityMedium,
+		Reason:     queuepkg.ReasonInputRequired,
 		DetectedAt: time.Now(),
 	}
 	queue.Add(item)
@@ -576,9 +577,9 @@ func TestReactiveQueueManagerEventTypes(t *testing.T) {
 // fixture for TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName as a
 // helper rather than a literal copy of the setup block already repeated across
 // this file's other ReactiveQueueManager tests.
-func newAutoResolvedRemovalTestFixture(t *testing.T) (*session.ReviewQueue, *session.ReviewQueuePoller, *events.EventBus, *session.InstanceStatusManager, *session.Storage) {
+func newAutoResolvedRemovalTestFixture(t *testing.T) (*queuepkg.ReviewQueue, *session.ReviewQueuePoller, *events.EventBus, *session.InstanceStatusManager, *session.Storage) {
 	t.Helper()
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
@@ -627,16 +628,16 @@ func TestOnItemRemoved_AutoResolvedByRule_SetsReasonAndRuleName(t *testing.T) {
 	eventCh, clientID := reactiveQueueMgr.AddStreamClient(clientCtx, filters)
 	defer reactiveQueueMgr.RemoveStreamClient(clientID)
 
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:  "test-auto-resolved",
-		Priority:   session.PriorityHigh,
-		Reason:     session.ReasonApprovalPending,
+		Priority:   queuepkg.PriorityHigh,
+		Reason:     queuepkg.ReasonApprovalPending,
 		DetectedAt: time.Now(),
 	}
 	queue.Add(item)
 	waitForEvent(t, eventCh, "ItemAdded", 500*time.Millisecond)
 
-	queue.RemoveWithInfo("test-auto-resolved", session.AutoResolvedByRuleRemoval("auto_resolved_by_rule"))
+	queue.RemoveWithInfo("test-auto-resolved", queuepkg.AutoResolvedByRuleRemoval("auto_resolved_by_rule"))
 
 	event := waitForEvent(t, eventCh, "ItemRemoved", 500*time.Millisecond)
 	removed, ok := event.Event.(*sessionv1.ReviewQueueEvent_ItemRemoved)
@@ -665,7 +666,7 @@ func waitForEvent(t *testing.T, eventCh <-chan *sessionv1.ReviewQueueEvent, even
 // BenchmarkReactiveQueueManagerThroughput measures event processing throughput
 func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	// Setup
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	// Use a fast poll interval so event delivery isn't gated on the default 2s cycle.
 	benchPollerCfg := session.DefaultReviewQueuePollerConfig()
@@ -711,10 +712,10 @@ func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		queue.Add(&session.ReviewItem{
+		queue.Add(&queuepkg.ReviewItem{
 			SessionID:  fmt.Sprintf("bench-%d", i),
-			Priority:   session.PriorityMedium,
-			Reason:     session.ReasonInputRequired,
+			Priority:   queuepkg.PriorityMedium,
+			Reason:     queuepkg.ReasonInputRequired,
 			DetectedAt: time.Now(),
 		})
 	}
@@ -758,7 +759,7 @@ func newReactiveQueueTestSetup(t *testing.T) (*ReactiveQueueManager, *session.Re
 		t.Fatalf("newReactiveQueueTestSetup: create storage: %v", err)
 	}
 
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	bus := events.NewEventBus(32)
@@ -788,11 +789,11 @@ func TestOnItemAdded_NotificationUsesStableID(t *testing.T) {
 
 	// OnItemAdded is the callback fired by the queue when the poller adds an item.
 	// ReviewItem.SessionID == inst.Title (the queue's key), as expected.
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonInputRequired,
-		Priority:    session.PriorityMedium,
+		Reason:      queuepkg.ReasonInputRequired,
+		Priority:    queuepkg.PriorityMedium,
 		DetectedAt:  time.Now(),
 	}
 	mgr.OnItemAdded(item)
@@ -827,11 +828,11 @@ func TestOnItemAdded_NotificationFallsBackToTitleWhenNoMatch(t *testing.T) {
 	defer cancel()
 	eventCh, _ := bus.Subscribe(ctx)
 
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:   "orphan-session",
 		SessionName: "orphan-session",
-		Reason:      session.ReasonIdleTimeout,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonIdleTimeout,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	}
 	mgr.OnItemAdded(item)
@@ -888,7 +889,7 @@ func newReactiveQueueTestSetupWithStorage(t *testing.T) (*ReactiveQueueManager, 
 		t.Fatalf("newReactiveQueueTestSetupWithStorage: create storage: %v", err)
 	}
 
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	bus := events.NewEventBus(32)
@@ -947,11 +948,11 @@ func TestMaybeAutoCreatePR_RunsOneShot_When_AutoCreatePREnabled(t *testing.T) {
 	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
 	poller.SetInstances([]*session.Instance{inst})
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1008,11 +1009,11 @@ func TestMaybeAutoCreatePR_DoesNothing_When_AutoCreatePRDisabled(t *testing.T) {
 	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
 	poller.SetInstances([]*session.Instance{inst})
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1057,11 +1058,11 @@ func TestMaybeAutoCreatePR_DoesNothing_When_SessionNotBacklogLinked(t *testing.T
 	poller.SetInstances([]*session.Instance{inst})
 	// Deliberately no CreateBacklogItem / CreateItemSession call.
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1101,11 +1102,11 @@ func TestMaybeAutoCreatePR_DoesNothing_When_PRAlreadyExists(t *testing.T) {
 	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID, GitHubPRURL: "https://github.com/acme/widgets/pull/1"}
 	poller.SetInstances([]*session.Instance{inst})
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1145,11 +1146,11 @@ func TestMaybeAutoCreatePR_DoesNothing_When_ReasonNotTaskComplete(t *testing.T) 
 	inst := &session.Instance{Title: sessionTitle, UUID: sessionUUID}
 	poller.SetInstances([]*session.Instance{inst})
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonApprovalPending,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1199,21 +1200,21 @@ func TestMaybeAutoCreatePR_TriggersViaOnQueueUpdated_When_ItemChangesReasonWhile
 
 	// Item first enters the queue for an unrelated reason — exists==false,
 	// fires OnItemAdded, but Reason != TaskComplete so no trigger yet.
-	mgr.queue.Add(&session.ReviewItem{
+	mgr.queue.Add(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonIdle,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonIdle,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
 	// Same session, same queue key, now transitions to TaskComplete while
 	// still present — exists==true, fires OnQueueUpdated, not OnItemAdded.
-	mgr.queue.Add(&session.ReviewItem{
+	mgr.queue.Add(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1275,10 +1276,10 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 	defer cancel()
 	eventCh, _ := mgr.eventBus.Subscribe(ctx)
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:  "review:153f8eac",
-		Reason:     session.ReasonTaskComplete,
-		Priority:   session.PriorityLow,
+		Reason:     queuepkg.ReasonTaskComplete,
+		Priority:   queuepkg.PriorityLow,
 		DetectedAt: time.Now(),
 	})
 
@@ -1296,10 +1297,10 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden(t *testing.T) {
 func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t *testing.T) {
 	tests := []struct {
 		name   string
-		reason session.AttentionReason
+		reason queuepkg.AttentionReason
 	}{
-		{"ReasonIdle", session.ReasonIdle},
-		{"ReasonStale", session.ReasonStale},
+		{"ReasonIdle", queuepkg.ReasonIdle},
+		{"ReasonStale", queuepkg.ReasonStale},
 	}
 
 	for _, tc := range tests {
@@ -1336,10 +1337,10 @@ func TestOnItemAdded_SuppressesNotification_When_SessionHidden_ReasonVariants(t 
 			defer cancel()
 			eventCh, _ := mgr.eventBus.Subscribe(ctx)
 
-			mgr.OnItemAdded(&session.ReviewItem{
+			mgr.OnItemAdded(&queuepkg.ReviewItem{
 				SessionID:  "review:153f8eac",
 				Reason:     tc.reason,
-				Priority:   session.PriorityLow,
+				Priority:   queuepkg.PriorityLow,
 				DetectedAt: time.Now(),
 			})
 
@@ -1392,11 +1393,11 @@ func TestOnItemAdded_PublishesNotification_When_SessionNotHidden_EvenIfBacklogLi
 	defer cancel()
 	eventCh, _ := mgr.eventBus.Subscribe(ctx)
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   sessionTitle,
 		SessionName: sessionTitle,
-		Reason:      session.ReasonTaskComplete,
-		Priority:    session.PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1435,10 +1436,10 @@ loop:
 func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorStateOrTestsFailing(t *testing.T) {
 	tests := []struct {
 		name   string
-		reason session.AttentionReason
+		reason queuepkg.AttentionReason
 	}{
-		{"ReasonErrorState", session.ReasonErrorState},
-		{"ReasonTestsFailing", session.ReasonTestsFailing},
+		{"ReasonErrorState", queuepkg.ReasonErrorState},
+		{"ReasonTestsFailing", queuepkg.ReasonTestsFailing},
 	}
 
 	for _, tc := range tests {
@@ -1475,10 +1476,10 @@ func TestOnItemAdded_PublishesNotification_When_SessionHidden_AndReasonIsErrorSt
 			defer cancel()
 			eventCh, _ := mgr.eventBus.Subscribe(ctx)
 
-			mgr.OnItemAdded(&session.ReviewItem{
+			mgr.OnItemAdded(&queuepkg.ReviewItem{
 				SessionID:  "review:hidden-problem",
 				Reason:     tc.reason,
-				Priority:   session.PriorityMedium,
+				Priority:   queuepkg.PriorityMedium,
 				DetectedAt: time.Now(),
 			})
 
@@ -1509,7 +1510,7 @@ type fakeSlackNotifierWiring struct {
 	gotDepth, gotThreshold              int
 }
 
-func (f *fakeSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string) {
+func (f *fakeSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *queuepkg.ReviewItem, dashboardURL string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.notifyReviewQueueItemCalls++
@@ -1557,11 +1558,11 @@ func TestOnItemAdded_InvokesNotifyReviewQueueItem_When_SlackNotifierWired(t *tes
 	fake := &fakeSlackNotifierWiring{}
 	mgr.SetSlackNotifier(fake)
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   "sess-1",
 		SessionName: "sess-1",
-		Reason:      session.ReasonTestsFailing,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonTestsFailing,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1585,11 +1586,11 @@ func TestOnItemAdded_SkipsSlackNotifier_When_ReasonIsApprovalPending(t *testing.
 	fake := &fakeSlackNotifierWiring{}
 	mgr.SetSlackNotifier(fake)
 
-	mgr.OnItemAdded(&session.ReviewItem{
+	mgr.OnItemAdded(&queuepkg.ReviewItem{
 		SessionID:   "sess-2",
 		SessionName: "sess-2",
-		Reason:      session.ReasonApprovalPending,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 	})
 
@@ -1628,7 +1629,7 @@ func (f *recordingSlackNotifierWiring) ping(path string) {
 	f.requestPaths = append(f.requestPaths, path)
 }
 
-func (f *recordingSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string) {
+func (f *recordingSlackNotifierWiring) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *queuepkg.ReviewItem, dashboardURL string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.notifyReviewQueueItemCalls++
@@ -1667,21 +1668,21 @@ func TestOnItemAdded_Integration_DigestSuppressesPerItemNotification_When_BothWo
 	// mgr.queue usage) — GetStatistics().TotalItems must reflect true queue
 	// depth when the crossing item's own OnItemAdded call reads it.
 	for i := 0; i < threshold-1; i++ {
-		mgr.queue.Add(&session.ReviewItem{
+		mgr.queue.Add(&queuepkg.ReviewItem{
 			SessionID:   fmt.Sprintf("filler-%d", i),
 			SessionName: fmt.Sprintf("filler-%d", i),
-			Reason:      session.ReasonTestsFailing,
-			Priority:    session.PriorityMedium,
+			Reason:      queuepkg.ReasonTestsFailing,
+			Priority:    queuepkg.PriorityMedium,
 			DetectedAt:  time.Now(),
 		})
 	}
 
 	// The crossing item: queue depth becomes exactly `threshold` once added.
-	crossingItem := &session.ReviewItem{
+	crossingItem := &queuepkg.ReviewItem{
 		SessionID:   "crossing-item",
 		SessionName: "crossing-item",
-		Reason:      session.ReasonTestsFailing,
-		Priority:    session.PriorityHigh,
+		Reason:      queuepkg.ReasonTestsFailing,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 	}
 	mgr.queue.Add(crossingItem)
@@ -1710,7 +1711,7 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 			repo := session.NewTestEntRepository(t)
 			storage, err := session.NewStorageWithRepository(repo)
 			require.NoError(t, err)
-			queue := session.NewReviewQueue()
+			queue := queuepkg.NewReviewQueue()
 			statusMgr := session.NewInstanceStatusManager()
 			poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 			bus := events.NewEventBus(32)
@@ -1741,9 +1742,9 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 			require.Equal(t, session.DetectionActionSkip, res.Action)
 
 			// Layer 3: handed the routine item anyway, only the gate decides.
-			for _, reason := range []session.AttentionReason{session.ReasonTaskComplete, session.ReasonIdle, session.ReasonStale} {
-				mgr.OnItemAdded(&session.ReviewItem{
-					SessionID: "review:lg08", Reason: reason, Priority: session.PriorityLow, DetectedAt: time.Now(),
+			for _, reason := range []queuepkg.AttentionReason{queuepkg.ReasonTaskComplete, queuepkg.ReasonIdle, queuepkg.ReasonStale} {
+				mgr.OnItemAdded(&queuepkg.ReviewItem{
+					SessionID: "review:lg08", Reason: reason, Priority: queuepkg.PriorityLow, DetectedAt: time.Now(),
 				})
 			}
 			// A sentinel published after the items bounds what the bus delivers.
@@ -1804,9 +1805,9 @@ func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) 
 				session.PRInitial{State: tc.state, Terminal: tc.state.Terminal(), HeadBranch: tc.head}))
 			poller.SetInstances([]*session.Instance{inst})
 
-			mgr.OnItemAdded(&session.ReviewItem{
+			mgr.OnItemAdded(&queuepkg.ReviewItem{
 				SessionID: "multi-pr-session", SessionName: "multi-pr-session",
-				Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now(),
+				Reason: queuepkg.ReasonTaskComplete, Priority: queuepkg.PriorityLow, DetectedAt: time.Now(),
 			})
 
 			if !tc.wantRuns {
@@ -1827,7 +1828,7 @@ func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) 
 
 // autoCreatePRSessionWithOpenPR sets up an AutoCreatePR-enabled session whose
 // Branch is empty and which already holds an open PR for branch feature-x.
-func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID string) (*ReactiveQueueManager, *fakeOneShotPRCreator, *session.ReviewItem) {
+func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID string) (*ReactiveQueueManager, *fakeOneShotPRCreator, *queuepkg.ReviewItem) {
 	t.Helper()
 	mgr, poller, storage := newReactiveQueueTestSetupWithStorage(t)
 	fake := &fakeOneShotPRCreator{prURL: "https://github.com/acme/widgets/pull/1"}
@@ -1851,7 +1852,7 @@ func autoCreatePRSessionWithOpenPR(t *testing.T, gitInit bool, sessionUUID strin
 	inst := &session.Instance{Title: "empty-branch", UUID: sessionUUID, Path: dir, HasPRLinks: true,
 		PRs: []domain.PRView{{Ref: ref, State: domain.PRStateOpen, HeadBranch: "feature-x", SessionUUID: sessionUUID}}}
 	poller.SetInstances([]*session.Instance{inst})
-	return mgr, fake, &session.ReviewItem{SessionID: "empty-branch", SessionName: "empty-branch", Reason: session.ReasonTaskComplete, Priority: session.PriorityLow, DetectedAt: time.Now()}
+	return mgr, fake, &queuepkg.ReviewItem{SessionID: "empty-branch", SessionName: "empty-branch", Reason: queuepkg.ReasonTaskComplete, Priority: queuepkg.PriorityLow, DetectedAt: time.Now()}
 }
 
 func TestMaybeAutoCreatePR_ShouldFallBackToCheckedOutBranch_WhenSnapshotBranchEmpty(t *testing.T) {

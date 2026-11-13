@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // TestWatchSessions_should_DeliverEvent_When_StatusFilterMatchesFailed is Epic
@@ -25,7 +26,7 @@ func TestWatchSessions_should_DeliverEvent_When_StatusFilterMatchesFailed(t *tes
 	t.Parallel()
 	svc, bus, srv := newNotificationTestServer(t)
 
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	svc.SetReviewQueuePoller(poller)
 
 	inst := &session.Instance{

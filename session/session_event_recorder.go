@@ -2,6 +2,7 @@ package session
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // SessionEventKind enumerates the kinds of session events (plan Glossary: SessionEventKind).
@@ -49,8 +50,8 @@ func (k SessionEventKind) String() string {
 // Each method has exactly one caller (plan "Event Ownership"); none may be called under Instance.mu.
 type SessionEventRecorder interface {
 	RecordTurnEnded(title string, turn domain.TurnEnded)
-	RecordAttentionRaised(title string, reason AttentionReason)
-	RecordAttentionCleared(title string, reason AttentionReason)
+	RecordAttentionRaised(title string, reason queue.AttentionReason)
+	RecordAttentionCleared(title string, reason queue.AttentionReason)
 	RecordStatusChanged(title string, from, to domain.Status)
 	// RecordAcknowledged: undone is true for UnacknowledgeSession.
 	RecordAcknowledged(title string, undone bool)
@@ -63,8 +64,8 @@ type SessionEventRecorder interface {
 type noopSessionEventRecorder struct{}
 
 func (noopSessionEventRecorder) RecordTurnEnded(string, domain.TurnEnded)                 {}
-func (noopSessionEventRecorder) RecordAttentionRaised(string, AttentionReason)            {}
-func (noopSessionEventRecorder) RecordAttentionCleared(string, AttentionReason)           {}
+func (noopSessionEventRecorder) RecordAttentionRaised(string, queue.AttentionReason)      {}
+func (noopSessionEventRecorder) RecordAttentionCleared(string, queue.AttentionReason)     {}
 func (noopSessionEventRecorder) RecordStatusChanged(string, domain.Status, domain.Status) {}
 func (noopSessionEventRecorder) RecordAcknowledged(string, bool)                          {}
 func (noopSessionEventRecorder) RecordLifecycle(string, domain.LifecycleEvent)            {}

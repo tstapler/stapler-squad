@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -205,7 +206,7 @@ func TestArchiveSessionByUUID_should_useStorageFallback_When_SessionNotInLivePol
 func TestArchiveSessionByUUID_should_returnNilWithoutPanicking_When_ConcStorageIsNil(t *testing.T) {
 	t.Parallel()
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 

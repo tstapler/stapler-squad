@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // TestCreateSession_should_SetInstanceExtraArgs_When_RequestIncludesExtraArgs verifies that
@@ -24,7 +25,7 @@ func TestCreateSession_should_SetInstanceExtraArgs_When_RequestIncludesExtraArgs
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -54,7 +55,7 @@ func TestCreateSession_should_LeaveInstanceExtraArgsEmpty_When_RequestOmitsExtra
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -94,7 +95,7 @@ func TestCreateSession_should_ComposeProfileCLIFlagsBeforePresetExtraArgs_When_B
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -131,7 +132,7 @@ func TestCreateSession_should_NotPrependCustomProgramCLIFlags_When_ProgramIsCust
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
 
-	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil))
+	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil))
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:    "custom-flags-once-test-session",

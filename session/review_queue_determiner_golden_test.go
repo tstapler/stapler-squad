@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // Regenerate goldens with: go test ./session -run TestDetermineGolden -update
@@ -82,15 +83,15 @@ func labelOf(name string) string {
 func labelMatched(label string, r DetectionResult) bool {
 	switch label {
 	case "approval":
-		return r.Action == DetectionActionAdd && r.Reason == ReasonApprovalPending
+		return r.Action == DetectionActionAdd && r.Reason == queue.ReasonApprovalPending
 	case "prose_question":
-		return r.Action == DetectionActionAdd && r.Reason == ReasonInputRequired
+		return r.Action == DetectionActionAdd && r.Reason == queue.ReasonInputRequired
 	case "finished":
-		return r.Action == DetectionActionAdd && r.Reason == ReasonTaskComplete
+		return r.Action == DetectionActionAdd && r.Reason == queue.ReasonTaskComplete
 	case "executing":
 		return r.Action == DetectionActionRemove
 	case "idle":
-		return r.Action != DetectionActionRemove && r.Reason != ReasonApprovalPending && r.Reason != ReasonInputRequired
+		return r.Action != DetectionActionRemove && r.Reason != queue.ReasonApprovalPending && r.Reason != queue.ReasonInputRequired
 	}
 	return false
 }

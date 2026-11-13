@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -606,7 +607,7 @@ func TestCreatePaths_ShouldAttachViaAttachPR_WhenCreateFromURLOrResolutionOrOneS
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
 	statusMgr := session.NewInstanceStatusManager()
-	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(session.NewReviewQueue(), statusMgr, nil))
+	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(queue.NewReviewQueue(), statusMgr, nil))
 	svc.SetStatusManager(statusMgr)
 
 	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *session.GitHubRef, error) {
@@ -661,7 +662,7 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 
 	// Wire a status manager AND a poller so FindLiveInstance resolves the live pointer.
 	statusMgr := session.NewInstanceStatusManager()
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 	svc.SetStatusManager(statusMgr)
@@ -815,7 +816,7 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 	// Wire a ReviewQueuePoller so FindLiveInstance (used by destroyCreatedSession to
 	// join the driver goroutine) resolves the live instance instead of always nil.
 	statusMgr := session.NewInstanceStatusManager()
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 

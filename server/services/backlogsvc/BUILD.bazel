@@ -184,6 +184,7 @@ go_test(
         "//session/git",
         "//session/headless",
         "//session/hostclaim",
+        "//session/queue",
         "//session/scrollback",
         "//session/tmux",
         "//testutil/wait",

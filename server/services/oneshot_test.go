@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // ─── extractPRURL unit tests ──────────────────────────────────────────────────
@@ -192,7 +193,7 @@ func TestBatchCreateSessions_DuplicateTitlesRejected(t *testing.T) {
 	// Without a poller FindLiveInstance is always nil, so DeleteSession would
 	// skip Destroy() and leave the created session's SessionDriver polling
 	// config.LoadConfig() (which writes config.json) into later tests' state dirs.
-	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil))
+	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil))
 
 	// The first "dup" passes validation and reaches real session creation.
 	// Isolate config to this test and use a trivial program so it doesn't spawn

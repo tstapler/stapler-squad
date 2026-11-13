@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // waitingForAgentStuckThreshold bounds how long the no-controller path trusts
@@ -41,8 +42,8 @@ func (a DetectionAction) String() string {
 // DetectionResult is the output of status determination — pure data, no side effects.
 type DetectionResult struct {
 	Action       DetectionAction
-	Reason       AttentionReason
-	Priority     Priority
+	Reason       queue.AttentionReason
+	Priority     queue.Priority
 	Context      string
 	ClaudeStatus detection.DetectedStatus
 	// CleanWorktree is true when the worktree was inspected and found clean.
@@ -52,7 +53,7 @@ type DetectionResult struct {
 
 // IsHighPriority returns true when the result warrants bypassing grace-period suppression.
 func (r DetectionResult) IsHighPriority() bool {
-	return r.Priority <= PriorityHigh
+	return r.Priority <= queue.PriorityHigh
 }
 
 // StatusDeterminer evaluates whether a session should be added to, removed from,
@@ -96,7 +97,7 @@ func (d *DefaultStatusDeterminer) suppressedByAck(inst *Instance) bool {
 // applyWorktreeCheck inspects the git worktree of inst and potentially overrides the
 // current add/priority state with an UncommittedChanges reason, or sets CleanWorktree.
 // Only called when the session has a git worktree attached.
-func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd bool, priority Priority) (newShouldAdd bool, newPriority Priority, newReason AttentionReason, newCtx string, cleanWorktree bool) {
+func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd bool, priority queue.Priority) (newShouldAdd bool, newPriority queue.Priority, newReason queue.AttentionReason, newCtx string, cleanWorktree bool) {
 	worktree, err := inst.GetGitWorktree()
 	if err != nil {
 		log.Warn("failed to get git worktree", "session", inst.Snapshot().Title, "err", err)
@@ -111,9 +112,9 @@ func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd b
 		return shouldAdd, priority, "", "", false
 	}
 	if isDirty {
-		if !shouldAdd || priority == PriorityLow {
+		if !shouldAdd || priority == queue.PriorityLow {
 			log.Debug("uncommitted changes detected", "session", inst.Snapshot().Title)
-			return true, PriorityLow, ReasonUncommittedChanges, "Uncommitted changes ready to commit", false
+			return true, queue.PriorityLow, queue.ReasonUncommittedChanges, "Uncommitted changes ready to commit", false
 		}
 		return shouldAdd, priority, "", "", false
 	}
@@ -123,8 +124,8 @@ func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd b
 
 // verdict accumulates the queue decision while Determine walks its detection paths.
 type verdict struct {
-	reason        AttentionReason
-	priority      Priority
+	reason        queue.AttentionReason
+	priority      queue.Priority
 	shouldAdd     bool
 	ctx           string
 	cleanWorktree bool
@@ -135,16 +136,16 @@ func (v *verdict) apply(dec statusDecision) {
 }
 
 func (v *verdict) markIdle() {
-	v.reason, v.priority, v.ctx, v.shouldAdd = ReasonIdle, PriorityLow, "Session idle - ready for next task", true
+	v.reason, v.priority, v.ctx, v.shouldAdd = queue.ReasonIdle, queue.PriorityLow, "Session idle - ready for next task", true
 }
 
 // checkUncommitted flags a dirty worktree when nothing more urgent is queued
 // (informational - user may want to review and commit).
 func (d *DefaultStatusDeterminer) checkUncommitted(inst *Instance, v *verdict) {
-	if (v.shouldAdd && v.priority != PriorityLow) || !inst.HasGitWorktree() {
+	if (v.shouldAdd && v.priority != queue.PriorityLow) || !inst.HasGitWorktree() {
 		return
 	}
-	var newReason AttentionReason
+	var newReason queue.AttentionReason
 	v.shouldAdd, v.priority, newReason, v.ctx, v.cleanWorktree = d.applyWorktreeCheck(inst, v.shouldAdd, v.priority)
 	if newReason != "" {
 		v.reason = newReason
@@ -194,7 +195,7 @@ func (d *DefaultStatusDeterminer) Determine(
 	// applies uniformly regardless of which caller (ReviewQueuePoller.checkSession,
 	// StartupScanner.Scan) invokes Determine.
 	if inst.Snapshot().Hidden && action == DetectionActionAdd &&
-		(v.reason == ReasonTaskComplete || v.reason == ReasonIdle || v.reason == ReasonStale) {
+		(v.reason == queue.ReasonTaskComplete || v.reason == queue.ReasonIdle || v.reason == queue.ReasonStale) {
 		action = DetectionActionSkip
 	}
 
@@ -303,11 +304,11 @@ func (d *DefaultStatusDeterminer) applyStaleness(inst *Instance, v *verdict) {
 	if timeSinceOutput <= d.config.StalenessThreshold || d.suppressedByAck(inst) {
 		return
 	}
-	if v.shouldAdd && !v.priority.IsLowerThan(PriorityMedium) {
+	if v.shouldAdd && !v.priority.IsLowerThan(queue.PriorityMedium) {
 		return
 	}
-	v.reason = ReasonStale
-	v.priority = PriorityLow
+	v.reason = queue.ReasonStale
+	v.priority = queue.PriorityLow
 	v.shouldAdd = true
 	v.ctx = fmt.Sprintf("No activity for %s - session may be stuck or waiting",
 		detection.FormatDuration(timeSinceOutput))

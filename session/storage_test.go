@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // testDBCounter guarantees each createTestStorage call gets a uniquely-named
@@ -236,7 +237,7 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 // This is the specific lookup that was failing with "session not found" after restart.
 func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 	t.Parallel()
-	queue := NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusMgr, nil)
 
@@ -259,7 +260,7 @@ func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 // pre-existing instances.
 func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 	t.Parallel()
-	queue := NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	poller := NewReviewQueuePoller(queue, statusMgr, nil)
 

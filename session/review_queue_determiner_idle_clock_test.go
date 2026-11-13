@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // idleClockDeterminer disables staleness so only the idle/stuck clocks decide the outcome.
@@ -24,9 +25,9 @@ func TestDetermine_Should_ReturnIdleReason_When_IdleClockOutputOnAndOutputOlderT
 		name       string
 		opts       DeterminerOptions
 		wantAction DetectionAction
-		wantReason AttentionReason
+		wantReason queue.AttentionReason
 	}{
-		{"flag on idles on old output", DeterminerOptions{IdleClockOutput: true}, DetectionActionAdd, ReasonIdle},
+		{"flag on idles on old output", DeterminerOptions{IdleClockOutput: true}, DetectionActionAdd, queue.ReasonIdle},
 		{"flag off keeps UpdatedAt clock", DeterminerOptions{}, DetectionActionSkip, ""},
 	}
 	for _, tc := range cases {

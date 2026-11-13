@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // Story 2.8 / ADR-004 / Spike S6: InvokeNotificationAction through the real
@@ -108,7 +109,7 @@ func newRemoteActionEnv(t *testing.T) *remoteActionEnv {
 	pane := &countingPane{}
 	inst := session.NewStartedInstanceForTest(t, "review-hidden", pane)
 	inst.UUID, inst.Hidden = "uuid-hidden", true
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	poller.SetInstances([]*session.Instance{inst})
 	svc.SetReviewQueuePoller(poller)
 

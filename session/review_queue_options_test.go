@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // optsRecordingDeterminer captures the options each Determine call receives.
@@ -24,7 +25,7 @@ func (d *optsRecordingDeterminer) Determine(_ *Instance, _ string, _ InstanceSta
 
 func TestDeterminerOptions_Should_ReadResolverOncePerCycle_When_ThreeSessionsPolled(t *testing.T) {
 	t.Parallel()
-	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), nil)
+	rqp := NewReviewQueuePoller(queue.NewReviewQueue(), NewInstanceStatusManager(), nil)
 	rec := &optsRecordingDeterminer{}
 	rqp.statusDeterminer = rec
 
@@ -66,7 +67,7 @@ func TestDeterminerOptions_Should_BeZeroValue_When_NoSourceWired(t *testing.T) {
 
 func TestRuleOptions_Should_ReadAckBypassFlagOncePerCycleAndNotEnterDeterminer_When_ThreeSessionsPolled(t *testing.T) {
 	t.Parallel()
-	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), nil)
+	rqp := NewReviewQueuePoller(queue.NewReviewQueue(), NewInstanceStatusManager(), nil)
 	rec := &optsRecordingDeterminer{}
 	rqp.statusDeterminer = rec
 

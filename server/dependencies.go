@@ -43,6 +43,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/importer"
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/session/prpoller"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -76,7 +77,7 @@ type ServerDependencies struct {
 	Instances         []*session.Instance
 	EventBus          *events.EventBus
 	StatusManager     *session.InstanceStatusManager
-	ReviewQueue       *session.ReviewQueue
+	ReviewQueue       *queuepkg.ReviewQueue
 	ReviewQueuePoller *session.ReviewQueuePoller
 	PRStatusPoller    *prpoller.PRStatusPoller
 
@@ -363,11 +364,11 @@ func syncOrphanedApprovalsToQueue(
 			}
 		}
 
-		item := &session.ReviewItem{
+		item := &queuepkg.ReviewItem{
 			SessionID:   approval.SessionID,
 			SessionName: approval.SessionID,
-			Reason:      session.ReasonApprovalPending,
-			Priority:    session.PriorityHigh,
+			Reason:      queuepkg.ReasonApprovalPending,
+			Priority:    queuepkg.PriorityHigh,
 			DetectedAt:  approval.CreatedAt,
 			Context:     context,
 			Metadata: map[string]string{
@@ -421,7 +422,7 @@ type CoreDeps struct {
 	SessionService *services.SessionService
 	Storage        *session.Storage
 	EventBus       *events.EventBus
-	ReviewQueue    *session.ReviewQueue
+	ReviewQueue    *queuepkg.ReviewQueue
 	ApprovalStore  *services.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
 
@@ -1396,11 +1397,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			context = "Permission request detected"
 		}
 
-		item := &session.ReviewItem{
+		item := &queuepkg.ReviewItem{
 			SessionID:   event.SessionTitle,
 			SessionName: event.SessionTitle,
-			Reason:      session.ReasonApprovalPending,
-			Priority:    session.PriorityHigh,
+			Reason:      queuepkg.ReasonApprovalPending,
+			Priority:    queuepkg.PriorityHigh,
 			DetectedAt:  event.Request.Timestamp,
 			Context:     context,
 		}

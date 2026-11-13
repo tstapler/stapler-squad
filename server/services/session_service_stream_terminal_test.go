@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -78,7 +79,7 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	svc, srv := newBidiStreamTestServer(t)
 
 	statusMgr := session.NewInstanceStatusManager()
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 

@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -39,16 +40,16 @@ func makeAcknowledgedInstance(title string) *Instance {
 func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 	t.Parallel()
 	// Create review queue
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	// Simulate initial detection: session added to queue
 	initialTime := time.Now().Add(-5 * time.Minute)
-	reason := ReasonIdleTimeout
-	priority := PriorityLow
+	reason := queuepkg.ReasonIdleTimeout
+	priority := queuepkg.PriorityLow
 	context := "Timed out after 5m of inactivity"
 
 	// First poll: add item to queue
-	item1 := &ReviewItem{
+	item1 := &queuepkg.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
 		Reason:      reason,
@@ -75,7 +76,7 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 			}
 		}
 
-		updatedItem := &ReviewItem{
+		updatedItem := &queuepkg.ReviewItem{
 			SessionID:   "test-session",
 			SessionName: "test-session",
 			Reason:      reason,
@@ -104,8 +105,8 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 		finalItem.DetectedAt.Format(time.RFC3339))
 
 	// Now simulate a status change
-	newReason := ReasonApprovalPending
-	newPriority := PriorityHigh
+	newReason := queuepkg.ReasonApprovalPending
+	newPriority := queuepkg.PriorityHigh
 	newContext := "Waiting for approval to proceed"
 
 	// Simulate poller detecting status change
@@ -118,7 +119,7 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 		}
 	}
 
-	changedItem := &ReviewItem{
+	changedItem := &queuepkg.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
 		Reason:      newReason,
@@ -158,26 +159,26 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 func TestReviewQueuePoller_ContextChangeUpdatesTimestamp(t *testing.T) {
 	t.Parallel()
 	// Create review queue
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	// Manually add an item with initial context
 	initialTime := time.Now().Add(-5 * time.Minute)
-	item1 := &ReviewItem{
+	item1 := &queuepkg.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
-		Reason:      ReasonIdleTimeout,
-		Priority:    PriorityLow,
+		Reason:      queuepkg.ReasonIdleTimeout,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  initialTime,
 		Context:     "Idle for 5 minutes",
 	}
 	queue.Add(item1)
 
 	// Update with same reason/priority but different context
-	item2 := &ReviewItem{
+	item2 := &queuepkg.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
-		Reason:      ReasonIdleTimeout,
-		Priority:    PriorityLow,
+		Reason:      queuepkg.ReasonIdleTimeout,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),            // New timestamp
 		Context:     "Idle for 10 minutes", // Different context
 	}
@@ -218,39 +219,39 @@ func TestReviewQueuePoller_ContextChangeUpdatesTimestamp(t *testing.T) {
 func TestReviewQueue_SortsByLastActivity(t *testing.T) {
 	t.Parallel()
 	// Create review queue
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	// Create three sessions with same priority but different LastActivity times
 	now := time.Now()
 
 	// Session 1: Last activity 5 days ago
-	item1 := &ReviewItem{
+	item1 := &queuepkg.ReviewItem{
 		SessionID:    "session-old",
 		SessionName:  "session-old",
-		Reason:       ReasonInputRequired,
-		Priority:     PriorityMedium,
+		Reason:       queuepkg.ReasonInputRequired,
+		Priority:     queuepkg.PriorityMedium,
 		DetectedAt:   now.Add(-5 * 24 * time.Hour),
 		Context:      "Waiting for input",
 		LastActivity: now.Add(-5 * 24 * time.Hour), // 5 days ago
 	}
 
 	// Session 2: Last activity 6 days ago (oldest)
-	item2 := &ReviewItem{
+	item2 := &queuepkg.ReviewItem{
 		SessionID:    "session-oldest",
 		SessionName:  "session-oldest",
-		Reason:       ReasonInputRequired,
-		Priority:     PriorityMedium,
+		Reason:       queuepkg.ReasonInputRequired,
+		Priority:     queuepkg.PriorityMedium,
 		DetectedAt:   now.Add(-6 * 24 * time.Hour),
 		Context:      "Waiting for input",
 		LastActivity: now.Add(-6 * 24 * time.Hour), // 6 days ago
 	}
 
 	// Session 3: Last activity 10 days ago but had recent activity
-	item3 := &ReviewItem{
+	item3 := &queuepkg.ReviewItem{
 		SessionID:    "session-recent",
 		SessionName:  "session-recent",
-		Reason:       ReasonInputRequired,
-		Priority:     PriorityMedium,
+		Reason:       queuepkg.ReasonInputRequired,
+		Priority:     queuepkg.PriorityMedium,
 		DetectedAt:   now.Add(-10 * 24 * time.Hour),
 		Context:      "Waiting for input",
 		LastActivity: now.Add(-1 * time.Hour), // 1 hour ago (most recent)
@@ -300,7 +301,7 @@ func TestReviewQueue_SortsByLastActivity(t *testing.T) {
 // newSimpleTestPoller creates a ReviewQueuePoller wired with a fresh queue and status manager,
 // with nil storage (no persistence). Safe to use in unit tests.
 func newSimpleTestPoller() *ReviewQueuePoller {
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	return NewReviewQueuePoller(queue, statusMgr, nil)
 }
@@ -308,7 +309,7 @@ func newSimpleTestPoller() *ReviewQueuePoller {
 // newSimpleTestPollerWithManager creates a ReviewQueuePoller and returns the concrete
 // *InstanceStatusManager so tests can register controllers directly.
 func newSimpleTestPollerWithManager() (*ReviewQueuePoller, *InstanceStatusManager) {
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	return NewReviewQueuePoller(queue, statusMgr, nil), statusMgr
 }
@@ -514,7 +515,7 @@ func TestDefaultReviewQueuePollerConfig_should_return5MinStalenessThreshold_When
 func TestReviewQueuePoller_StartStop(t *testing.T) {
 	t.Parallel()
 	// Use a fast poll interval so the goroutine does minimal work during the test.
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	cfg := DefaultReviewQueuePollerConfig()
 	cfg.PollInterval = 100 * time.Millisecond
@@ -540,7 +541,7 @@ func TestReviewQueuePoller_StartStop(t *testing.T) {
 // not spawn a second goroutine or panic.
 func TestReviewQueuePoller_Start_Idempotent(t *testing.T) {
 	t.Parallel()
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	cfg := DefaultReviewQueuePollerConfig()
 	cfg.PollInterval = 100 * time.Millisecond
@@ -564,7 +565,7 @@ func TestReviewQueuePoller_Start_Idempotent(t *testing.T) {
 // This is the regression test for the "skip button wipes list but doesn't remove status" bug.
 func TestReviewQueuePoller_AcknowledgedSession_RemovedOnNextPoll(t *testing.T) {
 	t.Parallel()
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := NewInstanceStatusManager()
 	poller := NewReviewQueuePollerWithConfig(queue, statusManager, nil, ReviewQueuePollerConfig{
 		StalenessThreshold: 5 * time.Minute,
@@ -574,11 +575,11 @@ func TestReviewQueuePoller_AcknowledgedSession_RemovedOnNextPoll(t *testing.T) {
 	inst := makeAcknowledgedInstance("acked-session")
 
 	// Pre-populate queue to simulate session being visible before user clicked Skip.
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:   "acked-session",
 		SessionName: "acked-session",
-		Reason:      ReasonInputRequired,
-		Priority:    PriorityMedium,
+		Reason:      queuepkg.ReasonInputRequired,
+		Priority:    queuepkg.PriorityMedium,
 		DetectedAt:  time.Now().Add(-1 * time.Minute),
 	})
 	poller.AddInstance(inst)
@@ -652,7 +653,7 @@ func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing
 	if !exists {
 		t.Fatal("expected idle session to be added to the review queue on tick 1")
 	}
-	if item.Reason != ReasonIdle {
+	if item.Reason != queuepkg.ReasonIdle {
 		t.Errorf("expected ReasonIdle on tick 1, got %v", item.Reason)
 	}
 
@@ -715,8 +716,8 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 	if !exists {
 		t.Fatal("session with approval prompt must be added to the review queue")
 	}
-	if item.Reason != ReasonApprovalPending {
-		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	if item.Reason != queuepkg.ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", queuepkg.ReasonApprovalPending, item.Reason)
 	}
 }
 
@@ -796,11 +797,11 @@ func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t
 	if !exists {
 		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
 	}
-	if item.Reason != ReasonApprovalPending {
-		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	if item.Reason != queuepkg.ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", queuepkg.ReasonApprovalPending, item.Reason)
 	}
-	if item.Priority != PriorityHigh {
-		t.Errorf("expected priority %s, got %s", PriorityHigh, item.Priority)
+	if item.Priority != queuepkg.PriorityHigh {
+		t.Errorf("expected priority %s, got %s", queuepkg.PriorityHigh, item.Priority)
 	}
 }
 
@@ -811,28 +812,28 @@ func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 	cases := []struct {
 		name               string
 		shouldAdd          bool
-		priority           Priority
+		priority           queuepkg.Priority
 		isControllerActive bool
 		wantOldBypassSkip  bool // true = old code SKIPPED the snooze (the bug)
 	}{
 		{
 			name:               "input-required medium-priority active-controller (the bug scenario)",
 			shouldAdd:          true,
-			priority:           PriorityMedium,
+			priority:           queuepkg.PriorityMedium,
 			isControllerActive: true,
 			wantOldBypassSkip:  true, // old code bypassed snooze → bug
 		},
 		{
 			name:               "error-state urgent active-controller",
 			shouldAdd:          true,
-			priority:           PriorityUrgent,
+			priority:           queuepkg.PriorityUrgent,
 			isControllerActive: true,
 			wantOldBypassSkip:  true, // old code bypassed snooze → bug
 		},
 		{
 			name:               "stale low-priority no-controller",
 			shouldAdd:          true,
-			priority:           PriorityLow,
+			priority:           queuepkg.PriorityLow,
 			isControllerActive: false,
 			wantOldBypassSkip:  false, // old code entered snooze block — worked correctly
 		},
@@ -844,7 +845,7 @@ func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 			// Reproduce the old condition that caused the bypass.
 			// oldCondition=true  → snooze block is entered (not bypassed)
 			// oldCondition=false → snooze block is skipped (bypassed = the bug)
-			oldCondition := !tc.shouldAdd || tc.priority == PriorityLow || !tc.isControllerActive
+			oldCondition := !tc.shouldAdd || tc.priority == queuepkg.PriorityLow || !tc.isControllerActive
 			oldBypassed := !oldCondition
 			if oldBypassed != tc.wantOldBypassSkip {
 				t.Errorf("expected old-code bypass=%v for scenario %q, got bypass=%v (oldCondition=%v)",
@@ -889,7 +890,7 @@ func makeStaleInstance(rqp *ReviewQueuePoller, title string) *Instance {
 func BenchmarkCheckSessionsConcurrent(b *testing.B) {
 	for _, n := range []int{1, 5, 10, 20} {
 		b.Run(fmt.Sprintf("sessions-%d", n), func(b *testing.B) {
-			queue := NewReviewQueue()
+			queue := queuepkg.NewReviewQueue()
 			statusMgr := NewInstanceStatusManager()
 			cfg := DefaultReviewQueuePollerConfig()
 			cfg.StalenessThreshold = 1 * time.Minute // ensure all instances are stale
@@ -1611,7 +1612,7 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 
 func TestFakesForStatusDeterminer_Should_CompileAndRunPollerTests_When_SignatureUpdated(t *testing.T) {
 	t.Parallel()
-	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), nil)
+	rqp := NewReviewQueuePoller(queuepkg.NewReviewQueue(), NewInstanceStatusManager(), nil)
 	rec := &optsRecordingDeterminer{}
 	rqp.statusDeterminer = rec
 	rqp.checkSession(makeStaleInstance(rqp, "fake-sig"), nil)
