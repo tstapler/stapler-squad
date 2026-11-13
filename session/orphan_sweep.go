@@ -216,7 +216,7 @@ func collectKnownSessions(instances []*Instance) knownSessions {
 		// Shells are independent sibling tmux sessions (see instance_shells.go) with
 		// no Instance-level identity of their own — without this, every shell is
 		// unconditionally treated as an orphan and killed on the next sweep/restart.
-		for _, shell := range inst.shells.List() {
+		for _, shell := range inst.ListShellsInMemory() {
 			if shell.TmuxSessionName != "" {
 				k.names[shell.TmuxSessionName] = struct{}{}
 			}

@@ -63,7 +63,7 @@ func newPRTestInstance(t *testing.T) *Instance {
 		Title: "multi-pr", UUID: "uuid-multi-pr", Path: t.TempDir(), Program: "echo", Branch: "feat/x",
 		GitHubOwner: "acme", GitHubRepo: "app",
 	}
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 	return inst
 }
 
@@ -184,7 +184,7 @@ func TestAttachPR_ShouldReturnErrNoSessionUUID_WhenUUIDEmpty(t *testing.T) {
 	t.Parallel()
 	inst := newPRTestInstance(t)
 	inst.UUID = ""
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 	err := inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{})
 	if !errors.Is(err, domain.ErrNoSessionUUID) {
 		t.Fatalf("AttachPR err = %v, want domain.ErrNoSessionUUID", err)
@@ -313,7 +313,7 @@ func TestAttachPR_ShouldClearLegacyUnrepresented_WhenAttachRepresentsLegacyNumbe
 			t.Parallel()
 			inst := newPRTestInstance(t)
 			inst.GitHubPRNumber, inst.LegacyPRUnrepresented = 11, true
-			finishInstanceConstruction(inst)
+			FinishInstanceConstruction(inst)
 			_ = inst.AttachPR(mustPRRef(t, "", "acme", "app", tt.attach), domain.AttachSourceBackfill, domain.PRInitial{})
 			if got := inst.Snapshot().GitHub.LegacyPRUnrepresented; got != tt.wantSet {
 				t.Errorf("LegacyPRUnrepresented = %v, want %v", got, tt.wantSet)

@@ -79,7 +79,7 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 	// slot during expensive syscalls (tmux PID lookup, CGo) and I/O (JSONL reads).
 	// False negatives are safe — switchWorkspaceLocked re-checks under the actor.
 	if i.claudeSession == nil || i.claudeSession.ConversationUUID == "" {
-		i.tryExtractConversationUUID()
+		i.TryExtractConversationUUID()
 	}
 
 	return sendSyncValue(i, func(s *instanceState) (*WorkspaceSwitchResult, error) {

@@ -614,7 +614,7 @@ func instanceFromData(data domain.InstanceData, deferStart bool) (*Instance, err
 		// for every Active session, even ones that were never actually down.
 		instance.wireTmuxSession(shellLaunch(instance.Program))
 		// Raw ArchivedAt read, not IsArchived(): this runs before
-		// finishInstanceConstruction publishes the first snapshot, so
+		// FinishInstanceConstruction publishes the first snapshot, so
 		// Snapshot() is not populated yet. The instance is still
 		// goroutine-local here, so the raw read is race-free.
 		if instance.ArchivedAt != nil {
@@ -637,6 +637,6 @@ func instanceFromData(data domain.InstanceData, deferStart bool) (*Instance, err
 		}
 	}
 
-	finishInstanceConstruction(instance)
+	FinishInstanceConstruction(instance)
 	return instance, nil
 }

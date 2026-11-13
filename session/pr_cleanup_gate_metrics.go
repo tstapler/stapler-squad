@@ -37,7 +37,7 @@ func newCleanupGateMetricSet() *cleanupGateMetricSet {
 
 // RecordCleanupBlocked counts one newly blocked (path, item) pair.
 func RecordCleanupBlocked(path string) {
-	cleanupGateMetrics.totals.add(path)
+	cleanupGateMetrics.totals.Add(path)
 	if cleanupGateMetrics.otel != nil {
 		cleanupGateMetrics.otel.Add(context.Background(), 1, metric.WithAttributes(attribute.String("path", path)))
 	}
@@ -54,7 +54,7 @@ func SetCleanupBlockedItems(path string, n int) {
 }
 
 // CleanupBlockedCount is ssq_cleanup_gate_blocked_total{path} in this process.
-func CleanupBlockedCount(path string) int64 { return cleanupGateMetrics.totals.get(path) }
+func CleanupBlockedCount(path string) int64 { return cleanupGateMetrics.totals.Get(path) }
 
 // CleanupBlockedItemsGauge reads ssq_cleanup_gate_blocked_items{path} back.
 func CleanupBlockedItemsGauge(path string) int {

@@ -106,7 +106,7 @@ func NewPausedTestInstance(title string) *Instance {
 
 // FinishInstanceForTest publishes the initial snapshot of an Instance built from a struct literal,
 // so tests of packages above session (e.g. session/prpoller) can call Snapshot()/AttachPR on it.
-func FinishInstanceForTest(i *Instance) { finishInstanceConstruction(i) }
+func FinishInstanceForTest(i *Instance) { FinishInstanceConstruction(i) }
 
 // SetProcessManagerForTest swaps the instance's pane backend so tests in packages that import session can
 // stand in a fake without reaching the unexported field.

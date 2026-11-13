@@ -343,7 +343,7 @@ func (s *SessionService) wireCallbacks(inst *session.Instance) {
 		return fmt.Errorf("%w: blocked by session %s", session.ErrDirectoryCollision, blockingUUID)
 	})
 	// Cross-session conversation-ownership guard (worktree-envvars-hijack Story 1.4.2):
-	// prevents tryExtractConversationUUID's DetectByPath fallback from silently
+	// prevents TryExtractConversationUUID's DetectByPath fallback from silently
 	// attributing another live session's conversation UUID to this instance.
 	inst.SetConversationOwnershipGuard(func(candidateUUID, path string) (string, bool) {
 		if ownerUUID, owned := s.ConversationOwnedByOtherLiveSession(conversationOwnershipQuery{

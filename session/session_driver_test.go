@@ -1535,7 +1535,7 @@ func TestStopSessionDriver_WaitsForHandleDriverFailureRetryGoroutine_NoGoroutine
 // which read via Snapshot()) could never observe the auto-linked PR.
 func TestScanAndLinkPRURL_RepublishesSnapshot(t *testing.T) {
 	inst := &Instance{Title: "scan-pr-url-test", GitHubOwner: "octocat", GitHubRepo: "Hello-World"}
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 
 	output := "remote: Create a pull request for 'foo' on GitHub by visiting:\nremote:      https://github.com/octocat/Hello-World/pull/42\n"
 	scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, output)

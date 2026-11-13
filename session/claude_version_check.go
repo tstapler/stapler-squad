@@ -96,7 +96,7 @@ func normalizeClaudeVersion(raw string) string {
 
 // kickOffClaudeVersionMismatchCheck triggers scrollForwardVersionMismatchCheck
 // for i's resolved claude binary, if any. Called from
-// finishInstanceConstruction so the check runs independent of whether the
+// FinishInstanceConstruction so the check runs independent of whether the
 // user ever scrolls, and again from ForwardScroll as a fallback for
 // test-only bare struct literals that bypass that constructor -- harmless
 // either way since the check is memoized per binary path. Runs in a

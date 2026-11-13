@@ -64,7 +64,7 @@ func NewProcessManager(_ context.Context, defaultBackend domain.ProcessManagerBa
 // opts.Program, if set, is applied via SetCommand here (mirrors newTmuxBackendFromOpts below).
 func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
 	b := NewTymuxBackend(newTymuxSessionFn())
-	if cmd := opts.launchCommand(); cmd != nil {
+	if cmd := opts.LaunchCommand(); cmd != nil {
 		b.TymuxManager().SetCommand(cmd)
 	}
 	b.TymuxManager().SetSessionLabel(opts.SessionName)

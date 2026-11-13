@@ -163,8 +163,8 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 // persist lock across snapshotting and writing so a concurrent AttachPR persist
 // (which snapshots under the same lock) cannot land an older mirror after this save.
 func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *Instance) {
-	inst.prPersistMu.Lock()
-	defer inst.prPersistMu.Unlock()
+	unlockPR := inst.LockPRPersist()
+	defer unlockPR()
 	data := inst.ToInstanceData()
 	log.Debug("SaveInstances: converting instance",
 		"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
@@ -178,8 +178,7 @@ func (s *Storage) saveInstanceToRepo(ctx context.Context, inst *Instance) {
 				return false
 			}
 		}
-		inst.clearPRPersistPending()
-		inst.terminalClearPending.Store(false)
+		inst.MarkPRPersisted()
 		return true
 	})
 }

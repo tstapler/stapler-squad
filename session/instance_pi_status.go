@@ -185,6 +185,28 @@ func (i *Instance) piStatusCommandFactory() piCommandFactory {
 	}
 }
 
+// PiSessionID returns the pi session ID ("" when no pi session data exists) under
+// piSessionMu, for the Pi history adapter, which stays outside the Instance package.
+func (i *Instance) PiSessionID() string {
+	i.piSessionMu.Lock()
+	defer i.piSessionMu.Unlock()
+	if i.piSession == nil {
+		return ""
+	}
+	return i.piSession.SessionID
+}
+
+// WithPiSession runs fn on the pi session data under piSessionMu, allocating it
+// first when nil (the Pi history adapter's Export stamps a fresh session ID).
+func (i *Instance) WithPiSession(fn func(*domain.PiSessionData)) {
+	i.piSessionMu.Lock()
+	defer i.piSessionMu.Unlock()
+	if i.piSession == nil {
+		i.piSession = &domain.PiSessionData{}
+	}
+	fn(i.piSession)
+}
+
 // SetPiSessionID records the real pi session UUID observed from the
 // status-only pi subprocess's "session" header event (Task 2.2.1e), so a
 // later Restart's buildLaunchCommand call injects --session <id> and the pi

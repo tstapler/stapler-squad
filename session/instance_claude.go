@@ -37,14 +37,14 @@ type claudeExtension struct {
 	// claudeSessionMu protects claudeSession and conversationClearedAt.
 	// Separate from i.mu to avoid holding the instance write lock during
 	// persistence I/O -- see the lock-order comments on
-	// ClearConversationState/SetHistoryInfo/tryExtractConversationUUID/
+	// ClearConversationState/SetHistoryInfo/TryExtractConversationUUID/
 	// startLocked (i.mu nests INSIDE this lock, never the reverse).
 	claudeSessionMu sync.RWMutex
 	// claudeSession is Claude Code session information for persistence and
 	// re-attachment.
 	claudeSession *domain.ClaudeSessionData
 	// conversationClearedAt records when ClearConversationState() last ran, so
-	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
+	// TryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
 	// predating an explicit "start fresh" request. In-memory only -- does not
 	// survive a process restart (see ADR-001, Consequences).
 	conversationClearedAt time.Time
@@ -344,7 +344,7 @@ func (i *Instance) ClearConversationState() {
 	i.snapshot.Store(snap)
 }
 
-// tryExtractConversationUUID attempts to detect the Claude conversation UUID.
+// TryExtractConversationUUID attempts to detect the Claude conversation UUID.
 // It first tries inspecting the open files of the live tmux pane process (via
 // HistoryFileDetector.Detect); if that is unavailable (tmux dead, e.g. a cold
 // restore), it falls back to DetectByPath, which scans
@@ -359,7 +359,7 @@ func (i *Instance) ClearConversationState() {
 // exception — it is an unlocked read, a pre-existing, out-of-scope exposure
 // on the real lock-free call sites (SwitchWorkspace, and the two cold-restore
 // call sites in instance.go) that this fix does not claim to have closed.
-func (i *Instance) tryExtractConversationUUID() {
+func (i *Instance) TryExtractConversationUUID() {
 	// Skip if we already have a conversation UUID.
 	if i.claudeSession != nil && i.claudeSession.ConversationUUID != "" {
 		return
@@ -510,6 +510,41 @@ func (i *Instance) SetClaudeConversationUUID(uuid string) {
 	i.claudeSession.ConversationUUID = uuid
 	cb := i.claudeSessionIDSavedCallback
 	i.claudeSessionMu.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+// WithClaudeSession runs fn on the Claude session data under claudeSessionMu,
+// allocating it first when nil. History adapters (which stay outside the Instance
+// package) use it to stamp a ported conversation UUID without the saved-callback
+// SetClaudeConversationUUID fires.
+func (i *Instance) WithClaudeSession(fn func(*domain.ClaudeSessionData)) {
+	i.claudeSessionMu.Lock()
+	defer i.claudeSessionMu.Unlock()
+	if i.claudeSession == nil {
+		i.claudeSession = &domain.ClaudeSessionData{}
+	}
+	fn(i.claudeSession)
+}
+
+// RecordPortedClaudeSession stamps the Claude session data after a history port and
+// fires the saved-callback outside the lock (called by history_post_export.go).
+func (i *Instance) RecordPortedClaudeSession(uuidStr, workspace string) {
+	i.claudeSessionMu.Lock()
+	if i.claudeSession == nil {
+		i.claudeSession = &domain.ClaudeSessionData{}
+	}
+	i.claudeSession.ConversationUUID = uuidStr
+	i.claudeSession.ProjectName = i.Title
+	i.claudeSession.LastAttached = time.Now()
+	if i.claudeSession.Metadata == nil {
+		i.claudeSession.Metadata = make(map[string]string)
+	}
+	i.claudeSession.Metadata["working_dir"] = workspace
+	cb := i.claudeSessionIDSavedCallback
+	i.claudeSessionMu.Unlock()
+
 	if cb != nil {
 		cb()
 	}

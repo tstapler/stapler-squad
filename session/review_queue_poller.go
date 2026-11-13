@@ -527,26 +527,12 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				if !liveSessions[sessionName] {
 					log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						// Can't use GetStatus()/Snapshot() here: this closure runs
-						// *inside* an in-flight actor command, and the published
-						// snapshot is only republished by runActor after the command
-						// returns (session/actor.go) -- Snapshot() would read the stale
-						// pre-command value. Fall back to the same i.mu.RLock()-guarded
-						// direct read transitionToLocked uses for its own status read
-						// (session/instance_state.go), which defends against legacy
-						// setters writing i.Status directly under i.mu from other
-						// goroutines while this actor command runs.
-						s.inst.mu.RLock()
-						status := s.inst.Status
-						s.inst.mu.RUnlock()
-						if status == domain.Active {
-							if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
-								log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
-								s.inst.loadStatus(domain.Stopped)
-							}
-						}
-					})
+					// The transition runs inside an in-flight actor command, where the published
+					// snapshot is stale, so TransitionToStoppedIfActiveOrLoad reads status under
+					// i.mu like transitionToLocked does.
+					if err := inst.TransitionToStoppedIfActiveOrLoad(ctx2s); err != nil {
+						log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
+					}
 					cancel()
 					rqp.removeFromQueue(inst.Title)
 					inst.FireLifecycleEvent(domain.EventExited, "reconcile-session-missing")
@@ -568,22 +554,15 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						rqp.warnArchivedLivePaneOnce(inst, sessionName, serverSocket)
 						continue
 					}
-					if dead, _, _ := inst.paneExitInfoIgnoringStatus(); dead {
+					if dead, _, _ := inst.PaneExitInfoIgnoringStatus(); dead {
 						log.Info("reconcileSessions: stopped session's pane exists but wrapped program has exited, leaving Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 						continue
 					}
 					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						s.inst.mu.RLock()
-						status := s.inst.Status
-						s.inst.mu.RUnlock()
-						if status == domain.Stopped {
-							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
-								log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
-							}
-						}
-					})
+					if err := inst.TransitionToActiveIf(ctx2s, domain.Stopped); err != nil {
+						log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
+					}
 					cancel()
 					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-revived")
 				}
@@ -605,16 +584,9 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					}
 					log.Warn("reconcileSessions: hibernated session found alive in tmux, resuming to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						s.inst.mu.RLock()
-						status := s.inst.Status
-						s.inst.mu.RUnlock()
-						if status == domain.Hibernated {
-							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
-								log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
-							}
-						}
-					})
+					if err := inst.TransitionToActiveIf(ctx2s, domain.Hibernated); err != nil {
+						log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
+					}
 					cancel()
 					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-hibernated-but-alive")
 				}
@@ -632,13 +604,9 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					}
 					log.Warn("reconcileSessions: crashed session found alive in tmux, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == domain.Crashed {
-							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
-								log.Warn("reconcileSessions: revival from crashed failed", "session", inst.Title, "err", err)
-							}
-						}
-					})
+					if err := inst.TransitionToActiveIf(ctx2s, domain.Crashed); err != nil {
+						log.Warn("reconcileSessions: revival from crashed failed", "session", inst.Title, "err", err)
+					}
 					cancel()
 					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-crashed-but-alive")
 				}
@@ -667,9 +635,9 @@ func (rqp *ReviewQueuePoller) warnArchivedLivePaneOnce(inst *Instance, sessionNa
 	if _, dup := rqp.archivedLivePaneWarned.LoadOrStore(snap.Title, struct{}{}); dup {
 		return
 	}
-	// Probed after the de-dup: paneExitInfoIgnoringStatus runs several tmux
+	// Probed after the de-dup: PaneExitInfoIgnoringStatus runs several tmux
 	// subprocesses, so it must not fire on every tick.
-	dead, _, _ := inst.paneExitInfoIgnoringStatus()
+	dead, _, _ := inst.PaneExitInfoIgnoringStatus()
 	log.Warn("reconcileSessions: archived session still has a live tmux pane object; not reviving",
 		"session", snap.Title, "tmux", sessionName, "socket", serverSocket,
 		"status", snap.Status, "pane_process_dead", dead,

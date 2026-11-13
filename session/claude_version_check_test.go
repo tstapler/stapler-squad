@@ -192,7 +192,7 @@ func TestScrollForwardVersionMismatchCheck_should_FireIndependentlyPerDistinctBi
 // TestScrollForwardVersionMismatchCheck_should_FireRegardlessOfScrollVolume_When_SessionNeverScrolls
 // is REQ-14b's regression guard for the specific gap pre-mortem P1 #1
 // identified: unlike scrollForwardKeybindingCanary, this check must not
-// require any ForwardScroll call to have happened. finishInstanceConstruction
+// require any ForwardScroll call to have happened. FinishInstanceConstruction
 // (session/instance.go) -- the one choke-point every Instance construction
 // site funnels through -- is where kickOffClaudeVersionMismatchCheck actually
 // fires; this test builds an Instance via that path and asserts the check
@@ -204,11 +204,11 @@ func TestScrollForwardVersionMismatchCheck_should_FireRegardlessOfScrollVolume_W
 	binaryPath := filepath.Join(t.TempDir(), "claude")
 
 	inst := &Instance{Title: t.Name(), Program: binaryPath}
-	finishInstanceConstruction(inst) // never calls ForwardScroll
+	FinishInstanceConstruction(inst) // never calls ForwardScroll
 
 	wait.RequireEventually(t, func() bool {
 		return len(h.recordsAtLevel(slog.LevelWarn)) > 0
-	}, time.Second, 10*time.Millisecond, "expected scrollForwardVersionMismatchCheck to fire from finishInstanceConstruction alone")
+	}, time.Second, 10*time.Millisecond, "expected scrollForwardVersionMismatchCheck to fire from FinishInstanceConstruction alone")
 
 	warns := h.recordsAtLevel(slog.LevelWarn)
 	if warns[0].attrs["binary_path"] != binaryPath {

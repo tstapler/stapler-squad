@@ -41,7 +41,7 @@ type rawGeminiMessage struct {
 func (a *GeminiAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn, error) {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
-		inst.tryExtractConversationUUID()
+		inst.TryExtractConversationUUID()
 		uuidStr = inst.GetClaudeConversationUUID()
 	}
 	if uuidStr == "" {
@@ -120,12 +120,7 @@ func (a *GeminiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 		uuidStr = uuid.New().String()
 	}
 
-	inst.claudeSessionMu.Lock()
-	if inst.claudeSession == nil {
-		inst.claudeSession = &domain.ClaudeSessionData{}
-	}
-	inst.claudeSession.ConversationUUID = uuidStr
-	inst.claudeSessionMu.Unlock()
+	inst.WithClaudeSession(func(d *domain.ClaudeSessionData) { d.ConversationUUID = uuidStr })
 
 	home, err := os.UserHomeDir()
 	if err != nil {

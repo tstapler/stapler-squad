@@ -57,7 +57,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
-		inst.tryExtractConversationUUID()
+		inst.TryExtractConversationUUID()
 		uuidStr = inst.GetClaudeConversationUUID()
 	}
 
@@ -81,12 +81,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 		}
 
 		if uuidStr != "" {
-			inst.claudeSessionMu.Lock()
-			if inst.claudeSession == nil {
-				inst.claudeSession = &domain.ClaudeSessionData{}
-			}
-			inst.claudeSession.ConversationUUID = uuidStr
-			inst.claudeSessionMu.Unlock()
+			inst.WithClaudeSession(func(d *domain.ClaudeSessionData) { d.ConversationUUID = uuidStr })
 		}
 	}
 

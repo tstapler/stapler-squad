@@ -46,7 +46,7 @@ type Registry struct {
 	// onConstruct, if non-nil, is invoked exactly once per genuinely-new LiveInstance —
 	// i.e. only on the branch that installs a fresh entry into r.entries.
 	// NEVER invoked on a refcount++ of an already-live entry, NEVER on the losing side
-	// of a construction race (that branch discards via stopActor() instead).
+	// of a construction race (that branch discards via StopActor() instead).
 	// Register does NOT invoke onConstruct — see Register's doc comment for why.
 	onConstruct func(*LiveInstance)
 }
@@ -93,10 +93,10 @@ func (r *Registry) Acquire(sessionID string) (*LiveInstance, ReleaseFunc, error)
 
 	// Re-check under lock: a concurrent Acquire may have won the race and installed
 	// an entry already. Never let two live actors exist for one ID — adopt the winner's
-	// entry, discard ours (stopActor is a no-op pre-Epic-3).
+	// entry, discard ours (StopActor is a no-op pre-Epic-3).
 	r.mu.Lock()
 	if e, ok := r.entries[sessionID]; ok {
-		live.stopActor()
+		live.StopActor()
 		e.refcount++
 		r.mu.Unlock()
 		return e.instance, r.makeRelease(sessionID), nil
@@ -144,7 +144,7 @@ func (r *Registry) Retain(inst *Instance) *LiveInstance {
 		e.retained = true
 		return e.instance
 	}
-	live := inst.liveInstance.Load()
+	live := inst.LiveInstance()
 	if live == nil {
 		live = NewLiveInstance(inst)
 	}
@@ -183,7 +183,7 @@ func (r *Registry) makeRelease(sessionID string) ReleaseFunc {
 // Design A) so mutual exclusion is automatic: a concurrent Acquire either sees the
 // entry and increments (this release's zero-check then skips teardown) or this release
 // removes it first (the concurrent Acquire finds nothing and builds a fresh one).
-// stopActor runs outside the lock per the "no I/O under the lock" discipline.
+// StopActor runs outside the lock per the "no I/O under the lock" discipline.
 func (r *Registry) release(sessionID string) {
 	r.mu.Lock()
 	e, ok := r.entries[sessionID]
@@ -199,7 +199,7 @@ func (r *Registry) release(sessionID string) {
 	}
 	delete(r.entries, sessionID)
 	r.mu.Unlock()
-	e.instance.stopActor()
+	e.instance.StopActor()
 }
 
 // ForceRelease tears down sessionID's actor and map entry immediately, regardless of
@@ -222,7 +222,7 @@ func (r *Registry) ForceRelease(sessionID string) {
 	}
 	delete(r.entries, sessionID)
 	r.mu.Unlock()
-	e.instance.stopActor()
+	e.instance.StopActor()
 }
 
 // AcquireAll acquires every session known to Storage in one call; returns one release
@@ -260,7 +260,7 @@ func (r *Registry) Shutdown() {
 	r.entries = make(map[string]*registryEntry)
 	r.mu.Unlock()
 	for _, e := range entries {
-		e.instance.stopActor()
+		e.instance.StopActor()
 	}
 }
 

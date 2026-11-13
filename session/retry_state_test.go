@@ -612,7 +612,7 @@ func assertCrashRetryScheduled(t *testing.T, inst *Instance, attempt int, policy
 	}
 
 	// The real driver poll loop clears NextRetryAt once it consumes a
-	// pending retry and restarts the session (clearNextRetryAt, called
+	// pending retry and restarts the session (ClearNextRetryAt, called
 	// from the restart path) — simulate that here so the next simulated
 	// crash starts from a clean pending-retry state.
 	inst.NextRetryAt = time.Time{}
@@ -865,7 +865,7 @@ func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRu
 	inst.driverGoroutines = 1
 	inst.driverMu.Unlock()
 
-	_, ok := inst.registerContinuation(nil) // restartForRetry spawns the continuation
+	_, ok := inst.RegisterDriverContinuation(nil) // restartForRetry spawns the continuation
 	require.True(t, ok)
 	inst.driverGoroutineExited() // the original driver returns
 	require.True(t, SessionDriverRunningForTest(inst), "cleared while the continuation still runs")
@@ -889,7 +889,7 @@ func TestStartSessionDriver_should_CountInitialDriver_When_ContinuationRegistere
 		StopSessionDriver(inst)
 		JoinSessionDriver(inst)
 	})
-	_, ok := inst.registerContinuation(nil)
+	_, ok := inst.RegisterDriverContinuation(nil)
 	require.True(t, ok)
 	go func() {
 		defer inst.driverWG.Done()

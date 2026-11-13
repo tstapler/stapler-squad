@@ -186,7 +186,7 @@ func SetSessionDriverStartHookForTest(fn func(*Instance)) {
 
 // SessionDriverRunningForTest reports whether inst still has a live driver goroutine.
 func SessionDriverRunningForTest(inst *Instance) bool {
-	return inst.driverRunning.Load()
+	return inst.DriverRunning()
 }
 
 // StartSessionDriverForTest starts inst's driver and registers its stop+join on
@@ -215,41 +215,25 @@ func StartSessionDriverForTest(t interface{ Cleanup(func()) }, inst *Instance, a
 // (e.g. CreateSession's async init goroutine racing a fast DeleteSession) can
 // never spawn a driver goroutine that nothing will ever be told to stop.
 func StartSessionDriver(inst *Instance, allowedPath string) {
-	inst.driverMu.Lock()
-	if inst.driverDestroyed {
-		inst.driverMu.Unlock()
+	stop, err := inst.BeginDriverRun()
+	switch {
+	case errors.Is(err, ErrDriverDestroyed):
 		log.Debug("SessionDriver: instance already destroyed, refusing to start driver",
 			"session", inst.Title,
 		)
 		return
-	}
-	if !inst.driverRunning.CompareAndSwap(false, true) {
-		inst.driverMu.Unlock()
+	case err != nil:
 		log.Debug("SessionDriver: driver already running for session, skipping duplicate start",
 			"session", inst.Title,
 		)
 		return
 	}
-	inst.driverGoroutines++
-	stopper := &sessionDriverStopper{stop: make(chan struct{})}
-	// Add(1) must happen before driverStopper is published (and before driverMu is
-	// released): StopSessionDriver reads driverStopper under driverMu and, if
-	// non-nil, immediately calls driverWG.Wait() outside the lock. Storing the
-	// stopper before Add(1) would let that Wait() race the not-yet-executed Add
-	// on a concurrent goroutine — sync.WaitGroup's own contract forbids Add and
-	// Wait running concurrently without a happens-before edge, and go test -race
-	// flags it. Doing Add under the same critical section as the Store makes the
-	// mutex provide that ordering.
-	inst.driverWG.Add(1)
-	inst.driverStopper.Store(stopper)
-	inst.driverMu.Unlock()
 	if hook := sessionDriverStartHook.Load(); hook != nil {
 		(*hook)(inst)
 	}
 	go func() {
-		defer inst.driverWG.Done()
-		defer inst.driverGoroutineExited()
-		runSessionDriver(inst, allowedPath, stopper.stop)
+		defer inst.FinishDriverGoroutine()
+		runSessionDriver(inst, allowedPath, stop)
 	}()
 }
 
@@ -464,7 +448,7 @@ func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, t
 	// (AcquireExecSlot's gateDir/LoadConfig, both keyed off the
 	// process-global STAPLER_SQUAD_TEST_DIR env var) against whatever test
 	// or session happens to be using that env var's value next.
-	if inst.destroyed.Load() {
+	if inst.IsDestroyed() {
 		return 0, 0, true
 	}
 
@@ -491,7 +475,7 @@ func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, t
 // (either restartForRetry succeeded and spawned a fresh continuation, or it
 // failed with a non-racing error).
 func handleRetryPendingTick(inst *Instance, allowedPath string, policy RetryPolicy, stop <-chan struct{}) (shouldContinue, shouldReturn bool) {
-	pending, elapsed := inst.retryPendingElapsed(time.Now())
+	pending, elapsed := inst.RetryPendingElapsed(time.Now())
 	if !pending {
 		return false, false
 	}
@@ -504,11 +488,11 @@ func handleRetryPendingTick(inst *Instance, allowedPath string, policy RetryPoli
 	// difference is that the pending NextRetryAt is cleared at its deadline
 	// rather than the moment the archive lands — no restart happens between.
 	if inst.IsArchived() {
-		inst.clearNextRetryAt()
+		inst.ClearNextRetryAt()
 		log.Info("SessionDriver: dropping scheduled retry, session is archived", "session", inst.Title)
 		return false, true
 	}
-	reason := inst.lastRetryFailureReason()
+	reason := inst.LastRetryFailureReason()
 	prompt := buildRetryContinuationPrompt(inst, reason)
 	if err := restartForRetry(inst, allowedPath, prompt, policy, stop); err != nil {
 		if errors.Is(err, ErrRetryInFlight) {
@@ -522,7 +506,7 @@ func handleRetryPendingTick(inst *Instance, allowedPath string, policy RetryPoli
 		)
 		return false, true
 	}
-	inst.clearNextRetryAt()
+	inst.ClearNextRetryAt()
 	// restartForRetry spawned a fresh continuation goroutine on success; this
 	// one's job is done.
 	return false, true
@@ -1279,18 +1263,19 @@ func shouldApprovePrompt(output, allowedPath string) bool {
 // restartForRetry then reuses the instance's existing stopper, or creates one
 // if none exists yet.
 func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, policy RetryPolicy, stop <-chan struct{}) error {
-	if !inst.retryInFlight.CompareAndSwap(false, true) {
+	releaseRetry, claimed := inst.TryBeginRetry()
+	if !claimed {
 		return ErrRetryInFlight
 	}
-	defer inst.retryInFlight.Store(false)
+	defer releaseRetry()
 
 	var restartErr error
 	if inst.IsHotRestoreRecoverable() {
 		//nolint:noarchivedrevival automated callers check IsArchived first; RetryNow is an explicit user action
 		inst.RecoverFromStopped()
 		// A prior failure may have been the session's worktree directory vanishing
-		// (see recreateWorktreeIfMissing); a failure there fails the retry now.
-		if setupErr := inst.recreateWorktreeIfMissing(); setupErr != nil {
+		// (see RecreateWorktreeIfMissing); a failure there fails the retry now.
+		if setupErr := inst.RecreateWorktreeIfMissing(); setupErr != nil {
 			restartErr = fmt.Errorf("failed to recreate missing worktree before retry: %w", setupErr)
 		} else {
 			// Clear the old (possibly dead) controller so StartController below creates a fresh one.
@@ -1319,7 +1304,7 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 	// Register before spawning to close the race window between an exiting
 	// goroutine's driverRunning bookkeeping and the new one starting
 	// (mirrors handleDriverFailure's existing D3 mitigation).
-	driverStop, ok := inst.registerContinuation(stop)
+	driverStop, ok := inst.RegisterDriverContinuation(stop)
 	if !ok {
 		// Destroy already ran. The restart above has already happened; it is cleaned up only when
 		// this ran on a driver goroutine that StopSessionDriver waited for (within driverStopTimeout).
@@ -1327,8 +1312,7 @@ func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, pol
 		return nil
 	}
 	go func() {
-		defer inst.driverWG.Done()
-		defer inst.driverGoroutineExited()
+		defer inst.FinishDriverGoroutine()
 		runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, policy, driverStop)
 	}()
 	return nil
