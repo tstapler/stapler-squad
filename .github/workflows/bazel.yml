@@ -219,6 +219,26 @@ jobs:
             affected.txt
           if-no-files-found: warn
 
+      # Bazel truncates test output past --experimental_ui_max_stdouterr_bytes, so keep the jest shards' own logs.
+      - name: Collect jest shard evidence
+        if: always()
+        run: |
+          testlogs="$(bazel info bazel-testlogs --config=ci 2>/dev/null)" || exit 0
+          src="$testlogs/web-app/jest"
+          [ -d "$src" ] || { echo "no jest testlogs at $src"; exit 0; }
+          mkdir -p jest-evidence
+          (cd "$src" && find . -type f \( -name test.log -o -name test.xml -o -name outputs.zip \) -print0 \
+            | xargs -0 -r cp --parents -t "$GITHUB_WORKSPACE/jest-evidence")
+
+      - name: Upload jest shard evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bazel-jest-evidence
+          path: jest-evidence
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Upload profile
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
