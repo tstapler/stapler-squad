@@ -344,6 +344,50 @@ func (r *EntRepository) Create(ctx context.Context, data domain.InstanceData) er
 		SetPinned(data.Pinned)
 
 	// Set optional fields
+	setSessionCreateIdentityFields(sessionCreate, data)
+	setSessionCreateActivityFields(sessionCreate, data)
+	setSessionCreateGitHubFields(sessionCreate, data)
+
+	// Link project if specified (look up by name)
+	if data.ProjectID != "" {
+		proj, err := tx.Project.Query().Where(project.Name(data.ProjectID)).Only(ctx)
+		if err == nil {
+			sessionCreate.SetProjectID(proj.ID)
+		}
+		// If project not found, silently continue (session created without project link)
+	}
+
+	sess, err := sessionCreate.Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create session: %w", err)
+	}
+
+	if err := createWorktreeRow(ctx, tx, sess.ID, data); err != nil {
+		return err
+	}
+	if err := createDiffStatsRow(ctx, tx, sess.ID, data); err != nil {
+		return err
+	}
+	if err := createTagLinks(ctx, tx, sess, data.Tags); err != nil {
+		return err
+	}
+	if err := createClaudeRows(ctx, tx, sess.ID, data); err != nil {
+		return err
+	}
+
+	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+		return err
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+func setSessionCreateIdentityFields(sessionCreate *ent.SessionCreate, data domain.InstanceData) {
 	if data.WorkingDir != "" {
 		sessionCreate.SetWorkingDir(data.WorkingDir)
 	}
@@ -377,6 +421,9 @@ func (r *EntRepository) Create(ctx context.Context, data domain.InstanceData) er
 	if data.SessionType != "" {
 		sessionCreate.SetSessionType(string(data.SessionType))
 	}
+}
+
+func setSessionCreateActivityFields(sessionCreate *ent.SessionCreate, data domain.InstanceData) {
 	if data.TmuxPrefix != "" {
 		sessionCreate.SetTmuxPrefix(data.TmuxPrefix)
 	}
@@ -416,6 +463,9 @@ func (r *EntRepository) Create(ctx context.Context, data domain.InstanceData) er
 	if data.InitialPrompt != "" {
 		sessionCreate.SetInitialPrompt(data.InitialPrompt)
 	}
+}
+
+func setSessionCreateGitHubFields(sessionCreate *ent.SessionCreate, data domain.InstanceData) {
 	if !data.InitialPromptSentAt.IsZero() {
 		sessionCreate.SetInitialPromptSentAt(data.InitialPromptSentAt)
 	}
@@ -449,120 +499,82 @@ func (r *EntRepository) Create(ctx context.Context, data domain.InstanceData) er
 	if !data.CreationProgressUpdatedAt.IsZero() {
 		sessionCreate.SetCreationProgressUpdatedAt(data.CreationProgressUpdatedAt)
 	}
+}
 
-	// Link project if specified (look up by name)
-	if data.ProjectID != "" {
-		proj, err := tx.Project.Query().Where(project.Name(data.ProjectID)).Only(ctx)
-		if err == nil {
-			sessionCreate.SetProjectID(proj.ID)
-		}
-		// If project not found, silently continue (session created without project link)
+func createWorktreeRow(ctx context.Context, tx *ent.Tx, sessionID int, data domain.InstanceData) error {
+	if data.Worktree.RepoPath == "" {
+		return nil
 	}
-
-	sess, err := sessionCreate.Save(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
+	if _, err := tx.Worktree.Create().
+		SetSessionID(sessionID).
+		SetRepoPath(data.Worktree.RepoPath).
+		SetWorktreePath(data.Worktree.WorktreePath).
+		SetSessionName(data.Worktree.SessionName).
+		SetBranchName(data.Worktree.BranchName).
+		SetBaseCommitSha(data.Worktree.BaseCommitSHA).
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to create worktree: %w", err)
 	}
+	return nil
+}
 
-	// Create worktree if present
-	if data.Worktree.RepoPath != "" {
-		if _, err := tx.Worktree.Create().
-			SetSessionID(sess.ID).
-			SetRepoPath(data.Worktree.RepoPath).
-			SetWorktreePath(data.Worktree.WorktreePath).
-			SetSessionName(data.Worktree.SessionName).
-			SetBranchName(data.Worktree.BranchName).
-			SetBaseCommitSha(data.Worktree.BaseCommitSHA).
-			Save(ctx); err != nil {
-			return fmt.Errorf("failed to create worktree: %w", err)
-		}
-	}
-
-	// Create diff stats
+func createDiffStatsRow(ctx context.Context, tx *ent.Tx, sessionID int, data domain.InstanceData) error {
 	diffCreate := tx.DiffStats.Create().
-		SetSessionID(sess.ID).
+		SetSessionID(sessionID).
 		SetAdded(data.DiffStats.Added).
 		SetRemoved(data.DiffStats.Removed)
-
 	if data.DiffStats.Content != "" {
 		diffCreate.SetContent(data.DiffStats.Content)
 	}
-
 	if _, err := diffCreate.Save(ctx); err != nil {
 		return fmt.Errorf("failed to create diff stats: %w", err)
 	}
+	return nil
+}
 
-	// Create/associate tags — collect all IDs then one bulk AddTagIDs.
-	if len(data.Tags) > 0 {
-		tagIDs := make([]int, 0, len(data.Tags))
-		for _, tagName := range data.Tags {
-			t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
-			if err != nil {
-				if ent.IsNotFound(err) {
-					t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
-					if err != nil {
-						return fmt.Errorf("failed to create tag %s: %w", tagName, err)
-					}
-				} else {
-					return fmt.Errorf("failed to query tag %s: %w", tagName, err)
-				}
-			}
-			tagIDs = append(tagIDs, t.ID)
-		}
-		if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
-			return fmt.Errorf("failed to associate tags: %w", err)
-		}
+// createTagLinks collects all tag IDs (creating missing tags) then does one bulk AddTagIDs.
+func createTagLinks(ctx context.Context, tx *ent.Tx, sess *ent.Session, tags []string) error {
+	if len(tags) == 0 {
+		return nil
 	}
-
-	// Create Claude session if present
-	if data.ClaudeSession.ConversationUUID != "" {
-		claudeCreate := tx.ClaudeSession.Create().
-			SetSessionID(sess.ID).
-			SetClaudeSessionID(data.ClaudeSession.ConversationUUID).
-			SetAutoReattach(data.ClaudeSession.Settings.AutoReattach).
-			SetCreateNewOnMissing(data.ClaudeSession.Settings.CreateNewOnMissing).
-			SetShowSessionSelector(data.ClaudeSession.Settings.ShowSessionSelector).
-			SetSessionTimeoutMinutes(data.ClaudeSession.Settings.SessionTimeoutMinutes)
-
-		if data.ClaudeSession.SquadSessionID != "" {
-			claudeCreate.SetConversationID(data.ClaudeSession.SquadSessionID)
-		}
-		if data.ClaudeSession.ProjectName != "" {
-			claudeCreate.SetProjectName(data.ClaudeSession.ProjectName)
-		}
-		if !data.ClaudeSession.LastAttached.IsZero() {
-			claudeCreate.SetLastAttached(data.ClaudeSession.LastAttached)
-		}
-		if data.ClaudeSession.Settings.PreferredSessionName != "" {
-			claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
-		}
-
-		claudeSess, err := claudeCreate.Save(ctx)
+	tagIDs := make([]int, 0, len(tags))
+	for _, tagName := range tags {
+		t, err := tx.Tag.Query().Where(tag.Name(tagName)).Only(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to create claude session: %w", err)
-		}
-
-		// Create Claude metadata entries
-		for key, value := range data.ClaudeSession.Metadata {
-			if _, err := tx.ClaudeMetadata.Create().
-				SetClaudeSessionID(claudeSess.ID).
-				SetKey(key).
-				SetValue(value).
-				Save(ctx); err != nil {
-				return fmt.Errorf("failed to create claude metadata %s: %w", key, err)
+			if !ent.IsNotFound(err) {
+				return fmt.Errorf("failed to query tag %s: %w", tagName, err)
+			}
+			t, err = tx.Tag.Create().SetName(tagName).Save(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to create tag %s: %w", tagName, err)
 			}
 		}
+		tagIDs = append(tagIDs, t.ID)
 	}
+	if err := tx.Session.UpdateOne(sess).AddTagIDs(tagIDs...).Exec(ctx); err != nil {
+		return fmt.Errorf("failed to associate tags: %w", err)
+	}
+	return nil
+}
 
-	if err := upsertSessionPRSetTx(ctx, tx, data); err != nil {
+// createClaudeRows creates the Claude session row and its metadata entries, if present.
+func createClaudeRows(ctx context.Context, tx *ent.Tx, sessionID int, data domain.InstanceData) error {
+	if data.ClaudeSession.ConversationUUID == "" {
+		return nil
+	}
+	claudeSess, err := createClaudeSessionRow(ctx, tx, sessionID, data)
+	if err != nil {
 		return err
 	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
+	for key, value := range data.ClaudeSession.Metadata {
+		if _, err := tx.ClaudeMetadata.Create().
+			SetClaudeSessionID(claudeSess.ID).
+			SetKey(key).
+			SetValue(value).
+			Save(ctx); err != nil {
+			return fmt.Errorf("failed to create claude metadata %s: %w", key, err)
+		}
 	}
-
 	return nil
 }
 
