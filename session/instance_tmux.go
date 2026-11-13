@@ -1145,6 +1145,22 @@ func (i *Instance) IsBackendProcessAlive() bool {
 	return false
 }
 
+// HasLivePaneNoCache is a fresh backend round trip for pane liveness (no cached flag),
+// for the driver's stall check, which stays outside the Instance package.
+// SetProcessManager installs the pane backend on an Instance built from a struct
+// literal (external_discovery.go wraps a discovered tmux session this way).
+func (i *Instance) SetProcessManager(pm ProcessManager) {
+	i.pmMu.Lock()
+	defer i.pmMu.Unlock()
+	i.processManager = pm
+}
+
+// LiveInstance returns the actor handle NewLiveInstance attached, or nil; the
+// registry uses it to adopt an existing actor instead of building a second one.
+func (i *Instance) LiveInstance() *LiveInstance { return i.liveInstance.Load() }
+
+func (i *Instance) HasLivePaneNoCache() bool { return i.pm().HasLiveSessionNoCache() }
+
 // IsLiveOrStoredSessionLive is IsBackendProcessAlive plus, for a view with no
 // pane (a liveness shadow or a not-yet-restored record), the record's persisted
 // daemon session. Only for "is some session still running" lookups: stream
@@ -1227,10 +1243,10 @@ func (i *Instance) PaneExitInfo() (dead bool, code int, signal string) {
 	if !i.TmuxAlive() {
 		return false, 0, ""
 	}
-	return i.paneExitInfoIgnoringStatus()
+	return i.PaneExitInfoIgnoringStatus()
 }
 
-// paneExitInfoIgnoringStatus is PaneExitInfo's tmux-backend lookup without
+// PaneExitInfoIgnoringStatus is PaneExitInfo's tmux-backend lookup without
 // the TmuxAlive() gate (which itself refuses to answer for Status ==
 // Stopped/Paused). ReviewQueuePoller.reconcileSessions' Stopped-but-alive
 // revival path needs exactly this: it runs BECAUSE Status is Stopped, to
@@ -1238,7 +1254,7 @@ func (i *Instance) PaneExitInfo() (dead bool, code int, signal string) {
 // remain-on-exit dead-pane placeholder tmux never tore down (see
 // PaneProcessDead's doc comment) -- PaneExitInfo's own gate would report
 // "not dead" unconditionally in that exact state, defeating the check.
-func (i *Instance) paneExitInfoIgnoringStatus() (dead bool, code int, signal string) {
+func (i *Instance) PaneExitInfoIgnoringStatus() (dead bool, code int, signal string) {
 	if !i.started.Load() || !i.pm().HasSession() || !i.pm().IsAlive() {
 		return false, 0, ""
 	}

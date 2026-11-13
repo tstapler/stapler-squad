@@ -140,7 +140,7 @@ func (i *Instance) combineErrors(errs []error) error {
 	return fmt.Errorf("%s", errMsg)
 }
 
-// previewBlocked reports whether preview capture should be skipped for this instance -
+// PreviewBlocked reports whether preview capture should be skipped for this instance -
 // either because it hasn't started yet, or because its lifecycle status makes a live
 // terminal capture meaningless (Paused/Stopped/Hibernated).
 //
@@ -149,7 +149,7 @@ func (i *Instance) combineErrors(errs []error) error {
 // the actor's own serialization, not under i.mu, so an unguarded read here
 // doesn't synchronize with that write at all (see GetStatus's doc comment).
 // Preview() and PreviewFullHistory() share this check so the two can't drift.
-func (i *Instance) previewBlocked() bool {
+func (i *Instance) PreviewBlocked() bool {
 	status := i.Snapshot().Status
 	return !i.started.Load() || status == domain.Paused || status == domain.Stopped || status == domain.Hibernated
 }
@@ -165,7 +165,7 @@ func (i *Instance) previewBlocked() bool {
 // ever reaching its `defer cancel()` on stop, leaking the capture-pane
 // subprocess across StopSessionDriver/Destroy().
 func (i *Instance) Preview() (string, error) {
-	if i.previewBlocked() {
+	if i.PreviewBlocked() {
 		return "", nil
 	}
 
@@ -223,7 +223,7 @@ func (i *Instance) CapturePaneContentFinal() (string, error) {
 // don't expose a context-aware capture (native backend, no active tmux
 // session, or no controller).
 func (i *Instance) PreviewContext(ctx context.Context) (string, error) {
-	if i.previewBlocked() {
+	if i.PreviewBlocked() {
 		return "", nil
 	}
 
@@ -249,7 +249,7 @@ func (i *Instance) PreviewContext(ctx context.Context) (string, error) {
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history.
 func (i *Instance) PreviewFullHistory() (string, error) {
-	if i.previewBlocked() {
+	if i.PreviewBlocked() {
 		return "", nil
 	}
 

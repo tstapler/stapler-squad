@@ -143,7 +143,7 @@ func TestPaneActivityGate_EmptyContentIsNotCached(t *testing.T) {
 	clock.advance(5 * time.Second)
 	empty := func(context.Context) (string, error) { p.captures++; return "", nil }
 
-	_, _ = g.preview(context.Background(), "s", empty) // e.g. previewBlocked on a paused instance
+	_, _ = g.preview(context.Background(), "s", empty) // e.g. PreviewBlocked on a paused instance
 	got, _ := g.preview(context.Background(), "s", p.capture)
 	assert.Equal(t, p.content, got)
 	assert.Equal(t, 2, p.captures)

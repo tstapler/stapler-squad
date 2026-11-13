@@ -27,7 +27,7 @@ const name = "noarchivedrevival"
 // Analyzer is the exported analysis.Analyzer for the noarchivedrevival check.
 var Analyzer = &analysis.Analyzer{
 	Name: name,
-	Doc:  "requires Start(false)/RecoverFromStopped()/restartForRetry/transitionToLocked(..., Active) in the automated-lifecycle files to follow an IsArchived()/ArchivedAt check, or carry //nolint:noarchivedrevival <reason>",
+	Doc:  "requires Start(false)/RecoverFromStopped()/TransitionToActiveIf()/restartForRetry/transitionToLocked(..., Active) in the automated-lifecycle files to follow an IsArchived()/ArchivedAt check, or carry //nolint:noarchivedrevival <reason>",
 	Run:  run,
 }
 
@@ -255,6 +255,8 @@ func revivalCall(call *ast.CallExpr) (string, bool) {
 			}
 		case "RecoverFromStopped":
 			return "RecoverFromStopped()", true
+		case "TransitionToActiveIf":
+			return "TransitionToActiveIf()", true
 		}
 	case *ast.Ident:
 		switch fun.Name {

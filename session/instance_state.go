@@ -265,7 +265,43 @@ func (i *Instance) HasTerminalViewers() bool {
 	return i.terminalViewers.Load() > 0
 }
 
-func (i *Instance) hibernationIdleDuration() time.Duration {
+// TransitionToActiveIf moves the instance to Active on its actor if its status is
+// still from, and returns the transition error (nil when the status had already
+// changed or the actor call timed out). The review queue poller's reconciler uses
+// it to revive Stopped/Hibernated/Crashed sessions whose tmux session is alive.
+func (i *Instance) TransitionToActiveIf(ctx context.Context, from domain.Status) error {
+	return i.transitionIf(ctx, from, domain.Active, false)
+}
+
+// TransitionToStoppedIfActiveOrLoad is TransitionToActiveIf's counterpart for a
+// managed session whose tmux session vanished: Active -> Stopped, falling back to
+// loading Stopped directly when the transition is refused, as the reconciler did inline.
+func (i *Instance) TransitionToStoppedIfActiveOrLoad(ctx context.Context) error {
+	return i.transitionIf(ctx, domain.Active, domain.Stopped, true)
+}
+
+// transitionIf runs on the actor, so the snapshot is stale inside the closure and the
+// status is read under i.mu.RLock, the same read transitionToLocked does.
+func (i *Instance) transitionIf(ctx context.Context, from, to domain.Status, loadOnError bool) error {
+	terr, _ := sendCtxValue(ctx, i, func(s *instanceState) (error, error) {
+		s.inst.mu.RLock()
+		status := s.inst.Status
+		s.inst.mu.RUnlock()
+		if status != from {
+			return nil, nil
+		}
+		err := transitionToLocked(s, context.Background(), to)
+		if err != nil && loadOnError {
+			s.inst.loadStatus(to)
+		}
+		return err, nil
+	})
+	return terr
+}
+
+// HibernationIdleDuration is how long the instance has been idle (no meaningful output and no
+// terminal viewer), for the hibernation sweeper outside the Instance package.
+func (i *Instance) HibernationIdleDuration() time.Duration {
 	idle := i.TimeSinceLastMeaningfulOutput(i.Snapshot().CreatedAt)
 	if closedAt := i.terminalViewClosedAt.Load(); closedAt != 0 {
 		if sinceClose := time.Since(time.Unix(0, closedAt)); sinceClose < idle {
@@ -275,7 +311,9 @@ func (i *Instance) hibernationIdleDuration() time.Duration {
 	return idle
 }
 
-func (i *Instance) hibernateAutomatically(ctx context.Context, reason string) error {
+// HibernateAutomatically hibernates an idle instance with no viewers, for the hibernation
+// sweeper outside the Instance package.
+func (i *Instance) HibernateAutomatically(ctx context.Context, reason string) error {
 	if !i.terminalViewers.CompareAndSwap(0, -1) {
 		return nil
 	}
@@ -448,6 +486,10 @@ func (i *Instance) Paused() bool {
 func (i *Instance) Hibernated() bool {
 	return i.Snapshot().Status == domain.Hibernated
 }
+
+// MarkStarted flags the instance as started without starting anything; health.go
+// uses it on the throwaway copy LoadInstances builds, whose backend is already wired.
+func (i *Instance) MarkStarted() { i.started.Store(true) }
 
 // Started returns true if the instance has been started.
 func (i *Instance) Started() bool {

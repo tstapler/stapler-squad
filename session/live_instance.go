@@ -18,7 +18,7 @@ const mailboxCapacity = 32
 //   - NewLiveInstance(inst)       — direct wrap when the caller already holds *Instance
 //
 // The actor goroutine (runActor in actor.go) is started by NewLiveInstance via
-// finishLiveInstanceConstruction and exits when Stop()/stopActor() cancels the ctx.
+// finishLiveInstanceConstruction and exits when Stop()/StopActor() cancels the ctx.
 type LiveInstance struct {
 	*Instance
 	ctx       context.Context
@@ -55,13 +55,13 @@ func NewLiveInstance(inst *Instance) *LiveInstance {
 // Idempotent: safe to call multiple times; the second and subsequent calls return
 // immediately once the first call's <-done wait completes.
 func (l *LiveInstance) Stop() {
-	l.stopActor()
+	l.StopActor()
 }
 
-// stopActor is the internal teardown called by Registry.release and ForceRelease.
+// StopActor is the internal teardown called by Registry.release and ForceRelease.
 // Cancels the actor's context and blocks until runActor exits (closes done).
 // Safe to call multiple times (idempotent via sync.Once).
-func (l *LiveInstance) stopActor() {
+func (l *LiveInstance) StopActor() {
 	l.closeOnce.Do(func() {
 		l.cancel()
 		<-l.done // block until runActor() returns and closes done

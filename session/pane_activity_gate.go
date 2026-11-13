@@ -147,7 +147,7 @@ func (g *paneActivityGate) preview(ctx context.Context, tmuxName string, capture
 		return g.content, nil
 	}
 	content, err := capture(ctx)
-	// "" is also what previewBlocked returns for a paused/stopped/not-started instance; caching it
+	// "" is also what PreviewBlocked returns for a paused/stopped/not-started instance; caching it
 	// would serve a blank pane after the instance resumes.
 	if err != nil || !inSnapshot || content == "" {
 		g.valid = false
@@ -197,7 +197,7 @@ func parseWindowActivity(out []byte) map[string]time.Time {
 // stopped, hibernated, not started) always goes through PreviewContext so it gets its "" and the
 // gate forgets any cached content.
 func driverPreview(ctx context.Context, gate *paneActivityGate, inst *Instance) (string, error) {
-	if inst.previewBlocked() {
+	if inst.PreviewBlocked() {
 		gate.reset()
 		return inst.PreviewContext(ctx)
 	}

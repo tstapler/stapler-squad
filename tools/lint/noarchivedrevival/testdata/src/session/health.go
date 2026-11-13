@@ -7,9 +7,10 @@ const Active Status = 1
 
 type Instance struct{ ArchivedAt *int }
 
-func (i *Instance) Start(first bool) error { return nil }
-func (i *Instance) RecoverFromStopped()    {}
-func (i *Instance) IsArchived() bool       { return false }
+func (i *Instance) Start(first bool) error                          { return nil }
+func (i *Instance) RecoverFromStopped()                             {}
+func (i *Instance) IsArchived() bool                                { return false }
+func (i *Instance) TransitionToActiveIf(ctx int, from Status) error { return nil }
 
 func restartForRetry(i *Instance) error { return nil }
 func transitionToLocked(s *Instance, ctx int, to Status) error {
@@ -30,6 +31,17 @@ func unguardedRetry(i *Instance) {
 
 func unguardedTransition(i *Instance) {
 	_ = transitionToLocked(i, 0, Active) // want `transitionToLocked\(\.\.\., Active\) revives`
+}
+
+func unguardedTransitionIf(i *Instance) {
+	_ = i.TransitionToActiveIf(0, 0) // want `TransitionToActiveIf\(\) revives`
+}
+
+func guardedTransitionIf(i *Instance) {
+	if i.IsArchived() {
+		return
+	}
+	_ = i.TransitionToActiveIf(0, 0)
 }
 
 func guardedByMethod(i *Instance) {
