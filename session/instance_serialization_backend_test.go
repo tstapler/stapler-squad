@@ -11,9 +11,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
-func restoredPausedData(t *testing.T, title string) InstanceData {
+func restoredPausedData(t *testing.T, title string) domain.InstanceData {
 	t.Helper()
-	return InstanceData{Title: title, Path: t.TempDir(), Program: "claude", Status: domain.Paused}
+	return domain.InstanceData{Title: title, Path: t.TempDir(), Program: "claude", Status: domain.Paused}
 }
 
 // A session persisted before its per-session tymux override existed has an empty

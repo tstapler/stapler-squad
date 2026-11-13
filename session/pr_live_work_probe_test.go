@@ -12,19 +12,19 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-type fakeSnapshotSource map[string]*InstanceSnapshot
+type fakeSnapshotSource map[string]*domain.InstanceSnapshot
 
-func (f fakeSnapshotSource) LiveSnapshot(id string) (*InstanceSnapshot, bool) {
+func (f fakeSnapshotSource) LiveSnapshot(id string) (*domain.InstanceSnapshot, bool) {
 	s, ok := f[id]
 	return s, ok
 }
 
 type fakeProbeInstanceStore struct {
-	data map[string]*InstanceData
+	data map[string]*domain.InstanceData
 	err  error
 }
 
-func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*InstanceData, error) {
+func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -39,8 +39,8 @@ func TestLiveWorkProbe_ShouldMapSnapshotToLiveEndedIdle_AndHeldByLiveWorkShouldH
 	t.Parallel()
 	now := prTestEpoch
 	archived := now.Add(-time.Hour)
-	mk := func(status domain.Status, lmca time.Time, mut func(*InstanceSnapshot)) *InstanceSnapshot {
-		s := &InstanceSnapshot{Status: status, LastMeaningfulChangeAt: lmca, CreatedAt: now.Add(-3 * time.Hour)}
+	mk := func(status domain.Status, lmca time.Time, mut func(*domain.InstanceSnapshot)) *domain.InstanceSnapshot {
+		s := &domain.InstanceSnapshot{Status: status, LastMeaningfulChangeAt: lmca, CreatedAt: now.Add(-3 * time.Hour)}
 		if mut != nil {
 			mut(s)
 		}
@@ -49,17 +49,17 @@ func TestLiveWorkProbe_ShouldMapSnapshotToLiveEndedIdle_AndHeldByLiveWorkShouldH
 	turnEndedAt := now.Add(-30 * time.Minute)
 	tests := []struct {
 		name string
-		snap *InstanceSnapshot
+		snap *domain.InstanceSnapshot
 		want bool
 	}{
 		{"active mid-turn, recent change", mk(domain.Active, now.Add(-2*time.Minute), nil), true},
 		{"paused is ended", mk(domain.Paused, now, nil), false},
 		{"stopped is ended", mk(domain.Stopped, now, nil), false},
 		{"hibernated is ended", mk(domain.Hibernated, now, nil), false},
-		{"archived is ended", mk(domain.Active, now, func(s *InstanceSnapshot) { s.ArchivedAt = &archived }), false},
-		{"turn ended and idle past the window", mk(domain.Active, turnEndedAt, func(s *InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: turnEndedAt} }), false},
-		{"turn ended recently is still live inside the window", mk(domain.Active, now.Add(-time.Minute), func(s *InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: now.Add(-time.Minute)} }), true},
-		{"turn ended, then new activity: working again", mk(domain.Active, now.Add(-5*time.Minute), func(s *InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: now.Add(-20 * time.Minute)} }), true},
+		{"archived is ended", mk(domain.Active, now, func(s *domain.InstanceSnapshot) { s.ArchivedAt = &archived }), false},
+		{"turn ended and idle past the window", mk(domain.Active, turnEndedAt, func(s *domain.InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: turnEndedAt} }), false},
+		{"turn ended recently is still live inside the window", mk(domain.Active, now.Add(-time.Minute), func(s *domain.InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: now.Add(-time.Minute)} }), true},
+		{"turn ended, then new activity: working again", mk(domain.Active, now.Add(-5*time.Minute), func(s *domain.InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: now.Add(-20 * time.Minute)} }), true},
 		{"working with no change for over 1h is capped, not live", mk(domain.Active, now.Add(-61*time.Minute), nil), false},
 		{"zero LMCA falls back to creation time (over 1h ago: capped)", mk(domain.Active, time.Time{}, nil), false},
 	}
@@ -78,7 +78,7 @@ func TestLiveWorkProbe_ShouldReturnNotLiveWithoutError_WhenSessionAbsentOrPersis
 	t.Parallel()
 	now := prTestEpoch
 	archived := now
-	store := &fakeProbeInstanceStore{data: map[string]*InstanceData{
+	store := &fakeProbeInstanceStore{data: map[string]*domain.InstanceData{
 		"archived": {Status: domain.Active, ArchivedAt: &archived, LastMeaningfulOutput: now},
 		"stopped":  {Status: domain.Stopped, LastMeaningfulOutput: now},
 		"recent":   {Status: domain.Active, LastMeaningfulOutput: now.Add(-time.Minute)},
@@ -124,7 +124,7 @@ func TestIsLiveWork_ShouldCapMidTurnSession_WhenNoChangeForOverOneHour(t *testin
 	f.LastMeaningfulChangeAt = now.Add(-time.Hour)
 	assert.False(t, IsLiveWork(f, now, LiveWorkIdleWindow))
 	before := LiveWorkResultCount(LiveWorkResultCapWorking)
-	snap := &InstanceSnapshot{Status: domain.Active, LastMeaningfulChangeAt: now.Add(-2 * time.Hour)}
+	snap := &domain.InstanceSnapshot{Status: domain.Active, LastMeaningfulChangeAt: now.Add(-2 * time.Hour)}
 	p := NewSnapshotLiveWorkProbe(fakeSnapshotSource{"s": snap}, &fakeProbeInstanceStore{})
 	_, _ = p.IsLive(context.Background(), "s", now)
 	assert.Greater(t, LiveWorkResultCount(LiveWorkResultCapWorking), before, "the cap firing is counted")

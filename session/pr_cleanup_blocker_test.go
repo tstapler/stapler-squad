@@ -15,7 +15,7 @@ import (
 type fakeGateSource struct {
 	views    map[string][]domain.PRView
 	guards   map[string]ItemGuardView
-	data     map[string]*InstanceData
+	data     map[string]*domain.InstanceData
 	viewsErr error
 	guardErr error
 	dataErr  error
@@ -36,7 +36,7 @@ func (f *fakeGateSource) ListItemGuardViewsByItemIDs(_ context.Context, ids []st
 	return out, nil
 }
 
-func (f *fakeGateSource) FindInstanceDataByID(id string) (*InstanceData, error) {
+func (f *fakeGateSource) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	if f.dataErr != nil {
 		return nil, f.dataErr
 	}
@@ -71,8 +71,8 @@ func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *test
 		{"item-direct open, no session link", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {Direct: []domain.PRView{open}}}}, "item i1"},
 		{"item-direct unknown", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {Direct: []domain.PRView{unknown}}}}, "item i1"},
 		{"item pr_number no link represents", &fakeGateSource{guards: map[string]ItemGuardView{"i1": {LegacyUnrepresented: true}}}, "item i1"},
-		{"session legacy number, no link, flag not true", &fakeGateSource{data: map[string]*InstanceData{"s1": {UUID: "s1", GitHubPRNumber: 5}}}, "session s1"},
-		{"session legacy number, no link, flag true", &fakeGateSource{data: map[string]*InstanceData{"s1": {UUID: "s1", GitHubPRNumber: 5, GitHubPRStatusTerminal: true}}}, ""},
+		{"session legacy number, no link, flag not true", &fakeGateSource{data: map[string]*domain.InstanceData{"s1": {UUID: "s1", GitHubPRNumber: 5}}}, "session s1"},
+		{"session legacy number, no link, flag true", &fakeGateSource{data: map[string]*domain.InstanceData{"s1": {UUID: "s1", GitHubPRNumber: 5, GitHubPRStatusTerminal: true}}}, ""},
 		{"views lookup error", &fakeGateSource{viewsErr: errors.New("db")}, "unreadable"},
 		{"guard lookup error", &fakeGateSource{guardErr: errors.New("db")}, "unreadable"},
 		{"instance lookup error", &fakeGateSource{dataErr: errors.New("db")}, "unreadable"},

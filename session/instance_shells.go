@@ -26,6 +26,7 @@ import (
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -152,7 +153,7 @@ func (i *Instance) SpawnShell(ctx context.Context, req SpawnShellRequest) (*Shel
 
 	// Persist to database (best-effort; non-fatal on error).
 	if i.shellRepo != nil {
-		data := ShellData{
+		data := domain.ShellData{
 			ID:              shellID,
 			Name:            name,
 			Command:         command,
@@ -417,7 +418,7 @@ func (i *Instance) ReconcileShells(ctx context.Context) {
 
 	// preparedShell holds all pre-computed state for one reconcile entry.
 	type preparedShell struct {
-		dbShell     ShellData
+		dbShell     domain.ShellData
 		handle      *tmux.ShellTmuxHandle
 		alive       bool // DoesSessionExist result; only meaningful when status=Running
 		exitCh      chan struct{}

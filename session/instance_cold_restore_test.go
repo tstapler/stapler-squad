@@ -91,7 +91,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	// branch logs "Cold restoring with --resume". The --resume flag itself is only
 	// appended by ClaudeCommandBuilder for Program="claude"; that is unit-tested
 	// separately in claude_command_builder_test.go.
-	inst.SetClaudeSession(&ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 		LastAttached:     time.Now(),
 	})
@@ -366,7 +366,7 @@ func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus domain.S
 
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive before restore")
 
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:            title,
 		Path:             tmpDir,
 		Status:           domain.Stopped,

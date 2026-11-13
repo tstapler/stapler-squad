@@ -155,9 +155,9 @@ func SeedDirectory(dir string, count int) error {
 //
 // Two sessions include "payment" in their title/tags so the search demo
 // filters from 6 → 2 results, which is visually more compelling than 3 → 1.
-func mockSessions() []session.InstanceData {
+func mockSessions() []domain.InstanceData {
 	now := time.Now()
-	return []session.InstanceData{
+	return []domain.InstanceData{
 		// Paused mid-task: payment integration with large diff in progress.
 		{
 			Title:                "payment-stripe-integration",
@@ -171,7 +171,7 @@ func mockSessions() []session.InstanceData {
 			UpdatedAt:            now.Add(-20 * time.Second),
 			LastTerminalUpdate:   now.Add(-20 * time.Second),
 			LastMeaningfulOutput: now.Add(-20 * time.Second),
-			DiffStats:            session.DiffStatsData{Added: 287, Removed: 43},
+			DiffStats:            domain.DiffStatsData{Added: 287, Removed: 43},
 		},
 		// Needs attention: agent hit a permission gate (sub-status; lifecycle is Active).
 		{
@@ -186,7 +186,7 @@ func mockSessions() []session.InstanceData {
 			UpdatedAt:            now.Add(-1 * time.Minute),
 			LastTerminalUpdate:   now.Add(-1 * time.Minute),
 			LastMeaningfulOutput: now.Add(-1 * time.Minute),
-			DiffStats:            session.DiffStatsData{Added: 56, Removed: 18},
+			DiffStats:            domain.DiffStatsData{Added: 56, Removed: 18},
 		},
 		// Paused: OAuth2 refactor waiting for review.
 		{
@@ -201,7 +201,7 @@ func mockSessions() []session.InstanceData {
 			UpdatedAt:            now.Add(-25 * time.Minute),
 			LastTerminalUpdate:   now.Add(-25 * time.Minute),
 			LastMeaningfulOutput: now.Add(-25 * time.Minute),
-			DiffStats:            session.DiffStatsData{Added: 342, Removed: 89},
+			DiffStats:            domain.DiffStatsData{Added: 342, Removed: 89},
 		},
 		// Paused: analytics dashboard frontend — large diff ready for review.
 		{
@@ -216,7 +216,7 @@ func mockSessions() []session.InstanceData {
 			UpdatedAt:            now.Add(-35 * time.Second),
 			LastTerminalUpdate:   now.Add(-35 * time.Second),
 			LastMeaningfulOutput: now.Add(-35 * time.Second),
-			DiffStats:            session.DiffStatsData{Added: 415, Removed: 127},
+			DiffStats:            domain.DiffStatsData{Added: 415, Removed: 127},
 		},
 		// Ready: Kubernetes HPA config ready for review.
 		{
@@ -231,7 +231,7 @@ func mockSessions() []session.InstanceData {
 			UpdatedAt:            now.Add(-15 * time.Minute),
 			LastTerminalUpdate:   now.Add(-15 * time.Minute),
 			LastMeaningfulOutput: now.Add(-15 * time.Minute),
-			DiffStats:            session.DiffStatsData{Added: 73, Removed: 11},
+			DiffStats:            domain.DiffStatsData{Added: 73, Removed: 11},
 		},
 		// Paused: payment receipts via aider (shows multi-agent support).
 		{
@@ -246,7 +246,7 @@ func mockSessions() []session.InstanceData {
 			UpdatedAt:            now.Add(-45 * time.Second),
 			LastTerminalUpdate:   now.Add(-45 * time.Second),
 			LastMeaningfulOutput: now.Add(-45 * time.Second),
-			DiffStats:            session.DiffStatsData{Added: 98, Removed: 22},
+			DiffStats:            domain.DiffStatsData{Added: 98, Removed: 22},
 		},
 	}
 }

@@ -66,7 +66,7 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 
 	// Simulate the UUID being captured while the session was running (exactly what
 	// tryExtractConversationUUID does mid-session), then the pane dying.
-	inst.SetClaudeSession(&ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 		LastAttached:     time.Now(),
 	})
@@ -90,7 +90,7 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 	// "Clear the stored session ID so HistoryLinker re-detects...") before
 	// re-deriving it via tryExtractConversationUUID, which found nothing in this
 	// fake, JSONL-less test environment and left it empty.
-	inst.SetClaudeSession(&ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 		LastAttached:     time.Now(),
 	})

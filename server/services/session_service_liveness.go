@@ -33,7 +33,7 @@ func (s *SessionService) FindLiveInstance(id string) *session.Instance {
 
 // LiveSnapshot implements session.LiveSnapshotSource for the live-work probe: the
 // lock-free Snapshot() of a session tracked live in this process.
-func (s *SessionService) LiveSnapshot(sessionUUID string) (*session.InstanceSnapshot, bool) {
+func (s *SessionService) LiveSnapshot(sessionUUID string) (*domain.InstanceSnapshot, bool) {
 	inst := s.findLifecycleInstance(nil, sessionUUID)
 	if inst == nil {
 		return nil, false

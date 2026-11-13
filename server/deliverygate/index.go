@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -48,7 +48,7 @@ func KindFromTags(tags []string) HiddenKind {
 }
 
 // EntryFromSnapshot builds an Entry from a lock-free instance snapshot.
-func EntryFromSnapshot(s *session.InstanceSnapshot) Entry {
+func EntryFromSnapshot(s *domain.InstanceSnapshot) Entry {
 	e := Entry{
 		UUID:   s.UUID,
 		Title:  s.Title,
@@ -310,7 +310,7 @@ func (i *VisibilityIndex) UpsertMany(entries []Entry) {
 	i.state.Store(s)
 }
 
-func entryFromData(d session.InstanceData) Entry {
+func entryFromData(d domain.InstanceData) Entry {
 	e := Entry{UUID: d.UUID, Title: d.Title, Hidden: d.Hidden}
 	if d.Title != "" {
 		e.TmuxName = tmux.NewSessionName(d.Title, d.TmuxPrefix).String()

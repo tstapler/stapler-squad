@@ -78,7 +78,7 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 	// disk, since it returns non-nil whenever any of repoPath/worktreePath/
 	// branchName is non-empty.
 	inst := newTestInstance("shared-cache-visibility-test")
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
@@ -294,7 +294,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 func TestDiffStatsDataSerializationExcludesContent(t *testing.T) {
 	t.Parallel()
 	// Create DiffStatsData with content
-	stats := DiffStatsData{
+	stats := domain.DiffStatsData{
 		Added:   10,
 		Removed: 5,
 		Content: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,5 +1,10 @@\n+new line\n",
@@ -332,7 +332,7 @@ func TestDiffStatsDataBackwardCompatibility(t *testing.T) {
 	}`
 
 	// Parse into DiffStatsData
-	var stats DiffStatsData
+	var stats domain.DiffStatsData
 	err := json.Unmarshal([]byte(oldJSON), &stats)
 	require.NoError(t, err)
 
@@ -349,10 +349,10 @@ func TestDiffStatsDataBackwardCompatibility(t *testing.T) {
 func TestInstanceDataSaveExcludesDiffContent(t *testing.T) {
 	t.Parallel()
 	// Create InstanceData with diff stats including content
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title: "test-session",
 		Path:  "/test/path",
-		DiffStats: DiffStatsData{
+		DiffStats: domain.DiffStatsData{
 			Added:   25,
 			Removed: 10,
 			Content: "large diff content that should not be persisted to reduce file size...",
@@ -415,7 +415,7 @@ func TestInstanceDataLoadWithDiffContent(t *testing.T) {
 	}`
 
 	// Parse into InstanceData
-	var data InstanceData
+	var data domain.InstanceData
 	err := json.Unmarshal([]byte(oldJSON), &data)
 	require.NoError(t, err)
 
@@ -684,7 +684,7 @@ func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDi
 
 	inst := newTestInstance("worktree-session-records")
 	inst.UUID = "33333333-3333-3333-3333-333333333333"
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session-records", "worktree-session-records", "backlog/some-item", "abc123def")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
@@ -899,7 +899,7 @@ func TestSaveInstances_WorktreeDataQueryableImmediately(t *testing.T) {
 
 	inst := newTestInstance("worktree-session")
 	inst.UUID = "11111111-1111-1111-1111-111111111111"
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session", "worktree-session", "backlog/some-item", "abc123def")
 
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
@@ -937,7 +937,7 @@ func TestSaveInstances_SkipsNotYetStartedInstance(t *testing.T) {
 func TestDiffStatsDataRoundTrip(t *testing.T) {
 	t.Parallel()
 	// Original data with content
-	original := DiffStatsData{
+	original := domain.DiffStatsData{
 		Added:   42,
 		Removed: 17,
 		Content: "This content should not survive the round trip...",
@@ -948,7 +948,7 @@ func TestDiffStatsDataRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Deserialize
-	var loaded DiffStatsData
+	var loaded domain.DiffStatsData
 	err = json.Unmarshal(jsonBytes, &loaded)
 	require.NoError(t, err)
 
@@ -1366,10 +1366,10 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 
 	a := newTestInstance("batch-a")
 	a.UUID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	a.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
+	a.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
 	b := newTestInstance("batch-b")
 	b.UUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	b.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
+	b.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
 	noWT := newTestInstance("batch-dir")
 	noWT.UUID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 	require.NoError(t, storage.SaveInstances([]*Instance{a, b, noWT}))
@@ -1401,7 +1401,7 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 // prLoadFixture creates a persisted Paused session row with an optional legacy PR.
 func prLoadFixture(t *testing.T, storage *Storage, title, uuid, owner, repo string, legacyNumber int) {
 	t.Helper()
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(), GitHubOwner: owner, GitHubRepo: repo,
 	}

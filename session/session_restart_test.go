@@ -48,12 +48,12 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 	}()
 
 	// Set Claude session data with valid UUID
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
 		LastAttached:     time.Now(),
-		Settings: ClaudeSettings{
+		Settings: domain.ClaudeSettings{
 			AutoReattach:          true,
 			CreateNewOnMissing:    true,
 			SessionTimeoutMinutes: 60,
@@ -148,7 +148,7 @@ func testRestartWithInvalidUUID(t *testing.T) {
 	}()
 
 	// Set Claude session data with INVALID UUID
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: invalidSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
@@ -190,7 +190,7 @@ func testRestartNonClaudeProgram(t *testing.T) {
 	}()
 
 	// Set Claude session data (should be ignored for non-Claude programs)
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
@@ -232,7 +232,7 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-456",
 		ProjectName:      "health-check-project",
@@ -291,7 +291,7 @@ func testLazyRecoveryRestart(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-789",
 		ProjectName:      "lazy-recovery-project",
@@ -410,7 +410,7 @@ func testCommandEnrichmentFlow(t *testing.T) {
 
 			// Set session data if provided
 			if tc.sessionID != "" {
-				instance.SetClaudeSession(&ClaudeSessionData{
+				instance.SetClaudeSession(&domain.ClaudeSessionData{
 					ConversationUUID: tc.sessionID,
 					SquadSessionID:   "conv-test",
 					ProjectName:      "test-project",
@@ -458,7 +458,7 @@ func testMultipleRestartCycles(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-multi",
 		ProjectName:      "multi-restart-project",
@@ -520,12 +520,12 @@ func testSessionDataPersistence(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	originalSession := &ClaudeSessionData{
+	originalSession := &domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-persist",
 		ProjectName:      "persistence-project",
 		LastAttached:     time.Now(),
-		Settings: ClaudeSettings{
+		Settings: domain.ClaudeSettings{
 			AutoReattach:          true,
 			CreateNewOnMissing:    true,
 			SessionTimeoutMinutes: 120,
@@ -608,7 +608,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-worktree",
 		ProjectName:      "worktree-project",

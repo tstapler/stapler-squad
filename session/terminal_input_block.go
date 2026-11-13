@@ -9,7 +9,7 @@ import "github.com/tstapler/stapler-squad/session/domain"
 //
 // recoverable is true for an archived instance (until unarchived) and a tymux instance
 // that is not Active yet (any non-Active status); a hidden one never recovers.
-func TerminalInputBlock(snap *InstanceSnapshot) (blocked, recoverable bool) {
+func TerminalInputBlock(snap *domain.InstanceSnapshot) (blocked, recoverable bool) {
 	if snap.Hidden {
 		return true, false
 	}

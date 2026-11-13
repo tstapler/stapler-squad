@@ -529,9 +529,7 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 	listener.WireToInstance(inst)
 
 	// Verify a listener was registered by checking the slice length.
-	inst.LifecycleListenersMu.Lock()
-	count := len(inst.LifecycleListeners)
-	inst.LifecycleListenersMu.Unlock()
+	count := inst.LifecycleListenerCount()
 	require.Equal(t, 1, count, "WireToInstance should register exactly one lifecycle listener")
 
 	// Create a BacklogItem and ItemSession linked to inst.UUID so that
@@ -2455,7 +2453,7 @@ func newPushAndCreatePRTestFixture(t *testing.T, storage *session.Storage) (*bac
 
 	inst := newTestInstance("push-pr-test")
 	inst.UUID = sessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/fake-repo", "/tmp/fake-repo/../worktrees/push-pr-test", "push-pr-test", "backlog/push-pr-test", "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -2784,7 +2782,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 
 	inst := newTestInstance("push-pr-drafted-body-test")
 	inst.UUID = sessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir, "push-pr-drafted-body-test", "backlog/push-pr-drafted-body-test", baseSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir, "push-pr-drafted-body-test", "backlog/push-pr-drafted-body-test", baseSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 	is := backlogdto.ItemSessionSummary{ID: itemSession.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
 
@@ -3336,7 +3334,7 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *session.Storage,
 
 	inst := newTestInstance(workSessionName)
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/fake-repo", "/tmp/fake-repo/../worktrees/"+workSessionName, workSessionName, "backlog/"+workSessionName, "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -4393,7 +4391,7 @@ func TestCaptureShipSnapshot_ShouldWriteAllSixFieldsBeforeDoneTransition_WhenBot
 
 	prStatus := &git.PRStatus{ApprovedCount: 2, ChangesRequestedCount: 0, CIFailing: false}
 	lastWork := &backlogdto.ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
-	wt := &session.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: baseSHA}
+	wt := &domain.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: baseSHA}
 
 	err := CaptureShipSnapshot(ctx, storage, item, prStatus, lastWork, wt)
 	require.NoError(t, err, "CaptureShipSnapshot must never return an error")
@@ -4466,7 +4464,7 @@ func TestCaptureShipSnapshot_ShouldPreserveSuccessfulGithubGroup_WhenFileStatsBe
 
 			item := newShipSnapshotTestItem(t, storage, repoPath, 9002)
 			lastWork := &backlogdto.ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
-			wt := &session.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: tt.baseSHA}
+			wt := &domain.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: tt.baseSHA}
 
 			err := CaptureShipSnapshot(ctx, storage, item, tt.prStatus, lastWork, wt)
 			require.NoError(t, err, "CaptureShipSnapshot must never return an error, even when both groups fail")
@@ -4569,7 +4567,7 @@ func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T
 
 	inst := newTestInstance("pr-pending-worktree")
 	inst.UUID = uuid.New().String()
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", worktreePath, "pr-pending-worktree", "backlog/some-item", "abc123")
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", worktreePath, "pr-pending-worktree", "backlog/some-item", "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -4619,7 +4617,7 @@ func newOrphanedAgentPRTestItem(t *testing.T, storage *session.Storage, branchNa
 
 	inst := newTestInstance("orphaned-agent-pr-worktree")
 	inst.UUID = uuid.New().String()
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage("/tmp/orphaned-agent-pr-test-repo", "/tmp/orphaned-agent-pr-test-repo/../wt", "orphaned-agent-pr-worktree", branchName, "abc123")
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage("/tmp/orphaned-agent-pr-test-repo", "/tmp/orphaned-agent-pr-test-repo/../wt", "orphaned-agent-pr-worktree", branchName, "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{

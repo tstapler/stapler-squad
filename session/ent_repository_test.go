@@ -131,7 +131,7 @@ func TestEntRepository_Delete_WithShells(t *testing.T) {
 	err := repo.Create(ctx, session)
 	require.NoError(t, err)
 
-	err = repo.CreateShell(ctx, session.Title, ShellData{
+	err = repo.CreateShell(ctx, session.Title, domain.ShellData{
 		ID:              uuid.NewString(),
 		Name:            "shell-1",
 		Command:         "bash",
@@ -241,7 +241,7 @@ func TestEntRepository_Worktree(t *testing.T) {
 
 	// Create session with worktree
 	session := createTestSession("worktree-session")
-	session.Worktree = GitWorktreeData{
+	session.Worktree = domain.GitWorktreeData{
 		RepoPath:      "/path/to/repo",
 		WorktreePath:  "/path/to/worktree",
 		SessionName:   "test-session",
@@ -271,7 +271,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
 	ctx := context.Background()
 
 	session := createTestSession("list-with-options-worktree")
-	session.Worktree = GitWorktreeData{
+	session.Worktree = domain.GitWorktreeData{
 		RepoPath:      "/path/to/repo",
 		WorktreePath:  "/path/to/worktree",
 		SessionName:   "test-session",
@@ -286,7 +286,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadWorktree(t *testing.T) {
 	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
 	require.NoError(t, err)
 	require.Len(t, minimal, 1)
-	assert.Equal(t, GitWorktreeData{}, minimal[0].Worktree)
+	assert.Equal(t, domain.GitWorktreeData{}, minimal[0].Worktree)
 
 	// LoadOptions{LoadWorktree: true} should load it.
 	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadWorktree: true})
@@ -334,7 +334,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 	ctx := context.Background()
 
 	session := createTestSession("list-with-options-diffstats")
-	session.DiffStats = DiffStatsData{
+	session.DiffStats = domain.DiffStatsData{
 		Added:   100,
 		Removed: 50,
 		Content: "diff content here",
@@ -346,7 +346,7 @@ func TestEntRepository_ListWithOptions_RespectsLoadDiffStats(t *testing.T) {
 	minimal, err := repo.ListWithOptions(ctx, LoadMinimal)
 	require.NoError(t, err)
 	require.Len(t, minimal, 1)
-	assert.Equal(t, DiffStatsData{}, minimal[0].DiffStats)
+	assert.Equal(t, domain.DiffStatsData{}, minimal[0].DiffStats)
 
 	full, err := repo.ListWithOptions(ctx, LoadOptions{LoadDiffStats: true})
 	require.NoError(t, err)
@@ -414,12 +414,12 @@ func TestEntRepository_ListWithOptions_RespectsLoadClaudeSession(t *testing.T) {
 	ctx := context.Background()
 
 	session := createTestSession("list-with-options-claude-session")
-	session.ClaudeSession = ClaudeSessionData{
+	session.ClaudeSession = domain.ClaudeSessionData{
 		ConversationUUID: "claude-123",
 		SquadSessionID:   "conv-456",
 		ProjectName:      "test-project",
 		LastAttached:     time.Now(),
-		Settings: ClaudeSettings{
+		Settings: domain.ClaudeSettings{
 			AutoReattach: true,
 		},
 		Metadata: map[string]string{
@@ -453,7 +453,7 @@ func TestEntRepository_DiffStats(t *testing.T) {
 
 	// Create session with diff stats
 	session := createTestSession("diffstats-session")
-	session.DiffStats = DiffStatsData{
+	session.DiffStats = domain.DiffStatsData{
 		Added:   100,
 		Removed: 50,
 		Content: "diff content here",
@@ -480,12 +480,12 @@ func TestEntRepository_ClaudeSession(t *testing.T) {
 
 	// Create session with Claude session data
 	session := createTestSession("claude-session")
-	session.ClaudeSession = ClaudeSessionData{
+	session.ClaudeSession = domain.ClaudeSessionData{
 		ConversationUUID: "claude-123",
 		SquadSessionID:   "conv-456",
 		ProjectName:      "test-project",
 		LastAttached:     time.Now(),
-		Settings: ClaudeSettings{
+		Settings: domain.ClaudeSettings{
 			AutoReattach:          true,
 			PreferredSessionName:  "my-session",
 			CreateNewOnMissing:    false,
@@ -651,7 +651,7 @@ func TestEntRepository_UUID_EmptyDefaultDoesNotBreakList(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 
-	byTitle := make(map[string]InstanceData)
+	byTitle := make(map[string]domain.InstanceData)
 	for _, d := range all {
 		byTitle[d.Title] = d
 	}

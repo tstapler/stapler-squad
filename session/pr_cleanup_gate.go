@@ -90,7 +90,7 @@ type GateOptions struct {
 type CleanupGateSource interface {
 	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error)
 	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]ItemGuardView, error)
-	FindInstanceDataByID(id string) (*InstanceData, error)
+	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 }
 
 // PRCleanupGate decides whether a backlog-driven path may remove an item's
@@ -158,7 +158,7 @@ func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []backlogdto.Ite
 	for _, id := range uuids {
 		d, derr := g.src.FindInstanceDataByID(id)
 		if errors.Is(derr, ErrInstanceDataNotFound) {
-			d = &InstanceData{UUID: id}
+			d = &domain.InstanceData{UUID: id}
 		} else if derr != nil {
 			return append(reasons, fmt.Sprintf("session %s: unreadable: %v", id, derr))
 		}
@@ -187,7 +187,7 @@ func (g *PRCleanupGate) prReasons(ctx context.Context, sessions []backlogdto.Ite
 // OwnPRsBlockReason is the ordered PR decision for one session's own links (first
 // match wins); "" means they permit deleting its worktree. rows are its link views.
 // Shared by the cleanup gate and the retention sweeper so they cannot disagree.
-func OwnPRsBlockReason(d InstanceData, rows []domain.PRView) string {
+func OwnPRsBlockReason(d domain.InstanceData, rows []domain.PRView) string {
 	switch {
 	case len(rows) == 0 && d.GitHubPRNumber == 0:
 		return ""

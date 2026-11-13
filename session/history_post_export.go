@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // The AfterExport methods live here, not in each adapter file, so the shared history.jsonl
@@ -56,7 +57,7 @@ func appendHistoryJSONL(path, cli string, entry map[string]interface{}) error {
 func recordPortedClaudeSession(i *Instance, uuidStr, workspace string) {
 	i.claudeSessionMu.Lock()
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = uuidStr
 	i.claudeSession.ProjectName = i.Title

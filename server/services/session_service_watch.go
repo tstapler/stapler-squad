@@ -231,7 +231,7 @@ func (s *SessionService) GetSessionDiff(
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list sessions: %w", err))
 		}
-		var found *session.InstanceData
+		var found *domain.InstanceData
 		for i := range allData {
 			if allData[i].MatchesID(req.Msg.Id) {
 				found = &allData[i]

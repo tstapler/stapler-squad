@@ -658,7 +658,7 @@ func TestHandoffSummarySchema_should_SurviveSessionDeletion_When_NoEdgeExists(t 
 	ctx := context.Background()
 
 	now := time.Now()
-	sessionData := session.InstanceData{
+	sessionData := domain.InstanceData{
 		Title: "handoff-fk-test-session", Path: "/home/user/project", WorkingDir: "/home/user/project",
 		Branch: "main", Status: domain.Paused, Height: 24, Width: 80,
 		CreatedAt: now, UpdatedAt: now, Program: "claude", Category: "Test", Tags: []string{},

@@ -10,7 +10,6 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -123,7 +122,7 @@ func (r *closedPRReverifier) clear(key string) {
 // reopened webhook, so a missed webhook would otherwise let a reopened PR's
 // worktree be deleted. Reopened, rate-limited, network and over-budget outcomes
 // hold the session; an unverifiable PR holds it until the count/age rule releases it.
-func (s *SessionRetentionSweeper) closedPRsStayClosed(ctx context.Context, d session.InstanceData, p *sweepPRData) (bool, string) {
+func (s *SessionRetentionSweeper) closedPRsStayClosed(ctx context.Context, d domain.InstanceData, p *sweepPRData) (bool, string) {
 	if s.reverifyClosed == nil {
 		return true, ""
 	}
@@ -143,7 +142,7 @@ func (s *SessionRetentionSweeper) closedPRsStayClosed(ctx context.Context, d ses
 	return true, ""
 }
 
-func (s *SessionRetentionSweeper) reverifyOne(ctx context.Context, d session.InstanceData, ref domain.PRRef) (bool, string) {
+func (s *SessionRetentionSweeper) reverifyOne(ctx context.Context, d domain.InstanceData, ref domain.PRRef) (bool, string) {
 	now := s.now()
 	if !s.reverify.take(now) {
 		return false, fmt.Sprintf("closed PR %s not re-verified: per-sweep GitHub budget used, retrying next sweep", ref)

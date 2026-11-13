@@ -30,27 +30,6 @@ func TestSnapshotNonNilAfterNewInstance(t *testing.T) {
 	}
 }
 
-func TestSnapshotNonNilAfterSessionToInstance(t *testing.T) {
-	t.Parallel()
-	s := &Session{
-		Title:     "session-to-instance",
-		Status:    domain.Creating,
-		Program:   "echo",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	inst := SessionToInstance(s)
-	if inst == nil {
-		t.Fatal("SessionToInstance returned nil")
-	}
-	if inst.Snapshot() == nil {
-		t.Fatal("Snapshot() is nil after SessionToInstance")
-	}
-	if inst.Snapshot().Title != "session-to-instance" {
-		t.Fatalf("Snapshot().Title = %q", inst.Snapshot().Title)
-	}
-}
-
 // --- Story 1.2: Mutator snapshot freshness ---
 
 func TestSnapshotReflectsMarkViewed(t *testing.T) {
@@ -366,5 +345,24 @@ func TestToInstanceData_ShouldCarryPRFlagsOut_WhenSnapshotHasLinks(t *testing.T)
 	}
 	if data.GitHubPRNumber != 12 {
 		t.Errorf("GitHubPRNumber = %d, want mirror 12", data.GitHubPRNumber)
+	}
+}
+
+func TestSetRetryProgressRepublishesSnapshotWithDeepCopiedHistory(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	now := time.Now()
+	inst.SetRetryProgress(func(rs *domain.RetryState) {
+		rs.RetryAttempt = 2
+		rs.LastFailureReason = "crashed"
+		rs.RecordAttempt(2, "crashed", now)
+	})
+	snap := inst.Snapshot()
+	if snap.Retry.RetryAttempt != 2 || snap.Retry.LastFailureReason != "crashed" || len(snap.Retry.RetryHistory) != 1 {
+		t.Fatalf("snapshot did not republish retry state: %+v", snap.Retry)
+	}
+	inst.SetRetryProgress(func(rs *domain.RetryState) { rs.RecordAttempt(3, "stalled", now) })
+	if len(snap.Retry.RetryHistory) != 1 {
+		t.Fatalf("earlier snapshot history aliased the live slice: %+v", snap.Retry.RetryHistory)
 	}
 }

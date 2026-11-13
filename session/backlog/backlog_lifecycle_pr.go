@@ -818,7 +818,7 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 // With reader:backlog on it must still be open on this item's branch (a closed or
 // foreign PR is replaced by a fresh one); a lookup failure is returned so the caller
 // retries instead of opening a duplicate. Scope off: any recorded PR is reused, as before.
-func (l *BacklogLifecycleListener) canReuseTrackedPR(ctx context.Context, item *backlogdto.BacklogItemData, wt session.GitWorktreeData) (bool, error) {
+func (l *BacklogLifecycleListener) canReuseTrackedPR(ctx context.Context, item *backlogdto.BacklogItemData, wt domain.GitWorktreeData) (bool, error) {
 	if item.PrNumber <= 0 || item.PrURL == "" {
 		return false, nil
 	}
@@ -1450,7 +1450,7 @@ func (l *BacklogLifecycleListener) RecordPRCreatedOutOfBand(ctx context.Context,
 // added on top of this function, it must return the locally-computed
 // snapshot value rather than re-reading a cache slot after a lock is
 // released, per docs/explanation/concurrency-patterns.md.
-func CaptureShipSnapshot(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, prStatus *git.PRStatus, lastWork *backlogdto.ItemSessionSummary, wt *session.GitWorktreeData) error {
+func CaptureShipSnapshot(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, prStatus *git.PRStatus, lastWork *backlogdto.ItemSessionSummary, wt *domain.GitWorktreeData) error {
 	var update backlogdto.BacklogItemUpdate
 	groupAFailed := false
 	groupBFailed := false
@@ -1749,7 +1749,7 @@ func (l *BacklogLifecycleListener) reconcilePRPendingItem(ctx context.Context, e
 			}
 		}
 
-		var wt *session.GitWorktreeData
+		var wt *domain.GitWorktreeData
 		if lastWork != nil {
 			if wtData, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID); wtErr != nil {
 				log.WarningLog().Printf("[BacklogLifecycle] ReconcilePRPending GetWorktreeDataBySessionUUID (ship snapshot) item=%s session=%s: %v", item.ID, lastWork.SessionUUID, wtErr)
@@ -2261,7 +2261,7 @@ type prOwnership struct {
 // the bare slug while the real branch is prefixed. A tip equal to the
 // session's base commit is dropped: with no commits of its own it is not
 // evidence of anything.
-func prOwnershipFor(lastWork *backlogdto.ItemSessionSummary, wt *session.GitWorktreeData) prOwnership {
+func prOwnershipFor(lastWork *backlogdto.ItemSessionSummary, wt *domain.GitWorktreeData) prOwnership {
 	var own prOwnership
 	seen := map[string]bool{}
 	add := func(name string) {

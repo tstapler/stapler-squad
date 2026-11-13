@@ -216,7 +216,7 @@ func (rqp *ReviewQueuePoller) AddInstance(instance *Instance) {
 	defer rqp.mu.Unlock()
 	// Stagger this session's dirty-cache TTL so sessions added in a burst
 	// (e.g. bulk startup) don't all run git-status subprocesses simultaneously.
-	instance.GitManager.PrimeDirtyCacheJitter()
+	instance.GitManager().PrimeDirtyCacheJitter()
 	rqp.instances = append(rqp.instances, instance)
 }
 
@@ -843,7 +843,7 @@ func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 	return reason != SkipNone
 }
 
-func skipReasonOf(snap *InstanceSnapshot, started bool) SkipReason {
+func skipReasonOf(snap *domain.InstanceSnapshot, started bool) SkipReason {
 	switch {
 	case snap.Hidden:
 		return SkipHidden
@@ -980,7 +980,7 @@ func (rqp *ReviewQueuePoller) handleDetectedRemove(title string, statusInfo Inst
 }
 
 // addDetectedItem builds, enriches and enqueues the review item for an Add action.
-func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo) {
+func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *domain.InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo) {
 	reason, priority, context := result.Reason, result.Priority, result.Context
 
 	detectedAt := time.Now()
@@ -1053,7 +1053,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 // ApprovalHandler.resolveSessionID stores PendingApproval.SessionID as the session's stable
 // ID (UUID when present, Title only as a fallback), but ReviewItem is keyed by Title, so
 // look up by UUID first and fall back to Title for sessions without a UUID.
-func (rqp *ReviewQueuePoller) enrichApprovalMetadata(item *ReviewItem, snap *InstanceSnapshot) {
+func (rqp *ReviewQueuePoller) enrichApprovalMetadata(item *ReviewItem, snap *domain.InstanceSnapshot) {
 	rqp.mu.RLock()
 	provider := rqp.approvalProvider
 	rqp.mu.RUnlock()

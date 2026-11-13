@@ -27,38 +27,38 @@ func addTestInstance(t *testing.T, storage *Storage, inst *Instance) {
 
 func TestWorkspaceKey_distinctForDifferentRepos(t *testing.T) {
 	t.Parallel()
-	keyA := WorkspaceKey("acme", "widgets", "", "")
-	keyB := WorkspaceKey("acme", "gadgets", "", "")
+	keyA := domain.WorkspaceKey("acme", "widgets", "", "")
+	keyB := domain.WorkspaceKey("acme", "gadgets", "", "")
 	assert.NotEqual(t, keyA, keyB)
 }
 
 func TestWorkspaceKey_sameForDifferentWorktreesOfSameRepo(t *testing.T) {
 	t.Parallel()
 	// Same GitHub repo, different worktree paths — must produce the same key.
-	keyMain := WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets")
-	keyWorktree := WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets-feature-branch")
+	keyMain := domain.WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets")
+	keyWorktree := domain.WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets-feature-branch")
 	assert.Equal(t, keyMain, keyWorktree)
 }
 
 func TestWorkspaceKey_isCaseInsensitiveOnGitHubOwnerRepo(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, WorkspaceKey("Acme", "Widgets", "", ""), WorkspaceKey("acme", "widgets", "", ""))
+	assert.Equal(t, domain.WorkspaceKey("Acme", "Widgets", "", ""), domain.WorkspaceKey("acme", "widgets", "", ""))
 }
 
 func TestWorkspaceKey_fallsBackToMainRepoPathWithoutGitHub(t *testing.T) {
 	t.Parallel()
-	key := WorkspaceKey("", "", "/repos/widgets", "/repos/widgets-worktree")
+	key := domain.WorkspaceKey("", "", "/repos/widgets", "/repos/widgets-worktree")
 	assert.Equal(t, "path:/repos/widgets", key)
 }
 
 func TestWorkspaceKey_emptyWhenNothingIsSet(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", WorkspaceKey("", "", "", ""))
+	assert.Equal(t, "", domain.WorkspaceKey("", "", "", ""))
 }
 
 func TestWorkspaceKey_fallsBackToBarePathWithoutGitHubOrMainRepoPath(t *testing.T) {
 	t.Parallel()
-	key := WorkspaceKey("", "", "", "/repos/widgets")
+	key := domain.WorkspaceKey("", "", "", "/repos/widgets")
 	assert.Equal(t, "path:/repos/widgets", key)
 }
 

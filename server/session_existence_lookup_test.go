@@ -5,18 +5,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeInstanceDataLister is a minimal instanceDataLister for testing
 // buildSessionExistenceLookup without a real *session.Storage (and without
 // implementing the full session.Repository interface).
 type fakeInstanceDataLister struct {
-	data []session.InstanceData
+	data []domain.InstanceData
 	err  error
 }
 
-func (f *fakeInstanceDataLister) ListInstanceData() ([]session.InstanceData, error) {
+func (f *fakeInstanceDataLister) ListInstanceData() ([]domain.InstanceData, error) {
 	return f.data, f.err
 }
 
@@ -27,7 +27,7 @@ func (f *fakeInstanceDataLister) ListInstanceData() ([]session.InstanceData, err
 // the gate short-circuits before ListInstanceData is even consulted.
 func Test_buildSessionExistenceLookup_should_ReturnNil_When_UptimeGateNotElapsed(t *testing.T) {
 	lister := &fakeInstanceDataLister{
-		data: []session.InstanceData{{UUID: "abc-123", Title: "some-session"}},
+		data: []domain.InstanceData{{UUID: "abc-123", Title: "some-session"}},
 	}
 	// startedAt "now" means time.Since(startedAt) is ~0, well under the 5-minute gate.
 	lookup := buildSessionExistenceLookup(lister, time.Now())
@@ -44,7 +44,7 @@ func Test_buildSessionExistenceLookup_should_ReturnNil_When_UptimeGateNotElapsed
 // and Title.
 func Test_buildSessionExistenceLookup_should_ReturnPopulatedMap_When_GateElapsedAndSessionsExist(t *testing.T) {
 	lister := &fakeInstanceDataLister{
-		data: []session.InstanceData{
+		data: []domain.InstanceData{
 			{UUID: "uuid-1", Title: "session-one"},
 			{Title: "session-two"}, // no UUID: GetStableID() falls back to Title
 		},
@@ -94,7 +94,7 @@ func Test_buildSessionExistenceLookup_should_ReturnNil_When_ListInstanceDataErro
 // prune everything session-scoped."
 func Test_buildSessionExistenceLookup_should_ReturnEmptyNonNilMap_When_GateElapsedAndNoSessions(t *testing.T) {
 	lister := &fakeInstanceDataLister{
-		data: []session.InstanceData{},
+		data: []domain.InstanceData{},
 	}
 	startedAt := time.Now().Add(-2 * pruneOrphanedMinUptime)
 	lookup := buildSessionExistenceLookup(lister, startedAt)

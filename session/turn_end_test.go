@@ -48,7 +48,7 @@ func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceIsBareLite
 
 func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceFromInstanceData(t *testing.T) {
 	t.Parallel()
-	inst, err := FromInstanceDataDeferred(InstanceData{Title: "restored", Path: t.TempDir(), Status: domain.Paused, Program: "claude"})
+	inst, err := FromInstanceDataDeferred(domain.InstanceData{Title: "restored", Path: t.TempDir(), Status: domain.Paused, Program: "claude"})
 	require.NoError(t, err)
 
 	inst.RecordTurnEnd("finished", domain.TurnEndSourceScreen)

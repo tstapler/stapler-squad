@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"regexp"
 	"strings"
 )
@@ -12,14 +13,14 @@ import (
 // conversation continuity across session restarts.
 type ClaudeCommandBuilder struct {
 	baseProgram   string
-	claudeSession *ClaudeSessionData
+	claudeSession *domain.ClaudeSessionData
 }
 
 // NewClaudeCommandBuilder creates a new command builder for constructing Claude CLI commands.
 // Parameters:
 //   - baseProgram: The base command string (e.g., "claude", "claude --model sonnet", "aider")
 //   - claudeSession: Optional session data for resumption support (can be nil)
-func NewClaudeCommandBuilder(baseProgram string, claudeSession *ClaudeSessionData) *ClaudeCommandBuilder {
+func NewClaudeCommandBuilder(baseProgram string, claudeSession *domain.ClaudeSessionData) *ClaudeCommandBuilder {
 	return &ClaudeCommandBuilder{
 		baseProgram:   baseProgram,
 		claudeSession: claudeSession,

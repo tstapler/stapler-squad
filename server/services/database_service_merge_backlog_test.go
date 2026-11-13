@@ -165,7 +165,7 @@ func TestMergeDatabase_should_stillPersistCopiedItems_When_EventPublishIsSuppres
 	sourceRepo, sourcePath, sourceCleanup := newTempEntRepoForMergeTest(t)
 	defer sourceCleanup()
 	seedBacklogItems(t, sourceRepo, ctx, 5, "source-item")
-	require.NoError(t, sourceRepo.Create(ctx, session.InstanceData{
+	require.NoError(t, sourceRepo.Create(ctx, domain.InstanceData{
 		Title:     "merged-session-1",
 		Path:      "/tmp/merge-test-session-1",
 		Program:   "claude",
@@ -210,7 +210,7 @@ func TestMergeDatabase_should_makeCopiedItemsVisibleOnNextSnapshot_When_ClientRe
 	sourceRepo, sourcePath, sourceCleanup := newTempEntRepoForMergeTest(t)
 	defer sourceCleanup()
 	sourceTitles := seedBacklogItems(t, sourceRepo, ctx, 5, "source-item")
-	require.NoError(t, sourceRepo.Create(ctx, session.InstanceData{
+	require.NoError(t, sourceRepo.Create(ctx, domain.InstanceData{
 		Title:     "merged-session-2",
 		Path:      "/tmp/merge-test-session-2",
 		Program:   "claude",

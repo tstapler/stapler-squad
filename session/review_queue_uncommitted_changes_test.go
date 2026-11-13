@@ -83,7 +83,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		Path:        repoPath,
 		Branch:      branchName,
 		Status:      domain.Active,
-		GitManager:  gitwt.Manager{Worktree: worktree},
+		gitManager:  gitwt.Manager{Worktree: worktree},
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
@@ -258,7 +258,7 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 		Path:        "/tmp/test-path",
 		Branch:      "",
 		Status:      domain.Active,
-		GitManager:  gitwt.Manager{Worktree: nil}, // No worktree
+		gitManager:  gitwt.Manager{Worktree: nil}, // No worktree
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},
@@ -323,7 +323,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		Path:        repoPath,
 		Branch:      branchName,
 		Status:      domain.Active,
-		GitManager:  gitwt.Manager{Worktree: worktree},
+		gitManager:  gitwt.Manager{Worktree: worktree},
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: domain.ReviewState{LastMeaningfulOutput: now},

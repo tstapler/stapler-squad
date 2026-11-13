@@ -1264,7 +1264,7 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 
 	// state.json stores instances inside a wrapper: {"instances": [...], ...}
 	type stateFileFormat struct {
-		Instances []session.InstanceData `json:"instances"`
+		Instances []domain.InstanceData `json:"instances"`
 	}
 	// #nosec G304 -- stateJSONPath is configDir+"/state.json", built from the internal
 	// config dir and a literal filename; never network/RPC input.

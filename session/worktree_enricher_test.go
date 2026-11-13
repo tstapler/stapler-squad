@@ -53,9 +53,9 @@ var clockBase = time.Unix(1_700_000_000, 0)
 func (c *enrichClock) Now() time.Time          { return clockBase.Add(time.Duration(c.ns.Load())) }
 func (c *enrichClock) Advance(d time.Duration) { c.ns.Add(int64(d)) }
 
-func loadData(title, path string, status domain.Status, worktree string) InstanceData {
+func loadData(title, path string, status domain.Status, worktree string) domain.InstanceData {
 	now := time.Now()
-	d := InstanceData{Title: title, Path: path, Status: status, CreatedAt: now, UpdatedAt: now, Program: "claude"}
+	d := domain.InstanceData{Title: title, Path: path, Status: status, CreatedAt: now, UpdatedAt: now, Program: "claude"}
 	if worktree != "" {
 		d.Worktree.WorktreePath = worktree
 		d.Worktree.RepoPath = path
@@ -119,7 +119,7 @@ func TestLoadInstances_BlockedProbeDoesNotStallLoad(t *testing.T) {
 	})
 
 	storage := newTestStorageForItemLink(t)
-	for _, d := range []InstanceData{loadData("stuck", "/stuck", domain.Paused, ""), loadData("a", "/a", domain.Paused, ""), loadData("b", "/b", domain.Paused, "")} {
+	for _, d := range []domain.InstanceData{loadData("stuck", "/stuck", domain.Paused, ""), loadData("a", "/a", domain.Paused, ""), loadData("b", "/b", domain.Paused, "")} {
 		require.NoError(t, storage.CreateInstanceData(context.Background(), d))
 	}
 	byTitle := func() map[string]*Instance {

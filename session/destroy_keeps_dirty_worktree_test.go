@@ -29,7 +29,7 @@ func startedWorktreeInstance(t *testing.T, name string) *Instance {
 		Status:      domain.Active,
 		IsWorktree:  true,
 		Permissions: domain.GetManagedPermissions(),
-		GitManager:  gitwt.Manager{Worktree: wt},
+		gitManager:  gitwt.Manager{Worktree: wt},
 	}
 	inst.started.Store(true)
 	return inst
@@ -38,7 +38,7 @@ func startedWorktreeInstance(t *testing.T, name string) *Instance {
 // dirtyWorktree leaves an untracked file in inst's worktree and returns its path.
 func dirtyWorktree(t *testing.T, inst *Instance) string {
 	t.Helper()
-	precious := filepath.Join(inst.GitManager.GetWorktreePath(), "precious.txt")
+	precious := filepath.Join(inst.GitManager().GetWorktreePath(), "precious.txt")
 	require.NoError(t, os.WriteFile(precious, []byte("uncommitted work"), 0o644))
 	return precious
 }
@@ -69,7 +69,7 @@ func TestCheckWorktreeRemovable(t *testing.T) {
 		t.Parallel()
 		inst := &Instance{
 			IsWorktree: true,
-			GitManager: gitwt.Manager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
+			gitManager: gitwt.Manager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
 		}
 		assert.NoError(t, inst.CheckWorktreeRemovable())
 	})
@@ -100,7 +100,7 @@ func TestForceDestroy_should_RemoveDirtyWorktree(t *testing.T) {
 	require.NoError(t, inst.ForceDestroy())
 
 	assert.NoFileExists(t, precious)
-	assert.NoDirExists(t, inst.GitManager.GetWorktreePath())
+	assert.NoDirExists(t, inst.GitManager().GetWorktreePath())
 }
 
 func TestDestroy_should_RemoveCleanWorktree(t *testing.T) {
@@ -109,7 +109,7 @@ func TestDestroy_should_RemoveCleanWorktree(t *testing.T) {
 
 	require.NoError(t, inst.Destroy())
 
-	assert.NoDirExists(t, inst.GitManager.GetWorktreePath())
+	assert.NoDirExists(t, inst.GitManager().GetWorktreePath())
 }
 
 // A failed restore must leave the worktree alone even when it is clean: it predates the
@@ -120,7 +120,7 @@ func TestCleanupAfterFailedStart_should_KeepWorktree_When_Restoring(t *testing.T
 
 	require.NoError(t, inst.cleanupAfterFailedStart(false))
 
-	assert.DirExists(t, inst.GitManager.GetWorktreePath())
+	assert.DirExists(t, inst.GitManager().GetWorktreePath())
 }
 
 func TestCleanupAfterFailedStart_should_RemoveCleanWorktree_When_FirstTimeSetup(t *testing.T) {
@@ -129,5 +129,5 @@ func TestCleanupAfterFailedStart_should_RemoveCleanWorktree_When_FirstTimeSetup(
 
 	require.NoError(t, inst.cleanupAfterFailedStart(true))
 
-	assert.NoDirExists(t, inst.GitManager.GetWorktreePath())
+	assert.NoDirExists(t, inst.GitManager().GetWorktreePath())
 }
