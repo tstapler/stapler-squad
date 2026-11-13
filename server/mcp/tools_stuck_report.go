@@ -14,7 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -66,7 +66,7 @@ func (h *backlogHandlers) getBacklogStuckReport(ctx context.Context, req mcpgo.C
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# %s\n", backlog.SanitizeForAgentContext(item.Title, 200))
+	fmt.Fprintf(&sb, "# %s\n", pipeline.SanitizeForAgentContext(item.Title, 200))
 	fmt.Fprintf(&sb, "status=%s priority=%d\n\n", item.Status, item.Priority)
 
 	writeAcceptanceCriteria(&sb, item)
@@ -101,7 +101,7 @@ func writeAcceptanceCriteria(sb *strings.Builder, item *backlogdto.BacklogItemDa
 	}
 	sb.WriteString("## Acceptance Criteria\n")
 	for i, c := range criteria {
-		fmt.Fprintf(sb, "%d. [%s] %s\n", i+1, c.Status, backlog.SanitizeForAgentContext(c.Text, stuckReportTruncateLen))
+		fmt.Fprintf(sb, "%d. [%s] %s\n", i+1, c.Status, pipeline.SanitizeForAgentContext(c.Text, stuckReportTruncateLen))
 	}
 	// kibitzer:ignore replace-magic-literal -- "\n" is a line terminator in formatted output, not a magic value; a named constant would just rename it
 	sb.WriteString("\n")
@@ -122,7 +122,7 @@ func (h *backlogHandlers) writeStuckTimeline(ctx context.Context, sb *strings.Bu
 		fmt.Fprintf(sb, "- %s  %-24s attempts=%d nudges=%d [%s]\n",
 			r.FirstDetectedAt.Format(time.RFC3339), r.Reason, r.RemediationAttempts, r.DiagnoseNudgeCount, state)
 		if r.Context != "" {
-			fmt.Fprintf(sb, "    %s\n", backlog.SanitizeForAgentContext(r.Context, stuckReportTruncateLen))
+			fmt.Fprintf(sb, "    %s\n", pipeline.SanitizeForAgentContext(r.Context, stuckReportTruncateLen))
 		}
 	}
 	sb.WriteString("\n")
@@ -169,7 +169,7 @@ func (h *backlogHandlers) writeActivityNotes(ctx context.Context, sb *strings.Bu
 		if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
 			firstLine = firstLine[:idx]
 		}
-		fmt.Fprintf(sb, "- %s: %s\n", n.CreatedAt.Format(time.RFC3339), backlog.SanitizeForAgentContext(firstLine, stuckReportTruncateLen))
+		fmt.Fprintf(sb, "- %s: %s\n", n.CreatedAt.Format(time.RFC3339), pipeline.SanitizeForAgentContext(firstLine, stuckReportTruncateLen))
 	}
 	sb.WriteString("\n")
 }
@@ -385,7 +385,7 @@ func (h *backlogHandlers) writeBlockedCleanup(sb *strings.Builder, itemID string
 			continue
 		}
 		fmt.Fprintf(sb, "\n## Worktree cleanup blocked\nBlocked for %s (path %s): %s\n",
-			time.Since(b.Since).Round(time.Minute), b.Path, backlog.SanitizeForAgentContext(b.Reason, 400))
+			time.Since(b.Since).Round(time.Minute), b.Path, pipeline.SanitizeForAgentContext(b.Reason, 400))
 		return
 	}
 }

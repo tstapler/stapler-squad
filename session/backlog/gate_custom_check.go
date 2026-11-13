@@ -104,7 +104,7 @@ var _ CustomCheckCaller = (*headless.Pool)(nil)
 //     returned error — the caller blocks the transition and logs Warn — never
 //     relying on the liveness sweep to detect it. (Task 2.4.4b1)
 //  4. On completion (success, error, or the bounded timeout), records the
-//     terminal verdict via Update, mirroring recordTerminalReviewVerdict's
+//     terminal verdict via Update, mirroring RecordTerminalReviewVerdict's
 //     PASS/FAIL/UNVERIFIABLE shape. (Task 2.4.4b3)
 //
 // The in-flight row from step 2 is also exactly what reconcileCustomGateChecks

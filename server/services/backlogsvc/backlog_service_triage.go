@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -48,7 +49,7 @@ import (
 func (s *BacklogService) initialPromptFor(ctx context.Context, item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary) string {
 	var prompt string
 	if s.pipelineEngine == nil {
-		prompt = backlog.BuildTokenBudgetedPrompt(item, priorSessions)
+		prompt = pipeline.BuildTokenBudgetedPrompt(item, priorSessions)
 	} else {
 		prompt = s.pipelineEngine.InitialPromptFor(item, priorSessions)
 	}
@@ -73,7 +74,7 @@ func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath st
 // (research/architecture.md §3).
 func (s *BacklogService) triagePromptFor(item *backlogdto.BacklogItemData, artifactAbsPath string) string {
 	if s.pipelineEngine == nil {
-		return backlog.BuildHeadlessTriagePrompt(item, artifactAbsPath)
+		return pipeline.BuildHeadlessTriagePrompt(item, artifactAbsPath)
 	}
 	return s.pipelineEngine.TriagePromptFor(item, artifactAbsPath)
 }
@@ -83,9 +84,9 @@ func (s *BacklogService) triagePromptFor(item *backlogdto.BacklogItemData, artif
 // session.CachingPipelineEngine's own default-mode fallback for the nil-engine case.
 // Used by TriggerReReview (Epic 1.5, Story 1.5.4); the equivalent seam for
 // ReviewGateRunner.Run lives in session/review_gate.go's own reviewPromptFor method.
-func (s *BacklogService) reviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras backlog.ReviewContextExtras) string {
+func (s *BacklogService) reviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras pipeline.ReviewContextExtras) string {
 	if s.pipelineEngine == nil {
-		return backlog.BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
+		return pipeline.BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 	}
 	return s.pipelineEngine.ReviewPromptFor(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 }
@@ -469,7 +470,7 @@ func triageShortTitle(sessions []backlogdto.ItemSessionSummary, itemTitle string
 		if s.Role != string(session.SessionRoleTriage) || s.TriageResult == "" {
 			continue
 		}
-		var r backlog.HeadlessTriageResult
+		var r pipeline.HeadlessTriageResult
 		if err := json.Unmarshal([]byte(s.TriageResult), &r); err == nil && r.Title != "" {
 			return r.Title
 		}
@@ -1154,7 +1155,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if s.pipelineEngine != nil {
 		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
 	}
-	workExecutorHash := backlog.ComputeExecutorHash(workExecProgram, workExecModel)
+	workExecutorHash := pipeline.ComputeExecutorHash(workExecProgram, workExecModel)
 	// Pin after hashing: the hash must stay the raw mode-side pair (see above).
 	workExecModel = pinnedWorkStageModel(item.RepoPath, workExecProgram, workExecModel)
 	var programOverride, workResolvedModel string
@@ -1280,7 +1281,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 12b. Capture the pre-work HEAD SHA so the review gate can diff base..HEAD across
 	// all commits the agent makes (not just HEAD~1..HEAD at review time). This goes in
 	// BaseCommitSha, never LastCommitSha — see SetItemSessionBaseCommit's doc comment.
-	if baseSHA, shaErr := backlog.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
+	if baseSHA, shaErr := pipeline.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
 		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 		inst.SetDirBaseSHA(baseSHA)
 	}
@@ -1959,10 +1960,10 @@ func resolveSessionPath(repoPath, slug, baseBranch string) (worktreePath string,
 // locks it around this call and the preceding resolveSessionPath to close the
 // check-then-create worktree race described there.
 func (s *BacklogService) writeSessionFilesLocked(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary, worktreePath string) error {
-	if wErr := backlog.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
+	if wErr := pipeline.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 	}
-	if wErr := backlog.WriteBacklogContextFile(item, priorSessions, worktreePath); wErr != nil {
+	if wErr := pipeline.WriteBacklogContextFile(item, priorSessions, worktreePath); wErr != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
 	}
 	return nil
@@ -3158,7 +3159,7 @@ func (s *BacklogService) TriggerReReview(
 		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
 			if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, prFixMainBranch, git.DefaultBranchDriftThreshold); !ok {
 				log.Warn("[TriggerReReview] branch drift blocked review", "item", item.ID, "branch", wt.BranchName, "summary", blockedSummary)
-				is, createErr := backlog.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
+				is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review branch-drift-blocked verdict: %w", createErr))
 				}
@@ -3199,7 +3200,7 @@ func (s *BacklogService) TriggerReReview(
 		priorVerdictSection = fmt.Sprintf("\n## Prior Review Verdict\nOutcome: %s\nSummary: %s\n", rv.OverallOutcome, rv.Summary)
 	}
 
-	attachedImages := backlog.AttachedImagesSection(item.Description)
+	attachedImages := pipeline.AttachedImagesSection(item.Description)
 	if attachedImages != "" {
 		attachedImages = "\n" + attachedImages
 	}
@@ -3235,7 +3236,7 @@ Call submit_review_verdict with:
   verdicts: [{"criterion_index": N, "outcome": "PASS|FAIL|PARTIAL", "evidence": "<specific evidence>"}]
 
 Do not modify the code. Only write the review verdict.
-`, backlog.SanitizeDiff(workSessionDiff), item.ID)
+`, pipeline.SanitizeDiff(workSessionDiff), item.ID)
 
 	// 9. Headless path — preferred when a headless pool is configured.
 	// This avoids needing tmux and runs the review inline via LLM call.
@@ -3253,7 +3254,7 @@ Do not modify the code. Only write the review verdict.
 		// ReviewGateRunner.Run (session/review_gate.go) blocks on an unrecoverable diff.
 		if workSessionDiff == "" && !codebaseWorkDirExists {
 			blockedSummary := fmt.Sprintf("Review blocked: no diff could be computed and the codebase-read fallback directory (%s) does not exist on disk. The recorded worktree may have been cleaned up without its DB row being updated — this needs investigation, not rework.", codebaseWorkDir)
-			is, createErr := backlog.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
+			is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review blocked verdict: %w", createErr))
 			}
@@ -3293,7 +3294,7 @@ Do not modify the code. Only write the review verdict.
 		transcriptCleanup := func() {}
 		defer func() { transcriptCleanup() }()
 
-		var extras backlog.ReviewContextExtras
+		var extras pipeline.ReviewContextExtras
 		if workSessionDiff == "" {
 			// sessions was already loaded above (step 4) — reuse it rather than a second
 			// ListItemSessions round trip.
@@ -3319,7 +3320,7 @@ Do not modify the code. Only write the review verdict.
 		}
 
 		headlessPrompt := s.reviewPromptFor(item, acSnapshot, workSessionDiff, false, verificationNotes, extras)
-		systemPrompt, callOpts, callTimeout, reviewPath := backlog.BuildReviewCallOptions(workSessionDiff, codebaseWorkDir)
+		systemPrompt, callOpts, callTimeout, reviewPath := pipeline.BuildReviewCallOptions(workSessionDiff, codebaseWorkDir)
 
 		// Resolve this stage's configured (program, model) executor (Epic 2.3,
 		// Story 2.3.3), mirroring TriggerTriage's identical resolution. As there:
@@ -3330,7 +3331,7 @@ Do not modify the code. Only write the review verdict.
 		if s.pipelineEngine != nil {
 			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
 		}
-		reviewExecutorHash := backlog.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
+		reviewExecutorHash := pipeline.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
 		reviewExecModel = pinnedStageModel(session.StageRoleReview, reviewExecProgram, reviewExecModel)
 		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
 		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
@@ -3356,7 +3357,7 @@ Do not modify the code. Only write the review verdict.
 		if reviewPath == "codebase-read" && !s.capabilityCheck.Ensure(ctx, s.headlessPool) {
 			reviewPath = "codebase-read-degraded"
 			capSummary := "Review UNVERIFIABLE: codebase-read capability self-check failed — this process's claude CLI/config does not appear to grant WorkDir+AllowedTools+PermissionMode read access, so no real codebase-read call was attempted."
-			is, createErr := backlog.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, capSummary)
+			is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, capSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review capability-self-check verdict: %w", createErr))
 			}
@@ -3402,7 +3403,7 @@ Do not modify the code. Only write the review verdict.
 			if reviewPath == "codebase-read" && (errors.Is(reviewCtx.Err(), context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.Canceled)) {
 				reviewPath = "codebase-read-degraded"
 				timeoutSummary := fmt.Sprintf("Review UNVERIFIABLE: codebase-read call timed out or was cancelled after %s (%v) — could not independently verify criteria against the codebase.", callTimeout, reviewCtx.Err())
-				is, createErr := backlog.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, timeoutSummary)
+				is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, timeoutSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review timeout verdict: %w", createErr))
 				}
@@ -3438,9 +3439,9 @@ Do not modify the code. Only write the review verdict.
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("headless re-review call failed: %w", callErr))
 		}
 
-		overall, perCriterion, reviewSummary := backlog.ParseHeadlessVerdictResult(reviewResult)
-		toolReads := backlog.ParseHeadlessToolReads(reviewResult)
-		overall, perCriterion, reviewSummary, reviewPath = backlog.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir, item.PlanArtifactsPath)
+		overall, perCriterion, reviewSummary := pipeline.ParseHeadlessVerdictResult(reviewResult)
+		toolReads := pipeline.ParseHeadlessToolReads(reviewResult)
+		overall, perCriterion, reviewSummary, reviewPath = pipeline.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir, item.PlanArtifactsPath)
 		// reviewPath now carries the final path label ("diff", "codebase-read-verified",
 		// or "codebase-read-degraded"), logged below via Epic 2.5's path=/duration_ms=
 		// observability fields.
@@ -3594,7 +3595,7 @@ Do not modify the code. Only write the review verdict.
 	}
 
 	// Capture the pre-review HEAD SHA so diffs against base..HEAD work correctly.
-	if baseSHA, shaErr := backlog.GetGitHeadSHA(item.RepoPath); shaErr == nil && baseSHA != "" {
+	if baseSHA, shaErr := pipeline.GetGitHeadSHA(item.RepoPath); shaErr == nil && baseSHA != "" {
 		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 	}
 
@@ -3881,7 +3882,7 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 	}
 	if haveWorktree {
 		// Try the dedicated worktree first.
-		diff, truncated, diffErr := backlog.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+		diff, truncated, diffErr := pipeline.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr == nil {
 			return diff, truncated
 		}
@@ -3909,7 +3910,7 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 		log.Warn("[TriggerReReview] work session has no resolvable branch; refusing to diff the shared checkout", "session", workSession.SessionUUID)
 		return "", false
 	}
-	diff, truncated, diffErr := backlog.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
+	diff, truncated, diffErr := pipeline.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
 	if diffErr == nil {
 		return diff, truncated
 	}
@@ -3936,9 +3937,9 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 		}
 	}
 	if diffHeadRef != "" {
-		if recoveredSHA, recoverErr := backlog.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
+		if recoveredSHA, recoverErr := pipeline.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
 			log.Warn("[TriggerReReview] RecoverBaseCommitSHA failed", "dir", recoverDir, "error", recoverErr)
-		} else if recoveredDiff, recoveredTruncated, retryErr := backlog.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
+		} else if recoveredDiff, recoveredTruncated, retryErr := pipeline.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
 			log.Warn("[TriggerReReview] retry with recovered base failed", "base", recoveredSHA, "dir", recoverDir, "error", retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
@@ -3960,7 +3961,7 @@ func resolveACSnapshot(workSession *backlogdto.ItemSessionSummary, itemAC sessio
 	live, _ := session.ParseAcCriteria(itemAC)
 	if workSession != nil && workSession.AcSnapshot != "" {
 		if ac, _ := session.ParseAcCriteria(workSession.AcSnapshot); len(ac) > 0 {
-			return backlog.MergeLiveCriterionNotes(ac, live)
+			return pipeline.MergeLiveCriterionNotes(ac, live)
 		}
 	}
 	return live

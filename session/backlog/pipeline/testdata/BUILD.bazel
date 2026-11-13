@@ -5,5 +5,5 @@ filegroup(
         ["**"],
         exclude = ["BUILD.bazel"],
     ),
-    visibility = ["//session/backlog:__pkg__"],
+    visibility = ["//session/backlog/pipeline:__pkg__"],
 )

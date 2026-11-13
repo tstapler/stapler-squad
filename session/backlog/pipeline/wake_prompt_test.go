@@ -1,4 +1,4 @@
-package backlog
+package pipeline
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
@@ -94,8 +95,8 @@ func TestReviewCommand_should_NameScheduleWakeAndStillForbidPolling_When_Schedul
 }
 
 func TestPipelineMode_should_AppendScheduleWakeToReviewAndInitialPrompts_OnlyWhenOn(t *testing.T) {
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
 				Slug: "sdd", Name: "SDD", ReviewCommandTemplate: "Call request_review for {{item_id}}. Do NOT use " + sessiontest.ClientWakeToolToken + " or /loop to wait.",
 				InitialPromptTemplate: "Work on {{item_title}}. Do NOT use " + sessiontest.ClientWakeToolToken + " or /loop.",

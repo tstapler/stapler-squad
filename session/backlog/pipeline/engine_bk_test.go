@@ -1,4 +1,4 @@
-package backlog
+package pipeline
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -36,8 +37,8 @@ func TestPipelineEngine_should_CompileWithSingleConcreteImplementation_When_Cach
 
 func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_ConcurrentInvalidateRunsUnderRace(t *testing.T) {
 	t.Parallel()
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
 				Slug:                  "quick",
 				Name:                  "Quick Fix",
@@ -107,8 +108,8 @@ func TestPipelineModeCache_Get_should_ReturnStableImmutableSnapshot_When_Concurr
 func TestPipelineModeCache_Get_should_ReturnFalse_When_SlugNotPresent(t *testing.T) {
 	t.Parallel()
 	cache := &pipelineModeCache{}
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{Slug: "quick"}}, nil
 		},
 	}
@@ -133,8 +134,8 @@ func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_C
 	aStarted := make(chan struct{})
 	bRead := make(chan struct{})
 
-	repoA := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repoA := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			// A starts first and is slow — a plain atomic.Pointer (no writer
 			// mutex) would let A's Store land after B's, reverting the cache
 			// to stale v1 data. The writer mutex must prevent that.
@@ -146,8 +147,8 @@ func TestPipelineModeCache_Invalidate_should_ReflectLastStartedCallResult_When_C
 			return []*ent.PipelineMode{{Slug: "marker-mode", Name: "v1"}}, nil
 		},
 	}
-	repoB := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repoB := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			close(bRead)
 			return []*ent.PipelineMode{{Slug: "marker-mode", Name: "v2"}}, nil
 		},
@@ -194,8 +195,8 @@ func TestPipelineModeCache_Load_should_ComputeContentHash_When_BuildingResolvedP
 		ReviewPromptTemplate:  "review-prompt",
 		InitialPromptTemplate: "initial",
 	}
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{mode}, nil
 		},
 	}
@@ -224,8 +225,8 @@ func TestPipelineModeCache_Load_should_ComputeContentHash_When_BuildingResolvedP
 	// Two modes with identical content produce identical hashes.
 	mode2 := *mode
 	mode2.Slug = "quick2"
-	repo2 := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo2 := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{&mode2}, nil
 		},
 	}
@@ -267,8 +268,8 @@ func TestCachingPipelineEngine_SlashCommandSet_should_ShortCircuitCacheAndDB_Whe
 
 func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWarnLog_When_ModeSlugUnresolvable(t *testing.T) {
 	t.Parallel()
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return nil, nil // no modes: "deleted-mode" can never resolve
 		},
 	}
@@ -377,8 +378,8 @@ func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_Whe
 	t.Parallel()
 	buf := captureWarningLog(t)
 
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return nil, errors.New("db unavailable")
 		},
 	}
@@ -420,8 +421,8 @@ func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_Whe
 func TestNewPipelineEngine_should_PopulateCacheFromRepository_When_ListEnabledSucceeds(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			calls++
 			return []*ent.PipelineMode{{Slug: "quick", Name: "Quick Fix"}}, nil
 		},
@@ -449,8 +450,8 @@ func TestNewPipelineEngine_should_PopulateCacheFromRepository_When_ListEnabledSu
 
 func TestCachingPipelineEngine_SlashCommandSet_should_RenderModeTemplates_When_ModeResolves(t *testing.T) {
 	t.Parallel()
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
 				Slug:                  "quick",
 				Name:                  "Quick Fix",
@@ -513,8 +514,8 @@ func TestCachingPipelineEngine_SlashCommandSet_should_RenderModeTemplates_When_M
 // BuildReviewPrompt content.
 func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTemplate_When_ModeResolves(t *testing.T) {
 	t.Parallel()
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
 				Slug:                 "quick",
 				Name:                 "Quick Fix",
@@ -635,8 +636,8 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault
 
 func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_PipelineModeSlugUnresolved(t *testing.T) {
 	t.Parallel()
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return nil, nil // no modes: "does-not-exist" can never resolve
 		},
 	}
@@ -663,8 +664,8 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnConfiguredModel_When_Rol
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors: %v", err)
 	}
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{Slug: "cheap-triage", StageExecutorsJSON: stageJSON}}, nil
 		},
 	}
@@ -691,8 +692,8 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ResolvedModeH
 	if err != nil {
 		t.Fatalf("SerializeStageExecutors: %v", err)
 	}
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{Slug: "cheap-triage", StageExecutorsJSON: stageJSON}}, nil
 		},
 	}

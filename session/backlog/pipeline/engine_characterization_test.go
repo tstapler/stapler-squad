@@ -1,4 +1,4 @@
-package backlog
+package pipeline
 
 import (
 	"fmt"
@@ -105,7 +105,7 @@ func serializeSlashCommandSet(files map[string]string) string {
 }
 
 // goldenPath returns the path to the golden fixture file named name under
-// session/backlog/testdata/pipeline_engine/.
+// session/backlog/pipeline/testdata/pipeline_engine/.
 func goldenPath(name string) string {
 	return filepath.Join("testdata", "pipeline_engine", name+".golden")
 }

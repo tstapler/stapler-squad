@@ -1,4 +1,4 @@
-package backlog
+package pipeline
 
 import (
 	"github.com/tstapler/stapler-squad/config"

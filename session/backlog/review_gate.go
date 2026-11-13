@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -36,7 +37,7 @@ type ReviewGateRunner struct {
 	// BacklogService.reviewPromptFor's identical nil-safe pattern
 	// (server/services/backlog_service_triage.go). Set once at construction,
 	// never mutated afterward — mirrors BacklogLifecycleListener.pipelineEngine.
-	pipelineEngine PipelineEngine
+	pipelineEngine pipeline.PipelineEngine
 
 	// gateSatisfactionRepoMu guards gateSatisfactionRepo for concurrent
 	// Set/get access, same pattern as BacklogLifecycleListener's optional
@@ -126,8 +127,7 @@ func NewReviewGateRunner(
 	getAutoReopener func() AutoReopenSpawner,
 	getNotifier func() session.Notifier,
 	getSessionCreator func() ReviewGateSpawner,
-	pipelineEngine PipelineEngine,
-) *ReviewGateRunner {
+	pipelineEngine pipeline.PipelineEngine) *ReviewGateRunner {
 	return &ReviewGateRunner{
 		storage:           storage,
 		getAutoReopener:   getAutoReopener,
@@ -232,7 +232,7 @@ func (r *ReviewGateRunner) reviewPromptFor(gateContext GateContext, item *backlo
 	}
 	var prompt string
 	if r.pipelineEngine == nil {
-		prompt = BuildReviewPrompt(effectiveItem, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
+		prompt = pipeline.BuildReviewPrompt(effectiveItem, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 	} else {
 		prompt = r.pipelineEngine.InteractiveReviewPromptFor(effectiveItem, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 	}
@@ -329,7 +329,7 @@ func (r *ReviewGateRunner) Run(
 	if committedDiffEmpty && !isDup {
 		summary := "Review blocked: no committed changes were found for this session. " +
 			"There is nothing to review — the work session ended without shipping any commits."
-		emptyDiffIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), session.ReviewVerdictFail, summary)
+		emptyDiffIS, createErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "empty-diff-"+uuid.New().String(), session.ReviewVerdictFail, summary)
 		if createErr != nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (empty diff) item=%s: %v", item.ID, createErr)
 			return
@@ -361,12 +361,12 @@ func (r *ReviewGateRunner) Run(
 	// Same as runDiffPreChecks' diff-error block: this records a synthetic,
 	// non-Instance-backed terminal verdict directly — it's a pre-flight
 	// guardrail, not the review call itself.
-	if secErr := RunPreGateSecurityCheck(diff); secErr != nil {
+	if secErr := pipeline.RunPreGateSecurityCheck(diff); secErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate security check blocked item=%s: %v", item.ID, secErr)
 		// Record a failed review ItemSession with a FAIL verdict so the gate verdict
 		// is visible in the UI and operators can act (override or re-review).
 		summary := fmt.Sprintf("Review blocked by security check: %v. Override required to proceed.", secErr)
-		secIS, secCreateErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "review-blocked-"+uuid.New().String(), session.ReviewVerdictFail, summary)
+		secIS, secCreateErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, "review-blocked-"+uuid.New().String(), session.ReviewVerdictFail, summary)
 		if secCreateErr != nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (security block) item=%s: %v", item.ID, secCreateErr)
 			return
@@ -408,7 +408,7 @@ func (r *ReviewGateRunner) Run(
 	if len(acSnapshot) == 0 {
 		acSnapshot = liveAC
 	} else {
-		acSnapshot = MergeLiveCriterionNotes(acSnapshot, liveAC)
+		acSnapshot = pipeline.MergeLiveCriterionNotes(acSnapshot, liveAC)
 	}
 
 	prompt := r.reviewPromptFor(gateContext, item, acSnapshot, diff, truncated, is.ID, is.VerificationNotes)
@@ -526,18 +526,18 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext Gat
 		// Belt-and-suspenders layer 2: warn if the worktree still has uncommitted changes.
 		// request_review (layer 1) should have caught this, but flag it here too so the
 		// reviewer prompt is aware and the verdict reflects the incomplete state.
-		if dirty, dirtyErr := IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
+		if dirty, dirtyErr := pipeline.IsWorktreeDirty(ctx, wt.WorktreePath); dirtyErr == nil && dirty {
 			log.InfoLog().Printf("[BacklogLifecycle] review gate: item=%s has uncommitted changes in worktree — diff will be incomplete", item.ID)
 			uncommittedWarning = "[WARNING: worktree has uncommitted changes — the following diff may be incomplete]\n"
 		}
 		var diffErr error
-		diff, truncated, diffErr = GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+		diff, truncated, diffErr = pipeline.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff (worktree) item=%s: %v; falling back to repo", item.ID, diffErr)
 			// item.RepoPath's own checked-out HEAD is not the work branch's tip, so an
 			// explicit branch ref is required here — implicit HEAD would diff against
 			// whatever the shared main checkout happens to have, not the agent's work.
-			diff, truncated, diffErr = GetGitDiffRef(ctx, item.RepoPath, wt.BaseCommitSHA, wt.BranchName)
+			diff, truncated, diffErr = pipeline.GetGitDiffRef(ctx, item.RepoPath, wt.BaseCommitSHA, wt.BranchName)
 			if diffErr != nil {
 				log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff (repo fallback) item=%s: %v", item.ID, diffErr)
 				worktreeDiffErr = diffErr
@@ -556,7 +556,7 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext Gat
 		if diffBase == "" {
 			diffBase = is.LastCommitSha
 		}
-		diff, truncated, diffErr = GetGitDiff(ctx, item.RepoPath, diffBase)
+		diff, truncated, diffErr = pipeline.GetGitDiff(ctx, item.RepoPath, diffBase)
 		if diffErr != nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate GetGitDiff item=%s: %v", item.ID, diffErr)
 			worktreeDiffErr = diffErr
@@ -585,9 +585,9 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext Gat
 		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
 			recoverDir = wt.WorktreePath
 		}
-		if recoveredSHA, recoverErr := RecoverBaseCommitSHA(ctx, recoverDir, wt.BranchName); recoverErr != nil {
+		if recoveredSHA, recoverErr := pipeline.RecoverBaseCommitSHA(ctx, recoverDir, wt.BranchName); recoverErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate RecoverBaseCommitSHA item=%s: %v", item.ID, recoverErr)
-		} else if recoveredDiff, recoveredTruncated, retryErr := GetGitDiffRef(ctx, recoverDir, recoveredSHA, wt.BranchName); retryErr != nil {
+		} else if recoveredDiff, recoveredTruncated, retryErr := pipeline.GetGitDiffRef(ctx, recoverDir, recoveredSHA, wt.BranchName); retryErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate retry with recovered base %s item=%s: %v", recoveredSHA, item.ID, retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
@@ -652,7 +652,7 @@ func (r *ReviewGateRunner) blockReviewWithTerminalVerdict(
 	is backlogdto.ItemSessionSummary,
 	verdictKeyPrefix, reason, summary, notifyTitle, notifyBody string,
 ) (string, bool, string, bool) {
-	blockedIS, createErr := recordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, verdictKeyPrefix+"-"+uuid.New().String(), session.ReviewVerdictFail, summary)
+	blockedIS, createErr := pipeline.RecordTerminalReviewVerdict(r.storage, item.ID, is.AcSnapshot, verdictKeyPrefix+"-"+uuid.New().String(), session.ReviewVerdictFail, summary)
 	if createErr != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] spawnReviewGate CreateItemSessionWithVerdict (%s) item=%s: %v", reason, item.ID, createErr)
 		return "", false, "", true
@@ -729,12 +729,12 @@ func (r *ReviewGateRunner) diffFromMergeBaseWhenResumed(ctx context.Context, ite
 	if info, err := os.Stat(worktreePath); err == nil && info.IsDir() {
 		dir = worktreePath
 	}
-	mergeBase, err := RecoverBaseCommitSHA(ctx, dir, branch)
+	mergeBase, err := pipeline.RecoverBaseCommitSHA(ctx, dir, branch)
 	mergeBase = strings.TrimSpace(mergeBase)
 	if err != nil || mergeBase == "" || mergeBase == strings.TrimSpace(recordedBase) {
 		return diff, truncated
 	}
-	mbDiff, mbTruncated, err := GetGitDiffRef(ctx, dir, mergeBase, branch)
+	mbDiff, mbTruncated, err := pipeline.GetGitDiffRef(ctx, dir, mergeBase, branch)
 	if err != nil || strings.TrimSpace(mbDiff) == "" {
 		return diff, truncated
 	}

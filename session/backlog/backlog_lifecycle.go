@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -239,7 +240,7 @@ type BacklogLifecycleListener struct {
 	// Optional — nil (the default for every constructor except NewBacklogLifecycleListenerWithPool,
 	// which is production's only caller) falls back to the built-in default pipeline. Set once at
 	// construction and forwarded unchanged into runner — never mutated afterward.
-	pipelineEngine PipelineEngine
+	pipelineEngine pipeline.PipelineEngine
 
 	// livenessEngine resolves per-stage/per-pipeline-mode stuck-detection thresholds (Epic 1.4 of
 	// backlog-custom-workflow-stages), replacing the flat liveness.MaxHeadlessTriageSessionStaleness/
@@ -353,7 +354,7 @@ func (l *BacklogLifecycleListener) SetReviewGateSatisfactionRepository(repo sess
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
 // wired). Exported for the pointer-equality integration test proving BacklogService and
 // BacklogLifecycleListener share a single PipelineEngine instance (Story 1.5.1).
-func (l *BacklogLifecycleListener) PipelineEngine() PipelineEngine {
+func (l *BacklogLifecycleListener) PipelineEngine() pipeline.PipelineEngine {
 	return l.pipelineEngine
 }
 
@@ -882,7 +883,7 @@ func (l *BacklogLifecycleListener) Shutdown() {
 // newListenerBase initialises fields common to all BacklogLifecycleListener constructors.
 // pipelineEngine and livenessEngine may both be nil — see their field doc comments for the
 // fallback behavior.
-func newListenerBase(storage *session.Storage, pipelineEngine PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
+func newListenerBase(storage *session.Storage, pipelineEngine pipeline.PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &BacklogLifecycleListener{
 		storage:                 storage,
@@ -926,7 +927,7 @@ func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner Re
 // the built-in default pipeline for every item. livenessEngine is the shared
 // liveness.LivenessEngine instance (Epic 1.4) — pass nil to fall back to each stuck-detection
 // sweep's literal constant for every item.
-func NewBacklogLifecycleListenerWithPool(storage *session.Storage, pool *headless.Pool, pipelineEngine PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
+func NewBacklogLifecycleListenerWithPool(storage *session.Storage, pool *headless.Pool, pipelineEngine pipeline.PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
 	l := newListenerBase(storage, pipelineEngine, livenessEngine)
 	l.headlessPool = pool
 	return l
@@ -1696,7 +1697,7 @@ func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, err
 // transitionBouncingItemToDone moves an item reconcileBouncingItems has
 // externally verified as converged (its PR merged, or its commit shipped to
 // main) to done. It does this via the state machine's own legal edges —
-// recording a genuine PASS verdict via recordTerminalReviewVerdict (documenting
+// recording a genuine PASS verdict via RecordTerminalReviewVerdict (documenting
 // the external verification as the justification), then in_progress->review
 // (only if the item isn't already at review) followed by review->done —
 // rather than calling the raw storage-layer TransitionBacklogItemStatus
@@ -1708,7 +1709,7 @@ func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, err
 // the guarded RPC path in server/services/backlog_service_lifecycle.go that
 // this internal caller was bypassing).
 func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Context, item backlogdto.BacklogItemData, verdictSummary string) error {
-	if _, err := recordTerminalReviewVerdict(l.storage, item.ID, item.AcceptanceCriteria, "bounce-reconcile-"+uuid.New().String(), session.ReviewVerdictPass, verdictSummary); err != nil {
+	if _, err := pipeline.RecordTerminalReviewVerdict(l.storage, item.ID, item.AcceptanceCriteria, "bounce-reconcile-"+uuid.New().String(), session.ReviewVerdictPass, verdictSummary); err != nil {
 		return fmt.Errorf("record PASS verdict: %w", err)
 	}
 

@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -232,7 +233,7 @@ func (c *ChainFirer) Fire(ctx context.Context, item *backlogdto.BacklogItemData)
 			priorSessions = nil // BuildSessionInitialPrompt handles nil priorSessions fine
 		}
 	}
-	priorItemSummary := BuildSessionInitialPrompt(item, priorSessions)
+	priorItemSummary := pipeline.BuildSessionInitialPrompt(item, priorSessions)
 	// #nosec G115 -- item.TriggeredByChainDepth is checked against maxChainDepth above, so +1 stays far below int32's range
 	chainDepth := int32(item.TriggeredByChainDepth + 1)
 

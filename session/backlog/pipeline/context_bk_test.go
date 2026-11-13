@@ -1,4 +1,4 @@
-package backlog
+package pipeline
 
 import (
 	"encoding/json"
@@ -411,8 +411,8 @@ func TestClosingKeywordWithRepo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := closingKeywordWithRepo(tt.issueURL, tt.remote); got != tt.want {
-				t.Fatalf("closingKeywordWithRepo(%q, %q) = %q, want %q", tt.issueURL, tt.remote, got, tt.want)
+			if got := ClosingKeywordWithRepo(tt.issueURL, tt.remote); got != tt.want {
+				t.Fatalf("ClosingKeywordWithRepo(%q, %q) = %q, want %q", tt.issueURL, tt.remote, got, tt.want)
 			}
 		})
 	}

@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -134,8 +136,8 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 	defer cleanup()
 	ctx := context.Background()
 
-	repo := &fakePipelineModeRepository{
-		listEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
+	repo := &blktest.FakePipelineModeRepository{
+		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
 			return []*ent.PipelineMode{{
 				Slug:                 "quick",
 				Name:                 "Quick Fix",
@@ -143,7 +145,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 			}}, nil
 		},
 	}
-	engine, err := NewPipelineEngine(repo)
+	engine, err := pipeline.NewPipelineEngine(repo)
 	require.NoError(t, err)
 
 	itemData := backlogdto.BacklogItemData{

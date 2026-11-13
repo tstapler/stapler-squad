@@ -1,4 +1,4 @@
-package backlog
+package pipeline
 
 import (
 	"strings"
@@ -80,7 +80,9 @@ func TestPromptBuilders_ListAttachedImagePaths(t *testing.T) {
 		"retriage": func(i *backlogdto.BacklogItemData) string {
 			return BuildHeadlessRetriagePrompt(i, "/tmp/art", HeadlessTriageResult{}, "fb")
 		},
-		"review": func(i *backlogdto.BacklogItemData) string { return BuildReviewPrompt(i, nil, "", false, "sid", "") },
+		"review": func(i *backlogdto.BacklogItemData) string {
+			return BuildReviewPrompt(i, nil, "", false, "sid", "")
+		},
 		"headless review": func(i *backlogdto.BacklogItemData) string {
 			return BuildHeadlessReviewPrompt(i, nil, "", false, "", ReviewContextExtras{})
 		},

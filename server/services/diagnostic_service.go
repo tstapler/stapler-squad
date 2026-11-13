@@ -13,7 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
@@ -268,7 +268,7 @@ func (d *DiagnosticService) buildLinkedSessions(ctx context.Context, itemID stri
 		if wt, wtErr := d.storage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID); wtErr == nil {
 			ls.Branch = wt.BranchName
 			if gitDiff == "" && wt.WorktreePath != "" {
-				gitDiff, gitDiffTruncated, _ = backlog.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+				gitDiff, gitDiffTruncated, _ = pipeline.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 				gitLog = gitLogSummary(ctx, wt.WorktreePath, wt.BaseCommitSHA, wt.BranchName)
 			}
 		}

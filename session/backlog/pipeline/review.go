@@ -1,4 +1,4 @@
-package backlog
+package pipeline
 
 import (
 	"context"
@@ -595,7 +595,7 @@ func DegradeIfUnverified(path string, overall session.ReviewOutcome, verdicts []
 	return overall, verdicts, summary, "codebase-read-degraded"
 }
 
-// recordTerminalReviewVerdict persists a terminal ItemSession+ReviewVerdict pair for a
+// RecordTerminalReviewVerdict persists a terminal ItemSession+ReviewVerdict pair for a
 // review that is being given up on without ever reaching the normal verdict-parsing
 // path — the shared create+end round trip previously duplicated (with a bare-ctx bug in
 // two of the copies — see ADR-001) across every "give up and persist a terminal
@@ -616,7 +616,7 @@ func DegradeIfUnverified(path string, overall session.ReviewOutcome, verdicts []
 // sites (return-vs-goroutine control flow, RPC error wrapping, distinct summary/outcome
 // per failure mode) that they remain the caller's responsibility rather than being
 // folded in here.
-func recordTerminalReviewVerdict(storage *session.Storage, itemID string, acSnapshot session.AcCriteriaJSON, sessionUUID string, outcome session.ReviewOutcome, summary string) (backlogdto.ItemSessionSummary, error) {
+func RecordTerminalReviewVerdict(storage *session.Storage, itemID string, acSnapshot session.AcCriteriaJSON, sessionUUID string, outcome session.ReviewOutcome, summary string) (backlogdto.ItemSessionSummary, error) {
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cleanupCancel()
 
@@ -635,19 +635,19 @@ func recordTerminalReviewVerdict(storage *session.Storage, itemID string, acSnap
 		return backlogdto.ItemSessionSummary{}, err
 	}
 	if updateErr := storage.UpdateItemSessionEnded(cleanupCtx, is.ID, time.Now()); updateErr != nil { //nolint:silenttransition bookkeeping timestamp only; the caller proceeds regardless (returns is, nil below either way), matching the convention of the other review-session-end bookkeeping call sites
-		log.WarningLog().Printf("[headless] recordTerminalReviewVerdict UpdateItemSessionEnded item=%s session=%s: %v", itemID, is.ID, updateErr)
+		log.WarningLog().Printf("[headless] RecordTerminalReviewVerdict UpdateItemSessionEnded item=%s session=%s: %v", itemID, is.ID, updateErr)
 	}
 	return is, nil
 }
 
 // RecordDegradedReviewVerdict persists a synthetic UNVERIFIABLE verdict for a review
 // that could not actually be attempted or completed (capability self-check failure,
-// codebase-read timeout/cancellation). Thin wrapper around recordTerminalReviewVerdict
+// codebase-read timeout/cancellation). Thin wrapper around RecordTerminalReviewVerdict
 // that fixes the outcome to UNVERIFIABLE and the session UUID convention
 // (uuidPrefix + a fresh random UUID) shared by every "degraded, not a real failure"
-// call site — see recordTerminalReviewVerdict's doc comment for the full rationale.
+// call site — see RecordTerminalReviewVerdict's doc comment for the full rationale.
 func RecordDegradedReviewVerdict(storage *session.Storage, itemID string, acSnapshot session.AcCriteriaJSON, uuidPrefix, summary string) (backlogdto.ItemSessionSummary, error) {
-	return recordTerminalReviewVerdict(storage, itemID, acSnapshot, uuidPrefix+uuid.New().String(), session.ReviewVerdictUnverifiable, summary)
+	return RecordTerminalReviewVerdict(storage, itemID, acSnapshot, uuidPrefix+uuid.New().String(), session.ReviewVerdictUnverifiable, summary)
 }
 
 // sanitizeDiff neutralises triple-backtick sequences in a diff to prevent

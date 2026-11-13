@@ -4612,7 +4612,7 @@ func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T
 	worktreePath := t.TempDir()
 	contextPath := filepath.Join(worktreePath, ".backlog-context.md")
 	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
-	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
+	cmdDir := filepath.Join(worktreePath, ".claude/commands/backlog")
 	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
 	statusPath := filepath.Join(cmdDir, "status.md")
 	require.NoError(t, os.WriteFile(statusPath, []byte("stale status"), 0o644))

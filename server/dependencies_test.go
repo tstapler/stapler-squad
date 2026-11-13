@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/zalando/go-keyring"
 
@@ -29,7 +30,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
-	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -224,11 +224,11 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 		t.Fatal("expected BacklogLifecycleListener.PipelineEngine() to be non-nil")
 	}
 
-	backlogCaching, ok := backlogSvcEngine.(*backlog.CachingPipelineEngine)
+	backlogCaching, ok := backlogSvcEngine.(*pipeline.CachingPipelineEngine)
 	if !ok {
 		t.Fatalf("expected BacklogService.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", backlogSvcEngine)
 	}
-	listenerCaching, ok := listenerEngine.(*backlog.CachingPipelineEngine)
+	listenerCaching, ok := listenerEngine.(*pipeline.CachingPipelineEngine)
 	if !ok {
 		t.Fatalf("expected BacklogLifecycleListener.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", listenerEngine)
 	}

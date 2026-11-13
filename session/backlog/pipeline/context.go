@@ -1,4 +1,4 @@
-package backlog
+package pipeline
 
 import (
 	"fmt"
@@ -28,11 +28,11 @@ func canonicalIssueURL(rawURL string) string {
 	return fmt.Sprintf("https://%s/%s/%s/issues/%d", ref.Host, ref.Owner, ref.Repo, ref.IssueNumber)
 }
 
-// closingKeywordWithRepo returns "Closes #<N>" when issueURL is a GitHub issue
+// ClosingKeywordWithRepo returns "Closes #<N>" when issueURL is a GitHub issue
 // in the same repository as prRemoteURL, else "". Cross-repo issues get no
 // keyword: GitHub's bare "#N" only resolves in-repo, and a full-URL keyword
 // would close an issue in a repo this PR doesn't belong to.
-func closingKeywordWithRepo(issueURL, prRemoteURL string) string {
+func ClosingKeywordWithRepo(issueURL, prRemoteURL string) string {
 	issue, err := github.ParseGitHubRefWithHosts(issueURL, nil)
 	if err != nil || issue.Type != github.RefTypeIssue {
 		return ""

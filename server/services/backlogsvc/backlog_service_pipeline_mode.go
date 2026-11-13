@@ -33,7 +33,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -64,7 +64,7 @@ func pipelineModeToProto(pm *ent.PipelineMode) *sessionv1.PipelineMode {
 		InitialPromptTemplate: pm.InitialPromptTemplate,
 		CreatedAt:             timestamppb.New(pm.CreatedAt),
 		UpdatedAt:             timestamppb.New(pm.UpdatedAt),
-		ContentHash: backlog.ComputeContentHash(
+		ContentHash: pipeline.ComputeContentHash(
 			pm.StatusCommandTemplate,
 			pm.DoneCommandTemplate,
 			pm.FailCommandTemplate,
@@ -131,7 +131,7 @@ func stageExecutorHashesToProto(stageExecutors map[session.StageRole]session.Pip
 	hashes := make(map[string]string, len(allStageRoles))
 	for _, role := range allStageRoles {
 		entry := stageExecutors[role] // zero-value PipelineStageExecutor{} when absent
-		hashes[string(role)] = backlog.ComputeExecutorHash(entry.Program, entry.Model)
+		hashes[string(role)] = pipeline.ComputeExecutorHash(entry.Program, entry.Model)
 	}
 	return hashes
 }

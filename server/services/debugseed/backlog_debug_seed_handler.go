@@ -29,7 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	sessiongit "github.com/tstapler/stapler-squad/session/git"
@@ -372,14 +372,14 @@ func (h *BacklogDebugSeedHandler) handleSeedHeadlessTriageSession(w http.Respons
 		return
 	}
 
-	triageResult := backlog.HeadlessTriageResult{
+	triageResult := pipeline.HeadlessTriageResult{
 		Title:   req.Title,
 		Summary: summary,
-		Suggestions: []backlog.TriageSuggestion{
+		Suggestions: []pipeline.TriageSuggestion{
 			{Text: "Add a regression test", Rationale: "Prevents this bug from recurring silently."},
 			{Text: "Extract shared helper", Rationale: "Removes duplicated logic across call sites."},
 		},
-		Tasks: []backlog.TriageTask{
+		Tasks: []pipeline.TriageTask{
 			{Text: "Implement the fix", Estimate: "30m", Category: "implementation"},
 		},
 	}

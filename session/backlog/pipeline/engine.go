@@ -16,7 +16,7 @@
 // See project_plans/backlog-configurable-pipeline/implementation/plan.md's
 // Pattern Decisions table ("PipelineEngine ↔ WorkflowEngine relationship")
 // and research/architecture.md §1 for the full reasoning.
-package backlog
+package pipeline
 
 import (
 	"context"

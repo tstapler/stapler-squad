@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/tstapler/stapler-squad/server/services/backlogflow"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -92,7 +92,7 @@ func collectUntrusted(msg protoreflect.Message, found map[string]bool) {
 // inject a line break or a long payload into the agent's context.
 func sanitizeFlowLeaf(s string) string {
 	flat := backlogflow.SanitizeFlowText(s, int(^uint(0)>>1))
-	return cutAtRuneBoundary(backlog.SanitizeForAgentContext(flat, flowLeafMaxLen))
+	return cutAtRuneBoundary(pipeline.SanitizeForAgentContext(flat, flowLeafMaxLen))
 }
 
 // cutAtRuneBoundary drops the partial rune that SanitizeForAgentContext's byte
@@ -101,7 +101,7 @@ func cutAtRuneBoundary(s string) string { return strings.ToValidUTF8(s, "") }
 
 func sanitizeFlowKeyEcho(s string) string {
 	flat := backlogflow.SanitizeFlowText(s, int(^uint(0)>>1))
-	return cutAtRuneBoundary(backlog.SanitizeForAgentContext(flat, flowKeyEchoMaxLen))
+	return cutAtRuneBoundary(pipeline.SanitizeForAgentContext(flat, flowKeyEchoMaxLen))
 }
 
 // sanitizeFlowMessage walks m by reflection and sanitizes every string leaf

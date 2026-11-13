@@ -25,8 +25,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -319,7 +319,7 @@ type BacklogService struct {
 	// triagePromptFor/reviewPromptFor/initialPromptFor below and
 	// SpawnSessionFromItem/TriggerTriage's nil-guarded ContentHashFor reads
 	// in backlog_service_triage.go.
-	pipelineEngine backlog.PipelineEngine
+	pipelineEngine pipeline.PipelineEngine
 
 	// pipelineModeRepo backs the PipelineMode CRUD RPCs (Epic 2.2):
 	// CreatePipelineMode/UpdatePipelineMode/DeletePipelineMode/
@@ -440,7 +440,7 @@ func (s *BacklogService) SetLivenessEngine(engine liveness.LivenessEngine) {
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
 // wired). Exported for the pointer-equality integration test proving BacklogService and
 // BacklogLifecycleListener share a single PipelineEngine instance (Story 1.5.1).
-func (s *BacklogService) PipelineEngine() backlog.PipelineEngine {
+func (s *BacklogService) PipelineEngine() pipeline.PipelineEngine {
 	return s.pipelineEngine
 }
 
@@ -538,7 +538,7 @@ func (s *BacklogService) SetEventBus(b *events.EventBus) {
 // Degradation contract: If creator is nil, RPCs that spawn sessions will return
 // CodeUnimplemented. This is expected in test environments where a real session
 // manager is unavailable.
-func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine session.WorkflowEngine, pipelineEngine backlog.PipelineEngine, pipelineModeRepo session.PipelineModeRepository) *BacklogService {
+func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config, engine session.WorkflowEngine, pipelineEngine pipeline.PipelineEngine, pipelineModeRepo session.PipelineModeRepository) *BacklogService {
 	if engine == nil {
 		engine = session.NewDefaultWorkflowEngine()
 	}
@@ -996,12 +996,12 @@ func itemSessionToProto(is backlogdto.ItemSessionSummary, costFor func(tmuxUUID 
 // by itemSessionToProto. Uses canonical session.TriageSuggestion / session.TriageTask
 // to keep the schema in sync across the MCP tool, headless path, and proto conversion.
 type triageResultJSON struct {
-	Summary             string                     `json:"summary"`
-	Suggestions         []backlog.TriageSuggestion `json:"suggestions"`
-	ClarifyingQuestions []string                   `json:"clarifying_questions,omitempty"`
-	Tasks               []backlog.TriageTask       `json:"tasks,omitempty"`
-	Iteration           int                        `json:"iteration,omitempty"`
-	Feedback            string                     `json:"feedback,omitempty"`
+	Summary             string                      `json:"summary"`
+	Suggestions         []pipeline.TriageSuggestion `json:"suggestions"`
+	ClarifyingQuestions []string                    `json:"clarifying_questions,omitempty"`
+	Tasks               []pipeline.TriageTask       `json:"tasks,omitempty"`
+	Iteration           int                         `json:"iteration,omitempty"`
+	Feedback            string                      `json:"feedback,omitempty"`
 }
 
 // backlogItemSummaryToProto maps a BacklogItemSummary to the proto BacklogItem message.
@@ -1359,8 +1359,8 @@ func (s *BacklogService) cleanupWorktrees(ctx context.Context, sessions []backlo
 func (s *BacklogService) removeWorktree(wt session.GitWorktreeData) bool {
 	// Scaffolding first: if Cleanup below fails or the path isn't a removable
 	// worktree, the item-pinned /backlog:* files must not outlive the item.
-	_ = backlog.CleanupSlashCommands(wt.WorktreePath)
-	_ = backlog.CleanupBacklogContextFile(wt.WorktreePath)
+	_ = pipeline.CleanupSlashCommands(wt.WorktreePath)
+	_ = pipeline.CleanupBacklogContextFile(wt.WorktreePath)
 	if cleanErr := s.cleanup.remove(wt); cleanErr != nil {
 		log.WarningLog().Printf("[cleanupItemWorktrees] failed to cleanup worktree path=%s: %v", wt.WorktreePath, cleanErr)
 		return false

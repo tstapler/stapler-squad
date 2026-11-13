@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
@@ -870,7 +871,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// the entClient-available branch below) because services.NewBacklogService
 	// (Epic 2.2) needs the same repository instance to back its PipelineMode CRUD
 	// RPCs, independent of whether pipelineEngine construction itself succeeded.
-	var pipelineEngine backlog.PipelineEngine
+	var pipelineEngine pipeline.PipelineEngine
 	var pipelineModeRepo session.PipelineModeRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
 		// Seed the built-in 9-stage/edge workflow graph (backlog_stages +
@@ -895,7 +896,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		if seedErr := session.EnsureDefaultSDDPipelineMode(context.Background(), pipelineModeRepo); seedErr != nil {
 			log.Warn("failed to seed default sdd pipeline mode, continuing without it", "err", seedErr)
 		}
-		if cachingPipelineEngine, err := backlog.NewPipelineEngine(pipelineModeRepo); err != nil {
+		if cachingPipelineEngine, err := pipeline.NewPipelineEngine(pipelineModeRepo); err != nil {
 			log.Warn("pipelineEngine construction failed; continuing with the default pipeline for all backlog items", "err", err)
 		} else {
 			pipelineEngine = cachingPipelineEngine
@@ -1683,7 +1684,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Per-item /backlog/* commands live in session worktrees only; a user-scope copy is stale
 	// scaffolding from an old build and shadows the real ones with a wrong item ID.
 	if home, hErr := os.UserHomeDir(); hErr == nil {
-		if removed, rmErr := backlog.RemoveStaleUserLevelBacklogCommands(home); rmErr != nil {
+		if removed, rmErr := pipeline.RemoveStaleUserLevelBacklogCommands(home); rmErr != nil {
 			log.WarningLog().Printf("failed to remove stale user-level backlog commands: %v", rmErr)
 		} else if removed {
 			log.InfoLog().Printf("removed stale user-level ~/.claude/commands/backlog (per-item commands belong in session worktrees)")
