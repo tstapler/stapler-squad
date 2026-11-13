@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +16,7 @@ func extractFixtureInstance(f *claimFixture, repo string, mutate func(*Instance)
 	inst := &Instance{
 		Title:           "extract",
 		Path:            repo,
-		SessionType:     SessionTypeDirectory,
+		SessionType:     domain.SessionTypeDirectory,
 		CreatedAt:       f.now.Add(-time.Minute),
 		historyDetector: f.detector,
 	}

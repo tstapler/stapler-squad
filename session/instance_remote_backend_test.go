@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -38,7 +40,7 @@ func attachRemoteWorktree(t *testing.T, rec *attachRecorder) (*Instance, RemoteE
 	inst := &Instance{
 		Title:            "remote-attach",
 		Path:             "/srv/repo",
-		SessionType:      SessionTypeExistingWorktree,
+		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: "/srv/wt",
 		ExecutionTarget:  target,
 		GitBackend:       rec,

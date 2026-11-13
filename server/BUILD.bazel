@@ -308,7 +308,6 @@ go_test(
         "//server/services/wsconn",
         "//server/wakes",
         "//session",
-        "//session/artifacts",
         "//session/backlog",
         "//session/backlog/shadowledger",
         "//session/dbpool",

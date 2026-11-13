@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // graphQLPRInfoQuery fetches a single pull request's full metadata — the
@@ -333,20 +335,20 @@ func mapPRInfoGraphQLLabels(nodes []prInfoLabelNode) []string {
 	return labels
 }
 
-// mapPRInfoGraphQLReviews field-maps review nodes into ReviewItem (always a
-// non-nil slice, mirroring GetPRInfoCtx's make([]ReviewItem, len(resp.Reviews))
+// mapPRInfoGraphQLReviews field-maps review nodes into domain.GitHubReviewItem (always a
+// non-nil slice, mirroring GetPRInfoCtx's make([]domain.GitHubReviewItem, len(resp.Reviews))
 // — see mapPRInfoGraphQLLabels's doc comment for why that matters) and
 // derives approved/changes-requested counts via the same parseReviewCounts
 // (client.go) GetPRInfoCtx uses, by first reshaping into ghReviewItem.
-func mapPRInfoGraphQLReviews(nodes []prInfoReviewNode) (reviews []ReviewItem, approved, changesRequested int) {
-	reviews = make([]ReviewItem, len(nodes))
+func mapPRInfoGraphQLReviews(nodes []prInfoReviewNode) (reviews []domain.GitHubReviewItem, approved, changesRequested int) {
+	reviews = make([]domain.GitHubReviewItem, len(nodes))
 	ghReviews := make([]ghReviewItem, len(nodes))
 	for i, r := range nodes {
 		login := ""
 		if r.Author != nil {
 			login = r.Author.Login
 		}
-		reviews[i] = ReviewItem{Author: login, State: r.State, Body: r.Body}
+		reviews[i] = domain.GitHubReviewItem{Author: login, State: r.State, Body: r.Body}
 		ghReviews[i].Author.Login = login
 		ghReviews[i].State = r.State
 		ghReviews[i].Body = r.Body
@@ -356,19 +358,19 @@ func mapPRInfoGraphQLReviews(nodes []prInfoReviewNode) (reviews []ReviewItem, ap
 }
 
 // mapPRInfoGraphQLChecks field-maps commits(last: 1)'s single
-// statusCheckRollup.contexts into CheckItem (always a non-nil slice — see
+// statusCheckRollup.contexts into domain.GitHubCheckItem (always a non-nil slice — see
 // mapPRInfoGraphQLLabels's doc comment) and derives CheckConclusion/CheckStatus
 // via the same getCheckConclusion (client.go) GetPRInfoCtx uses, by first
 // reshaping into ghStatusCheckItem — the shared shape both the gh-CLI and
 // GraphQL check-context union flatten onto (see prInfoCheckContextNode's doc
 // comment).
-func mapPRInfoGraphQLChecks(commitNodes []prInfoCommitNode) (checks []CheckItem, conclusion, status string) {
-	checks = make([]CheckItem, 0)
+func mapPRInfoGraphQLChecks(commitNodes []prInfoCommitNode) (checks []domain.GitHubCheckItem, conclusion, status string) {
+	checks = make([]domain.GitHubCheckItem, 0)
 	var ghChecks []ghStatusCheckItem
 	if len(commitNodes) > 0 {
 		if rollup := commitNodes[0].Commit.StatusCheckRollup; rollup != nil {
 			contexts := rollup.Contexts.Nodes
-			checks = make([]CheckItem, len(contexts))
+			checks = make([]domain.GitHubCheckItem, len(contexts))
 			ghChecks = make([]ghStatusCheckItem, len(contexts))
 			for i, c := range contexts {
 				item := ghStatusCheckItem{
@@ -379,7 +381,7 @@ func mapPRInfoGraphQLChecks(commitNodes []prInfoCommitNode) (checks []CheckItem,
 					Conclusion: c.Conclusion,
 				}
 				ghChecks[i] = item
-				checks[i] = CheckItem(item)
+				checks[i] = domain.GitHubCheckItem(item)
 			}
 		}
 	}

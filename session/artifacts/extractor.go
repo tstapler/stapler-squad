@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 var (
@@ -63,21 +63,21 @@ var (
 // ExtractFromBashCommand extracts a structured CommandArtifact from a Bash tool_use
 // input command. Returns nil if no known pattern matches.
 // Only call this on tool_use inputs (not tool_result outputs) to avoid double-counting.
-func ExtractFromBashCommand(command string) *CommandArtifact {
+func ExtractFromBashCommand(command string) *domain.CommandArtifact {
 	if m := reGHPRCreate.FindStringSubmatch(command); m != nil {
-		return &CommandArtifact{Type: "gh_pr_create", Command: truncate(command, 200), Detail: m[1]}
+		return &domain.CommandArtifact{Type: "gh_pr_create", Command: truncate(command, 200), Detail: m[1]}
 	}
 	if m := reGHPRMerge.FindStringSubmatch(command); m != nil {
-		return &CommandArtifact{Type: "gh_pr_merge", Command: truncate(command, 200), Detail: m[1]}
+		return &domain.CommandArtifact{Type: "gh_pr_merge", Command: truncate(command, 200), Detail: m[1]}
 	}
 	if m := reGitCommitMsg.FindStringSubmatch(command); m != nil {
-		return &CommandArtifact{Type: "git_commit", Command: truncate(command, 200), Detail: m[1]}
+		return &domain.CommandArtifact{Type: "git_commit", Command: truncate(command, 200), Detail: m[1]}
 	}
 	if m := reGoGet.FindStringSubmatch(command); m != nil {
-		return &CommandArtifact{Type: "package_install", Command: truncate(command, 200), Detail: m[1]}
+		return &domain.CommandArtifact{Type: "package_install", Command: truncate(command, 200), Detail: m[1]}
 	}
 	if m := reNPMInstall.FindStringSubmatch(command); m != nil {
-		return &CommandArtifact{Type: "package_install", Command: truncate(command, 200), Detail: m[1]}
+		return &domain.CommandArtifact{Type: "package_install", Command: truncate(command, 200), Detail: m[1]}
 	}
 	return nil
 }
@@ -90,18 +90,18 @@ func truncate(s string, n int) string {
 }
 
 // parsePRURL splits a pull request URL into its host, owner, repo and number.
-func parsePRURL(raw string) (PRRecord, bool) {
+func parsePRURL(raw string) (domain.PRRecord, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return PRRecord{}, false
+		return domain.PRRecord{}, false
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) < 4 || parts[2] != "pull" {
-		return PRRecord{}, false
+		return domain.PRRecord{}, false
 	}
 	n, err := strconv.Atoi(parts[3])
 	if err != nil {
-		return PRRecord{}, false
+		return domain.PRRecord{}, false
 	}
-	return PRRecord{Host: github.NormalizeHost(u.Host), Owner: parts[0], Repo: parts[1], Number: n}, true
+	return domain.PRRecord{Host: domain.NormalizeHost(u.Host), Owner: parts[0], Repo: parts[1], Number: n}, true
 }

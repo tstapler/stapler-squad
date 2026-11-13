@@ -1,6 +1,10 @@
 package artifacts
 
-import "regexp"
+import (
+	"regexp"
+
+	"github.com/tstapler/stapler-squad/session/domain"
+)
 
 const redactedValue = "[redacted]"
 
@@ -59,8 +63,8 @@ func Redact(s string) string {
 }
 
 // RedactedRecords returns a scrubbed copy of rs; the input is not modified.
-func RedactedRecords(rs RecordList) RecordList {
-	out := make(RecordList, len(rs))
+func RedactedRecords(rs domain.RecordList) domain.RecordList {
+	out := make(domain.RecordList, len(rs))
 	for i, r := range rs {
 		out[i] = redactRecord(r)
 	}
@@ -78,29 +82,29 @@ func redactAll(ss []string) []string {
 	return out
 }
 
-func redactCommandArtifact(c CommandArtifact) CommandArtifact {
+func redactCommandArtifact(c domain.CommandArtifact) domain.CommandArtifact {
 	c.Command, c.Detail = Redact(c.Command), Redact(c.Detail)
 	return c
 }
 
-func redactRecord(r ArtifactRecord) ArtifactRecord {
+func redactRecord(r domain.ArtifactRecord) domain.ArtifactRecord {
 	switch v := r.(type) {
-	case PRRecord:
+	case domain.PRRecord:
 		v.Branch, v.Base = Redact(v.Branch), Redact(v.Base)
 		return v
-	case BranchRecord:
+	case domain.BranchRecord:
 		v.Name = Redact(v.Name)
 		return v
-	case CommitRecord:
+	case domain.CommitRecord:
 		v.Subject, v.Branch = Redact(v.Subject), Redact(v.Branch)
 		return v
-	case PlanDocRecord:
+	case domain.PlanDocRecord:
 		v.Path = Redact(v.Path)
 		return v
-	case CILinkRecord:
+	case domain.CILinkRecord:
 		v.URL = Redact(v.URL)
 		return v
-	case CommandRecord:
+	case domain.CommandRecord:
 		v.Command, v.Detail, v.Result = Redact(v.Command), Redact(v.Detail), Redact(v.Result)
 		return v
 	}
@@ -119,12 +123,12 @@ func (f *scanFindings) redactFindings() {
 	}
 }
 
-// Redacted returns a scrubbed copy of the blob, for export. It cleans blobs
+// RedactBlob returns a scrubbed copy of the blob, for export. It cleans blobs
 // stored before redaction existed; the receiver is not modified.
-func (b *SessionArtifactsBlob) Redacted() *SessionArtifactsBlob {
+func RedactBlob(b *domain.SessionArtifactsBlob) *domain.SessionArtifactsBlob {
 	out := *b
 	out.PRURLs, out.ExternalURLs = redactAll(b.PRURLs), redactAll(b.ExternalURLs)
-	out.Commands = make([]CommandArtifact, len(b.Commands))
+	out.Commands = make([]domain.CommandArtifact, len(b.Commands))
 	for i, c := range b.Commands {
 		out.Commands[i] = redactCommandArtifact(c)
 	}

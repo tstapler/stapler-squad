@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/vcs"
@@ -150,7 +152,7 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 
 	vcsClient, err := vcs.DetectWithOptions(repoPath, detectOpts)
 	if err != nil {
-		if i.SessionType == SessionTypeDirectory {
+		if i.SessionType == domain.SessionTypeDirectory {
 			log.Info("no vcs detected, falling back to simple directory change", "path", repoPath)
 			i.Path = repoPath
 

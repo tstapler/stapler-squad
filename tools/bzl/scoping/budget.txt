@@ -15,7 +15,7 @@ session/gitwt files=5 loc=913 imports=9
 session/hostclaim files=9 loc=1841 imports=3
 session/ptyio files=6 loc=1254 imports=4
 session/importer files=13 loc=2173 imports=7
-session/itemsources files=8 loc=1731 imports=6
+session/itemsources files=8 loc=1731 imports=7
 session/backlog files=24 loc=12436 imports=17
 session/backlog/liveness files=7 loc=912 imports=8
 session/backlog/stuck files=2 loc=478 imports=4
@@ -29,7 +29,7 @@ server/services/internal/streammetrics files=2 loc=124 imports=3
 server/services/wsconn files=23 loc=9895 imports=21
 server/services/backlogsvc files=32 loc=15400 imports=25
 server/services/internal/svctest files=36 loc=1459 imports=17
-server/services/sessionbundle files=4 loc=862 imports=6
+server/services/sessionbundle files=4 loc=862 imports=7
 server/services/devtools files=4 loc=501 imports=4
 server/services/antigravityexport files=2 loc=400 imports=3
 server/services/backlogflow files=4 loc=747 imports=7

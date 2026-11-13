@@ -52,7 +52,7 @@ func seedCandidateInstance(t *testing.T, storage *session.Storage, title string,
 	require.NoError(t, storage.AddInstance(inst))
 }
 
-func withSessionType(st session.SessionType) func(*session.Instance) {
+func withSessionType(st domain.SessionType) func(*session.Instance) {
 	return func(i *session.Instance) { i.SessionType = st }
 }
 
@@ -100,11 +100,11 @@ var expectsWorktreeCases = []struct {
 	data session.InstanceData
 	want bool
 }{
-	{"new worktree session with branch", session.InstanceData{SessionType: session.SessionTypeNewWorktree, Branch: "work/b8ccca59"}, true},
-	{"existing worktree session with branch", session.InstanceData{SessionType: session.SessionTypeExistingWorktree, Branch: "work/abc"}, true},
-	{"directory session, no branch", session.InstanceData{SessionType: session.SessionTypeDirectory}, false},
-	{"new worktree session but no branch persisted", session.InstanceData{SessionType: session.SessionTypeNewWorktree}, false},
-	{"directory session with detected IsWorktree and a branch", session.InstanceData{SessionType: session.SessionTypeDirectory, IsWorktree: true, Branch: "detected-branch"}, true},
+	{"new worktree session with branch", session.InstanceData{SessionType: domain.SessionTypeNewWorktree, Branch: "work/b8ccca59"}, true},
+	{"existing worktree session with branch", session.InstanceData{SessionType: domain.SessionTypeExistingWorktree, Branch: "work/abc"}, true},
+	{"directory session, no branch", session.InstanceData{SessionType: domain.SessionTypeDirectory}, false},
+	{"new worktree session but no branch persisted", session.InstanceData{SessionType: domain.SessionTypeNewWorktree}, false},
+	{"directory session with detected IsWorktree and a branch", session.InstanceData{SessionType: domain.SessionTypeDirectory, IsWorktree: true, Branch: "detected-branch"}, true},
 }
 
 // TestExpectsWorktree covers Task 1.1.2a's predicate directly.
@@ -124,7 +124,7 @@ func TestListConsistencyCandidates_should_IncludeSession_When_WorktreeRowMissing
 	t.Parallel()
 	storage := newWorktreeConsistencyTestStorage(t)
 	seedCandidateInstance(t, storage, "missing-row",
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/b8ccca59"),
 		withStatus(session.Active),
 	)
@@ -143,7 +143,7 @@ func TestListConsistencyCandidates_should_ExcludeSession_When_StatusCreatingWith
 	t.Parallel()
 	storage := newWorktreeConsistencyTestStorage(t)
 	seedCandidateInstance(t, storage, "fresh-creating",
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/fresh"),
 		withStatus(session.Creating),
 		withUUID("fresh-creating-uuid"),
@@ -166,7 +166,7 @@ func TestListConsistencyCandidates_should_IncludeSession_When_StatusCreatingPast
 	t.Parallel()
 	storage := newWorktreeConsistencyTestStorage(t)
 	seedCandidateInstance(t, storage, "stale-creating",
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/stale"),
 		withStatus(session.Creating),
 		withUUID("stale-creating-uuid"),
@@ -186,7 +186,7 @@ func TestListConsistencyCandidates_should_ExcludeSession_When_SessionTypeDirecto
 	t.Parallel()
 	storage := newWorktreeConsistencyTestStorage(t)
 	seedCandidateInstance(t, storage, "plain-directory",
-		withSessionType(session.SessionTypeDirectory),
+		withSessionType(domain.SessionTypeDirectory),
 		withStatus(session.Active),
 	)
 
@@ -241,7 +241,7 @@ func TestSweep_NoRaceWithConcurrentActorWrites(t *testing.T) {
 	session.FinishInstanceForTest(inst)
 	inst.Status = session.Active
 	inst.Path = "/tmp/test-" + inst.Title
-	inst.SessionType = session.SessionTypeNewWorktree
+	inst.SessionType = domain.SessionTypeNewWorktree
 	inst.Branch = "work/race"
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -506,7 +506,7 @@ func TestResolveFinding_should_CreateWorktreeRowAndNotify_When_UniqueMatchOnNonI
 
 	seedCandidateInstance(t, storage, "repair-target",
 		withUUID(sessionUUID),
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch(realBranch),
 		withStatus(session.Active),
 	)
@@ -755,7 +755,7 @@ func TestResolveFinding_should_ResolveStuck_When_FlaggedThenRepaired(t *testing.
 
 	seedCandidateInstance(t, storage, "flag-then-repair-stuck",
 		withUUID(sessionUUID),
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch(realBranch),
 		withStatus(session.Active),
 	)
@@ -794,7 +794,7 @@ func TestResolveFinding_should_CallNotifySessionWithoutItemIdMetadata_When_NoBac
 
 		seedCandidateInstance(t, storage, "unlinked-repair",
 			withUUID(sessionUUID),
-			withSessionType(session.SessionTypeNewWorktree),
+			withSessionType(domain.SessionTypeNewWorktree),
 			withBranch("unlinked-repair"),
 			withStatus(session.Active),
 		)
@@ -945,7 +945,7 @@ func TestResolveFinding_should_NotSuppressRepairNotification_When_SameSessionAnd
 
 	seedCandidateInstance(t, storage, "flag-then-repair",
 		withUUID(sessionUUID),
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch(realBranch),
 		withStatus(session.Active),
 	)
@@ -1089,7 +1089,7 @@ func TestSweep_should_ProceedPastFlagGate_When_FeatureFlagOn(t *testing.T) {
 	t.Parallel()
 	storage := newWorktreeConsistencyTestStorage(t)
 	seedCandidateInstance(t, storage, "flag-on-candidate",
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/flag-on"),
 		withStatus(session.Active),
 	)
@@ -1198,7 +1198,7 @@ func TestSweep_ShouldRepairRegressionPR625_When_WorktreeRowMissingButOnDiskWorkt
 
 	seedCandidateInstance(t, storage, "pr625-repro",
 		withUUID(sessionUUID),
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch(branch),
 		withStatus(session.Active),
 		withPath(repoPath),
@@ -1250,7 +1250,7 @@ func TestSweep_ShouldFlagRegressionPR625_When_WorktreeRowAndOnDiskWorktreeBothMi
 
 	seedCandidateInstance(t, storage, "pr625-repro-gone",
 		withUUID(sessionUUID),
-		withSessionType(session.SessionTypeNewWorktree),
+		withSessionType(domain.SessionTypeNewWorktree),
 		withBranch("work/b8ccca59-gone"),
 		withStatus(session.Active),
 		withPath(repoPath),

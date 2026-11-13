@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -79,7 +81,7 @@ func (r *GitHubRef) PRURL() string {
 		return ""
 	}
 	return fmt.Sprintf("https://%s/%s/%s/pull/%d",
-		github.NormalizeHost(r.Host), r.Owner, r.Repo, r.PRNumber)
+		domain.NormalizeHost(r.Host), r.Owner, r.Repo, r.PRNumber)
 }
 
 // GitHubRefType indicates what kind of GitHub reference this is.

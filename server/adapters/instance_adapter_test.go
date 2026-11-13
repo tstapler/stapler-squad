@@ -5,18 +5,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 func TestRateLimitStateToProto_AllStates(t *testing.T) {
@@ -399,11 +398,11 @@ func TestInstanceToProto_should_SetPinned_FromInstance(t *testing.T) {
 func TestInstanceToProto_should_MapChecksAndReviewFeedback_When_Populated(t *testing.T) {
 	inst := &session.Instance{
 		GitHubCheckConclusion: "success",
-		GitHubChecks: []github.CheckItem{
+		GitHubChecks: []domain.GitHubCheckItem{
 			{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "COMPLETED", Conclusion: "SUCCESS"},
 			{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "COMPLETED", Conclusion: "FAILURE"},
 		},
-		GitHubReviewFeedback: []github.ReviewItem{
+		GitHubReviewFeedback: []domain.GitHubReviewItem{
 			{Author: "alice", State: "APPROVED", Body: "LGTM"},
 			{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix X"},
 		},
@@ -557,7 +556,7 @@ func TestInstanceToProto_LegacyPathFields_Unchanged(t *testing.T) {
 func TestInstanceToProto_PopulatesContextHealthFields(t *testing.T) {
 	li := session.NewLiveInstance(&session.Instance{})
 	t.Cleanup(li.Stop)
-	li.SetContextHealth(tokens.ContextHealthVerdict{Level: tokens.HealthRed, Reason: "Repeated the same Bash call 6 times in a row"})
+	li.SetContextHealth(domain.ContextHealthVerdict{Level: domain.HealthRed, Reason: "Repeated the same Bash call 6 times in a row"})
 
 	proto := InstanceToProto(li.Instance, nil)
 	require.NotNil(t, proto)
@@ -581,17 +580,17 @@ func TestAdapter_ShouldMapScanStateAndTranscriptSupported_WhenNonClaudeProgram(t
 	tests := []struct {
 		name          string
 		inst          *session.Instance
-		blob          *artifacts.SessionArtifactsBlob
+		blob          *domain.SessionArtifactsBlob
 		wantState     string
 		wantSupported bool
 	}{
 		{"non-claude program has no transcript", &session.Instance{Title: "t", Program: "aider"}, nil, "not_linked", false},
 		{"claude not yet linked", &session.Instance{Title: "t", Program: "claude"}, nil, "not_linked", true},
 		{"linked awaiting first scan", linkedInst("claude"), nil, "scanning", true},
-		{"scanned with nothing", linkedInst("claude"), &artifacts.SessionArtifactsBlob{ScanState: artifacts.ScanStateNoneFound}, "none_found", true},
-		{"scanned with data", linkedInst("claude"), &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: artifacts.ScanStateHasData}, "has_data", true},
-		{"failed keeps data", linkedInst("claude"), &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: artifacts.ScanStateFailed}, "failed", true},
-		{"legacy blob without state derives it", linkedInst("claude"), &artifacts.SessionArtifactsBlob{}, "none_found", true},
+		{"scanned with nothing", linkedInst("claude"), &domain.SessionArtifactsBlob{ScanState: domain.ScanStateNoneFound}, "none_found", true},
+		{"scanned with data", linkedInst("claude"), &domain.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: domain.ScanStateHasData}, "has_data", true},
+		{"failed keeps data", linkedInst("claude"), &domain.SessionArtifactsBlob{PRURLs: []string{"https://github.com/o/r/pull/1"}, ScanState: domain.ScanStateFailed}, "failed", true},
+		{"legacy blob without state derives it", linkedInst("claude"), &domain.SessionArtifactsBlob{}, "none_found", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -609,16 +608,16 @@ func TestAdapter_ShouldMapScanStateAndTranscriptSupported_WhenNonClaudeProgram(t
 
 func TestArtifactsToProto_ShouldMapEveryRecordKind_AndKeepV1Lists(t *testing.T) {
 	seen := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
-	blob := &artifacts.SessionArtifactsBlob{
+	blob := &domain.SessionArtifactsBlob{
 		PRURLs: []string{"https://github.com/acme/app/pull/12"},
-		Records: artifacts.RecordList{
-			artifacts.PRRecord{Host: "github.com", Owner: "acme", Repo: "app", Number: 12, Source: artifacts.PRSourceCreated, Branch: "feat-b", Base: "feat-a", FirstSeenAt: seen},
-			artifacts.BranchRecord{Name: "feat-b", Action: "created", FirstSeenAt: seen},
-			artifacts.CommitRecord{SHA: "1a2b3c4", Subject: "fix: x", Branch: "feat-b", FirstSeenAt: seen},
-			artifacts.IssueRecord{Owner: "acme", Repo: "app", Number: 45, Relation: "fixes", FirstSeenAt: seen},
-			artifacts.PlanDocRecord{Path: "project_plans/x/plan.md", FirstSeenAt: seen},
-			artifacts.CILinkRecord{URL: "https://github.com/acme/app/actions/runs/123", FirstSeenAt: seen},
-			artifacts.CommandRecord{Type: "git_commit", Command: "git commit", Result: "ok", FirstSeenAt: seen},
+		Records: domain.RecordList{
+			domain.PRRecord{Host: "github.com", Owner: "acme", Repo: "app", Number: 12, Source: domain.PRSourceCreated, Branch: "feat-b", Base: "feat-a", FirstSeenAt: seen},
+			domain.BranchRecord{Name: "feat-b", Action: "created", FirstSeenAt: seen},
+			domain.CommitRecord{SHA: "1a2b3c4", Subject: "fix: x", Branch: "feat-b", FirstSeenAt: seen},
+			domain.IssueRecord{Owner: "acme", Repo: "app", Number: 45, Relation: "fixes", FirstSeenAt: seen},
+			domain.PlanDocRecord{Path: "project_plans/x/plan.md", FirstSeenAt: seen},
+			domain.CILinkRecord{URL: "https://github.com/acme/app/actions/runs/123", FirstSeenAt: seen},
+			domain.CommandRecord{Type: "git_commit", Command: "git commit", Result: "ok", FirstSeenAt: seen},
 		},
 	}
 	got := artifactsToProto(blob, true, func() bool { return true })
@@ -639,7 +638,7 @@ func TestArtifactsToProto_ShouldMapEveryRecordKind_AndKeepV1Lists(t *testing.T) 
 }
 
 func TestArtifactsToProto_ShouldLeaveRecordsEmpty_WhenBlobIsV1(t *testing.T) {
-	got := artifactsToProto(&artifacts.SessionArtifactsBlob{PRURLs: []string{"u"}}, true, func() bool { return true })
+	got := artifactsToProto(&domain.SessionArtifactsBlob{PRURLs: []string{"u"}}, true, func() bool { return true })
 	require.Empty(t, got.GetRecords())
 	require.Equal(t, []string{"u"}, got.GetPrUrls())
 }

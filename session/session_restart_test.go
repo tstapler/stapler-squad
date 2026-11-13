@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -594,7 +596,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	instance, cleanup, err := NewTestInstance(t, "worktree-claude-test").
 		WithPath(tempRepo).
 		WithProgram("claude").
-		WithSessionType(SessionTypeNewWorktree).
+		WithSessionType(domain.SessionTypeNewWorktree).
 		Build()
 	require.NoError(t, err)
 	defer func() {
@@ -687,7 +689,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		// "bash -c '...'" program dies instantly, and tmux 3.8 reports an empty
 		// #{pane_pid} for a dead pane (3.7 still reported the old pid).
 		Program:          "sleep 3600",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          true,
 		TmuxServerSocket: testTmuxSocket(t),
 	})
@@ -781,7 +783,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 		Title:            "load-instances-defer-start-test",
 		Path:             t.TempDir(),
 		Program:          "bash -c 'echo hi; exec bash'",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          true,
 		TmuxServerSocket: testTmuxSocket(t),
 	})

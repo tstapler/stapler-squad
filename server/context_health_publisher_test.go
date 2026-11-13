@@ -3,6 +3,8 @@ package server
 import (
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -20,8 +22,8 @@ func healthTestInstance(t *testing.T, uuid string) *session.Instance {
 	return li.Instance
 }
 
-func loopSignals(repeats int) tokens.ContextHealthSignals {
-	return tokens.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: repeats, RepeatedToolName: "Bash"}
+func loopSignals(repeats int) domain.ContextHealthSignals {
+	return domain.ContextHealthSignals{ToolCallsInWindow: 12, MaxConsecutiveRepeats: repeats, RepeatedToolName: "Bash"}
 }
 
 func TestApplyContextHealth_PublishesOnLevelChangeOnly(t *testing.T) {
@@ -36,7 +38,7 @@ func TestApplyContextHealth_PublishesOnLevelChangeOnly(t *testing.T) {
 
 	run() // unknown -> amber
 	assert.Equal(t, 1, published)
-	assert.Equal(t, tokens.HealthAmber, inst.Snapshot().ContextHealth.Level)
+	assert.Equal(t, domain.HealthAmber, inst.Snapshot().ContextHealth.Level)
 
 	run() // unchanged
 	assert.Equal(t, 1, published)
@@ -49,7 +51,7 @@ func TestApplyContextHealth_PublishesOnLevelChangeOnly(t *testing.T) {
 	current = &tokens.ParseResult{ContextHealth: loopSignals(6)} // amber -> red
 	run()
 	assert.Equal(t, 2, published)
-	assert.Equal(t, tokens.HealthRed, inst.Snapshot().ContextHealth.Level)
+	assert.Equal(t, domain.HealthRed, inst.Snapshot().ContextHealth.Level)
 }
 
 func TestApplyContextHealth_SkipsInstancesWithoutTranscript(t *testing.T) {
@@ -61,6 +63,6 @@ func TestApplyContextHealth_SkipsInstancesWithoutTranscript(t *testing.T) {
 		config.ContextHealthConfig{},
 		func(*session.Instance) { published++ })
 	assert.Equal(t, 0, published)
-	assert.Equal(t, tokens.HealthUnknown, noUUID.Snapshot().ContextHealth.Level)
-	assert.Equal(t, tokens.HealthUnknown, noParse.Snapshot().ContextHealth.Level)
+	assert.Equal(t, domain.HealthUnknown, noUUID.Snapshot().ContextHealth.Level)
+	assert.Equal(t, domain.HealthUnknown, noParse.Snapshot().ContextHealth.Level)
 }

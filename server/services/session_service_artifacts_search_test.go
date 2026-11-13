@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/search"
 )
 
@@ -23,11 +24,11 @@ func (s staticPRLinks) SessionUUIDsByPR(_ context.Context, ref session.PRRef) ([
 
 var artifactT0 = time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 
-func scannedBlob(recs ...artifacts.ArtifactRecord) *artifacts.SessionArtifactsBlob {
-	return &artifacts.SessionArtifactsBlob{Records: recs, ScanState: artifacts.ScanStateHasData}
+func scannedBlob(recs ...domain.ArtifactRecord) *domain.SessionArtifactsBlob {
+	return &domain.SessionArtifactsBlob{Records: recs, ScanState: domain.ScanStateHasData}
 }
 
-func artifactSession(uuid, title string, age time.Duration, blob *artifacts.SessionArtifactsBlob) *session.Instance {
+func artifactSession(uuid, title string, age time.Duration, blob *domain.SessionArtifactsBlob) *session.Instance {
 	return &session.Instance{UUID: uuid, Title: title, UpdatedAt: artifactT0.Add(age), Artifacts: blob}
 }
 
@@ -58,20 +59,20 @@ func hitIDs(hits []*sessionv1.SessionArtifactHit) []string {
 	return ids
 }
 
-func prRecord(owner, repo string, n int, src artifacts.PRSource) artifacts.PRRecord {
-	return artifacts.PRRecord{Host: "github.com", Owner: owner, Repo: repo, Number: n, Source: src}
+func prRecord(owner, repo string, n int, src domain.PRSource) domain.PRRecord {
+	return domain.PRRecord{Host: "github.com", Owner: owner, Repo: repo, Number: n, Source: src}
 }
 
 func TestSearchSessionArtifacts_ShouldReturnTheOwningSession_ForEachKindOfString(t *testing.T) {
 	t.Parallel()
 	svc := newArtifactSvc(nil,
 		artifactSession("u1", "one", 0, scannedBlob(
-			prRecord("acme", "app", 77, artifacts.PRSourceCreated),
-			artifacts.BranchRecord{Name: "feat/zebra-stripes", Action: "pushed"},
-			artifacts.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", Subject: "stripe"},
-			artifacts.PlanDocRecord{Path: "project_plans/zebra/plan.md"},
+			prRecord("acme", "app", 77, domain.PRSourceCreated),
+			domain.BranchRecord{Name: "feat/zebra-stripes", Action: "pushed"},
+			domain.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", Subject: "stripe"},
+			domain.PlanDocRecord{Path: "project_plans/zebra/plan.md"},
 		)),
-		artifactSession("u2", "two", time.Hour, scannedBlob(artifacts.BranchRecord{Name: "other"})),
+		artifactSession("u2", "two", time.Hour, scannedBlob(domain.BranchRecord{Name: "other"})),
 	)
 	tests := []struct {
 		name, query, kind string
@@ -100,7 +101,7 @@ func TestSearchSessionArtifacts_ShouldReturnTheOwningSession_ForEachKindOfString
 
 func TestSearchSessionArtifacts_ShouldCountAMiss_AndAcceptTwoCharsButNotOne(t *testing.T) {
 	t.Parallel()
-	svc := newArtifactSvc(nil, artifactSession("u1", "one", 0, scannedBlob(artifacts.BranchRecord{Name: "feat-x"})))
+	svc := newArtifactSvc(nil, artifactSession("u1", "one", 0, scannedBlob(domain.BranchRecord{Name: "feat-x"})))
 	before := ArtifactSearchQueryCount("text", "miss")
 	resp, err := svc.SearchSessionArtifacts(context.Background(), artifactSearchReq("nonexistentzzz"))
 	require.NoError(t, err)
@@ -118,8 +119,8 @@ func TestSearchSessionArtifacts_ShouldCountAMiss_AndAcceptTwoCharsButNotOne(t *t
 
 func TestSearchSessionArtifacts_ShouldFollowHiddenAndArchivedVisibility(t *testing.T) {
 	t.Parallel()
-	blob := func() *artifacts.SessionArtifactsBlob {
-		return scannedBlob(artifacts.BranchRecord{Name: "shared-branch"})
+	blob := func() *domain.SessionArtifactsBlob {
+		return scannedBlob(domain.BranchRecord{Name: "shared-branch"})
 	}
 	hidden := artifactSession("uh", "hidden", 0, blob())
 	hidden.Hidden = true
@@ -143,9 +144,9 @@ func TestSearchSessionArtifacts_ShouldFollowHiddenAndArchivedVisibility(t *testi
 func TestSearchSessionArtifacts_ShouldRestrictToThePRFilter(t *testing.T) {
 	t.Parallel()
 	svc := newArtifactSvc(staticPRLinks{"github.com/acme/app#12": {"u3"}},
-		artifactSession("u1", "one", 0, scannedBlob(prRecord("acme", "app", 12, artifacts.PRSourceCreated), artifacts.BranchRecord{Name: "common-branch"})),
-		artifactSession("u2", "two", 0, scannedBlob(artifacts.BranchRecord{Name: "common-branch"})),
-		artifactSession("u3", "three", 0, scannedBlob(artifacts.BranchRecord{Name: "common-branch"})),
+		artifactSession("u1", "one", 0, scannedBlob(prRecord("acme", "app", 12, domain.PRSourceCreated), domain.BranchRecord{Name: "common-branch"})),
+		artifactSession("u2", "two", 0, scannedBlob(domain.BranchRecord{Name: "common-branch"})),
+		artifactSession("u3", "three", 0, scannedBlob(domain.BranchRecord{Name: "common-branch"})),
 	)
 	resp, err := svc.SearchSessionArtifacts(context.Background(), connect.NewRequest(&sessionv1.SearchSessionArtifactsRequest{
 		Query: "common-branch", Pr: &sessionv1.PullRequestRef{Owner: "acme", Repo: "app", Number: 12},
@@ -157,14 +158,14 @@ func TestSearchSessionArtifacts_ShouldRestrictToThePRFilter(t *testing.T) {
 func TestUnscannedCount_ShouldCountNotLinkedAndScanningVisibleSessions(t *testing.T) {
 	t.Parallel()
 	var insts []*session.Instance
-	insts = append(insts, artifactSession("s0", "s0", 0, scannedBlob(artifacts.BranchRecord{Name: "x-branch"})))
+	insts = append(insts, artifactSession("s0", "s0", 0, scannedBlob(domain.BranchRecord{Name: "x-branch"})))
 	for i := 1; i < 7; i++ {
 		insts = append(insts, artifactSession("s"+string(rune('0'+i)), "s"+string(rune('0'+i)), 0, scannedBlob()))
 	}
 	insts = append(insts,
 		artifactSession("n1", "n1", 0, nil), // no blob yet
-		artifactSession("n2", "n2", 0, &artifacts.SessionArtifactsBlob{ScanState: artifacts.ScanStateNotLinked}),
-		artifactSession("n3", "n3", 0, &artifacts.SessionArtifactsBlob{ScanState: artifacts.ScanStateScanning}),
+		artifactSession("n2", "n2", 0, &domain.SessionArtifactsBlob{ScanState: domain.ScanStateNotLinked}),
+		artifactSession("n3", "n3", 0, &domain.SessionArtifactsBlob{ScanState: domain.ScanStateScanning}),
 	)
 	hiddenUnscanned := artifactSession("n4", "n4", 0, nil)
 	hiddenUnscanned.Hidden = true
@@ -199,7 +200,7 @@ func TestFindSessionsByPullRequest_ShouldFilterOrphans_AndNeverSeedFromThem(t *t
 // Tracked row.
 func TestFindSessionsByPullRequest_ShouldOrderTrackedFirstThenByActivityThenTitle_U151(t *testing.T) {
 	t.Parallel()
-	seen := scannedBlob(prRecord("acme", "app", 12, artifacts.PRSourceMentioned))
+	seen := scannedBlob(prRecord("acme", "app", 12, domain.PRSourceMentioned))
 	svc := newArtifactSvc(staticPRLinks{"github.com/acme/app#12": {"t-old", "t-new", "both"}},
 		artifactSession("t-old", "tracked old", -3*time.Hour, scannedBlob()),
 		artifactSession("t-new", "tracked new", -time.Hour, scannedBlob()),
@@ -220,7 +221,7 @@ func TestFindSessionsByPullRequest_ShouldTreatCaseVariantsAsOnePR(t *testing.T) 
 	t.Parallel()
 	svc := newArtifactSvc(staticPRLinks{"github.com/acme/app#12": {"u1"}},
 		artifactSession("u1", "one", 0, scannedBlob()),
-		artifactSession("u2", "two", 0, scannedBlob(prRecord("Acme", "App", 12, artifacts.PRSourceCreated))),
+		artifactSession("u2", "two", 0, scannedBlob(prRecord("Acme", "App", 12, domain.PRSourceCreated))),
 	)
 	upper, err := svc.FindSessionsByPullRequest(context.Background(), findByPRReq("Acme", "App", 12))
 	require.NoError(t, err)

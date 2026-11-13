@@ -1,4 +1,4 @@
-package artifacts
+package domain
 
 import "time"
 
@@ -25,13 +25,13 @@ type SessionArtifactsBlob struct {
 // transcript from the top, but only once the artifact_scan_v2 flag is on.
 const ScanVersion = 2
 
-// legacyScanVersion is what a blob or position written before versions existed means.
-const legacyScanVersion = 1
+// LegacyScanVersion is what a blob or position written before versions existed means.
+const LegacyScanVersion = 1
 
 // Version returns the extractor version recorded in the blob.
-func (b *SessionArtifactsBlob) Version() int { return normalizeVersion(b.ScanVersion) }
+func (b *SessionArtifactsBlob) Version() int { return NormalizeScanVersion(b.ScanVersion) }
 
-func normalizeVersion(v int) int { return max(v, legacyScanVersion) }
+func NormalizeScanVersion(v int) int { return max(v, LegacyScanVersion) }
 
 // ScanState is the outcome of the last transcript scan for a session. The
 // wire values match the proto SessionArtifacts.scan_state strings.
@@ -68,6 +68,3 @@ type CommandArtifact struct {
 	Command string `json:"command"` // first 200 chars of the raw command for display
 	Detail  string `json:"detail"`  // extracted value: PR title, commit message, pkg name, PR number
 }
-
-const maxExternalURLs = 50
-const maxCommands = 30

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 )
@@ -48,7 +50,7 @@ type sessionKeys struct {
 // ArtifactHit is one matching artifact document.
 type ArtifactHit struct {
 	SessionID string
-	Type      artifacts.RecordKind
+	Type      domain.RecordKind
 	Score     float64
 	// Text is the display form: a PR ref, SHA, branch name, path or URL.
 	Text string
@@ -89,7 +91,7 @@ const shaPrefixLen = 7
 
 // Update replaces everything indexed for sessionID with blob's records. A nil
 // blob just removes the session.
-func (x *ArtifactIndex) Update(sessionID string, blob *artifacts.SessionArtifactsBlob) {
+func (x *ArtifactIndex) Update(sessionID string, blob *domain.SessionArtifactsBlob) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.removeLocked(sessionID)
@@ -169,9 +171,9 @@ func slicesDeleteSession(es []shaEntry, sessionID string) []shaEntry {
 }
 
 // recordExact fills the exact-lookup maps (never SessionPR: ADR-004).
-func (x *ArtifactIndex) recordExact(sessionID string, rec artifacts.ArtifactRecord, keys *sessionKeys) {
+func (x *ArtifactIndex) recordExact(sessionID string, rec domain.ArtifactRecord, keys *sessionKeys) {
 	switch r := rec.(type) {
-	case artifacts.PRRecord:
+	case domain.PRRecord:
 		ref, err := session.NewPRRef(r.Host, r.Owner, r.Repo, r.Number)
 		if err != nil {
 			return
@@ -181,7 +183,7 @@ func (x *ArtifactIndex) recordExact(sessionID string, rec artifacts.ArtifactReco
 		}
 		x.prSessions[ref][sessionID] = struct{}{}
 		keys.prs = append(keys.prs, ref)
-	case artifacts.CommitRecord:
+	case domain.CommitRecord:
 		sha := strings.ToLower(r.SHA)
 		if len(sha) < shaPrefixLen {
 			return
@@ -216,7 +218,7 @@ func (x *ArtifactIndex) Search(query string, limit int) []ArtifactHit {
 	for _, sd := range scored {
 		if d := x.docs.Get(sd.DocID); d != nil {
 			hits = append(hits, ArtifactHit{
-				SessionID: d.SessionID, Type: artifacts.RecordKind(d.MessageRole), Score: sd.Score, Text: d.Content,
+				SessionID: d.SessionID, Type: domain.RecordKind(d.MessageRole), Score: sd.Score, Text: d.Content,
 			})
 		}
 	}
@@ -289,33 +291,33 @@ func sortedKeys(set map[string]struct{}) []string {
 // short form shown in results.
 type artifactDoc struct{ search, display string }
 
-func artifactDocument(rec artifacts.ArtifactRecord) (artifactDoc, bool) {
+func artifactDocument(rec domain.ArtifactRecord) (artifactDoc, bool) {
 	switch r := rec.(type) {
-	case artifacts.PRRecord:
+	case domain.PRRecord:
 		ref := fmt.Sprintf("%s/%s#%d", r.Owner, r.Repo, r.Number)
 		return artifactDoc{
 			search:  strings.Join([]string{"pr", ref, r.Host + "/" + ref, fmt.Sprintf("https://%s/%s/%s/pull/%d", r.Host, r.Owner, r.Repo, r.Number), r.Branch, r.Base}, " "),
 			display: ref,
 		}, true
-	case artifacts.BranchRecord:
+	case domain.BranchRecord:
 		return artifactDoc{search: "branch " + r.Name + " " + r.Action, display: r.Name}, true
-	case artifacts.CommitRecord:
+	case domain.CommitRecord:
 		short := r.SHA
 		if len(short) > shaPrefixLen {
 			short = short[:shaPrefixLen]
 		}
 		return artifactDoc{search: strings.Join([]string{"commit", r.SHA, short, r.Subject, r.Branch}, " "), display: r.SHA}, true
-	case artifacts.IssueRecord:
+	case domain.IssueRecord:
 		ref := fmt.Sprintf("%s/%s#%d", r.Owner, r.Repo, r.Number)
 		if r.Owner == "" || r.Repo == "" {
 			ref = fmt.Sprintf("#%d", r.Number)
 		}
 		return artifactDoc{search: "issue " + ref + " " + r.Relation, display: ref}, true
-	case artifacts.PlanDocRecord:
+	case domain.PlanDocRecord:
 		return artifactDoc{search: "plan " + r.Path, display: r.Path}, true
-	case artifacts.CILinkRecord:
+	case domain.CILinkRecord:
 		return artifactDoc{search: "ci " + r.URL, display: r.URL}, true
-	case artifacts.CommandRecord:
+	case domain.CommandRecord:
 		return artifactDoc{search: "command " + r.Type + " " + r.Command + " " + r.Detail, display: r.Command}, true
 	}
 	return artifactDoc{}, false

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
@@ -253,7 +255,7 @@ func TestGitHubRefPRURL_should_BuildCanonicalURL_When_PRNumberSet(t *testing.T) 
 }
 
 // TestGitHubRefPRURL_should_NormalizeHost_When_HostIsGitHubEnterprise proves
-// PRURL() routes through github.NormalizeHost rather than embedding the raw
+// PRURL() routes through domain.NormalizeHost rather than embedding the raw
 // host string, so GHES hosts are handled the same way whether the ref came
 // from CreateSession's live parse or the backfill's path-recovered host.
 func TestGitHubRefPRURL_should_NormalizeHost_When_HostIsGitHubEnterprise(t *testing.T) {
@@ -262,7 +264,7 @@ func TestGitHubRefPRURL_should_NormalizeHost_When_HostIsGitHubEnterprise(t *test
 
 	got := ref.PRURL()
 
-	want := "https://" + github.NormalizeHost("github.mycorp.com") + "/acme/widgets/pull/7"
+	want := "https://" + domain.NormalizeHost("github.mycorp.com") + "/acme/widgets/pull/7"
 	if got != want {
 		t.Errorf("PRURL() = %q, want %q", got, want)
 	}

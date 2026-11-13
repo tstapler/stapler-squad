@@ -58,6 +58,7 @@ go_test(
         "//executor/safeexec",
         "//github",
         "//session",
+        "//session/domain",
         "//testutil/wait",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

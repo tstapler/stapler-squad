@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestSessionJSONSerialization verifies Session can be serialized and deserialized
@@ -33,7 +35,7 @@ func TestSessionJSONSerialization(t *testing.T) {
 			WorkingDir:   "/home/user/project/src",
 			IsWorktree:   true,
 			MainRepoPath: "/home/user/main-repo",
-			SessionType:  SessionTypeNewWorktree,
+			SessionType:  domain.SessionTypeNewWorktree,
 		},
 		Terminal: &TerminalContext{
 			Height:           24,
@@ -335,7 +337,7 @@ func TestSessionToInstanceConversion(t *testing.T) {
 			ProjectPath: "/projects/myapp",
 			WorkingDir:  "/projects/myapp/lib",
 			IsWorktree:  false,
-			SessionType: SessionTypeDirectory,
+			SessionType: domain.SessionTypeDirectory,
 		},
 		Terminal: &TerminalContext{
 			Height:           30,

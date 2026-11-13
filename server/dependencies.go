@@ -1985,7 +1985,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		artifactIndex := search.NewArtifactIndex(storage)
 		attachScan := artifactScanCompleteHandler(historyLinker.Instances, eventBus)
 		indexScan := indexScannedArtifacts(historyLinker.Instances, artifactIndex)
-		artifactExtractor.OnScanComplete = func(title string, blob *artifacts.SessionArtifactsBlob) {
+		artifactExtractor.OnScanComplete = func(title string, blob *domain.SessionArtifactsBlob) {
 			attachScan(title, blob)
 			indexScan(title, blob)
 		}

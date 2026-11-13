@@ -859,7 +859,7 @@ func (l *BacklogLifecycleListener) autoMergePreflight(repoPath, itemID string) b
 	if allowed, known := res.AutoMerge(); !known || allowed {
 		return false
 	}
-	key := fmt.Sprintf("automerge-off:%s/%s", github.NormalizeHost(ref.Host()), ref)
+	key := fmt.Sprintf("automerge-off:%s/%s", domain.NormalizeHost(ref.Host()), ref)
 	if !l.claimPreflight(key) {
 		return false
 	}

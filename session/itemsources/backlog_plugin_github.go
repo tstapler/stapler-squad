@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -39,7 +41,7 @@ var githubAPIBaseURL = "https://api.github.com"
 // host resolves to githubAPIBaseURL (github.com, or the test override).
 func githubAPIURL(host, pathAndQuery string) string {
 	base := githubAPIBaseURL
-	if host != "" && !github.IsGitHubCom(host) {
+	if host != "" && !domain.IsGitHubCom(host) {
 		base = github.RestBaseURLForHost(host)
 	}
 	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(pathAndQuery, "/")
