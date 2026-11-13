@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
@@ -52,12 +52,12 @@ func getPiExtensionHealthResolver() func(sessionID, program string) sessionv1.Pi
 // no blob reports why: "scanning" when a transcript is linked and awaiting its
 // first scan, otherwise "not_linked". supportsTranscript is only consulted for
 // the unlinked case, since it reads program config from disk.
-func artifactsToProto(a *artifacts.SessionArtifactsBlob, linked bool, supportsTranscript func() bool) *sessionv1.SessionArtifacts {
+func artifactsToProto(a *domain.SessionArtifactsBlob, linked bool, supportsTranscript func() bool) *sessionv1.SessionArtifacts {
 	if a == nil {
 		if linked {
-			return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateScanning), TranscriptSupported: true}
+			return &sessionv1.SessionArtifacts{ScanState: string(domain.ScanStateScanning), TranscriptSupported: true}
 		}
-		return &sessionv1.SessionArtifacts{ScanState: string(artifacts.ScanStateNotLinked), TranscriptSupported: supportsTranscript()}
+		return &sessionv1.SessionArtifacts{ScanState: string(domain.ScanStateNotLinked), TranscriptSupported: supportsTranscript()}
 	}
 	return &sessionv1.SessionArtifacts{
 		PrUrls:              validUTF8All(a.PRURLs),
@@ -278,7 +278,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 
 	// ContextHealth / ContextHealthReason (fields 97–98): left UNSPECIFIED until a
 	// verdict with enough samples exists (e.g. never for non-Claude sessions).
-	if snap.ContextHealth.Level != tokens.HealthUnknown {
+	if snap.ContextHealth.Level != domain.HealthUnknown {
 		protoSession.ContextHealth = tokens.ContextHealthLevelToProto(snap.ContextHealth.Level)
 		protoSession.ContextHealthReason = snap.ContextHealth.Reason
 	}
@@ -498,13 +498,13 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 }
 
 // sessionTypeToProto converts session.SessionType to proto SessionType enum.
-func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
+func sessionTypeToProto(sessionType domain.SessionType) sessionv1.SessionType {
 	switch sessionType {
-	case session.SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
-	case session.SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
-	case session.SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
@@ -576,7 +576,7 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 }
 
 // checksToProto converts the itemized GitHub statusCheckRollup into proto GithubCheckItem messages.
-func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
+func checksToProto(checks []domain.GitHubCheckItem) []*sessionv1.GithubCheckItem {
 	out := make([]*sessionv1.GithubCheckItem, len(checks))
 	for i, c := range checks {
 		out[i] = &sessionv1.GithubCheckItem{Name: c.Name, Context: c.Context, State: c.State, Status: c.Status, Conclusion: c.Conclusion}
@@ -585,7 +585,7 @@ func checksToProto(checks []github.CheckItem) []*sessionv1.GithubCheckItem {
 }
 
 // reviewFeedbackToProto converts the itemized GitHub PR review list into proto GithubReviewFeedback messages.
-func reviewFeedbackToProto(reviews []github.ReviewItem) []*sessionv1.GithubReviewFeedback {
+func reviewFeedbackToProto(reviews []domain.GitHubReviewItem) []*sessionv1.GithubReviewFeedback {
 	out := make([]*sessionv1.GithubReviewFeedback, len(reviews))
 	for i, r := range reviews {
 		out[i] = &sessionv1.GithubReviewFeedback{Author: r.Author, State: r.State, Body: r.Body}

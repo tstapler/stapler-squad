@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -72,7 +74,7 @@ func sumForResolvedSessionType(t *testing.T, m *metricdata.Metrics, resolvedSess
 // "SessionType flipped upstream" class this check exists to catch.
 func TestStartLocked_should_RecordInvariantMetricAndWarn_When_NewWorktreeRequestResolvesToDirectory(t *testing.T) {
 	before := collectWorktreeMismatchMetric(t)
-	baseline := sumForResolvedSessionType(t, before, string(SessionTypeDirectory))
+	baseline := sumForResolvedSessionType(t, before, string(domain.SessionTypeDirectory))
 
 	handler := installRecordingHandler(t)
 	repoDir := t.TempDir()
@@ -82,7 +84,7 @@ func TestStartLocked_should_RecordInvariantMetricAndWarn_When_NewWorktreeRequest
 		Title:                title,
 		Path:                 repoDir,
 		Program:              "sh",
-		SessionType:          SessionTypeDirectory,
+		SessionType:          domain.SessionTypeDirectory,
 		RequestedNewWorktree: true, // the mismatch: the original request asked for SESSION_TYPE_NEW_WORKTREE
 		TmuxPrefix:           fmt.Sprintf("test_worktreemismatch_%d_", now),
 		TmuxServerSocket:     coldRestoreSocket(t),
@@ -93,7 +95,7 @@ func TestStartLocked_should_RecordInvariantMetricAndWarn_When_NewWorktreeRequest
 	_ = inst.Start(true) // the invariant check runs before firstTimeSetup's worktree work; the eventual Start outcome is irrelevant here
 
 	after := collectWorktreeMismatchMetric(t)
-	got := sumForResolvedSessionType(t, after, string(SessionTypeDirectory))
+	got := sumForResolvedSessionType(t, after, string(domain.SessionTypeDirectory))
 	require.Greater(t, got, baseline, "session_creation_worktree_type_mismatch_total must increment for the resolved SessionTypeDirectory label")
 
 	warnLines := handler.recordsAtLevel(slog.LevelWarn)

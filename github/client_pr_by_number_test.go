@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // resetGhBaseURLForTest overrides GhBaseURL for a test and returns a restore
@@ -240,7 +242,7 @@ func TestGetPRInfoCtx_should_PopulateChecksAndReviews_When_StatusCheckRollupAndR
 	}
 
 	// Itemized Checks, read alongside the collapsed CheckConclusion/CheckStatus.
-	wantChecks := []CheckItem{
+	wantChecks := []domain.GitHubCheckItem{
 		{Name: "build", Context: "", State: "SUCCESS", Status: "completed", Conclusion: "success"},
 		{Name: "", Context: "lint", State: "FAILURE", Status: "completed", Conclusion: "failure"},
 	}
@@ -254,7 +256,7 @@ func TestGetPRInfoCtx_should_PopulateChecksAndReviews_When_StatusCheckRollupAndR
 	}
 
 	// Itemized Reviews, read alongside the collapsed Approved/ChangesRequested counts.
-	wantReviews := []ReviewItem{
+	wantReviews := []domain.GitHubReviewItem{
 		{Author: "alice", State: "APPROVED", Body: ""},
 		{Author: "bob", State: "CHANGES_REQUESTED", Body: "Please fix the error handling in foo.go"},
 	}

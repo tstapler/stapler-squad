@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // RepoRef is a value object that bundles a GitHub owner and repository name,
@@ -55,7 +57,7 @@ type LinkKey string
 // repoKey is the one place host, owner and repo are normalized for link keys.
 // All three are case-insensitive on GitHub; an empty host means github.com.
 func (r RepoRef) repoKey() string {
-	return NormalizeHost(r.host) + "/" + strings.ToLower(r.owner) + "/" + strings.ToLower(r.repo)
+	return domain.NormalizeHost(r.host) + "/" + strings.ToLower(r.owner) + "/" + strings.ToLower(r.repo)
 }
 
 // BranchKey returns "host/owner/repo@branch". The branch is never lowercased:

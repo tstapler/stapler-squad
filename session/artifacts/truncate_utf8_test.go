@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestTruncateBytes_ShouldNotSplitRune_WhenCutLandsMidRune(t *testing.T) {
@@ -28,7 +30,7 @@ func TestTruncate_ShouldNotSplitRune_WhenCommandOverCap(t *testing.T) {
 
 func TestCommandRecord_ShouldHaveValidUTF8Result_WhenOutputTruncatedMidRune(t *testing.T) {
 	t.Parallel()
-	call := pendingCall{cmd: &CommandArtifact{Type: "git_commit", Command: "git commit"}}
+	call := pendingCall{cmd: &domain.CommandArtifact{Type: "git_commit", Command: "git commit"}}
 	rec := commandRecord(call, strings.Repeat("日", 400))
 	if !utf8.ValidString(rec.Result) {
 		t.Fatalf("Result is invalid UTF-8")

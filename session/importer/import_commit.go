@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -144,7 +146,7 @@ func CommitImportExternalSession(ctx context.Context, params CommitImportParams)
 				Title:            title,
 				Path:             params.Candidate.Path,
 				Program:          params.Candidate.Program,
-				SessionType:      session.SessionTypeDirectory,
+				SessionType:      domain.SessionTypeDirectory,
 				TmuxServerSocket: params.TmuxServerSocket,
 				// Backend consults the session-name override map
 				// (tymux-bundled-integration Epic 4.4.3) so a canary override

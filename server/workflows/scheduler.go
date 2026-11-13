@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
@@ -492,7 +494,7 @@ func (s *Scheduler) fireTrigger(ctx context.Context, wf *ent.Workflow, p firePar
 		}
 	}
 
-	sessionType := sessionTypeToProto(session.SessionType(wf.SessionType))
+	sessionType := sessionTypeToProto(domain.SessionType(wf.SessionType))
 
 	// Resolve a family alias (e.g. "family:sonnet") to a concrete model ID and
 	// append it to the program via the shared helper (session.ResolveExecutorProgram),
@@ -687,17 +689,17 @@ func ValidateCronExpression(expr string) error {
 }
 
 // sessionTypeToProto converts a session.SessionType string to the proto enum.
-func sessionTypeToProto(st session.SessionType) sessionv1.SessionType {
+func sessionTypeToProto(st domain.SessionType) sessionv1.SessionType {
 	switch st {
-	case session.SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
-	case session.SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
-	case session.SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
-	case session.SessionTypeNewProject:
+	case domain.SessionTypeNewProject:
 		return sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT
-	case session.SessionTypeOneOff:
+	case domain.SessionTypeOneOff:
 		return sessionv1.SessionType_SESSION_TYPE_ONE_OFF
 	default:
 		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED

@@ -33,10 +33,7 @@ package session
 import (
 	"time"
 
-	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // GitHubIntegration groups all GitHub PR / URL integration fields within
@@ -61,8 +58,8 @@ type GitHubIntegration struct {
 	GitHubApprovedCount    int
 	GitHubChangesReqCount  int
 	GitHubCheckConclusion  string
-	GitHubChecks           []github.CheckItem
-	GitHubReviewFeedback   []github.ReviewItem
+	GitHubChecks           []domain.GitHubCheckItem
+	GitHubReviewFeedback   []domain.GitHubReviewItem
 	GitHubMergeable        string
 	GitHubPRStatusTerminal bool
 	LastPRStatusCheck      time.Time
@@ -120,7 +117,7 @@ type InstanceSnapshot struct {
 	InitialPromptSentAt   time.Time
 	Category              string
 	Note                  string
-	SessionType           SessionType
+	SessionType           domain.SessionType
 	TmuxPrefix            string
 	TmuxServerSocket      string
 	Backend               ProcessManagerBackend
@@ -180,8 +177,8 @@ type InstanceSnapshot struct {
 	IsManaged        bool
 	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
 	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
-	Artifacts        *artifacts.SessionArtifactsBlob
-	ContextHealth    tokens.ContextHealthVerdict // flat value; no deep copy needed
+	Artifacts        *domain.SessionArtifactsBlob
+	ContextHealth    domain.ContextHealthVerdict // flat value; no deep copy needed
 }
 
 // buildSnapshot builds a point-in-time InstanceSnapshot from i.
@@ -243,8 +240,8 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubApprovedCount:    i.GitHubApprovedCount,
 			GitHubChangesReqCount:  i.GitHubChangesReqCount,
 			GitHubCheckConclusion:  i.GitHubCheckConclusion,
-			GitHubChecks:           append([]github.CheckItem(nil), i.GitHubChecks...),
-			GitHubReviewFeedback:   append([]github.ReviewItem(nil), i.GitHubReviewFeedback...),
+			GitHubChecks:           append([]domain.GitHubCheckItem(nil), i.GitHubChecks...),
+			GitHubReviewFeedback:   append([]domain.GitHubReviewItem(nil), i.GitHubReviewFeedback...),
 			GitHubMergeable:        i.GitHubMergeable,
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,

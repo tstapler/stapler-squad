@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/spaolacci/murmur3"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -18,49 +20,6 @@ const (
 	// maxFingerprintBytes bounds how much of a tool input is hashed.
 	maxFingerprintBytes = 256
 )
-
-// ContextHealthLevel is the green/amber/red verdict. The zero value is
-// HealthUnknown so an unset struct is never a false green.
-type ContextHealthLevel int
-
-const (
-	HealthUnknown ContextHealthLevel = iota
-	HealthGreen
-	HealthAmber
-	HealthRed
-)
-
-func (l ContextHealthLevel) String() string {
-	switch l {
-	case HealthGreen:
-		return "green"
-	case HealthAmber:
-		return "amber"
-	case HealthRed:
-		return "red"
-	default:
-		return "unknown"
-	}
-}
-
-// ContextHealthSignals are raw, config-independent counts over the trailing
-// window. It holds no message content: tool names, a confusion pattern name,
-// and counts only.
-type ContextHealthSignals struct {
-	MaxConsecutiveRepeats int
-	RepeatedToolName      string
-	ConfusionPhraseCount  int
-	LastConfusionPhrase   string
-	ToolCallsInWindow     int
-	WindowEndsAt          time.Time
-}
-
-// ContextHealthVerdict is Signals judged against config thresholds.
-type ContextHealthVerdict struct {
-	Level   ContextHealthLevel
-	Reason  string
-	Signals ContextHealthSignals
-}
 
 // normalizeToolInput canonicalises a tool input for fingerprinting. Matching is
 // exact after normalisation, and inputs sharing the first maxFingerprintBytes
@@ -154,8 +113,8 @@ func (r *healthTurnRing) inOrder() []healthTurnRecord {
 
 // extractContextHealthSignals walks the window, tracking the identical-call
 // streak across turn boundaries.
-func extractContextHealthSignals(ring *healthTurnRing) ContextHealthSignals {
-	var sig ContextHealthSignals
+func extractContextHealthSignals(ring *healthTurnRing) domain.ContextHealthSignals {
+	var sig domain.ContextHealthSignals
 	var prev uint64
 	streak := 0
 	for _, rec := range ring.inOrder() {
@@ -186,10 +145,10 @@ func extractContextHealthSignals(ring *healthTurnRing) ContextHealthSignals {
 
 // EvaluateContextHealth applies thresholds to raw signals. Pure; a zero-value
 // cfg behaves as the defaults.
-func EvaluateContextHealth(sig ContextHealthSignals, cfg config.ContextHealthConfig) ContextHealthVerdict {
+func EvaluateContextHealth(sig domain.ContextHealthSignals, cfg config.ContextHealthConfig) domain.ContextHealthVerdict {
 	cfg = cfg.ContextHealthConfigOrDefault()
 	if sig.ToolCallsInWindow < cfg.MinToolCallSamples {
-		return ContextHealthVerdict{Level: HealthUnknown, Signals: sig}
+		return domain.ContextHealthVerdict{Level: domain.HealthUnknown, Signals: sig}
 	}
 
 	var reasons []string
@@ -202,15 +161,15 @@ func EvaluateContextHealth(sig ContextHealthSignals, cfg config.ContextHealthCon
 		reasons = append(reasons, fmt.Sprintf("%d self-correction messages in the last %d turns", sig.ConfusionPhraseCount, healthWindowTurns))
 	}
 
-	level := HealthGreen
+	level := domain.HealthGreen
 	switch {
 	case len(reasons) == 0:
 	case (loop && confused) ||
 		sig.MaxConsecutiveRepeats >= 2*cfg.LoopRepeatThreshold ||
 		sig.ConfusionPhraseCount >= 2*cfg.ConfusionPhraseThreshold:
-		level = HealthRed
+		level = domain.HealthRed
 	default:
-		level = HealthAmber
+		level = domain.HealthAmber
 	}
-	return ContextHealthVerdict{Level: level, Reason: strings.Join(reasons, "; "), Signals: sig}
+	return domain.ContextHealthVerdict{Level: level, Reason: strings.Join(reasons, "; "), Signals: sig}
 }

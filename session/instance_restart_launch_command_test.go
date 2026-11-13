@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -36,7 +38,7 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          stubClaudeBinary(t),
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_spike_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),

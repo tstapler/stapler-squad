@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -37,7 +39,7 @@ func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewWorktreeSe
 		Title:            title,
 		Path:             repoDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		Branch:           "bugfix/pr-poller",
 		TmuxPrefix:       fmt.Sprintf("test_tagworktree_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -70,7 +72,7 @@ func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewProjectOrE
 			Title:            title,
 			Path:             projectDir,
 			Program:          "sleep 300",
-			SessionType:      SessionTypeNewProject,
+			SessionType:      domain.SessionTypeNewProject,
 			Branch:           "bugfix/new-project",
 			TmuxPrefix:       fmt.Sprintf("test_tagnewproj_%d_", time.Now().UnixNano()),
 			TmuxServerSocket: coldRestoreSocket(t),
@@ -97,7 +99,7 @@ func TestReclassifyTagsAfterCreate_should_ApplyTagImmediately_When_NewProjectOrE
 			Title:            title,
 			Path:             mainRepoDir,
 			Program:          "sleep 300",
-			SessionType:      SessionTypeExistingWorktree,
+			SessionType:      domain.SessionTypeExistingWorktree,
 			ExistingWorktree: worktree.GetWorktreePath(),
 			TmuxPrefix:       fmt.Sprintf("test_tagexistwt_%d_", time.Now().UnixNano()),
 			TmuxServerSocket: coldRestoreSocket(t),
@@ -126,7 +128,7 @@ func TestReclassifyTagsAfterCreate_should_NotDeadlock_When_CalledAfterSetupFirst
 		Title:       "deadlock-guard",
 		Path:        projectDir,
 		Program:     "claude",
-		SessionType: SessionTypeNewProject,
+		SessionType: domain.SessionTypeNewProject,
 		Branch:      "bugfix/deadlock-guard",
 	})
 	require.NoError(t, err)

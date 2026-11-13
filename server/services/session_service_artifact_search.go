@@ -10,12 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/search"
 )
 
@@ -164,11 +165,11 @@ func (a *ArtifactService) addExactMatches(ctx context.Context, g *hitGroups, cq 
 			return err
 		}
 		for _, f := range found {
-			g.addMatch(f.SessionID, artifacts.KindPR, prDisplay(cq.pr), exactMatchScore)
+			g.addMatch(f.SessionID, domain.KindPR, prDisplay(cq.pr), exactMatchScore)
 		}
 	case queryKindSHA:
 		for _, id := range a.index.SessionsForSHAPrefix(cq.sha) {
-			g.addMatch(id, artifacts.KindCommit, cq.sha, exactMatchScore)
+			g.addMatch(id, domain.KindCommit, cq.sha, exactMatchScore)
 		}
 	}
 	return nil
@@ -241,7 +242,7 @@ func (v visibleSet) unscanned() int32 {
 			n++
 			continue
 		}
-		if st := blob.State(); st == artifacts.ScanStateNotLinked || st == artifacts.ScanStateScanning {
+		if st := blob.State(); st == domain.ScanStateNotLinked || st == domain.ScanStateScanning {
 			n++
 		}
 	}
@@ -296,7 +297,7 @@ func newHitGroups(vis visibleSet) *hitGroups {
 	return &hitGroups{vis: vis, hits: map[string]*sessionv1.SessionArtifactHit{}, score: map[string]float64{}}
 }
 
-func (g *hitGroups) addMatch(uuid string, kind artifacts.RecordKind, text string, score float64) {
+func (g *hitGroups) addMatch(uuid string, kind domain.RecordKind, text string, score float64) {
 	inst, ok := g.vis.byUUID[uuid]
 	if !ok {
 		return

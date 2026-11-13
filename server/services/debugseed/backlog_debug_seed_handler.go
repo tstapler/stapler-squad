@@ -642,7 +642,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		Path:        worktreePath,
 		Program:     "claude",
 		Status:      session.Stopped,
-		SessionType: session.SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Worktree: session.GitWorktreeData{

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // largestRealTranscript returns the biggest transcript under ~/.claude/projects, or "".
@@ -28,7 +30,7 @@ func largestRealTranscript() string {
 	return best
 }
 
-func scanToBlob(t *testing.T, path string) (*SessionArtifactsBlob, int) {
+func scanToBlob(t *testing.T, path string) (*domain.SessionArtifactsBlob, int) {
 	t.Helper()
 	var raw string
 	ae := NewArtifactExtractor(
@@ -61,7 +63,7 @@ func TestScan_ShouldCapBlobAt128KB_WhenGeneratedHugeTranscript(t *testing.T) {
 		t.Fatalf("stored blob is %d bytes, cap %d", size, MaxBlobBytes)
 	}
 	for _, r := range blob.Records {
-		if c, ok := r.(CommandRecord); ok && len(c.Result) > MaxResultBytes {
+		if c, ok := r.(domain.CommandRecord); ok && len(c.Result) > MaxResultBytes {
 			t.Fatalf("command result %d bytes", len(c.Result))
 		}
 	}

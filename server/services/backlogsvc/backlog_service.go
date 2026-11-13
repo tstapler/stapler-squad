@@ -16,10 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -476,8 +477,8 @@ func (s *BacklogService) EnterpriseHosts() []string {
 	hosts := make([]string, 0, len(configuredHosts))
 	seen := make(map[string]bool, len(configuredHosts))
 	for _, h := range configuredHosts {
-		host := githubpkg.NormalizeHost(h.Host)
-		if host == "" || githubpkg.IsGitHubCom(host) || seen[host] {
+		host := domain.NormalizeHost(h.Host)
+		if host == "" || domain.IsGitHubCom(host) || seen[host] {
 			continue
 		}
 		seen[host] = true

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
@@ -91,11 +93,11 @@ func TestApplyPRUpdate_should_ThreadChecksReviewsMergeable_When_PRInfoPopulated(
 	inst := &session.Instance{Title: "checks-reviews-mergeable-test"}
 	poller := NewPRStatusPoller(nil)
 
-	checks := []github.CheckItem{
+	checks := []domain.GitHubCheckItem{
 		{Name: "build", Context: "ci/build", State: "SUCCESS", Status: "completed", Conclusion: "success"},
 		{Name: "lint", Context: "ci/lint", State: "FAILURE", Status: "completed", Conclusion: "failure"},
 	}
-	reviews := []github.ReviewItem{
+	reviews := []domain.GitHubReviewItem{
 		{Author: "alice", State: "APPROVED", Body: "lgtm"},
 		{Author: "bob", State: "CHANGES_REQUESTED", Body: "please fix x"},
 	}

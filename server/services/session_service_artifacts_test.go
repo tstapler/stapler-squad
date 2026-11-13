@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,7 +40,7 @@ func TestRescanSessionArtifacts_ShouldResetPositionAndScan_WhenAnyState(t *testi
 				func(string) (string, error) { return "", nil },
 				func(p string) (string, bool) { return "rescan-me", p == path },
 			)
-			ae.OnScanComplete = func(string, *artifacts.SessionArtifactsBlob) { scans.Add(1) }
+			ae.OnScanComplete = func(string, *domain.SessionArtifactsBlob) { scans.Add(1) }
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 			ae.Start(ctx, "")

@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"golang.org/x/sync/singleflight"
 )
@@ -522,7 +524,7 @@ func (x worktreeIndex) path(ref RepoRef, headRef string, prRepos map[string]bool
 // wildcard; an empty RepoRef host otherwise means github.com. Legacy links never
 // grant nudge linkage.
 func legacyCompatible(candidate RepoRef, hostUnrecorded bool, ref RepoRef, prRepos map[string]bool) bool {
-	if !hostUnrecorded && NormalizeHost(candidate.Host()) != NormalizeHost(ref.Host()) {
+	if !hostUnrecorded && domain.NormalizeHost(candidate.Host()) != domain.NormalizeHost(ref.Host()) {
 		return false
 	}
 	return !prRepos[candidate.repoKey()]
@@ -1043,7 +1045,7 @@ var errAccountRateLimited = errors.New("GitHub rate limit exceeded")
 // accountPollStatus classifies one account's fetch outcome. Detail is a fixed
 // short string per state, never the raw error, so it cannot leak a token.
 func accountPollStatus(acc connectedAccount, err error) AccountPollStatus {
-	st := AccountPollStatus{Host: NormalizeHost(acc.host), AccountLogin: acc.login, State: AccountPollOK}
+	st := AccountPollStatus{Host: domain.NormalizeHost(acc.host), AccountLogin: acc.login, State: AccountPollOK}
 	switch {
 	case err == nil:
 	case errors.Is(err, errAccountUnauthorized):
@@ -1171,7 +1173,7 @@ func (c *UserPRCache) runUserPRQuery(host, token, query string) (*graphQLRespons
 // fetchUserPRsForToken polls one account with exactly one request, plus one
 // legacy-query retry when the host rejects the widened query (cached per host).
 func (c *UserPRCache) fetchUserPRsForToken(host, login, token string) ([]UserPR, error) {
-	host = NormalizeHost(host)
+	host = domain.NormalizeHost(host)
 	query := userPRGraphQLQuery
 	if c.config.DegradedDetails {
 		query = userPRGraphQLQueryDegraded

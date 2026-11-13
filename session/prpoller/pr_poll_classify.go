@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/github"
 )
 
@@ -45,14 +47,14 @@ func newHostHealth() *hostHealth { return &hostHealth{last: map[string]time.Time
 
 func (h *hostHealth) markSuccess(host string, at time.Time) {
 	h.mu.Lock()
-	h.last[github.NormalizeHost(host)] = at
+	h.last[domain.NormalizeHost(host)] = at
 	h.mu.Unlock()
 }
 
 func (h *hostHealth) healthy(host string, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	at, ok := h.last[github.NormalizeHost(host)]
+	at, ok := h.last[domain.NormalizeHost(host)]
 	return ok && now.Sub(at) < hostAuthWindow
 }
 

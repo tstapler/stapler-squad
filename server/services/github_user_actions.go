@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	githubpkg "github.com/tstapler/stapler-squad/github"
@@ -165,7 +167,7 @@ func (s *GitHubUserService) toggleDraft(ctx context.Context, m *sessionv1.PRDraf
 // target a different PR than the one the account was authorized for.
 func cachedNodeID(prs []githubpkg.UserPR, key githubpkg.PRKey) string {
 	for _, pr := range prs {
-		if pr.Number == key.Number() && githubpkg.NormalizeHost(pr.Host) == key.Host() &&
+		if pr.Number == key.Number() && domain.NormalizeHost(pr.Host) == key.Host() &&
 			pr.Owner == key.Owner() && pr.Repo == key.RepoName() {
 			return pr.NodeID
 		}

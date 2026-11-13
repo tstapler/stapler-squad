@@ -533,7 +533,7 @@ func (h *backlogHandlers) sessionRepo(ctx context.Context, sessionUUID string) (
 func sameRepo(a, b githubpkg.RepoRef) bool { return repoIdentity(a) == repoIdentity(b) }
 
 func repoIdentity(r githubpkg.RepoRef) string {
-	host := strings.TrimPrefix(githubpkg.NormalizeHost(r.Host()), "www.")
+	host := strings.TrimPrefix(domain.NormalizeHost(r.Host()), "www.")
 	return host + "/" + strings.ToLower(r.Owner()) + "/" + strings.TrimSuffix(strings.ToLower(r.Repo()), ".git")
 }
 

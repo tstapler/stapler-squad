@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/singleflight"
@@ -164,7 +166,7 @@ func (c *repoSettingsLookup) peek(ref RepoRef) (RepoSettingsResult, bool) {
 // resolve runs inside the singleflight, so it re-checks the cache: a caller
 // that missed just before another flight finished must not fetch again.
 func (c *repoSettingsLookup) resolve(ctx context.Context, ref RepoRef, key string, force bool) RepoSettingsResult {
-	host := NormalizeHost(ref.Host())
+	host := domain.NormalizeHost(ref.Host())
 
 	c.mu.Lock()
 	now := c.now()
@@ -241,7 +243,7 @@ func (c *repoSettingsLookup) noteHostFailureLocked(host string, now time.Time) {
 }
 
 func (c *repoSettingsLookup) applyLocked(ref RepoRef, f repoSettingsFetch, now time.Time) (RepoSettingsResult, string) {
-	key, host := ref.repoKey(), NormalizeHost(ref.Host())
+	key, host := ref.repoKey(), domain.NormalizeHost(ref.Host())
 	e := c.entries[key]
 	if e == nil {
 		c.evictLocked(now)

@@ -16,11 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -32,7 +33,7 @@ type fakeBundleStorage struct {
 	analyticsErr error
 	itemSession  backlogdto.ItemSessionSummary
 	itemErr      error
-	artBlob      *artifacts.SessionArtifactsBlob
+	artBlob      *domain.SessionArtifactsBlob
 	artErr       error
 }
 
@@ -44,7 +45,7 @@ func (f *fakeBundleStorage) GetItemSessionBySessionUUID(_ context.Context, _ str
 	return f.itemSession, f.itemErr
 }
 
-func (f *fakeBundleStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*artifacts.SessionArtifactsBlob, error) {
+func (f *fakeBundleStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*domain.SessionArtifactsBlob, error) {
 	return f.artBlob, f.artErr
 }
 
@@ -317,7 +318,7 @@ func (b *blockingStorage) GetItemSessionBySessionUUID(_ context.Context, _ strin
 	return backlogdto.ItemSessionSummary{}, nil
 }
 
-func (b *blockingStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*artifacts.SessionArtifactsBlob, error) {
+func (b *blockingStorage) GetSessionArtifactsByUUID(_ context.Context, _ string) (*domain.SessionArtifactsBlob, error) {
 	return nil, nil //nolint:nilnil // fake: no stored artifacts
 }
 
@@ -422,9 +423,9 @@ func TestAssembleBundle_IncludesTracesAndProfiles(t *testing.T) {
 
 func TestAssembleBundle_ShouldRedactSecrets_WhenArtifactsCarryTokens(t *testing.T) {
 	svc := sessionbundle.NewSessionBundleService(
-		&fakeBundleStorage{artBlob: &artifacts.SessionArtifactsBlob{
+		&fakeBundleStorage{artBlob: &domain.SessionArtifactsBlob{
 			ExternalURLs: []string{"https://x.io/cb?token=abcd1234"},
-			Commands:     []artifacts.CommandArtifact{{Type: "git_commit", Command: "git commit --token abcd1234"}},
+			Commands:     []domain.CommandArtifact{{Type: "git_commit", Command: "git commit --token abcd1234"}},
 		}},
 		&fakeCtxHistory{},
 		&fakeScrollback{lines: []byte("l")},

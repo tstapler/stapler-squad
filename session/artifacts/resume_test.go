@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/session/scanstate"
 )
 
@@ -71,7 +73,7 @@ func appendLines(t *testing.T, path string, texts ...string) {
 
 func prURLs(t *testing.T, blob string) []string {
 	t.Helper()
-	var b SessionArtifactsBlob
+	var b domain.SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(blob), &b); err != nil {
 		t.Fatal(err)
 	}
@@ -275,14 +277,14 @@ func TestRestoreState_KeepsSeededOffsetAheadOfStalePersistedOne(t *testing.T) {
 
 func TestMergeAndPersist_DedupsRepeatedCommands(t *testing.T) {
 	t.Parallel()
-	cmd := CommandArtifact{Type: "git_commit", Command: "git commit -m x", Detail: "x"}
-	raw, _ := json.Marshal(SessionArtifactsBlob{Commands: []CommandArtifact{cmd}})
+	cmd := domain.CommandArtifact{Type: "git_commit", Command: "git commit -m x", Detail: "x"}
+	raw, _ := json.Marshal(domain.SessionArtifactsBlob{Commands: []domain.CommandArtifact{cmd}})
 	ae := NewArtifactExtractor(
 		func(string, string) error { return nil },
 		func(string) (string, error) { return string(raw), nil },
 		func(string) (string, bool) { return "s", true },
 	)
-	blob := ae.mergeAndPersist("s", 1, &scanFindings{commands: []CommandArtifact{cmd}}, false)
+	blob := ae.mergeAndPersist("s", 1, &scanFindings{commands: []domain.CommandArtifact{cmd}}, false)
 	if len(blob.Commands) != 1 {
 		t.Fatalf("commands = %v, want the repeat dropped", blob.Commands)
 	}

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/session/scanstate"
 )
 
@@ -31,9 +33,9 @@ func v1Scanned(t *testing.T, flag func() bool, paths ...string) *harness {
 	return cur
 }
 
-func mustBlob(t *testing.T, raw string) *SessionArtifactsBlob {
+func mustBlob(t *testing.T, raw string) *domain.SessionArtifactsBlob {
 	t.Helper()
-	var b SessionArtifactsBlob
+	var b domain.SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(raw), &b); err != nil {
 		t.Fatal(err)
 	}

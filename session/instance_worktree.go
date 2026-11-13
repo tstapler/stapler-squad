@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
@@ -75,14 +77,14 @@ func (i *Instance) RepoName() (string, error) {
 // own comments for why. Any other combination is rejected up front rather than
 // silently attempting local discovery against a remote path.
 func (i *Instance) setupFirstTimeWorktree() error {
-	if i.executionTarget().IsRemote() && i.SessionType != SessionTypeExistingWorktree &&
-		i.SessionType != SessionTypeDirectory && i.SessionType != SessionTypeNewProject {
+	if i.executionTarget().IsRemote() && i.SessionType != domain.SessionTypeExistingWorktree &&
+		i.SessionType != domain.SessionTypeDirectory && i.SessionType != domain.SessionTypeNewProject {
 		return fmt.Errorf("remote execution target only supports session_type=existing_worktree, session_type=directory, "+
 			"or session_type=new_project (worktree/path must be pre-resolved by CreateSession's mode-specific block); got %v", i.SessionType)
 	}
 
 	switch i.SessionType {
-	case SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		// This case's contract is deliberately strict and unconditional: i.Path
 		// must already be an existing repo. It never bootstraps one, with no
 		// CreateIfMissing exception -- see findGitRepoRoot's doc comment for why
@@ -112,7 +114,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		i.mu.Unlock()
 		i.snapshot.Store(snap)
 		log.Info("git worktree created", "session", i.Title, "branch", branchName)
-	case SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		if i.ExistingWorktree == "" {
 			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
 		}
@@ -194,7 +196,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		i.Branch = connectedBranch
 		i.mu.Unlock()
 		log.Info("connected to existing worktree", "session", i.Title, "branch", connectedBranch)
-	case SessionTypeNewProject:
+	case domain.SessionTypeNewProject:
 		log.Info("new project session, initializing git repo", "session", i.Title, "path", i.Path)
 		// A remote instance's project directory was already git-initialized on the
 		// remote host by CreateSession's mode-specific block (git.RemoteWorktreeOps.
@@ -235,7 +237,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			i.mu.Unlock()
 			log.Info("new project initialized", "path", i.Path)
 		}
-	case SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
 		// EnsureDirectorySessionPath does local-filesystem os.Stat/git-init -- correct for
 		// a local Directory session, but i.Path names a REMOTE host path for a remote one,

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -346,7 +348,7 @@ func TestBackgroundResolutionPipeline_should_SkipTerminalWrite_When_EpochAlready
 			Title:            "epic22-stale-epoch",
 			Path:             dir,
 			Program:          "claude",
-			SessionType:      session.SessionTypeDirectory,
+			SessionType:      domain.SessionTypeDirectory,
 			TmuxServerSocket: fix.svc.testTmuxServerSocket,
 		},
 		Storage: fix.storage,
@@ -488,7 +490,7 @@ func TestBackgroundResolutionPipeline_should_TargetWorktreeDir_When_InjectingHoo
 			Title:            "epic42-hook-config-worktree",
 			Path:             repoDir,
 			Program:          "sh",
-			SessionType:      session.SessionTypeNewWorktree,
+			SessionType:      domain.SessionTypeNewWorktree,
 			Branch:           "feature-hook-test",
 			TmuxServerSocket: fix.svc.testTmuxServerSocket,
 		},
@@ -578,7 +580,7 @@ func TestSessionCreationPipeline_should_FailWithDirectoryCollision_When_Worktree
 			Title:            "epic45-collision-target",
 			Path:             repoDir,
 			Program:          "sh",
-			SessionType:      session.SessionTypeExistingWorktree,
+			SessionType:      domain.SessionTypeExistingWorktree,
 			ExistingWorktree: collisionPath,
 			TmuxServerSocket: fix.svc.testTmuxServerSocket,
 		},
@@ -652,7 +654,7 @@ func TestCreateSession_should_AllowOnlyOneWinner_When_ConcurrentRequestsTargetSa
 				Title:            title,
 				Path:             repoDir,
 				Program:          "sh",
-				SessionType:      session.SessionTypeExistingWorktree,
+				SessionType:      domain.SessionTypeExistingWorktree,
 				ExistingWorktree: repoDir,
 				TmuxServerSocket: fix.svc.testTmuxServerSocket,
 			},
