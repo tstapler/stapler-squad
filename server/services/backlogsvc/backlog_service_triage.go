@@ -447,6 +447,10 @@ const maxTriageSessionAge = triageCallBudget + 15*time.Minute
 
 // prFixMainBranch is the branch AutoReopenForPRFix syncs a PR's branch against before
 // respawning a fix session. This repo's convention is "main" (see CLAUDE.md).
+//
+// Still the literal "main" on purpose: isCodeShippedToMain and syncPRBranchWithMain
+// gate transitions and push merges, which a master-default repo would newly activate.
+// The read-only ship-status display resolves the real default branch instead.
 const prFixMainBranch = "main"
 
 // slugify converts s to a lowercase hyphen-delimited slug safe for file paths.

@@ -532,7 +532,7 @@ func (r *ReviewGateRunner) runDiffPreChecks(ctx context.Context, gateContext Gat
 		// Checked/synced here, before any diff is computed, so a clean auto-sync never
 		// even reaches the reviewer, and a real conflict blocks with an explicit,
 		// actionable reason instead of silently producing a misleading diff.
-		if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, domain.BounceMainBranch, git.DefaultBranchDriftThreshold); !ok {
+		if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, git.ResolveDefaultBranchName(item.RepoPath), git.DefaultBranchDriftThreshold); !ok {
 			log.WarningLog().Printf("[BacklogLifecycle] spawnReviewGate branch drift blocked review item=%s branch=%s: %s", item.ID, wt.BranchName, blockedSummary)
 			return r.blockReviewWithTerminalVerdict(ctx, gateContext, item, is, "branch-drift", "branch drift", blockedSummary,
 				"Review blocked — branch drifted too far behind main",

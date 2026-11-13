@@ -69,6 +69,8 @@ go_test(
         "backlog_spawn_failed_test.go",
         "backlog_storage_pr_listener_test.go",
         "ci_flaky_rerun_test.go",
+        "default_branch_guard_test.go",
+        "default_branch_master_test.go",
         "ent_repository_backlog_bk_test.go",
         "helpers_test.go",
         "liveness_characterization_test.go",

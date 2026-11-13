@@ -409,11 +409,12 @@ func (l *BacklogLifecycleListener) mostRecentWorkCommitShippedToMain(ctx context
 	// (work committed directly to main, no separate feature branch ever used)
 	// legitimately has sha == base == "shipped" by construction; that case
 	// must still fall through to the IsCommitOnMain check below unchanged.
+	defaultBranch := git.ResolveDefaultBranchName(repoPath)
 	if wt, wtErr := l.storage.GetWorktreeDataBySessionUUID(ctx, lastWorkSessionUUID); wtErr == nil &&
-		wt.BranchName != domain.BounceMainBranch && wt.BaseCommitSHA != "" && sha == wt.BaseCommitSHA {
+		wt.BranchName != defaultBranch && wt.BaseCommitSHA != "" && sha == wt.BaseCommitSHA {
 		return sha, false // no new commits yet on this branch — nothing to have shipped
 	}
-	onMain, mainErr := git.IsCommitOnMain(repoPath, domain.BounceMainBranch, sha)
+	onMain, mainErr := git.IsCommitOnMain(repoPath, defaultBranch, sha)
 	if mainErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] mostRecentWorkCommitShippedToMain IsCommitOnMain item=%s sha=%s: %v", itemID, sha, mainErr)
 		return sha, false
@@ -708,10 +709,11 @@ func (l *BacklogLifecycleListener) pushAndCreatePR(ctx context.Context, item *ba
 		// an unresolvable push_failed row. Any error from the check itself is
 		// treated as inconclusive (HasCommitsAheadOfMain returns true), so a
 		// broken check never blocks a real PR creation attempt.
-		if hasCommits, aheadErr := g.HasCommitsAheadOfMain(domain.BounceMainBranch); aheadErr != nil {
+		defaultBranch := git.ResolveDefaultBranchName(wt.RepoPath)
+		if hasCommits, aheadErr := g.HasCommitsAheadOfMain(defaultBranch); aheadErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] pushAndCreatePR HasCommitsAheadOfMain item=%s: %v; proceeding with PR creation attempt", item.ID, aheadErr)
 		} else if !hasCommits {
-			fallbackToDone(fmt.Sprintf("branch %s has no commits ahead of %s — nothing to ship", wt.BranchName, domain.BounceMainBranch))
+			fallbackToDone(fmt.Sprintf("branch %s has no commits ahead of %s — nothing to ship", wt.BranchName, defaultBranch))
 			return
 		}
 
@@ -2454,7 +2456,11 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 		return false
 	}
 
-	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, domain.BounceMainBranch, lastCommitSha)
+	// Deliberately still the literal "main" (not ResolveDefaultBranchName): this
+	// closes a live PR as superseded, and on a master-default repo the resolved
+	// branch would newly activate that destructive path. Revisit with its own soak.
+	supersedeBranch := domain.BounceMainBranch
+	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, supersedeBranch, lastCommitSha)
 	if mainErr != nil {
 		log.DebugLog().Printf("[BacklogLifecycle] closeIfSupersededByMain IsCommitOnMain item=%s sha=%s: %v", item.ID, lastCommitSha, mainErr)
 		return false
@@ -2464,7 +2470,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	}
 
 	log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain item=%s: last commit %s is already on %s — PR #%d is superseded, closing instead of spawning another fix cycle",
-		item.ID, lastCommitSha, domain.BounceMainBranch, item.PrNumber)
+		item.ID, lastCommitSha, supersedeBranch, item.PrNumber)
 
 	// Story 6 guard (adversarial-review.md's Blocker): re-verify, via a live
 	// GitHub lookup, that PR #item.PrNumber's head branch still matches this
@@ -2485,7 +2491,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 
 	closeComment := fmt.Sprintf(
 		"Closing as superseded: this branch's last known commit (%s) is already present on %s, so this item's work has already shipped through another path. No further fix is needed here.",
-		lastCommitSha, domain.BounceMainBranch)
+		lastCommitSha, supersedeBranch)
 	if closeErr := checker.ClosePR(ctx, item.PrNumber, closeComment); closeErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] closeIfSupersededByMain ClosePR item=%s pr=%d: %v", item.ID, item.PrNumber, closeErr)
 		// Still proceed — the item's code is on main regardless of whether the
@@ -2504,7 +2510,7 @@ func (l *BacklogLifecycleListener) closeIfSupersededByMain(ctx context.Context, 
 	precondition := &backlogdto.BacklogItemPrecondition{
 		ExpectedStatus: string(domain.BacklogStatusPRPending),
 		Note: fmt.Sprintf("self-heal: PR #%d closed as superseded — commit %s already on %s",
-			closedPrNum, lastCommitSha, domain.BounceMainBranch),
+			closedPrNum, lastCommitSha, supersedeBranch),
 	}
 	if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller: domain.CallerCloseSupersededPR, ItemID: item.ID, To: domain.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,

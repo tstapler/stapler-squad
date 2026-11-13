@@ -1872,14 +1872,15 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			// checked, never an arbitrary one, so an unrelated commit merged to
 			// main elsewhere can't produce a false positive.
 			if sha, shipped := l.mostRecentWorkCommitShippedToMain(ctx, item.ID, item.RepoPath); shipped {
-				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, domain.BounceMainBranch)
+				defaultBranch := git.ResolveDefaultBranchName(item.RepoPath)
+				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, defaultBranch)
 				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
 					log.Warn("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) failed", "item", item.ID, "error", transErr)
 					// The commit is already confirmed shipped to main — same
 					// silent-stranding risk as the merged-PR branch above.
-					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, domain.BounceMainBranch), transErr)
+					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, defaultBranch), transErr)
 				} else {
-					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", domain.BounceMainBranch)
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", defaultBranch)
 					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
 					// Signal 2) row from a prior tick — see the identical
 					// comment at the merged-PR branch above.
