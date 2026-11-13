@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -19,13 +20,13 @@ func BuildCompletionReviewContext(item *backlogdto.BacklogItemData, sessions []b
 		return ""
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Completed Item\nTitle: %s\n", TruncateField(item.Title, 300))
-	if d := strings.TrimSpace(SanitizeField(item.Description, 2000)); d != "" {
+	fmt.Fprintf(&sb, "## Completed Item\nTitle: %s\n", domain.TruncateField(item.Title, 300))
+	if d := strings.TrimSpace(domain.SanitizeField(item.Description, 2000)); d != "" {
 		fmt.Fprintf(&sb, "\n## Description\n%s\n", d)
 	}
-	criteria, _ := ParseAcCriteria(item.AcceptanceCriteria)
-	fmt.Fprintf(&sb, "\n## Acceptance Criteria (final status)\n%s\n", BuildAcChecklist(criteria))
-	if n := strings.TrimSpace(SanitizeField(item.Notes, 1000)); n != "" {
+	criteria, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
+	fmt.Fprintf(&sb, "\n## Acceptance Criteria (final status)\n%s\n", domain.BuildAcChecklist(criteria))
+	if n := strings.TrimSpace(domain.SanitizeField(item.Notes, 1000)); n != "" {
 		fmt.Fprintf(&sb, "\n## Triage Notes\n%s\n", n)
 	}
 	writeCompletionVerdictSection(&sb, sessions)
@@ -41,15 +42,15 @@ func writeCompletionVerdictSection(sb *strings.Builder, sessions []backlogdto.It
 	}
 	v := verdicts[0]
 	fmt.Fprintf(sb, "\n## Review Verdict\nOutcome: %s\n", v.OverallOutcome)
-	if s := strings.TrimSpace(SanitizeField(v.Summary, 1000)); s != "" {
+	if s := strings.TrimSpace(domain.SanitizeField(v.Summary, 1000)); s != "" {
 		fmt.Fprintf(sb, "Summary: %s\n", s)
 	}
-	per, err := ParsePerCriterionVerdicts(v.PerCriterion)
+	per, err := domain.ParsePerCriterionVerdicts(v.PerCriterion)
 	if err != nil {
 		return // treated as "no per-criterion evidence", not fatal
 	}
 	for _, c := range per {
-		fmt.Fprintf(sb, "- criterion %d: %s — %s\n", c.CriterionIndex, c.Outcome, SanitizeField(c.Evidence, 300))
+		fmt.Fprintf(sb, "- criterion %d: %s — %s\n", c.CriterionIndex, c.Outcome, domain.SanitizeField(c.Evidence, 300))
 	}
 }
 
@@ -59,11 +60,11 @@ func writeCompletionDiffSection(sb *strings.Builder, sessions []backlogdto.ItemS
 		if s.Role != SessionRoleWork || (s.LastCommitMessage == "" && s.CommitCountSinceSpawn == 0) {
 			continue
 		}
-		fmt.Fprintf(sb, "\n## Work Summary\nCommits: %d\nLast commit: %s\n", s.CommitCountSinceSpawn, SanitizeField(s.LastCommitMessage, 300))
+		fmt.Fprintf(sb, "\n## Work Summary\nCommits: %d\nLast commit: %s\n", s.CommitCountSinceSpawn, domain.SanitizeField(s.LastCommitMessage, 300))
 		return
 	}
 }
 
 // ExtractJSONObjects returns every top-level JSON object found in raw, in order, tolerating
 // surrounding prose and markdown fences. Exported for server/services' completion-review parser.
-func ExtractJSONObjects(raw string) []string { return ExtractTopLevelJSONObjects(raw) }
+func ExtractJSONObjects(raw string) []string { return domain.ExtractTopLevelJSONObjects(raw) }

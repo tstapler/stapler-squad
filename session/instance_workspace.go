@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/vcs"
@@ -110,7 +112,7 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot switch workspace for session that has not been started")
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		return nil, fmt.Errorf("cannot switch workspace for paused session - resume first")
 	}
 
@@ -150,7 +152,7 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 
 	vcsClient, err := vcs.DetectWithOptions(repoPath, detectOpts)
 	if err != nil {
-		if i.SessionType == SessionTypeDirectory {
+		if i.SessionType == domain.SessionTypeDirectory {
 			log.Info("no vcs detected, falling back to simple directory change", "path", repoPath)
 			i.Path = repoPath
 
@@ -309,7 +311,7 @@ func (i *Instance) switchWorktree(vcsClient vcs.VCS, req WorkspaceSwitchRequest,
 
 	// Try to create GitWorktree wrapper for compatibility
 	if gitWt, err := git.NewGitWorktreeFromExisting(targetWorktree.Path, i.Title); err == nil {
-		i.GitManager.Worktree = gitWt
+		i.gitManager.Worktree = gitWt
 	}
 
 	result.ChangesHandled = "worktree switch (changes remain in original worktree)"
@@ -410,8 +412,8 @@ func (i *Instance) validatePathSecurity(targetPath string) error {
 
 // getRepoPath returns the repository root path for the session
 func (i *Instance) getRepoPath() string {
-	if i.GitManager.Worktree != nil {
-		return i.GitManager.Worktree.GetWorktreePath()
+	if i.gitManager.Worktree != nil {
+		return i.gitManager.Worktree.GetWorktreePath()
 	}
 	if i.MainRepoPath != "" {
 		return i.MainRepoPath

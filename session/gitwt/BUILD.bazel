@@ -1,0 +1,70 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "gitwt",
+    srcs = [
+        "manager.go",
+        "watcher.go",
+        "watcher_fsevents_darwin.go",
+        "watcher_fsevents_other.go",
+        "watcher_inotify_linux.go",
+        "watcher_tree.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/gitwt",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//internal/dirwatch",
+        "//internal/fsevents",
+        "//log",
+        "//session/git",
+        "//session/git/backend",
+        "//session/gitprovider",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@com_github_linkdata_deadlock//:deadlock",
+    ] + select({
+        "@rules_go//go/platform:android": [
+            "//internal/treewatch",
+        ],
+        "@rules_go//go/platform:linux": [
+            "//internal/treewatch",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gitwt",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gitwt_test",
+    srcs = [
+        "manager_diffstatsfresh_test.go",
+        "manager_test.go",
+        "watcher_inotify_linux_test.go",
+        "watcher_test.go",
+        "watcher_tree_test.go",
+    ],
+    embed = [":gitwt"],
+    deps = [
+        "//config",
+        "//internal/fsevents",
+        "//session/git",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_goleak//:goleak",
+    ],
+)
+
+# Read by the server/services flag-default scan (feature_flag_service_test.go) for the change-detection flag site.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//server/services:__pkg__"],
+)

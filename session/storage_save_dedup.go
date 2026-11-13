@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
@@ -57,7 +58,7 @@ func hashJSON(parts ...any) (sum [sha256.Size]byte) {
 
 // sectionsOf hashes the child-table sections of data. DiffStats.Content is
 // json:"-" but Update persists it, so it is hashed explicitly.
-func sectionsOf(data InstanceData) sectionSums {
+func sectionsOf(data domain.InstanceData) sectionSums {
 	tags := slices.Clone(data.Tags)
 	slices.Sort(tags)
 	return sectionSums{
@@ -82,7 +83,7 @@ func (s sectionSums) skipAgainst(prev sectionSums) updateSkip {
 // fingerprintInstanceData hashes everything persisted except UpdatedAt, which
 // ToInstanceData stamps with time.Now() on every call. ok is false when the
 // data cannot be marshalled; callers then always write.
-func fingerprintInstanceData(data InstanceData) (sum [sha256.Size]byte, ok bool) {
+func fingerprintInstanceData(data domain.InstanceData) (sum [sha256.Size]byte, ok bool) {
 	data.UpdatedAt = time.Time{}
 	raw, err := json.Marshal(data)
 	if err != nil {
@@ -109,7 +110,7 @@ func fingerprintInstanceData(data InstanceData) (sum [sha256.Size]byte, ok bool)
 // last row written; without it, two racing saves could leave a stale
 // fingerprint that makes a later save of newer data look unchanged. Writes
 // already serialize on the single writer connection, so this adds no waiting.
-func (f *savedFingerprints) persist(data InstanceData, write func(skip updateSkip) bool) {
+func (f *savedFingerprints) persist(data domain.InstanceData, write func(skip updateSkip) bool) {
 	sum, hashed := fingerprintInstanceData(data)
 	secs := sectionsOf(data)
 	f.mu.Lock()

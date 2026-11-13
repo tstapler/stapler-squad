@@ -20,8 +20,8 @@ import (
 
 type enforceEveryClass struct{}
 
-func (enforceEveryClass) Mode() session.EngineMode                       { return session.ModeEnforce }
-func (enforceEveryClass) ModeFor(session.CallerClass) session.EngineMode { return session.ModeEnforce }
+func (enforceEveryClass) Mode() session.EngineMode                      { return session.ModeEnforce }
+func (enforceEveryClass) ModeFor(domain.CallerClass) session.EngineMode { return session.ModeEnforce }
 
 type gateFixture struct {
 	storage *session.Storage
@@ -48,7 +48,7 @@ func newEnforcedGateFixture(t *testing.T) *gateFixture {
 
 // addApprovalGate puts an unsatisfied human_approval gate on a seeded edge and
 // returns its id.
-func (f *gateFixture) addApprovalGate(t *testing.T, from, to session.BacklogStatus) uuid.UUID {
+func (f *gateFixture) addApprovalGate(t *testing.T, from, to domain.BacklogStatus) uuid.UUID {
 	t.Helper()
 	edges, err := f.repo.ListAllTransitions(t.Context(), string(from))
 	require.NoError(t, err)
@@ -57,7 +57,7 @@ func (f *gateFixture) addApprovalGate(t *testing.T, from, to session.BacklogStat
 			continue
 		}
 		gate, gateErr := f.repo.CreateGate(t.Context(), session.GateCreateInput{
-			TransitionID: e.ID, Kind: string(session.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
+			TransitionID: e.ID, Kind: string(domain.GateKindHumanApproval), Config: map[string]interface{}{}, Enabled: true,
 		})
 		require.NoError(t, gateErr)
 		require.NoError(t, f.cfg.InvalidateCache(t.Context()))
@@ -67,9 +67,9 @@ func (f *gateFixture) addApprovalGate(t *testing.T, from, to session.BacklogStat
 	return uuid.Nil
 }
 
-func (f *gateFixture) workItem(t *testing.T, status session.BacklogStatus, ac string) (*backlogdto.BacklogItemData, context.Context) {
+func (f *gateFixture) workItem(t *testing.T, status domain.BacklogStatus, ac string) (*backlogdto.BacklogItemData, context.Context) {
 	t.Helper()
-	item, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status), AcceptanceCriteria: session.AcCriteriaJSON(ac), SkipPlanning: true})
+	item, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status), AcceptanceCriteria: domain.AcCriteriaJSON(ac), SkipPlanning: true})
 	require.NoError(t, err)
 	sessionUUID := uuid.New().String()
 	_, err = f.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
@@ -118,8 +118,8 @@ const allDoneAC = `[{"index":0,"text":"Criterion A","status":"done"}]`
 
 func TestRequestReview_Enforce_GateDeniesWithStructuredResultThenSucceedsOnceSatisfied(t *testing.T) {
 	f := newEnforcedGateFixture(t)
-	gateID := f.addApprovalGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
-	item, ctx := f.workItem(t, session.BacklogStatusInProgress, allDoneAC)
+	gateID := f.addApprovalGate(t, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
+	item, ctx := f.workItem(t, domain.BacklogStatusInProgress, allDoneAC)
 	handler := &backlogHandlers{storage: f.storage}
 	call := func() string {
 		res, err := handler.requestReview(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID, "message": "done"}))
@@ -131,7 +131,7 @@ func TestRequestReview_Enforce_GateDeniesWithStructuredResultThenSucceedsOnceSat
 	assert.Equal(t, "operator_gate", denied.Error.BlockedBy)
 	assert.Equal(t, "ask the operator to approve this transition", denied.Error.Hint)
 	assert.Contains(t, denied.Error.Message, "in_progress -> review")
-	assert.Equal(t, string(session.BacklogStatusInProgress), f.status(t, item.ID), "a denied call writes nothing")
+	assert.Equal(t, string(domain.BacklogStatusInProgress), f.status(t, item.ID), "a denied call writes nothing")
 	stuck, err := f.storage.ListStuckStatesForItem(t.Context(), item.ID)
 	require.NoError(t, err)
 	require.Len(t, stuck, 1, "the agent denial reaches the reporter")
@@ -142,31 +142,31 @@ func TestRequestReview_Enforce_GateDeniesWithStructuredResultThenSucceedsOnceSat
 	_, err = session.RecordGateApproval(t.Context(), f.gates, itemUUID, gateID, "owner", true)
 	require.NoError(t, err)
 	assert.Contains(t, call(), "Review requested", "satisfying the gate lets the next call succeed")
-	assert.Equal(t, string(session.BacklogStatusReview), f.status(t, item.ID))
+	assert.Equal(t, string(domain.BacklogStatusReview), f.status(t, item.ID))
 }
 
 func TestRequestReview_Enforce_SkipReviewGateStillCompletesWithoutAVerdict(t *testing.T) {
 	f := newEnforcedGateFixture(t)
-	item, ctx := f.workItem(t, session.BacklogStatusInProgress, allDoneAC)
+	item, ctx := f.workItem(t, domain.BacklogStatusInProgress, allDoneAC)
 	_, err := f.storage.UpdateBacklogItem(t.Context(), item.ID, backlogdto.BacklogItemUpdate{SkipReviewGate: boolPtr(true)}, nil)
 	require.NoError(t, err)
 
 	res, err := (&backlogHandlers{storage: f.storage}).requestReview(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID, "message": "done"}))
 	require.NoError(t, err)
 	assert.Contains(t, rawText(t, res), "marked done directly")
-	assert.Equal(t, string(session.BacklogStatusDone), f.status(t, item.ID))
+	assert.Equal(t, string(domain.BacklogStatusDone), f.status(t, item.ID))
 }
 
 func TestResumeWork_Enforce_GateOnReadyToInProgressDenies(t *testing.T) {
 	f := newEnforcedGateFixture(t)
-	f.addApprovalGate(t, session.BacklogStatusReady, session.BacklogStatusInProgress)
-	item, ctx := f.workItem(t, session.BacklogStatusReady, "")
+	f.addApprovalGate(t, domain.BacklogStatusReady, domain.BacklogStatusInProgress)
+	item, ctx := f.workItem(t, domain.BacklogStatusReady, "")
 
 	res, err := (&backlogHandlers{storage: f.storage}).resumeWork(ctx, makeToolReq(map[string]interface{}{"item_id": item.ID}))
 	require.NoError(t, err)
 	denied := requireDenied(t, rawText(t, res))
 	assert.Equal(t, "operator_gate", denied.Error.BlockedBy)
-	assert.Equal(t, string(session.BacklogStatusReady), f.status(t, item.ID))
+	assert.Equal(t, string(domain.BacklogStatusReady), f.status(t, item.ID))
 }
 
 func TestReportBlocked_EscalationFromReview_DoesNotWriteAReviewToReviewTransition(t *testing.T) {
@@ -176,13 +176,13 @@ func TestReportBlocked_EscalationFromReview_DoesNotWriteAReviewToReviewTransitio
 		var item *backlogdto.BacklogItemData
 		if enforced {
 			f := newEnforcedGateFixture(t)
-			item, ctx = f.workItem(t, session.BacklogStatusReview, "")
+			item, ctx = f.workItem(t, domain.BacklogStatusReview, "")
 			storage = f.storage
 		} else {
 			storage = newTestBacklogStorage(t)
 			var err error
 			item, err = storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
-				Title: "blocked in review", Status: string(session.BacklogStatusReview),
+				Title: "blocked in review", Status: string(domain.BacklogStatusReview),
 				Notes: blockedNoteMarker + " first\n" + blockedNoteMarker + " second",
 			})
 			require.NoError(t, err)
@@ -205,14 +205,14 @@ func TestReportBlocked_EscalationFromReview_DoesNotWriteAReviewToReviewTransitio
 
 		after, err := storage.GetBacklogItem(t.Context(), item.ID)
 		require.NoError(t, err)
-		assert.Equal(t, string(session.BacklogStatusReview), after.Status, "enforced=%v", enforced)
+		assert.Equal(t, string(domain.BacklogStatusReview), after.Status, "enforced=%v", enforced)
 		assert.Len(t, after.StatusEvents, len(before.StatusEvents), "no review->review event is written (enforced=%v)", enforced)
 	}
 }
 
 func TestReportDuplicate_Enforce_ArchivesFromAnyStatusAndHonorsAnOperatorGate(t *testing.T) {
 	f := newEnforcedGateFixture(t)
-	survivor, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "survivor", Status: string(session.BacklogStatusReady)})
+	survivor, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "survivor", Status: string(domain.BacklogStatusReady)})
 	require.NoError(t, err)
 	handler := &backlogHandlers{storage: f.storage}
 	report := func(item *backlogdto.BacklogItemData) string {
@@ -223,19 +223,19 @@ func TestReportDuplicate_Enforce_ArchivesFromAnyStatusAndHonorsAnOperatorGate(t 
 		return rawText(t, res)
 	}
 
-	for _, from := range []session.BacklogStatus{session.BacklogStatusReady, session.BacklogStatusRefining, session.BacklogStatusIdea} {
+	for _, from := range []domain.BacklogStatus{domain.BacklogStatusReady, domain.BacklogStatusRefining, domain.BacklogStatusIdea} {
 		dup, createErr := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "dup", Status: string(from)})
 		require.NoError(t, createErr)
 		assert.Contains(t, report(dup), "archived as a duplicate", "archive from %s", from)
-		assert.Equal(t, string(session.BacklogStatusArchived), f.status(t, dup.ID))
+		assert.Equal(t, string(domain.BacklogStatusArchived), f.status(t, dup.ID))
 	}
 
-	f.addApprovalGate(t, session.BacklogStatusQueued, session.BacklogStatusArchived)
-	gated, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "gated dup", Status: string(session.BacklogStatusQueued)})
+	f.addApprovalGate(t, domain.BacklogStatusQueued, domain.BacklogStatusArchived)
+	gated, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "gated dup", Status: string(domain.BacklogStatusQueued)})
 	require.NoError(t, err)
 	denied := requireDenied(t, report(gated))
 	assert.Equal(t, "operator_gate", denied.Error.BlockedBy)
-	assert.Equal(t, string(session.BacklogStatusQueued), f.status(t, gated.ID))
+	assert.Equal(t, string(domain.BacklogStatusQueued), f.status(t, gated.ID))
 }
 
 func boolPtr(b bool) *bool { return &b }

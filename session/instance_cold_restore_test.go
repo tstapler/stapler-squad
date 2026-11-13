@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -72,7 +74,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -89,7 +91,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	// branch logs "Cold restoring with --resume". The --resume flag itself is only
 	// appended by ClaudeCommandBuilder for Program="claude"; that is unit-tested
 	// separately in claude_command_builder_test.go.
-	inst.SetClaudeSession(&ClaudeSessionData{
+	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 		LastAttached:     time.Now(),
 	})
@@ -109,7 +111,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold restore")
 	// DoesSessionExist slow path has a 3s timeout; deadline must exceed that to guarantee
 	// at least one successful check before the Eventually deadline fires.
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
@@ -131,7 +133,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -157,7 +159,7 @@ func TestColdRestore_WithoutUUID(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold start")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold start")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold start")
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold start")
 }
 
@@ -200,7 +202,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          stubClaudeBinary(t),
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_coldrestore_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -237,7 +239,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	}()
 
 	assert.True(t, inst.Started(), "instance must be marked as started after cold restore")
-	assert.Equal(t, Running, inst.Status, "instance status must be Running after cold restore")
+	assert.Equal(t, domain.Active, inst.Status, "instance status must be Running after cold restore")
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive after cold restore")
 
 	assert.Contains(t, inst.LaunchCommand, "--resume", "launch command must embed --resume when a same-path JSONL was recoverable")
@@ -256,7 +258,7 @@ func sleepInstanceOptions(title, tmpDir, prefix, socket string) InstanceOptions 
 		Title:            title,
 		Path:             tmpDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       prefix,
 		TmuxServerSocket: socket,
@@ -318,7 +320,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 	}()
 
 	assert.True(t, inst2.Started(), "inst2 must be marked as started after hot restore")
-	assert.Equal(t, Running, inst2.Status, "inst2 status must be Running after hot restore")
+	assert.Equal(t, domain.Active, inst2.Status, "inst2 status must be Running after hot restore")
 }
 
 // TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHasLiveTmuxPane
@@ -327,7 +329,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 // session, already archived at the item level but with its own ArchivedAt
 // left nil (an orphaned pre-item_sessions-linkage row), was recreated roughly
 // every 60s for hours. The Stopped-branch "secretly still alive" probe in
-// fromInstanceData (session/instance_serialization.go) saw the tmux pane
+// instanceFromData (session/instance_serialization.go) saw the tmux pane
 // still running (remain-on-exit keeps a dead pane around, see that probe's
 // doc comment) and flipped Stopped -> Active -> Start(false), contradicting
 // session_driver.go's handleStoppedStatus, which already treats a one-shot
@@ -343,31 +345,31 @@ func TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHas
 
 	t.Run("oneshot_review_tag_stays_stopped", func(t *testing.T) {
 		t.Parallel()
-		assertStoppedReloadOutcome(t, []string{"backlog:review"}, Stopped, true)
+		assertStoppedReloadOutcome(t, []string{"backlog:review"}, domain.Stopped, true)
 	})
 
 	t.Run("non_oneshot_control_revives_to_active", func(t *testing.T) {
 		t.Parallel()
-		assertStoppedReloadOutcome(t, nil, Active, false)
+		assertStoppedReloadOutcome(t, nil, domain.Active, false)
 	})
 }
 
 // assertStoppedReloadOutcome starts a real, long-running tmux session, then
 // reloads it from a Stopped/unarchived InstanceData carrying the given tags
-// — the same shape LoadInstances feeds fromInstanceData's "secretly still
+// — the same shape LoadInstances feeds instanceFromData's "secretly still
 // alive" probe — and asserts the resulting status/started flags. A live pane
 // (not a mock) so the assertion exercises the actual IsAlive()/
 // PaneExitStatus() probe the production respawn loop hit.
-func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus Status, wantStarted bool) {
+func assertStoppedReloadOutcome(t *testing.T, tags []string, wantStatus domain.Status, wantStarted bool) {
 	t.Helper()
 	inst, title, tmpDir, prefix, socket := newLiveSleepInstance(t)
 
 	wait.RequireEventually(t, inst.TmuxAlive, 10*time.Second, 50*time.Millisecond, "tmux session must be alive before restore")
 
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:            title,
 		Path:             tmpDir,
-		Status:           Stopped,
+		Status:           domain.Stopped,
 		Program:          "sleep 300",
 		TmuxPrefix:       prefix,
 		TmuxServerSocket: socket,
@@ -493,7 +495,7 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			inst := &Instance{
 				Title:           "test-clearedat-guard",
 				Path:            tmpDir,
-				SessionType:     SessionTypeDirectory,
+				SessionType:     domain.SessionTypeDirectory,
 				claudeExtension: claudeExtension{conversationClearedAt: clearedAt},
 				historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 			}
@@ -573,7 +575,7 @@ func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwn
 		Title:           "session-b",
 		UUID:            "session-b-uuid",
 		Path:            sharedPath,
-		SessionType:     SessionTypeDirectory,
+		SessionType:     domain.SessionTypeDirectory,
 		historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 	}
 	instB.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(instB.UUID,
@@ -606,7 +608,7 @@ func TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfReco
 		Title:           "cold-restore-self-recovery",
 		UUID:            "cold-restore-self-uuid",
 		Path:            tmpDir,
-		SessionType:     SessionTypeDirectory,
+		SessionType:     domain.SessionTypeDirectory,
 		historyDetector: NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{files: []string{}}, fakeHome),
 	}
 	inst.SetConversationOwnershipGuard(newSimulatedConversationOwnershipGuard(inst.UUID,

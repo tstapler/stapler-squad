@@ -2,7 +2,6 @@ package backlog
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -17,7 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
 )
 
-func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller session.TransitionCaller, from, to session.BacklogStatus, reason string) {
+func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller domain.TransitionCaller, from, to domain.BacklogStatus, reason string) {
 	t.Helper()
 	applied, err := h.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonTransitionDenied, from,
 		domain.FormatTransitionDeniedContext(domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: reason}, "test"))
@@ -25,9 +24,9 @@ func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller session.T
 	require.True(t, applied, "the item must be at %s for the denial to anchor", from)
 }
 
-func denBlock(t *testing.T, h *gateHarness, from, to session.BacklogStatus) {
+func denBlock(t *testing.T, h *gateHarness, from, to domain.BacklogStatus) {
 	t.Helper()
-	addGateToSeededEdge(t, h.repo.Client, h.cfg, from, to, session.GateKindHumanApproval, nil)
+	addGateToSeededEdge(t, h.repo.Client, h.cfg, from, to, domain.GateKindHumanApproval, nil)
 }
 
 func denOpenRows(t *testing.T, h *gateHarness, itemID string, reason domain.StuckReason) []backlogdto.OpenStuckStateData {
@@ -59,7 +58,7 @@ func sessDisableGates(t *testing.T, h *gateHarness) {
 // long as no other active session exists. If withActiveWorkSession is true, a
 // second ItemSession (role=work, EndedAt nil) is attached, simulating rework
 // still in progress — this should exclude the item from FindStuckReviewItems.
-func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome session.ReviewOutcome, endReviewSession, withActiveWorkSession bool) *backlogdto.BacklogItemData {
+func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome domain.ReviewOutcome, endReviewSession, withActiveWorkSession bool) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
@@ -67,7 +66,7 @@ func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome sess
 		Title:              "Stuck review test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -114,7 +113,7 @@ func currentAttempts(t *testing.T, repo *session.EntRepository, itemID string, r
 	t.Helper()
 	rows, err := repo.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(rows, itemID, reason)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	require.True(t, ok)
 	return row.RemediationAttempts
 }
@@ -135,45 +134,10 @@ func createTestEntRepository(t *testing.T) (*session.EntRepository, func()) {
 	return repo, func() {}
 }
 
-// fakePipelineModeRepository is a test double for PipelineModeRepository.
-// Only ListEnabled is exercised by pipeline_engine.go — the remaining methods
-// return an error if called, since no test in this file should reach them.
-type fakePipelineModeRepository struct {
-	listEnabledFn func(ctx context.Context) ([]*ent.PipelineMode, error)
-}
-
-func (f *fakePipelineModeRepository) Create(context.Context, session.PipelineModeCreateInput) (*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.Create: not implemented")
-}
-
-func (f *fakePipelineModeRepository) Update(context.Context, uuid.UUID, session.PipelineModeUpdateInput) (*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.Update: not implemented")
-}
-
-func (f *fakePipelineModeRepository) Delete(context.Context, uuid.UUID) error {
-	return errors.New("fakePipelineModeRepository.Delete: not implemented")
-}
-
-func (f *fakePipelineModeRepository) GetByID(context.Context, uuid.UUID) (*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.GetByID: not implemented")
-}
-
-func (f *fakePipelineModeRepository) GetBySlug(context.Context, string) (*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.GetBySlug: not implemented")
-}
-
-func (f *fakePipelineModeRepository) ListAll(context.Context) ([]*ent.PipelineMode, error) {
-	return nil, errors.New("fakePipelineModeRepository.ListAll: not implemented")
-}
-
-func (f *fakePipelineModeRepository) ListEnabled(ctx context.Context) ([]*ent.PipelineMode, error) {
-	return f.listEnabledFn(ctx)
-}
-
 type reportedDenial struct {
 	itemID       string
-	caller       session.TransitionCaller
-	from, to     session.BacklogStatus
+	caller       domain.TransitionCaller
+	from, to     domain.BacklogStatus
 	reason       string
 	err          error
 	statusAtCall string
@@ -188,7 +152,7 @@ type recordingReporter struct {
 	panics  bool
 }
 
-func (r *recordingReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+func (r *recordingReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to domain.BacklogStatus, reason string, denyErr error) {
 	cur, _ := r.storage.GetBacklogItem(ctx, item.ID)
 	r.mu.Lock()
 	r.calls = append(r.calls, reportedDenial{item.ID, caller, from, to, reason, denyErr, cur.Status})
@@ -229,7 +193,7 @@ func newGateHarness(t *testing.T, mode session.EngineMode) *gateHarness {
 	return &gateHarness{storage: storage, repo: repo, cfg: cfg, sel: sel, rep: rep}
 }
 
-func (h *gateHarness) newItem(t *testing.T, status session.BacklogStatus) *backlogdto.BacklogItemData {
+func (h *gateHarness) newItem(t *testing.T, status domain.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
 	item, err := h.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status)})
 	require.NoError(t, err)
@@ -244,13 +208,13 @@ func (h *gateHarness) status(t *testing.T, id string) string {
 }
 
 // moveRaw changes the stored status behind the gate's back (a concurrent mover).
-func (h *gateHarness) moveRaw(t *testing.T, id string, to session.BacklogStatus) {
+func (h *gateHarness) moveRaw(t *testing.T, id string, to domain.BacklogStatus) {
 	t.Helper()
 	_, err := h.repo.RawTransitionBacklogItemStatus(context.Background(), id, to, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 }
 
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, kind session.GateKind, config map[string]interface{}) {
+func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
 	tr, err := client.StageTransition.Query().
@@ -268,12 +232,12 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.Configur
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-type classModes map[session.CallerClass]session.EngineMode
+type classModes map[domain.CallerClass]session.EngineMode
 
-func (c classModes) Mode() session.EngineMode { return c[session.ClassOperator] }
+func (c classModes) Mode() session.EngineMode { return c[domain.ClassOperator] }
 
-func (c classModes) ModeFor(k session.CallerClass) session.EngineMode { return c[k] }
+func (c classModes) ModeFor(k domain.CallerClass) session.EngineMode { return c[k] }
 
 func allClasses(m session.EngineMode) classModes {
-	return classModes{session.ClassOperator: m, session.ClassAgent: m, session.ClassSystem: m, "bogus": m}
+	return classModes{domain.ClassOperator: m, domain.ClassAgent: m, domain.ClassSystem: m, "bogus": m}
 }

@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/summaries"
 )
 
 // uniqueDispatchTitle builds a title for a repeatedly-dispatchable one-shot
@@ -136,7 +139,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 		Path:             path,
 		Program:          program,
 		PermissionMode:   session.PermissionModeAuto, // automated sessions auto-approve tool uses without bypass prompt
-		SessionType:      session.SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		Prompt:           opts.Prompt,
 		Tags:             opts.Tags,
 		OneShot:          opts.OneShot,
@@ -187,7 +190,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, path string
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
 	if s.sessionSummaryGenerator != nil {
-		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+		summaries.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 	}
 	return instance, nil
 }
@@ -207,7 +210,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 		Path:             repoPath,
 		Program:          program,
 		PermissionMode:   session.PermissionModeAuto,
-		SessionType:      session.SessionTypeExistingWorktree,
+		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: worktreePath,
 		Prompt:           opts.Prompt,
 		Tags:             opts.Tags,
@@ -254,7 +257,7 @@ func (s *SessionService) CreateWorktreeSession(ctx context.Context, repoPath, wo
 		s.backlogLifecycleListener.WireToInstance(instance)
 	}
 	if s.sessionSummaryGenerator != nil {
-		session.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
+		summaries.WireSessionSummaryListener(s.sessionSummaryGenerator, instance)
 	}
 	return instance, nil
 }

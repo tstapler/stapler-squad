@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // The stale-creation sweeper fails a Creating session whose progress timestamp is older than
@@ -15,7 +16,7 @@ import (
 
 func TestRecoverFromStopped_should_ResetCreationProgressClock(t *testing.T) {
 	t.Parallel()
-	for _, from := range []Status{Stopped, PermanentlyFailed, Failed} {
+	for _, from := range []domain.Status{domain.Stopped, domain.PermanentlyFailed, domain.Failed} {
 		t.Run(from.String(), func(t *testing.T) {
 			t.Parallel()
 			old := time.Now().Add(-21 * 24 * time.Hour)
@@ -23,7 +24,7 @@ func TestRecoverFromStopped_should_ResetCreationProgressClock(t *testing.T) {
 
 			inst.RecoverFromStopped()
 
-			require.Equal(t, Creating, inst.Status)
+			require.Equal(t, domain.Creating, inst.Status)
 			assert.WithinDuration(t, time.Now(), inst.CreationProgressUpdatedAt(), time.Minute)
 		})
 	}
@@ -32,9 +33,9 @@ func TestRecoverFromStopped_should_ResetCreationProgressClock(t *testing.T) {
 func TestTransitionTo_should_ResetCreationProgressClock_When_EnteringCreating(t *testing.T) {
 	t.Parallel()
 	old := time.Now().Add(-21 * 24 * time.Hour)
-	inst := &Instance{Title: "retry-clock", Status: Failed, creationProgressUpdatedAt: old}
+	inst := &Instance{Title: "retry-clock", Status: domain.Failed, creationProgressUpdatedAt: old}
 
-	require.NoError(t, inst.transitionTo(context.Background(), Creating))
+	require.NoError(t, inst.transitionTo(context.Background(), domain.Creating))
 
 	assert.WithinDuration(t, time.Now(), inst.CreationProgressUpdatedAt(), time.Minute)
 }

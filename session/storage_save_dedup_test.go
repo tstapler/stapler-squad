@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func countSessionUpdates(t *testing.T, storage *Storage) *atomic.Int64 {
@@ -115,7 +116,7 @@ func TestPersist_Should_HoldLockAcrossWrite(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		f.persist(InstanceData{Title: "t"}, func(updateSkip) bool {
+		f.persist(domain.InstanceData{Title: "t"}, func(updateSkip) bool {
 			close(inWrite)
 			<-release
 			return true
@@ -136,7 +137,7 @@ func TestPersist_Should_HoldLockAcrossWrite(t *testing.T) {
 func TestWriteRow_Should_ForgetAfterWrite(t *testing.T) {
 	t.Parallel()
 	s := &Storage{}
-	data := InstanceData{Title: "t"}
+	data := domain.InstanceData{Title: "t"}
 	s.saved.persist(data, func(updateSkip) bool { return true })
 
 	err := s.writeRow("t", func() error {
@@ -184,7 +185,7 @@ func TestUpdateInstanceIfEpoch_Should_OnlyForgetMatchingSession(t *testing.T) {
 	require.NoError(t, storage.AddInstance(b))
 	require.NoError(t, storage.SaveInstances([]*Instance{a, b}))
 
-	_, err := storage.UpdateInstanceIfEpoch(context.Background(), a.Title, 0, Stopped, "x")
+	_, err := storage.UpdateInstanceIfEpoch(context.Background(), a.Title, 0, domain.Stopped, "x")
 	require.NoError(t, err)
 	updates := countSessionUpdates(t, storage)
 
@@ -233,7 +234,7 @@ func TestSaveInstances_Should_WriteAgain_When_RowChangedByDirectWriter(t *testin
 // DiffStats.Content is json:"-" yet persisted, so the fingerprint must cover it.
 func TestFingerprintInstanceData_Should_Differ_When_OnlyDiffContentDiffers(t *testing.T) {
 	t.Parallel()
-	a := InstanceData{Title: "t"}
+	a := domain.InstanceData{Title: "t"}
 	b := a
 	a.DiffStats.Content = "-old line"
 	b.DiffStats.Content = "-new line"
@@ -259,7 +260,7 @@ func TestSaveInstances_Should_WriteAgain_When_InstanceDeletedAndRecreated(t *tes
 	require.Len(t, got, 1, "an unchanged instance deleted from storage must be re-created by the next save")
 }
 
-func recordSkip(f *savedFingerprints, data InstanceData, ok bool) updateSkip {
+func recordSkip(f *savedFingerprints, data domain.InstanceData, ok bool) updateSkip {
 	var got updateSkip
 	f.persist(data, func(skip updateSkip) bool { got = skip; return ok })
 	return got
@@ -268,7 +269,7 @@ func recordSkip(f *savedFingerprints, data InstanceData, ok bool) updateSkip {
 func TestPersist_Should_SkipOnlyUnchangedSections(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	base := InstanceData{Title: "t", Tags: []string{"b", "a"}, DiffStats: DiffStatsData{Added: 1, Content: "x"}}
+	base := domain.InstanceData{Title: "t", Tags: []string{"b", "a"}, DiffStats: domain.DiffStatsData{Added: 1, Content: "x"}}
 	recordSkip(&f, base, true)
 
 	scalar := base
@@ -296,7 +297,7 @@ func TestPersist_Should_SkipOnlyUnchangedSections(t *testing.T) {
 func TestPersist_Should_NotAdvanceSections_When_WriteFails(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	base := InstanceData{Title: "t", Tags: []string{"a"}}
+	base := domain.InstanceData{Title: "t", Tags: []string{"a"}}
 	recordSkip(&f, base, true)
 
 	changed := base
@@ -310,7 +311,7 @@ func TestPersist_Should_NotAdvanceSections_When_WriteFails(t *testing.T) {
 func TestPersist_Should_WriteEverything_When_TitleUnseen(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	assert.Equal(t, updateSkip{}, recordSkip(&f, InstanceData{Title: "new"}, true))
+	assert.Equal(t, updateSkip{}, recordSkip(&f, domain.InstanceData{Title: "new"}, true))
 }
 
 // End to end: skipping unchanged sections must not lose a changed one.
@@ -340,7 +341,7 @@ func TestSaveInstances_Should_PersistChangedSections_When_OthersSkipped(t *testi
 func TestPersist_Should_ForgetEntry_When_DataCannotBeHashed(t *testing.T) {
 	t.Parallel()
 	var f savedFingerprints
-	base := InstanceData{Title: "t", Tags: []string{"a"}}
+	base := domain.InstanceData{Title: "t", Tags: []string{"a"}}
 	recordSkip(&f, base, true)
 
 	bad := base

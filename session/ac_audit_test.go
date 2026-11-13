@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func ownerCtx() context.Context {
@@ -48,8 +49,8 @@ func TestAcAudit_should_RecordRejection_When_WaivingDoneCriterion(t *testing.T) 
 
 	err := repo.WaiveAcCriterion(ownerCtx(), id, 1, "why") // criterion 1 is done
 
-	require.ErrorIs(t, err, session.ErrAcCriterionAlreadyDone)
-	assert.Equal(t, session.AcStatusDone, loadCriteria(t, repo, id)[1].Status)
+	require.ErrorIs(t, err, backlogdto.ErrAcCriterionAlreadyDone)
+	assert.Equal(t, domain.AcStatusDone, loadCriteria(t, repo, id)[1].Status)
 	rows, err := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -67,8 +68,8 @@ func TestAcAudit_should_RecordOneRowPerMutation_When_AgentChangesStatusAndHitsWa
 
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "working"))
 	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "owner call"))
-	require.ErrorIs(t, repo.UpdateAcCriterionStatus(agent, id, 0, "done", ""), session.ErrAcCriterionWaived)
-	require.ErrorIs(t, repo.UpdateAcCriterionStatus(agent, id, 9, "done", ""), session.ErrAcCriterionOutOfRange)
+	require.ErrorIs(t, repo.UpdateAcCriterionStatus(agent, id, 0, "done", ""), backlogdto.ErrAcCriterionWaived)
+	require.ErrorIs(t, repo.UpdateAcCriterionStatus(agent, id, 9, "done", ""), backlogdto.ErrAcCriterionOutOfRange)
 
 	rows, err := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, err)
@@ -91,31 +92,31 @@ func TestListAcAudit_should_ReturnErrNotFound_When_ItemMissing(t *testing.T) {
 
 func createACItem(t *testing.T, repo *session.EntRepository, texts ...string) string {
 	t.Helper()
-	cs := make([]session.AcCriterion, len(texts))
+	cs := make([]domain.AcCriterion, len(texts))
 	for i, tx := range texts {
-		cs[i] = session.AcCriterion{Index: i, Text: tx, Status: session.AcStatusPending}
+		cs[i] = domain.AcCriterion{Index: i, Text: tx, Status: domain.AcStatusPending}
 	}
-	ac, err := session.SerializeAcCriteria(cs)
+	ac, err := domain.SerializeAcCriteria(cs)
 	require.NoError(t, err)
-	item, err := repo.CreateBacklogItem(context.Background(), session.BacklogItemData{
-		Title: "ac item", Status: string(session.BacklogStatusInProgress), AcceptanceCriteria: ac,
+	item, err := repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
+		Title: "ac item", Status: string(domain.BacklogStatusInProgress), AcceptanceCriteria: ac,
 	})
 	require.NoError(t, err)
 	return item.ID
 }
 
-func rewriteAC(t *testing.T, repo *session.EntRepository, id string, in []session.AcCriterion) error {
+func rewriteAC(t *testing.T, repo *session.EntRepository, id string, in []domain.AcCriterion) error {
 	t.Helper()
-	ac, err := session.SerializeAcCriteria(in)
+	ac, err := domain.SerializeAcCriteria(in)
 	require.NoError(t, err)
-	_, err = repo.UpdateBacklogItem(ownerCtx(), id, session.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), id, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
 	return err
 }
 
-func pend(texts ...string) []session.AcCriterion {
-	out := make([]session.AcCriterion, len(texts))
+func pend(texts ...string) []domain.AcCriterion {
+	out := make([]domain.AcCriterion, len(texts))
 	for i, tx := range texts {
-		out[i] = session.AcCriterion{Index: i, Text: tx, Status: session.AcStatusPending}
+		out[i] = domain.AcCriterion{Index: i, Text: tx, Status: domain.AcStatusPending}
 	}
 	return out
 }
@@ -133,18 +134,18 @@ func TestUpdateBacklogItem_should_CarryWaiverByText_When_CriteriaReorderedOrInse
 	require.Len(t, got, 4)
 	for i, c := range got {
 		if i == 2 {
-			assert.Equal(t, session.AcStatusWaived, c.Status)
+			assert.Equal(t, domain.AcStatusWaived, c.Status)
 			assert.Equal(t, "beta waived", c.WaiverReason)
 			assert.NotEmpty(t, c.WaivedBy)
 		} else {
-			assert.Equal(t, session.AcStatusPending, c.Status, "criterion %d must not inherit the waiver", i)
+			assert.Equal(t, domain.AcStatusPending, c.Status, "criterion %d must not inherit the waiver", i)
 		}
 	}
 }
 
 func TestUpdateBacklogItem_should_ClearAndAuditWaiver_When_CriterionEditedOrRemoved(t *testing.T) {
 	t.Parallel()
-	for name, next := range map[string][]session.AcCriterion{
+	for name, next := range map[string][]domain.AcCriterion{
 		"edited":  pend("alpha", "beta changed meaning"),
 		"removed": pend("alpha"),
 	} {
@@ -157,7 +158,7 @@ func TestUpdateBacklogItem_should_ClearAndAuditWaiver_When_CriterionEditedOrRemo
 			require.NoError(t, rewriteAC(t, repo, id, next))
 
 			for _, c := range loadCriteria(t, repo, id) {
-				assert.NotEqual(t, session.AcStatusWaived, c.Status)
+				assert.NotEqual(t, domain.AcStatusWaived, c.Status)
 				assert.Empty(t, c.WaivedBy)
 			}
 			rows, err := repo.ListAcAudit(context.Background(), id)
@@ -174,12 +175,12 @@ func TestUpdateBacklogItem_should_RejectAndAudit_When_RewriteIntroducesWaiver(t 
 	repo := session.NewTestEntRepository(t)
 	id := createACItem(t, repo, "alpha")
 	in := pend("alpha")
-	in[0].Status = session.AcStatusWaived
+	in[0].Status = domain.AcStatusWaived
 
 	err := rewriteAC(t, repo, id, in)
 
-	require.ErrorIs(t, err, session.ErrAcWaiverViaUpdate)
-	assert.Equal(t, session.AcStatusPending, loadCriteria(t, repo, id)[0].Status)
+	require.ErrorIs(t, err, backlogdto.ErrAcWaiverViaUpdate)
+	assert.Equal(t, domain.AcStatusPending, loadCriteria(t, repo, id)[0].Status)
 	rows, lerr := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, lerr)
 	require.Len(t, rows, 1)
@@ -195,7 +196,7 @@ func TestAcAudit_should_SkipRepeatedSameStatusAndRefuseRewaive(t *testing.T) {
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "a"))
 	require.NoError(t, repo.UpdateAcCriterionStatus(agent, id, 0, "in_progress", "b"))
 	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "first"))
-	require.ErrorIs(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "second"), session.ErrAcCriterionAlreadyWaived)
+	require.ErrorIs(t, repo.WaiveAcCriterion(ownerCtx(), id, 0, "second"), backlogdto.ErrAcCriterionAlreadyWaived)
 
 	rows, err := repo.ListAcAudit(context.Background(), id)
 	require.NoError(t, err)
@@ -291,7 +292,7 @@ func TestUpdateBacklogItem_should_CarryWaivedByAtAndHandleDuplicateAndEmptyTexts
 	require.Len(t, got, 4)
 	waived := 0
 	for _, c := range got {
-		if c.Status == session.AcStatusWaived {
+		if c.Status == domain.AcStatusWaived {
 			waived++
 			assert.Equal(t, before.WaivedBy, c.WaivedBy)
 			assert.Equal(t, before.WaivedAt, c.WaivedAt)
@@ -300,8 +301,8 @@ func TestUpdateBacklogItem_should_CarryWaivedByAtAndHandleDuplicateAndEmptyTexts
 		}
 	}
 	assert.Equal(t, 1, waived, "exactly one of the duplicate texts holds the single waiver")
-	assert.NotEqual(t, session.AcStatusWaived, got[2].Status)
-	assert.NotEqual(t, session.AcStatusWaived, got[3].Status, "empty text never carries a waiver")
+	assert.NotEqual(t, domain.AcStatusWaived, got[2].Status)
+	assert.NotEqual(t, domain.AcStatusWaived, got[3].Status, "empty text never carries a waiver")
 }
 
 func TestUpdateBacklogItem_should_ReportClearedWaivers_And_RollBackOtherFields_When_Rejected(t *testing.T) {
@@ -311,9 +312,9 @@ func TestUpdateBacklogItem_should_ReportClearedWaivers_And_RollBackOtherFields_W
 	require.NoError(t, repo.WaiveAcCriterion(ownerCtx(), id, 1, "why"))
 
 	title := "renamed"
-	ac, err := session.SerializeAcCriteria(pend("alpha", "beta reworded"))
+	ac, err := domain.SerializeAcCriteria(pend("alpha", "beta reworded"))
 	require.NoError(t, err)
-	res, err := repo.UpdateBacklogItem(ownerCtx(), id, session.BacklogItemUpdate{Title: &title, AcceptanceCriteria: &ac}, nil)
+	res, err := repo.UpdateBacklogItem(ownerCtx(), id, backlogdto.BacklogItemUpdate{Title: &title, AcceptanceCriteria: &ac}, nil)
 	require.NoError(t, err)
 	require.Len(t, res.ClearedAcWaivers, 1)
 	assert.Equal(t, "beta", res.ClearedAcWaivers[0].Text)
@@ -321,12 +322,12 @@ func TestUpdateBacklogItem_should_ReportClearedWaivers_And_RollBackOtherFields_W
 
 	// A rejected rewrite must not apply the title either.
 	bad := pend("alpha", "beta reworded")
-	bad[0].Status = session.AcStatusWaived
+	bad[0].Status = domain.AcStatusWaived
 	title2 := "should not stick"
-	badJSON, err := session.SerializeAcCriteria(bad)
+	badJSON, err := domain.SerializeAcCriteria(bad)
 	require.NoError(t, err)
-	_, err = repo.UpdateBacklogItem(ownerCtx(), id, session.BacklogItemUpdate{Title: &title2, AcceptanceCriteria: &badJSON}, nil)
-	require.ErrorIs(t, err, session.ErrAcWaiverViaUpdate)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), id, backlogdto.BacklogItemUpdate{Title: &title2, AcceptanceCriteria: &badJSON}, nil)
+	require.ErrorIs(t, err, backlogdto.ErrAcWaiverViaUpdate)
 	item, err := repo.GetBacklogItem(context.Background(), id)
 	require.NoError(t, err)
 	assert.Equal(t, "renamed", item.Title)
@@ -335,17 +336,17 @@ func TestUpdateBacklogItem_should_ReportClearedWaivers_And_RollBackOtherFields_W
 func TestUpdateBacklogItem_should_TolerateLegacyPlainTextStoredCriteria_And_RejectPlainTextIncoming(t *testing.T) {
 	t.Parallel()
 	repo := session.NewTestEntRepository(t)
-	item, err := repo.CreateBacklogItem(context.Background(), session.BacklogItemData{
-		Title: "legacy", Status: string(session.BacklogStatusIdea), AcceptanceCriteria: session.AcCriteriaJSON("- do the thing\n- other"),
+	item, err := repo.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
+		Title: "legacy", Status: string(domain.BacklogStatusIdea), AcceptanceCriteria: domain.AcCriteriaJSON("- do the thing\n- other"),
 	})
 	require.NoError(t, err)
 
-	plain := session.AcCriteriaJSON("still plain text")
-	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &plain}, nil)
+	plain := domain.AcCriteriaJSON("still plain text")
+	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &plain}, nil)
 	require.Error(t, err, "plain-text criteria are not valid input to an update")
 
-	ac, serr := session.SerializeAcCriteria(pend("do the thing"))
+	ac, serr := domain.SerializeAcCriteria(pend("do the thing"))
 	require.NoError(t, serr)
-	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, session.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
+	_, err = repo.UpdateBacklogItem(ownerCtx(), item.ID, backlogdto.BacklogItemUpdate{AcceptanceCriteria: &ac}, nil)
 	require.NoError(t, err, "an unreadable stored list pins nothing and is replaced")
 }

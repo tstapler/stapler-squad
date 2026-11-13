@@ -14,6 +14,11 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/chains"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -49,7 +54,7 @@ type BacklogLifecycleListener struct {
 	// SessionService exists, so the spawner is wired post-construction via
 	// SetSessionCreator.
 	sessionCreatorMu sync.RWMutex
-	sessionCreator   ReviewGateSpawner
+	sessionCreator   reviewgate.ReviewGateSpawner
 
 	// poolMu guards headlessPool for concurrent Set/get access.
 	poolMu       sync.RWMutex
@@ -60,7 +65,7 @@ type BacklogLifecycleListener struct {
 
 	// autoReopenMu guards autoReopener for concurrent Set/get access.
 	autoReopenMu sync.RWMutex
-	autoReopener AutoReopenSpawner
+	autoReopener reviewgate.AutoReopenSpawner
 
 	// prFixMu guards prFixSpawner for concurrent Set/get access.
 	prFixMu      sync.RWMutex
@@ -193,7 +198,7 @@ type BacklogLifecycleListener struct {
 
 	// notifierMu guards notifier for concurrent Set/get access.
 	notifierMu sync.RWMutex
-	notifier   session.Notifier
+	notifier   domain.Notifier
 
 	// sessionArchiverMu guards sessionArchiver for concurrent Set/get access.
 	sessionArchiverMu sync.RWMutex
@@ -231,22 +236,22 @@ type BacklogLifecycleListener struct {
 	shutdownCancel context.CancelFunc
 
 	// runner encapsulates the spawnReviewGate logic so it can be tested independently.
-	runner *ReviewGateRunner
+	runner *reviewgate.ReviewGateRunner
 
 	// pipelineEngine resolves mode-specific slash-command sets and prompts (Epic 1.5).
 	// Optional — nil (the default for every constructor except NewBacklogLifecycleListenerWithPool,
 	// which is production's only caller) falls back to the built-in default pipeline. Set once at
 	// construction and forwarded unchanged into runner — never mutated afterward.
-	pipelineEngine PipelineEngine
+	pipelineEngine pipeline.PipelineEngine
 
 	// livenessEngine resolves per-stage/per-pipeline-mode stuck-detection thresholds (Epic 1.4 of
-	// backlog-custom-workflow-stages), replacing the flat maxHeadlessTriageSessionStaleness/
-	// maxWorkSessionStaleness/bounceThreshold/bounceLookback constants at their reconcile* call
+	// backlog-custom-workflow-stages), replacing the flat liveness.MaxHeadlessTriageSessionStaleness/
+	// liveness.MaxWorkSessionStaleness/stuck.BounceThreshold/stuck.BounceLookback constants at their reconcile* call
 	// sites. Optional — nil (the default for every constructor except
 	// NewBacklogLifecycleListenerWithPool, production's only caller) falls back to each call
 	// site's literal constant, unchanged from pre-Epic-1.4 behavior. Set once at construction,
 	// same pattern as pipelineEngine above — never mutated afterward.
-	livenessEngine LivenessEngine
+	livenessEngine liveness.LivenessEngine
 
 	// chainReconcilerMu guards chainReconciler for concurrent Set/get access.
 	chainReconcilerMu sync.RWMutex
@@ -255,7 +260,7 @@ type BacklogLifecycleListener struct {
 	// default) makes reconcileTriggerChains a no-op — matches every other
 	// optional-dependency detector's nil-safe convention in this file. Wired
 	// via SetChainReconciler.
-	chainReconciler *TriggerChainReconciler
+	chainReconciler *chains.TriggerChainReconciler
 
 	// gateSatisfactionRepoMu guards gateSatisfactionRepo for concurrent Set/get access.
 	gateSatisfactionRepoMu sync.RWMutex
@@ -277,7 +282,7 @@ type BacklogLifecycleListener struct {
 	// never the SwitchableWorkflowEngine selector: the .(*ConfiguredWorkflowEngine)
 	// assertions below would fail and silently disable gate-context resolution.
 	// Wired via SetWorkflowEngine.
-	workflowEngine session.WorkflowEngine
+	workflowEngine domain.WorkflowEngine
 	// wrongEngineWarn limits the "not a ConfiguredWorkflowEngine" WARN to once.
 	wrongEngineWarn sync.Once
 
@@ -287,7 +292,7 @@ type BacklogLifecycleListener struct {
 // SetWorkflowEngine wires the WorkflowEngine transitionHasAutomatedReviewGate
 // consults for a custom transition's automated-review gate. nil (the
 // default) is safe — see the field's doc comment.
-func (l *BacklogLifecycleListener) SetWorkflowEngine(engine session.WorkflowEngine) {
+func (l *BacklogLifecycleListener) SetWorkflowEngine(engine domain.WorkflowEngine) {
 	l.workflowEngineMu.Lock()
 	defer l.workflowEngineMu.Unlock()
 	l.workflowEngine = engine
@@ -310,12 +315,12 @@ func (l *BacklogLifecycleListener) configuredWorkflowEngine() (*session.Configur
 
 // WorkflowEngine returns the wired engine (nil if none); exported for the
 // production-wiring test in server/.
-func (l *BacklogLifecycleListener) WorkflowEngine() session.WorkflowEngine {
+func (l *BacklogLifecycleListener) WorkflowEngine() domain.WorkflowEngine {
 	return l.getWorkflowEngine()
 }
 
 // getWorkflowEngine returns the currently-wired WorkflowEngine (nil if none).
-func (l *BacklogLifecycleListener) getWorkflowEngine() session.WorkflowEngine {
+func (l *BacklogLifecycleListener) getWorkflowEngine() domain.WorkflowEngine {
 	l.workflowEngineMu.RLock()
 	defer l.workflowEngineMu.RUnlock()
 	return l.workflowEngine
@@ -351,7 +356,7 @@ func (l *BacklogLifecycleListener) SetReviewGateSatisfactionRepository(repo sess
 // PipelineEngine returns the PipelineEngine injected at construction (nil if none was
 // wired). Exported for the pointer-equality integration test proving BacklogService and
 // BacklogLifecycleListener share a single PipelineEngine instance (Story 1.5.1).
-func (l *BacklogLifecycleListener) PipelineEngine() PipelineEngine {
+func (l *BacklogLifecycleListener) PipelineEngine() pipeline.PipelineEngine {
 	return l.pipelineEngine
 }
 
@@ -400,7 +405,7 @@ func (l *BacklogLifecycleListener) SetRepoSettingsSeam(s RepoSettingsSeam) {
 
 // SetAutoReopener wires in the spawner used to automatically reopen items for
 // rework when a review verdict is FAIL or PARTIAL.
-func (l *BacklogLifecycleListener) SetAutoReopener(r AutoReopenSpawner) {
+func (l *BacklogLifecycleListener) SetAutoReopener(r reviewgate.AutoReopenSpawner) {
 	l.autoReopenMu.Lock()
 	defer l.autoReopenMu.Unlock()
 	l.autoReopener = r
@@ -410,21 +415,21 @@ func (l *BacklogLifecycleListener) SetAutoReopener(r AutoReopenSpawner) {
 // after construction. Needed because production wiring
 // (server/dependencies.go) constructs this listener before SessionService
 // exists.
-func (l *BacklogLifecycleListener) SetSessionCreator(s ReviewGateSpawner) {
+func (l *BacklogLifecycleListener) SetSessionCreator(s reviewgate.ReviewGateSpawner) {
 	l.sessionCreatorMu.Lock()
 	defer l.sessionCreatorMu.Unlock()
 	l.sessionCreator = s
 }
 
 // getSessionCreator returns the current review-gate session spawner under a read lock.
-func (l *BacklogLifecycleListener) getSessionCreator() ReviewGateSpawner {
+func (l *BacklogLifecycleListener) getSessionCreator() reviewgate.ReviewGateSpawner {
 	l.sessionCreatorMu.RLock()
 	defer l.sessionCreatorMu.RUnlock()
 	return l.sessionCreator
 }
 
 // getAutoReopener returns the current auto-reopener under a read lock.
-func (l *BacklogLifecycleListener) getAutoReopener() AutoReopenSpawner {
+func (l *BacklogLifecycleListener) getAutoReopener() reviewgate.AutoReopenSpawner {
 	l.autoReopenMu.RLock()
 	defer l.autoReopenMu.RUnlock()
 	return l.autoReopener
@@ -539,14 +544,14 @@ func (l *BacklogLifecycleListener) triggerDequeue(ctx context.Context) {
 // SetChainReconciler wires in the pipeline-chain restart-recovery reconciler
 // (webhook-triggers Phase 6). Called via server/dependencies.go once a
 // ChainFirer has been constructed (see WireChainFirer).
-func (l *BacklogLifecycleListener) SetChainReconciler(r *TriggerChainReconciler) {
+func (l *BacklogLifecycleListener) SetChainReconciler(r *chains.TriggerChainReconciler) {
 	l.chainReconcilerMu.Lock()
 	defer l.chainReconcilerMu.Unlock()
 	l.chainReconciler = r
 }
 
 // getChainReconciler returns the current chain reconciler under a read lock.
-func (l *BacklogLifecycleListener) getChainReconciler() *TriggerChainReconciler {
+func (l *BacklogLifecycleListener) getChainReconciler() *chains.TriggerChainReconciler {
 	l.chainReconcilerMu.RLock()
 	defer l.chainReconcilerMu.RUnlock()
 	return l.chainReconciler
@@ -672,14 +677,14 @@ func (l *BacklogLifecycleListener) getBranchReconciler() func(worktreePath, bran
 // SetNotifier wires in the notifier used to publish operator-facing notifications
 // (PR creation failures, security blocks, stale work sessions, rework-cap hits).
 // Optional — nil means notifications are disabled.
-func (l *BacklogLifecycleListener) SetNotifier(n session.Notifier) {
+func (l *BacklogLifecycleListener) SetNotifier(n domain.Notifier) {
 	l.notifierMu.Lock()
 	defer l.notifierMu.Unlock()
 	l.notifier = n
 }
 
 // getNotifier returns the current notifier under a read lock.
-func (l *BacklogLifecycleListener) getNotifier() session.Notifier {
+func (l *BacklogLifecycleListener) getNotifier() domain.Notifier {
 	l.notifierMu.RLock()
 	defer l.notifierMu.RUnlock()
 	return l.notifier
@@ -726,7 +731,7 @@ func (l *BacklogLifecycleListener) notifyAutoRemediating(itemID, title, message 
 // (BUG-030, BUG-040, BUG-041, BUG-046, BUG-048, and this fix's sibling call
 // sites in reconcileBouncingItems/ReconcilePRPending).
 func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, failureContext string, writeErr error) {
-	if session.IsGateDenial(writeErr) {
+	if domain.IsGateDenial(writeErr) {
 		// The gate's reporter already raised the one comment and notification.
 		log.Debug("[BacklogLifecycle] transition denied by the workflow gate; not re-notifying", "item", itemID, "error", writeErr)
 		return
@@ -742,8 +747,8 @@ func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, fai
 // logSystemTransitionFailure logs a failed gated system write: a denial or a
 // lost compare-and-swap is expected and retried on the next tick (Debug); any
 // other failure is an Error.
-func logSystemTransitionFailure(where, itemID string, to session.BacklogStatus, err error) {
-	if session.IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed) {
+func logSystemTransitionFailure(where, itemID string, to domain.BacklogStatus, err error) {
+	if domain.IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed) {
 		log.Debug("[BacklogLifecycle] "+where+": transition skipped", "item", itemID, "to", to, "error", err)
 		return
 	}
@@ -880,7 +885,7 @@ func (l *BacklogLifecycleListener) Shutdown() {
 // newListenerBase initialises fields common to all BacklogLifecycleListener constructors.
 // pipelineEngine and livenessEngine may both be nil — see their field doc comments for the
 // fallback behavior.
-func newListenerBase(storage *session.Storage, pipelineEngine PipelineEngine, livenessEngine LivenessEngine) *BacklogLifecycleListener {
+func newListenerBase(storage *session.Storage, pipelineEngine pipeline.PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &BacklogLifecycleListener{
 		storage:                 storage,
@@ -899,7 +904,7 @@ func newListenerBase(storage *session.Storage, pipelineEngine PipelineEngine, li
 		prByNumberFinder:        defaultPRByNumberFinder,
 		dashboardBaseURLFn:      func() string { return "" },
 	}
-	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
+	l.runner = reviewgate.NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
 }
 
@@ -912,7 +917,7 @@ func NewBacklogLifecycleListener(storage *session.Storage) *BacklogLifecycleList
 
 // NewBacklogLifecycleListenerWithSpawner creates a listener that will spawn a
 // review gate session when a work session exits and SkipReviewGate is false.
-func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner ReviewGateSpawner) *BacklogLifecycleListener {
+func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner reviewgate.ReviewGateSpawner) *BacklogLifecycleListener {
 	l := newListenerBase(storage, nil, nil)
 	l.SetSessionCreator(spawner)
 	return l
@@ -922,9 +927,9 @@ func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner Re
 // for review gate calls instead of spawning a tmux session. pipelineEngine is the
 // shared PipelineEngine instance (Epic 1.5, Story 1.5.1) — pass nil to fall back to
 // the built-in default pipeline for every item. livenessEngine is the shared
-// LivenessEngine instance (Epic 1.4) — pass nil to fall back to each stuck-detection
+// liveness.LivenessEngine instance (Epic 1.4) — pass nil to fall back to each stuck-detection
 // sweep's literal constant for every item.
-func NewBacklogLifecycleListenerWithPool(storage *session.Storage, pool *headless.Pool, pipelineEngine PipelineEngine, livenessEngine LivenessEngine) *BacklogLifecycleListener {
+func NewBacklogLifecycleListenerWithPool(storage *session.Storage, pool *headless.Pool, pipelineEngine pipeline.PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
 	l := newListenerBase(storage, pipelineEngine, livenessEngine)
 	l.headlessPool = pool
 	return l
@@ -937,14 +942,14 @@ type instanceBacklogListener struct {
 	instanceUUID string
 }
 
-func (il *instanceBacklogListener) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
+func (il *instanceBacklogListener) OnLifecycleEvent(event domain.LifecycleEvent, _ string) {
 	if !il.parent.enabled.Load() {
 		return
 	}
 	switch event {
-	case session.EventStarted:
+	case domain.EventStarted:
 		go il.parent.onSessionStarted(il.instanceUUID)
-	case session.EventExited, session.EventStopped:
+	case domain.EventExited, domain.EventStopped:
 		// A deliberate operator stop (stop_session, DeleteSession, backlog
 		// stale-work remediation) ends the session exactly as much as an
 		// unexpected exit does — the ItemSession bookkeeping and downstream
@@ -1055,23 +1060,23 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 		return
 	}
 
-	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
+	if domain.BacklogStatus(item.Status) != domain.BacklogStatusInProgress {
 		log.Debug("[BacklogLifecycle] item is not in_progress; skipping", "item", item.ID, "status", item.Status)
 		return
 	}
 
-	toStatus := session.BacklogStatusReview
+	toStatus := domain.BacklogStatusReview
 	if item.SkipReviewGate {
-		toStatus = session.BacklogStatusDone
+		toStatus = domain.BacklogStatusDone
 	}
 
 	updatedAt := item.UpdatedAt
 	precondition := &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus:    string(session.BacklogStatusInProgress),
+		ExpectedStatus:    string(domain.BacklogStatusInProgress),
 		ExpectedUpdatedAt: &updatedAt,
 	}
-	if _, err := l.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerSessionExited, ItemID: item.ID, To: toStatus, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+	if _, err := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerSessionExited, ItemID: item.ID, To: toStatus, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
 		logSystemTransitionFailure("onSessionExited", item.ID, toStatus, err)
 		return
@@ -1089,7 +1094,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	go l.triggerDequeue(context.Background())
 
 	// Spawn review gate if the item moved to review and a review mechanism is configured.
-	if gateContext, ok := l.resolveReviewGateContext(session.BacklogStatusInProgress, toStatus); ok && !item.SkipReviewGate && l.getSessionCreator() != nil {
+	if gateContext, ok := l.resolveReviewGateContext(domain.BacklogStatusInProgress, toStatus); ok && !item.SkipReviewGate && l.getSessionCreator() != nil {
 		go func() {
 			// Acquire the bounded semaphore to prevent unbounded goroutine fan-out
 			// when many sessions exit simultaneously.
@@ -1108,7 +1113,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	// InvokeCustomGateCheck doc comment) if this transition has one configured.
 	// Independent of the automated-review gate above; a transition may have
 	// either, both, or neither.
-	if gateID, cfg, ok := l.resolveCustomCheckGateContext(session.BacklogStatusInProgress, toStatus); ok {
+	if gateID, cfg, ok := l.resolveCustomCheckGateContext(domain.BacklogStatusInProgress, toStatus); ok {
 		targetStage := toStatus
 		go func() {
 			select {
@@ -1127,9 +1132,9 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 // no persisted TransitionGate backs it (GateID ""), and it always reviews a
 // code diff (RequiresDiff: true) — the same behavior review_gate.go's Run had
 // unconditionally before Story 2.4.3 generalized it to accept a GateContext.
-var builtInReviewGateContext = GateContext{
+var builtInReviewGateContext = reviewgate.GateContext{
 	GateID:           "",
-	TargetTransition: session.BacklogStatusReview,
+	TargetTransition: domain.BacklogStatusReview,
 	RequiresDiff:     true,
 }
 
@@ -1155,19 +1160,19 @@ var builtInReviewGateContext = GateContext{
 // review gate in that case. server/dependencies.go wires the concrete engine
 // via SetWorkflowEngine; with none (or a non-concrete one) this degrades to
 // the `to == BacklogStatusReview` case only.
-func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to session.BacklogStatus) (GateContext, bool) {
-	if to == session.BacklogStatusReview {
+func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to domain.BacklogStatus) (reviewgate.GateContext, bool) {
+	if to == domain.BacklogStatusReview {
 		return builtInReviewGateContext, true
 	}
 	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
-		return GateContext{}, false
+		return reviewgate.GateContext{}, false
 	}
 	gateID, cfg, found := cwe.ResolveAutomatedReviewGateContext(from, to)
 	if !found {
-		return GateContext{}, false
+		return reviewgate.GateContext{}, false
 	}
-	return GateContext{
+	return reviewgate.GateContext{
 		GateID:           gateID,
 		TargetTransition: to,
 		RequiresDiff:     cfg.RequiresDiff,
@@ -1182,10 +1187,10 @@ func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to session.Bac
 // resolveReviewGateContext's shape for the sibling stateful gate kind. ok is
 // false when no WorkflowEngine is wired, it isn't a *ConfiguredWorkflowEngine,
 // or the edge carries no custom-check gate.
-func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to session.BacklogStatus) (uuid.UUID, session.CustomCheckConfig, bool) {
+func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to domain.BacklogStatus) (uuid.UUID, domain.CustomCheckConfig, bool) {
 	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
-		return uuid.Nil, session.CustomCheckConfig{}, false
+		return uuid.Nil, domain.CustomCheckConfig{}, false
 	}
 	return cwe.ResolveCustomCheckGateContext(from, to)
 }
@@ -1202,7 +1207,7 @@ func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to sessio
 // Scope note: only the two DB-derivable reasons that already have a queryable
 // detection surface as of this Epic are seeded — abandoned_review (via the
 // existing FindStuckReviewItems query) and stale_work (mirroring
-// reconcileStaleWorkSessions' maxWorkSessionStaleness check, without
+// reconcileStaleWorkSessions' liveness.MaxWorkSessionStaleness check, without
 // modifying that function). rework_cap, bouncing, and push_failed are
 // deliberately NOT seeded here: their detection logic is introduced by Phase
 // 2 (Stories 2.1.2, 2.1.4, 2.1.6 respectively) and does not exist yet in this
@@ -1229,7 +1234,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 		log.Warn("[BacklogLifecycle] BackfillStuckStates FindStuckReviewItems error", "error", err)
 	} else {
 		for _, item := range reviewItems {
-			if l.backfillMarkAndNotify(ctx, er, item.ID.String(), domain.StuckReasonAbandonedReview, session.BacklogStatusReview,
+			if l.backfillMarkAndNotify(ctx, er, item.ID.String(), domain.StuckReasonAbandonedReview, domain.BacklogStatusReview,
 				"backfilled at startup: stuck in review with nothing in flight") {
 				seeded++
 			}
@@ -1237,9 +1242,9 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 	}
 
 	// stale_work: in_progress items whose active work session has gone quiet
-	// past maxWorkSessionStaleness.
+	// past liveness.MaxWorkSessionStaleness.
 	inProgressItems, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusInProgress)},
+		Statuses: []string{string(domain.BacklogStatusInProgress)},
 	})
 	if err != nil {
 		log.Warn("[BacklogLifecycle] BackfillStuckStates ListBacklogItems error", "error", err)
@@ -1264,10 +1269,10 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 			if active.LastProgressAt != nil {
 				lastProgress = *active.LastProgressAt
 			}
-			if time.Since(lastProgress) < maxWorkSessionStaleness {
+			if time.Since(lastProgress) < liveness.MaxWorkSessionStaleness {
 				continue
 			}
-			if l.backfillMarkAndNotify(ctx, er, item.ID, domain.StuckReasonStaleWork, session.BacklogStatusInProgress,
+			if l.backfillMarkAndNotify(ctx, er, item.ID, domain.StuckReasonStaleWork, domain.BacklogStatusInProgress,
 				fmt.Sprintf("backfilled at startup: no progress since %s", lastProgress)) {
 				seeded++
 			}
@@ -1282,7 +1287,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 // re-notify for a condition already known before the restart. Returns
 // whether a row was newly opened by this call. Best-effort: errors are
 // logged, never returned.
-func (l *BacklogLifecycleListener) backfillMarkAndNotify(ctx context.Context, er *session.EntRepository, itemID string, reason domain.StuckReason, expectedStatus session.BacklogStatus, stuckContext string) bool {
+func (l *BacklogLifecycleListener) backfillMarkAndNotify(ctx context.Context, er *session.EntRepository, itemID string, reason domain.StuckReason, expectedStatus domain.BacklogStatus, stuckContext string) bool {
 	applied, err := er.MarkStuck(ctx, itemID, reason, expectedStatus, stuckContext)
 	if err != nil {
 		log.Warn("[BacklogLifecycle] BackfillStuckStates MarkStuck failed", "item", itemID, "reason", reason, "error", err)
@@ -1366,7 +1371,7 @@ func (l *BacklogLifecycleListener) respawnReviewGatesWithoutGate(ctx context.Con
 			// builtInReviewGateContext, routed through the same resolver as
 			// onSessionExited for a single source of truth rather than a second
 			// hardcoded reference to that variable.
-			gateContext, ok := l.resolveReviewGateContext(session.BacklogStatus(itemCopy.Status), session.BacklogStatusReview)
+			gateContext, ok := l.resolveReviewGateContext(domain.BacklogStatus(itemCopy.Status), domain.BacklogStatusReview)
 			if !ok {
 				gateContext = builtInReviewGateContext
 			}
@@ -1452,7 +1457,7 @@ func (l *BacklogLifecycleListener) resolveBouncingAndCapExhausted(ctx context.Co
 }
 
 // reconcileStaleWorkSessions notifies once per item when an in_progress backlog item's
-// active work session has gone longer than maxWorkSessionStaleness without progress,
+// active work session has gone longer than liveness.MaxWorkSessionStaleness without progress,
 // then (docs/tasks/backlog-stuck-item-auto-remediation.md Phase B) drives the
 // "stale_work" reason's automated remediation for every subsequent tick the
 // condition still holds. Notify-once dedup and "since when" are DB-backed
@@ -1498,9 +1503,9 @@ func (l *BacklogLifecycleListener) resolveBouncingAndCapExhausted(ctx context.Co
 func (l *BacklogLifecycleListener) refreshWorkSessionGitActivity(ctx context.Context) {
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{
-			string(session.BacklogStatusInProgress),
-			string(session.BacklogStatusReview),
-			string(session.BacklogStatusPRPending),
+			string(domain.BacklogStatusInProgress),
+			string(domain.BacklogStatusReview),
+			string(domain.BacklogStatusPRPending),
 		},
 	})
 	if err != nil {
@@ -1587,7 +1592,7 @@ const planApprovalStaleness = 5 * time.Minute
 // architecture question out of scope for this fix; see BUG-038.
 func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Context, er *session.EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusQueued)},
+		Statuses: []string{string(domain.BacklogStatusQueued)},
 	})
 	if err != nil {
 		log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems list error", "error", err)
@@ -1617,7 +1622,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 			continue
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, session.BacklogStatusQueued,
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonPlanNotApproved, domain.BacklogStatusQueued,
 			"queued item blocked by DequeueNextQueuedItems' planning gate (plan not approved, skip_planning not set)")
 		if markErr != nil {
 			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems MarkStuck failed", "item", item.ID, "error", markErr)
@@ -1631,7 +1636,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}
@@ -1694,7 +1699,7 @@ func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, err
 // transitionBouncingItemToDone moves an item reconcileBouncingItems has
 // externally verified as converged (its PR merged, or its commit shipped to
 // main) to done. It does this via the state machine's own legal edges —
-// recording a genuine PASS verdict via recordTerminalReviewVerdict (documenting
+// recording a genuine PASS verdict via RecordTerminalReviewVerdict (documenting
 // the external verification as the justification), then in_progress->review
 // (only if the item isn't already at review) followed by review->done —
 // rather than calling the raw storage-layer TransitionBacklogItemStatus
@@ -1706,24 +1711,24 @@ func ResolveBranchTip(ctx context.Context, repoPath, branch string) (string, err
 // the guarded RPC path in server/services/backlog_service_lifecycle.go that
 // this internal caller was bypassing).
 func (l *BacklogLifecycleListener) transitionBouncingItemToDone(ctx context.Context, item backlogdto.BacklogItemData, verdictSummary string) error {
-	if _, err := recordTerminalReviewVerdict(l.storage, item.ID, item.AcceptanceCriteria, "bounce-reconcile-"+uuid.New().String(), session.ReviewVerdictPass, verdictSummary); err != nil {
+	if _, err := pipeline.RecordTerminalReviewVerdict(l.storage, item.ID, item.AcceptanceCriteria, "bounce-reconcile-"+uuid.New().String(), domain.ReviewVerdictPass, verdictSummary); err != nil {
 		return fmt.Errorf("record PASS verdict: %w", err)
 	}
 
 	status := item.Status
-	if status == string(session.BacklogStatusInProgress) {
+	if status == string(domain.BacklogStatusInProgress) {
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: status}
-		if _, err := l.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerBouncingToDone, ItemID: item.ID, To: session.BacklogStatusReview, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		if _, err := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerBouncingToDone, ItemID: item.ID, To: domain.BacklogStatusReview, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); err != nil {
 			return fmt.Errorf("in_progress->review: %w", err)
 		}
-		status = string(session.BacklogStatusReview)
+		status = string(domain.BacklogStatusReview)
 	}
 
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: status}
-	if _, err := l.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerBouncingToDone, ItemID: item.ID, To: session.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+	if _, err := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerBouncingToDone, ItemID: item.ID, To: domain.BacklogStatusDone, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
 		return fmt.Errorf("review->done: %w", err)
 	}
@@ -1761,7 +1766,7 @@ func (l *BacklogLifecycleListener) liveHoldFromRows(ctx context.Context, er *ses
 }
 
 // reconcileBouncingItems flags items that have crossed in_progress->review
-// >= bounceThreshold times within bounceLookback with no recorded PASS
+// >= stuck.BounceThreshold times within stuck.BounceLookback with no recorded PASS
 // verdict — a non-converging rework cycle that never hits the rework cap
 // (root cause #4). Before flagging, it first checks whether the item's
 // linked PR has already merged (including a manual merge outside the app's
@@ -1777,7 +1782,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 	// Scan items in the two statuses a bouncing cycle spans; a converged item
 	// (done) is handled by the self-heal sweep, not re-flagged here.
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusInProgress), string(session.BacklogStatusReview)},
+		Statuses: []string{string(domain.BacklogStatusInProgress), string(domain.BacklogStatusReview)},
 	})
 	if err != nil {
 		log.Warn("[BacklogLifecycle] reconcileBouncingItems list error", "error", err)
@@ -1788,15 +1793,15 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// Resolve this item's Shape-C liveness definition (CycleThreshold/CycleLookback)
 		// per item, inside the loop — a per-mode override means these can legitimately
 		// differ between items in the same tick (Epic 1.4, Story 1.4.3). Keyed to
-		// BacklogStatusReview, NOT BacklogStatusInProgress: DefaultLivenessEngine's table
+		// BacklogStatusReview, NOT BacklogStatusInProgress: liveness.DefaultLivenessEngine's table
 		// (Epic 1.2) already occupies BacklogStatusInProgress with the Shape-B stale-work
-		// definition, and a LivenessDefinition is a tagged union with exactly one Kind per
+		// definition, and a liveness.LivenessDefinition is a tagged union with exactly one Kind per
 		// stage — see this file's Epic 1.4 plan-correction note in
 		// project_plans/backlog-custom-workflow-stages/implementation/plan.md's Story 1.4.3.
-		cycleThreshold := bounceThreshold
-		cycleLookback := bounceLookback
+		cycleThreshold := stuck.BounceThreshold
+		cycleLookback := stuck.BounceLookback
 		if l.livenessEngine != nil {
-			if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusReview, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+			if def, defErr := l.livenessEngine.LivenessFor(domain.BacklogStatusReview, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 				cycleThreshold = def.CycleThreshold
 				cycleLookback = def.CycleLookback
 			}
@@ -1867,14 +1872,14 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			// checked, never an arbitrary one, so an unrelated commit merged to
 			// main elsewhere can't produce a false positive.
 			if sha, shipped := l.mostRecentWorkCommitShippedToMain(ctx, item.ID, item.RepoPath); shipped {
-				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, session.BounceMainBranch)
+				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, domain.BounceMainBranch)
 				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
 					log.Warn("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) failed", "item", item.ID, "error", transErr)
 					// The commit is already confirmed shipped to main — same
 					// silent-stranding risk as the merged-PR branch above.
-					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, session.BounceMainBranch), transErr)
+					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, domain.BounceMainBranch), transErr)
 				} else {
-					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", session.BounceMainBranch)
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", domain.BounceMainBranch)
 					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
 					// Signal 2) row from a prior tick — see the identical
 					// comment at the merged-PR branch above.
@@ -1909,9 +1914,9 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			latestOutcome = recentVerdicts[0].OverallOutcome
 			latestSummary = recentVerdicts[0].Summary
 		}
-		hasPass := latestOutcome == string(session.ReviewOutcomePass)
+		hasPass := latestOutcome == string(domain.ReviewOutcomePass)
 
-		if !isBouncing(count, cycleThreshold, hasPass) {
+		if !stuck.IsBouncing(count, cycleThreshold, hasPass) {
 			continue
 		}
 
@@ -1920,10 +1925,10 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			// sanitizeField at 500 matches the existing convention for
 			// rendering a ReviewVerdict.Summary into operator/agent-facing
 			// text (see backlog_context.go, backlog_review.go).
-			reasonDetail = fmt.Sprintf("%s (most recent verdict: %s — %s)", reasonDetail, latestOutcome, session.SanitizeField(latestSummary, 500))
+			reasonDetail = fmt.Sprintf("%s (most recent verdict: %s — %s)", reasonDetail, latestOutcome, domain.SanitizeField(latestSummary, 500))
 		}
 
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatus(item.Status), reasonDetail)
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, domain.BacklogStatus(item.Status), reasonDetail)
 		if markErr != nil {
 			log.Warn("[BacklogLifecycle] reconcileBouncingItems MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
@@ -1936,14 +1941,14 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			log.Warn("[BacklogLifecycle] reconcileBouncingItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonBouncing)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonBouncing)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}
 		log.Warn("[BacklogLifecycle] item bouncing, no PASS", "item", item.ID, "cycles", count, "lookback", cycleLookback)
 		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, cycleLookback)
 		if latestOutcome != "" {
-			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, session.SanitizeField(latestSummary, 500))
+			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, domain.SanitizeField(latestSummary, 500))
 		}
 		l.notify(item.ID,
 			"Item is thrashing between work and review",
@@ -2057,25 +2062,25 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 		resolve := false
 		switch row.Reason {
 		case domain.StuckReasonPRReadyUnmerged:
-			resolve = row.ItemStatus != session.BacklogStatusPRPending
+			resolve = row.ItemStatus != domain.BacklogStatusPRPending
 		case domain.StuckReasonAbandonedReview:
-			resolve = row.ItemStatus != session.BacklogStatusReview
+			resolve = row.ItemStatus != domain.BacklogStatusReview
 		case domain.StuckReasonVerdictUndelivered:
 			// Point-of-success resolve is resolveVerdictUndeliveredLogged
 			// (server/services/backlog_service_verdict_steer.go); this is the
 			// backstop for every other way the item can leave review (ships,
 			// reopens for rework, is manually moved, etc.) without that call
 			// ever firing.
-			resolve = row.ItemStatus != session.BacklogStatusReview
+			resolve = row.ItemStatus != domain.BacklogStatusReview
 		case domain.StuckReasonStaleWork:
-			resolve = row.ItemStatus != session.BacklogStatusInProgress
+			resolve = row.ItemStatus != domain.BacklogStatusInProgress
 		case domain.StuckReasonBouncing, domain.StuckReasonBounceCapExhausted:
 			// bounce_cap_exhausted (Signal 2, plan.md Epic 1.3) can only ever
 			// coexist with an open bouncing row, so it shares bouncing's exact
 			// non-terminal anchor — this is a backstop for any status
 			// transition that bypasses reconcileBouncingItems' explicit
 			// resolve-alongside-bouncing call sites above.
-			resolve = row.ItemStatus != session.BacklogStatusInProgress && row.ItemStatus != session.BacklogStatusReview
+			resolve = row.ItemStatus != domain.BacklogStatusInProgress && row.ItemStatus != domain.BacklogStatusReview
 		case domain.StuckReasonAutonomousStuck:
 			// Shares bouncing's two-status anchor, not a single {in_progress}
 			// one — see this function's doc comment for why review must stay
@@ -2084,7 +2089,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 			// this backstops: a row left open after the item cycled all the
 			// way back to "ready" through a path resolveAutonomousStuck's
 			// point-of-success call never observes.
-			resolve = row.ItemStatus != session.BacklogStatusInProgress && row.ItemStatus != session.BacklogStatusReview
+			resolve = row.ItemStatus != domain.BacklogStatusInProgress && row.ItemStatus != domain.BacklogStatusReview
 		case domain.StuckReasonOrphanedTriage:
 			// Generalized 2026-08-03 to also anchor at queued (see
 			// reconcileOrphanedTriageItems' doc comment): a retry that
@@ -2093,17 +2098,17 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 			// correctly on genuine success. A retry still in flight (queued
 			// reset to idea) or a repeat failure (back to idea) keeps the row
 			// open, matching the pre-existing idea-only behavior.
-			resolve = row.ItemStatus != session.BacklogStatusIdea && row.ItemStatus != session.BacklogStatusQueued
+			resolve = row.ItemStatus != domain.BacklogStatusIdea && row.ItemStatus != domain.BacklogStatusQueued
 		case domain.StuckReasonPlanNotApproved:
-			resolve = row.ItemStatus != session.BacklogStatusQueued
+			resolve = row.ItemStatus != domain.BacklogStatusQueued
 		case domain.StuckReasonPRPendingNoPR:
-			resolve = row.ItemStatus != session.BacklogStatusPRPending
+			resolve = row.ItemStatus != domain.BacklogStatusPRPending
 		case domain.StuckReasonPRNeedsFix, domain.StuckReasonMergedPRUnverified:
-			resolve = row.ItemStatus != session.BacklogStatusPRPending
+			resolve = row.ItemStatus != domain.BacklogStatusPRPending
 		case domain.StuckReasonRepeatedNoopDispatch:
 			// Commit-landed resolution is reconcileRepeatedNoopDispatch's
 			// else-branch (same-status, invisible to this sweep).
-			resolve = row.ItemStatus != session.BacklogStatusInProgress && row.ItemStatus != session.BacklogStatusReview
+			resolve = row.ItemStatus != domain.BacklogStatusInProgress && row.ItemStatus != domain.BacklogStatusReview
 		case domain.StuckReasonTransitionDenied:
 			resolve = !session.TransitionDenialAnchored(row)
 		case domain.StuckReasonSpawnFailed:
@@ -2116,8 +2121,8 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 			if !domain.IsDequeueSpawnFailedContext(row.Context) {
 				continue
 			}
-			resolve = row.ItemStatus != session.BacklogStatusReady && row.ItemStatus != session.BacklogStatusQueued &&
-				row.ItemStatus != session.BacklogStatusInProgress
+			resolve = row.ItemStatus != domain.BacklogStatusReady && row.ItemStatus != domain.BacklogStatusQueued &&
+				row.ItemStatus != domain.BacklogStatusInProgress
 		default:
 			// push_failed, rework_cap, multiple_reasons, and any future
 			// reason with no non-terminal anchor: stays open until the
@@ -2126,7 +2131,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 			// resolved by its own detector (reconcileMultiReasonEscalation's
 			// de-escalate branch), not a status-anchor case here — its
 			// "resolved" condition is "count of other open reasons dropped
-			// below multiReasonThreshold", which has no single item-status
+			// below stuck.MultiReasonThreshold", which has no single item-status
 			// anchor to check.
 			continue
 		}
@@ -2138,7 +2143,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 }
 
 // reconcileMultiReasonEscalation groups every open BacklogStuckState row by
-// item and, for any item with multiReasonThreshold or more simultaneously
+// item and, for any item with stuck.MultiReasonThreshold or more simultaneously
 // open *non-escalation* stuck reasons, marks/refreshes a durable
 // domain.StuckReasonMultipleReasons row (Signal 1 — see plan.md Epic 1.2).
 // Computed fresh from FindOpenStuckStates every tick (never a cached count,
@@ -2164,7 +2169,7 @@ func (l *BacklogLifecycleListener) selfHealStuck(ctx context.Context, er *sessio
 //     Failure #1, P1).
 //
 // Notification is dwell-gated and notify-once per row lifetime
-// (multiReasonEscalationNotifyReady, keyed off the row's FirstDetectedAt) so
+// (stuck.MultiReasonEscalationNotifyReady, keyed off the row's FirstDetectedAt) so
 // a single-tick threshold crossing doesn't notify immediately. De-escalation
 // (ResolveStuck) is NOT dwell-gated — it fires the same tick the count first
 // drops below threshold (see plan.md Pattern Decisions' "Flap control"
@@ -2267,7 +2272,7 @@ func excludeStructurallyCoupledAbandonedReview(set multiReasonRowSet) []backlogd
 // caller can stop processing the item, or whether escalation should still be
 // evaluated (false).
 func (l *BacklogLifecycleListener) deescalateMultiReasonIfNeeded(ctx context.Context, er *session.EntRepository, itemID string, hasExistingRow bool, openReasonsCount int) bool {
-	if isMultiReasonEscalated(openReasonsCount) {
+	if stuck.IsMultiReasonEscalated(openReasonsCount) {
 		return false
 	}
 	if hasExistingRow {
@@ -2294,7 +2299,7 @@ func (l *BacklogLifecycleListener) notifyMultiReasonEscalationIfReady(ctx contex
 	if existingRow.NotifiedAt != nil {
 		return
 	}
-	if !multiReasonEscalationNotifyReady(existingRow.FirstDetectedAt, time.Now()) {
+	if !stuck.MultiReasonEscalationNotifyReady(existingRow.FirstDetectedAt, time.Now()) {
 		return
 	}
 	l.notify(itemID,
@@ -2318,7 +2323,7 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx con
 	set := categorizeOpenStuckRows(rows)
 	nonEscalation := excludeStructurallyCoupledAbandonedReview(set)
 
-	existingRow, hasExistingRow := session.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMultipleReasons)
+	existingRow, hasExistingRow := backlogdto.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMultipleReasons)
 
 	if l.deescalateMultiReasonIfNeeded(ctx, er, itemID, hasExistingRow, len(nonEscalation)) {
 		return

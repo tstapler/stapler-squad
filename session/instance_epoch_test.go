@@ -8,13 +8,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestBumpCreationEpoch_should_Increment_When_CalledTwice verifies Story 1.2.1:
 // bumpCreationEpoch increments exactly once per call (simulating cancel-then-retry).
 func TestBumpCreationEpoch_should_Increment_When_CalledTwice(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-bump-epoch", Status: Creating}
+	inst := &Instance{Title: "test-bump-epoch", Status: domain.Creating}
 
 	require.Equal(t, uint64(0), inst.CreationEpoch())
 
@@ -31,15 +32,15 @@ func TestBumpCreationEpoch_should_Increment_When_CalledTwice(t *testing.T) {
 // 1.2.2's happy path: a caller presenting the current epoch wins the write.
 func TestTryForceStatusIfEpoch_should_ApplyWrite_When_EpochMatches(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-force-status-match", Status: Creating}
+	inst := &Instance{Title: "test-force-status-match", Status: domain.Creating}
 	inst.bumpCreationEpoch()
 	inst.bumpCreationEpoch()
 	inst.bumpCreationEpoch() // epoch == 3
 
-	applied := inst.TryForceStatusIfEpoch(3, Active, "")
+	applied := inst.TryForceStatusIfEpoch(3, domain.Active, "")
 
 	assert.True(t, applied)
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 }
 
 // TestTryForceStatusIfEpoch_should_ReturnFalse_When_EpochIsStale verifies Story
@@ -47,15 +48,15 @@ func TestTryForceStatusIfEpoch_should_ApplyWrite_When_EpochMatches(t *testing.T)
 // captured value by a cancel) no-ops and reports false.
 func TestTryForceStatusIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-force-status-stale", Status: Creating}
+	inst := &Instance{Title: "test-force-status-stale", Status: domain.Creating}
 	inst.bumpCreationEpoch()
 	inst.bumpCreationEpoch()
 	inst.bumpCreationEpoch() // epoch == 3
 
-	applied := inst.TryForceStatusIfEpoch(2, Active, "")
+	applied := inst.TryForceStatusIfEpoch(2, domain.Active, "")
 
 	assert.False(t, applied)
-	assert.Equal(t, Creating, inst.Status, "status must be unchanged on a stale write")
+	assert.Equal(t, domain.Creating, inst.Status, "status must be unchanged on a stale write")
 }
 
 // TestTryForceStatusIfEpoch_should_ProduceExactlyOneWinner_When_CalledConcurrently
@@ -64,7 +65,7 @@ func TestTryForceStatusIfEpoch_should_ReturnFalse_When_EpochIsStale(t *testing.T
 // produce exactly one true return.
 func TestTryForceStatusIfEpoch_should_ProduceExactlyOneWinner_When_CalledConcurrently(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-force-status-race", Status: Creating}
+	inst := &Instance{Title: "test-force-status-race", Status: domain.Creating}
 	li := NewLiveInstance(inst)
 	defer li.Stop()
 
@@ -73,13 +74,13 @@ func TestTryForceStatusIfEpoch_should_ProduceExactlyOneWinner_When_CalledConcurr
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		if inst.TryForceStatusIfEpoch(0, Active, "") {
+		if inst.TryForceStatusIfEpoch(0, domain.Active, "") {
 			atomic.AddInt64(&wins, 1)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		if inst.TryForceStatusIfEpoch(0, Failed, "timed out") {
+		if inst.TryForceStatusIfEpoch(0, domain.Failed, "timed out") {
 			atomic.AddInt64(&wins, 1)
 		}
 	}()
@@ -92,7 +93,7 @@ func TestTryForceStatusIfEpoch_should_ProduceExactlyOneWinner_When_CalledConcurr
 // verifies Story 1.2.3's happy path.
 func TestTryStartRetry_should_BumpEpochAndResetToCreating_When_StatusIsFailed(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-retry-happy", Status: Failed}
+	inst := &Instance{Title: "test-retry-happy", Status: domain.Failed}
 	priorEpoch := inst.CreationEpoch()
 
 	before := time.Now()
@@ -101,7 +102,7 @@ func TestTryStartRetry_should_BumpEpochAndResetToCreating_When_StatusIsFailed(t 
 
 	require.True(t, started)
 	assert.Equal(t, priorEpoch+1, newEpoch)
-	assert.Equal(t, Creating, inst.Status)
+	assert.Equal(t, domain.Creating, inst.Status)
 	assert.False(t, inst.CreationProgressUpdatedAt().Before(before), "CreationProgressUpdatedAt must be bumped to now, not left at its stale pre-retry value")
 	assert.False(t, inst.CreationProgressUpdatedAt().After(after))
 }
@@ -110,13 +111,13 @@ func TestTryStartRetry_should_BumpEpochAndResetToCreating_When_StatusIsFailed(t 
 // Story 1.2.3's guard: retry only applies to a Failed instance.
 func TestTryStartRetry_should_ReturnNotStarted_When_StatusIsNotFailed(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-retry-not-failed", Status: Active}
+	inst := &Instance{Title: "test-retry-not-failed", Status: domain.Active}
 
 	newEpoch, started := inst.TryStartRetry()
 
 	assert.False(t, started)
 	assert.Equal(t, uint64(0), newEpoch)
-	assert.Equal(t, Active, inst.Status, "instance must be untouched when not Failed")
+	assert.Equal(t, domain.Active, inst.Status, "instance must be untouched when not Failed")
 	assert.Equal(t, uint64(0), inst.CreationEpoch())
 }
 
@@ -124,7 +125,7 @@ func TestTryStartRetry_should_ReturnNotStarted_When_StatusIsNotFailed(t *testing
 // Story 1.2.3's double-click-retry fencing guarantee under -race -count=50.
 func TestTryStartRetry_should_StartExactlyOnce_When_CalledConcurrently(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-retry-race", Status: Failed}
+	inst := &Instance{Title: "test-retry-race", Status: domain.Failed}
 	li := NewLiveInstance(inst)
 	defer li.Stop()
 
@@ -146,5 +147,5 @@ func TestTryStartRetry_should_StartExactlyOnce_When_CalledConcurrently(t *testin
 	wg.Wait()
 
 	assert.Equal(t, int64(1), atomic.LoadInt64(&starts), "exactly one caller must start the retry")
-	assert.Equal(t, Creating, inst.Status)
+	assert.Equal(t, domain.Creating, inst.Status)
 }

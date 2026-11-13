@@ -1,0 +1,65 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "reviewgate",
+    srcs = [
+        "custom_check.go",
+        "gate.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/backlog/reviewgate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//session",
+        "//session/backlog/liveness",
+        "//session/backlog/pipeline",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/git",
+        "//session/headless",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":reviewgate",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "reviewgate_test",
+    srcs = [
+        "custom_check_test.go",
+        "gate_bk_test.go",
+    ],
+    embed = [":reviewgate"],
+    deps = [
+        "//session",
+        "//session/backlog/internal/blktest",
+        "//session/backlog/liveness",
+        "//session/backlog/pipeline",
+        "//session/backlog/stuck",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/git",
+        "//session/internal/sessiontest",
+        "//tools/bzl/ent",
+        "@com_github_go_git_go_git_v5//:go-git",
+        "@com_github_go_git_go_git_v5//plumbing/object",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session and server/services tests that scan Go sources repo-wide.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

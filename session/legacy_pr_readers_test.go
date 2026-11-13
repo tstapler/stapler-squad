@@ -45,9 +45,10 @@ var legacyPRReaders = map[string]string{
 	"session/instance_pr_set.go":                 readsSnapshot,
 	"session/instance_serialization.go":          readsSnapshot,
 	"session/instance_snapshot.go":               readsSnapshot,
+	"session/domain/instance_snapshot.go":        readsSnapshot,     // the struct definition: declares the scalars next to the PRs set
+	"session/domain/instance_data.go":            readsInstanceData, // the struct definition
 	"session/instance_terminal.go":               readsSnapshot,
 	"session/prpoller/pr_status_poller.go":       readsSnapshot,
-	"session/session.go":                         readsSnapshot,
 	"session/storage.go":                         readsInstanceData,
 }
 

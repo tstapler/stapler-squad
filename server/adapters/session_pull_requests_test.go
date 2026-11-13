@@ -12,18 +12,19 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func prView(t *testing.T, n int, state session.PRState, terminal bool) session.PRView {
+func prView(t *testing.T, n int, state domain.PRState, terminal bool) domain.PRView {
 	t.Helper()
-	ref, err := session.NewPRRef("", "acme", "app", n)
+	ref, err := domain.NewPRRef("", "acme", "app", n)
 	require.NoError(t, err)
-	return session.PRView{Ref: ref, State: state, StoredTerminal: terminal, AttachedAt: time.Date(2026, 11, 1, 0, 0, n, 0, time.UTC)}
+	return domain.PRView{Ref: ref, State: state, StoredTerminal: terminal, AttachedAt: time.Date(2026, 11, 1, 0, 0, n, 0, time.UTC)}
 }
 
 func TestSessionPullRequests_ShouldFlagOnlyTheActivePR_WhenMergedAndOpen(t *testing.T) {
-	got := SessionPullRequests([]session.PRView{
-		prView(t, 11, session.PRStateMerged, true), prView(t, 12, session.PRStateOpen, false),
+	got := SessionPullRequests([]domain.PRView{
+		prView(t, 11, domain.PRStateMerged, true), prView(t, 12, domain.PRStateOpen, false),
 	}, "")
 	require.Len(t, got, 2)
 	assert.False(t, got[0].IsActive)
@@ -32,13 +33,13 @@ func TestSessionPullRequests_ShouldFlagOnlyTheActivePR_WhenMergedAndOpen(t *test
 }
 
 func TestSessionPullRequests_ShouldMapPollHealthAndUnverifiedOutcome(t *testing.T) {
-	limited := prView(t, 12, session.PRStateOpen, false)
+	limited := prView(t, 12, domain.PRStateOpen, false)
 	limited.PollError, limited.RateLimitResetAt = "rate_limited", time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
-	inaccessible := prView(t, 13, session.PRStateOpen, false)
+	inaccessible := prView(t, 13, domain.PRStateOpen, false)
 	inaccessible.PollError = "repo_inaccessible"
-	seeded := prView(t, 9, session.PRStateUnknown, true)
+	seeded := prView(t, 9, domain.PRStateUnknown, true)
 
-	got := SessionPullRequests([]session.PRView{limited, inaccessible, seeded, prView(t, 14, session.PRStateOpen, false)}, "")
+	got := SessionPullRequests([]domain.PRView{limited, inaccessible, seeded, prView(t, 14, domain.PRStateOpen, false)}, "")
 	assert.Equal(t, sessionv1.PollError_POLL_ERROR_RATE_LIMITED, got[0].PollError)
 	assert.NotNil(t, got[0].RateLimitResetAt)
 	assert.Equal(t, sessionv1.PollError_POLL_ERROR_REPO_INACCESSIBLE, got[1].PollError)
@@ -71,13 +72,13 @@ func newInstanceWithPRs(t *testing.T, title string, numbers ...int) *session.Ins
 	require.NoError(t, err)
 	inst.UUID = "uuid-" + title
 	for i, n := range numbers {
-		ref, rerr := session.NewPRRef("github.com", "acme", "app", n)
+		ref, rerr := domain.NewPRRef("github.com", "acme", "app", n)
 		require.NoError(t, rerr)
-		state := session.PRStateOpen
+		state := domain.PRStateOpen
 		if i < len(numbers)-1 {
-			state = session.PRStateMerged
+			state = domain.PRStateMerged
 		}
-		require.NoError(t, inst.AttachPR(ref, session.AttachSourceManual, session.PRInitial{
+		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, domain.PRInitial{
 			State: state, Terminal: state.Terminal(), URL: "https://github.com/acme/app/pull/" + fmt.Sprint(n), HeadBranch: "backlog/feature-" + fmt.Sprint(n),
 		}))
 	}
@@ -110,18 +111,18 @@ func TestListSessions_ShouldAddAtMostKnownBytesPerSession_WhenEachHasThreePRs(t 
 
 func TestSessionPullRequests_ShouldCarryTitleVerifyAttemptsAndItemDirect(t *testing.T) {
 	t.Parallel()
-	unverified := prView(t, 9, session.PRStateUnknown, true)
+	unverified := prView(t, 9, domain.PRStateUnknown, true)
 	unverified.Title, unverified.PollFailCount = "Old change", 3
-	settled := prView(t, 10, session.PRStateOpen, false)
+	settled := prView(t, 10, domain.PRStateOpen, false)
 	settled.PollFailCount = 4 // a live row's failures are not verify attempts
-	direct := prView(t, 11, session.PRStateOpen, false)
+	direct := prView(t, 11, domain.PRStateOpen, false)
 	direct.BacklogItemID = "item-1"
 
-	got := SessionPullRequests([]session.PRView{unverified, settled, direct}, "")
+	got := SessionPullRequests([]domain.PRView{unverified, settled, direct}, "")
 
 	assert.Equal(t, "Old change", got[0].Title)
 	assert.EqualValues(t, 3, got[0].VerifyAttempts)
-	assert.EqualValues(t, session.VerifyAttemptLimit, got[0].VerifyAttemptLimit)
+	assert.EqualValues(t, domain.VerifyAttemptLimit, got[0].VerifyAttemptLimit)
 	assert.False(t, got[0].VerifyExhausted)
 	assert.False(t, got[0].ItemDirect)
 	assert.Zero(t, got[1].VerifyAttempts)
@@ -131,21 +132,21 @@ func TestSessionPullRequests_ShouldCarryTitleVerifyAttemptsAndItemDirect(t *test
 
 func TestSessionPullRequests_ShouldFlagVerifyExhausted_WhenFiveFailuresSpanThirtyMinutes(t *testing.T) {
 	t.Parallel()
-	v := prView(t, 9, session.PRStateUnknown, true)
-	v.PollFailCount = session.VerifyAttemptLimit
+	v := prView(t, 9, domain.PRStateUnknown, true)
+	v.PollFailCount = domain.VerifyAttemptLimit
 	v.FirstFailAt = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	v.LastPolledAt = v.FirstFailAt.Add(31 * time.Minute)
 
-	got := SessionPullRequests([]session.PRView{v}, "")
+	got := SessionPullRequests([]domain.PRView{v}, "")
 
 	assert.True(t, got[0].VerifyExhausted)
-	assert.EqualValues(t, session.VerifyAttemptLimit, got[0].VerifyAttempts)
+	assert.EqualValues(t, domain.VerifyAttemptLimit, got[0].VerifyAttempts)
 }
 
 func TestSessionPullRequestsForList_ShouldCarryNormalizedHostAndOmitURL(t *testing.T) {
-	ghe, err := session.NewPRRef("https://GHE.Example.net/", "acme", "app", 5)
+	ghe, err := domain.NewPRRef("https://GHE.Example.net/", "acme", "app", 5)
 	require.NoError(t, err)
-	got := SessionPullRequestsForList([]session.PRView{prView(t, 4, session.PRStateOpen, false), {Ref: ghe, URL: "https://ghe.example.net/acme/app/pull/5"}}, "")
+	got := SessionPullRequestsForList([]domain.PRView{prView(t, 4, domain.PRStateOpen, false), {Ref: ghe, URL: "https://ghe.example.net/acme/app/pull/5"}}, "")
 	require.Len(t, got, 2)
 	assert.Equal(t, "github.com", got[0].Host)
 	assert.Equal(t, "ghe.example.net", got[1].Host)

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ErrPRPersisterUnavailable means a user PR edit needs a storage backend that
@@ -16,9 +17,9 @@ var ErrPRPersisterUnavailable = errors.New("session: PR persister cannot edit li
 // automatic attach paths keep their narrower seam.
 type prSetEditor interface {
 	// DetachSessionPR deletes the session's link and writes its tombstone in one transaction.
-	DetachSessionPR(ctx context.Context, sessionUUID string, ref PRRef) error
-	SetSessionPRPinned(ctx context.Context, sessionUUID string, ref PRRef, pinned bool) error
-	ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref PRRef) error
+	DetachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef) error
+	SetSessionPRPinned(ctx context.Context, sessionUUID string, ref domain.PRRef, pinned bool) error
+	ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref domain.PRRef) error
 }
 
 // editorLocked returns the editor and the serialized persist section. The caller
@@ -35,7 +36,7 @@ func (i *Instance) editorLocked() (prSetEditor, error) {
 // tombstone commit first, then the in-memory set and the legacy mirror follow.
 // A repository failure changes nothing in memory. It reports whether ref was in
 // the set; a ref that is not attached writes nothing.
-func (i *Instance) DetachPRPersisted(ctx context.Context, ref PRRef) (bool, error) {
+func (i *Instance) DetachPRPersisted(ctx context.Context, ref domain.PRRef) (bool, error) {
 	if ref.IsZero() {
 		return false, ErrZeroPRRef
 	}
@@ -60,7 +61,7 @@ func (i *Instance) DetachPRPersisted(ctx context.Context, ref PRRef) (bool, erro
 
 // PinPRPersisted pins or unpins ref (pinning clears every other pin), repository
 // first so a failure leaves the in-memory active PR untouched.
-func (i *Instance) PinPRPersisted(ctx context.Context, ref PRRef, pinned bool) error {
+func (i *Instance) PinPRPersisted(ctx context.Context, ref domain.PRRef, pinned bool) error {
 	if ref.IsZero() {
 		return ErrZeroPRRef
 	}
@@ -87,7 +88,7 @@ func (i *Instance) PinPRPersisted(ctx context.Context, ref PRRef, pinned bool) e
 // AttachPRManual attaches ref on the user's explicit request: it first clears
 // this session's tombstone for ref (a manual attach overrides an earlier detach)
 // and then attaches with source manual.
-func (i *Instance) AttachPRManual(ctx context.Context, ref PRRef, initial PRInitial) error {
+func (i *Instance) AttachPRManual(ctx context.Context, ref domain.PRRef, initial domain.PRInitial) error {
 	i.prPersistMu.Lock()
 	ed, err := i.editorLocked()
 	if err == nil {
@@ -97,7 +98,7 @@ func (i *Instance) AttachPRManual(ctx context.Context, ref PRRef, initial PRInit
 	if err != nil {
 		return err
 	}
-	return i.AttachPR(ref, AttachSourceManual, initial)
+	return i.AttachPR(ref, domain.AttachSourceManual, initial)
 }
 
 // ErrPRNotAttached means the PR is not in the session's set.
@@ -109,7 +110,7 @@ var ErrPRNotAttached = errors.New("session: pull request is not attached to this
 func (i *Instance) persistMirrorLocked() {
 	snap := i.Snapshot()
 	g := snap.GitHub
-	if err := i.prPersister.PersistPRMirror(snap.UUID, g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRStatusTerminal); err != nil && !errors.Is(err, ErrSessionNotPersisted) {
+	if err := i.prPersister.PersistPRMirror(snap.UUID, g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRStatusTerminal); err != nil && !errors.Is(err, domain.ErrSessionNotPersisted) {
 		log.Warn("persist PR mirror after edit failed; the next pass retries", "session", snap.Title, "err", err)
 	}
 }

@@ -26,7 +26,7 @@ a dedicated git worktree per headless SDD triage run (branch name
 `<prefix>triage-<item-id>`, path matching `*/worktrees/triage-<item-id>*`)
 purely at the git level — it has no `Instance` row, no `Worktree` ent row, and
 is therefore invisible to every one of stapler-squad's own automated sweeps
-(`session/worktree_consistency_sweep.go`, `SessionRetentionSweeper`,
+(`session/wtconsistency/sweep.go`, `SessionRetentionSweeper`,
 `HibernationSweeper`). **This skill is the only thing in the whole system
 that can see it, which makes it the only thing that can protect it.**
 

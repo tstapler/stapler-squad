@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // stubDeterminer returns a fixed result so the post-Determine chain in checkSession can be
@@ -18,13 +19,13 @@ func (s stubDeterminer) Determine(*Instance, string, InstanceStatusInfo, detecti
 // chainOutcome is what is left in the queue after one checkSession pass.
 type chainOutcome struct {
 	present  bool
-	priority Priority
-	reason   AttentionReason
+	priority queue.Priority
+	reason   queue.AttentionReason
 }
 
 var (
 	chainGone = chainOutcome{}
-	chainKept = func(p Priority, r AttentionReason) chainOutcome {
+	chainKept = func(p queue.Priority, r queue.AttentionReason) chainOutcome {
 		return chainOutcome{present: true, priority: p, reason: r}
 	}
 )
@@ -40,83 +41,83 @@ type chainCase struct {
 	ackAgo      time.Duration
 	outputAgo   time.Duration
 	addedAgo    time.Duration
-	existing    *ReviewItem
+	existing    *queue.ReviewItem
 	wantOutcome chainOutcome
 }
 
-func chainAdd(p Priority, r AttentionReason) DetectionResult {
+func chainAdd(p queue.Priority, r queue.AttentionReason) DetectionResult {
 	return DetectionResult{Action: DetectionActionAdd, Priority: p, Reason: r, Context: "ctx"}
 }
 
 func chainCases() []chainCase {
 	const sec = time.Second
-	prompt := &ReviewItem{SessionID: "s", Reason: ReasonApprovalPending, Priority: PriorityHigh, Context: "old"}
-	low := &ReviewItem{SessionID: "s", Reason: ReasonIdle, Priority: PriorityLow, Context: "old"}
-	med := &ReviewItem{SessionID: "s", Reason: ReasonInputRequired, Priority: PriorityMedium, Context: "ctx"}
+	prompt := &queue.ReviewItem{SessionID: "s", Reason: queue.ReasonApprovalPending, Priority: queue.PriorityHigh, Context: "old"}
+	low := &queue.ReviewItem{SessionID: "s", Reason: queue.ReasonIdle, Priority: queue.PriorityLow, Context: "old"}
+	med := &queue.ReviewItem{SessionID: "s", Reason: queue.ReasonInputRequired, Priority: queue.PriorityMedium, Context: "ctx"}
 
 	return []chainCase{
 		// The :901 gap: Medium (input required) is not "active high priority", so an
 		// acknowledgment newer than the last output snoozes a live input prompt.
-		{name: "medium_add_ack_after_output_is_snoozed", result: chainAdd(PriorityMedium, ReasonInputRequired),
+		{name: "medium_add_ack_after_output_is_snoozed", result: chainAdd(queue.PriorityMedium, queue.ReasonInputRequired),
 			controllerActive: true, outputAgo: 60 * sec, ackAgo: 30 * sec, wantOutcome: chainGone},
-		{name: "medium_add_ack_after_output_is_kept_when_bypass_fix_on", result: chainAdd(PriorityMedium, ReasonInputRequired),
+		{name: "medium_add_ack_after_output_is_kept_when_bypass_fix_on", result: chainAdd(queue.PriorityMedium, queue.ReasonInputRequired),
 			controllerActive: true, bypassFix: true, outputAgo: 60 * sec, ackAgo: 30 * sec,
-			wantOutcome: chainKept(PriorityMedium, ReasonInputRequired)},
-		{name: "medium_non_human_add_ack_after_output_is_snoozed_when_bypass_fix_on", result: chainAdd(PriorityMedium, ReasonWaitingForUser),
+			wantOutcome: chainKept(queue.PriorityMedium, queue.ReasonInputRequired)},
+		{name: "medium_non_human_add_ack_after_output_is_snoozed_when_bypass_fix_on", result: chainAdd(queue.PriorityMedium, queue.ReasonWaitingForUser),
 			controllerActive: true, bypassFix: true, outputAgo: 60 * sec, ackAgo: 30 * sec, wantOutcome: chainGone},
-		{name: "high_add_ack_after_output_bypasses_snooze_when_bypass_fix_on", result: chainAdd(PriorityHigh, ReasonApprovalPending),
+		{name: "high_add_ack_after_output_bypasses_snooze_when_bypass_fix_on", result: chainAdd(queue.PriorityHigh, queue.ReasonApprovalPending),
 			controllerActive: true, bypassFix: true, outputAgo: 60 * sec, ackAgo: 30 * sec,
-			wantOutcome: chainKept(PriorityHigh, ReasonApprovalPending)},
-		{name: "high_add_ack_after_output_bypasses_snooze", result: chainAdd(PriorityHigh, ReasonApprovalPending),
+			wantOutcome: chainKept(queue.PriorityHigh, queue.ReasonApprovalPending)},
+		{name: "high_add_ack_after_output_bypasses_snooze", result: chainAdd(queue.PriorityHigh, queue.ReasonApprovalPending),
 			controllerActive: true, outputAgo: 60 * sec, ackAgo: 30 * sec,
-			wantOutcome: chainKept(PriorityHigh, ReasonApprovalPending)},
-		{name: "urgent_add_ack_after_output_bypasses_snooze", result: chainAdd(PriorityUrgent, ReasonErrorState),
+			wantOutcome: chainKept(queue.PriorityHigh, queue.ReasonApprovalPending)},
+		{name: "urgent_add_ack_after_output_bypasses_snooze", result: chainAdd(queue.PriorityUrgent, queue.ReasonErrorState),
 			controllerActive: true, outputAgo: 60 * sec, ackAgo: 30 * sec,
-			wantOutcome: chainKept(PriorityUrgent, ReasonErrorState)},
-		{name: "low_add_ack_after_output_is_snoozed", result: chainAdd(PriorityLow, ReasonIdle),
+			wantOutcome: chainKept(queue.PriorityUrgent, queue.ReasonErrorState)},
+		{name: "low_add_ack_after_output_is_snoozed", result: chainAdd(queue.PriorityLow, queue.ReasonIdle),
 			controllerActive: true, outputAgo: 60 * sec, ackAgo: 30 * sec, wantOutcome: chainGone},
 		{name: "skip_with_ack_after_output_removes_existing_item", result: DetectionResult{Action: DetectionActionSkip},
 			controllerActive: true, outputAgo: 60 * sec, ackAgo: 30 * sec, existing: low, wantOutcome: chainGone},
 		{name: "skip_without_ack_leaves_existing_item", result: DetectionResult{Action: DetectionActionSkip},
-			controllerActive: true, existing: low, wantOutcome: chainKept(PriorityLow, ReasonIdle)},
+			controllerActive: true, existing: low, wantOutcome: chainKept(queue.PriorityLow, queue.ReasonIdle)},
 
 		// Grace period: ack before the last output, but under 5 minutes ago.
-		{name: "low_add_within_grace_period_is_removed", result: chainAdd(PriorityLow, ReasonIdle),
+		{name: "low_add_within_grace_period_is_removed", result: chainAdd(queue.PriorityLow, queue.ReasonIdle),
 			controllerActive: true, outputAgo: 10 * sec, ackAgo: 60 * sec, wantOutcome: chainGone},
-		{name: "low_add_after_grace_period_is_added", result: chainAdd(PriorityLow, ReasonIdle),
+		{name: "low_add_after_grace_period_is_added", result: chainAdd(queue.PriorityLow, queue.ReasonIdle),
 			controllerActive: true, outputAgo: 10 * sec, ackAgo: 10 * time.Minute,
-			wantOutcome: chainKept(PriorityLow, ReasonIdle)},
-		{name: "high_add_without_controller_within_grace_period_is_removed", result: chainAdd(PriorityHigh, ReasonApprovalPending),
+			wantOutcome: chainKept(queue.PriorityLow, queue.ReasonIdle)},
+		{name: "high_add_without_controller_within_grace_period_is_removed", result: chainAdd(queue.PriorityHigh, queue.ReasonApprovalPending),
 			controllerActive: false, outputAgo: 10 * sec, ackAgo: 60 * sec, wantOutcome: chainGone},
-		{name: "high_add_with_controller_ignores_grace_period", result: chainAdd(PriorityHigh, ReasonApprovalPending),
+		{name: "high_add_with_controller_ignores_grace_period", result: chainAdd(queue.PriorityHigh, queue.ReasonApprovalPending),
 			controllerActive: true, outputAgo: 10 * sec, ackAgo: 60 * sec,
-			wantOutcome: chainKept(PriorityHigh, ReasonApprovalPending)},
-		{name: "medium_add_with_controller_ignores_grace_period", result: chainAdd(PriorityMedium, ReasonInputRequired),
+			wantOutcome: chainKept(queue.PriorityHigh, queue.ReasonApprovalPending)},
+		{name: "medium_add_with_controller_ignores_grace_period", result: chainAdd(queue.PriorityMedium, queue.ReasonInputRequired),
 			controllerActive: true, outputAgo: 10 * sec, ackAgo: 60 * sec,
-			wantOutcome: chainKept(PriorityMedium, ReasonInputRequired)},
+			wantOutcome: chainKept(queue.PriorityMedium, queue.ReasonInputRequired)},
 
 		// Re-add spam limit: only applies when the item is already queued.
-		{name: "readd_inside_interval_when_queued_is_dropped", result: chainAdd(PriorityMedium, ReasonInputRequired),
-			controllerActive: true, addedAgo: 30 * sec, existing: &ReviewItem{SessionID: "s", Reason: ReasonWaitingForUser, Priority: PriorityMedium, Context: "kept"},
-			wantOutcome: chainKept(PriorityMedium, ReasonWaitingForUser)},
-		{name: "readd_inside_interval_with_escalation_replaces_item", result: chainAdd(PriorityHigh, ReasonApprovalPending),
+		{name: "readd_inside_interval_when_queued_is_dropped", result: chainAdd(queue.PriorityMedium, queue.ReasonInputRequired),
+			controllerActive: true, addedAgo: 30 * sec, existing: &queue.ReviewItem{SessionID: "s", Reason: queue.ReasonWaitingForUser, Priority: queue.PriorityMedium, Context: "kept"},
+			wantOutcome: chainKept(queue.PriorityMedium, queue.ReasonWaitingForUser)},
+		{name: "readd_inside_interval_with_escalation_replaces_item", result: chainAdd(queue.PriorityHigh, queue.ReasonApprovalPending),
 			controllerActive: true, addedAgo: 30 * sec, existing: low,
-			wantOutcome: chainKept(PriorityHigh, ReasonApprovalPending)},
-		{name: "readd_inside_interval_when_not_queued_is_added", result: chainAdd(PriorityMedium, ReasonInputRequired),
-			controllerActive: true, addedAgo: 30 * sec, wantOutcome: chainKept(PriorityMedium, ReasonInputRequired)},
-		{name: "readd_outside_interval_updates_item", result: chainAdd(PriorityMedium, ReasonInputRequired),
+			wantOutcome: chainKept(queue.PriorityHigh, queue.ReasonApprovalPending)},
+		{name: "readd_inside_interval_when_not_queued_is_added", result: chainAdd(queue.PriorityMedium, queue.ReasonInputRequired),
+			controllerActive: true, addedAgo: 30 * sec, wantOutcome: chainKept(queue.PriorityMedium, queue.ReasonInputRequired)},
+		{name: "readd_outside_interval_updates_item", result: chainAdd(queue.PriorityMedium, queue.ReasonInputRequired),
 			controllerActive: true, addedAgo: 5 * time.Minute, existing: low,
-			wantOutcome: chainKept(PriorityMedium, ReasonInputRequired)},
+			wantOutcome: chainKept(queue.PriorityMedium, queue.ReasonInputRequired)},
 
 		// Determiner Remove: prompt-reason items survive on the no-controller path only.
 		{name: "remove_without_controller_keeps_prompt_item", result: DetectionResult{Action: DetectionActionRemove},
-			controllerActive: false, existing: prompt, wantOutcome: chainKept(PriorityHigh, ReasonApprovalPending)},
+			controllerActive: false, existing: prompt, wantOutcome: chainKept(queue.PriorityHigh, queue.ReasonApprovalPending)},
 		{name: "remove_with_controller_drops_prompt_item", result: DetectionResult{Action: DetectionActionRemove},
 			controllerActive: true, existing: prompt, wantOutcome: chainGone},
 		{name: "remove_without_controller_drops_non_prompt_item", result: DetectionResult{Action: DetectionActionRemove},
 			controllerActive: false, existing: low, wantOutcome: chainGone},
 		{name: "skip_leaves_medium_item", result: DetectionResult{Action: DetectionActionSkip},
-			controllerActive: true, existing: med, wantOutcome: chainKept(PriorityMedium, ReasonInputRequired)},
+			controllerActive: true, existing: med, wantOutcome: chainKept(queue.PriorityMedium, queue.ReasonInputRequired)},
 	}
 }
 
@@ -137,7 +138,7 @@ func TestCheckSession_Should_PreserveCharacterizedSuppressionChain_When_Refactor
 				}
 			})
 
-			poller := NewReviewQueuePoller(NewReviewQueue(), newFakeStatusProvider(map[string]InstanceStatusInfo{
+			poller := NewReviewQueuePoller(queue.NewReviewQueue(), newFakeStatusProvider(map[string]InstanceStatusInfo{
 				"s": {IsControllerActive: tc.controllerActive},
 			}), nil)
 			poller.SetOptionsSource(func() (DeterminerOptions, RuleOptions) {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeInstanceStore is a minimal InstanceStore stub for upload handler tests.
@@ -26,11 +27,11 @@ func (f *fakeInstanceStore) LoadInstances() ([]*session.Instance, error) {
 	return f.instances, f.loadErr
 }
 
-func (f *fakeInstanceStore) ListInstanceData() ([]session.InstanceData, error) {
+func (f *fakeInstanceStore) ListInstanceData() ([]domain.InstanceData, error) {
 	return nil, nil
 }
 
-func (f *fakeInstanceStore) FindInstanceDataByID(id string) (*session.InstanceData, error) {
+func (f *fakeInstanceStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	for _, inst := range f.instances {
 		data := inst.ToInstanceData()
 		if data.MatchesID(id) {

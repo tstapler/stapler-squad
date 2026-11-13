@@ -14,7 +14,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // maxSlackBlockTextLen caps a single Slack Block Kit text block at 2900 runes,
@@ -74,7 +75,7 @@ func resolveSlackWebhookURL(cfg *config.Config) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve slack webhook url: %w", err)
 	}
-	return session.DecryptToken(key, cfg.Slack.WebhookURLEncrypted)
+	return domain.DecryptToken(key, cfg.Slack.WebhookURLEncrypted)
 }
 
 // resolveSlackSigningSecret returns the effective Slack app signing secret,
@@ -90,7 +91,7 @@ func resolveSlackSigningSecret(cfg *config.Config) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve slack signing secret: %w", err)
 	}
-	return session.DecryptToken(key, cfg.Slack.SigningSecretEncrypted)
+	return domain.DecryptToken(key, cfg.Slack.SigningSecretEncrypted)
 }
 
 // slackWebhookPayload is a Slack Incoming Webhook Block Kit message body.
@@ -250,7 +251,7 @@ func (n *SlackNotifier) dispatchAsync(ctx context.Context, fn func(ctx context.C
 // item. No-ops cleanly (no HTTP call) when no webhook is configured. The
 // call itself is non-blocking; any send failure is logged and swallowed —
 // this method never returns an error to the caller.
-func (n *SlackNotifier) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *session.ReviewItem, dashboardURL string) {
+func (n *SlackNotifier) NotifyReviewQueueItem(ctx context.Context, cfg *config.Config, item *queue.ReviewItem, dashboardURL string) {
 	n.dispatchAsync(ctx, func(ctx context.Context) {
 		webhookURL, err := resolveSlackWebhookURL(cfg)
 		if err != nil {

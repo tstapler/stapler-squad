@@ -14,11 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/git/backend/cli"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 )
 
 // defaultGitBackend serves instances built without an injected backend (tests, legacy
@@ -46,13 +49,13 @@ func (i *Instance) RepoName() (string, error) {
 	if !i.started.Load() {
 		return "", fmt.Errorf("cannot get repo name for instance that has not been started")
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		return "", fmt.Errorf("cannot get repo name for paused instance")
 	}
-	if !i.GitManager.HasWorktree() {
+	if !i.gitManager.HasWorktree() {
 		return "", fmt.Errorf("gitWorktree is nil")
 	}
-	return i.GitManager.GetRepoName(), nil
+	return i.gitManager.GetRepoName(), nil
 }
 
 // setupFirstTimeWorktree creates or attaches to the git worktree based on session type.
@@ -75,14 +78,14 @@ func (i *Instance) RepoName() (string, error) {
 // own comments for why. Any other combination is rejected up front rather than
 // silently attempting local discovery against a remote path.
 func (i *Instance) setupFirstTimeWorktree() error {
-	if i.executionTarget().IsRemote() && i.SessionType != SessionTypeExistingWorktree &&
-		i.SessionType != SessionTypeDirectory && i.SessionType != SessionTypeNewProject {
+	if i.executionTarget().IsRemote() && i.SessionType != domain.SessionTypeExistingWorktree &&
+		i.SessionType != domain.SessionTypeDirectory && i.SessionType != domain.SessionTypeNewProject {
 		return fmt.Errorf("remote execution target only supports session_type=existing_worktree, session_type=directory, "+
 			"or session_type=new_project (worktree/path must be pre-resolved by CreateSession's mode-specific block); got %v", i.SessionType)
 	}
 
 	switch i.SessionType {
-	case SessionTypeNewWorktree:
+	case domain.SessionTypeNewWorktree:
 		// This case's contract is deliberately strict and unconditional: i.Path
 		// must already be an existing repo. It never bootstraps one, with no
 		// CreateIfMissing exception -- see findGitRepoRoot's doc comment for why
@@ -96,7 +99,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
 		}
-		i.GitManager.SetWorktree(gitWorktree)
+		i.gitManager.SetWorktree(gitWorktree)
 		// i.mu guards this write and the buildSnapshot() read below against
 		// legacy setters (MarkViewed, ForceStatus, etc. -- see ForceStatus's
 		// doc comment) that bypass the actor and run on arbitrary caller
@@ -112,7 +115,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		i.mu.Unlock()
 		i.snapshot.Store(snap)
 		log.Info("git worktree created", "session", i.Title, "branch", branchName)
-	case SessionTypeExistingWorktree:
+	case domain.SessionTypeExistingWorktree:
 		if i.ExistingWorktree == "" {
 			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
 		}
@@ -177,7 +180,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			cancel()
 			gitWorktree := git.NewGitWorktreeFromStorage(i.Path, i.ExistingWorktree, i.Title, i.Branch, baseCommitSHA, git.WithCommandRunner(runner))
 			i.mu.Lock()
-			i.GitManager.SetWorktree(gitWorktree)
+			i.gitManager.SetWorktree(gitWorktree)
 			attachedBranch := i.Branch
 			i.mu.Unlock()
 			log.Info("attached to remote git worktree", "session", i.Title, "path", i.ExistingWorktree, "branch", attachedBranch)
@@ -189,12 +192,12 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			return fmt.Errorf("failed to connect to existing worktree: %w", err)
 		}
 		i.mu.Lock()
-		i.GitManager.SetWorktree(gitWorktree)
+		i.gitManager.SetWorktree(gitWorktree)
 		connectedBranch := gitWorktree.GetBranchName()
 		i.Branch = connectedBranch
 		i.mu.Unlock()
 		log.Info("connected to existing worktree", "session", i.Title, "branch", connectedBranch)
-	case SessionTypeNewProject:
+	case domain.SessionTypeNewProject:
 		log.Info("new project session, initializing git repo", "session", i.Title, "path", i.Path)
 		// A remote instance's project directory was already git-initialized on the
 		// remote host by CreateSession's mode-specific block (git.RemoteWorktreeOps.
@@ -224,18 +227,18 @@ func (i *Instance) setupFirstTimeWorktree() error {
 				return fmt.Errorf("new_project worktree creation failed: %w", err)
 			}
 			i.mu.Lock()
-			i.GitManager.SetWorktree(gitWorktree)
+			i.gitManager.SetWorktree(gitWorktree)
 			i.Branch = branchName
 			i.mu.Unlock()
 			log.Info("new project initialized with worktree", "path", i.Path, "branch", branchName)
 		} else {
 			i.mu.Lock()
-			i.GitManager.SetWorktree(nil)
+			i.gitManager.SetWorktree(nil)
 			i.Branch = ""
 			i.mu.Unlock()
 			log.Info("new project initialized", "path", i.Path)
 		}
-	case SessionTypeDirectory:
+	case domain.SessionTypeDirectory:
 		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
 		// EnsureDirectorySessionPath does local-filesystem os.Stat/git-init -- correct for
 		// a local Directory session, but i.Path names a REMOTE host path for a remote one,
@@ -250,7 +253,7 @@ func (i *Instance) setupFirstTimeWorktree() error {
 			}
 		}
 		i.mu.Lock()
-		i.GitManager.SetWorktree(nil)
+		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
 		i.mu.Unlock()
 	default:
@@ -446,7 +449,7 @@ func (i *Instance) resolveStartPath(basePath string) string {
 	startPath := i.WorkingDir
 	if !filepath.IsAbs(i.WorkingDir) {
 		startPath = filepath.Join(basePath, i.WorkingDir)
-	} else if i.GitManager.HasWorktree() && pathEscapesRoot(basePath, startPath) {
+	} else if i.gitManager.HasWorktree() && pathEscapesRoot(basePath, startPath) {
 		// For worktree sessions, an absolute WorkingDir must be within the worktree.
 		// CaptureCurrentState() can persist the process CWD (e.g. the main repo path
 		// when Claude cd's there) — this is a read-side backstop for that; see
@@ -505,8 +508,8 @@ func (i *Instance) GetEffectiveRootDir() string {
 // for, and which logs a warning for every paused session whose worktree
 // pause_session removed.
 func (i *Instance) ActiveDir() string {
-	if i.GitManager.HasWorktree() {
-		if p := i.GitManager.GetWorktreePath(); p != "" {
+	if i.gitManager.HasWorktree() {
+		if p := i.gitManager.GetWorktreePath(); p != "" {
 			return p
 		}
 	}
@@ -532,11 +535,11 @@ func (i *Instance) GetCreationWarning() string {
 // Workspace type for which field answers which question — in particular
 // ActiveDir to compare sessions, ExistingDir to open files. Prefer it to
 // reading inst.Path directly, which is wrong for worktree sessions.
-func (i *Instance) Workspace() Workspace {
+func (i *Instance) Workspace() domain.Workspace {
 	repoRoot := i.GetPath()
 	worktreeDir := ""
-	if i.GitManager.HasWorktree() {
-		worktreeDir = i.GitManager.GetWorktreePath()
+	if i.gitManager.HasWorktree() {
+		worktreeDir = i.gitManager.GetWorktreePath()
 	}
 	// Derived from worktreeDir rather than calling ActiveDir(), which would read
 	// the worktree a second time — the two fields must describe one instant.
@@ -556,7 +559,7 @@ func (i *Instance) Workspace() Workspace {
 			existingDir = repoRoot
 		}
 	}
-	return Workspace{
+	return domain.Workspace{
 		RepoRoot:    repoRoot,
 		WorktreeDir: worktreeDir,
 		ActiveDir:   activeDir,
@@ -566,8 +569,8 @@ func (i *Instance) Workspace() Workspace {
 
 // CleanupWorktree removes the git worktree, keeping session intact.
 func (i *Instance) CleanupWorktree() error {
-	if i.GitManager.HasWorktree() {
-		if err := i.GitManager.Cleanup(); err != nil {
+	if i.gitManager.HasWorktree() {
+		if err := i.gitManager.Cleanup(); err != nil {
 			return fmt.Errorf("failed to cleanup git worktree: %w", err)
 		}
 	}
@@ -579,12 +582,12 @@ func (i *Instance) GetGitWorktree() (*git.GitWorktree, error) {
 	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot get git worktree for instance that has not been started")
 	}
-	return i.GitManager.GetWorktree(), nil
+	return i.gitManager.GetWorktree(), nil
 }
 
 // HasGitWorktree returns true if the instance has a git worktree.
 func (i *Instance) HasGitWorktree() bool {
-	return i.GitManager.HasWorktree()
+	return i.gitManager.HasWorktree()
 }
 
 // GetBaseCommitSHA returns the commit SHA this session's branch diverged
@@ -593,26 +596,26 @@ func (i *Instance) HasGitWorktree() bool {
 // computeDirDiffStats's HasWorktree()-gated pattern. Returns "" if neither is
 // set yet.
 func (i *Instance) GetBaseCommitSHA() string {
-	if i.GitManager.HasWorktree() {
-		return i.GitManager.GetBaseCommitSHA()
+	if i.gitManager.HasWorktree() {
+		return i.gitManager.GetBaseCommitSHA()
 	}
-	return i.GitManager.GetDirBaseSHA()
+	return i.gitManager.GetDirBaseSHA()
 }
 
 // SetGitWorktree sets the git worktree for testing purposes.
 func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
-	i.GitManager.SetWorktree(worktree)
+	i.gitManager.SetWorktree(worktree)
 	i.started.Store(worktree != nil)
 }
 
 // RecordVCSStatusRequest marks this instance's worktree as recently active
-// for WorktreeChangeDetector's idle-gating (Story 2.2.2) -- called by
+// for gitwt.WorktreeChangeDetector idle-gating (Story 2.2.2) -- called by
 // WorkspaceService.GetVCSStatus on every call (hit or miss) so a workdir
 // being polled only via GetVCSStatus (never GetSessionDiff) still counts as
 // active for the periodic tick's activeFunc check. No-op if there's no
 // worktree.
 func (i *Instance) RecordVCSStatusRequest() {
-	i.GitManager.RecordRequest()
+	i.gitManager.RecordRequest()
 }
 
 // RefreshDiffStatsIfStale recomputes diff stats only if the cached value is
@@ -624,7 +627,7 @@ func (i *Instance) RecordVCSStatusRequest() {
 // guaranteed-fresh read (daemon.go's AutoYes loop, exit/destroy lifecycle
 // snapshots) must keep calling UpdateDiffStats directly.
 func (i *Instance) RefreshDiffStatsIfStale() error {
-	if i.GitManager.DiffStatsFresh() {
+	if i.gitManager.DiffStatsFresh() {
 		return nil
 	}
 	return i.UpdateDiffStats()
@@ -636,16 +639,16 @@ func (i *Instance) UpdateDiffStats() error {
 	// Read lock for initial state checks
 	i.mu.RLock()
 	if !i.started.Load() {
-		i.GitManager.ClearDiffStats()
+		i.gitManager.ClearDiffStats()
 		i.mu.RUnlock()
 		return nil
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		i.mu.RUnlock()
 		return nil
 	}
-	if !i.GitManager.HasWorktree() {
-		dirBase := i.GitManager.GetDirBaseSHA()
+	if !i.gitManager.HasWorktree() {
+		dirBase := i.gitManager.GetDirBaseSHA()
 		workingDir := i.WorkingDir
 		if workingDir == "" {
 			workingDir = i.Path
@@ -657,14 +660,14 @@ func (i *Instance) UpdateDiffStats() error {
 		// Directory session with a known base SHA — compute diff outside the lock.
 		stats := computeDirDiffStats(workingDir, dirBase)
 		i.mu.Lock()
-		i.GitManager.SetDiffStats(stats)
+		i.gitManager.SetDiffStats(stats)
 		i.mu.Unlock()
 		return nil
 	}
 	i.mu.RUnlock()
 
 	// I/O outside lock: check worktree existence and compute diff
-	stats, needsPause := i.GitManager.ComputeDiffIfReady()
+	stats, needsPause := i.gitManager.ComputeDiffIfReady()
 
 	// Compute "has commits ahead of base" alongside the diff stats, also outside
 	// the lock — AC6 needs this cached on Session so the frontend can disable the
@@ -673,7 +676,7 @@ func (i *Instance) UpdateDiffStats() error {
 	// as diff stats (cleared below in that case).
 	var hasCommits bool
 	if !needsPause {
-		if wt := i.GitManager.GetWorktree(); wt != nil {
+		if wt := i.gitManager.GetWorktree(); wt != nil {
 			// bounceMainBranch, not a dynamically-resolved default branch: mirrors
 			// pushAndCreatePR's own HasCommitsAheadOfMain call
 			// (session/backlog_lifecycle_pr.go:564). Resolving the actual default
@@ -684,7 +687,7 @@ func (i *Instance) UpdateDiffStats() error {
 			// file (documented in session/worktree_pr_poller.go). Fails open
 			// (HasCommitsAheadOfMain returns true on error by contract) — ignore
 			// the error and trust the bool.
-			hasCommits, _ = wt.HasCommitsAheadOfMain(BounceMainBranch)
+			hasCommits, _ = wt.HasCommitsAheadOfMain(instanceMainBranch)
 		}
 	}
 
@@ -693,11 +696,11 @@ func (i *Instance) UpdateDiffStats() error {
 	var transitionErr error
 	var didTransitionToPaused bool
 	if needsPause {
-		if i.Status != Paused {
+		if i.Status != domain.Paused {
 			didTransitionToPaused = true
-			transitionErr = i.transitionTo(context.Background(), Paused)
+			transitionErr = i.transitionTo(context.Background(), domain.Paused)
 		}
-		i.GitManager.ClearDiffStats()
+		i.gitManager.ClearDiffStats()
 		i.mu.Unlock()
 		if didTransitionToPaused {
 			log.Warn("worktree directory doesn't exist, marking as paused", "session", i.Title)
@@ -709,15 +712,15 @@ func (i *Instance) UpdateDiffStats() error {
 	}
 	if stats != nil && stats.Error != nil {
 		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
-			i.GitManager.ClearDiffStats()
+			i.gitManager.ClearDiffStats()
 			i.mu.Unlock()
 			return nil
 		}
 		i.mu.Unlock()
 		return fmt.Errorf("failed to get diff stats: %w", stats.Error)
 	}
-	i.GitManager.SetDiffStats(stats)
-	i.GitManager.SetHasCommitsAhead(hasCommits)
+	i.gitManager.SetDiffStats(stats)
+	i.gitManager.SetHasCommitsAhead(hasCommits)
 	i.mu.Unlock()
 	return nil
 }
@@ -726,7 +729,7 @@ func (i *Instance) UpdateDiffStats() error {
 func (i *Instance) GetDiffStats() *git.DiffStats {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	return i.GitManager.GetDiffStats()
+	return i.gitManager.GetDiffStats()
 }
 
 // GetHasCommitsAhead returns the cached signal for whether the session's
@@ -735,7 +738,7 @@ func (i *Instance) GetDiffStats() *git.DiffStats {
 func (i *Instance) GetHasCommitsAhead() bool {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	return i.GitManager.GetHasCommitsAhead()
+	return i.gitManager.GetHasCommitsAhead()
 }
 
 // SetDirBaseSHA sets the base commit SHA used to compute diff stats for
@@ -743,7 +746,7 @@ func (i *Instance) GetHasCommitsAhead() bool {
 func (i *Instance) SetDirBaseSHA(sha string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.GitManager.SetDirBaseSHA(sha)
+	i.gitManager.SetDirBaseSHA(sha)
 }
 
 // computeDirDiffStats computes diff stats for a directory session — the
@@ -812,8 +815,8 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 // TestBackgroundResolutionPipeline_*/TestSessionService_RetrySession_*/
 // TestTriggerTriage_* when tried.
 func (i *Instance) worktreeDetectPath() string {
-	if i.GitManager.HasWorktree() {
-		if worktreePath := i.GitManager.GetWorktreePath(); worktreePath != "" {
+	if i.gitManager.HasWorktree() {
+		if worktreePath := i.gitManager.GetWorktreePath(); worktreePath != "" {
 			return worktreePath
 		}
 	}
@@ -829,7 +832,7 @@ func (i *Instance) applyWorktreeInfo(info *WorktreeInfo) error {
 }
 
 // populateWorktreeInfoOnLoad fills worktree/GitHub info while the instance is
-// still goroutine-local (inside fromInstanceData). Without a registered
+// still goroutine-local (inside instanceFromData). Without a registered
 // WorktreeEnricher it detects synchronously, as before; with one it applies a
 // cached result if ready and otherwise leaves the fields empty for the next load.
 func (i *Instance) populateWorktreeInfoOnLoad() {
@@ -865,4 +868,14 @@ func (i *Instance) populateWorktreeInfoOnLoad() {
 	} else if i.GitHubOwner != "" {
 		log.Info("auto-detected github info", "session", i.Title, "owner", i.GitHubOwner, "repo", i.GitHubRepo, "worktree", i.IsWorktree)
 	}
+}
+
+// instanceMainBranch duplicates BounceMainBranch (backlog_shared.go) so Instance
+// code does not depend on the backlog-owned constant; keep the two in sync.
+const instanceMainBranch = "main"
+
+// GitManager returns the instance's git worktree manager. It is an accessor
+// (not a snapshot field) because the manager is a behaviour object.
+func (i *Instance) GitManager() *gitwt.Manager {
+	return &i.gitManager
 }

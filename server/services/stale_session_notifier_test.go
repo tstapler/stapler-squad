@@ -14,13 +14,15 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // newStaleTestInstance builds a bare *session.Instance for StaleSessionNotifier tests.
 // lastMeaningfulOutput is written through both the plain field and SyncAtomicTimestamps()
 // so GetTimeSinceLastMeaningfulOutput()'s fast (atomic-shadow) path reflects it immediately,
 // mirroring the pattern session/review_queue_poller_test.go's makeAcknowledgedInstance uses.
-func newStaleTestInstance(title, uuid string, status session.Status, lastMeaningfulOutput time.Time) *session.Instance {
+func newStaleTestInstance(title, uuid string, status domain.Status, lastMeaningfulOutput time.Time) *session.Instance {
 	inst := &session.Instance{
 		Title:     title,
 		UUID:      uuid,
@@ -44,7 +46,7 @@ func setLastMeaningfulOutput(inst *session.Instance, t time.Time) {
 // StaleSessionNotifier tests that only need GetInstances() -- never Start()ed, so no
 // polling goroutine or tmux/status-manager dependency is required.
 func newTestNotifierPoller(instances ...*session.Instance) *session.ReviewQueuePoller {
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), nil, nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), nil, nil)
 	poller.SetInstances(instances)
 	return poller
 }
@@ -94,7 +96,7 @@ func TestStaleSessionNotifier_checkAll_should_FireExactlyOnce_When_SessionStaysS
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, true)
 
-	inst := newStaleTestInstance("sess-1", "uuid-1", session.Active, time.Now().Add(-40*time.Minute))
+	inst := newStaleTestInstance("sess-1", "uuid-1", domain.Active, time.Now().Add(-40*time.Minute))
 	poller := newTestNotifierPoller(inst)
 	bus := events.NewEventBus(4)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -120,7 +122,7 @@ func TestStaleSessionNotifier_checkAll_should_ReArm_When_SessionRecoversAndGoesS
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, true)
 
-	inst := newStaleTestInstance("sess-2", "uuid-2", session.Active, time.Now().Add(-40*time.Minute))
+	inst := newStaleTestInstance("sess-2", "uuid-2", domain.Active, time.Now().Add(-40*time.Minute))
 	poller := newTestNotifierPoller(inst)
 	bus := events.NewEventBus(4)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -149,7 +151,7 @@ func TestStaleSessionNotifier_checkAll_should_NotNotify_When_SessionIsNotActive(
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, true)
 
-	inst := newStaleTestInstance("sess-3", "uuid-3", session.Paused, time.Now().Add(-40*time.Minute))
+	inst := newStaleTestInstance("sess-3", "uuid-3", domain.Paused, time.Now().Add(-40*time.Minute))
 	poller := newTestNotifierPoller(inst)
 	bus := events.NewEventBus(4)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -166,7 +168,7 @@ func TestStaleSessionNotifier_checkAll_should_NotNotify_When_NotifyEnabledIsFals
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, false)
 
-	inst := newStaleTestInstance("sess-4", "uuid-4", session.Active, time.Now().Add(-40*time.Minute))
+	inst := newStaleTestInstance("sess-4", "uuid-4", domain.Active, time.Now().Add(-40*time.Minute))
 	poller := newTestNotifierPoller(inst)
 	bus := events.NewEventBus(4)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -184,7 +186,7 @@ func TestStaleSessionNotifier_checkAll_should_ObserveConfigChange_When_ConfigFil
 	// Threshold starts high enough that a 40-minute idle session is NOT yet stale.
 	writeStaleSessionConfig(t, dir, 60, true)
 
-	inst := newStaleTestInstance("sess-5", "uuid-5", session.Active, time.Now().Add(-40*time.Minute))
+	inst := newStaleTestInstance("sess-5", "uuid-5", domain.Active, time.Now().Add(-40*time.Minute))
 	poller := newTestNotifierPoller(inst)
 	bus := events.NewEventBus(4)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,7 +211,7 @@ func TestStaleSessionNotifier_checkAll_should_ReNotify_When_SessionPausesThenRes
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, true)
 
-	inst := newStaleTestInstance("sess-6", "uuid-6", session.Active, time.Now().Add(-40*time.Minute))
+	inst := newStaleTestInstance("sess-6", "uuid-6", domain.Active, time.Now().Add(-40*time.Minute))
 	poller := newTestNotifierPoller(inst)
 	bus := events.NewEventBus(4)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -229,7 +231,7 @@ func TestStaleSessionNotifier_checkAll_should_ReNotify_When_SessionPausesThenRes
 
 	// Pause while still stale -- the dedup entry must clear on this transition alone,
 	// not just on idle-time recovery.
-	inst.ForceStatus(session.Paused)
+	inst.ForceStatus(domain.Paused)
 	notifier.checkAll()
 	assertNoNotification(t, ch)
 
@@ -240,7 +242,7 @@ func TestStaleSessionNotifier_checkAll_should_ReNotify_When_SessionPausesThenRes
 
 	// Resume while still past threshold -- a naive "only clear on recovery" implementation
 	// would still suppress this, since idle time never dropped below threshold.
-	inst.ForceStatus(session.Active)
+	inst.ForceStatus(domain.Active)
 	notifier.checkAll()
 	drainOneNotification(t, ch)
 }
@@ -256,7 +258,7 @@ func TestStaleSessionNotifier_checkAll_should_FireOnceOnceEnabled_When_NotifyWas
 	dir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 	writeStaleSessionConfig(t, dir, 30, false)
 
-	inst := newStaleTestInstance("sess-7", "uuid-7", session.Active, time.Now().Add(-40*time.Minute))
+	inst := newStaleTestInstance("sess-7", "uuid-7", domain.Active, time.Now().Add(-40*time.Minute))
 	poller := newTestNotifierPoller(inst)
 	bus := events.NewEventBus(4)
 	ctx, cancel := context.WithCancel(context.Background())

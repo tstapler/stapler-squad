@@ -9,7 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 )
 
 // brokenWorktreeInstance returns a started worktree Instance whose worktree
@@ -22,10 +24,10 @@ func brokenWorktreeInstance(t *testing.T) (*Instance, string) {
 
 	inst := &Instance{
 		Title:       "dirty-check-fails",
-		Status:      Running,
+		Status:      domain.Active,
 		IsWorktree:  true,
-		Permissions: GetManagedPermissions(),
-		GitManager: GitWorktreeManager{
+		Permissions: domain.GetManagedPermissions(),
+		gitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), wtDir, "dirty-check-fails", "branch", ""),
 		},
 	}
@@ -41,7 +43,7 @@ func TestPause_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *testing
 
 	require.ErrorIs(t, err, ErrDirtyStateUnknown)
 	assert.FileExists(t, precious)
-	assert.Equal(t, Running, inst.Status, "status must not advance when pause was refused")
+	assert.Equal(t, domain.Active, inst.Status, "status must not advance when pause was refused")
 }
 
 func TestStopByUser_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *testing.T) {
@@ -52,7 +54,7 @@ func TestStopByUser_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *te
 
 	require.ErrorIs(t, err, ErrDirtyStateUnknown)
 	assert.FileExists(t, precious)
-	assert.Equal(t, Running, inst.Status, "status must not advance when stop was refused")
+	assert.Equal(t, domain.Active, inst.Status, "status must not advance when stop was refused")
 }
 
 // An untracked file must be reported as work to commit and must survive
@@ -67,15 +69,15 @@ func TestWorktreeNeedsCommit_should_PreserveUntrackedFile_When_WorktreeRemoved(t
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
 
-	inst := &Instance{IsWorktree: true, GitManager: GitWorktreeManager{Worktree: wt}}
+	inst := &Instance{IsWorktree: true, gitManager: gitwt.Manager{Worktree: wt}}
 	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "untracked.txt"), []byte("keep me"), 0o644))
 
 	needs, err := inst.worktreeNeedsCommit()
 	require.NoError(t, err)
 	require.True(t, needs, "untracked file must count as uncommitted work")
 
-	require.NoError(t, inst.GitManager.CommitChanges("save"))
-	require.NoError(t, inst.GitManager.Remove())
+	require.NoError(t, inst.GitManager().CommitChanges("save"))
+	require.NoError(t, inst.GitManager().Remove())
 
 	repo, err := git.OpenRepo(repoPath)
 	require.NoError(t, err)
@@ -94,7 +96,7 @@ func TestWorktreeNeedsCommit_should_BeFalse_When_WorktreeDirMissing(t *testing.T
 	t.Parallel()
 	inst := &Instance{
 		IsWorktree: true,
-		GitManager: GitWorktreeManager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
+		gitManager: gitwt.Manager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
 	}
 
 	needs, err := inst.worktreeNeedsCommit()
@@ -113,9 +115,9 @@ func TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean(t *t
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
-	inst := &Instance{IsWorktree: true, GitManager: GitWorktreeManager{Worktree: wt}}
+	inst := &Instance{IsWorktree: true, gitManager: gitwt.Manager{Worktree: wt}}
 
-	dirty, err := inst.GitManager.IsDirty() // primes the clean cache
+	dirty, err := inst.GitManager().IsDirty() // primes the clean cache
 	require.NoError(t, err)
 	require.False(t, dirty)
 	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "late.txt"), []byte("late"), 0o644))
@@ -123,7 +125,7 @@ func TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean(t *t
 	needs, err := inst.worktreeNeedsCommit()
 	require.NoError(t, err)
 	require.True(t, needs)
-	require.NoError(t, inst.GitManager.CommitChanges("save"))
+	require.NoError(t, inst.GitManager().CommitChanges("save"))
 
 	repo, err := git.OpenRepo(repoPath)
 	require.NoError(t, err)
@@ -154,7 +156,7 @@ func TestForceStopByUser_should_StopAndKeepWorktree_When_DirtyCheckErrors(t *tes
 	err := inst.ForceStopByUser()
 
 	require.NoError(t, err)
-	assert.Equal(t, Stopped, inst.Status)
+	assert.Equal(t, domain.Stopped, inst.Status)
 	assert.FileExists(t, precious, "force stop must never delete the worktree contents")
 	assert.True(t, pm.closeCalled, "force stop must still kill the tmux session")
 }
@@ -162,13 +164,13 @@ func TestForceStopByUser_should_StopAndKeepWorktree_When_DirtyCheckErrors(t *tes
 func TestForceStopByUser_should_StillRefuse_When_TransitionIllegal(t *testing.T) {
 	t.Parallel()
 	inst, precious := brokenWorktreeInstance(t)
-	inst.Status = Restoring
+	inst.Status = domain.Restoring
 	pm := &fakeStopByUserProcessManager{hasSession: true}
 	inst.processManager = pm
 
 	err := inst.ForceStopByUser()
 
-	var transErr ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	require.ErrorAs(t, err, &transErr)
 	assert.False(t, pm.closeCalled)
 	assert.FileExists(t, precious)
@@ -185,9 +187,9 @@ func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testin
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
 	inst := &Instance{
-		Title: "force-known-dirty", Status: Running, IsWorktree: true,
-		Permissions: GetManagedPermissions(),
-		GitManager:  GitWorktreeManager{Worktree: wt},
+		Title: "force-known-dirty", Status: domain.Active, IsWorktree: true,
+		Permissions: domain.GetManagedPermissions(),
+		gitManager:  gitwt.Manager{Worktree: wt},
 	}
 	inst.started.Store(true)
 	inst.processManager = &fakeStopByUserProcessManager{hasSession: true}
@@ -195,7 +197,7 @@ func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testin
 
 	require.NoError(t, inst.ForceStopByUser())
 
-	assert.Equal(t, Stopped, inst.Status)
+	assert.Equal(t, domain.Stopped, inst.Status)
 	repo, err := git.OpenRepo(repoPath)
 	require.NoError(t, err)
 	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)

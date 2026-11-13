@@ -69,7 +69,7 @@ func TestDequeueClaim_should_SurfaceTransitionDeniedOnceAndRecover_When_EngineDe
 		wantReason string
 	}{
 		{"operator_gate", func(h *systemGateHarness, t *testing.T) func() {
-			return h.blockWithGate(t, session.BacklogStatusQueued, session.BacklogStatusInProgress)
+			return h.blockWithGate(t, domain.BacklogStatusQueued, domain.BacklogStatusInProgress)
 		}, "operator_gate"},
 	}
 	for _, tc := range cases {
@@ -139,14 +139,14 @@ const denHeldLog = "item waits on a denied transition, skipping"
 
 type denSpawnCase struct {
 	name   string
-	status session.BacklogStatus
-	to     session.BacklogStatus // the denied edge out of status
-	caller session.TransitionCaller
+	status domain.BacklogStatus
+	to     domain.BacklogStatus // the denied edge out of status
+	caller domain.TransitionCaller
 	setup  func(t *testing.T) (*BacklogService, string)
 	call   func(svc *BacklogService, itemID string)
 }
 
-func denDefaultSetup(status session.BacklogStatus) func(t *testing.T) (*BacklogService, string) {
+func denDefaultSetup(status domain.BacklogStatus) func(t *testing.T) (*BacklogService, string) {
 	return func(t *testing.T) (*BacklogService, string) {
 		svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 		svc.SetHeadlessPool(&fakeHeadlessPool{})
@@ -157,14 +157,14 @@ func denDefaultSetup(status session.BacklogStatus) func(t *testing.T) (*BacklogS
 func denSpawnCases() []denSpawnCase {
 	ctx := context.Background()
 	return []denSpawnCase{
-		{"AutoRespawnTriage", session.BacklogStatusIdea, session.BacklogStatusReady, session.CallerAutonomousComplete,
-			denDefaultSetup(session.BacklogStatusIdea), func(s *BacklogService, id string) { _ = s.AutoRespawnTriage(ctx, id) }},
-		{"MaybeTriggerTriage", session.BacklogStatusIdea, session.BacklogStatusReady, session.CallerMaybeTriggerTriage,
+		{"AutoRespawnTriage", domain.BacklogStatusIdea, domain.BacklogStatusReady, domain.CallerAutonomousComplete,
+			denDefaultSetup(domain.BacklogStatusIdea), func(s *BacklogService, id string) { _ = s.AutoRespawnTriage(ctx, id) }},
+		{"MaybeTriggerTriage", domain.BacklogStatusIdea, domain.BacklogStatusReady, domain.CallerMaybeTriggerTriage,
 			func(t *testing.T) (*BacklogService, string) {
 				svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 				svc.SetHeadlessPool(&fakeHeadlessPool{})
 				item, err := svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
-					Title: "has a plan", Status: string(session.BacklogStatusIdea), RepoPath: t.TempDir(), PlanApproved: true,
+					Title: "has a plan", Status: string(domain.BacklogStatusIdea), RepoPath: t.TempDir(), PlanApproved: true,
 				})
 				require.NoError(t, err)
 				return svc, item.ID
@@ -173,31 +173,31 @@ func denSpawnCases() []denSpawnCase {
 				item, _ := s.storage.GetBacklogItem(ctx, id)
 				s.MaybeTriggerTriage(ctx, id, false, item.RepoPath)
 			}},
-		{"DequeueNextQueuedItems", session.BacklogStatusQueued, session.BacklogStatusInProgress, session.CallerClaimAndSpawn,
+		{"DequeueNextQueuedItems", domain.BacklogStatusQueued, domain.BacklogStatusInProgress, domain.CallerClaimAndSpawn,
 			func(t *testing.T) (*BacklogService, string) {
 				svc, _, repoPath := newDequeueClaimService(t, &fakeClaimChecker{verdict: services.NewUnclaimedVerdict()})
 				svc.claimDedupFlag = func() bool { return false }
 				return svc, createQueuedItemWithURL(t, svc, repoPath, claimIssueURL)
 			},
 			func(s *BacklogService, _ string) { _ = s.DequeueNextQueuedItems(ctx) }},
-		{"AutoReopenAfterFailedReview", session.BacklogStatusReview, session.BacklogStatusPRPending, session.CallerOrphanedAgentPR,
-			denDefaultSetup(session.BacklogStatusReview), func(s *BacklogService, id string) { _ = s.AutoReopenAfterFailedReview(ctx, id) }},
-		{"AutoRespawnAutonomousWork", session.BacklogStatusInProgress, session.BacklogStatusReview, session.CallerReconcileStuck,
-			denDefaultSetup(session.BacklogStatusInProgress), func(s *BacklogService, id string) { _ = s.AutoRespawnAutonomousWork(ctx, id) }},
-		{"RemediateStaleWorkSession", session.BacklogStatusInProgress, session.BacklogStatusReview, session.CallerReconcileStuck,
-			denDefaultSetup(session.BacklogStatusInProgress), func(s *BacklogService, id string) { _ = s.RemediateStaleWorkSession(ctx, id) }},
-		{"AutoReopenForPRFix", session.BacklogStatusPRPending, session.BacklogStatusDone, session.CallerReconcilePRPendingMerge,
-			denDefaultSetup(session.BacklogStatusPRPending), func(s *BacklogService, id string) { _ = s.AutoReopenForPRFix(ctx, id, "ci failed") }},
-		{"AutoRespawnReview", session.BacklogStatusReview, session.BacklogStatusPRPending, session.CallerOrphanedAgentPR,
-			denDefaultSetup(session.BacklogStatusReview), func(s *BacklogService, id string) { _ = s.AutoRespawnReview(ctx, id) }},
+		{"AutoReopenAfterFailedReview", domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.CallerOrphanedAgentPR,
+			denDefaultSetup(domain.BacklogStatusReview), func(s *BacklogService, id string) { _ = s.AutoReopenAfterFailedReview(ctx, id) }},
+		{"AutoRespawnAutonomousWork", domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.CallerReconcileStuck,
+			denDefaultSetup(domain.BacklogStatusInProgress), func(s *BacklogService, id string) { _ = s.AutoRespawnAutonomousWork(ctx, id) }},
+		{"RemediateStaleWorkSession", domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.CallerReconcileStuck,
+			denDefaultSetup(domain.BacklogStatusInProgress), func(s *BacklogService, id string) { _ = s.RemediateStaleWorkSession(ctx, id) }},
+		{"AutoReopenForPRFix", domain.BacklogStatusPRPending, domain.BacklogStatusDone, domain.CallerReconcilePRPendingMerge,
+			denDefaultSetup(domain.BacklogStatusPRPending), func(s *BacklogService, id string) { _ = s.AutoReopenForPRFix(ctx, id, "ci failed") }},
+		{"AutoRespawnReview", domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.CallerOrphanedAgentPR,
+			denDefaultSetup(domain.BacklogStatusReview), func(s *BacklogService, id string) { _ = s.AutoRespawnReview(ctx, id) }},
 	}
 }
 
 // denOpenRowFrom opens a transition_denied row anchored at from. The item must
 // be at from when called.
-func denOpenRowFrom(t *testing.T, svc *BacklogService, itemID string, caller session.TransitionCaller, from, to session.BacklogStatus) {
+func denOpenRowFrom(t *testing.T, svc *BacklogService, itemID string, caller domain.TransitionCaller, from, to domain.BacklogStatus) {
 	t.Helper()
-	d := domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: session.DeniedOperatorGate}
+	d := domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: backlogdto.DeniedOperatorGate}
 	applied, err := svc.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonTransitionDenied, from, domain.FormatTransitionDeniedContext(d, "test"))
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -217,9 +217,9 @@ func TestSpawnPoints_should_SkipOnAnOpenDenialFromTheirStatusOnly(t *testing.T) 
 				case "open denial":
 					denOpenRowFrom(t, svc, itemID, tc.caller, tc.status, tc.to)
 				case "stale row":
-					_, err := svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusRefining, nil, session.TriggeredBySystem)
+					_, err := svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusRefining, nil, session.TriggeredBySystem)
 					require.NoError(t, err)
-					denOpenRowFrom(t, svc, itemID, tc.caller, session.BacklogStatusRefining, tc.to)
+					denOpenRowFrom(t, svc, itemID, tc.caller, domain.BacklogStatusRefining, tc.to)
 					_, err = svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, tc.status, nil, session.TriggeredBySystem)
 					require.NoError(t, err)
 				}
@@ -239,10 +239,10 @@ func TestSpawnPoints_should_SkipOnAnOpenDenialFromTheirStatusOnly(t *testing.T) 
 }
 
 func TestSpawnPoints_should_ProceedAndClearTheRow_When_TheDenialLifted(t *testing.T) {
-	svc, itemID := denDefaultSetup(session.BacklogStatusInProgress)(t)
+	svc, itemID := denDefaultSetup(domain.BacklogStatusInProgress)(t)
 	h := wireEnforcedGate(t, svc)
-	remove := h.blockWithGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
-	denOpenRowFrom(t, svc, itemID, session.CallerReconcileStuck, session.BacklogStatusInProgress, session.BacklogStatusReview)
+	remove := h.blockWithGate(t, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
+	denOpenRowFrom(t, svc, itemID, domain.CallerReconcileStuck, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	remove()
 	logs := svctest.CaptureLogs(t)
 
@@ -253,12 +253,12 @@ func TestSpawnPoints_should_ProceedAndClearTheRow_When_TheDenialLifted(t *testin
 }
 
 func TestTriggerRemediationNow_should_ReturnFailedPreconditionAndSpendNoAttempt_When_TheItemIsHeldByADenial(t *testing.T) {
-	svc, itemID := denDefaultSetup(session.BacklogStatusIdea)(t)
+	svc, itemID := denDefaultSetup(domain.BacklogStatusIdea)(t)
 	h := wireEnforcedGate(t, svc)
-	h.blockWithGate(t, session.BacklogStatusIdea, session.BacklogStatusReady)
-	_, err := svc.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonOrphanedTriage, session.BacklogStatusIdea, "orphan")
+	h.blockWithGate(t, domain.BacklogStatusIdea, domain.BacklogStatusReady)
+	_, err := svc.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonOrphanedTriage, domain.BacklogStatusIdea, "orphan")
 	require.NoError(t, err)
-	denOpenRowFrom(t, svc, itemID, session.CallerAutonomousComplete, session.BacklogStatusIdea, session.BacklogStatusReady)
+	denOpenRowFrom(t, svc, itemID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 
 	_, err = svc.TriggerRemediationNow(context.Background(), connect.NewRequest(&sessionv1.TriggerRemediationNowRequest{
 		ItemId: itemID, Reason: sessionv1.StuckReason_STUCK_REASON_ORPHANED_TRIAGE,
@@ -303,14 +303,14 @@ func denTriageSessionCount(t *testing.T, svc *BacklogService, itemID string) int
 }
 
 func TestAutonomousTriageDenied_should_StayQuietAndFinishByItself_When_TheOperatorApproves(t *testing.T) {
-	f := newCharFixture(t, "denied-redrive", session.SessionRoleTriage, session.BacklogStatusIdea)
+	f := newCharFixture(t, "denied-redrive", session.SessionRoleTriage, domain.BacklogStatusIdea)
 	svc := NewBacklogService(f.storage, &mockSessionCreator{}, nil, nil, nil, nil)
 	svc.SetHeadlessPool(&fakeHeadlessPool{})
 	bus := events.NewEventBus(64)
 	svc.SetEventBus(bus)
 	notifications, _ := bus.Subscribe(t.Context())
 	h := wireEnforcedGate(t, svc)
-	remove := h.blockWithGate(t, session.BacklogStatusIdea, session.BacklogStatusReady)
+	remove := h.blockWithGate(t, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 	spy := &denTriageSpy{BacklogService: svc}
 	listener := backlog.NewBacklogLifecycleListener(f.storage)
 	listener.SetEnabled(true)
@@ -349,8 +349,8 @@ func TestReconcileStuckDenied_should_NotRespawnWork_And_MoveToReviewOnceApproved
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(svctest.CreateTestStorage(t), creator, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
-	remove := h.blockWithGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
-	item := systemItemAt(t, svc, session.BacklogStatusInProgress)
+	remove := h.blockWithGate(t, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
+	item := systemItemAt(t, svc, domain.BacklogStatusInProgress)
 	ctx := context.Background()
 	workIS, err := svc.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "ended-work", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
@@ -363,7 +363,7 @@ func TestReconcileStuckDenied_should_NotRespawnWork_And_MoveToReviewOnceApproved
 		require.NoError(t, err)
 		require.Zero(t, moved)
 	}
-	require.Equal(t, []string{string(session.CallerReconcileStuck)}, deniedCallers(t, svc, item.ID), "one row for three denied ticks")
+	require.Equal(t, []string{string(domain.CallerReconcileStuck)}, deniedCallers(t, svc, item.ID), "one row for three denied ticks")
 
 	require.NoError(t, svc.AutoRespawnAutonomousWork(ctx, item.ID))
 	require.NoError(t, svc.RemediateStaleWorkSession(ctx, item.ID))
@@ -383,13 +383,13 @@ func TestReconcileStuckDenied_should_NotRespawnWork_And_MoveToReviewOnceApproved
 // and reconcile-stuck.
 func TestWriterCallersDenied_should_ReportOnceAcrossManyTicks(t *testing.T) {
 	cases := []struct {
-		caller   session.TransitionCaller
-		from, to session.BacklogStatus
+		caller   domain.TransitionCaller
+		from, to domain.BacklogStatus
 	}{
-		{session.CallerReconcilePRPendingMerge, session.BacklogStatusPRPending, session.BacklogStatusDone},
-		{session.CallerArchiveStaleDone, session.BacklogStatusDone, session.BacklogStatusArchived},
-		{session.CallerRecoverDriftedPR, session.BacklogStatusReview, session.BacklogStatusPRPending},
-		{session.CallerReconcileStuck, session.BacklogStatusInProgress, session.BacklogStatusReview},
+		{domain.CallerReconcilePRPendingMerge, domain.BacklogStatusPRPending, domain.BacklogStatusDone},
+		{domain.CallerArchiveStaleDone, domain.BacklogStatusDone, domain.BacklogStatusArchived},
+		{domain.CallerRecoverDriftedPR, domain.BacklogStatusReview, domain.BacklogStatusPRPending},
+		{domain.CallerReconcileStuck, domain.BacklogStatusInProgress, domain.BacklogStatusReview},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.caller), func(t *testing.T) {
@@ -402,10 +402,10 @@ func TestWriterCallersDenied_should_ReportOnceAcrossManyTicks(t *testing.T) {
 			item := systemItemAt(t, svc, tc.from)
 
 			for range 5 {
-				_, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
+				_, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
 					Caller: tc.caller, ItemID: item.ID, To: tc.to, TriggeredBy: session.TriggeredBySystem,
 				})
-				require.ErrorIs(t, err, session.ErrGateNotSatisfied)
+				require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 			}
 
 			assert.Len(t, transitionDeniedRows(t, svc, item.ID), 1)

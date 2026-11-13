@@ -13,6 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -312,7 +313,7 @@ func (p *SessionTagClassificationPoller) pollOnce() {
 // metaForSession builds the classifier input for one instance's current snapshot. Shared by
 // classificationNeeded and ClassifyNow so the manual path classifies exactly what the
 // automatic path would have.
-func metaForSession(snap *InstanceSnapshot) classifier.SessionTaggingContext {
+func metaForSession(snap *domain.InstanceSnapshot) classifier.SessionTaggingContext {
 	return classifier.SessionTaggingContext{
 		Name:    snap.Title,
 		Branch:  snap.Branch,

@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -51,7 +52,7 @@ func newPRPollMetrics() *prPollMetrics {
 	return m
 }
 
-func (m *prPollMetrics) poll(state PRState) {
+func (m *prPollMetrics) poll(state domain.PRState) {
 	m.polls.add(string(state))
 	if m.pollOtel != nil {
 		m.pollOtel.Add(context.Background(), 1, metric.WithAttributes(attribute.String("state", string(state))))
@@ -99,7 +100,7 @@ func (m *prPollMetrics) setUnverified(n int) {
 }
 
 // PRPollCount is ssq_pr_poll_total{state} in this process.
-func PRPollCount(state PRState) int64 { return prMetrics.polls.get(string(state)) }
+func PRPollCount(state domain.PRState) int64 { return prMetrics.polls.get(string(state)) }
 
 // PRPollFailureCount is ssq_pr_poll_failures_total{reason} in this process.
 func PRPollFailureCount(reason string) int64 { return prMetrics.failures.get(reason) }
@@ -132,7 +133,7 @@ func PRPinCount(action string) int64 { return prMetrics.pins.get(action) }
 
 // Recorders the prpoller package calls; the counters stay here because the session
 // PR-set editors feed the same registry.
-func RecordPRPoll(state PRState)        { prMetrics.poll(state) }
+func RecordPRPoll(state domain.PRState) { prMetrics.poll(state) }
 func RecordPRPollFailure(reason string) { prMetrics.failure(reason) }
 func RecordPRDiscoveryListCall()        { prMetrics.discoveryListCall() }
 func SetPRUnverified(n int)             { prMetrics.setUnverified(n) }

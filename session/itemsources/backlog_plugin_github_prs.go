@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"golang.org/x/sync/errgroup"
 )
@@ -212,7 +213,7 @@ func (g *GitHubPRsPlugin) MapToBacklogItem(item session.ExternalItem, sourceID s
 		Title:       title,
 		Description: desc,
 		Priority:    item.Priority,
-		Status:      string(session.BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		ExternalID:  item.ExternalID,
 		SourceID:    sourceID,
 	}

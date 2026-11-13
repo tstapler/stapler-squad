@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
 
@@ -43,7 +44,7 @@ func insertStoppedSessionForWorkflow(t *testing.T, entRepo *session.EntRepositor
 	_, err := client.Session.Create().
 		SetTitle(title).
 		SetPath("/tmp").
-		SetStatus(int(session.Stopped)).
+		SetStatus(int(domain.Stopped)).
 		SetWorkflowID(workflowID).
 		SetUpdatedAt(updatedAt).
 		SetProgram("claude").
@@ -159,11 +160,11 @@ func TestArchiveExcessSessions_should_NotArchiveActiveSession_When_RevivedBetwee
 
 	client := entRepo.GetEntClient()
 	stopped, err := client.Session.Create().
-		SetTitle("c8-stopped").SetPath("/tmp").SetStatus(int(session.Stopped)).
+		SetTitle("c8-stopped").SetPath("/tmp").SetStatus(int(domain.Stopped)).
 		SetWorkflowID(wf.ID.String()).SetProgram("claude").Save(ctx)
 	require.NoError(t, err)
 	revived, err := client.Session.Create().
-		SetTitle("c8-revived").SetPath("/tmp").SetStatus(int(session.Active)).
+		SetTitle("c8-revived").SetPath("/tmp").SetStatus(int(domain.Active)).
 		SetWorkflowID(wf.ID.String()).SetProgram("claude").Save(ctx)
 	require.NoError(t, err)
 

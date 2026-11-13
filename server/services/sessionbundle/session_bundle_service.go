@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	kzip "github.com/klauspost/compress/zip"
 	"github.com/tstapler/stapler-squad/config"
@@ -36,7 +38,7 @@ type BundleStorage interface {
 	// linked to this session, or domain.ErrNotFound when none exists.
 	GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (backlogdto.ItemSessionSummary, error)
 	// GetSessionArtifactsByUUID returns the artifact blob, or (nil, nil) when none.
-	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error)
+	GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*domain.SessionArtifactsBlob, error)
 }
 
 // ContextHistoryReader is the narrow contexthistory interface SessionBundleService
@@ -253,7 +255,7 @@ func (s *SessionBundleService) assembleBundle(
 }
 
 // collectSessionMetadata adds the required session_metadata section.
-func (c *bundleCollector) collectSessionMetadata(snap *session.InstanceSnapshot) {
+func (c *bundleCollector) collectSessionMetadata(snap *domain.InstanceSnapshot) {
 	metaPayload := struct {
 		ID          string    `json:"id"`
 		UUID        string    `json:"uuid"`
@@ -419,7 +421,7 @@ func (s *SessionBundleService) collectArtifacts(ctx context.Context, c *bundleCo
 		c.omit("artifacts", "no artifact scan recorded for this session (not_linked or scan pending)")
 		return
 	}
-	c.addMarshaled("artifacts", artBlob.Redacted())
+	c.addMarshaled("artifacts", artifacts.RedactBlob(artBlob))
 }
 
 func (c *bundleCollector) totalUncompressed() int {

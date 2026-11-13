@@ -17,7 +17,7 @@ import (
 
 // createStuckTestItem creates a bare backlog item in the given status, for use
 // as the parent of BacklogStuckState rows under test.
-func createStuckTestItem(t *testing.T, repo *EntRepository, ctx context.Context, status BacklogStatus) string {
+func createStuckTestItem(t *testing.T, repo *EntRepository, ctx context.Context, status domain.BacklogStatus) string {
 	t.Helper()
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "stuck-state test item",
@@ -36,9 +36,9 @@ func TestMarkStuck_should_insertOpenRowWithNullNotified_When_NoExistingRow(t *te
 	defer cleanup()
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 
-	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "PR #148 green & mergeable")
+	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "PR #148 green & mergeable")
 	require.NoError(t, err)
 	assert.True(t, applied)
 
@@ -63,9 +63,9 @@ func TestMarkStuck_should_updateLastCheckedOnly_When_OpenRowExists(t *testing.T)
 	defer cleanup()
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 
-	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "first pass")
+	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "first pass")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -76,7 +76,7 @@ func TestMarkStuck_should_updateLastCheckedOnly_When_OpenRowExists(t *testing.T)
 	// Force a measurable delta.
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
-	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "second pass")
+	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "second pass")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -102,9 +102,9 @@ func TestMarkStuck_should_reopenRowInPlace_When_ExistingRowResolved(t *testing.T
 	defer cleanup()
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
 
-	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing x3")
+	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing x3")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -124,7 +124,7 @@ func TestMarkStuck_should_reopenRowInPlace_When_ExistingRowResolved(t *testing.T
 
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
-	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, BacklogStatusInProgress, "bouncing again")
+	applied, err = repo.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "bouncing again")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -149,10 +149,10 @@ func TestMarkStuck_should_keepExactlyOneRow_When_ResolvedThenRecurs(t *testing.T
 	defer cleanup()
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
 
 	for i := 0; i < 3; i++ {
-		applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonStaleWork, BacklogStatusInProgress, "stale")
+		applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonStaleWork, domain.BacklogStatusInProgress, "stale")
 		require.NoError(t, err)
 		require.True(t, applied)
 
@@ -175,9 +175,9 @@ func TestMarkStuck_should_returnAppliedFalse_When_StatusPreconditionMismatch(t *
 	defer cleanup()
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusInProgress)
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusInProgress)
 
-	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonReworkCap, BacklogStatusReview, "cap hit")
+	applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonReworkCap, domain.BacklogStatusReview, "cap hit")
 	require.NoError(t, err)
 	assert.False(t, applied)
 
@@ -195,8 +195,8 @@ func TestResolveStuck_should_setResolvedAtOnce_When_RowOpen(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
-	_, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "ready")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
+	_, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "ready")
 	require.NoError(t, err)
 
 	resolved, err := repo.ResolveStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged)
@@ -221,8 +221,8 @@ func TestResolveStuck_should_beNoOpAndNotOverwrite_When_AlreadyResolved(t *testi
 	defer cleanup()
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
-	_, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "ready")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
+	_, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "ready")
 	require.NoError(t, err)
 
 	resolved, err := repo.ResolveStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged)
@@ -263,13 +263,13 @@ func TestFindOpenStuckStates_should_excludeResolvedAndSnoozed_When_Queried(t *te
 		domain.StuckReasonBouncing,
 		domain.StuckReasonPushFailed,
 	}
-	statuses := []BacklogStatus{
-		BacklogStatusPRPending,
-		BacklogStatusReview,
-		BacklogStatusReview,
-		BacklogStatusInProgress,
-		BacklogStatusInProgress,
-		BacklogStatusReview,
+	statuses := []domain.BacklogStatus{
+		domain.BacklogStatusPRPending,
+		domain.BacklogStatusReview,
+		domain.BacklogStatusReview,
+		domain.BacklogStatusInProgress,
+		domain.BacklogStatusInProgress,
+		domain.BacklogStatusReview,
 	}
 	for i, reason := range reasons {
 		itemID := createStuckTestItem(t, repo, ctx, statuses[i])
@@ -280,8 +280,8 @@ func TestFindOpenStuckStates_should_excludeResolvedAndSnoozed_When_Queried(t *te
 	}
 
 	// One additional row snoozed until tomorrow.
-	snoozedItemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
-	applied, err := repo.MarkStuck(ctx, snoozedItemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "snoozed")
+	snoozedItemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
+	applied, err := repo.MarkStuck(ctx, snoozedItemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "snoozed")
 	require.NoError(t, err)
 	require.True(t, applied)
 	snoozedUUID, err := uuid.Parse(snoozedItemID)
@@ -293,8 +293,8 @@ func TestFindOpenStuckStates_should_excludeResolvedAndSnoozed_When_Queried(t *te
 	require.NoError(t, err)
 
 	// One additional row resolved.
-	resolvedItemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
-	applied, err = repo.MarkStuck(ctx, resolvedItemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "resolved")
+	resolvedItemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
+	applied, err = repo.MarkStuck(ctx, resolvedItemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "resolved")
 	require.NoError(t, err)
 	require.True(t, applied)
 	_, err = repo.ResolveStuck(ctx, resolvedItemID, domain.StuckReasonPRReadyUnmerged)
@@ -325,8 +325,8 @@ func TestMarkStuckNotified_should_setNotifiedAt_When_Null(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	itemID := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
-	_, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "ready")
+	itemID := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
+	_, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "ready")
 	require.NoError(t, err)
 
 	row, err := repo.Client.BacklogStuckState.Query().Only(ctx)
@@ -368,9 +368,9 @@ func TestFindOpenStuckStates_should_returnRowsAfterDBReopen_When_ProcessRestarts
 		defer repo.Close()
 
 		ctx := context.Background()
-		itemID = createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+		itemID = createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 
-		applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, BacklogStatusPRPending, "PR #148 green & mergeable")
+		applied, err := repo.MarkStuck(ctx, itemID, domain.StuckReasonPRReadyUnmerged, domain.BacklogStatusPRPending, "PR #148 green & mergeable")
 		require.NoError(t, err)
 		require.True(t, applied)
 

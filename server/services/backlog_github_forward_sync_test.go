@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -138,7 +139,7 @@ func TestForwardSyncSubscriber_ClosesIssueOnDoneTransition_WhenEnabled(t *testin
 		Kind:      events.BacklogChangeStatusTransition,
 		Item:      item,
 		OldStatus: "review",
-		NewStatus: string(session.BacklogStatusDone),
+		NewStatus: string(domain.BacklogStatusDone),
 	}))
 
 	wait.RequireEventually(t, func() bool { return fake.closeCallCount() == 1 }, 2*time.Second, 10*time.Millisecond, "expected CloseIssue to be called")
@@ -175,7 +176,7 @@ func TestForwardSyncSubscriber_NoOpWhenForwardSyncDisabled(t *testing.T) {
 	bus.Publish(events.NewBacklogItemChangedEvent(&events.BacklogItemEventPayload{
 		Kind:      events.BacklogChangeStatusTransition,
 		Item:      item,
-		NewStatus: string(session.BacklogStatusDone),
+		NewStatus: string(domain.BacklogStatusDone),
 	}))
 
 	// Negative assertion: give the subscriber goroutine a window to (wrongly)
@@ -280,7 +281,7 @@ func TestForwardSyncSubscriber_NoOpForLocallyCreatedItem(t *testing.T) {
 	// A plain, locally-created backlog item — no source, no external ID.
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:  "locally created item",
-		Status: string(session.BacklogStatusDone),
+		Status: string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
@@ -342,7 +343,7 @@ func newSourcelessDeps(plugin externalIssueCloser, token string) sourcelessClose
 func createSourcelessDoneItem(t *testing.T, storage *session.Storage, prURL string) *backlogdto.BacklogItemData {
 	t.Helper()
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
-		Title: "imported", Status: string(session.BacklogStatusDone), ExternalURL: sourcelessIssueURL,
+		Title: "imported", Status: string(domain.BacklogStatusDone), ExternalURL: sourcelessIssueURL,
 	})
 	require.NoError(t, err)
 	if prURL != "" {
@@ -430,7 +431,7 @@ func TestForwardSyncClose_SourcelessItem_TokenMissSkips(t *testing.T) {
 	require.Zero(t, fake.commentCallCount())
 	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusDone), refreshed.Status)
+	require.Equal(t, string(domain.BacklogStatusDone), refreshed.Status)
 }
 
 func TestForwardSyncClose_SourcelessItem_CloseFailureLeavesItemDone(t *testing.T) {
@@ -443,7 +444,7 @@ func TestForwardSyncClose_SourcelessItem_CloseFailureLeavesItemDone(t *testing.T
 	require.Zero(t, fake.commentCallCount())
 	refreshed, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusDone), refreshed.Status)
+	require.Equal(t, string(domain.BacklogStatusDone), refreshed.Status)
 	require.Nil(t, refreshed.GitHubSyncedIssueUpdatedAt, "watermark must not advance on a failed close")
 }
 
@@ -457,7 +458,7 @@ func TestForwardSyncClose_SourcelessItem_NonIssueURLsSkip(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			storage := svctest.NewForwardSyncTestStorage(t)
-			item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "t", Status: string(session.BacklogStatusDone), ExternalURL: url})
+			item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "t", Status: string(domain.BacklogStatusDone), ExternalURL: url})
 			require.NoError(t, err)
 			fake := &fakeForwardSyncCloserPlugin{pluginID: "x"}
 			registry := session.NewPluginRegistry()
@@ -480,7 +481,7 @@ func TestForwardSyncClose_SourceLinkedItemWithoutExternalID_NeverTakesSourceless
 	storage := svctest.NewForwardSyncTestStorage(t)
 	sourceID := svctest.CreateForwardSyncTestSource(t, storage, "fake_closer", false, "")
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
-		Title: "t", Status: string(session.BacklogStatusDone), SourceID: sourceID, ExternalURL: sourcelessIssueURL,
+		Title: "t", Status: string(domain.BacklogStatusDone), SourceID: sourceID, ExternalURL: sourcelessIssueURL,
 	})
 	require.NoError(t, err)
 	fake := &fakeForwardSyncCloserPlugin{pluginID: "x"}

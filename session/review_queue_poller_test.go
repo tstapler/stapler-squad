@@ -8,7 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
+	"github.com/tstapler/stapler-squad/session/claudectl/claudectltest"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -17,7 +21,7 @@ import (
 func makeAcknowledgedInstance(title string) *Instance {
 	inst := &Instance{
 		Title:  title,
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
@@ -36,16 +40,16 @@ func makeAcknowledgedInstance(title string) *Instance {
 func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 	t.Parallel()
 	// Create review queue
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	// Simulate initial detection: session added to queue
 	initialTime := time.Now().Add(-5 * time.Minute)
-	reason := ReasonIdleTimeout
-	priority := PriorityLow
+	reason := queuepkg.ReasonIdleTimeout
+	priority := queuepkg.PriorityLow
 	context := "Timed out after 5m of inactivity"
 
 	// First poll: add item to queue
-	item1 := &ReviewItem{
+	item1 := &queuepkg.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
 		Reason:      reason,
@@ -72,7 +76,7 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 			}
 		}
 
-		updatedItem := &ReviewItem{
+		updatedItem := &queuepkg.ReviewItem{
 			SessionID:   "test-session",
 			SessionName: "test-session",
 			Reason:      reason,
@@ -101,8 +105,8 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 		finalItem.DetectedAt.Format(time.RFC3339))
 
 	// Now simulate a status change
-	newReason := ReasonApprovalPending
-	newPriority := PriorityHigh
+	newReason := queuepkg.ReasonApprovalPending
+	newPriority := queuepkg.PriorityHigh
 	newContext := "Waiting for approval to proceed"
 
 	// Simulate poller detecting status change
@@ -115,7 +119,7 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 		}
 	}
 
-	changedItem := &ReviewItem{
+	changedItem := &queuepkg.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
 		Reason:      newReason,
@@ -155,26 +159,26 @@ func TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged(t *testing.T) {
 func TestReviewQueuePoller_ContextChangeUpdatesTimestamp(t *testing.T) {
 	t.Parallel()
 	// Create review queue
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	// Manually add an item with initial context
 	initialTime := time.Now().Add(-5 * time.Minute)
-	item1 := &ReviewItem{
+	item1 := &queuepkg.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
-		Reason:      ReasonIdleTimeout,
-		Priority:    PriorityLow,
+		Reason:      queuepkg.ReasonIdleTimeout,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  initialTime,
 		Context:     "Idle for 5 minutes",
 	}
 	queue.Add(item1)
 
 	// Update with same reason/priority but different context
-	item2 := &ReviewItem{
+	item2 := &queuepkg.ReviewItem{
 		SessionID:   "test-session",
 		SessionName: "test-session",
-		Reason:      ReasonIdleTimeout,
-		Priority:    PriorityLow,
+		Reason:      queuepkg.ReasonIdleTimeout,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now(),            // New timestamp
 		Context:     "Idle for 10 minutes", // Different context
 	}
@@ -215,39 +219,39 @@ func TestReviewQueuePoller_ContextChangeUpdatesTimestamp(t *testing.T) {
 func TestReviewQueue_SortsByLastActivity(t *testing.T) {
 	t.Parallel()
 	// Create review queue
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	// Create three sessions with same priority but different LastActivity times
 	now := time.Now()
 
 	// Session 1: Last activity 5 days ago
-	item1 := &ReviewItem{
+	item1 := &queuepkg.ReviewItem{
 		SessionID:    "session-old",
 		SessionName:  "session-old",
-		Reason:       ReasonInputRequired,
-		Priority:     PriorityMedium,
+		Reason:       queuepkg.ReasonInputRequired,
+		Priority:     queuepkg.PriorityMedium,
 		DetectedAt:   now.Add(-5 * 24 * time.Hour),
 		Context:      "Waiting for input",
 		LastActivity: now.Add(-5 * 24 * time.Hour), // 5 days ago
 	}
 
 	// Session 2: Last activity 6 days ago (oldest)
-	item2 := &ReviewItem{
+	item2 := &queuepkg.ReviewItem{
 		SessionID:    "session-oldest",
 		SessionName:  "session-oldest",
-		Reason:       ReasonInputRequired,
-		Priority:     PriorityMedium,
+		Reason:       queuepkg.ReasonInputRequired,
+		Priority:     queuepkg.PriorityMedium,
 		DetectedAt:   now.Add(-6 * 24 * time.Hour),
 		Context:      "Waiting for input",
 		LastActivity: now.Add(-6 * 24 * time.Hour), // 6 days ago
 	}
 
 	// Session 3: Last activity 10 days ago but had recent activity
-	item3 := &ReviewItem{
+	item3 := &queuepkg.ReviewItem{
 		SessionID:    "session-recent",
 		SessionName:  "session-recent",
-		Reason:       ReasonInputRequired,
-		Priority:     PriorityMedium,
+		Reason:       queuepkg.ReasonInputRequired,
+		Priority:     queuepkg.PriorityMedium,
 		DetectedAt:   now.Add(-10 * 24 * time.Hour),
 		Context:      "Waiting for input",
 		LastActivity: now.Add(-1 * time.Hour), // 1 hour ago (most recent)
@@ -297,7 +301,7 @@ func TestReviewQueue_SortsByLastActivity(t *testing.T) {
 // newSimpleTestPoller creates a ReviewQueuePoller wired with a fresh queue and status manager,
 // with nil storage (no persistence). Safe to use in unit tests.
 func newSimpleTestPoller() *ReviewQueuePoller {
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	return NewReviewQueuePoller(queue, statusMgr, nil)
 }
@@ -305,7 +309,7 @@ func newSimpleTestPoller() *ReviewQueuePoller {
 // newSimpleTestPollerWithManager creates a ReviewQueuePoller and returns the concrete
 // *InstanceStatusManager so tests can register controllers directly.
 func newSimpleTestPollerWithManager() (*ReviewQueuePoller, *InstanceStatusManager) {
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	return NewReviewQueuePoller(queue, statusMgr, nil), statusMgr
 }
@@ -315,7 +319,7 @@ func newTestPollerInstance(title, uuid string) *Instance {
 	inst := &Instance{
 		Title:   title,
 		UUID:    uuid,
-		Status:  Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
 	inst.started.Store(true)
@@ -511,7 +515,7 @@ func TestDefaultReviewQueuePollerConfig_should_return5MinStalenessThreshold_When
 func TestReviewQueuePoller_StartStop(t *testing.T) {
 	t.Parallel()
 	// Use a fast poll interval so the goroutine does minimal work during the test.
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	cfg := DefaultReviewQueuePollerConfig()
 	cfg.PollInterval = 100 * time.Millisecond
@@ -537,7 +541,7 @@ func TestReviewQueuePoller_StartStop(t *testing.T) {
 // not spawn a second goroutine or panic.
 func TestReviewQueuePoller_Start_Idempotent(t *testing.T) {
 	t.Parallel()
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusMgr := NewInstanceStatusManager()
 	cfg := DefaultReviewQueuePollerConfig()
 	cfg.PollInterval = 100 * time.Millisecond
@@ -561,7 +565,7 @@ func TestReviewQueuePoller_Start_Idempotent(t *testing.T) {
 // This is the regression test for the "skip button wipes list but doesn't remove status" bug.
 func TestReviewQueuePoller_AcknowledgedSession_RemovedOnNextPoll(t *testing.T) {
 	t.Parallel()
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusManager := NewInstanceStatusManager()
 	poller := NewReviewQueuePollerWithConfig(queue, statusManager, nil, ReviewQueuePollerConfig{
 		StalenessThreshold: 5 * time.Minute,
@@ -571,11 +575,11 @@ func TestReviewQueuePoller_AcknowledgedSession_RemovedOnNextPoll(t *testing.T) {
 	inst := makeAcknowledgedInstance("acked-session")
 
 	// Pre-populate queue to simulate session being visible before user clicked Skip.
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:   "acked-session",
 		SessionName: "acked-session",
-		Reason:      ReasonInputRequired,
-		Priority:    PriorityMedium,
+		Reason:      queuepkg.ReasonInputRequired,
+		Priority:    queuepkg.PriorityMedium,
 		DetectedAt:  time.Now().Add(-1 * time.Minute),
 	})
 	poller.AddInstance(inst)
@@ -623,7 +627,7 @@ func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing
 	inst := &Instance{
 		Title:  "skip-idle-session",
 		UUID:   "uuid-skip-idle",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 
@@ -649,7 +653,7 @@ func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing
 	if !exists {
 		t.Fatal("expected idle session to be added to the review queue on tick 1")
 	}
-	if item.Reason != ReasonIdle {
+	if item.Reason != queuepkg.ReasonIdle {
 		t.Errorf("expected ReasonIdle on tick 1, got %v", item.Reason)
 	}
 
@@ -690,17 +694,14 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 	inst := &Instance{
 		Title:  "controller-session",
 		UUID:   "uuid-ctrl",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 
 	// Wire a controller that is NOT started (ctx == nil → IsStarted() = false).
 	// GetController() returns non-nil, but IsControllerActive will be false so the
 	// no-controller terminal-content path runs.
-	bareController := &ClaudeController{
-		sessionName: inst.Title,
-		instance:    inst,
-	}
+	bareController := claudectl.NewBareForTest(inst.Title, inst)
 	inst.controllerManager.SetController(bareController)
 
 	// Pre-populate the content cache with an approval prompt so the no-controller
@@ -715,8 +716,8 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 	if !exists {
 		t.Fatal("session with approval prompt must be added to the review queue")
 	}
-	if item.Reason != ReasonApprovalPending {
-		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	if item.Reason != queuepkg.ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", queuepkg.ReasonApprovalPending, item.Reason)
 	}
 }
 
@@ -736,7 +737,7 @@ func TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue(t *testing.T) {
 	inst := &Instance{
 		Title:  "archived-session",
 		UUID:   "uuid-archived",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	archivedAt := time.Now().Add(-1 * time.Hour)
@@ -764,27 +765,27 @@ func TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue(t *testing.T) {
 }
 
 // TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue verifies that
-// sessions with an active (started) ClaudeController that reports StatusNeedsApproval are
+// sessions with an active (started) claudectl.ClaudeController that reports StatusNeedsApproval are
 // added to the review queue via the controller-based detection path (lines 696-828).
 func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t *testing.T) {
 	t.Parallel()
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
-	// Use a mock InstanceContext so GetCurrentStatus() returns StatusNeedsApproval
+	// Use a mock claudectl.InstanceContext so GetCurrentStatus() returns StatusNeedsApproval
 	// without requiring a real tmux session.
 	approvalContent := "Yes, allow reading /home/user/file.go\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
 	inst := &Instance{
 		Title:  "active-controller-session",
 		UUID:   "uuid-active",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
+	ctrl.SetSessionNameForTest(inst.Title)
 
 	// Mark the controller as started by setting a non-nil context.
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.MarkRunningForTest(t.Context())
 
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
@@ -796,11 +797,11 @@ func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t
 	if !exists {
 		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
 	}
-	if item.Reason != ReasonApprovalPending {
-		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	if item.Reason != queuepkg.ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", queuepkg.ReasonApprovalPending, item.Reason)
 	}
-	if item.Priority != PriorityHigh {
-		t.Errorf("expected priority %s, got %s", PriorityHigh, item.Priority)
+	if item.Priority != queuepkg.PriorityHigh {
+		t.Errorf("expected priority %s, got %s", queuepkg.PriorityHigh, item.Priority)
 	}
 }
 
@@ -811,28 +812,28 @@ func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 	cases := []struct {
 		name               string
 		shouldAdd          bool
-		priority           Priority
+		priority           queuepkg.Priority
 		isControllerActive bool
 		wantOldBypassSkip  bool // true = old code SKIPPED the snooze (the bug)
 	}{
 		{
 			name:               "input-required medium-priority active-controller (the bug scenario)",
 			shouldAdd:          true,
-			priority:           PriorityMedium,
+			priority:           queuepkg.PriorityMedium,
 			isControllerActive: true,
 			wantOldBypassSkip:  true, // old code bypassed snooze → bug
 		},
 		{
 			name:               "error-state urgent active-controller",
 			shouldAdd:          true,
-			priority:           PriorityUrgent,
+			priority:           queuepkg.PriorityUrgent,
 			isControllerActive: true,
 			wantOldBypassSkip:  true, // old code bypassed snooze → bug
 		},
 		{
 			name:               "stale low-priority no-controller",
 			shouldAdd:          true,
-			priority:           PriorityLow,
+			priority:           queuepkg.PriorityLow,
 			isControllerActive: false,
 			wantOldBypassSkip:  false, // old code entered snooze block — worked correctly
 		},
@@ -844,7 +845,7 @@ func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 			// Reproduce the old condition that caused the bypass.
 			// oldCondition=true  → snooze block is entered (not bypassed)
 			// oldCondition=false → snooze block is skipped (bypassed = the bug)
-			oldCondition := !tc.shouldAdd || tc.priority == PriorityLow || !tc.isControllerActive
+			oldCondition := !tc.shouldAdd || tc.priority == queuepkg.PriorityLow || !tc.isControllerActive
 			oldBypassed := !oldCondition
 			if oldBypassed != tc.wantOldBypassSkip {
 				t.Errorf("expected old-code bypass=%v for scenario %q, got bypass=%v (oldCondition=%v)",
@@ -867,7 +868,7 @@ func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 func makeStaleInstance(rqp *ReviewQueuePoller, title string) *Instance {
 	inst := &Instance{
 		Title:  title,
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	// CreatedAt well in the past → GetTimeSinceLastMeaningfulOutput() > StalenessThreshold
@@ -889,7 +890,7 @@ func makeStaleInstance(rqp *ReviewQueuePoller, title string) *Instance {
 func BenchmarkCheckSessionsConcurrent(b *testing.B) {
 	for _, n := range []int{1, 5, 10, 20} {
 		b.Run(fmt.Sprintf("sessions-%d", n), func(b *testing.B) {
-			queue := NewReviewQueue()
+			queue := queuepkg.NewReviewQueue()
 			statusMgr := NewInstanceStatusManager()
 			cfg := DefaultReviewQueuePollerConfig()
 			cfg.StalenessThreshold = 1 * time.Minute // ensure all instances are stale
@@ -932,8 +933,8 @@ func TestReviewQueuePoller_ReconcileSessions_ActiveInstancesOnDifferentSockets_S
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", Active)
-	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", Active)
+	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", domain.Active)
+	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", domain.Active)
 	poller.SetInstances([]*Instance{instDefault, instCustom})
 
 	// Each session is alive, but only on its own socket.
@@ -942,10 +943,10 @@ func TestReviewQueuePoller_ReconcileSessions_ActiveInstancesOnDifferentSockets_S
 
 	poller.reconcileSessions()
 
-	if instDefault.Status != Active {
+	if instDefault.Status != domain.Active {
 		t.Errorf("default-socket instance: got status %v, want Active (it IS alive on its own socket \"\")", instDefault.Status)
 	}
-	if instCustom.Status != Active {
+	if instCustom.Status != domain.Active {
 		t.Errorf("custom-socket instance: got status %v, want Active (it IS alive on its own socket \"custom\")", instCustom.Status)
 	}
 
@@ -971,8 +972,8 @@ func TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped(
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux", "tymux-only-socket", Active)
-	tymuxInst.Backend = BackendTymux
+	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux", "tymux-only-socket", domain.Active)
+	tymuxInst.Backend = domain.BackendTymux
 	poller.SetInstances([]*Instance{tymuxInst})
 
 	// Deliberately do NOT call querier.setLiveSessions for "tymux-only-socket"
@@ -981,7 +982,7 @@ func TestReviewQueuePoller_ReconcileSessions_TymuxBackend_NeverQueriedOrFlipped(
 
 	poller.reconcileSessions()
 
-	if tymuxInst.Status != Active {
+	if tymuxInst.Status != domain.Active {
 		t.Errorf("tymux instance: got status %v, want Active (untouched — tymux liveness isn't polled here)", tymuxInst.Status)
 	}
 	if sockets := querier.socketsQueried(); len(sockets) != 0 {
@@ -1000,9 +1001,9 @@ func TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled(t
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	tmuxInst := makeSocketTestInstance("tmux-session", "session-tmux", "shared-socket", Active)
-	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux-name", "shared-socket", Active)
-	tymuxInst.Backend = BackendTymux
+	tmuxInst := makeSocketTestInstance("tmux-session", "session-tmux", "shared-socket", domain.Active)
+	tymuxInst := makeSocketTestInstance("tymux-session", "session-tymux-name", "shared-socket", domain.Active)
+	tymuxInst.Backend = domain.BackendTymux
 	poller.SetInstances([]*Instance{tmuxInst, tymuxInst})
 
 	// tmux session genuinely alive; the tymux instance's name is deliberately
@@ -1012,10 +1013,10 @@ func TestReviewQueuePoller_ReconcileSessions_MixedBackends_TmuxStillReconciled(t
 
 	poller.reconcileSessions()
 
-	if tmuxInst.Status != Active {
+	if tmuxInst.Status != domain.Active {
 		t.Errorf("tmux instance: got status %v, want Active", tmuxInst.Status)
 	}
-	if tymuxInst.Status != Active {
+	if tymuxInst.Status != domain.Active {
 		t.Errorf("tymux instance: got status %v, want Active (never touched)", tymuxInst.Status)
 	}
 }
@@ -1029,8 +1030,8 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", Stopped)
-	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", Stopped)
+	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", domain.Stopped)
+	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", domain.Stopped)
 	poller.SetInstances([]*Instance{instDefault, instCustom})
 
 	// Default-socket session came back; custom-socket session is still gone.
@@ -1039,10 +1040,10 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedInstancesOnDifferentSockets_
 
 	poller.reconcileSessions()
 
-	if instDefault.Status != Active {
+	if instDefault.Status != domain.Active {
 		t.Errorf("default-socket instance: got status %v, want Active (revived)", instDefault.Status)
 	}
-	if instCustom.Status != Stopped {
+	if instCustom.Status != domain.Stopped {
 		t.Errorf("custom-socket instance: got status %v, want Stopped (still not found on its own socket)", instCustom.Status)
 	}
 }
@@ -1070,7 +1071,7 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped(t 
 	}
 	inst := &Instance{
 		Title:            "dead-pane-session",
-		Status:           Stopped,
+		Status:           domain.Stopped,
 		IsManaged:        true,
 		TmuxServerSocket: "",
 	}
@@ -1082,7 +1083,7 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedWithDeadPane_StaysStopped(t 
 
 	poller.reconcileSessions()
 
-	if inst.Status != Stopped {
+	if inst.Status != domain.Stopped {
 		t.Errorf("got status %v, want Stopped (pane object exists but wrapped program has exited -- must not be reported Active)", inst.Status)
 	}
 }
@@ -1105,7 +1106,7 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive
 	}
 	inst := &Instance{
 		Title:            "live-pane-session",
-		Status:           Stopped,
+		Status:           domain.Stopped,
 		IsManaged:        true,
 		TmuxServerSocket: "",
 	}
@@ -1117,7 +1118,7 @@ func TestReviewQueuePoller_ReconcileSessions_StoppedWithLivePane_RevivesToActive
 
 	poller.reconcileSessions()
 
-	if inst.Status != Active {
+	if inst.Status != domain.Active {
 		t.Errorf("got status %v, want Active (pane's wrapped program is genuinely still running)", inst.Status)
 	}
 }
@@ -1131,8 +1132,8 @@ func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffect
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", Active)
-	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", Active)
+	instDefault := makeSocketTestInstance("default-socket-session", "session-default", "", domain.Active)
+	instCustom := makeSocketTestInstance("custom-socket-session", "session-custom", "custom", domain.Active)
 	poller.SetInstances([]*Instance{instDefault, instCustom})
 
 	querier.setLiveSessions("", "session-default")
@@ -1140,12 +1141,12 @@ func TestReviewQueuePoller_ReconcileSessions_ServerDownOnOneSocket_DoesNotAffect
 
 	poller.reconcileSessions()
 
-	if instDefault.Status != Active {
+	if instDefault.Status != domain.Active {
 		t.Errorf("default-socket instance: got status %v, want Active (its own socket is healthy)", instDefault.Status)
 	}
 	// custom's server is down, so reconciliation for it is skipped this pass -- it
 	// must NOT be marked Stopped just because its socket happened to be unreachable.
-	if instCustom.Status != Active {
+	if instCustom.Status != domain.Active {
 		t.Errorf("custom-socket instance: got status %v, want Active (server-down must skip, not falsely mark Stopped)", instCustom.Status)
 	}
 }
@@ -1163,14 +1164,14 @@ func TestReviewQueuePoller_ReconcileSessions_CrashedButTmuxAlive_RevivesToActive
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", domain.Crashed)
 	poller.SetInstances([]*Instance{instCrashed})
 
 	querier.setLiveSessions("", "session-crashed")
 
 	poller.reconcileSessions()
 
-	if instCrashed.Status != Active {
+	if instCrashed.Status != domain.Active {
 		t.Errorf("crashed instance found alive in tmux: got status %v, want Active (revived)", instCrashed.Status)
 	}
 }
@@ -1184,14 +1185,14 @@ func TestReviewQueuePoller_ReconcileSessions_CrashedAndTmuxGone_StaysUntouched(t
 	querier := newFakeTmuxSocketQuerier()
 	poller.tmuxSocket = querier
 
-	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	instCrashed := makeSocketTestInstance("crashed-session", "session-crashed", "", domain.Crashed)
 	poller.SetInstances([]*Instance{instCrashed})
 
 	querier.setLiveSessions("") // nothing alive
 
 	poller.reconcileSessions()
 
-	if instCrashed.Status != Crashed {
+	if instCrashed.Status != domain.Crashed {
 		t.Errorf("crashed instance with no live tmux session: got status %v, want Crashed (untouched)", instCrashed.Status)
 	}
 }
@@ -1203,7 +1204,7 @@ func TestReviewQueuePoller_ReconcileSessions_CrashedAndTmuxGone_StaysUntouched(t
 func TestReviewQueuePoller_ShouldSkipSession_SkipsCrashed(t *testing.T) {
 	t.Parallel()
 	poller := newSimpleTestPoller()
-	inst := makeSocketTestInstance("crashed-session", "session-crashed", "", Crashed)
+	inst := makeSocketTestInstance("crashed-session", "session-crashed", "", domain.Crashed)
 	inst.started.Store(true)
 
 	if !poller.shouldSkipSession(inst) {
@@ -1221,13 +1222,13 @@ func TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed
 	t.Parallel()
 	poller := newSimpleTestPoller()
 
-	hibernated := makeSocketTestInstance("hibernated-session", "session-hibernated", "", Hibernated)
+	hibernated := makeSocketTestInstance("hibernated-session", "session-hibernated", "", domain.Hibernated)
 	hibernated.started.Store(true)
 	if !poller.shouldSkipSession(hibernated) {
 		t.Error("expected shouldSkipSession(Hibernated instance) to be true")
 	}
 
-	permFailed := makeSocketTestInstance("perm-failed-session", "session-perm-failed", "", PermanentlyFailed)
+	permFailed := makeSocketTestInstance("perm-failed-session", "session-perm-failed", "", domain.PermanentlyFailed)
 	permFailed.started.Store(true)
 	if !poller.shouldSkipSession(permFailed) {
 		t.Error("expected shouldSkipSession(PermanentlyFailed instance) to be true")
@@ -1237,11 +1238,11 @@ func TestReviewQueuePoller_ShouldSkipSession_SkipsHibernatedAndPermanentlyFailed
 // stubApprovalMetadataProvider is a minimal ApprovalMetadataProvider for tests. It records
 // each key it was queried with so tests can assert lookup order.
 type stubApprovalMetadataProvider struct {
-	bySessionID map[string][]ApprovalMetadata
+	bySessionID map[string][]domain.ApprovalMetadata
 	queried     []string
 }
 
-func (s *stubApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata {
+func (s *stubApprovalMetadataProvider) GetApprovalMetadataBySession(sessionID string) []domain.ApprovalMetadata {
 	s.queried = append(s.queried, sessionID)
 	return s.bySessionID[sessionID]
 }
@@ -1259,21 +1260,21 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
 	inst := &Instance{
 		Title:  "session-title-not-used-as-key",
 		UUID:   "session-uuid-1234",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.SetSessionNameForTest(inst.Title)
+	ctrl.MarkRunningForTest(t.Context())
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
 
 	provider := &stubApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			inst.UUID: {{
 				ApprovalID:         "approval-1",
 				ToolName:           "Bash",
@@ -1316,17 +1317,17 @@ func TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataH
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
-	inst := &Instance{Title: "session-risk-set", UUID: "session-risk-set-uuid", Status: Running}
+	inst := &Instance{Title: "session-risk-set", UUID: "session-risk-set-uuid", Status: domain.Active}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.SetSessionNameForTest(inst.Title)
+	ctrl.MarkRunningForTest(t.Context())
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
 
 	provider := &stubApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			inst.UUID: {{ApprovalID: "approval-risk-set", RiskLevel: "critical"}},
 		},
 	}
@@ -1348,17 +1349,17 @@ func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadata
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
-	inst := &Instance{Title: "session-risk-empty", UUID: "session-risk-empty-uuid", Status: Running}
+	inst := &Instance{Title: "session-risk-empty", UUID: "session-risk-empty-uuid", Status: domain.Active}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.SetSessionNameForTest(inst.Title)
+	ctrl.MarkRunningForTest(t.Context())
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
 
 	provider := &stubApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			inst.UUID: {{ApprovalID: "approval-risk-empty", RiskLevel: ""}},
 		},
 	}
@@ -1380,7 +1381,7 @@ func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadata
 // pending approvals, the queue must surface the most dangerous one, not just the first.
 func TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrentApprovalsAtMixedRisk(t *testing.T) {
 	t.Parallel()
-	approvals := []ApprovalMetadata{
+	approvals := []domain.ApprovalMetadata{
 		{ApprovalID: "a-medium", RiskLevel: "medium"},
 		{ApprovalID: "b-critical", RiskLevel: "critical"},
 		{ApprovalID: "c-low", RiskLevel: "low"},
@@ -1395,7 +1396,7 @@ func TestHighestRiskApproval_should_ReturnCriticalItem_When_SessionHasConcurrent
 // the tiebreak rule: ties keep the earliest (first-inserted) approval.
 func TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShareTopRisk(t *testing.T) {
 	t.Parallel()
-	approvals := []ApprovalMetadata{
+	approvals := []domain.ApprovalMetadata{
 		{ApprovalID: "first-high"},
 		{ApprovalID: "second-high"},
 	}
@@ -1411,7 +1412,7 @@ func TestHighestRiskApproval_should_KeepEarliestOnTie_When_MultipleApprovalsShar
 // fail-safe rank: "" (not recorded) must rank alongside "high", never sort below "medium".
 func TestHighestRiskApproval_should_TreatUnrecordedAsHigh_When_MixedWithMedium(t *testing.T) {
 	t.Parallel()
-	approvals := []ApprovalMetadata{
+	approvals := []domain.ApprovalMetadata{
 		{ApprovalID: "medium-item", RiskLevel: "medium"},
 		{ApprovalID: "unrecorded-item", RiskLevel: ""},
 	}
@@ -1467,21 +1468,21 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	ctrl, _ := newControllerWithMock(approvalContent)
+	ctrl, _ := claudectltest.NewController(approvalContent)
 
 	inst := &Instance{
 		Title:  "session-with-no-uuid",
 		UUID:   "", // no stable UUID — resolveSessionID would have fallen back to Title too
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
-	ctrl.sessionName = inst.Title
-	ctrl.lifecycle.Write(func(l *controllerLifecycle) { l.ctx = t.Context() })
+	ctrl.SetSessionNameForTest(inst.Title)
+	ctrl.MarkRunningForTest(t.Context())
 	inst.controllerManager.SetController(ctrl)
 	statusMgr.RegisterController(inst.Title, ctrl)
 
 	provider := &stubApprovalMetadataProvider{
-		bySessionID: map[string][]ApprovalMetadata{
+		bySessionID: map[string][]domain.ApprovalMetadata{
 			inst.Title: {{
 				ApprovalID:         "approval-title-fallback",
 				EscalationReason:   "No matching rule; escalated for manual review.",
@@ -1523,7 +1524,7 @@ func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysSt
 	archivedAt := time.Now()
 	inst := &Instance{
 		Title:      "archived-live-pane-session",
-		Status:     Stopped,
+		Status:     domain.Stopped,
 		IsManaged:  true,
 		ArchivedAt: &archivedAt,
 	}
@@ -1535,7 +1536,7 @@ func TestReviewQueuePoller_ReconcileSessions_ArchivedStoppedWithLivePane_StaysSt
 
 	poller.reconcileSessions()
 
-	if got := inst.Snapshot().Status; got != Stopped {
+	if got := inst.Snapshot().Status; got != domain.Stopped {
 		t.Errorf("got status %v, want Stopped (an archived session must never be revived to Active)", got)
 	}
 }
@@ -1551,7 +1552,7 @@ func TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTrans
 	poller.tmuxSocket = querier
 
 	archivedAt := time.Now()
-	inst := makeSocketTestInstance("archived-active-no-pane", "session-archived-gone", "", Active)
+	inst := makeSocketTestInstance("archived-active-no-pane", "session-archived-gone", "", domain.Active)
 	inst.ArchivedAt = &archivedAt
 	inst.started.Store(true)
 	poller.SetInstances([]*Instance{inst})
@@ -1561,7 +1562,7 @@ func TestReviewQueuePoller_ReconcileSessions_ArchivedActiveWithNoPane_StillTrans
 
 	poller.reconcileSessions()
 
-	if got := inst.Snapshot().Status; got != Stopped {
+	if got := inst.Snapshot().Status; got != domain.Stopped {
 		t.Errorf("got status %v, want Stopped (archived rows must still converge when their pane is gone)", got)
 	}
 }
@@ -1583,7 +1584,7 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 	archivedAt := time.Now()
 	inst := &Instance{
 		Title:      "archived-warn-once-session",
-		Status:     Stopped,
+		Status:     domain.Stopped,
 		IsManaged:  true,
 		ArchivedAt: &archivedAt,
 	}
@@ -1611,7 +1612,7 @@ func TestReviewQueuePoller_WarnArchivedLivePane_ThrottledPerProcess(t *testing.T
 
 func TestFakesForStatusDeterminer_Should_CompileAndRunPollerTests_When_SignatureUpdated(t *testing.T) {
 	t.Parallel()
-	rqp := NewReviewQueuePoller(NewReviewQueue(), NewInstanceStatusManager(), nil)
+	rqp := NewReviewQueuePoller(queuepkg.NewReviewQueue(), NewInstanceStatusManager(), nil)
 	rec := &optsRecordingDeterminer{}
 	rqp.statusDeterminer = rec
 	rqp.checkSession(makeStaleInstance(rqp, "fake-sig"), nil)
@@ -1633,11 +1634,11 @@ func TestShouldSkipSession_Should_LogOncePerSessionAndIncrementSkipCounter_When_
 		mu.Unlock()
 	}
 
-	hidden := makeSocketTestInstance("sys-1", "uuid-sys-1", "", Running)
+	hidden := makeSocketTestInstance("sys-1", "uuid-sys-1", "", domain.Active)
 	hidden.started.Store(true)
 	hidden.Hidden = true
 	hidden.SyncAtomicTimestamps()
-	paused := makeSocketTestInstance("p-1", "uuid-p-1", "", Paused)
+	paused := makeSocketTestInstance("p-1", "uuid-p-1", "", domain.Paused)
 	paused.started.Store(true)
 
 	for _, inst := range []*Instance{hidden, paused} {

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -38,7 +40,7 @@ func TestReclassifyTagsLocked_should_NotRace_When_SetterAndGetTagsRunConcurrentl
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
-			inst.SetGitHubResolution(GitHubResolution{Path: inst.Path, Branch: branches[i%len(branches)]})
+			inst.SetGitHubResolution(domain.GitHubResolution{Path: inst.Path, Branch: branches[i%len(branches)]})
 		}
 	}()
 
@@ -82,7 +84,7 @@ func TestReclassifyTagsAfterCreate_should_AcquireOwnLock_When_CalledConcurrently
 		Title:            title,
 		Path:             projectDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeNewProject,
+		SessionType:      domain.SessionTypeNewProject,
 		Branch:           "bugfix/lock-order-race",
 		TmuxPrefix:       fmt.Sprintf("test_taglockrace_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),

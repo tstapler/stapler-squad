@@ -108,7 +108,7 @@ func recordStatusEvent(ctx context.Context, in statusEventInput) {
 // already inside a transaction can pass tx.BacklogStage/tx.StageTransition —
 // the same "standalone client or tx client" seam recordStatusEvent's evClient
 // parameter uses (see its doc comment).
-func resolveStageSnapshotFields(ctx context.Context, stageClient *ent.BacklogStageClient, transitionClient *ent.StageTransitionClient, toStatus BacklogStatus) (name string, allowedSlugs []string) {
+func resolveStageSnapshotFields(ctx context.Context, stageClient *ent.BacklogStageClient, transitionClient *ent.StageTransitionClient, toStatus domain.BacklogStatus) (name string, allowedSlugs []string) {
 	stage, err := stageClient.Query().Where(backlogstage.Slug(string(toStatus))).Only(ctx)
 	if err != nil {
 		return "", nil
@@ -129,47 +129,6 @@ func resolveStageSnapshotFields(ctx context.Context, stageClient *ent.BacklogSta
 	}
 	sort.Strings(slugs)
 	return stage.Name, slugs
-}
-
-// BuildStageConfigSnapshotFallback reconstructs the StageConfigSnapshot
-// (session/configured_workflow_engine.go) an item's current stage carried at
-// the moment it entered that stage, from item.StatusEvents — already
-// eager-loaded by GetBacklogItem, no new query (ADR-004). It scans for the
-// most recent event whose ToStatus matches item.Status (by CreatedAt, not
-// slice position — callers order this slice both ascending and descending)
-// and builds the snapshot from that event's stageNameSnapshot/
-// allowedTransitionsSnapshot pair. Returns nil when no such event exists —
-// e.g. an item still sitting in its entry stage, which was never the
-// destination of a recorded transition — which is already
-// ConfiguredWorkflowEngine's "no fallback" case, so callers degrade to
-// today's live-cache-only behavior rather than crashing.
-func BuildStageConfigSnapshotFallback(item *backlogdto.BacklogItemData) *StageConfigSnapshot {
-	var latest *backlogdto.BacklogStatusEventData
-	for i := range item.StatusEvents {
-		ev := &item.StatusEvents[i]
-		if ev.ToStatus != item.Status {
-			continue
-		}
-		if latest == nil || ev.CreatedAt.After(latest.CreatedAt) {
-			latest = ev
-		}
-	}
-	if latest == nil {
-		return nil
-	}
-
-	stageName := ""
-	if latest.StageNameSnapshot != nil {
-		stageName = *latest.StageNameSnapshot
-	}
-	allowed := make([]BacklogStatus, 0, len(latest.AllowedTransitionsSnapshot))
-	for _, s := range latest.AllowedTransitionsSnapshot {
-		allowed = append(allowed, BacklogStatus(s))
-	}
-	return &StageConfigSnapshot{
-		StageName:          stageName,
-		AllowedTransitions: allowed,
-	}
 }
 
 // --- converters ---
@@ -227,7 +186,7 @@ func ItemSessionToSummary(is *ent.ItemSession) backlogdto.ItemSessionSummary {
 		SessionUUID:              is.SessionUUID,
 		Role:                     is.SessionRole,
 		BranchName:               is.BranchName,
-		AcSnapshot:               AcCriteriaJSON(is.AcSnapshot),
+		AcSnapshot:               domain.AcCriteriaJSON(is.AcSnapshot),
 		PipelineModeSnapshot:     is.PipelineModeSnapshot,
 		PipelineModeSnapshotHash: is.PipelineModeSnapshotHash,
 		ResolvedProgram:          is.ResolvedProgram,
@@ -318,7 +277,7 @@ func BacklogItemToData(item *ent.BacklogItem) backlogdto.BacklogItemData {
 		PublicIDRaw:                     item.PublicID,
 		Title:                           item.Title,
 		Description:                     item.Description,
-		AcceptanceCriteria:              AcCriteriaJSON(item.AcceptanceCriteria),
+		AcceptanceCriteria:              domain.AcCriteriaJSON(item.AcceptanceCriteria),
 		Priority:                        item.Priority,
 		Status:                          item.Status,
 		RepoPath:                        item.RepoPath,
@@ -439,7 +398,7 @@ func (r *EntRepository) CreateBacklogItem(ctx context.Context, data backlogdto.B
 	}
 	status := data.Status
 	if status == "" {
-		status = string(BacklogStatusIdea)
+		status = string(domain.BacklogStatusIdea)
 	}
 
 	// Story 1.1 AC: every newly created backlog item is minted a
@@ -905,10 +864,10 @@ func (r *EntRepository) UnresolvedBlockerIDs(ctx context.Context, itemID string)
 func excludedTerminalStatuses(filter backlogdto.BacklogItemFilter) []string {
 	var excluded []string
 	if filter.ExcludeDone {
-		excluded = append(excluded, string(BacklogStatusDone))
+		excluded = append(excluded, string(domain.BacklogStatusDone))
 	}
 	if filter.ExcludeArchived {
-		excluded = append(excluded, string(BacklogStatusArchived))
+		excluded = append(excluded, string(domain.BacklogStatusArchived))
 	}
 	return excluded
 }
@@ -932,7 +891,7 @@ func excludedTerminalStatuses(filter backlogdto.BacklogItemFilter) []string {
 // migrated or directly-seeded row against aging out on an unrelated basis.
 func (r *EntRepository) FindDoneItemsOlderThan(ctx context.Context, cutoff time.Time) ([]backlogdto.BacklogItemData, error) {
 	items, err := r.Client.BacklogItem.Query().
-		Where(backlogitem.StatusEQ(string(BacklogStatusDone))).
+		Where(backlogitem.StatusEQ(string(domain.BacklogStatusDone))).
 		WithStatusEvents(func(q *ent.BacklogStatusEventQuery) {
 			q.Order(ent.Desc(backlogstatusevent.FieldCreatedAt))
 		}).
@@ -946,7 +905,7 @@ func (r *EntRepository) FindDoneItemsOlderThan(ctx context.Context, cutoff time.
 		var lastDoneAt time.Time
 		found := false
 		for _, ev := range item.Edges.StatusEvents {
-			if ev.ToStatus == string(BacklogStatusDone) {
+			if ev.ToStatus == string(domain.BacklogStatusDone) {
 				lastDoneAt = ev.CreatedAt
 				found = true
 				break // events ordered desc by CreatedAt — first match is most recent
@@ -1109,10 +1068,10 @@ func (r *EntRepository) ListBacklogItemSummaries(ctx context.Context, filter bac
 			SourcePluginID:      sourcePluginIDOf(item),
 			Labels:              item.Labels,
 			Title:               item.Title,
-			Status:              BacklogStatus(item.Status),
+			Status:              domain.BacklogStatus(item.Status),
 			Priority:            item.Priority,
 			RepoPath:            item.RepoPath,
-			AcceptanceCriteria:  AcCriteriaJSON(item.AcceptanceCriteria),
+			AcceptanceCriteria:  domain.AcCriteriaJSON(item.AcceptanceCriteria),
 			Notes:               item.Notes,
 			PrURL:               item.PrURL,
 			PrNumber:            item.PrNumber,
@@ -1187,7 +1146,7 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 		}
 	}
 
-	var clearedWaivers []AcCriterion
+	var clearedWaivers []domain.AcCriterion
 	u := tx.BacklogItem.UpdateOneID(parsedID)
 	if update.Title != nil {
 		u.SetTitle(*update.Title)
@@ -1217,7 +1176,7 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 	for _, c := range clearedWaivers {
 		if err := r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
 			ItemID: parsedID.String(), ItemPublicID: item.PublicID, CriterionIndex: c.Index,
-			PreviousStatus: string(AcStatusWaived), Reason: c.WaiverReason,
+			PreviousStatus: string(domain.AcStatusWaived), Reason: c.WaiverReason,
 			Outcome: "waiver_cleared:criterion_removed_or_text_changed",
 		}); err != nil {
 			return nil, err
@@ -1241,16 +1200,16 @@ func (r *EntRepository) UpdateBacklogItem(ctx context.Context, id string, update
 // reconcileAcUpdate applies the waiver invariant to a whole-list criteria rewrite inside tx and
 // returns the list to store plus the waivers that did not survive (to be audited on commit). A
 // refused rewrite writes its own audit row on tx before returning the error.
-func (r *EntRepository) reconcileAcUpdate(ctx context.Context, tx *ent.Tx, current *ent.BacklogItem, incomingJSON AcCriteriaJSON) (AcCriteriaJSON, []AcCriterion, error) {
-	incoming, err := ParseAcCriteria(incomingJSON)
+func (r *EntRepository) reconcileAcUpdate(ctx context.Context, tx *ent.Tx, current *ent.BacklogItem, incomingJSON domain.AcCriteriaJSON) (domain.AcCriteriaJSON, []domain.AcCriterion, error) {
+	incoming, err := domain.ParseAcCriteria(incomingJSON)
 	if err != nil {
 		return "", nil, fmt.Errorf("invalid acceptance criteria: %w", err)
 	}
-	existing, _ := ParseAcCriteria(AcCriteriaJSON(current.AcceptanceCriteria)) // an unreadable stored list pins nothing
+	existing, _ := domain.ParseAcCriteria(domain.AcCriteriaJSON(current.AcceptanceCriteria)) // an unreadable stored list pins nothing
 	merged, cleared, err := reconcileAcWaivers(existing, incoming)
 	if err != nil {
 		if auditErr := r.createAcAuditEvent(ctx, tx.AcAuditEvent, AcAuditEventData{
-			ItemID: current.ID.String(), ItemPublicID: current.PublicID, NewStatus: string(AcStatusWaived),
+			ItemID: current.ID.String(), ItemPublicID: current.PublicID, NewStatus: string(domain.AcStatusWaived),
 			Outcome: "rejected:" + backlogdto.ErrAcWaiverViaUpdate.Error(),
 		}); auditErr != nil {
 			return "", nil, errors.Join(err, auditErr)
@@ -1260,7 +1219,7 @@ func (r *EntRepository) reconcileAcUpdate(ctx context.Context, tx *ent.Tx, curre
 	if len(merged) == 0 {
 		return incomingJSON, cleared, nil
 	}
-	out, err := SerializeAcCriteria(merged)
+	out, err := domain.SerializeAcCriteria(merged)
 	if err != nil {
 		return "", nil, fmt.Errorf("serialize acceptance criteria: %w", err)
 	}
@@ -1583,7 +1542,7 @@ func (r *EntRepository) rawArchiveBacklogItem(ctx context.Context, id string, pr
 	now := time.Now()
 	affected, err := update.
 		SetArchivedAt(now).
-		SetStatus(string(BacklogStatusArchived)).
+		SetStatus(string(domain.BacklogStatusArchived)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
@@ -1611,12 +1570,12 @@ func (r *EntRepository) rawArchiveBacklogItem(ctx context.Context, id string, pr
 		return nil, fmt.Errorf("failed to reload backlog item %s after archive: %w", id, err)
 	}
 
-	stageNameSnapshot, allowedTransitionsSnapshot := resolveStageSnapshotFields(ctx, r.Client.BacklogStage, r.Client.StageTransition, BacklogStatusArchived)
+	stageNameSnapshot, allowedTransitionsSnapshot := resolveStageSnapshotFields(ctx, r.Client.BacklogStage, r.Client.StageTransition, domain.BacklogStatusArchived)
 	recordStatusEvent(ctx, statusEventInput{
 		evClient:                   r.Client.BacklogStatusEvent,
 		itemID:                     parsedID,
 		fromStatus:                 current.Status,
-		toStatus:                   string(BacklogStatusArchived),
+		toStatus:                   string(domain.BacklogStatusArchived),
 		triggeredBy:                triggeredBy,
 		note:                       note,
 		stageNameSnapshot:          stageNameSnapshot,
@@ -1665,7 +1624,7 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expecte
 	now := time.Now()
 	affected, err := update.
 		ClearArchivedAt().
-		SetStatus(string(BacklogStatusIdea)).
+		SetStatus(string(domain.BacklogStatusIdea)).
 		SetUserModifiedStatusAt(now).
 		Save(ctx)
 	if err != nil {
@@ -1686,12 +1645,12 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expecte
 		return nil, fmt.Errorf("failed to reload backlog item %s after unarchive: %w", id, err)
 	}
 
-	stageNameSnapshot, allowedTransitionsSnapshot := resolveStageSnapshotFields(ctx, r.Client.BacklogStage, r.Client.StageTransition, BacklogStatusIdea)
+	stageNameSnapshot, allowedTransitionsSnapshot := resolveStageSnapshotFields(ctx, r.Client.BacklogStage, r.Client.StageTransition, domain.BacklogStatusIdea)
 	recordStatusEvent(ctx, statusEventInput{
 		evClient:                   r.Client.BacklogStatusEvent,
 		itemID:                     parsedID,
 		fromStatus:                 current.Status,
-		toStatus:                   string(BacklogStatusIdea),
+		toStatus:                   string(domain.BacklogStatusIdea),
 		triggeredBy:                TriggeredByUser,
 		stageNameSnapshot:          stageNameSnapshot,
 		allowedTransitionsSnapshot: allowedTransitionsSnapshot,
@@ -1706,7 +1665,7 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expecte
 	r.publishItemChanged(ctx, &result, BacklogItemChange{
 		Kind:      ChangeStatusTransition,
 		OldStatus: current.Status,
-		NewStatus: string(BacklogStatusIdea),
+		NewStatus: string(domain.BacklogStatusIdea),
 	})
 
 	return &result, nil
@@ -1850,7 +1809,7 @@ func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error 
 // 2026-07-20 repro, item 0fd4a940, PR #176), and the backlog work-item queue
 // feature's concurrent-dequeue-claim test found the same race could
 // double-claim a single queued item between two dequeue sweeps (PR #199).
-func (r *EntRepository) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
+func (r *EntRepository) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus domain.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
 	return r.rawTransitionBacklogItemStatusWithNote(ctx, id, toStatus, precondition, triggeredBy, "")
 }
 
@@ -1872,7 +1831,7 @@ func applyStatusPreconditionWhere(update *ent.BacklogItemUpdate, precondition *b
 // rawTransitionBacklogItemStatusWithNote is rawTransitionBacklogItemStatus that
 // also appends appendNote (when non-empty) to the item's Notes in the same
 // UPDATE, so the status, the note and the status event commit together.
-func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Context, id string, toStatus BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy, appendNote string) (*backlogdto.BacklogItemData, error) {
+func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Context, id string, toStatus domain.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy, appendNote string) (*backlogdto.BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
@@ -1908,7 +1867,7 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Conte
 	// itself later succeeds. current (fetched above, before this write) is the
 	// only place NextWorkflowID is visible before this transition's own SELECT
 	// on affected==0 below.
-	if toStatus == BacklogStatusDone && current.NextWorkflowID != nil {
+	if toStatus == domain.BacklogStatusDone && current.NextWorkflowID != nil {
 		setter = setter.SetChainedAt(now)
 	}
 	if appendNote != "" {
@@ -1985,7 +1944,7 @@ func (r *EntRepository) rawTransitionBacklogItemStatusWithNote(ctx context.Conte
 	// dispatchCallback is itself non-blocking (bounded semaphore + go), so this
 	// adds no latency to the caller and a delivery failure can never roll back or
 	// corrupt the status transition above.
-	if toStatus == BacklogStatusDone {
+	if toStatus == domain.BacklogStatusDone {
 		r.DispatchCallback("session_complete", map[string]any{
 			"event":       "session_complete",
 			"item_id":     result.ID,
@@ -2102,7 +2061,7 @@ func (r *EntRepository) RevertChainFireClaim(ctx context.Context, id string) err
 // comment): EntRepository has no second real implementation to abstract
 // this over, so adding it to the interface would be pure speculation
 // (see the `interface-pollution-checklist` skill).
-func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus BacklogStatus, prURL string, prNumber int, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string, link *itemPRLinkWrite) (*backlogdto.BacklogItemData, error) {
+func (r *EntRepository) rawTransitionBacklogItemStatusWithPRFields(ctx context.Context, id string, toStatus domain.BacklogStatus, prURL string, prNumber int, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string, link *itemPRLinkWrite) (*backlogdto.BacklogItemData, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", domain.ErrNotFound, id, err)
@@ -2443,7 +2402,7 @@ func (r *EntRepository) attachStatusEventsForPublish(ctx context.Context, data *
 // concurrency-sensitive part — is still guaranteed by the single upsert
 // statement; there is no read-then-write for detecting whether the row
 // exists.
-func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus BacklogStatus, stuckContext string) (applied bool, err error) {
+func (r *EntRepository) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus domain.BacklogStatus, stuckContext string) (applied bool, err error) {
 	if !reason.IsValid() {
 		return false, fmt.Errorf("invalid stuck reason %q", reason)
 	}
@@ -3406,8 +3365,8 @@ func (r *EntRepository) ArchivedSessionUUIDs(ctx context.Context, sessionUUIDs [
 // GetWorktreeDataBySessionUUIDs is GetWorktreeDataBySessionUUID for many
 // sessions in one query per 500 UUIDs. UUIDs with no session or no worktree are
 // absent from the result.
-func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]GitWorktreeData, error) {
-	out := make(map[string]GitWorktreeData, len(sessionUUIDs))
+func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]domain.GitWorktreeData, error) {
+	out := make(map[string]domain.GitWorktreeData, len(sessionUUIDs))
 	const chunkSize = 500
 	for start := 0; start < len(sessionUUIDs); start += chunkSize {
 		end := min(start+chunkSize, len(sessionUUIDs))
@@ -3420,7 +3379,7 @@ func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessi
 		}
 		for _, sess := range rows {
 			if wt := sess.Edges.Worktree; wt != nil {
-				out[sess.UUID] = GitWorktreeData{
+				out[sess.UUID] = domain.GitWorktreeData{
 					RepoPath:      wt.RepoPath,
 					WorktreePath:  wt.WorktreePath,
 					SessionName:   wt.SessionName,
@@ -3436,21 +3395,21 @@ func (r *EntRepository) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessi
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns an empty GitWorktreeData (no error) if the session does
 // not exist or is a directory-mode session without a dedicated worktree.
-func (r *EntRepository) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (GitWorktreeData, error) {
+func (r *EntRepository) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (domain.GitWorktreeData, error) {
 	sess, err := r.Client.Session.Query().
 		Where(entSession.UUID(sessionUUID)).
 		WithWorktree().
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return GitWorktreeData{}, nil
+			return domain.GitWorktreeData{}, nil
 		}
-		return GitWorktreeData{}, fmt.Errorf("GetWorktreeDataBySessionUUID %q: %w", sessionUUID, err)
+		return domain.GitWorktreeData{}, fmt.Errorf("GetWorktreeDataBySessionUUID %q: %w", sessionUUID, err)
 	}
 	if sess.Edges.Worktree == nil {
-		return GitWorktreeData{}, nil
+		return domain.GitWorktreeData{}, nil
 	}
-	return GitWorktreeData{
+	return domain.GitWorktreeData{
 		RepoPath:      sess.Edges.Worktree.RepoPath,
 		WorktreePath:  sess.Edges.Worktree.WorktreePath,
 		SessionName:   sess.Edges.Worktree.SessionName,

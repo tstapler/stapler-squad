@@ -46,7 +46,7 @@ func addPausedAutonomousInstance(t *testing.T, storage *session.Storage, title s
 		Title:          title,
 		UUID:           title + "-uuid-1234",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -188,7 +188,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -203,7 +203,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesStatu
 	// precondition will fail and TransitionBacklogItemStatus must return an error.
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Notification race test item",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -261,7 +261,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -272,7 +272,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_MarksAutonomo
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck test item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -310,7 +310,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -321,7 +321,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NoStuckRow_Wh
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous done test item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -382,7 +382,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Mid-SDD-workflow work session, never called request_review",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -400,7 +400,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_DoesNotForceR
 
 	reloaded, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), reloaded.Status,
+	assert.Equal(t, string(domain.BacklogStatusInProgress), reloaded.Status,
 		"the orchestrator's inferred DONE must never force in_progress→review; only request_review may do that")
 	assert.Empty(t, trigger.calls, "no review session may be spawned off the orchestrator's inferred DONE signal")
 }
@@ -423,7 +423,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsNotLinked
 	const title = "not-linked-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -453,7 +453,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	const title = "dangling-item-session-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -465,7 +465,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_LogsRealLooku
 	// return ErrNotFound and this test will report that below instead of asserting blindly.
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Deleted-out-from-under-us item",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -505,7 +505,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 	const title = "unrecognized-role-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -513,7 +513,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_UnrecognizedR
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Unrecognized role test item",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -573,7 +573,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -584,7 +584,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck resolves test item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -597,7 +597,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 
 	// Simulate a prior turn-cap stop that left an open autonomous_stuck row.
 	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
-		session.BacklogStatusInProgress, "autonomous driver stopped after 20 turns without a DONE signal")
+		domain.BacklogStatusInProgress, "autonomous driver stopped after 20 turns without a DONE signal")
 	require.NoError(t, err)
 	require.True(t, applied)
 	open, err := storage.FindOpenStuckStates(ctx)
@@ -632,7 +632,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -643,7 +643,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous stuck review resolves test item",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -655,7 +655,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ResolvesAuton
 	require.NoError(t, err)
 
 	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck,
-		session.BacklogStatusReview, "autonomous review driver stopped after 20 turns without a DONE signal")
+		domain.BacklogStatusReview, "autonomous review driver stopped after 20 turns without a DONE signal")
 	require.NoError(t, err)
 	require.True(t, applied)
 	open, err := storage.FindOpenStuckStates(ctx)
@@ -690,7 +690,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -701,7 +701,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_KeepsAutonomo
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous still-stuck test item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -742,7 +742,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -756,7 +756,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_R
 	// having already acted via a different, earlier session exit).
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Review stuck, item already moved on",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -803,7 +803,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		CreatedAt:      time.Now(),
@@ -814,7 +814,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_ReviewStuck_E
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Review stuck, still stuck test item",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -865,7 +865,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 	const title = "triage-stuck-metadata-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -873,7 +873,7 @@ func TestOnAutonomousDriverComplete_StampsItemID_When_TriageStuck(t *testing.T) 
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Triage stuck metadata test item",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
@@ -927,7 +927,7 @@ func TestOnAutonomousDriverComplete_SuppressesGenericNotification_When_InstanceH
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		Hidden:         true,
@@ -977,7 +977,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 		Title:          title,
 		UUID:           title + "-uuid",
 		Path:           "/tmp/test",
-		Status:         session.Paused,
+		Status:         domain.Paused,
 		Program:        "claude",
 		AutonomousMode: true,
 		Hidden:         false,
@@ -989,7 +989,7 @@ func TestOnAutonomousDriverComplete_StampsSessionScopedMetadata_When_NotHiddenAn
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Generic notif metadata test item",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
@@ -1155,7 +1155,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 	const title = "autonomous-respawn-failure-test"
 	inst := &session.Instance{
 		Title: title, UUID: title + "-uuid", Path: "/tmp/test",
-		Status: session.Paused, Program: "claude", AutonomousMode: true,
+		Status: domain.Paused, Program: "claude", AutonomousMode: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(inst))
@@ -1163,7 +1163,7 @@ func TestAutonomousOrchestrationService_OnAutonomousDriverComplete_NotifiesOpera
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Autonomous respawn failure test item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -1210,17 +1210,17 @@ func TestOnAutonomousDriverComplete_should_WriteExactlyOneStatusOnlyForTriageDon
 	cases := []struct {
 		name       string
 		role       string
-		start      session.BacklogStatus
+		start      domain.BacklogStatus
 		outcome    session.AutonomousDriverOutcome
-		wantStatus session.BacklogStatus
+		wantStatus domain.BacklogStatus
 		wantWrites int
 	}{
-		{"triage done", session.SessionRoleTriage, session.BacklogStatusIdea, doneOutcome, session.BacklogStatusReady, 1},
-		{"triage stuck", session.SessionRoleTriage, session.BacklogStatusIdea, stallOutcome, session.BacklogStatusIdea, 0},
-		{"work done", session.SessionRoleWork, session.BacklogStatusInProgress, doneOutcome, session.BacklogStatusInProgress, 0},
-		{"work stall", session.SessionRoleWork, session.BacklogStatusInProgress, stallOutcome, session.BacklogStatusInProgress, 0},
-		{"review done", session.SessionRoleReview, session.BacklogStatusReview, doneOutcome, session.BacklogStatusReview, 0},
-		{"review stall", session.SessionRoleReview, session.BacklogStatusReview, stallOutcome, session.BacklogStatusReview, 0},
+		{"triage done", session.SessionRoleTriage, domain.BacklogStatusIdea, doneOutcome, domain.BacklogStatusReady, 1},
+		{"triage stuck", session.SessionRoleTriage, domain.BacklogStatusIdea, stallOutcome, domain.BacklogStatusIdea, 0},
+		{"work done", session.SessionRoleWork, domain.BacklogStatusInProgress, doneOutcome, domain.BacklogStatusInProgress, 0},
+		{"work stall", session.SessionRoleWork, domain.BacklogStatusInProgress, stallOutcome, domain.BacklogStatusInProgress, 0},
+		{"review done", session.SessionRoleReview, domain.BacklogStatusReview, doneOutcome, domain.BacklogStatusReview, 0},
+		{"review stall", session.SessionRoleReview, domain.BacklogStatusReview, stallOutcome, domain.BacklogStatusReview, 0},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

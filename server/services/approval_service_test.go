@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -959,7 +960,7 @@ func TestIsApprovalPending_ReflectsStoreState(t *testing.T) {
 
 // ─── active PR drives the CI gate (multi-PR) ─────────────────────────────────
 
-func multiPRInstance(t *testing.T, sessionID, scalarConclusion string, prs ...session.PRView) *session.Instance {
+func multiPRInstance(t *testing.T, sessionID, scalarConclusion string, prs ...domain.PRView) *session.Instance {
 	t.Helper()
 	return &session.Instance{
 		Title: sessionID, UUID: sessionID, PRs: prs, HasPRLinks: true,
@@ -967,11 +968,11 @@ func multiPRInstance(t *testing.T, sessionID, scalarConclusion string, prs ...se
 	}
 }
 
-func prViewFor(t *testing.T, number int, state session.PRState, conclusion string) session.PRView {
+func prViewFor(t *testing.T, number int, state domain.PRState, conclusion string) domain.PRView {
 	t.Helper()
-	ref, err := session.NewPRRef("", "acme", "app", number)
+	ref, err := domain.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
-	return session.PRView{
+	return domain.PRView{
 		Ref: ref, State: state, StoredTerminal: state.Terminal(), CheckConclusion: conclusion,
 		AttachedAt: time.Date(2026, 11, 1, 0, 0, number, 0, time.UTC),
 	}
@@ -983,8 +984,8 @@ func TestApprovalGate_ShouldReadActivePRConclusion_WhenMergedAndOpenWithFailure(
 
 	// The stale scalar says "success" (left by merged #11); the active PR #12 is red.
 	inst := multiPRInstance(t, "session-M", "success",
-		prViewFor(t, 11, session.PRStateMerged, "success"),
-		prViewFor(t, 12, session.PRStateOpen, ciConclusionFailure))
+		prViewFor(t, 11, domain.PRStateMerged, "success"),
+		prViewFor(t, 12, domain.PRStateOpen, ciConclusionFailure))
 
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
@@ -1004,8 +1005,8 @@ func TestApprovalGate_ShouldNotBlock_WhenOnlyANonActivePRIsFailing(t *testing.T)
 
 	// The scalar still says "failure" from merged #11, but the active PR #12 is green.
 	inst := multiPRInstance(t, "session-N", ciConclusionFailure,
-		prViewFor(t, 11, session.PRStateMerged, ciConclusionFailure),
-		prViewFor(t, 12, session.PRStateOpen, "success"))
+		prViewFor(t, 11, domain.PRStateMerged, ciConclusionFailure),
+		prViewFor(t, 12, domain.PRStateOpen, "success"))
 
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)

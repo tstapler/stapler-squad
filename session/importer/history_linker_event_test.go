@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // panePIDCountingPM counts GetPanePID calls; the embedded nil ProcessManager
@@ -27,7 +28,7 @@ func newLinkedInstances(t *testing.T, n int, calls *atomic.Int64) []*session.Ins
 	insts := make([]*session.Instance, 0, n)
 	for i := 0; i < n; i++ {
 		title := "linked-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		inst := &session.Instance{Title: title, Path: t.TempDir(), Status: session.Active}
+		inst := &session.Instance{Title: title, Path: t.TempDir(), Status: domain.Active}
 		inst.SetProcessManagerForTest(panePIDCountingPM{calls: calls})
 		inst.SetHistoryInfo("uuid-"+title, "/projects/p/uuid-"+title+".jsonl")
 		insts = append(insts, inst)

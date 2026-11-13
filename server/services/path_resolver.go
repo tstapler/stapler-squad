@@ -15,7 +15,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // errGitInternal and errWorktreeMissing let the write path attach typed reasons to resolver refusals.
@@ -227,7 +227,7 @@ type resolvedRequest struct {
 	Root      *WorktreeRoot
 	Resolved  ResolvedPath
 	ViaLink   bool
-	Workspace session.Workspace
+	Workspace domain.Workspace
 }
 
 // resolveFileRequest is the shared request preamble: workspace lookup, root
@@ -252,30 +252,30 @@ func resolveFileRequest(_ context.Context, provider WorkspaceProvider, ref FileR
 }
 
 // workspaceDirFor looks up the session's workspace and picks the directory for mode.
-func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (session.Workspace, string, error) {
+func workspaceDirFor(provider WorkspaceProvider, ref FileRef, mode AccessMode) (domain.Workspace, string, error) {
 	if ref.SessionID == "" {
-		return session.Workspace{}, "", connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
+		return domain.Workspace{}, "", connect.NewError(connect.CodeInvalidArgument, errors.New("session_id is required"))
 	}
 	ws, err := provider.GetWorkspace(ref.SessionID)
 	if err != nil {
-		return session.Workspace{}, "", err
+		return domain.Workspace{}, "", err
 	}
 	dir := ws.ExistingDir
 	if mode == AccessWrite {
 		if !worktreeOnDisk(ws) {
-			return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errWorktreeMissing)
+			return domain.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errWorktreeMissing)
 		}
 		dir = ws.ActiveDir
 	}
 	if dir == "" {
-		return session.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("session has no working directory"))
+		return domain.Workspace{}, "", connect.NewError(connect.CodeFailedPrecondition, errors.New("session has no working directory"))
 	}
 	return ws, dir, nil
 }
 
 // worktreeOnDisk is false once the session's active directory is gone and ExistingDir
 // has fallen back to the repo root. Writes and content search both refuse that state.
-func worktreeOnDisk(ws session.Workspace) bool {
+func worktreeOnDisk(ws domain.Workspace) bool {
 	return ws.ActiveDir != "" && ws.ActiveDir == ws.ExistingDir
 }
 

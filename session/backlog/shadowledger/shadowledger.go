@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -76,7 +77,7 @@ var (
 	shadowMethods = []session.EngineMethod{session.MethodCanTransition, session.MethodAllowedTransitions, session.MethodPendingGates, session.MethodValidateGates}
 	shadowPaths   = []session.CallPath{session.PathTransition, session.PathRead}
 	shadowClasses = []session.DivergenceClass{session.ClassGraph, session.ClassGateMissing, session.ClassGateExtra, session.ClassErrorKind, session.ClassGuardNew}
-	ledgerClasses = []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem}
+	ledgerClasses = []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem}
 	shadowConfigs = []string{session.ConfigSeeded, session.ConfigEdited, session.ConfigUnlabeled}
 )
 
@@ -84,14 +85,14 @@ var (
 // call path touches atomics only; the mutex guards the divergence ring, which
 // is written only when a divergence occurs.
 type ShadowLedgerRecorder struct {
-	class session.CallerClass // the class the unclassed ShadowRecorder methods record into
+	class domain.CallerClass // the class the unclassed ShadowRecorder methods record into
 	dir   string
 	clock hostclaim.Clock
 	warn  func(format string, args ...any)
 
 	base session.ShadowLedger // loaded at start; never mutated afterwards
 
-	live map[session.CallerClass]*liveClass // fixed at construction, read-only after
+	live map[domain.CallerClass]*liveClass // fixed at construction, read-only after
 
 	mu    sync.Mutex // guards ring, start
 	ring  []session.ReproRecord
@@ -141,7 +142,7 @@ var (
 type ShadowRecorderOption func(*ShadowLedgerRecorder)
 
 // WithShadowClass sets the caller class this recorder writes (default operator).
-func WithShadowClass(c session.CallerClass) ShadowRecorderOption {
+func WithShadowClass(c domain.CallerClass) ShadowRecorderOption {
 	return func(r *ShadowLedgerRecorder) { r.class = c }
 }
 
@@ -166,9 +167,9 @@ func ShadowLedgerPath(dir string) string { return filepath.Join(dir, shadowLedge
 // starts fresh with a WARN) and records this binary's start time.
 func NewShadowLedgerRecorder(dir string, opts ...ShadowRecorderOption) *ShadowLedgerRecorder {
 	r := &ShadowLedgerRecorder{
-		class: session.ClassOperator, dir: dir, clock: hostclaim.RealClock{},
+		class: domain.ClassOperator, dir: dir, clock: hostclaim.RealClock{},
 		warn: func(f string, a ...any) { log.WarningLog().Printf(f, a...) },
-		live: map[session.CallerClass]*liveClass{},
+		live: map[domain.CallerClass]*liveClass{},
 	}
 	for _, c := range ledgerClasses {
 		r.live[c] = newLiveClass()
@@ -215,7 +216,7 @@ func crossDivKeys() []divKey {
 
 // forClass returns the live counters for c; an empty or unknown class records
 // into the recorder's own class.
-func (r *ShadowLedgerRecorder) forClass(c session.CallerClass) (session.CallerClass, *liveClass) {
+func (r *ShadowLedgerRecorder) forClass(c domain.CallerClass) (domain.CallerClass, *liveClass) {
 	if lc := r.live[c]; lc != nil {
 		return c, lc
 	}
@@ -228,7 +229,7 @@ func (r *ShadowLedgerRecorder) RecordShadowCall(m session.EngineMethod, p sessio
 }
 
 // RecordShadowCallFor implements ClassedShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordShadowCallFor(class session.CallerClass, m session.EngineMethod, p session.CallPath) {
+func (r *ShadowLedgerRecorder) RecordShadowCallFor(class domain.CallerClass, m session.EngineMethod, p session.CallPath) {
 	_, lc := r.forClass(class)
 	lc.active.Store(true)
 	lc.calls.Inc(shadowKey{m, p})
@@ -243,7 +244,7 @@ func (r *ShadowLedgerRecorder) RecordDivergence(m session.EngineMethod, c sessio
 }
 
 // RecordDivergenceFor implements ClassedShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordDivergenceFor(class session.CallerClass, m session.EngineMethod, c session.DivergenceClass, config string, p session.CallPath) {
+func (r *ShadowLedgerRecorder) RecordDivergenceFor(class domain.CallerClass, m session.EngineMethod, c session.DivergenceClass, config string, p session.CallPath) {
 	_, lc := r.forClass(class)
 	lc.active.Store(true)
 	lc.divergences.Inc(divKey{m, c, normalizeConfigLabel(config), p})
@@ -255,7 +256,7 @@ func (r *ShadowLedgerRecorder) RecordNotCompared(reason session.NotComparedReaso
 }
 
 // RecordNotComparedFor implements ClassedShadowRecorder.
-func (r *ShadowLedgerRecorder) RecordNotComparedFor(class session.CallerClass, reason session.NotComparedReason) {
+func (r *ShadowLedgerRecorder) RecordNotComparedFor(class domain.CallerClass, reason session.NotComparedReason) {
 	_, lc := r.forClass(class)
 	lc.active.Store(true)
 	lc.notCompared.Inc(reason)
@@ -352,8 +353,8 @@ func (r *ShadowLedgerRecorder) Snapshot() session.ShadowLedger {
 }
 
 // liveClassOrder lists the live classes in a stable order.
-func (r *ShadowLedgerRecorder) liveClassOrder() []session.CallerClass {
-	out := make([]session.CallerClass, 0, len(r.live))
+func (r *ShadowLedgerRecorder) liveClassOrder() []domain.CallerClass {
+	out := make([]domain.CallerClass, 0, len(r.live))
 	for c := range r.live {
 		out = append(out, c)
 	}

@@ -21,6 +21,7 @@ go_library(
         "//config",
         "//session",
         "//session/artifacts",
+        "//session/domain",
         "//telemetry",
         "@io_opentelemetry_go_otel_metric//:metric",
     ],
@@ -47,7 +48,6 @@ go_test(
     embed = [":search"],
     deps = [
         "//config",
-        "//session",
-        "//session/artifacts",
+        "//session/domain",
     ],
 )

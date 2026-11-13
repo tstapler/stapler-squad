@@ -27,6 +27,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -47,7 +50,7 @@ import (
 func (s *BacklogService) initialPromptFor(ctx context.Context, item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary) string {
 	var prompt string
 	if s.pipelineEngine == nil {
-		prompt = backlog.BuildTokenBudgetedPrompt(item, priorSessions)
+		prompt = pipeline.BuildTokenBudgetedPrompt(item, priorSessions)
 	} else {
 		prompt = s.pipelineEngine.InitialPromptFor(item, priorSessions)
 	}
@@ -72,7 +75,7 @@ func (s *BacklogService) workspacePeersBlockFor(ctx context.Context, repoPath st
 // (research/architecture.md §3).
 func (s *BacklogService) triagePromptFor(item *backlogdto.BacklogItemData, artifactAbsPath string) string {
 	if s.pipelineEngine == nil {
-		return backlog.BuildHeadlessTriagePrompt(item, artifactAbsPath)
+		return pipeline.BuildHeadlessTriagePrompt(item, artifactAbsPath)
 	}
 	return s.pipelineEngine.TriagePromptFor(item, artifactAbsPath)
 }
@@ -82,9 +85,9 @@ func (s *BacklogService) triagePromptFor(item *backlogdto.BacklogItemData, artif
 // session.CachingPipelineEngine's own default-mode fallback for the nil-engine case.
 // Used by TriggerReReview (Epic 1.5, Story 1.5.4); the equivalent seam for
 // ReviewGateRunner.Run lives in session/review_gate.go's own reviewPromptFor method.
-func (s *BacklogService) reviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras backlog.ReviewContextExtras) string {
+func (s *BacklogService) reviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []domain.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras pipeline.ReviewContextExtras) string {
 	if s.pipelineEngine == nil {
-		return backlog.BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
+		return pipeline.BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 	}
 	return s.pipelineEngine.ReviewPromptFor(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 }
@@ -171,7 +174,7 @@ func recentWorkSessionFileLists(repoPath string, sessions []backlogdto.ItemSessi
 // a missed toast. The durable write is additive to the notification, not a
 // gate: a MarkStuck/MarkStuckNotified failure is logged but must never
 // suppress the notification itself.
-func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, capContext string, reworkCap int) {
+func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTitle string, currentStatus domain.BacklogStatus, capContext string, reworkCap int) {
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkCap, currentStatus,
 			fmt.Sprintf("hit the %d-iteration rework cap %s. Increase the cap in Settings → Defaults, or click \"Reopen for Revision\" to try one more round manually.", reworkCap, capContext))
@@ -209,7 +212,7 @@ func (s *BacklogService) notifyReworkCapHit(ctx context.Context, itemID, itemTit
 // stops the auto-reopen loop. Mirrors notifyReworkCapHit's structure: a
 // MarkStuck/MarkStuckNotified failure is logged but never suppresses the
 // notification itself.
-func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, itemTitle string, currentStatus session.BacklogStatus, attemptCount int, failureSummary string) {
+func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, itemTitle string, currentStatus domain.BacklogStatus, attemptCount int, failureSummary string) {
 	if s.storage != nil {
 		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonBouncing, currentStatus,
 			fmt.Sprintf("stopped auto-rework — the last %d attempts (including one escalated retry) failed the same way: %q. Fix the underlying issue, then click \"Reopen for Revision\".", attemptCount, failureSummary))
@@ -247,14 +250,14 @@ func (s *BacklogService) notifyRepeatedFailure(ctx context.Context, itemID, item
 // specifically so a misfiring heuristic can never newly stall an item that would
 // otherwise proceed. A MarkStuck/MarkStuckNotified failure is only logged,
 // matching every other MarkStuck call site's own convention.
-func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, currentStatus session.BacklogStatus, recentVerdicts []backlogdto.ReviewVerdictSummary, sessions []backlogdto.ItemSessionSummary, repoPath string) {
+func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, currentStatus domain.BacklogStatus, recentVerdicts []backlogdto.ReviewVerdictSummary, sessions []backlogdto.ItemSessionSummary, repoPath string) {
 	if s.storage == nil {
 		return
 	}
-	flip := backlog.IsFlakyVerdictFlipFlop(recentVerdicts)
+	flip := stuck.IsFlakyVerdictFlipFlop(recentVerdicts)
 	testOnly := false
 	if repoPath != "" {
-		testOnly = backlog.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, backlog.TestOnlyReworkMinAttempts))
+		testOnly = stuck.IsTestOnlyReworkCycle(recentWorkSessionFileLists(repoPath, sessions, stuck.TestOnlyReworkMinAttempts))
 	}
 	if !flip && !testOnly {
 		return
@@ -286,7 +289,7 @@ func (s *BacklogService) notifyLikelyFlaky(ctx context.Context, itemID string, c
 // operator to guess why a queued/ready item never gets claimed. A MarkStuck/
 // MarkStuckNotified failure is only logged, matching every other MarkStuck call
 // site's own convention.
-func (s *BacklogService) notifyBlockedByDependency(ctx context.Context, itemID string, currentStatus session.BacklogStatus) {
+func (s *BacklogService) notifyBlockedByDependency(ctx context.Context, itemID string, currentStatus domain.BacklogStatus) {
 	if s.storage == nil {
 		return
 	}
@@ -320,7 +323,7 @@ func (s *BacklogService) notifyBlockedByDependency(ctx context.Context, itemID s
 // notification itself.
 func (s *BacklogService) notifySpawnAndRollbackFailed(ctx context.Context, itemID, itemTitle string, spawnErr, rollbackErr error) {
 	if s.storage != nil {
-		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonSpawnFailed, session.BacklogStatusInProgress,
+		applied, err := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonSpawnFailed, domain.BacklogStatusInProgress,
 			fmt.Sprintf("a rework session failed to spawn (%v) and the automatic rollback to review also failed (%v) — the item is in_progress with no active session. Click \"Reopen for Revision\" or \"Run Autonomously\" to retry.", spawnErr, rollbackErr))
 		if err != nil {
 			log.Warn("[notifySpawnAndRollbackFailed] MarkStuck failed", "item", itemID, "error", err)
@@ -468,7 +471,7 @@ func triageShortTitle(sessions []backlogdto.ItemSessionSummary, itemTitle string
 		if s.Role != string(session.SessionRoleTriage) || s.TriageResult == "" {
 			continue
 		}
-		var r backlog.HeadlessTriageResult
+		var r pipeline.HeadlessTriageResult
 		if err := json.Unmarshal([]byte(s.TriageResult), &r); err == nil && r.Title != "" {
 			return r.Title
 		}
@@ -562,9 +565,9 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// path below can proceed. Handles both in_progress (stop work session) and review
 	// (stop review session + transition back to in_progress so restart begins from
 	// the work phase where the git worktree and slash commands are set up).
-	if req.Msg.Force && (item.Status == string(session.BacklogStatusInProgress) ||
-		item.Status == string(session.BacklogStatusReview) ||
-		item.Status == string(session.BacklogStatusPRPending)) {
+	if req.Msg.Force && (item.Status == string(domain.BacklogStatusInProgress) ||
+		item.Status == string(domain.BacklogStatusReview) ||
+		item.Status == string(domain.BacklogStatusPRPending)) {
 		var forceErr error
 		item, forceErr = s.forceResetItem(ctx, item, triggeredBy)
 		if forceErr != nil {
@@ -573,12 +576,12 @@ func (s *BacklogService) SpawnSessionFromItem(
 	}
 
 	// 3. Validate status. Allow ready (first spawn) or in_progress (re-spawn after reopen).
-	isReopen := item.Status == string(session.BacklogStatusInProgress)
-	if item.Status != string(session.BacklogStatusReady) && !isReopen {
+	isReopen := item.Status == string(domain.BacklogStatusInProgress)
+	if item.Status != string(domain.BacklogStatusReady) && !isReopen {
 		log.Info("[SpawnSessionFromItem] status gate blocked spawn", "item", item.ID, "status", item.Status, "autonomous", req.Msg.Autonomous)
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item must be in %q or %q status to spawn a session, got %q — use TriggerTriage to advance from %q",
-				session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status, item.Status))
+				domain.BacklogStatusReady, domain.BacklogStatusInProgress, item.Status, item.Status))
 	}
 
 	// 3b. Planning gate (only for fresh spawns; on reopen planning is already approved).
@@ -652,8 +655,8 @@ func (s *BacklogService) HasUnresolvedBlockers(ctx context.Context, itemID strin
 // hasUnresolvedBlockers query above. Only checked for the ->in_progress
 // guard, so this is a no-op os.Stat for every other transition and for any
 // item without a plan path at all.
-func planArtifactsPathMissing(item *backlogdto.BacklogItemData, to session.BacklogStatus) bool {
-	if to != session.BacklogStatusInProgress || item.PlanArtifactsPath == "" {
+func planArtifactsPathMissing(item *backlogdto.BacklogItemData, to domain.BacklogStatus) bool {
+	if to != domain.BacklogStatusInProgress || item.PlanArtifactsPath == "" {
 		return false
 	}
 	_, statErr := os.Stat(item.PlanArtifactsPath)
@@ -670,9 +673,9 @@ func planArtifactsPathMissing(item *backlogdto.BacklogItemData, to session.Backl
 // so DequeueNextQueuedItems can batch the underlying query once across all
 // candidates instead of once per claim (see its own call to
 // storage.UnresolvedBlockerItemIDs before the claim loop).
-func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogdto.BacklogItemData, to session.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error) {
-	from := session.BacklogStatus(item.Status)
-	guardInput := session.NewBacklogItemTransitionInput(item, from)
+func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogdto.BacklogItemData, to domain.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string, hasUnresolvedBlockers bool) (*backlogdto.BacklogItemData, error) {
+	from := domain.BacklogStatus(item.Status)
+	guardInput := backlogdto.NewBacklogItemTransitionInput(item, from)
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers
 	guardInput.PlanArtifactsPathMissing = planArtifactsPathMissing(item, to)
 	// Blocked dependencies and missing plans are expected steady-state refusals
@@ -682,11 +685,11 @@ func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogd
 	// would pin updated_at, which callers that edited the item first (queue
 	// metadata) have already moved.
 	if session.NewDefaultWorkflowEngine().CanTransition(from, to, nil) {
-		if guardErr := session.TransitionGuard(guardInput, to); guardErr != nil {
+		if guardErr := domain.TransitionGuard(guardInput, to); guardErr != nil {
 			return nil, guardErr
 		}
 	}
-	return s.storage.GatedTransition(ctx, session.TransitionRequest{
+	return s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller: guardedTransitionCaller(to, triggeredBy), ItemID: item.ID, To: to,
 		Precondition: precondition, TriggeredBy: triggeredBy, Guard: &guardInput,
 	})
@@ -697,14 +700,14 @@ func (s *BacklogService) TransitionWithGuard(ctx context.Context, item *backlogd
 // (->queued), the dequeue claim (->in_progress, system) and Jules dispatch
 // (->in_progress, user). Jules reaches this through an interface whose
 // signature carries no caller.
-func guardedTransitionCaller(to session.BacklogStatus, triggeredBy string) session.TransitionCaller {
+func guardedTransitionCaller(to domain.BacklogStatus, triggeredBy string) domain.TransitionCaller {
 	switch {
-	case to == session.BacklogStatusQueued:
-		return session.CallerQueueBacklogItem
+	case to == domain.BacklogStatusQueued:
+		return domain.CallerQueueBacklogItem
 	case triggeredBy == session.TriggeredByUser:
-		return session.CallerJulesDispatchStart
+		return domain.CallerJulesDispatchStart
 	default:
-		return session.CallerClaimAndSpawn
+		return domain.CallerClaimAndSpawn
 	}
 }
 
@@ -726,10 +729,10 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *backlogdto.
 	if autonomous {
 		triggeredBy = session.TriggeredBySystem
 	}
-	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady), Note: "WIP cap hit"}
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady), Note: "WIP cap hit"}
 	// Blocker guard only applies to the queued/ready -> in_progress transition, so
 	// queueing (-> Queued) always passes false rather than querying.
-	updated, err := s.TransitionWithGuard(ctx, item, session.BacklogStatusQueued, precondition, triggeredBy, false)
+	updated, err := s.TransitionWithGuard(ctx, item, domain.BacklogStatusQueued, precondition, triggeredBy, false)
 	if err != nil {
 		if errors.Is(err, domain.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, fmt.Errorf("item status changed concurrently — retry the spawn: %w", err))
@@ -801,9 +804,9 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 		return nil
 	}
 
-	statuses := []string{string(session.BacklogStatusQueued)}
+	statuses := []string{string(domain.BacklogStatusQueued)}
 	if s.autoSpawnReadyItemsEnabled() {
-		statuses = append(statuses, string(session.BacklogStatusReady))
+		statuses = append(statuses, string(domain.BacklogStatusReady))
 	}
 	candidates, err := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: statuses,
@@ -861,9 +864,9 @@ func (s *BacklogService) DequeueNextQueuedItems(ctx context.Context) error {
 // and spawns its work session, rolling back to the pre-claim status if the spawn
 // fails. It reports whether a session was spawned. Callers hold dequeueMu.
 func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item backlogdto.BacklogItemData, hasUnresolvedBlockers bool) bool {
-	fromStatus := session.BacklogStatus(item.Status)
+	fromStatus := domain.BacklogStatus(item.Status)
 	claimed, claimErr := s.TransitionWithGuard(ctx, &item,
-		session.BacklogStatusInProgress,
+		domain.BacklogStatusInProgress,
 		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
 		session.TriggeredBySystem,
 		hasUnresolvedBlockers)
@@ -877,7 +880,7 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item backlo
 	if spawnErr != nil {
 		log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
 		if _, rbErr := s.storage.Rollback(ctx, item.ID, fromStatus,
-			&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress), Note: "dequeue spawn failed"},
+			&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: "dequeue spawn failed"},
 			session.TriggeredBySystem); rbErr != nil {
 			log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
 			// The same silent-stranding shape notifySpawnAndRollbackFailed was
@@ -898,19 +901,19 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item backlo
 
 // handleClaimError classifies why transitionWithGuard refused a dequeue claim
 // and surfaces it durably or quietly as appropriate. Callers hold dequeueMu.
-func (s *BacklogService) handleClaimError(ctx context.Context, item backlogdto.BacklogItemData, fromStatus session.BacklogStatus, claimErr error) {
+func (s *BacklogService) handleClaimError(ctx context.Context, item backlogdto.BacklogItemData, fromStatus domain.BacklogStatus, claimErr error) {
 	switch {
 	case errors.Is(claimErr, domain.ErrPreconditionFailed):
 		// Expected under concurrent claims (another process's dequeue
 		// sweep, or a manual un-queue) — not worth logging.
-	case errors.Is(claimErr, session.ErrUnresolvedBlockers):
+	case errors.Is(claimErr, domain.ErrUnresolvedBlockers):
 		// Expected steady state: item is legitimately blocked and will be
 		// retried on a later sweep once its blocker reaches done — not a
 		// bug, so not worth a warning-level log every sweep. Still surface
 		// it durably (AC3) so the item detail view can render a BlockerChip
 		// instead of leaving the operator to guess why it's stalled.
 		s.notifyBlockedByDependency(ctx, item.ID, fromStatus)
-	case errors.Is(claimErr, session.ErrPlanRequired), errors.Is(claimErr, session.ErrPlanArtifactsRequired):
+	case errors.Is(claimErr, domain.ErrPlanRequired), errors.Is(claimErr, domain.ErrPlanArtifactsRequired):
 		// Defense-in-depth (PR #199 review F2/F3): should be unreachable
 		// now that SpawnSessionFromItem's planning gate runs before the
 		// WIP-cap queue gate, but refuse the claim rather than silently
@@ -918,7 +921,7 @@ func (s *BacklogService) handleClaimError(ctx context.Context, item backlogdto.B
 		// call site regression, or a pre-existing queued/ready row from
 		// before that ordering fix).
 		log.Warn("[DequeueNextQueuedItems] claim blocked by planning gate — leaving as-is", "item", item.ID, "status", fromStatus, "error", claimErr)
-	case errors.Is(claimErr, session.ErrPlanArtifactsMissing):
+	case errors.Is(claimErr, domain.ErrPlanArtifactsMissing):
 		// Genuinely reachable, unlike the two cases above: a path that was
 		// valid when the plan was approved can be deleted later (triage
 		// worktree reaped by CleanupTerminalItem, then the item reopened).
@@ -933,7 +936,7 @@ func (s *BacklogService) handleClaimError(ctx context.Context, item backlogdto.B
 				log.Warn("[DequeueNextQueuedItems] MarkStuck failed", "item", item.ID, "error", markErr)
 			}
 		}
-	case errors.Is(claimErr, session.ErrTransitionNotAllowed), errors.Is(claimErr, session.ErrGateNotSatisfied):
+	case errors.Is(claimErr, session.ErrTransitionNotAllowed), errors.Is(claimErr, domain.ErrGateNotSatisfied):
 		// An engine denial was already reported by the gate (transition_denied row,
 		// comment, notification) under caller claim_and_spawn.
 	default:
@@ -1086,7 +1089,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 		}
 		if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
 			log.Info("[spawnSessionAfterGates] hit work session cap; refusing spawn", "item", item.ID, "count", workCount, "cap", reworkCap)
-			s.notifyReworkCapHit(ctx, item.ID, item.Title, session.BacklogStatus(item.Status), "at the shared spawn gate", reworkCap)
+			s.notifyReworkCapHit(ctx, item.ID, item.Title, domain.BacklogStatus(item.Status), "at the shared spawn gate", reworkCap)
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("item has reached its %d-round rework cap; raise the cap in Settings or via the item's rework-cap override before spawning again", reworkCap))
 		}
@@ -1153,7 +1156,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if s.pipelineEngine != nil {
 		workExecProgram, workExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleWork)
 	}
-	workExecutorHash := backlog.ComputeExecutorHash(workExecProgram, workExecModel)
+	workExecutorHash := pipeline.ComputeExecutorHash(workExecProgram, workExecModel)
 	// Pin after hashing: the hash must stay the raw mode-side pair (see above).
 	workExecModel = pinnedWorkStageModel(item.RepoPath, workExecProgram, workExecModel)
 	var programOverride, workResolvedModel string
@@ -1247,7 +1250,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// into the constructor; item.PipelineMode itself is always recorded regardless).
 	var pipelineModeSnapshotHash string
 	if s.pipelineEngine != nil {
-		pipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlog.PipelineMode(item.PipelineMode))
+		pipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlogdto.PipelineMode(item.PipelineMode))
 	}
 	// Stamp the full branch, not the bare slug: the slug never equals a PR's head ref, so
 	// stamping it broke the merge-verification guard.
@@ -1279,7 +1282,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// 12b. Capture the pre-work HEAD SHA so the review gate can diff base..HEAD across
 	// all commits the agent makes (not just HEAD~1..HEAD at review time). This goes in
 	// BaseCommitSha, never LastCommitSha — see SetItemSessionBaseCommit's doc comment.
-	if baseSHA, shaErr := backlog.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
+	if baseSHA, shaErr := pipeline.GetGitHeadSHA(worktreePath); shaErr == nil && baseSHA != "" {
 		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 		inst.SetDirBaseSHA(baseSHA)
 	}
@@ -1313,8 +1316,8 @@ func (s *BacklogService) spawnSessionAfterGates(
 		if autonomous {
 			triggeredBy = session.TriggeredBySystem
 		}
-		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerSpawnSessionAfterGates, ItemID: item.ID, To: session.BacklogStatusInProgress,
+		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerSpawnSessionAfterGates, ItemID: item.ID, To: domain.BacklogStatusInProgress,
 			TriggeredBy: triggeredBy, Unconditional: true,
 		}); transErr != nil {
 			log.Error("[SpawnSessionFromItem] failed to transition item to in_progress", "error", transErr)
@@ -1429,10 +1432,10 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *backlogdto.Ba
 		}
 	}
 	s.stopLiveWorkAndReviewSessions(ctx, item.ID)
-	wasPRPending := item.Status == string(session.BacklogStatusPRPending)
-	if item.Status == string(session.BacklogStatusReview) || wasPRPending {
-		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: session.BacklogStatusInProgress,
+	wasPRPending := item.Status == string(domain.BacklogStatusPRPending)
+	if item.Status == string(domain.BacklogStatusReview) || wasPRPending {
+		updated, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerOperatorForceReset, ItemID: item.ID, Observed: item, To: domain.BacklogStatusInProgress,
 			TriggeredBy: triggeredBy, Unconditional: true,
 		})
 		if transErr != nil {
@@ -1464,14 +1467,14 @@ func (s *BacklogService) forceResetItem(ctx context.Context, item *backlogdto.Ba
 // finding, tied to the 2026-07-12 OOM incident the cap exists to prevent.
 func (s *BacklogService) countLiveBacklogWorkSessions(ctx context.Context) (int, error) {
 	candidates, err := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusInProgress), string(session.BacklogStatusReview)},
+		Statuses: []string{string(domain.BacklogStatusInProgress), string(domain.BacklogStatusReview)},
 	})
 	if err != nil {
 		return 0, err
 	}
 	count := 0
 	for _, item := range candidates {
-		if item.Status == string(session.BacklogStatusInProgress) {
+		if item.Status == string(domain.BacklogStatusInProgress) {
 			count++
 			continue
 		}
@@ -1657,7 +1660,7 @@ func (s *BacklogService) respawnBlockedActiveProgressSignal(activeSessionUUID st
 // once per open row, and callers of this helper are naturally rate-limited
 // the same way (each fires once per reconcile-triggered respawn attempt, not
 // on a tight poll loop).
-func (s *BacklogService) notifyRespawnBlockedByActiveSession(ctx context.Context, caller, itemID, itemTitle string, currentStatus session.BacklogStatus, activeSessionUUID string) {
+func (s *BacklogService) notifyRespawnBlockedByActiveSession(ctx context.Context, caller, itemID, itemTitle string, currentStatus domain.BacklogStatus, activeSessionUUID string) {
 	progress := s.respawnBlockedActiveProgressSignal(activeSessionUUID)
 	log.Info(fmt.Sprintf("[%s] already has an active session; skipping respawn", caller), "item", itemID, "session", activeSessionUUID, "progress", progress)
 
@@ -1790,7 +1793,7 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	// precondition mismatch (item moved off review between read and write)
 	// must never block or skip the notification below — that publish is the
 	// one pre-existing behavior this addition must not regress.
-	if applied, markErr := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkBlockedStale, session.BacklogStatusReview,
+	if applied, markErr := s.storage.MarkStuck(ctx, itemID, domain.StuckReasonReworkBlockedStale, domain.BacklogStatusReview,
 		fmt.Sprintf("active work session %s idle %s since last meaningful output", active.SessionUUID, idle.Round(time.Second))); markErr != nil {
 		log.Warn("[AutoReopenAfterFailedReview] MarkStuck(rework_blocked_stale) failed", "item", itemID, "error", markErr)
 	} else if !applied {
@@ -1829,7 +1832,7 @@ func (s *BacklogService) ResolveReworkBlockedStaleIfRecovered(ctx context.Contex
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
 	}
-	if item.Status != string(session.BacklogStatusReview) {
+	if item.Status != string(domain.BacklogStatusReview) {
 		s.resolveReworkBlockedStaleLogged(ctx, itemID)
 		return nil
 	}
@@ -1958,10 +1961,10 @@ func resolveSessionPath(repoPath, slug, baseBranch string) (worktreePath string,
 // locks it around this call and the preceding resolveSessionPath to close the
 // check-then-create worktree race described there.
 func (s *BacklogService) writeSessionFilesLocked(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary, worktreePath string) error {
-	if wErr := backlog.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
+	if wErr := pipeline.WriteSlashCommands(s.pipelineEngine, item, worktreePath); wErr != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 	}
-	if wErr := backlog.WriteBacklogContextFile(item, priorSessions, worktreePath); wErr != nil {
+	if wErr := pipeline.WriteBacklogContextFile(item, priorSessions, worktreePath); wErr != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
 	}
 	return nil
@@ -1977,11 +1980,11 @@ func (s *BacklogService) evaluateReviewFailureBreakers(ctx context.Context, item
 	itemID := item.ID
 	if verdictErr != nil {
 		log.Warn("[AutoReopenAfterFailedReview] GetRecentReviewVerdictSummaries failed", "item", itemID, "error", verdictErr)
-	} else if streak := backlog.ReviewFailureStreakLen(recentVerdicts); streak >= backlog.RepeatedFailureParkThreshold {
+	} else if streak := stuck.ReviewFailureStreakLen(recentVerdicts); streak >= stuck.RepeatedFailureParkThreshold {
 		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", streak)
-		s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
+		s.notifyRepeatedFailure(ctx, itemID, item.Title, domain.BacklogStatus(item.Status), streak, recentVerdicts[0].Summary)
 		return escalateRetryReason, true
-	} else if streak >= backlog.RepeatedFailureEscalationThreshold {
+	} else if streak >= stuck.RepeatedFailureEscalationThreshold {
 		log.Info("[AutoReopenAfterFailedReview] failed the same way repeatedly; granting one escalated retry before parking", "item", itemID, "streak", streak)
 		escalateRetryReason = recentVerdicts[0].Summary
 	}
@@ -2006,13 +2009,13 @@ func (s *BacklogService) evaluateReviewFailureBreakers(ctx context.Context, item
 	// picking one breaker over evaluating both isn't worth the added
 	// complexity here.
 	if escalateRetryReason == "" {
-		noVerdictStreak := backlog.NoVerdictStreakLen(recentReviewHadVerdict(sessions, backlog.RepeatedFailureParkThreshold))
+		noVerdictStreak := stuck.NoVerdictStreakLen(recentReviewHadVerdict(sessions, stuck.RepeatedFailureParkThreshold))
 		switch {
-		case noVerdictStreak >= backlog.RepeatedFailureParkThreshold:
+		case noVerdictStreak >= stuck.RepeatedFailureParkThreshold:
 			log.Info("[AutoReopenAfterFailedReview] review sessions all exited without ever writing a verdict (including one escalated retry); leaving in review for remediation instead of reopening", "item", itemID, "streak", noVerdictStreak)
-			s.notifyRepeatedFailure(ctx, itemID, item.Title, session.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
+			s.notifyRepeatedFailure(ctx, itemID, item.Title, domain.BacklogStatus(item.Status), noVerdictStreak, "review session exited without ever writing a verdict")
 			return escalateRetryReason, true
-		case noVerdictStreak >= backlog.RepeatedFailureEscalationThreshold:
+		case noVerdictStreak >= stuck.RepeatedFailureEscalationThreshold:
 			log.Info("[AutoReopenAfterFailedReview] review sessions exited without ever writing a verdict; granting one escalated retry before parking", "item", itemID, "streak", noVerdictStreak)
 			escalateRetryReason = "review session exited without ever writing a verdict, twice in a row"
 		}
@@ -2103,7 +2106,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// entries — enough for ReviewFailureStreakLen to observe the streak up to
 	// (and including) the park threshold itself; a streak can never be
 	// reported past that value since the query never returns more rows than that.
-	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, backlog.RepeatedFailureParkThreshold)
+	recentVerdicts, verdictErr := s.storage.GetRecentReviewVerdictSummaries(ctx, itemID, stuck.RepeatedFailureParkThreshold)
 
 	// Story 3.2.1: purely informational — evaluated unconditionally, on every
 	// call, regardless of whether a circuit breaker below trips and returns
@@ -2112,7 +2115,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// will co-occur with e.g. a bouncing row on the same underlying evidence
 	// (see plan.md's correlated-signal note). IsFlakyVerdictFlipFlop only ever
 	// reads recentVerdicts[0]/[1], so fetching more entries above is safe.
-	s.notifyLikelyFlaky(ctx, itemID, session.BacklogStatus(item.Status), recentVerdicts, sessions, item.RepoPath)
+	s.notifyLikelyFlaky(ctx, itemID, domain.BacklogStatus(item.Status), recentVerdicts, sessions, item.RepoPath)
 
 	escalateRetryReason, park := s.evaluateReviewFailureBreakers(ctx, item, sessions, recentVerdicts, verdictErr)
 	if park {
@@ -2122,7 +2125,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// A verdict the reviewer classed as unfixable by rework (unattainable, unrelated failure,
 	// environmental, wrong branch, or a proposed waiver) goes to the owner, not another round.
 	if verdictErr == nil && len(recentVerdicts) > 0 {
-		if criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria); parseErr == nil {
+		if criteria, parseErr := domain.ParseAcCriteria(item.AcceptanceCriteria); parseErr == nil {
 			if flagged := flaggedForOwner(recentVerdicts[0].PerCriterion, criteria); len(flagged) > 0 && s.escalateVerdictToOwner(ctx, item, flagged) {
 				return nil
 			}
@@ -2137,7 +2140,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	}
 	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
 		log.Info("[AutoReopenAfterFailedReview] hit work session cap; leaving in review for manual action", "item", itemID, "count", workCount, "cap", reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after a failed review verdict", reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, domain.BacklogStatus(item.Status), "after a failed review verdict", reworkCap)
 		return nil
 	}
 
@@ -2145,12 +2148,12 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	// (e.g. concurrent manual reopen firing at the same time).
 	updatedAt := item.UpdatedAt
 	precondition := &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus:    string(session.BacklogStatusReview),
+		ExpectedStatus:    string(domain.BacklogStatusReview),
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened after failed review verdict",
 	}
-	inProgress, transitionErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerAutoReopenFailedReview, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress,
+	inProgress, transitionErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerAutoReopenFailedReview, ItemID: itemID, Observed: item, To: domain.BacklogStatusInProgress,
 		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	})
 	if transitionErr != nil {
@@ -2234,10 +2237,10 @@ func (s *BacklogService) rollbackFailedReopen(ctx context.Context, item *backlog
 	// precondition here means the rollback only fires if nothing else has
 	// touched the item since this function's own in_progress write landed.
 	rollbackPrecondition := &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus:    string(session.BacklogStatusInProgress),
+		ExpectedStatus:    string(domain.BacklogStatusInProgress),
 		ExpectedUpdatedAt: &inProgress.UpdatedAt,
 	}
-	if _, rollbackErr := s.storage.Rollback(ctx, itemID, session.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
+	if _, rollbackErr := s.storage.Rollback(ctx, itemID, domain.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
 		log.Error("[AutoReopenAfterFailedReview] rollback to review failed", "item", itemID, "error", rollbackErr)
 		// The item is now stranded in_progress with no active session and no
 		// visible error anywhere else (BUG-030) — a log line nobody reads.
@@ -2266,7 +2269,7 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
 	}
-	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
+	if domain.BacklogStatus(item.Status) != domain.BacklogStatusInProgress {
 		// Already moved on (a human acted manually, or another reconciler beat
 		// us to it) — nothing to do.
 		return nil
@@ -2286,11 +2289,11 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 	// a race with another respawn attempt is still possible.
 	s.tombstoneOrphanWorkSessions(ctx, itemID, sessions)
 	if active := findActiveWorkSession(sessions); active != nil {
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, domain.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
 	}
 	if activeJules := findActiveJulesSession(sessions); activeJules != nil {
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, session.BacklogStatus(item.Status), activeJules.SessionUUID)
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnAutonomousWork", itemID, item.Title, domain.BacklogStatus(item.Status), activeJules.SessionUUID)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoRespawnAutonomousWork", itemID)
@@ -2303,7 +2306,7 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 	}
 	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
 		log.Info("[AutoRespawnAutonomousWork] hit work session cap; leaving in_progress for manual action", "item", itemID, "count", workCount, "cap", reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "after repeatedly hitting the autonomous turn cap without finishing", reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, domain.BacklogStatus(item.Status), "after repeatedly hitting the autonomous turn cap without finishing", reworkCap)
 		return nil
 	}
 
@@ -2370,7 +2373,7 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
 	}
-	if session.BacklogStatus(item.Status) != session.BacklogStatusInProgress {
+	if domain.BacklogStatus(item.Status) != domain.BacklogStatusInProgress {
 		// Already moved on (a human acted manually, or another reconciler beat
 		// us to it) — nothing to remediate.
 		return nil
@@ -2491,7 +2494,7 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
 	}
-	if session.BacklogStatus(item.Status) != session.BacklogStatusPRPending {
+	if domain.BacklogStatus(item.Status) != domain.BacklogStatusPRPending {
 		return fmt.Errorf("item %s is not pr_pending (got %s)", itemID, item.Status)
 	}
 	if s.heldByTransitionDenial(ctx, "AutoReopenForPRFix", item) {
@@ -2523,7 +2526,7 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 		active = knownActive
 	}
 	if active != nil {
-		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, session.BacklogStatus(item.Status), active, fixContext)
+		s.steerActiveSessionForPRFix(ctx, itemID, item.Title, domain.BacklogStatus(item.Status), active, fixContext)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoReopenForPRFix", itemID)
@@ -2536,18 +2539,18 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	}
 	if reworkCap := s.effectiveReworkCap(item); workCount >= reworkCap {
 		log.Info("[AutoReopenForPRFix] hit work session cap; leaving in pr_pending for manual action", "item", itemID, "count", workCount, "cap", reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber), reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, domain.BacklogStatus(item.Status), "while fixing PR #"+fmt.Sprint(item.PrNumber), reworkCap)
 		return nil
 	}
 
 	updatedAt := item.UpdatedAt
 	precondition := &backlogdto.BacklogItemPrecondition{
-		ExpectedStatus:    string(session.BacklogStatusPRPending),
+		ExpectedStatus:    string(domain.BacklogStatusPRPending),
 		ExpectedUpdatedAt: &updatedAt,
 		Note:              "auto-reopened for PR fix (CI/review)",
 	}
-	if _, err := s.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerAutoReopenForPRFix, ItemID: itemID, Observed: item, To: session.BacklogStatusInProgress,
+	if _, err := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerAutoReopenForPRFix, ItemID: itemID, Observed: item, To: domain.BacklogStatusInProgress,
 		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); err != nil {
 		return fmt.Errorf("transition to in_progress: %w", err)
@@ -2624,8 +2627,8 @@ func (s *BacklogService) rollbackFailedPRFixReopen(ctx context.Context, item *ba
 	itemID := item.ID
 	// Roll back to pr_pending so the reconciler can retry. Status-only CAS: the
 	// notes writes around the spawn bump updated_at, so it cannot be pinned.
-	rollbackPrecondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusInProgress)}
-	if _, rollbackErr := s.storage.Rollback(ctx, itemID, session.BacklogStatusPRPending, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
+	rollbackPrecondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress)}
+	if _, rollbackErr := s.storage.Rollback(ctx, itemID, domain.BacklogStatusPRPending, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
 		log.Error("[AutoReopenForPRFix] rollback to pr_pending failed", "item", itemID, "error", rollbackErr)
 		// The caller below only ever learns about spawnErr — a rollback
 		// failure here leaves the item stranded at in_progress with no work
@@ -2665,7 +2668,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	if err != nil {
 		return fmt.Errorf("load item: %w", err)
 	}
-	if session.BacklogStatus(item.Status) != session.BacklogStatusReview {
+	if domain.BacklogStatus(item.Status) != domain.BacklogStatusReview {
 		// Already moved on by the time this async call runs (e.g. a review gate
 		// was re-spawned by ReconcileStuck's FindReviewItemsWithoutGate path, or a
 		// human acted manually) — nothing to do.
@@ -2693,7 +2696,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 		active = findActiveJulesSession(sessions)
 	}
 	if active != nil {
-		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnReview", itemID, item.Title, session.BacklogStatus(item.Status), active.SessionUUID)
+		s.notifyRespawnBlockedByActiveSession(ctx, "AutoRespawnReview", itemID, item.Title, domain.BacklogStatus(item.Status), active.SessionUUID)
 		return nil
 	}
 	s.resolveRespawnBlockedActiveLogged(ctx, "AutoRespawnReview", itemID)
@@ -2713,7 +2716,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	}
 	if reworkCap := s.effectiveReworkCap(item); reviewCount >= reworkCap {
 		log.Info("[AutoRespawnReview] hit review session cap; leaving in review for manual action", "item", itemID, "count", reviewCount, "cap", reworkCap)
-		s.notifyReworkCapHit(ctx, itemID, item.Title, session.BacklogStatus(item.Status), "while abandoned in review with no active session", reworkCap)
+		s.notifyReworkCapHit(ctx, itemID, item.Title, domain.BacklogStatus(item.Status), "while abandoned in review with no active session", reworkCap)
 		return nil
 	}
 
@@ -2778,7 +2781,7 @@ func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, apply
 		if listErr != nil {
 			log.Warn("[AutoRespawnTriage] list sessions failed; skipping unchanged-content gate", "item", itemID, "error", listErr)
 		}
-		if listErr == nil && (item.Status == string(session.BacklogStatusIdea) || item.Status == string(session.BacklogStatusQueued)) {
+		if listErr == nil && (item.Status == string(domain.BacklogStatusIdea) || item.Status == string(domain.BacklogStatusQueued)) {
 			// Checked before the queued->idea reset below so a skipped item is not demoted.
 			if reason := unchangedRetriageSkipReason(item, sessions); reason != "" {
 				s.recordTriageSkip(ctx, itemID, reason+"; human action needed (approve the plan or edit the item)")
@@ -2787,13 +2790,13 @@ func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, apply
 		}
 	}
 
-	switch session.BacklogStatus(item.Status) {
-	case session.BacklogStatusIdea:
+	switch domain.BacklogStatus(item.Status) {
+	case domain.BacklogStatusIdea:
 		// Already in the state TriggerTriage requires — fall through below.
-	case session.BacklogStatusQueued:
-		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusQueued)}
-		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerRespawnTriage, ItemID: itemID, To: session.BacklogStatusIdea,
+	case domain.BacklogStatusQueued:
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusQueued)}
+		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerRespawnTriage, ItemID: itemID, To: domain.BacklogStatusIdea,
 			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			return fmt.Errorf("reset queued item to idea before retriage: %w", transErr)
@@ -3024,9 +3027,9 @@ func (s *BacklogService) skipTriageForNewItem(ctx context.Context, itemID string
 		return false
 	}
 	s.recordTriageSkip(ctx, itemID, reason)
-	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
-	if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerMaybeTriggerTriage, ItemID: itemID, To: session.BacklogStatusReady,
+	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusIdea)}
+	if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerMaybeTriggerTriage, ItemID: itemID, To: domain.BacklogStatusReady,
 		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 	}); transErr != nil {
 		if isEngineDenial(transErr) {
@@ -3107,9 +3110,9 @@ func (s *BacklogService) TriggerReReview(
 	}
 
 	// 2. Validate item is in review status.
-	if item.Status != string(session.BacklogStatusReview) {
+	if item.Status != string(domain.BacklogStatusReview) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("item must be in %q status to re-trigger review, got %q", session.BacklogStatusReview, item.Status))
+			fmt.Errorf("item must be in %q status to re-trigger review, got %q", domain.BacklogStatusReview, item.Status))
 	}
 
 	// 3. Repo path required.
@@ -3157,7 +3160,7 @@ func (s *BacklogService) TriggerReReview(
 		if wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, mostRecentWorkSession.SessionUUID); wtErr == nil && wt.WorktreePath != "" && wt.BranchName != "" {
 			if ok, blockedSummary := git.EnsureBranchSyncedWithMain(wt.WorktreePath, wt.BranchName, prFixMainBranch, git.DefaultBranchDriftThreshold); !ok {
 				log.Warn("[TriggerReReview] branch drift blocked review", "item", item.ID, "branch", wt.BranchName, "summary", blockedSummary)
-				is, createErr := backlog.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
+				is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review branch-drift-blocked verdict: %w", createErr))
 				}
@@ -3198,7 +3201,7 @@ func (s *BacklogService) TriggerReReview(
 		priorVerdictSection = fmt.Sprintf("\n## Prior Review Verdict\nOutcome: %s\nSummary: %s\n", rv.OverallOutcome, rv.Summary)
 	}
 
-	attachedImages := backlog.AttachedImagesSection(item.Description)
+	attachedImages := pipeline.AttachedImagesSection(item.Description)
 	if attachedImages != "" {
 		attachedImages = "\n" + attachedImages
 	}
@@ -3234,7 +3237,7 @@ Call submit_review_verdict with:
   verdicts: [{"criterion_index": N, "outcome": "PASS|FAIL|PARTIAL", "evidence": "<specific evidence>"}]
 
 Do not modify the code. Only write the review verdict.
-`, backlog.SanitizeDiff(workSessionDiff), item.ID)
+`, pipeline.SanitizeDiff(workSessionDiff), item.ID)
 
 	// 9. Headless path — preferred when a headless pool is configured.
 	// This avoids needing tmux and runs the review inline via LLM call.
@@ -3252,7 +3255,7 @@ Do not modify the code. Only write the review verdict.
 		// ReviewGateRunner.Run (session/review_gate.go) blocks on an unrecoverable diff.
 		if workSessionDiff == "" && !codebaseWorkDirExists {
 			blockedSummary := fmt.Sprintf("Review blocked: no diff could be computed and the codebase-read fallback directory (%s) does not exist on disk. The recorded worktree may have been cleaned up without its DB row being updated — this needs investigation, not rework.", codebaseWorkDir)
-			is, createErr := backlog.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
+			is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, blockedSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review blocked verdict: %w", createErr))
 			}
@@ -3292,7 +3295,7 @@ Do not modify the code. Only write the review verdict.
 		transcriptCleanup := func() {}
 		defer func() { transcriptCleanup() }()
 
-		var extras backlog.ReviewContextExtras
+		var extras pipeline.ReviewContextExtras
 		if workSessionDiff == "" {
 			// sessions was already loaded above (step 4) — reuse it rather than a second
 			// ListItemSessions round trip.
@@ -3318,7 +3321,7 @@ Do not modify the code. Only write the review verdict.
 		}
 
 		headlessPrompt := s.reviewPromptFor(item, acSnapshot, workSessionDiff, false, verificationNotes, extras)
-		systemPrompt, callOpts, callTimeout, reviewPath := backlog.BuildReviewCallOptions(workSessionDiff, codebaseWorkDir)
+		systemPrompt, callOpts, callTimeout, reviewPath := pipeline.BuildReviewCallOptions(workSessionDiff, codebaseWorkDir)
 
 		// Resolve this stage's configured (program, model) executor (Epic 2.3,
 		// Story 2.3.3), mirroring TriggerTriage's identical resolution. As there:
@@ -3329,7 +3332,7 @@ Do not modify the code. Only write the review verdict.
 		if s.pipelineEngine != nil {
 			reviewExecProgram, reviewExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleReview)
 		}
-		reviewExecutorHash := backlog.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
+		reviewExecutorHash := pipeline.ComputeExecutorHash(reviewExecProgram, reviewExecModel)
 		reviewExecModel = pinnedStageModel(session.StageRoleReview, reviewExecProgram, reviewExecModel)
 		reviewCaller, reviewConfiguredProgram, reviewFallbackReason := s.resolveHeadlessCaller(reviewExecProgram, item.ID, "review")
 		reviewResolvedModel, reviewModelErr := session.ResolveModel(s.modelFamilies, reviewExecModel)
@@ -3355,11 +3358,11 @@ Do not modify the code. Only write the review verdict.
 		if reviewPath == "codebase-read" && !s.capabilityCheck.Ensure(ctx, s.headlessPool) {
 			reviewPath = "codebase-read-degraded"
 			capSummary := "Review UNVERIFIABLE: codebase-read capability self-check failed — this process's claude CLI/config does not appear to grant WorkDir+AllowedTools+PermissionMode read access, so no real codebase-read call was attempted."
-			is, createErr := backlog.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, capSummary)
+			is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, capSummary)
 			if createErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review capability-self-check verdict: %w", createErr))
 			}
-			log.Warn("[TriggerReReview] headless re-review complete", "item", item.ID, "outcome", session.ReviewVerdictUnverifiable, "path", reviewPath, "duration_ms", time.Since(callStart).Milliseconds())
+			log.Warn("[TriggerReReview] headless re-review complete", "item", item.ID, "outcome", domain.ReviewVerdictUnverifiable, "path", reviewPath, "duration_ms", time.Since(callStart).Milliseconds())
 			return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
 				ItemSession: itemSessionToProto(is, s.buildCostLookup()),
 			}), nil
@@ -3401,11 +3404,11 @@ Do not modify the code. Only write the review verdict.
 			if reviewPath == "codebase-read" && (errors.Is(reviewCtx.Err(), context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.Canceled)) {
 				reviewPath = "codebase-read-degraded"
 				timeoutSummary := fmt.Sprintf("Review UNVERIFIABLE: codebase-read call timed out or was cancelled after %s (%v) — could not independently verify criteria against the codebase.", callTimeout, reviewCtx.Err())
-				is, createErr := backlog.RecordDegradedReviewVerdict(s.storage, item.ID, session.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, timeoutSummary)
+				is, createErr := pipeline.RecordDegradedReviewVerdict(s.storage, item.ID, domain.AcCriteriaJSON(acSnapshotJSON), services.HeadlessReReviewUUIDPrefix, timeoutSummary)
 				if createErr != nil {
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save headless re-review timeout verdict: %w", createErr))
 				}
-				log.Warn("[TriggerReReview] headless re-review complete", "item", item.ID, "outcome", session.ReviewVerdictUnverifiable, "path", reviewPath, "duration_ms", time.Since(callStart).Milliseconds())
+				log.Warn("[TriggerReReview] headless re-review complete", "item", item.ID, "outcome", domain.ReviewVerdictUnverifiable, "path", reviewPath, "duration_ms", time.Since(callStart).Milliseconds())
 				return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
 					ItemSession: itemSessionToProto(is, s.buildCostLookup()),
 				}), nil
@@ -3424,7 +3427,7 @@ Do not modify the code. Only write the review verdict.
 				ItemID:      item.ID,
 				SessionUUID: services.HeadlessReReviewUUIDPrefix + uuid.New().String(),
 				SessionRole: session.SessionRoleReview,
-				AcSnapshot:  session.AcCriteriaJSON(acSnapshotJSON),
+				AcSnapshot:  domain.AcCriteriaJSON(acSnapshotJSON),
 			}); failCreateErr != nil {
 				log.Warn("[TriggerReReview] failed to record audit ItemSession for failed call", "item", item.ID, "error", failCreateErr)
 			} else {
@@ -3437,9 +3440,9 @@ Do not modify the code. Only write the review verdict.
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("headless re-review call failed: %w", callErr))
 		}
 
-		overall, perCriterion, reviewSummary := backlog.ParseHeadlessVerdictResult(reviewResult)
-		toolReads := backlog.ParseHeadlessToolReads(reviewResult)
-		overall, perCriterion, reviewSummary, reviewPath = backlog.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir, item.PlanArtifactsPath)
+		overall, perCriterion, reviewSummary := pipeline.ParseHeadlessVerdictResult(reviewResult)
+		toolReads := pipeline.ParseHeadlessToolReads(reviewResult)
+		overall, perCriterion, reviewSummary, reviewPath = pipeline.DegradeIfUnverified(reviewPath, overall, perCriterion, reviewSummary, toolReads, codebaseWorkDir, item.PlanArtifactsPath)
 		// reviewPath now carries the final path label ("diff", "codebase-read-verified",
 		// or "codebase-read-degraded"), logged below via Epic 2.5's path=/duration_ms=
 		// observability fields.
@@ -3461,7 +3464,7 @@ Do not modify the code. Only write the review verdict.
 			SessionUUID:            reviewSessionUUID,
 			ConversationUUID:       reviewConversationID,
 			SessionRole:            session.SessionRoleReview,
-			AcSnapshot:             session.AcCriteriaJSON(acSnapshotJSON),
+			AcSnapshot:             domain.AcCriteriaJSON(acSnapshotJSON),
 			EstimatedCostUsd:       callCostUSD,
 			CostUnpriced:           !callCostPriced,
 			ResolvedProgram:        reviewExecProgram,
@@ -3506,13 +3509,13 @@ Do not modify the code. Only write the review verdict.
 		// item's "Ship PR" action (backlog_service_ship.go) is the intended
 		// recovery path once left here (docs/tasks/backlog-feature-improvement.md,
 		// 2026-07-18 update).
-		if overall == session.ReviewVerdictPass {
+		if overall == domain.ReviewVerdictPass {
 			if !s.isCodeShippedToMain(ctx, item.ID, item.RepoPath, "TriggerReReview") {
 				log.Info("[TriggerReReview] PASS verdict but code not verified on main — leaving in review for manual transition/override", "item", item.ID)
 			} else {
-				precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
-				if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-					Caller: session.CallerTriggerReReview, ItemID: item.ID, To: session.BacklogStatusDone,
+				precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}
+				if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+					Caller: domain.CallerTriggerReReview, ItemID: item.ID, To: domain.BacklogStatusDone,
 					Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 				}); transErr != nil {
 					log.Warn("[TriggerReReview] PASS but transition to done failed", "error", transErr)
@@ -3585,7 +3588,7 @@ Do not modify the code. Only write the review verdict.
 		ItemID:        item.ID,
 		SessionUUID:   inst.UUID,
 		SessionRole:   session.SessionRoleReview,
-		AcSnapshot:    session.AcCriteriaJSON(acSnapshotJSON),
+		AcSnapshot:    domain.AcCriteriaJSON(acSnapshotJSON),
 		DiffTruncated: diffTruncated,
 	})
 	if err != nil {
@@ -3593,7 +3596,7 @@ Do not modify the code. Only write the review verdict.
 	}
 
 	// Capture the pre-review HEAD SHA so diffs against base..HEAD work correctly.
-	if baseSHA, shaErr := backlog.GetGitHeadSHA(item.RepoPath); shaErr == nil && baseSHA != "" {
+	if baseSHA, shaErr := pipeline.GetGitHeadSHA(item.RepoPath); shaErr == nil && baseSHA != "" {
 		_ = s.storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA)
 	}
 
@@ -3735,7 +3738,7 @@ func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, item
 			live = s.sessionStopper != nil && s.sessionStopper.IsSessionLive(is.SessionUUID)
 		}
 		notLive := isStale || !live
-		statusAdvanced := itemStatus != string(session.BacklogStatusIdea)
+		statusAdvanced := itemStatus != string(domain.BacklogStatusIdea)
 		if notLive || statusAdvanced {
 			// BUG-065: attribute this tombstone to "shutdown" — matching
 			// classifyHeadlessCallError's bucket name, which
@@ -3837,7 +3840,7 @@ func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath st
 	// present-but-wrong-branch directory must not be handed to the reviewer as this
 	// session's own codebase; a missing directory is not itself a mismatch (mirrors
 	// the review-gate fallback), so it still reaches the exists-check below.
-	if mismatchReason := backlog.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+	if mismatchReason := reviewgate.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
 		log.Warn("[TriggerReReview] resolveCodebaseWorkDir worktree identity mismatch", "session", workSession.SessionUUID, "worktree", wt.WorktreePath, "reason", mismatchReason)
 		return wt.WorktreePath, false
 	}
@@ -3871,7 +3874,7 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 	// gone directory (set base/head from the row, skip straight to the repoPath
 	// fallback below) rather than trusting GetGitDiff to diff the wrong checkout.
 	if haveWorktree {
-		if mismatchReason := backlog.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+		if mismatchReason := reviewgate.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
 			log.Warn("[TriggerReReview] getWorkSessionDiff worktree identity mismatch", "session", workSession.SessionUUID, "worktree", wt.WorktreePath, "reason", mismatchReason)
 			haveWorktree = false
 			diffBaseSHA = wt.BaseCommitSHA
@@ -3880,7 +3883,7 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 	}
 	if haveWorktree {
 		// Try the dedicated worktree first.
-		diff, truncated, diffErr := backlog.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
+		diff, truncated, diffErr := pipeline.GetGitDiff(ctx, wt.WorktreePath, wt.BaseCommitSHA)
 		if diffErr == nil {
 			return diff, truncated
 		}
@@ -3908,7 +3911,7 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 		log.Warn("[TriggerReReview] work session has no resolvable branch; refusing to diff the shared checkout", "session", workSession.SessionUUID)
 		return "", false
 	}
-	diff, truncated, diffErr := backlog.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
+	diff, truncated, diffErr := pipeline.GetGitDiffRef(ctx, diffDir, diffBaseSHA, diffHeadRef)
 	if diffErr == nil {
 		return diff, truncated
 	}
@@ -3935,9 +3938,9 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 		}
 	}
 	if diffHeadRef != "" {
-		if recoveredSHA, recoverErr := backlog.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
+		if recoveredSHA, recoverErr := pipeline.RecoverBaseCommitSHA(ctx, recoverDir, diffHeadRef); recoverErr != nil {
 			log.Warn("[TriggerReReview] RecoverBaseCommitSHA failed", "dir", recoverDir, "error", recoverErr)
-		} else if recoveredDiff, recoveredTruncated, retryErr := backlog.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
+		} else if recoveredDiff, recoveredTruncated, retryErr := pipeline.GetGitDiffRef(ctx, recoverDir, recoveredSHA, diffHeadRef); retryErr != nil {
 			log.Warn("[TriggerReReview] retry with recovered base failed", "base", recoveredSHA, "dir", recoverDir, "error", retryErr)
 		} else if strings.TrimSpace(recoveredDiff) == "" {
 			// A recovered base that produces an empty diff is indistinguishable from
@@ -3955,11 +3958,11 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 
 // resolveACSnapshot returns the acceptance criteria to use for a re-review. It prefers
 // the snapshot captured at work-session start; falls back to the item's current AC.
-func resolveACSnapshot(workSession *backlogdto.ItemSessionSummary, itemAC session.AcCriteriaJSON) []session.AcCriterion {
-	live, _ := session.ParseAcCriteria(itemAC)
+func resolveACSnapshot(workSession *backlogdto.ItemSessionSummary, itemAC domain.AcCriteriaJSON) []domain.AcCriterion {
+	live, _ := domain.ParseAcCriteria(itemAC)
 	if workSession != nil && workSession.AcSnapshot != "" {
-		if ac, _ := session.ParseAcCriteria(workSession.AcSnapshot); len(ac) > 0 {
-			return backlog.MergeLiveCriterionNotes(ac, live)
+		if ac, _ := domain.ParseAcCriteria(workSession.AcSnapshot); len(ac) > 0 {
+			return pipeline.MergeLiveCriterionNotes(ac, live)
 		}
 	}
 	return live

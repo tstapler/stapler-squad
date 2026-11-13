@@ -10,6 +10,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // addCreatingSession inserts a Creating-status instance directly into storage
@@ -21,7 +22,7 @@ func addCreatingSession(t *testing.T, storage *session.Storage, title, uuid stri
 		Title:     title,
 		UUID:      uuid,
 		Path:      "/tmp/test",
-		Status:    session.Creating,
+		Status:    domain.Creating,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -38,15 +39,15 @@ func TestCommitTerminalStatus_should_UpdatePersistedAndInMemory_When_EpochMatche
 	storage := svctest.CreateTestStorage(t)
 	inst := addCreatingSession(t, storage, "commit-terminal-match", "uuid-commit-match")
 
-	applied := commitTerminalStatus(context.Background(), storage, inst, 0, session.Active, "")
+	applied := commitTerminalStatus(context.Background(), storage, inst, 0, domain.Active, "")
 
 	assert.True(t, applied)
-	assert.Equal(t, session.Active, inst.Status, "in-memory status must be synced")
+	assert.Equal(t, domain.Active, inst.Status, "in-memory status must be synced")
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
-	assert.Equal(t, session.Active, loaded[0].Status, "persisted row must be updated")
+	assert.Equal(t, domain.Active, loaded[0].Status, "persisted row must be updated")
 }
 
 // TestCommitTerminalStatus_should_LeaveBothUntouched_When_EpochIsStale covers
@@ -60,15 +61,15 @@ func TestCommitTerminalStatus_should_LeaveBothUntouched_When_EpochIsStale(t *tes
 
 	// The persisted row's creation_epoch defaults to 0; present a stale captured
 	// value of 1 (as if a cancel/retry had already bumped the DB row past it).
-	applied := commitTerminalStatus(context.Background(), storage, inst, 1, session.Active, "")
+	applied := commitTerminalStatus(context.Background(), storage, inst, 1, domain.Active, "")
 
 	assert.False(t, applied)
-	assert.Equal(t, session.Creating, inst.Status, "in-memory status must be untouched when the durable write is rejected")
+	assert.Equal(t, domain.Creating, inst.Status, "in-memory status must be untouched when the durable write is rejected")
 
 	loaded, err := storage.LoadInstances()
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
-	assert.Equal(t, session.Creating, loaded[0].Status, "persisted row must be unchanged when epochs mismatch")
+	assert.Equal(t, domain.Creating, loaded[0].Status, "persisted row must be unchanged when epochs mismatch")
 }
 
 // TestCommitTerminalStatus_should_NeverProduceStaleLookingButLiveSession_When_CrashBetweenPersistAndInMemorySync
@@ -87,7 +88,7 @@ func TestCommitTerminalStatus_should_NeverProduceStaleLookingButLiveSession_When
 
 	// Model the crash: the durable persist succeeds, but the process is killed
 	// before commitTerminalStatus can call instance.TryForceStatusIfEpoch.
-	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-commit-crash", 0, session.Active, "")
+	applied, err := storage.UpdateInstanceIfEpoch(context.Background(), "uuid-commit-crash", 0, domain.Active, "")
 	require.NoError(t, err)
 	require.True(t, applied, "the durable persist half of the write must succeed")
 
@@ -97,7 +98,7 @@ func TestCommitTerminalStatus_should_NeverProduceStaleLookingButLiveSession_When
 	require.NoError(t, err)
 	require.Len(t, reloaded, 1)
 
-	assert.Equal(t, session.Active, reloaded[0].Status,
+	assert.Equal(t, domain.Active, reloaded[0].Status,
 		"a reloaded instance must reflect the durably-persisted terminal status, "+
 			"not Creating — otherwise the Stale-Creation Sweeper would wrongly treat "+
 			"a genuinely-successful session as an orphaned, still-in-progress one")

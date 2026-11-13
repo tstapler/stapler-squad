@@ -2,44 +2,12 @@ package session
 
 import (
 	"context"
-	"fmt"
+	"testing"
 
-	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/session/launchcmd"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
-
-// ErrUnrecognizedBackend is returned by NewProcessManager when the resolved
-// ProcessManagerBackend value (from opts.Backend, the process-wide global, or
-// defaultBackend) matches none of the known backend constants
-// (BackendTmux/BackendNative/BackendTymux). Story 2.1.3's acceptance
-// criteria (UX-9.2) require this to fail loudly at construction, not
-// silently fall back to BackendTmux and not panic — an unrecognized value is
-// most likely a typo'd constant or corrupted persisted data, and a silent
-// tmux fallback would mask that.
-var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBackend")
-
-// getSelectedBackend resolves the process-wide default backend live, on
-// every call — no process restart required to change it. cfg.ProcessManagerBackend
-// (hand-editable in config.json) or the "tymux" feature flag
-// (config.EffectiveTymuxEnabled, live-settable via SetTymuxGlobalOverride)
-// each force BackendTymux; otherwise cfg.ProcessManagerBackend passes
-// through as-is (so "native" still works), and "" falls through to
-// NewProcessManager's defaultBackend/BackendTmux.
-func getSelectedBackend() ProcessManagerBackend {
-	return selectedBackendFromConfig(config.LoadConfig())
-}
-
-// selectedBackendFromConfig is getSelectedBackend's pure core over an
-// already-loaded config.
-func selectedBackendFromConfig(cfg *config.Config) ProcessManagerBackend {
-	backend := ProcessManagerBackend(cfg.ProcessManagerBackend)
-	if backend == BackendTymux || config.EffectiveTymuxEnabled(cfg) {
-		return BackendTymux
-	}
-	return backend
-}
 
 // NewProcessManager returns the ProcessManager implementation selected by, in order
 // of precedence: opts.Backend (an explicit per-session override), the registered
@@ -56,7 +24,7 @@ func selectedBackendFromConfig(cfg *config.Config) ProcessManagerBackend {
 // global (set at package init to BackendTmux and never empty in production) is always
 // checked first. See plan.md Epic 2.1 Story 2.1.3 for why defaultBackend's precedence
 // position is otherwise unchanged.
-func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, opts ProcessManagerOptions) (ProcessManager, error) {
+func NewProcessManager(_ context.Context, defaultBackend domain.ProcessManagerBackend, opts ProcessManagerOptions) (ProcessManager, error) {
 	backend := opts.Backend
 	if backend == "" {
 		backend = getSelectedBackend()
@@ -65,7 +33,7 @@ func NewProcessManager(_ context.Context, defaultBackend ProcessManagerBackend, 
 		backend = defaultBackend
 	}
 	if backend == "" {
-		backend = BackendTmux
+		backend = domain.BackendTmux
 	}
 
 	return buildBackend(backend, opts)
@@ -104,14 +72,6 @@ func newTymuxBackendFromOpts(opts ProcessManagerOptions) *TymuxBackend {
 	return b
 }
 
-// launchCommand returns opts.Command, or opts.Program parsed from shell text; nil when neither is set.
-func (o ProcessManagerOptions) launchCommand() launchcmd.LaunchCommand {
-	if o.Command != nil {
-		return o.Command
-	}
-	return shellLaunch(o.Program)
-}
-
 // newTymuxSessionFn is the injection seam for constructing a real tymux
 // manager, mirroring backend_tymux.go's ensureDaemonRunningFn.
 var newTymuxSessionFn = func() tymux.TymuxManager {
@@ -137,4 +97,14 @@ func newTmuxBackendFromOpts(opts ProcessManagerOptions) *TmuxBackend {
 		mgr.SetSession(sess)
 	}
 	return NewTmuxBackend(mgr)
+}
+
+// SetTymuxManagerFactoryForTest makes every tymux-backed Instance built until tb ends use
+// the manager fn returns, so tests outside this package need no live tymuxd. Not safe
+// alongside parallel tests that build tymux Instances.
+func SetTymuxManagerFactoryForTest(tb testing.TB, fn func() tymux.TymuxManager) {
+	tb.Helper()
+	orig := newTymuxSessionFn
+	newTymuxSessionFn = fn
+	tb.Cleanup(func() { newTymuxSessionFn = orig })
 }

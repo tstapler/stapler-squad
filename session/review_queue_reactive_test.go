@@ -4,7 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -20,7 +23,7 @@ func (m *reactiveTestStatusProvider) GetStatus(inst *Instance) InstanceStatusInf
 	return InstanceStatusInfo{}
 }
 
-func (m *reactiveTestStatusProvider) GetController(title string) (*ClaudeController, bool) {
+func (m *reactiveTestStatusProvider) GetController(title string) (*claudectl.ClaudeController, bool) {
 	return nil, false
 }
 
@@ -29,7 +32,7 @@ func (m *reactiveTestStatusProvider) GetController(title string) (*ClaudeControl
 func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 	t.Parallel()
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusProvider := &reactiveTestStatusProvider{
 		statusByTitle: make(map[string]InstanceStatusInfo),
 	}
@@ -43,7 +46,7 @@ func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 
 	inst := &Instance{
 		Title:  "reactive-test",
-		Status: Active,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Second)
@@ -54,7 +57,7 @@ func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 	poller.injectCachedContent(inst.Title, idleContent)
 
 	statusProvider.statusByTitle[inst.Title] = InstanceStatusInfo{
-		BasicStatus:        Active,
+		BasicStatus:        domain.Active,
 		IsControllerActive: false,
 		ClaudeStatus:       detection.StatusIdle,
 	}
@@ -78,7 +81,7 @@ func TestReactiveQueueManager_StatusChange_AddsToQueue(t *testing.T) {
 func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 	t.Parallel()
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	statusProvider := &reactiveTestStatusProvider{
 		statusByTitle: make(map[string]InstanceStatusInfo),
 	}
@@ -89,16 +92,16 @@ func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 
 	inst := &Instance{
 		Title:  "active-test",
-		Status: Active,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now()
 
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:    inst.Title,
 		SessionName:  inst.Title,
-		Reason:       ReasonIdleTimeout,
-		Priority:     PriorityLow,
+		Reason:       queuepkg.ReasonIdleTimeout,
+		Priority:     queuepkg.PriorityLow,
 		DetectedAt:   time.Now().Add(-1 * time.Minute),
 		LastActivity: time.Now().Add(-1 * time.Minute),
 	})
@@ -111,7 +114,7 @@ func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 	inst.LastUserResponse = time.Now().Add(-100 * time.Millisecond)
 
 	statusProvider.statusByTitle[inst.Title] = InstanceStatusInfo{
-		BasicStatus:        Active,
+		BasicStatus:        domain.Active,
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusExecuting,
 		IdleState: detection.IdleStateInfo{

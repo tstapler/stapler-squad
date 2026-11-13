@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -30,17 +31,17 @@ func attachWorkSessionWithRange(t *testing.T, storage *session.Storage, repo *se
 	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, sha, "work commit", time.Now(), 1))
 
 	now := time.Now()
-	require.NoError(t, repo.Create(t.Context(), session.InstanceData{
+	require.NoError(t, repo.Create(t.Context(), domain.InstanceData{
 		Title:      sessionUUID,
 		UUID:       sessionUUID,
 		Path:       worktreePath,
 		WorkingDir: worktreePath,
 		Branch:     branchName,
-		Status:     session.Paused,
+		Status:     domain.Paused,
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      repoPath,
 			WorktreePath:  worktreePath,
 			SessionName:   sessionUUID,
@@ -74,7 +75,7 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeDirectoryNoLo
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "done item, worktree cleaned up",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusDone),
+		Status:   string(domain.BacklogStatusDone),
 	})
 	require.NoError(t, err)
 
@@ -111,7 +112,7 @@ func TestGetBacklogItemDiff_should_ComputeCorrectDiff_When_WorktreeStillExists(t
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "item still in progress",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	attachWorkSessionWithRange(t, storage, repo, item.ID, "live-work", repoPath, repoPath, "feature", baseSHA, sha)
@@ -150,7 +151,7 @@ func TestGetBacklogItemDiff_should_ShowRealChanges_When_LastCommitShaNeverRefres
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "review item with a real Gate Verdict",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -197,7 +198,7 @@ func TestGetBacklogItemDiff_should_ShowEarlierSessionWork_When_LatestReworkSessi
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
 		Title:    "reopened item, rework session made no commits",
 		RepoPath: repoPath,
-		Status:   string(session.BacklogStatusReview),
+		Status:   string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/mux"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -149,18 +150,18 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Title:        title,
 		Path:         discovered.Metadata.Cwd,
 		Program:      discovered.Metadata.Command,
-		Status:       Active,
-		InstanceType: InstanceTypeExternal,
-		Backend:      BackendTmux, // wraps an existing tmux session; no global selection may re-route it
+		Status:       domain.Active,
+		InstanceType: domain.InstanceTypeExternal,
+		Backend:      domain.BackendTmux, // wraps an existing tmux session; no global selection may re-route it
 		Category:     "External",
 		Tags:         []string{"external", "mux"},
 		CreatedAt:    now, // Initialize timestamps to avoid stale notifications
 		UpdatedAt:    now,
-		ReviewState: ReviewState{
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   now,
 			LastMeaningfulOutput: now, // Initialize to now - external sessions have output when discovered
 		},
-		ExternalMetadata: &ExternalInstanceMetadata{
+		ExternalMetadata: &domain.ExternalInstanceMetadata{
 			MuxSocketPath:   discovered.SocketPath,
 			MuxEnabled:      true,
 			SourceTerminal:  guessSourceTerminal(discovered.Metadata),
@@ -177,7 +178,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 	// instance.Backend value here means genuinely corrupted/unexpected data —
 	// log it loudly and skip wrapping this discovered session rather than
 	// registering an Instance with no process manager.
-	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
 	if err != nil {
 		log.Error("failed to construct process manager for external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title, "err", err)
 		return

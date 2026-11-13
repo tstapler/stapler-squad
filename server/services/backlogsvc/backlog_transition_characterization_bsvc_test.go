@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -18,7 +19,7 @@ type transitionCase struct {
 	name string
 	// seed creates the item (and any verdict/dependency) and returns its ID.
 	seed     func(t *testing.T, svc *BacklogService) string
-	to       session.BacklogStatus
+	to       domain.BacklogStatus
 	override string
 	// wantCode is the connect code, or zero value with wantOK for success.
 	wantOK       bool
@@ -33,7 +34,7 @@ func seedItem(t *testing.T, svc *BacklogService, data backlogdto.BacklogItemData
 	return item.ID
 }
 
-func seedReviewItemWithVerdict(t *testing.T, svc *BacklogService, status session.BacklogStatus, outcome session.ReviewOutcome) string {
+func seedReviewItemWithVerdict(t *testing.T, svc *BacklogService, status domain.BacklogStatus, outcome domain.ReviewOutcome) string {
 	t.Helper()
 	id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "characterization item", Status: string(status)})
 	if outcome != "" {
@@ -50,124 +51,124 @@ func seedReviewItemWithVerdict(t *testing.T, svc *BacklogService, status session
 func TestTransitionBacklogItemStatus_CharacterizesOverrideAndErrorCodes_UnderDefaultEngine(t *testing.T) {
 	t.Parallel()
 
-	oneAC, err := session.SerializeAcCriteria([]session.AcCriterion{{Index: 0, Text: "works", Status: session.AcStatusPending}})
+	oneAC, err := domain.SerializeAcCriteria([]domain.AcCriterion{{Index: 0, Text: "works", Status: domain.AcStatusPending}})
 	require.NoError(t, err)
 
 	cases := []transitionCase{
 		{
 			name: "review_to_done_without_verdict_and_no_override_is_FailedPrecondition_ErrVerdictRequired",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedReviewItemWithVerdict(t, svc, session.BacklogStatusReview, "")
+				return seedReviewItemWithVerdict(t, svc, domain.BacklogStatusReview, "")
 			},
-			to: session.BacklogStatusDone, wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrVerdictRequired,
+			to: domain.BacklogStatusDone, wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrVerdictRequired,
 		},
 		{
 			name: "review_to_done_without_verdict_but_with_override_succeeds",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedReviewItemWithVerdict(t, svc, session.BacklogStatusReview, "")
+				return seedReviewItemWithVerdict(t, svc, domain.BacklogStatusReview, "")
 			},
-			to: session.BacklogStatusDone, override: "ship per owner", wantOK: true,
+			to: domain.BacklogStatusDone, override: "ship per owner", wantOK: true,
 		},
 		{
 			name: "review_to_ready_with_PASS_verdict_and_no_override_is_FailedPrecondition_ErrVerdictClearRequiredForReady",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedReviewItemWithVerdict(t, svc, session.BacklogStatusReview, session.ReviewVerdictPass)
+				return seedReviewItemWithVerdict(t, svc, domain.BacklogStatusReview, domain.ReviewVerdictPass)
 			},
-			to: session.BacklogStatusReady, wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrVerdictClearRequiredForReady,
+			to: domain.BacklogStatusReady, wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrVerdictClearRequiredForReady,
 		},
 		{
 			name: "review_to_ready_with_PASS_verdict_and_override_succeeds",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedReviewItemWithVerdict(t, svc, session.BacklogStatusReview, session.ReviewVerdictPass)
+				return seedReviewItemWithVerdict(t, svc, domain.BacklogStatusReview, domain.ReviewVerdictPass)
 			},
-			to: session.BacklogStatusReady, override: "re-spawn", wantOK: true,
+			to: domain.BacklogStatusReady, override: "re-spawn", wantOK: true,
 		},
 		{
 			name: "idea_to_ready_without_AC_is_FailedPrecondition_ErrACRequired",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no ac", Status: string(session.BacklogStatusIdea)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no ac", Status: string(domain.BacklogStatusIdea)})
 			},
-			to: session.BacklogStatusReady, wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrACRequired,
+			to: domain.BacklogStatusReady, wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrACRequired,
 		},
 		{
 			name: "idea_to_ready_without_AC_is_NOT_bypassed_by_override",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no ac", Status: string(session.BacklogStatusIdea)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no ac", Status: string(domain.BacklogStatusIdea)})
 			},
-			to: session.BacklogStatusReady, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrACRequired,
+			to: domain.BacklogStatusReady, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrACRequired,
 		},
 		{
 			name: "idea_to_ready_with_AC_succeeds",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "has ac", Status: string(session.BacklogStatusIdea), AcceptanceCriteria: oneAC})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "has ac", Status: string(domain.BacklogStatusIdea), AcceptanceCriteria: oneAC})
 			},
-			to: session.BacklogStatusReady, wantOK: true,
+			to: domain.BacklogStatusReady, wantOK: true,
 		},
 		{
 			name: "ready_to_in_progress_without_plan_is_FailedPrecondition_ErrPlanRequired",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no plan", Status: string(session.BacklogStatusReady)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no plan", Status: string(domain.BacklogStatusReady)})
 			},
-			to: session.BacklogStatusInProgress, wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrPlanRequired,
+			to: domain.BacklogStatusInProgress, wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrPlanRequired,
 		},
 		{
 			name: "ready_to_in_progress_without_plan_is_NOT_bypassed_by_override",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no plan", Status: string(session.BacklogStatusReady)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "no plan", Status: string(domain.BacklogStatusReady)})
 			},
-			to: session.BacklogStatusInProgress, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrPlanRequired,
+			to: domain.BacklogStatusInProgress, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrPlanRequired,
 		},
 		{
 			name: "ready_to_in_progress_with_approved_plan_but_no_artifacts_path_is_FailedPrecondition_ErrPlanArtifactsRequired",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "plan no path", Status: string(session.BacklogStatusReady)})
+				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "plan no path", Status: string(domain.BacklogStatusReady)})
 				approved := true
 				_, err := svc.storage.UpdateBacklogItem(t.Context(), id, backlogdto.BacklogItemUpdate{PlanApproved: &approved}, nil)
 				require.NoError(t, err)
 				return id
 			},
-			to: session.BacklogStatusInProgress, wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrPlanArtifactsRequired,
+			to: domain.BacklogStatusInProgress, wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrPlanArtifactsRequired,
 		},
 		{
 			name: "ready_to_in_progress_with_artifacts_path_missing_on_disk_is_FailedPrecondition_ErrPlanArtifactsMissing",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "plan gone", Status: string(session.BacklogStatusReady)})
+				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "plan gone", Status: string(domain.BacklogStatusReady)})
 				approved := true
 				gone := filepath.Join(t.TempDir(), "deleted-plan-dir")
 				_, err := svc.storage.UpdateBacklogItem(t.Context(), id, backlogdto.BacklogItemUpdate{PlanApproved: &approved, PlanArtifactsPath: &gone}, nil)
 				require.NoError(t, err)
 				return id
 			},
-			to: session.BacklogStatusInProgress, wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrPlanArtifactsMissing,
+			to: domain.BacklogStatusInProgress, wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrPlanArtifactsMissing,
 		},
 		{
 			name: "ready_to_in_progress_with_unresolved_blocker_is_FailedPrecondition_ErrUnresolvedBlockers",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				blocker := seedItem(t, svc, backlogdto.BacklogItemData{Title: "blocker", Status: string(session.BacklogStatusIdea)})
-				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "blocked", Status: string(session.BacklogStatusReady), SkipPlanning: true})
+				blocker := seedItem(t, svc, backlogdto.BacklogItemData{Title: "blocker", Status: string(domain.BacklogStatusIdea)})
+				id := seedItem(t, svc, backlogdto.BacklogItemData{Title: "blocked", Status: string(domain.BacklogStatusReady), SkipPlanning: true})
 				require.NoError(t, svc.storage.AddBacklogItemDependency(t.Context(), backlogdto.BacklogItemDependencyEdge{BlockerID: blocker, BlockedID: id}))
 				return id
 			},
-			to: session.BacklogStatusInProgress, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: session.ErrUnresolvedBlockers,
+			to: domain.BacklogStatusInProgress, override: "please", wantCode: connect.CodeFailedPrecondition, wantSentinel: domain.ErrUnresolvedBlockers,
 		},
 		{
 			name: "idea_to_done_is_InvalidArgument_without_override",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "skip ahead", Status: string(session.BacklogStatusIdea)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "skip ahead", Status: string(domain.BacklogStatusIdea)})
 			},
-			to: session.BacklogStatusDone, wantCode: connect.CodeInvalidArgument,
+			to: domain.BacklogStatusDone, wantCode: connect.CodeInvalidArgument,
 		},
 		{
 			name: "idea_to_done_is_InvalidArgument_even_with_override_because_CanTransition_runs_first",
 			seed: func(t *testing.T, svc *BacklogService) string {
-				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "skip ahead", Status: string(session.BacklogStatusIdea)})
+				return seedItem(t, svc, backlogdto.BacklogItemData{Title: "skip ahead", Status: string(domain.BacklogStatusIdea)})
 			},
-			to: session.BacklogStatusDone, override: "ship per owner", wantCode: connect.CodeInvalidArgument,
+			to: domain.BacklogStatusDone, override: "ship per owner", wantCode: connect.CodeInvalidArgument,
 		},
 		{
 			name: "unknown_item_is_NotFound",
 			seed: func(t *testing.T, svc *BacklogService) string { return "does-not-exist" },
-			to:   session.BacklogStatusDone, wantCode: connect.CodeNotFound,
+			to:   domain.BacklogStatusDone, wantCode: connect.CodeNotFound,
 		},
 	}
 
@@ -244,7 +245,7 @@ func assertNoManualOverrideRecorded(t *testing.T, svc *BacklogService, id string
 func TestTransitionBacklogItemStatus_CharacterizesNilStorage_AsUnavailable(t *testing.T) {
 	t.Parallel()
 	_, err := newBacklogServiceNilStorage().TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
-		ItemId: "x", TargetStatus: string(session.BacklogStatusReady),
+		ItemId: "x", TargetStatus: string(domain.BacklogStatusReady),
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
@@ -256,9 +257,9 @@ func TestTransitionBacklogItemStatus_CharacterizesNilStorage_AsUnavailable(t *te
 func TestIsFailedPreconditionGuardError_CharacterizesSentinelSet(t *testing.T) {
 	t.Parallel()
 	for _, sentinel := range []error{
-		session.ErrACRequired, session.ErrPlanRequired, session.ErrPlanArtifactsRequired,
-		session.ErrPlanArtifactsMissing, session.ErrVerdictRequired, session.ErrCodeNotOnMain,
-		session.ErrVerdictClearRequiredForReady, session.ErrUnresolvedBlockers,
+		domain.ErrACRequired, domain.ErrPlanRequired, domain.ErrPlanArtifactsRequired,
+		domain.ErrPlanArtifactsMissing, domain.ErrVerdictRequired, domain.ErrCodeNotOnMain,
+		domain.ErrVerdictClearRequiredForReady, domain.ErrUnresolvedBlockers,
 	} {
 		assert.True(t, isFailedPreconditionGuardError(sentinel), "%v", sentinel)
 	}

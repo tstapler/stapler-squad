@@ -9,6 +9,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // setupRQSFixture creates a ReviewQueueService wired with real SQLite storage and a
@@ -22,7 +24,7 @@ func setupRQSFixture(t *testing.T) (rqs *ReviewQueueService, poller *session.Rev
 	require.NoError(t, err)
 
 	bus := events.NewEventBus(16)
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller = session.NewReviewQueuePoller(queue, statusMgr, nil)
 
@@ -48,7 +50,7 @@ func TestAcknowledgeSession_UpdatesLiveInstance(t *testing.T) {
 	persisted := &session.Instance{
 		Title:   "sess-1",
 		Path:    "/tmp/test",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 		Program: "claude",
 	}
 	require.NoError(t, storage.AddInstance(persisted))

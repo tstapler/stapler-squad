@@ -41,8 +41,8 @@ type autoArchiveListener struct {
 	inst *session.Instance
 }
 
-func (l *autoArchiveListener) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
-	if event == session.EventExited {
+func (l *autoArchiveListener) OnLifecycleEvent(event domain.LifecycleEvent, _ string) {
+	if event == domain.EventExited {
 		go l.svc.maybeAutoArchive(l.inst)
 	}
 }
@@ -64,8 +64,8 @@ type coldRestoreOutcomeListener struct {
 	inst *session.Instance
 }
 
-func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event session.LifecycleEvent, reason string) {
-	if event == session.EventStarted && reason == session.ReasonColdRestoreLostHistory {
+func (l *coldRestoreOutcomeListener) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
+	if event == domain.EventStarted && reason == domain.ReasonColdRestoreLostHistory {
 		l.svc.onColdRestoreLostHistory(l.inst)
 	}
 }
@@ -108,8 +108,8 @@ type sessionStartedPublisher struct {
 	inst *session.Instance
 }
 
-func (l *sessionStartedPublisher) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
-	if event != session.EventStarted {
+func (l *sessionStartedPublisher) OnLifecycleEvent(event domain.LifecycleEvent, _ string) {
+	if event != domain.EventStarted {
 		return
 	}
 	go l.publishIfActive()
@@ -120,7 +120,7 @@ func (l *sessionStartedPublisher) OnLifecycleEvent(event session.LifecycleEvent,
 // emit a status update on every reconcile cycle.
 func (l *sessionStartedPublisher) publishIfActive() bool {
 	snap := l.inst.Snapshot()
-	if snap.Status != session.Active || snap.ArchivedAt != nil {
+	if snap.Status != domain.Active || snap.ArchivedAt != nil {
 		return false
 	}
 	l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
@@ -134,8 +134,8 @@ type sessionExitedPublisher struct {
 	inst *session.Instance
 }
 
-func (l *sessionExitedPublisher) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
-	if event != session.EventExited {
+func (l *sessionExitedPublisher) OnLifecycleEvent(event domain.LifecycleEvent, _ string) {
+	if event != domain.EventExited {
 		return
 	}
 	go func() {

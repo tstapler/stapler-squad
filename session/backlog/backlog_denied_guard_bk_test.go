@@ -10,20 +10,21 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func TestSelfHealStuck_should_ResolveATransitionDeniedRowOnlyOnceTheItemLeftItsFromStatus(t *testing.T) {
 	t.Parallel()
 	h := newGateHarness(t, session.ModeEnforce)
 	ctx := context.Background()
-	item := h.newItem(t, session.BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, session.CallerAutonomousComplete, session.BacklogStatusIdea, session.BacklogStatusReady, session.DeniedOperatorGate)
+	item := h.newItem(t, domain.BacklogStatusIdea)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady, backlogdto.DeniedOperatorGate)
 	l := NewBacklogLifecycleListener(h.storage)
 
 	l.selfHealStuck(ctx, h.repo)
 	assert.Len(t, denOpenRows(t, h, item.ID, domain.StuckReasonTransitionDenied), 1, "still anchored at idea")
 
-	h.moveRaw(t, item.ID, session.BacklogStatusReady)
+	h.moveRaw(t, item.ID, domain.BacklogStatusReady)
 	l.selfHealStuck(ctx, h.repo)
 	assert.Empty(t, denOpenRows(t, h, item.ID, domain.StuckReasonTransitionDenied), "the item moved on")
 }
@@ -39,10 +40,10 @@ func TestReconcileOrphanedTriageItems_should_NotMarkOrphaned_When_IdeaHasAnOpenD
 			t.Parallel()
 			h := newGateHarness(t, session.ModeEnforce)
 			ctx := context.Background()
-			denBlock(t, h, session.BacklogStatusIdea, session.BacklogStatusReady)
+			denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 			item := newEndedTriageTestItem(t, h.storage, h.repo)
 			if tc.denied {
-				denOpenDenial(t, h, item.ID, session.CallerAutonomousComplete, session.BacklogStatusIdea, session.BacklogStatusReady, session.DeniedOperatorGate)
+				denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady, backlogdto.DeniedOperatorGate)
 			}
 
 			NewBacklogLifecycleListener(h.storage).reconcileOrphanedTriageItems(ctx, h.repo)
@@ -56,11 +57,11 @@ func TestReconcileOrphanedTriageRemediation_should_SpendNoAttempt_When_IdeaHasAn
 	t.Parallel()
 	h := newGateHarness(t, session.ModeEnforce)
 	ctx := context.Background()
-	denBlock(t, h, session.BacklogStatusIdea, session.BacklogStatusReady)
+	denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 	item := newEndedTriageTestItem(t, h.storage, h.repo)
-	_, err := h.storage.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, session.BacklogStatusIdea, "pre-existing orphan row")
+	_, err := h.storage.MarkStuck(ctx, item.ID, domain.StuckReasonOrphanedTriage, domain.BacklogStatusIdea, "pre-existing orphan row")
 	require.NoError(t, err)
-	denOpenDenial(t, h, item.ID, session.CallerAutonomousComplete, session.BacklogStatusIdea, session.BacklogStatusReady, session.DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady, backlogdto.DeniedOperatorGate)
 
 	NewBacklogLifecycleListener(h.storage).reconcileOrphanedTriageRemediation(ctx, h.repo)
 
@@ -79,10 +80,10 @@ func TestReconcileOrphanedAgentPRs_should_SkipTheGitHubLookup_When_ReviewHasAnOp
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newGateHarness(t, session.ModeEnforce)
-			denBlock(t, h, session.BacklogStatusReview, session.BacklogStatusPRPending)
+			denBlock(t, h, domain.BacklogStatusReview, domain.BacklogStatusPRPending)
 			item := newOrphanedAgentPRTestItem(t, h.storage, "backlog/den-orphan")
 			if tc.denied {
-				denOpenDenial(t, h, item.ID, session.CallerOrphanedAgentPR, session.BacklogStatusReview, session.BacklogStatusPRPending, session.DeniedOperatorGate)
+				denOpenDenial(t, h, item.ID, domain.CallerOrphanedAgentPR, domain.BacklogStatusReview, domain.BacklogStatusPRPending, backlogdto.DeniedOperatorGate)
 			}
 			lookups := 0
 			l := NewBacklogLifecycleListener(h.storage)
@@ -102,11 +103,11 @@ func TestReconcilePushFailedItems_should_SpendNoAttempt_When_ReviewHasAnOpenDeni
 	t.Parallel()
 	h := newGateHarness(t, session.ModeEnforce)
 	ctx := context.Background()
-	denBlock(t, h, session.BacklogStatusReview, session.BacklogStatusPRPending)
-	item := h.newItem(t, session.BacklogStatusReview)
-	_, err := h.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, session.BacklogStatusReview, "push rejected")
+	denBlock(t, h, domain.BacklogStatusReview, domain.BacklogStatusPRPending)
+	item := h.newItem(t, domain.BacklogStatusReview)
+	_, err := h.storage.MarkStuck(ctx, item.ID, domain.StuckReasonPushFailed, domain.BacklogStatusReview, "push rejected")
 	require.NoError(t, err)
-	denOpenDenial(t, h, item.ID, session.CallerPushCreatePRFallback, session.BacklogStatusReview, session.BacklogStatusPRPending, session.DeniedOperatorGate)
+	denOpenDenial(t, h, item.ID, domain.CallerPushCreatePRFallback, domain.BacklogStatusReview, domain.BacklogStatusPRPending, backlogdto.DeniedOperatorGate)
 
 	NewBacklogLifecycleListener(h.storage).reconcilePushFailedItems(ctx, h.repo)
 
@@ -120,16 +121,16 @@ func TestReconcileUnprocessedReviewVerdicts_should_NotApplyTheVerdict_When_Revie
 	for _, tc := range []struct {
 		name       string
 		denied     bool
-		wantStatus session.BacklogStatus
-	}{{"open denial", true, session.BacklogStatusReview}, {"no denial", false, session.BacklogStatusDone}} {
+		wantStatus domain.BacklogStatus
+	}{{"open denial", true, domain.BacklogStatusReview}, {"no denial", false, domain.BacklogStatusDone}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newGateHarness(t, session.ModeEnforce)
 			ctx := context.Background()
-			item := newStuckReviewTestItem(t, h.storage, session.ReviewVerdictPass, false, true)
+			item := newStuckReviewTestItem(t, h.storage, domain.ReviewVerdictPass, false, true)
 			if tc.denied {
-				denBlock(t, h, session.BacklogStatusReview, session.BacklogStatusDone)
-				denOpenDenial(t, h, item.ID, session.CallerPushCreatePRFallback, session.BacklogStatusReview, session.BacklogStatusDone, session.DeniedOperatorGate)
+				denBlock(t, h, domain.BacklogStatusReview, domain.BacklogStatusDone)
+				denOpenDenial(t, h, item.ID, domain.CallerPushCreatePRFallback, domain.BacklogStatusReview, domain.BacklogStatusDone, backlogdto.DeniedOperatorGate)
 			}
 			l := NewBacklogLifecycleListener(h.storage)
 			l.SetSessionLivenessChecker(func(sessionUUID string) bool { return !strings.HasPrefix(sessionUUID, "headless-review-") })
@@ -145,9 +146,9 @@ func TestReconcileMultiReasonEscalation_should_TreatALoneTransitionDeniedRowAsNo
 	t.Parallel()
 	h := newGateHarness(t, session.ModeEnforce)
 	ctx := context.Background()
-	denBlock(t, h, session.BacklogStatusIdea, session.BacklogStatusReady)
-	item := h.newItem(t, session.BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, session.CallerAutonomousComplete, session.BacklogStatusIdea, session.BacklogStatusReady, session.DeniedOperatorGate)
+	denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
+	item := h.newItem(t, domain.BacklogStatusIdea)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady, backlogdto.DeniedOperatorGate)
 
 	NewBacklogLifecycleListener(h.storage).reconcileMultiReasonEscalation(ctx, h.repo)
 

@@ -16,18 +16,18 @@ func TestSystemRequiredEdges_ArchiveAndRecoveryGroupsStayOutOfTableSeedAndAllowe
 	valid := domain.ValidTransitions()
 	h := newSeededSelectorHarness(t, ModeEnforce)
 
-	for _, from := range []BacklogStatus{BacklogStatusInProgress, BacklogStatusReview, BacklogStatusPRPending} {
-		require.Falsef(t, valid[from][BacklogStatusArchived], "validTransitions must not gain %s->archived", from)
+	for _, from := range []domain.BacklogStatus{domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.BacklogStatusPRPending} {
+		require.Falsef(t, valid[from][domain.BacklogStatusArchived], "validTransitions must not gain %s->archived", from)
 	}
-	require.False(t, valid[BacklogStatusArchived][BacklogStatusArchived])
+	require.False(t, valid[domain.BacklogStatusArchived][domain.BacklogStatusArchived])
 
 	// The seeded database (create-if-count-zero, never re-run) lacks these edges,
 	// so this is the stale-seed case: the union alone must let archive through.
-	for _, from := range []BacklogStatus{BacklogStatusInProgress, BacklogStatusReview, BacklogStatusPRPending, BacklogStatusDone, BacklogStatusArchived} {
-		require.Truef(t, h.sel.CanTransition(from, BacklogStatusArchived, nil), "stale seed: %s->archived", from)
+	for _, from := range []domain.BacklogStatus{domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.BacklogStatusPRPending, domain.BacklogStatusDone, domain.BacklogStatusArchived} {
+		require.Truef(t, h.sel.CanTransition(from, domain.BacklogStatusArchived, nil), "stale seed: %s->archived", from)
 	}
-	for _, from := range []BacklogStatus{BacklogStatusInProgress, BacklogStatusReview, BacklogStatusPRPending} {
-		require.NotContainsf(t, h.sel.AllowedTransitions(from, nil), BacklogStatusArchived, "%s allowed list", from)
+	for _, from := range []domain.BacklogStatus{domain.BacklogStatusInProgress, domain.BacklogStatusReview, domain.BacklogStatusPRPending} {
+		require.NotContainsf(t, h.sel.AllowedTransitions(from, nil), domain.BacklogStatusArchived, "%s allowed list", from)
 	}
 	for _, e := range systemRequiredOffGraph {
 		require.Falsef(t, valid[e.From][e.To], "%s->%s is off-graph by definition", e.From, e.To)

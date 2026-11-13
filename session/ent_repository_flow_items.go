@@ -65,9 +65,9 @@ func (r *EntFlowReader) Stages(context.Context) ([]domain.BacklogStatus, error) 
 // order; a custom stage is placed right after the earliest built-in stage that
 // can transition into it (ties by slug), or just before the terminal archived
 // stage when none does. Built-ins absent from the graph are omitted.
-func PipelineStages(engine WorkflowEngine) []BacklogStatus {
+func PipelineStages(engine domain.WorkflowEngine) []domain.BacklogStatus {
 	known, preds := walkStageGraph(engine)
-	var custom []BacklogStatus
+	var custom []domain.BacklogStatus
 	for s := range known {
 		if !isBuiltInStage(s) {
 			custom = append(custom, s)
@@ -75,23 +75,23 @@ func PipelineStages(engine WorkflowEngine) []BacklogStatus {
 	}
 	sortStatuses(custom)
 
-	after := map[BacklogStatus][]BacklogStatus{}
+	after := map[domain.BacklogStatus][]domain.BacklogStatus{}
 	for _, c := range custom {
-		anchor := BacklogStatusArchived
+		anchor := domain.BacklogStatusArchived
 		if p, ok := earliestBuiltIn(preds[c]); ok {
 			anchor = p
 		}
 		after[anchor] = append(after[anchor], c)
 	}
-	var out []BacklogStatus
+	var out []domain.BacklogStatus
 	for _, b := range BuiltInStageOrder {
-		if b == BacklogStatusArchived {
+		if b == domain.BacklogStatusArchived {
 			out = append(out, after[b]...)
 		}
 		if known[b] {
 			out = append(out, b)
 		}
-		if b != BacklogStatusArchived {
+		if b != domain.BacklogStatusArchived {
 			out = append(out, after[b]...)
 		}
 	}
@@ -100,11 +100,11 @@ func PipelineStages(engine WorkflowEngine) []BacklogStatus {
 
 // walkStageGraph explores the graph from every built-in stage and returns the
 // stages it found plus each stage's predecessors.
-func walkStageGraph(engine WorkflowEngine) (known map[BacklogStatus]bool, preds map[BacklogStatus][]BacklogStatus) {
-	known = map[BacklogStatus]bool{}
-	preds = map[BacklogStatus][]BacklogStatus{}
-	queue := append([]BacklogStatus(nil), BuiltInStageOrder...)
-	seen := map[BacklogStatus]bool{}
+func walkStageGraph(engine domain.WorkflowEngine) (known map[domain.BacklogStatus]bool, preds map[domain.BacklogStatus][]domain.BacklogStatus) {
+	known = map[domain.BacklogStatus]bool{}
+	preds = map[domain.BacklogStatus][]domain.BacklogStatus{}
+	queue := append([]domain.BacklogStatus(nil), BuiltInStageOrder...)
+	seen := map[domain.BacklogStatus]bool{}
 	for len(queue) > 0 {
 		from := queue[0]
 		queue = queue[1:]
@@ -125,7 +125,7 @@ func walkStageGraph(engine WorkflowEngine) (known map[BacklogStatus]bool, preds 
 	return known, preds
 }
 
-func isBuiltInStage(s BacklogStatus) bool {
+func isBuiltInStage(s domain.BacklogStatus) bool {
 	for _, b := range BuiltInStageOrder {
 		if b == s {
 			return true
@@ -134,7 +134,7 @@ func isBuiltInStage(s BacklogStatus) bool {
 	return false
 }
 
-func earliestBuiltIn(candidates []BacklogStatus) (BacklogStatus, bool) {
+func earliestBuiltIn(candidates []domain.BacklogStatus) (domain.BacklogStatus, bool) {
 	for _, b := range BuiltInStageOrder {
 		for _, c := range candidates {
 			if c == b {
@@ -145,7 +145,7 @@ func earliestBuiltIn(candidates []BacklogStatus) (BacklogStatus, bool) {
 	return "", false
 }
 
-func sortStatuses(ss []BacklogStatus) {
+func sortStatuses(ss []domain.BacklogStatus) {
 	for i := 1; i < len(ss); i++ {
 		for j := i; j > 0 && ss[j] < ss[j-1]; j-- {
 			ss[j], ss[j-1] = ss[j-1], ss[j]

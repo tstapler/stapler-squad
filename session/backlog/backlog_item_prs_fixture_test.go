@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -27,7 +28,7 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	t.Cleanup(cleanup)
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "item prs", AcceptanceCriteria: `[]`, Priority: 1,
-		Status: string(session.BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
+		Status: string(domain.BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
 	f := &itemPRFixture{t: t, storage: storage, repo: storage.Repo, itemID: item.ID}
@@ -39,8 +40,8 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	return f
 }
 
-func testRef(n int) session.PRRef {
-	ref, err := session.NewPRRef("github.com", "acme", "app", n)
+func testRef(n int) domain.PRRef {
+	ref, err := domain.NewPRRef("github.com", "acme", "app", n)
 	if err != nil {
 		panic(err)
 	}
@@ -55,10 +56,10 @@ func (f *itemPRFixture) session(role string) string {
 	return id
 }
 
-func (f *itemPRFixture) link(owner session.PROwner, n int, state session.PRState) {
+func (f *itemPRFixture) link(owner session.PROwner, n int, state domain.PRState) {
 	f.t.Helper()
-	res, err := f.repo.UpsertSessionPR(context.Background(), owner, testRef(n), session.PRLink{
-		Role: session.PRRolePrimary, Source: session.AttachSourceManual, Initial: session.PRInitial{State: state, Terminal: state.Terminal()},
+	res, err := f.repo.UpsertSessionPR(context.Background(), owner, testRef(n), domain.PRLink{
+		Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: state, Terminal: state.Terminal()},
 	})
 	require.NoError(f.t, err)
 	require.False(f.t, res.Tombstoned)
@@ -91,7 +92,7 @@ func TestReconcilePRPending_ShouldSyncMirrorAtEndOfPass_OnlyWhenBacklogReaderOn(
 		t.Run(map[bool]string{false: "off", true: "on"}[on], func(t *testing.T) {
 			t.Parallel()
 			f := newItemPRFixture(t, 21)
-			f.link(session.ItemPROwner(f.itemID), 22, session.PRStateOpen)
+			f.link(session.ItemPROwner(f.itemID), 22, domain.PRStateOpen)
 			listener := NewBacklogLifecycleListener(f.storage)
 			listener.backlogReaderOverride = func() bool { return on }
 			overridePRPendingChecker(t, listener, &fakePRPendingChecker{merged: false, status: &git.PRStatus{}})

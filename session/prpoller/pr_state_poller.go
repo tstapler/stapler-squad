@@ -99,7 +99,7 @@ func (p *PRStatusPoller) pollPullRequestStates(ctx context.Context, fanOut bool)
 	if len(due) == 0 {
 		return nil
 	}
-	var byRef map[session.PRRef][]*session.Instance
+	var byRef map[domain.PRRef][]*session.Instance
 	if fanOut {
 		byRef = p.instancesByRef()
 	}
@@ -128,7 +128,7 @@ func (p *PRStatusPoller) pollPullRequestStates(ctx context.Context, fanOut bool)
 	return terminal
 }
 
-func countUnverified(views []session.PRView) int {
+func countUnverified(views []domain.PRView) int {
 	n := 0
 	for _, v := range views {
 		if v.UnverifiedTerminal() {
@@ -141,15 +141,15 @@ func countUnverified(views []session.PRView) int {
 // selectDueStates applies the backoff gates and the cold-start cap. views arrive
 // non-terminal first, then unverified terminal, each newest attach first; the cap
 // keeps that order, so blocking rows resolve before seeded ones.
-func (p *PRStatusPoller) selectDueStates(views []session.PRView, now time.Time) []session.PRView {
+func (p *PRStatusPoller) selectDueStates(views []domain.PRView, now time.Time) []domain.PRView {
 	limit := p.maxColdPolls()
 	cold := 0
-	var out []session.PRView
+	var out []domain.PRView
 	for _, v := range views {
 		if !p.stateDue(v, now) {
 			continue
 		}
-		if v.State == session.PRStateUnknown || v.LastPolledAt.IsZero() {
+		if v.State == domain.PRStateUnknown || v.LastPolledAt.IsZero() {
 			if cold >= limit {
 				continue
 			}
@@ -160,7 +160,7 @@ func (p *PRStatusPoller) selectDueStates(views []session.PRView, now time.Time) 
 	return out
 }
 
-func (p *PRStatusPoller) stateDue(v session.PRView, now time.Time) bool {
+func (p *PRStatusPoller) stateDue(v domain.PRView, now time.Time) bool {
 	if now.Before(v.RateLimitResetAt) {
 		return false
 	}
@@ -184,7 +184,7 @@ func (p *PRStatusPoller) noteNonCountedFailure(stateID int, now time.Time) {
 }
 
 // pruneStateBackoffs drops retry gates of state rows no longer pollable (GC'd or terminal).
-func (p *PRStatusPoller) pruneStateBackoffs(views []session.PRView) {
+func (p *PRStatusPoller) pruneStateBackoffs(views []domain.PRView) {
 	live := make(map[int]struct{}, len(views))
 	for _, v := range views {
 		live[v.StateID] = struct{}{}
@@ -206,8 +206,8 @@ func (p *PRStatusPoller) clearStateBackoff(stateID int) {
 
 // instancesByRef indexes the live sessions by each PR they link. It copies the
 // instance list under p.mu and reads snapshots after releasing it.
-func (p *PRStatusPoller) instancesByRef() map[session.PRRef][]*session.Instance {
-	out := map[session.PRRef][]*session.Instance{}
+func (p *PRStatusPoller) instancesByRef() map[domain.PRRef][]*session.Instance {
+	out := map[domain.PRRef][]*session.Instance{}
 	for _, inst := range p.GetInstances() {
 		for _, pv := range inst.Snapshot().GitHub.PRs {
 			out[pv.Ref] = append(out[pv.Ref], inst)
@@ -217,9 +217,9 @@ func (p *PRStatusPoller) instancesByRef() map[session.PRRef][]*session.Instance 
 }
 
 // pollState fetches one PR and records the outcome. No lock is held across the request.
-func (p *PRStatusPoller) pollState(ctx context.Context, v session.PRView, src session.PRObservationSource, byRef map[session.PRRef][]*session.Instance) []int {
+func (p *PRStatusPoller) pollState(ctx context.Context, v domain.PRView, src session.PRObservationSource, byRef map[domain.PRRef][]*session.Instance) []int {
 	observedAt := p.nowTime()
-	ref, err := v.Ref.RepoRef()
+	ref, err := session.PRRepoRef(v.Ref)
 	if err != nil {
 		return nil
 	}
@@ -243,8 +243,8 @@ func (p *PRStatusPoller) pollState(ctx context.Context, v session.PRView, src se
 
 // recordUnchanged clears stale failure bookkeeping after a 304; with nothing to
 // clear it writes nothing.
-func (p *PRStatusPoller) recordUnchanged(ctx context.Context, v session.PRView, src session.PRObservationSource, at time.Time) {
-	if v.PollFailCount == 0 && v.PollError == "" || v.State == session.PRStateUnknown {
+func (p *PRStatusPoller) recordUnchanged(ctx context.Context, v domain.PRView, src session.PRObservationSource, at time.Time) {
+	if v.PollFailCount == 0 && v.PollError == "" || v.State == domain.PRStateUnknown {
 		return
 	}
 	obs := session.PRObservation{
@@ -258,8 +258,8 @@ func (p *PRStatusPoller) recordUnchanged(ctx context.Context, v session.PRView, 
 }
 
 func observationFromInfo(info *github.PRInfo, src session.PRObservationSource, at time.Time) (session.PRObservation, bool) {
-	st, err := session.ParsePRState(strings.ToLower(info.State))
-	if err != nil || st == session.PRStateUnknown {
+	st, err := domain.ParsePRState(strings.ToLower(info.State))
+	if err != nil || st == domain.PRStateUnknown {
 		return session.PRObservation{}, false
 	}
 	obs := session.PRObservation{
@@ -270,9 +270,9 @@ func observationFromInfo(info *github.PRInfo, src session.PRObservationSource, a
 	}
 	// PRInfo carries no merged_at/closed_at; updatedAt is the terminal moment.
 	switch st {
-	case session.PRStateMerged:
+	case domain.PRStateMerged:
 		obs.MergedAt = info.UpdatedAt
-	case session.PRStateClosed:
+	case domain.PRStateClosed:
 		obs.ClosedAt = info.UpdatedAt
 	}
 	return obs, true
@@ -284,7 +284,7 @@ func observationFromInfo(info *github.PRInfo, src session.PRObservationSource, a
 // mirror reconciler (T1.5.2) repairs; each session persist is serialized per
 // session so an older snapshot cannot land after a newer one. It returns the ids
 // of states that just went terminal and calls nothing else (T5.4.3 adds the listener).
-func (p *PRStatusPoller) applyPRStateUpdate(ctx context.Context, v session.PRView, info *github.PRInfo, src session.PRObservationSource, at time.Time, byRef map[session.PRRef][]*session.Instance) []int {
+func (p *PRStatusPoller) applyPRStateUpdate(ctx context.Context, v domain.PRView, info *github.PRInfo, src session.PRObservationSource, at time.Time, byRef map[domain.PRRef][]*session.Instance) []int {
 	obs, ok := observationFromInfo(info, src, at)
 	if !ok {
 		log.Warn("PR status poller: unusable PR state", "pr", v.Ref, "state", info.State)
@@ -312,7 +312,7 @@ func (p *PRStatusPoller) applyPRStateUpdate(ctx context.Context, v session.PRVie
 
 // mirrorToSession copies an applied observation into one session's PR set and
 // persists its derived terminal flag when that changed.
-func (p *PRStatusPoller) mirrorToSession(inst *session.Instance, ref session.PRRef, obs session.PRObservation, info *github.PRInfo, changed bool) {
+func (p *PRStatusPoller) mirrorToSession(inst *session.Instance, ref domain.PRRef, obs session.PRObservation, info *github.PRInfo, changed bool) {
 	priority := string(github.DerivePRPriority(info))
 	before := inst.Snapshot().GitHub.GitHubPRStatusTerminal
 	inst.ApplyPRUpdate(ref, session.PRStatusUpdate{
@@ -320,7 +320,7 @@ func (p *PRStatusPoller) mirrorToSession(inst *session.Instance, ref session.PRR
 		ApprovedCount: obs.ApprovedCount, ChangesReqCount: obs.ChangesRequestedCount, IsDraft: obs.IsDraft,
 		Terminal: obs.State.Terminal(), Checks: info.Checks, Reviews: info.Reviews,
 	})
-	inst.MirrorPRPollFacts(ref, session.PRView{Title: obs.Title, LastPolledAt: obs.ObservedAt})
+	inst.MirrorPRPollFacts(ref, domain.PRView{Title: obs.Title, LastPolledAt: obs.ObservedAt})
 	if obs.State.Terminal() {
 		inst.MarkPRTerminal(ref, obs.State)
 	}
@@ -340,7 +340,7 @@ func (p *PRStatusPoller) mirrorToSession(inst *session.Instance, ref session.PRR
 }
 
 // recordStateFailure classifies a failed fetch and records it on the row.
-func (p *PRStatusPoller) recordStateFailure(ctx context.Context, v session.PRView, ref github.RepoRef, at time.Time, err error, byRef map[session.PRRef][]*session.Instance) {
+func (p *PRStatusPoller) recordStateFailure(ctx context.Context, v domain.PRView, ref github.RepoRef, at time.Time, err error, byRef map[domain.PRRef][]*session.Instance) {
 	probe := func() (github.RepoProbe, error) {
 		if pr, ok := p.ghClient.(repoProber); ok {
 			return pr.ProbeRepo(ctx, ref)
@@ -374,7 +374,7 @@ func (p *PRStatusPoller) recordStateFailure(ctx context.Context, v session.PRVie
 
 // mirrorPollFacts pushes the row's fresh failure bookkeeping onto the linked live
 // sessions so the verify-attempt counter the UI shows moves with each poll.
-func (p *PRStatusPoller) mirrorPollFacts(ctx context.Context, ref session.PRRef, byRef map[session.PRRef][]*session.Instance) {
+func (p *PRStatusPoller) mirrorPollFacts(ctx context.Context, ref domain.PRRef, byRef map[domain.PRRef][]*session.Instance) {
 	if len(byRef[ref]) == 0 {
 		return
 	}
@@ -397,12 +397,12 @@ func rateLimitResetAfter(at time.Time, tick time.Duration) time.Time {
 // notifyIfNowUnknown raises the one-shot unknown notification when a live
 // (non-terminal) row has just exhausted its counted failures. Unverified terminal
 // rows never notify.
-func (p *PRStatusPoller) notifyIfNowUnknown(ctx context.Context, before session.PRView) {
-	if before.State == session.PRStateUnknown {
+func (p *PRStatusPoller) notifyIfNowUnknown(ctx context.Context, before domain.PRView) {
+	if before.State == domain.PRStateUnknown {
 		return
 	}
 	after, err := p.storage.GetPullRequestState(ctx, before.Ref)
-	if err != nil || after.State != session.PRStateUnknown {
+	if err != nil || after.State != domain.PRStateUnknown {
 		return
 	}
 	log.Warn("PR status poller: PR state is unknown after repeated failures", "pr", before.Ref, "poll_error", after.PollError)
@@ -415,7 +415,7 @@ func (p *PRStatusPoller) notifyIfNowUnknown(ctx context.Context, before session.
 }
 
 // SetOnPRUnknown registers the callback raised once when a PR becomes unknown.
-func (p *PRStatusPoller) SetOnPRUnknown(fn func(session.PRView)) {
+func (p *PRStatusPoller) SetOnPRUnknown(fn func(domain.PRView)) {
 	p.mu.Lock()
 	p.onPRUnknown = fn
 	p.mu.Unlock()
@@ -445,7 +445,7 @@ func (p *PRStatusPoller) armTerminalDiscovery(key string, now time.Time) {
 
 // discoveryEligible: a live, unarchived session whose links are all terminal. It
 // polls nothing else, so a new PR on its branch is the only thing that can resume it.
-func discoveryEligible(snap *session.InstanceSnapshot) bool {
+func discoveryEligible(snap *domain.InstanceSnapshot) bool {
 	gh := snap.GitHub
 	if snap.Status.IsSuspended() || snap.ArchivedAt != nil || gh.GitHubIsFork ||
 		gh.GitHubOwner == "" || gh.GitHubRepo == "" || len(gh.PRs) == 0 {
@@ -483,7 +483,7 @@ func (p *PRStatusPoller) discoverForResolvedSessions(ctx context.Context) {
 // discoverBranchPR attaches the open PR on the session's current branch when it
 // is not linked yet. AttachPR honors tombstones and the 50-link cap, and a new
 // open PR makes the mirror's terminal flag false again, resuming the session.
-func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot) {
+func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot) {
 	branch := inst.CurrentBranch()
 	if branch == "" {
 		return
@@ -515,7 +515,7 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Ins
 		}
 		return
 	}
-	prRef, err := session.NewPRRef(gh.GitHubHost, gh.GitHubOwner, gh.GitHubRepo, info.Number)
+	prRef, err := domain.NewPRRef(gh.GitHubHost, gh.GitHubOwner, gh.GitHubRepo, info.Number)
 	if err != nil {
 		storeEtag()
 		return
@@ -524,8 +524,8 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Ins
 		storeEtag()
 		return
 	}
-	initial := session.PRInitial{State: session.PRStateOpen, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
-	if err := inst.AttachPR(prRef, session.AttachSourceBranchDiscovery, initial); err != nil {
+	initial := domain.PRInitial{State: domain.PRStateOpen, URL: info.HTMLURL, Title: info.Title, HeadBranch: info.HeadRef, BaseBranch: info.BaseRef, IsDraft: info.IsDraft}
+	if err := inst.AttachPR(prRef, domain.AttachSourceBranchDiscovery, initial); err != nil {
 		log.Warn("PR status poller: attaching the discovered PR failed", "session", snap.Title, "pr", prRef, "err", err)
 		return
 	}
@@ -536,7 +536,7 @@ func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Ins
 // Refresh fetches one PR through the poll core and returns once the observation
 // was applied, dropped or failed, bounded by refreshTimeout. It never writes a
 // row itself. A PR with no state row is an error.
-func (p *PRStatusPoller) Refresh(ctx context.Context, ref session.PRRef, src session.PRObservationSource) error {
+func (p *PRStatusPoller) Refresh(ctx context.Context, ref domain.PRRef, src session.PRObservationSource) error {
 	if p.storage == nil {
 		return domain.ErrNotFound
 	}
@@ -547,7 +547,7 @@ func (p *PRStatusPoller) Refresh(ctx context.Context, ref session.PRRef, src ses
 	fctx, cancel := context.WithTimeout(ctx, refreshTimeout)
 	defer cancel()
 	fctx = github.WithGitHubCallOrigin(fctx, github.OriginWebhookReconcile)
-	var byRef map[session.PRRef][]*session.Instance
+	var byRef map[domain.PRRef][]*session.Instance
 	if p.multiPRScope(config.SessionMultiPRScopePoller) {
 		byRef = p.instancesByRef()
 	}

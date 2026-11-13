@@ -15,7 +15,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/middleware"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -25,12 +26,12 @@ type auditFixture struct {
 	itemID  string
 }
 
-func newAuditFixture(t *testing.T, status session.BacklogStatus) auditFixture {
+func newAuditFixture(t *testing.T, status domain.BacklogStatus) auditFixture {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
-	ac, err := session.SerializeAcCriteria([]session.AcCriterion{
-		{Index: 0, Text: "pending one", Status: session.AcStatusPending},
-		{Index: 1, Text: "done one", Status: session.AcStatusDone},
+	ac, err := domain.SerializeAcCriteria([]domain.AcCriterion{
+		{Index: 0, Text: "pending one", Status: domain.AcStatusPending},
+		{Index: 1, Text: "done one", Status: domain.AcStatusDone},
 	})
 	require.NoError(t, err)
 	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{
@@ -59,7 +60,7 @@ func (f auditFixture) audit(t *testing.T) []session.AcAuditEventData {
 
 func TestWaiveAcceptanceCriterion_should_DenyAndAudit_When_RequestCarriesSessionIdentity(t *testing.T) {
 	t.Parallel()
-	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	f := newAuditFixture(t, domain.BacklogStatusInProgress)
 
 	err := f.waive(t, t.Context(), 0, "self waive", map[string]string{"X-Stapler-Session-UUID": "11111111-1111-4111-8111-111111111111"})
 
@@ -73,13 +74,13 @@ func TestWaiveAcceptanceCriterion_should_DenyAndAudit_When_RequestCarriesSession
 	assert.False(t, rows[0].SessionVerified, "an unproven claim must not be recorded as verified")
 	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
 	require.NoError(t, err)
-	got, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
-	assert.Equal(t, session.AcStatusPending, got[0].Status)
+	got, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
+	assert.Equal(t, domain.AcStatusPending, got[0].Status)
 }
 
 func TestWaiveAcceptanceCriterion_should_RecordUnverifiedCaller_When_NoIdentitySignal(t *testing.T) {
 	t.Parallel()
-	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	f := newAuditFixture(t, domain.BacklogStatusInProgress)
 
 	require.NoError(t, f.waive(t, t.Context(), 0, "ok", map[string]string{"User-Agent": "curl/8", "Sec-Fetch-Site": "same-origin"}))
 
@@ -91,7 +92,7 @@ func TestWaiveAcceptanceCriterion_should_RecordUnverifiedCaller_When_NoIdentityS
 	assert.Equal(t, "curl/8", rows[0].UserAgent)
 	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
 	require.NoError(t, err)
-	got, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
+	got, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	assert.Equal(t, "unverified caller", got[0].WaivedBy)
 }
 
@@ -99,16 +100,16 @@ func TestWaiveAcceptanceCriterion_should_RefuseAndAudit_When_ItemTerminalOrCrite
 	t.Parallel()
 	cases := []struct {
 		name    string
-		status  session.BacklogStatus
+		status  domain.BacklogStatus
 		idx     int32
 		reason  string
 		code    connect.Code
 		outcome string
 	}{
-		{"done item", session.BacklogStatusDone, 0, "r", connect.CodeFailedPrecondition, "denied:item_terminal"},
-		{"archived item", session.BacklogStatusArchived, 0, "r", connect.CodeFailedPrecondition, "denied:item_terminal"},
-		{"blank reason", session.BacklogStatusInProgress, 0, " ", connect.CodeInvalidArgument, "rejected:reason_required"},
-		{"done criterion", session.BacklogStatusInProgress, 1, "r", connect.CodeFailedPrecondition, "rejected:"},
+		{"done item", domain.BacklogStatusDone, 0, "r", connect.CodeFailedPrecondition, "denied:item_terminal"},
+		{"archived item", domain.BacklogStatusArchived, 0, "r", connect.CodeFailedPrecondition, "denied:item_terminal"},
+		{"blank reason", domain.BacklogStatusInProgress, 0, " ", connect.CodeInvalidArgument, "rejected:reason_required"},
+		{"done criterion", domain.BacklogStatusInProgress, 1, "r", connect.CodeFailedPrecondition, "rejected:"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,7 +147,7 @@ func (stubValidator) ValidateAuthSession(token string) bool { return token == "g
 
 func TestUpdateBacklogItem_should_NotIntroduceOrClearWaiver_When_ClientResubmitsCriteria(t *testing.T) {
 	t.Parallel()
-	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	f := newAuditFixture(t, domain.BacklogStatusInProgress)
 	require.NoError(t, f.waive(t, t.Context(), 0, "owner call", nil))
 
 	// Resubmitting the waived criterion as pending must not clear the waiver.
@@ -171,14 +172,14 @@ func TestUpdateBacklogItem_should_NotIntroduceOrClearWaiver_When_ClientResubmits
 	require.NoError(t, err)
 	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
 	require.NoError(t, err)
-	got, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
-	assert.Equal(t, session.AcStatusWaived, got[0].Status)
+	got, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
+	assert.Equal(t, domain.AcStatusWaived, got[0].Status)
 	assert.Equal(t, "owner call", got[0].WaiverReason)
 }
 
 func TestListAcAuditEvents_should_ReturnTrailOldestFirst(t *testing.T) {
 	t.Parallel()
-	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	f := newAuditFixture(t, domain.BacklogStatusInProgress)
 	require.Error(t, f.waive(t, t.Context(), 0, "x", map[string]string{"X-Stapler-Session-UUID": "11111111-1111-4111-8111-111111111111"}))
 	require.NoError(t, f.waive(t, t.Context(), 0, "y", nil))
 
@@ -230,14 +231,14 @@ func TestAcActorFromRequest_should_MarkInvalidSessionIDAndCapRemoteAddr(t *testi
 
 func TestWaiveAcceptanceCriterion_should_RefuseRewaiveAndOversizedReason(t *testing.T) {
 	t.Parallel()
-	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	f := newAuditFixture(t, domain.BacklogStatusInProgress)
 	require.NoError(t, f.waive(t, t.Context(), 0, "first", nil))
 
 	err := f.waive(t, t.Context(), 0, "second", nil)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 
-	f2 := newAuditFixture(t, session.BacklogStatusInProgress)
+	f2 := newAuditFixture(t, domain.BacklogStatusInProgress)
 	err = f2.waive(t, t.Context(), 0, strings.Repeat("r", maxWaiverReason+1), nil)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
@@ -245,14 +246,14 @@ func TestWaiveAcceptanceCriterion_should_RefuseRewaiveAndOversizedReason(t *test
 
 func TestApplyTriageResultToUpdate_should_NeverStoreModelWaiver_And_RepoCarriesExistingWaiverByText(t *testing.T) {
 	t.Parallel()
-	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	f := newAuditFixture(t, domain.BacklogStatusInProgress)
 	require.NoError(t, f.waive(t, t.Context(), 0, "owner call", nil)) // "pending one"
 
 	// Re-triage: reorders, inserts, and the model emits a bogus waived status plus waiver metadata.
-	result := &backlog.HeadlessTriageResult{AcceptanceCriteria: []session.AcCriterion{
-		{Text: "brand new", Status: session.AcStatusWaived, WaiverReason: "model says so", WaivedBy: "model"},
-		{Text: "done one", Status: session.AcStatusDone},
-		{Text: "Pending One", Status: session.AcStatusPending},
+	result := &pipeline.HeadlessTriageResult{AcceptanceCriteria: []domain.AcCriterion{
+		{Text: "brand new", Status: domain.AcStatusWaived, WaiverReason: "model says so", WaivedBy: "model"},
+		{Text: "done one", Status: domain.AcStatusDone},
+		{Text: "Pending One", Status: domain.AcStatusPending},
 	}}
 	var update backlogdto.BacklogItemUpdate
 	applyTriageResultToUpdate(result, &update)
@@ -261,19 +262,19 @@ func TestApplyTriageResultToUpdate_should_NeverStoreModelWaiver_And_RepoCarriesE
 
 	item, err := f.storage.GetBacklogItem(t.Context(), f.itemID)
 	require.NoError(t, err)
-	got, err := session.ParseAcCriteria(item.AcceptanceCriteria)
+	got, err := domain.ParseAcCriteria(item.AcceptanceCriteria)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
-	assert.Equal(t, session.AcStatusPending, got[0].Status, "model-emitted waiver is normalised away")
+	assert.Equal(t, domain.AcStatusPending, got[0].Status, "model-emitted waiver is normalised away")
 	assert.Empty(t, got[0].WaivedBy)
-	assert.Equal(t, session.AcStatusWaived, got[2].Status, "existing waiver follows its text to the new index")
+	assert.Equal(t, domain.AcStatusWaived, got[2].Status, "existing waiver follows its text to the new index")
 	assert.Equal(t, "owner call", got[2].WaiverReason)
 	assert.NotEmpty(t, got[2].WaivedBy)
 }
 
 func TestUpdateBacklogItem_should_ReturnClearedWaivers_When_CriterionTextChanges(t *testing.T) {
 	t.Parallel()
-	f := newAuditFixture(t, session.BacklogStatusInProgress)
+	f := newAuditFixture(t, domain.BacklogStatusInProgress)
 	require.NoError(t, f.waive(t, t.Context(), 0, "owner call", nil)) // "pending one"
 
 	resp, err := f.svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{

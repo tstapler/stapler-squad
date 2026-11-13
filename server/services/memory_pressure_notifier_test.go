@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeRatio returns a ratioFunc that always reports the given (ratio, true).
@@ -113,10 +113,10 @@ func TestMemoryPressureNotifier_checkOnce_should_ReArm_When_RatioDropsBelowClear
 }
 
 func TestMemoryPressureNotifier_reclaimOptionsText_should_ListOnlyIdleActiveSessions_SortedLongestFirst(t *testing.T) {
-	shortIdle := newStaleTestInstance("short-idle-sess", "uuid-1", session.Active, time.Now().Add(-11*time.Minute))
-	longIdle := newStaleTestInstance("long-idle-sess", "uuid-2", session.Active, time.Now().Add(-30*time.Minute))
-	busySession := newStaleTestInstance("busy-sess", "uuid-3", session.Active, time.Now())
-	pausedSession := newStaleTestInstance("paused-sess", "uuid-4", session.Paused, time.Now().Add(-60*time.Minute))
+	shortIdle := newStaleTestInstance("short-idle-sess", "uuid-1", domain.Active, time.Now().Add(-11*time.Minute))
+	longIdle := newStaleTestInstance("long-idle-sess", "uuid-2", domain.Active, time.Now().Add(-30*time.Minute))
+	busySession := newStaleTestInstance("busy-sess", "uuid-3", domain.Active, time.Now())
+	pausedSession := newStaleTestInstance("paused-sess", "uuid-4", domain.Paused, time.Now().Add(-60*time.Minute))
 	poller := newTestNotifierPoller(shortIdle, longIdle, busySession, pausedSession)
 
 	notifier := NewMemoryPressureNotifier(poller, nil)

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -46,12 +48,12 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 	}()
 
 	// Set Claude session data with valid UUID
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
 		LastAttached:     time.Now(),
-		Settings: ClaudeSettings{
+		Settings: domain.ClaudeSettings{
 			AutoReattach:          true,
 			CreateNewOnMissing:    true,
 			SessionTimeoutMinutes: 60,
@@ -88,7 +90,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 
 	// Verify the restart also used the --resume flag
 	assert.True(t, instance.Started(), "Instance should be started after restart")
-	assert.Equal(t, Running, instance.Status, "Instance should be running after restart")
+	assert.Equal(t, domain.Active, instance.Status, "Instance should be running after restart")
 
 	t.Logf("✓ Session restarted successfully with conversation continuity")
 }
@@ -146,7 +148,7 @@ func testRestartWithInvalidUUID(t *testing.T) {
 	}()
 
 	// Set Claude session data with INVALID UUID
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: invalidSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
@@ -188,7 +190,7 @@ func testRestartNonClaudeProgram(t *testing.T) {
 	}()
 
 	// Set Claude session data (should be ignored for non-Claude programs)
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-123",
 		ProjectName:      "test-project",
@@ -230,7 +232,7 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-456",
 		ProjectName:      "health-check-project",
@@ -266,7 +268,7 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 
 	// Verify session is restored
 	assert.True(t, instance.Started(), "Instance should be started after restart")
-	assert.Equal(t, Running, instance.Status, "Instance should be running after restart")
+	assert.Equal(t, domain.Active, instance.Status, "Instance should be running after restart")
 
 	t.Logf("✓ Health checker automatic restart succeeded with conversation continuity")
 }
@@ -289,7 +291,7 @@ func testLazyRecoveryRestart(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-789",
 		ProjectName:      "lazy-recovery-project",
@@ -408,7 +410,7 @@ func testCommandEnrichmentFlow(t *testing.T) {
 
 			// Set session data if provided
 			if tc.sessionID != "" {
-				instance.SetClaudeSession(&ClaudeSessionData{
+				instance.SetClaudeSession(&domain.ClaudeSessionData{
 					ConversationUUID: tc.sessionID,
 					SquadSessionID:   "conv-test",
 					ProjectName:      "test-project",
@@ -456,7 +458,7 @@ func testMultipleRestartCycles(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-multi",
 		ProjectName:      "multi-restart-project",
@@ -518,12 +520,12 @@ func testSessionDataPersistence(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	originalSession := &ClaudeSessionData{
+	originalSession := &domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-persist",
 		ProjectName:      "persistence-project",
 		LastAttached:     time.Now(),
-		Settings: ClaudeSettings{
+		Settings: domain.ClaudeSettings{
 			AutoReattach:          true,
 			CreateNewOnMissing:    true,
 			SessionTimeoutMinutes: 120,
@@ -594,7 +596,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	instance, cleanup, err := NewTestInstance(t, "worktree-claude-test").
 		WithPath(tempRepo).
 		WithProgram("claude").
-		WithSessionType(SessionTypeNewWorktree).
+		WithSessionType(domain.SessionTypeNewWorktree).
 		Build()
 	require.NoError(t, err)
 	defer func() {
@@ -606,7 +608,7 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	}()
 
 	// Set Claude session data
-	instance.SetClaudeSession(&ClaudeSessionData{
+	instance.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-worktree",
 		ProjectName:      "worktree-project",
@@ -687,7 +689,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 		// "bash -c '...'" program dies instantly, and tmux 3.8 reports an empty
 		// #{pane_pid} for a dead pane (3.7 still reported the old pid).
 		Program:          "sleep 3600",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          true,
 		TmuxServerSocket: testTmuxSocket(t),
 	})
@@ -711,7 +713,7 @@ func TestFromInstanceData_ActiveSession_DetectsAlreadyRunningTmux(t *testing.T) 
 	}()
 
 	require.True(t, instance.TmuxAlive(), "tmux session should be alive after Start")
-	require.Equal(t, Active, instance.Status, "instance should be Active after Start")
+	require.Equal(t, domain.Active, instance.Status, "instance should be Active after Start")
 
 	// A freshly-created tmux server socket can transiently fail "list-sessions"
 	// for a few ms right after creation (server startup lag), independent of
@@ -781,7 +783,7 @@ func TestLoadInstances_DoesNotBlockOnStartingActiveSessions(t *testing.T) {
 		Title:            "load-instances-defer-start-test",
 		Path:             t.TempDir(),
 		Program:          "bash -c 'echo hi; exec bash'",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          true,
 		TmuxServerSocket: testTmuxSocket(t),
 	})

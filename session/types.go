@@ -5,137 +5,15 @@ import (
 	"fmt"
 	"time"
 	"unicode"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
-
-// InstanceType represents the type of session instance
-type InstanceType int
-
-const (
-	// InstanceTypeManaged represents a session fully managed by stapler-squad
-	// with complete lifecycle control, git worktrees, and all features
-	InstanceTypeManaged InstanceType = iota
-
-	// InstanceTypeExternal represents a Claude instance discovered externally
-	// (not created by stapler-squad) with limited interaction capabilities
-	InstanceTypeExternal
-)
-
-func (it InstanceType) String() string {
-	switch it {
-	case InstanceTypeManaged:
-		return "Managed"
-	case InstanceTypeExternal:
-		return "External"
-	default:
-		return "Unknown"
-	}
-}
-
-// ExternalInstanceMetadata contains metadata for externally discovered Claude instances
-type ExternalInstanceMetadata struct {
-	// TmuxSocket is the tmux server socket this instance belongs to
-	// Empty string means the default tmux server
-	TmuxSocket string
-
-	// TmuxSessionName is the full tmux session name
-	TmuxSessionName string
-
-	// DiscoveredAt is when this external instance was first discovered
-	DiscoveredAt time.Time
-
-	// LastSeen is when this instance was last seen during discovery
-	LastSeen time.Time
-
-	// OriginalPID is the process ID when first discovered
-	OriginalPID int
-
-	// MuxSocketPath is the path to an ssq-mux Unix domain socket
-	// If set, this instance was discovered via ssq-mux and supports
-	// full bidirectional terminal access
-	MuxSocketPath string
-
-	// MuxEnabled indicates whether this instance supports mux protocol
-	MuxEnabled bool
-
-	// SourceTerminal identifies the source (e.g., "IntelliJ", "Terminal", "tmux")
-	SourceTerminal string
-}
-
-// InstancePermissions defines what operations are allowed on an instance
-type InstancePermissions struct {
-	// View operations
-	CanView bool
-
-	// Attach to the terminal session
-	CanAttach bool
-
-	// Send commands to the terminal
-	CanSendCommand bool
-
-	// Pause the session (stop tmux, keep worktree)
-	CanPause bool
-
-	// Resume a paused session
-	CanResume bool
-
-	// Destroy the session completely
-	CanDestroy bool
-
-	// Perform git operations (commit, push, worktree management)
-	CanModifyGit bool
-
-	// Add to review queue
-	CanAddToQueue bool
-
-	// RequiresConfirmation maps operation names to whether they need confirmation
-	// Used for high-risk operations on external instances
-	RequiresConfirmation map[string]bool
-}
-
-// GetManagedPermissions returns full permissions for squad-managed instances
-func GetManagedPermissions() InstancePermissions {
-	return InstancePermissions{
-		CanView:              true,
-		CanAttach:            true,
-		CanSendCommand:       true,
-		CanPause:             true,
-		CanResume:            true,
-		CanDestroy:           true,
-		CanModifyGit:         true,
-		CanAddToQueue:        true,
-		RequiresConfirmation: make(map[string]bool),
-	}
-}
-
-// GetExternalPermissions returns limited permissions for external instances
-// allowAttach controls whether attach operations are permitted (power user mode)
-func GetExternalPermissions(allowAttach bool) InstancePermissions {
-	perms := InstancePermissions{
-		CanView:              true,
-		CanAttach:            allowAttach,
-		CanSendCommand:       allowAttach,
-		CanPause:             false,
-		CanResume:            false,
-		CanDestroy:           false,
-		CanModifyGit:         false,
-		CanAddToQueue:        false,
-		RequiresConfirmation: make(map[string]bool),
-	}
-
-	// If attach is allowed, require confirmation
-	if allowAttach {
-		perms.RequiresConfirmation["attach"] = true
-		perms.RequiresConfirmation["send"] = true
-	}
-
-	return perms
-}
 
 // GetMuxExternalPermissions returns permissions for mux-enabled external instances.
 // Mux instances support full bidirectional terminal access and can be destroyed
 // since they're explicitly opted-in by launching through ssq-mux with tmux session.
-func GetMuxExternalPermissions() InstancePermissions {
-	return InstancePermissions{
+func GetMuxExternalPermissions() domain.InstancePermissions {
+	return domain.InstancePermissions{
 		CanView:        true,
 		CanAttach:      true,
 		CanSendCommand: true,
@@ -260,17 +138,6 @@ var (
 	ErrWorktreeDirty = errors.New("worktree has uncommitted changes; keeping it (force to discard)")
 )
 
-// ErrInvalidTransition is returned when a status transition is not allowed
-// by the state machine defined in state_machine.go.
-type ErrInvalidTransition struct {
-	From Status
-	To   Status
-}
-
-func (e ErrInvalidTransition) Error() string {
-	return fmt.Sprintf("invalid transition: %s -> %s", e.From, e.To)
-}
-
 // ErrDuplicateTag is returned when adding a tag that already exists.
 type ErrDuplicateTag struct {
 	Tag string
@@ -315,45 +182,6 @@ func isValidTitle(title string) bool {
 		}
 	}
 	return true
-}
-
-// Workspace describes where a session is operating. It names the four path
-// concepts the domain actually has; picking the wrong one has already shipped a
-// bug. Why, and the full story: .claude/rules/instance-lock-free-reads.md.
-//
-// Which one you want:
-//
-//	comparing two sessions' locations  -> ActiveDir
-//	reading or writing files           -> ExistingDir
-//	"same repository?"                 -> RepoRoot, or Instance.WorkspaceKey()
-//
-// Use Instance.Workspace() to obtain this value; do not construct directly.
-type Workspace struct {
-	// RepoRoot is the path the session was created against, as recorded on
-	// Instance.Path. For a session created from a pre-existing worktree this is
-	// that worktree, not the main checkout -- Instance.MainRepoPath holds the
-	// main checkout in that case.
-	RepoRoot string
-
-	// WorktreeDir is the dedicated git worktree created for this session, or ""
-	// when the session works directly in RepoRoot.
-	WorktreeDir string
-
-	// ActiveDir is where this session works: WorktreeDir if it has one, else
-	// RepoRoot. Deliberately does NOT check whether the directory still exists,
-	// so it stays stable across a worktree cleanup -- which makes it the correct
-	// key for comparing, correlating, or identifying sessions, and the right
-	// default when you are unsure.
-	ActiveDir string
-
-	// ExistingDir is ActiveDir when that directory exists on disk, else
-	// RepoRoot. Use it only to open files: pause_session deletes a worktree
-	// while keeping its branch, and without the fallback filesystem callers
-	// surface a bare "directory not found: .".
-	//
-	// Lossy by construction -- two sessions whose worktrees were both cleaned up
-	// share an ExistingDir without being in the same place, so never compare it.
-	ExistingDir string
 }
 
 // RestartState holds the state needed to restart a session

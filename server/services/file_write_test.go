@@ -18,6 +18,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const writeSessionID = "test-session"
@@ -25,15 +26,15 @@ const writeSessionID = "test-session"
 // writeWorkspaces is the WorkspaceProvider and WriteGuard of a write rig.
 type writeWorkspaces struct {
 	mu        sync.Mutex
-	ws        session.Workspace
+	ws        domain.Workspace
 	guardErr  error
 	checks    int
 	gotWrites int // spy: stays zero, a guard has no way to start or revive a session
 }
 
-func (w *writeWorkspaces) GetWorkspace(id string) (session.Workspace, error) {
+func (w *writeWorkspaces) GetWorkspace(id string) (domain.Workspace, error) {
 	if id != writeSessionID {
-		return session.Workspace{}, connect.NewError(connect.CodeNotFound, errors.New("no such session"))
+		return domain.Workspace{}, connect.NewError(connect.CodeNotFound, errors.New("no such session"))
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -293,7 +294,7 @@ func TestWriteFile_ShouldReturnFailedPreconditionWorktreeMissing_When_ActiveDirD
 	repoRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "a.go"), []byte("one\n"), 0o644))
 	// A paused worktree session: its (deleted) worktree is the active dir, the repo root is the fallback.
-	r.prov.ws = session.Workspace{
+	r.prov.ws = domain.Workspace{
 		RepoRoot: repoRoot, WorktreeDir: filepath.Join(repoRoot, "gone"),
 		ActiveDir: filepath.Join(repoRoot, "gone"), ExistingDir: repoRoot,
 	}
@@ -313,7 +314,7 @@ func mustRead(t *testing.T, p string) []byte {
 
 func TestWriteFile_ShouldSave_When_DirectoryModeSessionWorktreeDirEmpty(t *testing.T) {
 	r := newWriteRig(t)
-	r.prov.ws = session.Workspace{RepoRoot: r.dir, WorktreeDir: "", ActiveDir: r.dir, ExistingDir: r.dir}
+	r.prov.ws = domain.Workspace{RepoRoot: r.dir, WorktreeDir: "", ActiveDir: r.dir, ExistingDir: r.dir}
 	r.put("a.go", []byte("one\n"))
 
 	resp, err := r.write("a.go", "mine\n", r.token("a.go"))

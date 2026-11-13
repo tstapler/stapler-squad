@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
+
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +38,7 @@ func TestResolveSessionType_ExplicitDirectory(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeDirectory, got)
+	assert.Equal(t, domain.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
@@ -45,7 +48,7 @@ func TestResolveSessionType_ExplicitNewWorktree(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "my-branch")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeNewWorktree, got)
+	assert.Equal(t, domain.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
@@ -56,7 +59,7 @@ func TestResolveSessionType_ExplicitExistingWorktree(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeExistingWorktree, got)
+	assert.Equal(t, domain.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
@@ -66,7 +69,7 @@ func TestResolveSessionType_UnspecifiedDefaultsToDirectory(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeDirectory, got)
+	assert.Equal(t, domain.SessionTypeDirectory, got)
 }
 
 func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
@@ -77,7 +80,7 @@ func TestResolveSessionType_UnspecifiedBranchInfersNewWorktree(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "feat/my-feature")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeNewWorktree, got)
+	assert.Equal(t, domain.SessionTypeNewWorktree, got)
 }
 
 func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t *testing.T) {
@@ -89,7 +92,7 @@ func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t 
 	}
 	got, err := resolveSessionType(msg, "feat/branch")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeExistingWorktree, got)
+	assert.Equal(t, domain.SessionTypeExistingWorktree, got)
 }
 
 func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
@@ -100,7 +103,7 @@ func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
 	}
 	got, err := resolveSessionType(msg, "some-branch")
 	require.NoError(t, err)
-	assert.Equal(t, session.SessionTypeOneOff, got)
+	assert.Equal(t, domain.SessionTypeOneOff, got)
 }
 
 func TestResolveSessionType_should_ReturnError_When_SessionTypeUnrecognized(t *testing.T) {
@@ -112,7 +115,7 @@ func TestResolveSessionType_should_ReturnError_When_SessionTypeUnrecognized(t *t
 	}
 	got, err := resolveSessionType(msg, "")
 	require.Error(t, err)
-	assert.Equal(t, session.SessionType(""), got)
+	assert.Equal(t, domain.SessionType(""), got)
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +332,7 @@ func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
 		Title:   "duplicate-name",
 		Path:    t.TempDir(),
 		Program: "claude",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 	}))
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -604,7 +607,7 @@ func TestCreatePaths_ShouldAttachViaAttachPR_WhenCreateFromURLOrResolutionOrOneS
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
 	statusMgr := session.NewInstanceStatusManager()
-	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(session.NewReviewQueue(), statusMgr, nil))
+	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(queue.NewReviewQueue(), statusMgr, nil))
 	svc.SetStatusManager(statusMgr)
 
 	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *session.GitHubRef, error) {
@@ -624,7 +627,7 @@ func TestCreatePaths_ShouldAttachViaAttachPR_WhenCreateFromURLOrResolutionOrOneS
 	}, wait.WaitConfig{Timeout: 30 * time.Second, PollInterval: 50 * time.Millisecond, Description: "resolved PR attached"}))
 	prs := inst.Snapshot().GitHub.PRs
 	assert.Equal(t, 12, prs[0].Ref.Number())
-	assert.Equal(t, session.AttachSourceCreatedFromURL, prs[0].AttachSource)
+	assert.Equal(t, domain.AttachSourceCreatedFromURL, prs[0].AttachSource)
 	assert.Equal(t, 12, inst.Snapshot().GitHub.GitHubPRNumber)
 }
 
@@ -659,7 +662,7 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 
 	// Wire a status manager AND a poller so FindLiveInstance resolves the live pointer.
 	statusMgr := session.NewInstanceStatusManager()
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 	svc.SetStatusManager(statusMgr)
@@ -691,7 +694,7 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	if !managerWired {
 		// When tmux is absent the goroutine sets Status=Stopped and returns early,
 		// never reaching SetStatusManager. By 30 s the goroutine is long finished.
-		if session.Status(inst.GetStatus()) == session.Stopped {
+		if domain.Status(inst.GetStatus()) == domain.Stopped {
 			t.Skip("tmux not available; skipping status-manager wiring assertion")
 		}
 		t.Error("status manager was never wired within 30 s — regression in CreateSession goroutine")
@@ -765,10 +768,10 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	// tmux is present (LookPath above), so Stopped is a real spawn failure, not a skip:
 	// skipping here would turn the very regression under test green.
 	wait.RequireEventually(t, func() bool {
-		switch session.Status(inst.GetStatus()) {
-		case session.Active:
+		switch domain.Status(inst.GetStatus()) {
+		case domain.Active:
 			return true
-		case session.Stopped:
+		case domain.Stopped:
 			t.Fatalf("session reached Stopped instead of Active: spawn failed")
 		}
 		return false
@@ -813,7 +816,7 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 	// Wire a ReviewQueuePoller so FindLiveInstance (used by destroyCreatedSession to
 	// join the driver goroutine) resolves the live instance instead of always nil.
 	statusMgr := session.NewInstanceStatusManager()
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
 
@@ -892,7 +895,7 @@ func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T)
 		Title:            "wirecallbacks-nil-poller-" + t.Name(),
 		Path:             repoDir,
 		Program:          "sh",
-		SessionType:      session.SessionTypeExistingWorktree,
+		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: repoDir,
 		TmuxServerSocket: svc.testTmuxServerSocket,
 	})
@@ -903,7 +906,7 @@ func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T)
 
 	logs := svctest.CaptureLogs(t)
 	require.NoError(t, inst.Start(true), "nil reviewQueuePoller must fall back to permissive, not block the spawn")
-	assert.Equal(t, session.Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.Contains(t, logs.String(), "reviewQueuePoller is nil", "the fallback must log a warning, not silently allow")
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 
@@ -203,7 +204,7 @@ func TestRecordFlowMarkerForItemPR_should_DoNoItemRead_When_DecisionDeduped(t *t
 	t.Parallel()
 	repo, drv := newCountingRepo(t)
 	ctx := context.Background()
-	item := createStuckTestItem(t, repo, ctx, BacklogStatusPRPending)
+	item := createStuckTestItem(t, repo, ctx, domain.BacklogStatusPRPending)
 
 	repo.RecordFlowMarkerForItemPR(ctx, item, FlowMarkerPRFixOutcome, PRFixOutcomeSteered)
 	_, first := drv.snapshot()

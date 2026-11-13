@@ -214,7 +214,7 @@ const (
 	// existing reopen/park decision, never gating it — a misfiring heuristic
 	// here cannot newly stall an item that would otherwise proceed. Both
 	// predicates carry documented false-positive sources (see their doc
-	// comments in session/stuck_decisions.go); the UI should present this as a
+	// comments in session/backlog/stuck/decisions.go); the UI should present this as a
 	// hint to verify, not a confident verdict.
 	StuckReasonLikelyFlaky StuckReason = "likely_flaky"
 	// StuckReasonBlockedByDependency: DequeueNextQueuedItems' dependency gate
@@ -231,7 +231,7 @@ const (
 	StuckReasonBlockedByDependency StuckReason = "blocked_by_dependency"
 	// StuckReasonMultipleReasons: a synthetic, aggregate reason marking an
 	// item that has multiReasonThreshold or more *other*, non-escalation
-	// stuck reasons open simultaneously (session/stuck_decisions.go's
+	// stuck reasons open simultaneously (session/backlog/stuck/decisions.go's
 	// isMultiReasonEscalated). Set/resolved by reconcileMultiReasonEscalation
 	// (session/backlog_lifecycle_stuck.go) as the count of open non-escalation
 	// reasons crosses the threshold in either direction. Deliberately excludes
@@ -290,7 +290,7 @@ const (
 	StuckReasonWorktreeInconsistent StuckReason = "worktree_inconsistent"
 	// StuckReasonRepeatedNoopDispatch: an item with a PASS verdict, sitting in
 	// review/in_progress, has had N consecutive work sessions end with no new
-	// commits (session/stuck_decisions.go's isRepeatedNoopDispatch). Set by
+	// commits (session/backlog/stuck/decisions.go's isRepeatedNoopDispatch). Set by
 	// reconcileRepeatedNoopDispatch; while open, the dispatcher
 	// (BacklogService.spawnSessionAfterGates) refuses to spawn another work
 	// session so the loop cannot continue unattended. Resolved when the item

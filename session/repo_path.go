@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -79,7 +81,7 @@ func (r *GitHubRef) PRURL() string {
 		return ""
 	}
 	return fmt.Sprintf("https://%s/%s/%s/pull/%d",
-		github.NormalizeHost(r.Host), r.Owner, r.Repo, r.PRNumber)
+		domain.NormalizeHost(r.Host), r.Owner, r.Repo, r.PRNumber)
 }
 
 // GitHubRefType indicates what kind of GitHub reference this is.
@@ -727,46 +729,10 @@ func ResolveMainRepoRoot(repoPath string) (string, error) {
 	return resolved, nil
 }
 
-// WorkspaceKey returns a canonical identity for the repo/workspace a session belongs to,
-// used to group sibling worktrees/branches of the same repo as peers. Prefers the GitHub
-// owner/repo (stable across worktree paths); falls back to MainRepoPath, then Path.
-// Returns "" when none are set (e.g. a bare one-off session with no git remote).
-func WorkspaceKey(githubOwner, githubRepo, mainRepoPath, path string) string {
-	if githubOwner != "" && githubRepo != "" {
-		return "gh:" + strings.ToLower(githubOwner) + "/" + strings.ToLower(githubRepo)
-	}
-	if mainRepoPath != "" {
-		return "path:" + mainRepoPath
-	}
-	if path != "" {
-		return "path:" + path
-	}
-	return ""
-}
-
 // WorkspaceKey returns this instance's workspace identity. See the package-level
 // WorkspaceKey function for the derivation rules.
 func (i *Instance) WorkspaceKey() string {
-	return WorkspaceKey(i.GitHubOwner, i.GitHubRepo, i.MainRepoPath, i.Path)
-}
-
-// WorkspaceKey returns this instance data's workspace identity. See the package-level
-// WorkspaceKey function for the derivation rules.
-func (d InstanceData) WorkspaceKey() string {
-	return WorkspaceKey(d.GitHubOwner, d.GitHubRepo, d.MainRepoPath, d.Path)
-}
-
-// ActiveDir returns this instance data's resolved working directory: the git
-// worktree path if one was recorded (requires LoadOptions.LoadWorktree), else
-// Path. Mirrors Instance.Workspace().ActiveDir for callers that only have the
-// serialized InstanceData (see .claude/rules/instance-lock-free-reads.md) —
-// use this, not the raw identity Path, wherever a lookup needs to match the
-// directory a worktree session actually runs in.
-func (d InstanceData) ActiveDir() string {
-	if d.Worktree.WorktreePath != "" {
-		return d.Worktree.WorktreePath
-	}
-	return d.Path
+	return domain.WorkspaceKey(i.GitHubOwner, i.GitHubRepo, i.MainRepoPath, i.Path)
 }
 
 // ResolveBranchTip resolves branch to its commit SHA in repoPath. Worktrees share one ref

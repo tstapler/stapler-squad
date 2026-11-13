@@ -14,11 +14,12 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type prSpec struct {
 	number   int
-	state    session.PRState
+	state    domain.PRState
 	terminal bool
 }
 
@@ -26,15 +27,15 @@ type prSpec struct {
 // reloaded (hydrated, persister-wired) instance with the live poller.
 func addLivePRSession(t *testing.T, fix *forkTestFixture, title, uuid string, prs ...prSpec) *session.Instance {
 	t.Helper()
-	inst := &session.Instance{Title: title, UUID: uuid, Path: "/tmp/test", Status: session.Stopped, Program: "claude",
+	inst := &session.Instance{Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Stopped, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(), GitHubOwner: "acme", GitHubRepo: "app"}
 	require.NoError(t, fix.storage.AddInstance(inst))
 	for _, p := range prs {
-		ref, err := session.NewPRRef("", "acme", "app", p.number)
+		ref, err := domain.NewPRRef("", "acme", "app", p.number)
 		require.NoError(t, err)
 		_, err = fix.storage.AttachSessionPR(context.Background(), uuid, ref,
-			session.PRLink{Role: session.PRRolePrimary, Source: session.AttachSourceBranchDiscovery,
-				Initial: session.PRInitial{State: p.state, Terminal: p.terminal}}, session.PRMirror{})
+			domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBranchDiscovery,
+				Initial: domain.PRInitial{State: p.state, Terminal: p.terminal}}, session.PRMirror{})
 		require.NoError(t, err)
 	}
 	loaded, err := fix.storage.LoadInstances()
@@ -65,7 +66,7 @@ func TestDetachSessionPullRequest_ShouldDeleteOneLinkAndTombstoneInOneTxn(t *tes
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	inst := addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, session.PRStateMerged, true}, prSpec{12, session.PRStateOpen, false})
+	inst := addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, domain.PRStateMerged, true}, prSpec{12, domain.PRStateOpen, false})
 
 	resp, err := fix.svc.DetachSessionPullRequest(context.Background(), connect.NewRequest(
 		&sessionv1.DetachSessionPullRequestRequest{Id: "uuid-u1", Pr: protoRef(12)}))
@@ -77,8 +78,8 @@ func TestDetachSessionPullRequest_ShouldDeleteOneLinkAndTombstoneInOneTxn(t *tes
 	require.Len(t, views["uuid-u1"], 1, "only the detached link is removed")
 
 	// Branch discovery attaching #12 again is blocked by the tombstone.
-	ref12, _ := session.NewPRRef("", "acme", "app", 12)
-	require.NoError(t, inst.AttachPR(ref12, session.AttachSourceBranchDiscovery, session.PRInitial{State: session.PRStateOpen}))
+	ref12, _ := domain.NewPRRef("", "acme", "app", 12)
+	require.NoError(t, inst.AttachPR(ref12, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	views, err = fix.storage.ListSessionPRViewsByUUIDs(context.Background(), []string{"uuid-u1"})
 	require.NoError(t, err)
 	assert.Len(t, views["uuid-u1"], 1, "no recreated link")
@@ -98,7 +99,7 @@ func TestDetachSessionPullRequest_ShouldFailPrecondition_WhenPRNotAttached(t *te
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, session.PRStateOpen, false})
+	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, domain.PRStateOpen, false})
 
 	_, err := fix.svc.DetachSessionPullRequest(context.Background(), connect.NewRequest(
 		&sessionv1.DetachSessionPullRequestRequest{Id: "uuid-u1", Pr: protoRef(99)}))
@@ -113,7 +114,7 @@ func TestPinSessionPullRequest_ShouldMakePinnedActive_UntilUnpinned(t *testing.T
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	inst := addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, session.PRStateOpen, false}, prSpec{12, session.PRStateOpen, false})
+	inst := addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, domain.PRStateOpen, false}, prSpec{12, domain.PRStateOpen, false})
 	ctx := context.Background()
 
 	resp, err := fix.svc.PinSessionPullRequest(ctx, connect.NewRequest(&sessionv1.PinSessionPullRequestRequest{Id: "uuid-u1", Pr: protoRef(11)}))
@@ -147,7 +148,7 @@ func TestAttachSessionPullRequest_ShouldVerifyViaConditionalRequestAndClearTombs
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, session.PRStateOpen, false}, prSpec{30, session.PRStateOpen, false})
+	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{11, domain.PRStateOpen, false}, prSpec{30, domain.PRStateOpen, false})
 	ctx := context.Background()
 
 	// Detach #30 so a tombstone exists, then attach it by URL.
@@ -190,13 +191,13 @@ func TestRefreshSessionPullRequests_ShouldRefreshOpenAndUnverifiedRowsOnly_WhenC
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 	addLivePRSession(t, fix, "u1", "uuid-u1",
-		prSpec{9, session.PRStateUnknown, true}, prSpec{11, session.PRStateMerged, true}, prSpec{12, session.PRStateOpen, false})
+		prSpec{9, domain.PRStateUnknown, true}, prSpec{11, domain.PRStateMerged, true}, prSpec{12, domain.PRStateOpen, false})
 
 	_, err := fix.svc.RefreshSessionPullRequests(context.Background(), connect.NewRequest(&sessionv1.RefreshSessionPullRequestsRequest{Id: "uuid-u1"}))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err), "no refresher wired")
 
 	var polled []int
-	fix.svc.SetPRRefreshFunc(func(_ context.Context, _ *session.Instance, ref session.PRRef) error {
+	fix.svc.SetPRRefreshFunc(func(_ context.Context, _ *session.Instance, ref domain.PRRef) error {
 		polled = append(polled, ref.Number())
 		return nil
 	})
@@ -210,8 +211,8 @@ func TestListSessions_ShouldFilterByPR_WhenPRSetAndNotZero(t *testing.T) {
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
-	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{12, session.PRStateOpen, false})
-	addLivePRSession(t, fix, "u2", "uuid-u2", prSpec{13, session.PRStateOpen, false})
+	addLivePRSession(t, fix, "u1", "uuid-u1", prSpec{12, domain.PRStateOpen, false})
+	addLivePRSession(t, fix, "u2", "uuid-u2", prSpec{13, domain.PRStateOpen, false})
 	addLivePRSession(t, fix, "u3", "uuid-u3")
 	ctx := context.Background()
 	titles := func(req *sessionv1.ListSessionsRequest) []string {

@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 )
 
 func browseReq(mut func(*sessionv1.ListSessionArtifactsRequest)) *connect.Request[sessionv1.ListSessionArtifactsRequest] {
@@ -23,15 +23,15 @@ func browseReq(mut func(*sessionv1.ListSessionArtifactsRequest)) *connect.Reques
 
 func browseFixture() *ArtifactService {
 	at := func(d time.Duration) time.Time { return artifactT0.Add(d) }
-	pr := func(o, r string, n int, d time.Duration) artifacts.PRRecord {
-		p := prRecord(o, r, n, artifacts.PRSourceCreated)
+	pr := func(o, r string, n int, d time.Duration) domain.PRRecord {
+		p := prRecord(o, r, n, domain.PRSourceCreated)
 		p.FirstSeenAt = at(d)
 		return p
 	}
 	return newArtifactSvc(nil,
 		artifactSession("u1", "one", 0, scannedBlob(
 			pr("acme", "app", 12, 3*time.Hour),
-			artifacts.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", Subject: "fix", FirstSeenAt: at(2 * time.Hour)},
+			domain.CommitRecord{SHA: "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", Subject: "fix", FirstSeenAt: at(2 * time.Hour)},
 		)),
 		artifactSession("u2", "two", time.Hour, scannedBlob(pr("acme", "other", 3, time.Hour))),
 		artifactSession("u3", "three", 2*time.Hour, nil),
@@ -99,10 +99,10 @@ func TestListSessionArtifacts_ShouldKeepOnlySessionsTiedToThePR(t *testing.T) {
 
 func TestListSessionArtifacts_ShouldUseTheSessionsOwnPRState(t *testing.T) {
 	t.Parallel()
-	ref, err := session.NewPRRef("", "acme", "app", 12)
+	ref, err := domain.NewPRRef("", "acme", "app", 12)
 	require.NoError(t, err)
-	inst := artifactSession("u1", "one", 0, scannedBlob(prRecord("acme", "app", 12, artifacts.PRSourceCreated)))
-	require.NoError(t, inst.AttachPR(ref, session.AttachSourceCreatedFromURL, session.PRInitial{State: session.PRStateMerged, Terminal: true, URL: "https://github.com/acme/app/pull/12"}))
+	inst := artifactSession("u1", "one", 0, scannedBlob(prRecord("acme", "app", 12, domain.PRSourceCreated)))
+	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceCreatedFromURL, domain.PRInitial{State: domain.PRStateMerged, Terminal: true, URL: "https://github.com/acme/app/pull/12"}))
 	svc := newArtifactSvc(nil, inst)
 	resp, err := svc.ListSessionArtifacts(context.Background(), browseReq(func(r *sessionv1.ListSessionArtifactsRequest) { r.State = "merged" }))
 	require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestListSessionArtifacts_ShouldUseTheSessionsOwnPRState(t *testing.T) {
 func TestListSessionArtifacts_ShouldRedactLegacyBlobs(t *testing.T) {
 	t.Parallel()
 	svc := newArtifactSvc(nil, artifactSession("u1", "one", 0, scannedBlob(
-		artifacts.CILinkRecord{URL: "https://ci.example.com/runs/9?token=abcd1234secret", FirstSeenAt: artifactT0},
+		domain.CILinkRecord{URL: "https://ci.example.com/runs/9?token=abcd1234secret", FirstSeenAt: artifactT0},
 	)))
 	resp, err := svc.ListSessionArtifacts(context.Background(), browseReq(nil))
 	require.NoError(t, err)

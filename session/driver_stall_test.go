@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // livenessPM reports a fixed pane liveness; every other ProcessManager call
@@ -78,7 +79,7 @@ type stallScenario struct {
 func newStallFixture(t *testing.T, sc stallScenario) *stallFixture {
 	t.Helper()
 	last := stallTestNow.Add(-sc.quiet)
-	inst := &Instance{Title: t.Name(), Program: "pi", Status: Active, InitialPromptSentAt: last}
+	inst := &Instance{Title: t.Name(), Program: "pi", Status: domain.Active, InitialPromptSentAt: last}
 	inst.RetryMaxAttempts = retryEverything().MaxAttempts // driver start snapshots this
 	if sc.autonomous {
 		inst.Tags = []string{TagBacklogWork}
@@ -120,7 +121,7 @@ func TestInteractiveStall_LiveWorkingPaneIsNeverRestartedOrFailed(t *testing.T) 
 		if rs.RetryAttempt != 0 || !rs.NextRetryAt.IsZero() {
 			t.Fatalf("round %d: live working pane was scheduled for a restart: %+v", round, rs)
 		}
-		if got := f.inst.Snapshot().Status; got == PermanentlyFailed {
+		if got := f.inst.Snapshot().Status; got == domain.PermanentlyFailed {
 			t.Fatalf("round %d: live interactive session was marked permanently failed", round)
 		}
 	}
@@ -140,7 +141,7 @@ func TestInteractiveStall_ControllerlessLivePaneIsNotFailed(t *testing.T) {
 
 	f.tick(retryEverything(), stallTestNow.Add(3*time.Hour))
 
-	if got := f.inst.Snapshot().Status; got == PermanentlyFailed {
+	if got := f.inst.Snapshot().Status; got == domain.PermanentlyFailed {
 		t.Fatal("controllerless live pane was marked permanently failed")
 	}
 	if _, failures := f.notifier.counts(); f.attempt.stallFlags != 1 || failures != 0 {
@@ -203,7 +204,7 @@ func TestInteractiveStall_AttemptCountersAreIrrelevantForLivePanes(t *testing.T)
 		f.inst.RetryAttempt = attemptsUsed
 		f.tick(retryEverything(), stallTestNow.Add(3*time.Hour))
 		rs := f.inst.RetrySnapshot()
-		if f.inst.Snapshot().Status == PermanentlyFailed || rs.RetryAttempt != attemptsUsed || !rs.NextRetryAt.IsZero() {
+		if f.inst.Snapshot().Status == domain.PermanentlyFailed || rs.RetryAttempt != attemptsUsed || !rs.NextRetryAt.IsZero() {
 			t.Fatalf("attempts=%d: retry state touched for a live pane: %+v", attemptsUsed, rs)
 		}
 	}
@@ -276,12 +277,12 @@ func TestInteractiveStall_DeadPaneStillFailsThroughRetryPolicy(t *testing.T) {
 
 	later := stallTestNow.Add(driverInactivityTimeout + time.Minute)
 	f.tick(policy, later)
-	if f.inst.Snapshot().Status == PermanentlyFailed {
+	if f.inst.Snapshot().Status == domain.PermanentlyFailed {
 		t.Fatal("failed on the first dead probe")
 	}
 	_, ret := f.tick(policy, later.Add(deadPaneConfirmWindow))
 
-	if !ret || f.inst.Snapshot().Status != PermanentlyFailed {
+	if !ret || f.inst.Snapshot().Status != domain.PermanentlyFailed {
 		t.Fatal("dead pane must still be marked permanently failed")
 	}
 	if _, failures := f.notifier.counts(); failures != 1 {
@@ -305,7 +306,7 @@ func TestAutonomousStall_RetainsRestartSemantics(t *testing.T) {
 	}
 	f.attempt.nudgeSentAt = stallTestNow
 	_, ret = f.tick(policy, later.Add(time.Minute))
-	if !ret || f.inst.Snapshot().Status != PermanentlyFailed {
+	if !ret || f.inst.Snapshot().Status != domain.PermanentlyFailed {
 		t.Fatal("autonomous second stall must still mark permanently failed")
 	}
 }
@@ -352,7 +353,7 @@ func TestInteractiveStall_TransientDeadProbeDoesNotFail(t *testing.T) {
 	f.tick(policy, later.Add(deadPaneConfirmWindow-time.Second)) // alive: resets the window
 	pm.alive = false
 	f.tick(policy, later.Add(deadPaneConfirmWindow)) // dead again, window restarts here
-	if _, ret := f.tick(policy, later.Add(deadPaneConfirmWindow+time.Second)); ret || f.inst.Snapshot().Status == PermanentlyFailed {
+	if _, ret := f.tick(policy, later.Add(deadPaneConfirmWindow+time.Second)); ret || f.inst.Snapshot().Status == domain.PermanentlyFailed {
 		t.Fatal("dead probes separated by an alive probe must not fail the session")
 	}
 	if _, ret := f.tick(policy, later.Add(2*deadPaneConfirmWindow)); !ret {
@@ -403,7 +404,7 @@ func TestDriverTotalDeadline_InteractiveOutlivesStallBudget(t *testing.T) {
 // wall-clock budget does not end the driver; an autonomous one does.
 func TestDriverTickGate_InteractiveIgnoresElapsedDeadline(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "gate", Status: Active}
+	inst := &Instance{Title: "gate", Status: domain.Active}
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	stop := make(chan struct{})

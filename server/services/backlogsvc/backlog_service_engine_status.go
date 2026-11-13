@@ -10,13 +10,14 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // WorkflowEngineStatusSource is everything GetWorkflowEngineStatus reads. A nil
 // optional field degrades to "unknown" for that part; a nil ModeFor or Ledger
 // makes the whole RPC Unavailable so a caller can never read a default as ENFORCE.
 type WorkflowEngineStatusSource struct {
-	ModeFor          func(session.CallerClass) session.EngineMode
+	ModeFor          func(domain.CallerClass) session.EngineMode
 	Ledger           func() (session.ShadowLedger, error)
 	ConfigDiff       func(ctx context.Context) (session.ConfigDiff, []session.StrandedItem, error)
 	Acks             func() session.SoakAcks
@@ -31,7 +32,7 @@ func (s *BacklogService) SetWorkflowEngineStatusSource(src *WorkflowEngineStatus
 	s.engineStatus = src
 }
 
-var engineStatusClasses = []session.CallerClass{session.ClassOperator, session.ClassAgent, session.ClassSystem}
+var engineStatusClasses = []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem}
 
 // GetWorkflowEngineStatus reports per-class engine modes and flip-readiness evidence.
 // +api: backlog:get-workflow-engine-status
@@ -86,7 +87,7 @@ func (s *BacklogService) GetWorkflowEngineStatus(
 	return connect.NewResponse(resp), nil
 }
 
-func evaluateClassSoak(src *WorkflowEngineStatusSource, c session.CallerClass, l session.ShadowLedger, ledgerErr error, now time.Time, anyEnforced bool) session.Verdict {
+func evaluateClassSoak(src *WorkflowEngineStatusSource, c domain.CallerClass, l session.ShadowLedger, ledgerErr error, now time.Time, anyEnforced bool) session.Verdict {
 	p := session.DefaultSoakParams(c, now)
 	p.AnyClassEnforced = anyEnforced
 	if src.Acks != nil {

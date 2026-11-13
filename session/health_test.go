@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -97,7 +98,7 @@ func TestHealthCheckerDebounce(t *testing.T) {
 	// TmuxAlive() returns false because tmuxManager.HasSession() is false.
 	inst := &Instance{
 		Title:  "debounce-test",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 
@@ -192,7 +193,7 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &Instance{
 		Title:  "pane-dead-test",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
@@ -243,7 +244,7 @@ func TestHealthCheckerRecovery_BatchMapMiss_DoesNotDoubleCallIsAlive(t *testing.
 	}
 	inst := &Instance{
 		Title:  "batch-miss-test",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
@@ -277,7 +278,7 @@ func TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFall
 	}
 	inst := &Instance{
 		Title:  "batch-hit-test",
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
@@ -317,7 +318,7 @@ func TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod(t *tes
 		paneExitDead:     true,
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{Title: "crashed-test", Status: Active}
+	inst := &Instance{Title: "crashed-test", Status: domain.Active}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
@@ -334,7 +335,7 @@ func TestHealthCheckerRecovery_PaneCrashed_AutoRespawnsOutsideGracePeriod(t *tes
 		t.Error("expected auto-respawn to call Start() rather than leaving the session Crashed")
 	}
 	snap := inst.Snapshot()
-	if snap.Status != Active {
+	if snap.Status != domain.Active {
 		t.Errorf("expected Status=Active after a successful auto-respawn, got %s", snap.Status)
 	}
 	if !result.RecoverySuccess {
@@ -362,7 +363,7 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails(t *testi
 		startReturn:      errors.New("refusing to start: crash loop"),
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{Title: "crashed-test-respawn-fails", Status: Active}
+	inst := &Instance{Title: "crashed-test-respawn-fails", Status: domain.Active}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
@@ -376,7 +377,7 @@ func TestHealthCheckerRecovery_PaneCrashed_MarksCrashedWhenRespawnFails(t *testi
 		t.Error("expected an auto-respawn attempt (Start called) even though it fails")
 	}
 	snap := inst.Snapshot()
-	if snap.Status != Crashed {
+	if snap.Status != domain.Crashed {
 		t.Errorf("expected Status=Crashed once the respawn attempt itself fails, got %s", snap.Status)
 	}
 	if snap.ExitReason == "" || !strings.Contains(snap.ExitReason, "auto-recovery failed") {
@@ -403,7 +404,7 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 		paneExitDead:     true,
 	}
 	mock := &deadPaneMock{mockTmuxManager: inner}
-	inst := &Instance{Title: "normal-exit-test", Status: Active}
+	inst := &Instance{Title: "normal-exit-test", Status: domain.Active}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
@@ -417,10 +418,10 @@ func TestHealthCheckerRecovery_PaneExitedNormally_MarksStoppedNotCrashed(t *test
 		t.Errorf("expected no auto-respawn on normal completion, got %d Start() calls", mock.startCalls)
 	}
 	snap := inst.Snapshot()
-	if snap.Status != Stopped {
+	if snap.Status != domain.Stopped {
 		t.Errorf("expected Status=Stopped for a normal (exit code 0) completion, got %s", snap.Status)
 	}
-	if snap.Status == Crashed {
+	if snap.Status == domain.Crashed {
 		t.Error("normal completion must not be marked Crashed")
 	}
 	if !result.RecoverySuccess {
@@ -450,7 +451,7 @@ func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDes
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &Instance{
 		Title:     "fresh-session-test",
-		Status:    Active,
+		Status:    domain.Active,
 		CreatedAt: time.Now(), // created after (>=) checker.startedAt
 	}
 	inst.started.Store(true)
@@ -466,7 +467,7 @@ func TestHealthCheckerRecovery_FreshSessionNeverAlive_MarksStoppedImmediatelyDes
 		t.Errorf("expected no auto-respawn for a never-previously-alive session, got %d Start() calls", mock.startCalls)
 	}
 	snap := inst.Snapshot()
-	if snap.Status != Stopped {
+	if snap.Status != domain.Stopped {
 		t.Errorf("expected Status=Stopped immediately (no grace period for a fresh session), got %s", snap.Status)
 	}
 }
@@ -492,7 +493,7 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &Instance{
 		Title:     "pre-existing-session-test",
-		Status:    Active,
+		Status:    domain.Active,
 		CreatedAt: time.Now().Add(-1 * time.Hour), // created well before the checker started
 	}
 	inst.started.Store(true)
@@ -511,7 +512,7 @@ func TestHealthCheckerRecovery_PreExistingSessionAtRestart_StillRespawnsWithinGr
 		t.Error("expected the stale dead-pane session to be killed before respawn")
 	}
 	snap := inst.Snapshot()
-	if snap.Status == Crashed || snap.Status == Stopped {
+	if snap.Status == domain.Crashed || snap.Status == domain.Stopped {
 		t.Errorf("expected no user-visible status transition during the grace period, got %s", snap.Status)
 	}
 }
@@ -529,7 +530,7 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 	checker := NewSessionHealthChecker(nil)
 
 	mock := &mockTmuxManager{hasSessionReturn: false} // TmuxAlive() would be false
-	inst := &Instance{Title: "permanently-failed-test", Status: PermanentlyFailed}
+	inst := &Instance{Title: "permanently-failed-test", Status: domain.PermanentlyFailed}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
@@ -565,7 +566,7 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 		t.Errorf("expected failure count to stay 0 (skip returns before the debounce path is reached), got %d", count)
 	}
 
-	if inst.Snapshot().Status != PermanentlyFailed {
+	if inst.Snapshot().Status != domain.PermanentlyFailed {
 		t.Errorf("expected Status to remain PermanentlyFailed, got %s", inst.Snapshot().Status)
 	}
 }
@@ -573,7 +574,7 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 // TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck pins the
 // fix for a real incident (tymux-validation-test, 2026-09-07): a tymux-backed
 // instance's throwaway LoadInstances() copy always reports HasSession()==false
-// (fromInstanceData never wires tymux session/pane IDs the way it wires a
+// (instanceFromData never wires tymux session/pane IDs the way it wires a
 // TmuxSession by name for the tmux backend — that would need a real
 // ListSessions RPC, which deferStart's "don't block LoadInstances()" contract
 // rules out). Without the Backend != BackendTymux guard, checkTmuxHealth
@@ -586,7 +587,7 @@ func TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck(t *testi
 	checker := NewSessionHealthChecker(nil)
 
 	mock := &mockTmuxManager{hasSessionReturn: false} // would fail TmuxAlive() if ever consulted
-	inst := &Instance{Title: "tymux-backend-test", Status: Active, Backend: BackendTymux}
+	inst := &Instance{Title: "tymux-backend-test", Status: domain.Active, Backend: domain.BackendTymux}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
 
@@ -627,9 +628,9 @@ func TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances(
 	checker.tmuxSocket = querier
 	querier.setDown("custom", true) // "" (default) stays up
 
-	instHealthy := &Instance{Title: "healthy-default-socket", Status: Running, TmuxServerSocket: ""}
+	instHealthy := &Instance{Title: "healthy-default-socket", Status: domain.Active, TmuxServerSocket: ""}
 	instHealthy.started.Store(true)
-	instDown := &Instance{Title: "down-custom-socket", Status: Running, TmuxServerSocket: "custom"}
+	instDown := &Instance{Title: "down-custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
 	instDown.started.Store(true)
 
 	results := checker.checkInstances([]*Instance{instHealthy, instDown})
@@ -658,9 +659,9 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 	checker.tmuxSocket = querier
 	// Neither socket is marked down -- both should be checked.
 
-	instDefault := &Instance{Title: "default-socket", Status: Running, TmuxServerSocket: ""}
+	instDefault := &Instance{Title: "default-socket", Status: domain.Active, TmuxServerSocket: ""}
 	instDefault.started.Store(true)
-	instCustom := &Instance{Title: "custom-socket", Status: Running, TmuxServerSocket: "custom"}
+	instCustom := &Instance{Title: "custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
 	instCustom.started.Store(true)
 
 	results := checker.checkInstances([]*Instance{instDefault, instCustom})
@@ -681,17 +682,17 @@ func TestHealthCheckerRecovery_ArchivedInstance_SkippedNotAutoRestarted(t *testi
 
 	tests := []struct {
 		name     string
-		status   Status
+		status   domain.Status
 		archived bool
 		// wantRecovery is the expected RecoveryAttempted on the second
 		// checkSingleSession call (past the failure debounce).
 		wantRecovery bool
 	}{
-		{name: "active_archived", status: Active, archived: true},
-		{name: "creating_archived", status: Creating, archived: true},
-		{name: "restoring_archived", status: Restoring, archived: true},
-		{name: "failed_archived", status: Failed, archived: true},
-		{name: "active_not_archived_control", status: Active, archived: false, wantRecovery: true},
+		{name: "active_archived", status: domain.Active, archived: true},
+		{name: "creating_archived", status: domain.Creating, archived: true},
+		{name: "restoring_archived", status: domain.Restoring, archived: true},
+		{name: "failed_archived", status: domain.Failed, archived: true},
+		{name: "active_not_archived_control", status: domain.Active, archived: false, wantRecovery: true},
 	}
 
 	for _, tt := range tests {

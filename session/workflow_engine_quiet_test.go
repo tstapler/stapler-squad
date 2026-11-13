@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func w21bTotalDenied(h *gateHarness) int64 {
@@ -21,9 +22,9 @@ func TestRedriveAndHolds_should_NotInflateEnforceDeniedCounts_OverManyTicks(t *t
 	t.Parallel()
 	h := newGateHarness(t, ModeEnforce)
 	ctx := context.Background()
-	denBlock(t, h, BacklogStatusIdea, BacklogStatusReady)
-	item := h.newItem(t, BacklogStatusIdea)
-	denOpenDenial(t, h, item.ID, CallerAutonomousComplete, BacklogStatusIdea, BacklogStatusReady, DeniedOperatorGate)
+	denBlock(t, h, domain.BacklogStatusIdea, domain.BacklogStatusReady)
+	item := h.newItem(t, domain.BacklogStatusIdea)
+	denOpenDenial(t, h, item.ID, domain.CallerAutonomousComplete, domain.BacklogStatusIdea, domain.BacklogStatusReady, backlogdto.DeniedOperatorGate)
 
 	for i := 0; i < 5; i++ {
 		h.storage.RedriveTransitionDenials(ctx)
@@ -38,13 +39,13 @@ func TestGatedTransition_RealGraphDenialCountsOnce_OperatorOverrideCountsNone(t 
 	t.Parallel()
 	ctx := context.Background()
 	h := newGateHarness(t, ModeEnforce)
-	item := h.newItem(t, BacklogStatusIdea)
+	item := h.newItem(t, domain.BacklogStatusIdea)
 
-	_, err := h.storage.GatedTransition(ctx, TransitionRequest{Caller: CallerMCPResumeWork, ItemID: item.ID, To: BacklogStatusDone})
+	_, err := h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerMCPResumeWork, ItemID: item.ID, To: domain.BacklogStatusDone})
 	require.ErrorIs(t, err, ErrTransitionNotAllowed)
 	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(DenialConfigGraph))
 
-	_, err = h.storage.GatedTransition(ctx, TransitionRequest{Caller: CallerOperatorTransitionRPC, ItemID: item.ID, To: BacklogStatusDone, OverrideReason: "owner says so"})
+	_, err = h.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: domain.BacklogStatusDone, OverrideReason: "owner says so"})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, h.sel.EnforceDeniedTotal(DenialConfigGraph), "an override that frees the graph is not a denial")
 }

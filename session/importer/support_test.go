@@ -16,12 +16,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func makeTestInstance(title string) *session.Instance {
-	return &session.Instance{Title: title, Status: session.Active}
+	return &session.Instance{Title: title, Status: domain.Active}
 }
 
 // newTestGitWorktree builds a GitWorktree value without touching the filesystem or running git.

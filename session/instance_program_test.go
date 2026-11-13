@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestSwitchProgram_SameValue_NoOp verifies that requesting the program the instance
@@ -82,7 +83,7 @@ func TestSwitchProgram_Stopped_PersistsNoRestart(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.Status = Stopped
+	inst.Status = domain.Stopped
 
 	persistCalled := false
 	changed, resolved, err := inst.SwitchProgram(context.Background(), "aider", func() error {
@@ -106,7 +107,7 @@ func TestSwitchProgram_RestartError_PersistAlreadyRan(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.Status = Active
+	inst.Status = domain.Active
 	inst.started.Store(true)
 	inst.Path = "" // forces Restart() to fail deterministically, no real tmux involved
 
@@ -130,7 +131,7 @@ func TestSwitchProgram_ActiveStartedFalse_RestartErrorsCannotRestart(t *testing.
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.Status = Active
+	inst.Status = domain.Active
 	inst.Path = "/tmp/somewhere" // valid path; started=false is what should trip the error
 	// inst.started left false (zero value)
 
@@ -149,7 +150,7 @@ func TestSwitchProgram_LeavingClaudeFamily_ClearsConversationState(t *testing.T)
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "abc-123"})
 	inst.HistoryFilePath = "/fake/history.jsonl"
 
 	changed, _, err := inst.SwitchProgram(context.Background(), "aider", nil)
@@ -167,7 +168,7 @@ func TestSwitchProgram_RoundTrip_NoStaleResume(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "stale-uuid"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "stale-uuid"})
 
 	_, _, err := inst.SwitchProgram(context.Background(), "aider", nil)
 	require.NoError(t, err)
@@ -220,7 +221,7 @@ func TestSwitchProgram_ClaudeToAider_CleanlyClearsConversationState(t *testing.T
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: "abc-123"})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: "abc-123"})
 
 	changed, resolved, err := inst.SwitchProgram(context.Background(), "aider", nil)
 

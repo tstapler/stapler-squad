@@ -51,23 +51,6 @@ func NewLiveInstance(inst *Instance) *LiveInstance {
 	return li
 }
 
-// newLiveInstance is the internal construction path used by Registry.Acquire.
-// It calls FromInstanceData to reconstruct the *Instance from storage data
-// (including Start() for Active sessions), then wraps it in a LiveInstance.
-func newLiveInstance(data InstanceData, storage *Storage) (*LiveInstance, error) {
-	rows := []InstanceData{data}
-	storage.hydrateSessionPRs(context.Background(), rows) // single-session read; LoadInstances does the bulk one
-	inst, err := FromInstanceData(rows[0])
-	if err != nil {
-		return nil, err
-	}
-	// Inject shell repository so shell operations can persist to the DB.
-	inst.SetShellRepository(storage.Repo)
-	inst.SetInitialPromptRepository(storage.Repo)
-	inst.SetPRPersister(storage)
-	return NewLiveInstance(inst), nil
-}
-
 // Stop signals this instance's actor to exit and waits for it to drain.
 // Idempotent: safe to call multiple times; the second and subsequent calls return
 // immediately once the first call's <-done wait completes.

@@ -2,7 +2,7 @@ package session
 
 // instance_pi_status.go wires Epic 5.2's PiStatusSource into Instance's
 // existing StartController/StopController lifecycle (session/instance_controller.go),
-// mirroring how a ClaudeController is registered/unregistered but via the
+// mirroring how a claudectl.ClaudeController is registered/unregistered but via the
 // piSources parallel map (session/instance_status.go), not the controllers map.
 
 import (
@@ -15,12 +15,13 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // piExtension holds pi-coding-agent controller and session state, and
 // implements programExtension (instance_controller.go) so
 // StartController/StopController dispatch to it instead of growing another
-// if-branch when isPi(i.Program) and config.FeaturePiSupport is enabled --
+// if-branch when IsPi(i.Program) and config.FeaturePiSupport is enabled --
 // see StartController's doc comment for why the two are mutually exclusive
 // per instance rather than layered.
 //
@@ -31,9 +32,9 @@ import (
 type piExtension struct {
 	// piSession holds pi-coding-agent session information for
 	// resume-on-restart (see buildPiCommand). Populated only when
-	// isPi(i.Program) and the config.FeaturePiSupport flag is enabled -- see
+	// IsPi(i.Program) and the config.FeaturePiSupport flag is enabled -- see
 	// the capture in Restart. Guarded by piSessionMu, not i.mu.
-	piSession *PiSessionData
+	piSession *domain.PiSessionData
 	// piSessionMu protects piSession. Separate from i.mu: SetPiSessionID is
 	// called from PiStatusSource's reader goroutine (via the onSessionID
 	// callback) and Restart touches piSession too, so a dedicated lock makes
@@ -72,7 +73,7 @@ var _ programExtension = (*piExtension)(nil)
 // subprocess/goroutines and racing Restart's unsynchronized piSession
 // access (see SetPiSessionID's doc comment).
 func (e *piExtension) Supported(i *Instance) bool {
-	return isPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)
+	return IsPi(i.Program) && config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport)
 }
 
 // Running reports whether a PiStatusSource is currently registered.
@@ -208,7 +209,7 @@ func (i *Instance) SetPiSessionID(id string) {
 		return
 	}
 	if i.piSession == nil {
-		i.piSession = &PiSessionData{}
+		i.piSession = &domain.PiSessionData{}
 	}
 	i.piSession.SessionID = id
 	i.piSession.LastAttached = time.Now()

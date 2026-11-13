@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -14,13 +15,13 @@ import (
 // this process; ok is false when it is not tracked live. Implemented by the server
 // layer over the live instance registry.
 type LiveSnapshotSource interface {
-	LiveSnapshot(sessionUUID string) (snap *InstanceSnapshot, ok bool)
+	LiveSnapshot(sessionUUID string) (snap *domain.InstanceSnapshot, ok bool)
 }
 
 // InstanceDataReader is the storage read the probe falls back to for a session
 // that is not live. *Storage implements it.
 type InstanceDataReader interface {
-	FindInstanceDataByID(id string) (*InstanceData, error)
+	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 }
 
 // SnapshotLiveWorkProbe is the real LiveWorkProbe. Contract (owner-approved):
@@ -105,8 +106,8 @@ func (p *SnapshotLiveWorkProbe) clearErrorHold(sessionUUID string) {
 // Creating or Active session. TurnEnded means a turn end was recorded and nothing
 // meaningful changed after it: RecordTurnEnd touches LastMeaningfulChangeAt to the
 // same instant, so any later output, approval or status change makes it Working again.
-func LiveWorkFactsFromSnapshot(s *InstanceSnapshot) LiveWorkFacts {
-	unended := s.ArchivedAt == nil && (s.Status == Creating || s.Status == Active)
+func LiveWorkFactsFromSnapshot(s *domain.InstanceSnapshot) LiveWorkFacts {
+	unended := s.ArchivedAt == nil && (s.Status == domain.Creating || s.Status == domain.Active)
 	lmca := s.LastMeaningfulChangeAt
 	if lmca.IsZero() {
 		lmca = s.CreatedAt
@@ -118,8 +119,8 @@ func LiveWorkFactsFromSnapshot(s *InstanceSnapshot) LiveWorkFacts {
 // liveWorkFactsFromData is the persisted fallback for a session that is not live
 // in this process: not Working (nothing is running to be mid-turn), so only a
 // recent output keeps it live.
-func liveWorkFactsFromData(d *InstanceData) LiveWorkFacts {
-	unended := d.ArchivedAt == nil && (d.Status == Creating || d.Status == Active)
+func liveWorkFactsFromData(d *domain.InstanceData) LiveWorkFacts {
+	unended := d.ArchivedAt == nil && (d.Status == domain.Creating || d.Status == domain.Active)
 	return LiveWorkFacts{Unended: unended, LastMeaningfulChangeAt: d.LastMeaningfulOutput}
 }
 

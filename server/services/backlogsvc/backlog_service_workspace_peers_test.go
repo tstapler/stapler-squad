@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -33,7 +34,7 @@ func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndP
 		UUID:    "peer-uuid",
 		Path:    repoPath,
 		Branch:  "main",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	}
 	require.NoError(t, storage.AddInstance(peer))
@@ -73,7 +74,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_FlagDisabledByDefa
 		UUID:    "peer-uuid",
 		Path:    repoPath,
 		Branch:  "main",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	}
 	require.NoError(t, storage.AddInstance(peer))
@@ -150,7 +151,7 @@ func TestWorkspacePeersBlockFor_should_ExcludeSessionsOnDifferentRepos(t *testin
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 
 	peerOnRepoB := &session.Instance{
-		Title: "unrelated-repo-session", UUID: "b-uuid", Path: repoB, Status: session.Active, Program: "claude",
+		Title: "unrelated-repo-session", UUID: "b-uuid", Path: repoB, Status: domain.Active, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(peerOnRepoB))

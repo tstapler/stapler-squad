@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestRunGitHubPRURLBackfill_should_PopulateURL_When_HostRecoverableFromPath
@@ -23,10 +24,10 @@ func TestRunGitHubPRURLBackfill_should_PopulateURL_When_HostRecoverableFromPath(
 	ctx := context.Background()
 
 	now := time.Now().UTC()
-	require.NoError(t, repo.Create(ctx, InstanceData{
+	require.NoError(t, repo.Create(ctx, domain.InstanceData{
 		Title:          "pr-463-traffic-capacitron",
 		Path:           "/Users/tstapler/.stapler-squad/repos/github.com/tstapler/stapler-squad/pr-463",
-		Status:         Stopped,
+		Status:         domain.Stopped,
 		Program:        "claude",
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -53,10 +54,10 @@ func TestRunGitHubPRURLBackfill_should_SkipRow_When_HostNotRecoverableFromPath(t
 	ctx := context.Background()
 
 	now := time.Now().UTC()
-	require.NoError(t, repo.Create(ctx, InstanceData{
+	require.NoError(t, repo.Create(ctx, domain.InstanceData{
 		Title:          "local-dir-with-pr-metadata",
 		Path:           "/Users/tstapler/dotfiles",
-		Status:         Stopped,
+		Status:         domain.Stopped,
 		Program:        "claude",
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -82,10 +83,10 @@ func TestRunGitHubPRURLBackfill_should_BeIdempotent_When_RunTwice(t *testing.T) 
 	ctx := context.Background()
 
 	now := time.Now().UTC()
-	require.NoError(t, repo.Create(ctx, InstanceData{
+	require.NoError(t, repo.Create(ctx, domain.InstanceData{
 		Title:          "pr-99-idempotent-check",
 		Path:           "/Users/tstapler/.stapler-squad/repos/github.com/tstapler/stapler-squad/pr-99",
-		Status:         Stopped,
+		Status:         domain.Stopped,
 		Program:        "claude",
 		CreatedAt:      now,
 		UpdatedAt:      now,

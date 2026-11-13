@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -98,29 +100,6 @@ type LaunchSpec struct {
 	NewTmuxSession func(extra ...tmux.TmuxSessionOption) *tmux.TmuxSession
 }
 
-// ProcessManagerBackend identifies the backend implementation.
-type ProcessManagerBackend string
-
-const (
-	BackendTmux   ProcessManagerBackend = "tmux"
-	BackendNative ProcessManagerBackend = "native"
-	BackendTymux  ProcessManagerBackend = "tymux"
-)
-
-// pushesLivenessEvents lists backends that report liveness push-style
-// (instanceOnExitCallback) instead of being independently pollable by name
-// — the single place to add a future backend instead of touching every
-// poll site that needs to skip it.
-var pushesLivenessEvents = map[ProcessManagerBackend]bool{
-	BackendTymux: true,
-}
-
-// SkipsPollBasedLiveness reports whether tmux-socket-based liveness polling
-// (reconcileSessions, health.go) has anything correct to add for this backend.
-func (b ProcessManagerBackend) SkipsPollBasedLiveness() bool {
-	return pushesLivenessEvents[b]
-}
-
 // ProcessManagerOptions holds constructor parameters for NewProcessManager.
 type ProcessManagerOptions struct {
 	SessionName  string
@@ -135,7 +114,40 @@ type ProcessManagerOptions struct {
 	// this one call — an explicit per-session choice always wins. Zero value ("")
 	// means "no per-session override," preserving today's behavior for every caller
 	// that doesn't set it. See NewProcessManager's precedence in backend_factory.go.
-	Backend ProcessManagerBackend
+	Backend domain.ProcessManagerBackend
 	// TymuxSessionID is the persisted daemon session id for a restored tymux Instance.
 	TymuxSessionID string
+}
+
+// BackendKeyed is the optional capability naming the registry key a ProcessManager
+// was built for.
+type BackendKeyed interface {
+	BackendKey() domain.ProcessManagerBackend
+}
+
+// processManagerBackendKey returns the backend a ProcessManager actually is, or ""
+// when it declares none (nil or a test fake).
+func processManagerBackendKey(pm ProcessManager) domain.ProcessManagerBackend {
+	if k, ok := capabilityOf[BackendKeyed](pm); ok {
+		return k.BackendKey()
+	}
+	return ""
+}
+
+// ErrUnrecognizedBackend is returned by NewProcessManager when the resolved
+// ProcessManagerBackend value (from opts.Backend, the process-wide global, or
+// defaultBackend) matches none of the known backend constants
+// (BackendTmux/BackendNative/BackendTymux). Story 2.1.3's acceptance
+// criteria (UX-9.2) require this to fail loudly at construction, not
+// silently fall back to BackendTmux and not panic — an unrecognized value is
+// most likely a typo'd constant or corrupted persisted data, and a silent
+// tmux fallback would mask that.
+var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBackend")
+
+// launchCommand returns opts.Command, or opts.Program parsed from shell text; nil when neither is set.
+func (o ProcessManagerOptions) launchCommand() launchcmd.LaunchCommand {
+	if o.Command != nil {
+		return o.Command
+	}
+	return shellLaunch(o.Program)
 }

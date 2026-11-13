@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -66,7 +67,7 @@ func newRetryTestInstance(t *testing.T, svc *SessionService, storage *session.St
 	// goroutine (e.g.
 	// TestBackgroundResolutionPipeline_should_ContinueRunning_When_RPCContextIsCanceled).
 	wait.RequireEventually(t, func() bool {
-		return session.Status(inst.GetStatus()) == session.Active
+		return domain.Status(inst.GetStatus()) == domain.Active
 	}, 10*time.Second, 20*time.Millisecond, "precondition: original CreateSession attempt must reach Active before this test forces it to Failed")
 
 	return inst
@@ -90,7 +91,7 @@ func TestRetrySessionCreation_should_TransitionFailedToCreating_When_SameInstanc
 	// setup. ForceStatus is the unconditional, non-epoch-gated setter
 	// (session/instance_state.go) meant for exactly this kind of direct
 	// test-fixture status injection.
-	inst.ForceStatus(session.Failed)
+	inst.ForceStatus(domain.Failed)
 
 	ch, subID := svc.eventBus.Subscribe(context.Background())
 	defer svc.eventBus.Unsubscribe(subID)
@@ -133,8 +134,8 @@ drain:
 	// goroutine, and this fixture's instance has no live actor to make
 	// StatusAndFailureReason's read safe.
 	wait.RequireEventually(t, func() bool {
-		status := session.Status(inst.GetStatus())
-		return status == session.Active || status == session.Failed
+		status := domain.Status(inst.GetStatus())
+		return status == domain.Active || status == domain.Failed
 	}, 10*time.Second, 20*time.Millisecond, "retried pipeline must reach a terminal status")
 }
 
@@ -148,7 +149,7 @@ func TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFa
 	inst := newRetryTestInstance(t, svc, storage, "retry-not-failed")
 
 	status, _ := inst.StatusAndFailureReason()
-	require.Equal(t, session.Active, status, "precondition: fixture instance is Active, not Failed")
+	require.Equal(t, domain.Active, status, "precondition: fixture instance is Active, not Failed")
 
 	_, err := svc.RetrySessionCreation(context.Background(), connect.NewRequest(&sessionv1.RetrySessionCreationRequest{
 		Id: "retry-not-failed",
@@ -161,7 +162,7 @@ func TestRetrySessionCreation_should_ReturnFailedPrecondition_When_StatusIsNotFa
 	// Instance must be untouched: still present, still Active.
 	require.NotNil(t, svc.ReviewQueuePoller.FindInstance("retry-not-failed"))
 	status, _ = inst.StatusAndFailureReason()
-	assert.Equal(t, session.Active, status)
+	assert.Equal(t, domain.Active, status)
 }
 
 // TestRetrySessionCreation_should_SpawnExactlyOnePipeline_When_CalledConcurrently
@@ -175,7 +176,7 @@ func TestRetrySessionCreation_should_SpawnExactlyOnePipeline_When_CalledConcurre
 	storage := svctest.CreateTestStorage(t)
 	svc := newCreateTestService(t, storage)
 	inst := newRetryTestInstance(t, svc, storage, "retry-race-test")
-	inst.ForceStatus(session.Failed)
+	inst.ForceStatus(domain.Failed)
 
 	// pipelineEntries counts how many times the re-spawned pipeline actually
 	// reaches its "Resolving defaults..." phase -- the first setPhase call
@@ -223,8 +224,8 @@ func TestRetrySessionCreation_should_SpawnExactlyOnePipeline_When_CalledConcurre
 	// rationale as newRetryTestInstance's doc comment: this polls
 	// concurrently with the winning call's freshly-spawned pipeline goroutine.
 	wait.RequireEventually(t, func() bool {
-		status := session.Status(inst.GetStatus())
-		return status == session.Active || status == session.Failed
+		status := domain.Status(inst.GetStatus())
+		return status == domain.Active || status == domain.Failed
 	}, 10*time.Second, 20*time.Millisecond, "the one spawned pipeline must reach a terminal status")
 
 	assert.Equal(t, int32(1), pipelineEntries.Load(), "exactly one pipeline goroutine must have run for this instance")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -66,7 +67,7 @@ func TestFindConversationFilePath_CancelledContextAborts(t *testing.T) {
 func makeTestInstance(title string) *Instance {
 	return &Instance{
 		Title:  title,
-		Status: Running,
+		Status: domain.Active,
 	}
 }
 

@@ -28,7 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -311,10 +311,10 @@ func (s *BacklogService) TriggerTriage(
 	}
 
 	// 2. Status guard — triage is only valid for idea or ready items.
-	if item.Status != string(session.BacklogStatusIdea) && item.Status != string(session.BacklogStatusReady) {
+	if item.Status != string(domain.BacklogStatusIdea) && item.Status != string(domain.BacklogStatusReady) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item must be in %q or %q status to trigger triage, got %q",
-				session.BacklogStatusIdea, session.BacklogStatusReady, item.Status))
+				domain.BacklogStatusIdea, domain.BacklogStatusReady, item.Status))
 	}
 
 	// 3. Repo path required.
@@ -379,10 +379,10 @@ func (s *BacklogService) TriggerTriage(
 	// 3b. If re-triggering on a "ready" item, move it back to "idea".
 	// Use a precondition so a concurrent work-session spawn (ready→in_progress) that
 	// races with this re-triage doesn't drag the item backwards to idea.
-	if item.Status == string(session.BacklogStatusReady) {
-		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
-		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerOperatorTriggerTriage, ItemID: req.Msg.ItemId, Observed: item, To: session.BacklogStatusIdea,
+	if item.Status == string(domain.BacklogStatusReady) {
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}
+		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerOperatorTriggerTriage, ItemID: req.Msg.ItemId, Observed: item, To: domain.BacklogStatusIdea,
 			Precondition: precondition, TriggeredBy: session.TriggeredByUser,
 		}); transErr != nil {
 			return nil, triageResetError(req.Msg.ItemId, transErr)
@@ -430,15 +430,15 @@ func (s *BacklogService) TriggerTriage(
 	var triagePrompt string
 	if feedback != "" {
 		if req.Msg.ChatMode {
-			triagePrompt = backlog.BuildHeadlessChatRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+			triagePrompt = pipeline.BuildHeadlessChatRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
 		} else {
-			triagePrompt = backlog.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
+			triagePrompt = pipeline.BuildHeadlessRetriagePrompt(item, artifactAbsPath, priorResult, feedback)
 		}
 	} else {
 		triagePrompt = s.triagePromptFor(item, artifactAbsPath)
 	}
 
-	log.Info("[PipelineEngine] stage=triage", "item", item.ID, "mode", backlog.ResolvedModeLabel(item.PipelineMode))
+	log.Info("[PipelineEngine] stage=triage", "item", item.ID, "mode", backlogdto.ResolvedModeLabel(item.PipelineMode))
 
 	// 8. Create ItemSession synchronously before goroutine (prevents TOCTOU on orphan guard).
 	// Snapshot the resolved PipelineMode slug + content hash — see the comment on the
@@ -446,7 +446,7 @@ func (s *BacklogService) TriggerTriage(
 	triageSessionUUID := services.HeadlessTriageUUIDPrefix + uuid.New().String()
 	var triagePipelineModeSnapshotHash string
 	if s.pipelineEngine != nil {
-		triagePipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlog.PipelineMode(item.PipelineMode))
+		triagePipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlogdto.PipelineMode(item.PipelineMode))
 	}
 
 	// Resolve this stage's configured (program, model) executor before creating
@@ -460,7 +460,7 @@ func (s *BacklogService) TriggerTriage(
 	if s.pipelineEngine != nil {
 		triageExecProgram, triageExecModel = s.pipelineEngine.ExecutorFor(item, session.StageRoleTriage)
 	}
-	triageExecutorHash := backlog.ComputeExecutorHash(triageExecProgram, triageExecModel)
+	triageExecutorHash := pipeline.ComputeExecutorHash(triageExecProgram, triageExecModel)
 	triageCaller, triageConfiguredProgram, triageFallbackReason := s.resolveHeadlessCaller(triageExecProgram, item.ID, "triage")
 	triageResolvedModel := resolveTriageModel(s.cfg, s.modelFamilies, triageExecProgram, triageExecModel)
 
@@ -533,7 +533,7 @@ func (s *BacklogService) TriggerTriage(
 		// byte-for-byte unchanged from before.
 		callBudget := triageCallBudget
 		if s.livenessEngine != nil {
-			if def, defErr := s.livenessEngine.LivenessFor(session.BacklogStatusIdea, backlog.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+			if def, defErr := s.livenessEngine.LivenessFor(domain.BacklogStatusIdea, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 				callBudget = def.ExpectedDuration
 			}
 		}
@@ -687,7 +687,7 @@ func (s *BacklogService) TriggerTriage(
 			return
 		}
 
-		result, parseErr := backlog.ParseHeadlessTriageResult(raw)
+		result, parseErr := pipeline.ParseHeadlessTriageResult(raw)
 		if parseErr != nil {
 			capturePath := s.captureHeadlessFailure(triageSessionUUID, raw)
 			log.Error("[TriggerTriage] parse result failed",
@@ -880,10 +880,10 @@ func (s *BacklogService) TriggerTriage(
 		_ = s.storage.UpdateItemSessionEnded(persistCtx, isID, time.Now()) //nolint:silenttransition ended-at bookkeeping only; no item status depends on it
 		s.triageInFlight.Delete(itemID)
 
-		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusIdea)}
 		statusAdvanced := true
-		if _, transErr := s.storage.GatedTransition(persistCtx, session.TransitionRequest{
-			Caller: session.CallerTriageComplete, ItemID: itemID, To: session.BacklogStatusReady,
+		if _, transErr := s.storage.GatedTransition(persistCtx, backlogdto.TransitionRequest{
+			Caller: domain.CallerTriageComplete, ItemID: itemID, To: domain.BacklogStatusReady,
 			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			log.Error("[TriggerTriage] status transition idea→ready failed", "item", itemID, "error", transErr)
@@ -953,18 +953,18 @@ func (s *BacklogService) CancelTriage(
 
 // findPriorTriageResult returns the most recent successfully-parsed triage result from
 // the provided sessions, along with a boolean indicating whether one was found.
-func findPriorTriageResult(sessions []backlogdto.ItemSessionSummary) (backlog.HeadlessTriageResult, bool) {
+func findPriorTriageResult(sessions []backlogdto.ItemSessionSummary) (pipeline.HeadlessTriageResult, bool) {
 	for i := len(sessions) - 1; i >= 0; i-- {
 		is := sessions[i]
 		if is.Role != string(session.SessionRoleTriage) || is.TriageResult == "" {
 			continue
 		}
-		var result backlog.HeadlessTriageResult
+		var result pipeline.HeadlessTriageResult
 		if jsonErr := json.Unmarshal([]byte(is.TriageResult), &result); jsonErr == nil {
 			return result, true
 		}
 	}
-	return backlog.HeadlessTriageResult{}, false
+	return pipeline.HeadlessTriageResult{}, false
 }
 
 // applyTriageResultToUpdate re-indexes and status-normalises the AC criteria from a
@@ -977,22 +977,22 @@ func findPriorTriageResult(sessions []backlogdto.ItemSessionSummary) (backlog.He
 // value leaves the item's existing priority/category untouched rather than
 // clobbering it with a zero value — same convention AcceptanceCriteria already uses
 // here (an empty result means "no assessment", not "clear the existing value").
-func applyTriageResultToUpdate(result *backlog.HeadlessTriageResult, update *backlogdto.BacklogItemUpdate) {
+func applyTriageResultToUpdate(result *pipeline.HeadlessTriageResult, update *backlogdto.BacklogItemUpdate) {
 	if len(result.AcceptanceCriteria) > 0 {
 		// Re-index to ensure 0-based contiguous indices regardless of what the model output.
 		for i := range result.AcceptanceCriteria {
 			result.AcceptanceCriteria[i].Index = i
 			// A model must never mint a waiver (nor smuggle waiver metadata); existing owner
 			// waivers are carried forward by the repository, matched on criterion text.
-			if result.AcceptanceCriteria[i].Status == session.AcStatusWaived {
-				result.AcceptanceCriteria[i].Status = session.AcStatusPending
+			if result.AcceptanceCriteria[i].Status == domain.AcStatusWaived {
+				result.AcceptanceCriteria[i].Status = domain.AcStatusPending
 			}
 			result.AcceptanceCriteria[i].WaiverReason, result.AcceptanceCriteria[i].WaivedBy, result.AcceptanceCriteria[i].WaivedAt = "", "", ""
 			if result.AcceptanceCriteria[i].Status == "" {
 				result.AcceptanceCriteria[i].Status = "pending"
 			}
 		}
-		if acJSON, marshalErr := session.SerializeAcCriteria(result.AcceptanceCriteria); marshalErr == nil {
+		if acJSON, marshalErr := domain.SerializeAcCriteria(result.AcceptanceCriteria); marshalErr == nil {
 			update.AcceptanceCriteria = &acJSON
 		}
 	}

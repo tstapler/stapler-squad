@@ -10,9 +10,10 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func viewOf(t *testing.T, inst *session.Instance, n int) session.PRView {
+func viewOf(t *testing.T, inst *session.Instance, n int) domain.PRView {
 	t.Helper()
 	for _, v := range inst.Snapshot().GitHub.PRs {
 		if v.Ref.Number() == n {
@@ -20,7 +21,7 @@ func viewOf(t *testing.T, inst *session.Instance, n int) session.PRView {
 		}
 	}
 	t.Fatalf("PR #%d not in the session's set", n)
-	return session.PRView{}
+	return domain.PRView{}
 }
 
 func TestPoller_ShouldPersistAndMirrorTitle_WhenFetchSucceeds(t *testing.T) {
@@ -28,10 +29,10 @@ func TestPoller_ShouldPersistAndMirrorTitle_WhenFetchSucceeds(t *testing.T) {
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open", Title: "Add the thing"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newPRTestInstance(t)
-	inst.Status = session.Active
-	require.NoError(t, inst.AttachPR(prRefN(t, 12), session.AttachSourceManual, session.PRInitial{State: session.PRStateOpen}))
+	inst.Status = domain.Active
+	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen}))
 	p.SetInstances([]*session.Instance{inst})
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
 
@@ -43,7 +44,7 @@ func TestPoller_ShouldKeepStoredTitle_WhenFetchCarriesNone(t *testing.T) {
 	t.Parallel()
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
-	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen, Title: "Seeded title"})
+	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen, Title: "Seeded title"})
 
 	p.checkAllSessions()
 
@@ -58,9 +59,9 @@ func TestPoller_ShouldMirrorVerifyAttemptsToLiveSession_WhenUnverifiedTerminalPo
 	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	p.clock = func() time.Time { return now }
 	inst := newPRTestInstance(t)
-	inst.Status = session.Active
-	unverified := session.PRInitial{State: session.PRStateUnknown, Terminal: true}
-	require.NoError(t, inst.AttachPR(prRefN(t, 9), session.AttachSourceBackfill, unverified))
+	inst.Status = domain.Active
+	unverified := domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}
+	require.NoError(t, inst.AttachPR(prRefN(t, 9), domain.AttachSourceBackfill, unverified))
 	p.SetInstances([]*session.Instance{inst})
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 	require.True(t, viewOf(t, inst, 9).UnverifiedTerminal())
@@ -82,17 +83,17 @@ func TestPoller_ShouldClearMirroredVerifyAttempts_WhenLaterFetchResolvesTheRow(t
 	client := &recordingPRClient{info: map[int]*github.PRInfo{9: {Number: 9, State: "merged"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newPRTestInstance(t)
-	inst.Status = session.Active
-	unverified := session.PRInitial{State: session.PRStateUnknown, Terminal: true}
-	require.NoError(t, inst.AttachPR(prRefN(t, 9), session.AttachSourceBackfill, unverified))
-	inst.MirrorPRPollFacts(prRefN(t, 9), session.PRView{PollFailCount: 3, PollError: "not_found", FirstFailAt: time.Now()})
+	inst.Status = domain.Active
+	unverified := domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}
+	require.NoError(t, inst.AttachPR(prRefN(t, 9), domain.AttachSourceBackfill, unverified))
+	inst.MirrorPRPollFacts(prRefN(t, 9), domain.PRView{PollFailCount: 3, PollError: "not_found", FirstFailAt: time.Now()})
 	p.SetInstances([]*session.Instance{inst})
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 
 	p.checkAllSessions()
 
 	got := viewOf(t, inst, 9)
-	assert.Equal(t, session.PRStateMerged, got.State)
+	assert.Equal(t, domain.PRStateMerged, got.State)
 	assert.Zero(t, got.PollFailCount)
 	assert.Empty(t, got.PollError)
 }

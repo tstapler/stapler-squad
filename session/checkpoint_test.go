@@ -12,12 +12,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
 	t.Parallel()
-	cp := Checkpoint{
+	cp := domain.Checkpoint{
 		ID:             "550e8400-e29b-41d4-a716-446655440000",
 		SessionID:      "test-session-id",
 		Label:          "before-refactor",
@@ -31,7 +32,7 @@ func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
 	data, err := json.Marshal(cp)
 	require.NoError(t, err)
 
-	var restored Checkpoint
+	var restored domain.Checkpoint
 	err = json.Unmarshal(data, &restored)
 	require.NoError(t, err)
 
@@ -48,7 +49,7 @@ func TestInstanceData_BackwardCompatNilCheckpoints(t *testing.T) {
 	t.Parallel()
 	// Old format without checkpoints field
 	oldJSON := `{"title":"test","path":"/tmp","status":0}`
-	var data InstanceData
+	var data domain.InstanceData
 	err := json.Unmarshal([]byte(oldJSON), &data)
 	require.NoError(t, err)
 	assert.Nil(t, data.Checkpoints)
@@ -57,7 +58,7 @@ func TestInstanceData_BackwardCompatNilCheckpoints(t *testing.T) {
 
 func TestCheckpointList_FindByID(t *testing.T) {
 	t.Parallel()
-	cl := CheckpointList{
+	cl := domain.CheckpointList{
 		{ID: "id-1", Label: "first"},
 		{ID: "id-2", Label: "second"},
 		{ID: "id-3", Label: "third"},
@@ -73,7 +74,7 @@ func TestCheckpointList_FindByID(t *testing.T) {
 
 func TestCheckpointList_FindByLabel(t *testing.T) {
 	t.Parallel()
-	cl := CheckpointList{
+	cl := domain.CheckpointList{
 		{ID: "id-1", Label: "first"},
 		{ID: "id-2", Label: "second"},
 		{ID: "id-3", Label: "first"}, // duplicate label
@@ -90,7 +91,7 @@ func TestCheckpointList_FindByLabel(t *testing.T) {
 func TestCheckpointList_Latest(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	cl := CheckpointList{
+	cl := domain.CheckpointList{
 		{ID: "id-1", Timestamp: now.Add(-2 * time.Hour)},
 		{ID: "id-2", Timestamp: now.Add(-1 * time.Hour)},
 		{ID: "id-3", Timestamp: now.Add(-3 * time.Hour)},
@@ -103,7 +104,7 @@ func TestCheckpointList_Latest(t *testing.T) {
 
 func TestCheckpointList_Latest_Empty(t *testing.T) {
 	t.Parallel()
-	var cl CheckpointList
+	var cl domain.CheckpointList
 	latest := cl.Latest()
 	assert.Nil(t, latest)
 }
@@ -129,7 +130,7 @@ func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 	}
 	inst.started.Store(true)
 	// Set conversation UUID so it gets captured.
-	inst.claudeSession = &ClaudeSessionData{ConversationUUID: "conv-uuid-123"}
+	inst.claudeSession = &domain.ClaudeSessionData{ConversationUUID: "conv-uuid-123"}
 
 	before := time.Now()
 	cp, err := inst.CreateCheckpoint("before-refactor", 42)
@@ -174,7 +175,7 @@ func TestForkFromCheckpoint_HonorsSessionNameOverrideMap(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, newInst)
 
-	assert.Equal(t, BackendTmux, newInst.Backend,
+	assert.Equal(t, domain.BackendTmux, newInst.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 }
 
@@ -255,7 +256,7 @@ func TestCreateCheckpoint_TitleEscapingConfigDir_RejectsContainment(t *testing.T
 	const maliciousTitle = "../ssq-checkpoint-escape-poc"
 	inst := &Instance{Title: maliciousTitle, Program: "claude", Path: workspace}
 	inst.started.Store(true)
-	inst.claudeSession = &ClaudeSessionData{ConversationUUID: convUUID}
+	inst.claudeSession = &domain.ClaudeSessionData{ConversationUUID: convUUID}
 
 	cp, err := inst.CreateCheckpoint("escape-attempt", 0)
 	require.NoError(t, err, "containment rejection is swallowed, not propagated as an error")
@@ -285,7 +286,7 @@ func TestCreateCheckpoint_LegitimateTitle_WritesUnderConfigDir(t *testing.T) {
 	const legitTitle = "checkpoint-legit-title"
 	inst := &Instance{Title: legitTitle, Program: "claude", Path: workspace}
 	inst.started.Store(true)
-	inst.claudeSession = &ClaudeSessionData{ConversationUUID: convUUID}
+	inst.claudeSession = &domain.ClaudeSessionData{ConversationUUID: convUUID}
 
 	cp, err := inst.CreateCheckpoint("legit", 0)
 	require.NoError(t, err)

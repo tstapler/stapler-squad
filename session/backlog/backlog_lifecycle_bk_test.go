@@ -19,6 +19,8 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -58,7 +60,7 @@ func TestBacklogLifecycleListener_OnSessionStarted(t *testing.T) {
 		Description:        "A test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -137,7 +139,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToRevie
 		Description:        "A test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		SkipReviewGate:     false,
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
@@ -167,7 +169,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToRevie
 	// Verify that the item transitioned to review.
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusReview), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusReview), fetchedItem.Status)
 
 	// Verify that the ItemSession has EndedAt set.
 	repo := storage.Repo
@@ -204,7 +206,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_SkipsTransition_Wh
 		Description:        "A test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		SkipReviewGate:     false,
 	})
 	require.NoError(t, err)
@@ -236,7 +238,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_SkipsTransition_Wh
 	// whatever already-in-flight remediation is deciding what happens next.
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusInProgress), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusInProgress), fetchedItem.Status)
 }
 
 // fakeQueueDequeuer is a test double implementing QueueDequeuer, recording every
@@ -269,7 +271,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TriggersDequeue(t 
 		Title:              "Test Item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -338,7 +340,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToDone_
 		Description:        "A test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		SkipReviewGate:     true,
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
@@ -368,7 +370,7 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToDone_
 	// Verify that the item transitioned to done (not review).
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusDone), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusDone), fetchedItem.Status)
 
 	// Verify that the ItemSession has EndedAt set.
 	repo := storage.Repo
@@ -393,7 +395,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_NoTransition(t *
 		Description:        "A test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -422,7 +424,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_NoTransition(t *
 	// Verify that the item status did NOT change (still in_progress).
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusInProgress), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusInProgress), fetchedItem.Status)
 
 	// Verify that the ItemSession EndedAt IS set (exit is recorded for all roles).
 	repo := storage.Repo
@@ -468,7 +470,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ItemNotInProgress_NoTransition
 		Description:        "A test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -497,7 +499,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ItemNotInProgress_NoTransition
 	// Verify that the item status did NOT change (still review).
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusReview), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusReview), fetchedItem.Status)
 
 	// Verify that the ItemSession has EndedAt set (the exit was recorded).
 	repo := storage.Repo
@@ -527,9 +529,7 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 	listener.WireToInstance(inst)
 
 	// Verify a listener was registered by checking the slice length.
-	inst.LifecycleListenersMu.Lock()
-	count := len(inst.LifecycleListeners)
-	inst.LifecycleListenersMu.Unlock()
+	count := inst.LifecycleListenerCount()
 	require.Equal(t, 1, count, "WireToInstance should register exactly one lifecycle listener")
 
 	// Create a BacklogItem and ItemSession linked to inst.UUID so that
@@ -539,7 +539,7 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 		Description:        "Testing wire",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -556,7 +556,7 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		inst.FireLifecycleEvent(session.EventStarted, "")
+		inst.FireLifecycleEvent(domain.EventStarted, "")
 	}()
 	waitWithTimeout(t, done)
 
@@ -593,7 +593,7 @@ func TestBacklogLifecycleListener_WireToInstance_EventStopped_TransitionsToRevie
 		Description:        "Testing operator-stop reconciliation",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		SkipReviewGate:     false,
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
@@ -612,13 +612,13 @@ func TestBacklogLifecycleListener_WireToInstance_EventStopped_TransitionsToRevie
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		inst.FireLifecycleEvent(session.EventStopped, "operator-destroy")
+		inst.FireLifecycleEvent(domain.EventStopped, "operator-destroy")
 	}()
 	waitWithTimeout(t, done)
 
 	wait.RequireEventually(t, func() bool {
 		fetchedItem, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
-		return ferr == nil && fetchedItem.Status == string(session.BacklogStatusReview)
+		return ferr == nil && fetchedItem.Status == string(domain.BacklogStatusReview)
 	}, 2*time.Second, 20*time.Millisecond, "EventStopped should trigger the same in_progress->review transition as EventExited")
 
 	repo := storage.Repo
@@ -648,64 +648,12 @@ func TestBacklogLifecycleListener_NewBacklogLifecycleListenerWithSpawner(t *test
 	defer cleanup()
 
 	// Create a mock spawner.
-	mockSpawner := &mockReviewGateSpawner{}
+	mockSpawner := &blktest.MockReviewGateSpawner{}
 
 	listener := NewBacklogLifecycleListenerWithSpawner(storage, mockSpawner)
 	require.NotNil(t, listener)
 	require.Equal(t, storage, listener.storage)
 	require.Equal(t, mockSpawner, listener.sessionCreator)
-}
-
-// mockReviewGateSpawner is a mock implementation of ReviewGateSpawner for testing.
-// Guarded by mu since SpawnReviewSession can be invoked from a goroutine (e.g. via
-// onSessionExited's bounded-semaphore fan-out).
-type mockReviewGateSpawner struct {
-	mu              sync.Mutex
-	spawnCalled     bool
-	callCount       int
-	lastItem        *backlogdto.BacklogItemData
-	lastItemSession string
-	lastPrompt      string
-
-	// err, when non-nil, is returned by SpawnReviewSession instead of a synthesized
-	// Instance — used to test the spawner-error path.
-	err error
-	// instance, when non-nil, is returned by SpawnReviewSession on success instead of
-	// a synthesized one with a random UUID — used to assert the returned Instance's
-	// UUID is exactly what gets linked into the resulting ItemSession.
-	instance *session.Instance
-}
-
-func (m *mockReviewGateSpawner) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.spawnCalled = true
-	m.callCount++
-	m.lastItem = item
-	m.lastItemSession = itemSessionID
-	m.lastPrompt = prompt
-	if m.err != nil {
-		return nil, m.err
-	}
-	if m.instance != nil {
-		return m.instance, nil
-	}
-	return &session.Instance{UUID: uuid.New().String()}, nil
-}
-
-// getCallCount returns the number of times SpawnReviewSession has been called, under
-// the mock's own lock — safe to read concurrently with in-flight calls.
-func (m *mockReviewGateSpawner) getCallCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.callCount
-}
-
-// getLastPrompt returns the prompt passed to the most recent SpawnReviewSession call.
-func (m *mockReviewGateSpawner) getLastPrompt() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastPrompt
 }
 
 // fakePRPendingChecker is a test double implementing prPendingChecker, used to
@@ -752,7 +700,7 @@ func (f *fakePRPendingChecker) ClosePR(ctx context.Context, prNumber int, commen
 }
 
 // fakePRFixSpawner is a test double implementing PRFixSpawner, recording
-// whether/how AutoReopenForPRFix was called. Same shape as mockReviewGateSpawner.
+// whether/how AutoReopenForPRFix was called. Same shape as blktest.MockReviewGateSpawner.
 //
 // err and onCall let a test simulate AutoReopenForPRFix's three real outcomes
 // (BUG-040 regression coverage for ReconcilePRPending's closed-PR branch,
@@ -845,7 +793,7 @@ func TestBacklogLifecycleListener_IgnoresEventsWhenDisabled(t *testing.T) {
 		Description:        "Testing enabled gate",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -870,10 +818,10 @@ func TestBacklogLifecycleListener_IgnoresEventsWhenDisabled(t *testing.T) {
 	// Fire EventExited — the gate should stop processing immediately.
 	// Allow time for any goroutine that might have been started to settle.
 	wait.RequireEventually(t, func() bool {
-		inst.FireLifecycleEvent(session.EventExited, "")
+		inst.FireLifecycleEvent(domain.EventExited, "")
 		// Check that the item was NOT transitioned.
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
-		return ferr == nil && fetched.Status == string(session.BacklogStatusInProgress)
+		return ferr == nil && fetched.Status == string(domain.BacklogStatusInProgress)
 	}, 500*time.Millisecond, 20*time.Millisecond,
 		"disabled listener should not transition item status")
 }
@@ -893,7 +841,7 @@ func TestBacklogLifecycleListener_ProcessesEventsWhenEnabled(t *testing.T) {
 		Description:        "Testing enabled gate",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		SkipReviewGate:     true, // go straight to done to make assertion easy
 	}
 	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
@@ -917,11 +865,11 @@ func TestBacklogLifecycleListener_ProcessesEventsWhenEnabled(t *testing.T) {
 	listener.WireToInstance(inst)
 
 	// Fire EventExited — the listener must process it and transition the item.
-	inst.FireLifecycleEvent(session.EventExited, "")
+	inst.FireLifecycleEvent(domain.EventExited, "")
 
 	wait.RequireEventually(t, func() bool {
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
-		return ferr == nil && fetched.Status == string(session.BacklogStatusDone)
+		return ferr == nil && fetched.Status == string(domain.BacklogStatusDone)
 	}, 2*time.Second, 20*time.Millisecond,
 		"enabled listener should transition item from in_progress to done")
 }
@@ -936,7 +884,7 @@ func TestBacklogLifecycleListener_ProcessesEventsWhenEnabled(t *testing.T) {
 // time.Now()). The review session itself is left alive (EndedAt nil) so only
 // the verdict-age path, not the ordinary dead-session path, can explain a
 // "dead" verdict.
-func newStuckReviewTestItemWithVerdictAge(t *testing.T, storage *session.Storage, er *session.EntRepository, outcome session.ReviewOutcome, verdictAge time.Duration) *backlogdto.BacklogItemData {
+func newStuckReviewTestItemWithVerdictAge(t *testing.T, storage *session.Storage, er *session.EntRepository, outcome domain.ReviewOutcome, verdictAge time.Duration) *backlogdto.BacklogItemData {
 	t.Helper()
 	ctx := context.Background()
 
@@ -944,7 +892,7 @@ func newStuckReviewTestItemWithVerdictAge(t *testing.T, storage *session.Storage
 		Title:              "Stuck review test item (backdated verdict)",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -971,7 +919,7 @@ func newStuckReviewTestItemWithVerdictAge(t *testing.T, storage *session.Storage
 // TestReconcileStuckReviewItems_NotifiesOncePerItem verifies the ReconcileStuck
 // safety net surfaces abandoned review items via a notification (fixing their
 // total invisibility to both the human operator and every other reconciler),
-// once the 15-minute grace (Story 2.1.3, abandonedReview pure fn) has
+// once the 15-minute grace (Story 2.1.3, stuck.AbandonedReview pure fn) has
 // elapsed, and that repeat ticks do not re-notify for the same item.
 func TestReconcileStuckReviewItems_NotifiesOncePerItem(t *testing.T) {
 	t.Parallel()
@@ -979,7 +927,7 @@ func TestReconcileStuckReviewItems_NotifiesOncePerItem(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	item := newStuckReviewTestItem(t, storage, session.ReviewVerdictUnverifiable, true, false)
+	item := newStuckReviewTestItem(t, storage, domain.ReviewVerdictUnverifiable, true, false)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &sessiontest.FakeNotifier{}
@@ -1014,7 +962,7 @@ func TestReconcileStuckReviewItems_NotifiesOncePerItem(t *testing.T) {
 	// Item status itself must be untouched — this reconciler is detection-only.
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status)
 }
 
 // TestMarkAbandonedReview_AutoRespawnsReview_OncePastGrace is a regression test
@@ -1031,7 +979,7 @@ func TestMarkAbandonedReview_AutoRespawnsReview_OncePastGrace(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	item := newStuckReviewTestItem(t, storage, session.ReviewVerdictUnverifiable, true, false)
+	item := newStuckReviewTestItem(t, storage, domain.ReviewVerdictUnverifiable, true, false)
 
 	listener := NewBacklogLifecycleListener(storage)
 	respawner := newFakeReviewRespawner()
@@ -1073,7 +1021,7 @@ func TestMarkAbandonedReview_AutoRespawnsReview_OncePastGrace(t *testing.T) {
 	// itself — only the respawned review session (if any) may do that.
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status)
 }
 
 // TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue is a BUG-043
@@ -1095,7 +1043,7 @@ func TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	item := newStuckReviewTestItem(t, storage, session.ReviewVerdictUnverifiable, true, false)
+	item := newStuckReviewTestItem(t, storage, domain.ReviewVerdictUnverifiable, true, false)
 
 	listener := NewBacklogLifecycleListener(storage)
 	respawner := newFakeReviewRespawner()
@@ -1108,7 +1056,7 @@ func TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue(t *testing.T) {
 	// mirrors the live DB state found on all three affected items (BUG-043):
 	// a prior bounce cycle already tripped this gate independently of
 	// abandoned_review's own schedule.
-	_, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bounced previously")
+	_, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, domain.BacklogStatusReview, "bounced previously")
 	require.NoError(t, err)
 	future := time.Now().Add(2 * time.Hour)
 	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, 1, &future)
@@ -1130,7 +1078,7 @@ func TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue(t *testing.T) {
 	// is not to waste it on a foregone conclusion.
 	rows, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
 	require.True(t, ok, "abandoned_review row must still be open")
 	assert.Equal(t, int32(0), row.RemediationAttempts, "must not consume an abandoned_review attempt on a respawn blocked downstream by the bouncing gate")
 }
@@ -1145,7 +1093,7 @@ func TestMarkAbandonedReview_NoRespawn_WhenNoReviewRespawnerConfigured(t *testin
 	defer cleanup()
 	ctx := context.Background()
 
-	item := newStuckReviewTestItem(t, storage, session.ReviewVerdictUnverifiable, true, false)
+	item := newStuckReviewTestItem(t, storage, domain.ReviewVerdictUnverifiable, true, false)
 
 	listener := NewBacklogLifecycleListener(storage)
 	notifier := &sessiontest.FakeNotifier{}
@@ -1176,7 +1124,7 @@ func newPRPendingTestItem(t *testing.T, storage *session.Storage, prNumber int) 
 		Title:              "PR pending test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -1343,7 +1291,7 @@ func TestReconcilePRPending_DoesNotRespawnFixSession_When_StillCIFailingOnNextTi
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonPRNeedsFix)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonPRNeedsFix)
 	require.True(t, ok, "a pr_needs_fix stuck row must be open while the PR keeps failing CI")
 	assert.Equal(t, int32(1), row.RemediationAttempts, "the gated second tick must not consume a second remediation attempt")
 }
@@ -1474,7 +1422,7 @@ func TestReconcilePRPending_ConflictOnly_StandsDownWhenReworkCapOpen(t *testing.
 	listener.ReconcilePRPending(ctx, storage.Repo)
 	require.Equal(t, 1, spawner.callCount)
 	parkPRNeedsFixRow(t, storage, item.ID)
-	applied, err := storage.Repo.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, session.BacklogStatusPRPending, "cap hit")
+	applied, err := storage.Repo.MarkStuck(ctx, item.ID, domain.StuckReasonReworkCap, domain.BacklogStatusPRPending, "cap hit")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -1695,7 +1643,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -1707,12 +1655,12 @@ func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusInProgress), fetched.Status, "first tick's reopen must have succeeded")
+	require.Equal(t, string(domain.BacklogStatusInProgress), fetched.Status, "first tick's reopen must have succeeded")
 
 	// Put the item back at pr_pending with the same closed PR reference, as if
 	// a fresh push landed the same closed PR number again — the realistic
 	// repeat-tick scenario this gate protects against.
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusPRPending, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.ReconcilePRPending(ctx, er)
@@ -1775,7 +1723,7 @@ func TestReconcilePRPending_NoSpawn_WhenAllSignalsFalse(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "item status must remain pr_pending")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "item status must remain pr_pending")
 }
 
 // TestReconcilePRPending_hasNewFeedback_should_ReturnTrue_When_LatestFeedbackAtAfterWatermark
@@ -1841,7 +1789,7 @@ func TestReconcilePRPending_hasNewFeedback_should_ReturnFalse_When_WatermarkEqua
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "item status must remain pr_pending")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "item status must remain pr_pending")
 }
 
 // TestReconcilePRPending_DispatchLog_should_IncludeFeedbackFlag_When_FeedbackTriggersSpawn
@@ -2065,7 +2013,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testi
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -2078,7 +2026,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testi
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status, "item must have actually left pr_pending")
+	assert.Equal(t, string(domain.BacklogStatusInProgress), fetched.Status, "item must have actually left pr_pending")
 	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared so the next pushAndCreatePR creates a fresh PR")
 	assert.Empty(t, fetched.PrURL, "PrURL must be cleared so the next pushAndCreatePR creates a fresh PR")
 }
@@ -2106,7 +2054,7 @@ func TestReconcilePRPending_should_ClearWatermark_When_PRClosedWithoutMerging(t 
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -2117,7 +2065,7 @@ func TestReconcilePRPending_should_ClearWatermark_When_PRClosedWithoutMerging(t 
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status, "item must have actually left pr_pending")
+	assert.Equal(t, string(domain.BacklogStatusInProgress), fetched.Status, "item must have actually left pr_pending")
 	assert.Nil(t, fetched.PrFeedbackAddressedAt, "PrFeedbackAddressedAt must be cleared alongside PrURL/PrNumber on a confirmed closed-without-merging reopen")
 }
 
@@ -2162,7 +2110,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenN
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "item must remain pr_pending when the reopen no-ops")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "item must remain pr_pending when the reopen no-ops")
 	assert.Equal(t, 173, fetched.PrNumber, "PrNumber must NOT be cleared when the reopen never actually happened (BUG-040)")
 	assert.Equal(t, item.PrURL, fetched.PrURL, "PrURL must NOT be cleared when the reopen never actually happened (BUG-040)")
 }
@@ -2195,7 +2143,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_LeavesPRFieldsIntact_When_ReopenE
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, 173, fetched.PrNumber, "PrNumber must NOT be cleared when AutoReopenForPRFix errored (BUG-040)")
 	assert.Equal(t, item.PrURL, fetched.PrURL, "PrURL must NOT be cleared when AutoReopenForPRFix errored (BUG-040)")
 }
@@ -2230,7 +2178,7 @@ func TestReconcilePRPending_ClosedPR_ClosesAsSupersededInsteadOfReopening_When_L
 		Title:              "Closed-PR superseded test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           dir,
 	})
 	require.NoError(t, err)
@@ -2257,7 +2205,7 @@ func TestReconcilePRPending_ClosedPR_ClosesAsSupersededInsteadOfReopening_When_L
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status, "item must transition straight to done once its commit is confirmed already on main")
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status, "item must transition straight to done once its commit is confirmed already on main")
 	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared")
 	assert.Empty(t, fetched.PrURL, "PrURL must be cleared")
 }
@@ -2293,7 +2241,7 @@ func TestReconcilePRPending_ClosesSupersededPR_When_LastCommitAlreadyOnMain(t *t
 		Title:              "Superseded PR test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           dir,
 	})
 	require.NoError(t, err)
@@ -2328,7 +2276,7 @@ func TestReconcilePRPending_ClosesSupersededPR_When_LastCommitAlreadyOnMain(t *t
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status, "item must transition straight to done once its commit is confirmed already on main")
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status, "item must transition straight to done once its commit is confirmed already on main")
 	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must be cleared")
 	assert.Empty(t, fetched.PrURL, "PrURL must be cleared")
 }
@@ -2363,7 +2311,7 @@ func TestReconcilePRPending_SpawnsFixSession_When_LastCommitNotOnMain(t *testing
 		Title:              "Genuinely broken PR test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           dir,
 	})
 	require.NoError(t, err)
@@ -2399,7 +2347,7 @@ func TestReconcilePRPending_SpawnsFixSession_When_LastCommitNotOnMain(t *testing
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 }
 
 // fakePRCreator is a test double implementing prCreator, letting tests inject
@@ -2490,7 +2438,7 @@ func newPushAndCreatePRTestFixture(t *testing.T, storage *session.Storage) (*bac
 		Title:              "Push and create PR test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -2505,7 +2453,7 @@ func newPushAndCreatePRTestFixture(t *testing.T, storage *session.Storage) (*bac
 
 	inst := newTestInstance("push-pr-test")
 	inst.UUID = sessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/fake-repo", "/tmp/fake-repo/../worktrees/push-pr-test", "push-pr-test", "backlog/push-pr-test", "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -2538,7 +2486,7 @@ func TestPushAndCreatePR_PushFails_LeavesItemInReview_AndNotifies(t *testing.T) 
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
 	assert.Contains(t, notifier.Titles(), "PR creation failed")
 	for _, c := range notifier.Calls {
 		if c.Title != "PR creation failed" {
@@ -2612,7 +2560,7 @@ func TestPushAndCreatePR_CreatePRFails_LeavesItemInReview_AndNotifies(t *testing
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "item must stay in review, not silently become done")
 	assert.Contains(t, notifier.Titles(), "PR creation failed")
 }
 
@@ -2697,7 +2645,7 @@ func TestPushAndCreatePR_PRFieldsPersistFails_StaysInReview_AndNotifies(t *testi
 
 	fetched, err := storage2.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status,
 		"item must stay in review when the PR-fields persist fails (BUG-040) — must never silently enter pr_pending with pr_number=0")
 	assert.Equal(t, 0, fetched.PrNumber, "PrNumber must remain unset since the persist failed")
 	assert.Empty(t, fetched.PrURL, "PrURL must remain unset since the persist failed")
@@ -2732,7 +2680,7 @@ func TestPushAndCreatePR_AutoMergeFails_StillTransitionsButNotifies(t *testing.T
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "the PR was created successfully — the item must still advance to pr_pending")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "the PR was created successfully — the item must still advance to pr_pending")
 	assert.Contains(t, notifier.Titles(), "Auto-merge not enabled", "operator must be told the PR needs a manual merge, not just a log line")
 }
 
@@ -2761,7 +2709,7 @@ func TestPushAndCreatePR_should_RequestCopilotReview_When_PRCreated(t *testing.T
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 }
 
 // TestPushAndCreatePR_should_SendWarningNotification_When_RequestCopilotReviewFails
@@ -2791,7 +2739,7 @@ func TestPushAndCreatePR_should_SendWarningNotification_When_RequestCopilotRevie
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "the PR was created successfully — the item must still advance to pr_pending")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "the PR was created successfully — the item must still advance to pr_pending")
 	assert.Contains(t, notifier.Titles(), "Copilot review not requested")
 }
 
@@ -2810,14 +2758,14 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repoDir := newNonEmptyDiffGitRepo(t)
+	repoDir := blktest.NewNonEmptyDiffGitRepo(t)
 
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:              "Drafted PR body gets a backlog link",
 		Description:        "The agent-drafted PR body must still point back at the backlog item.",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           repoDir,
 	})
 	require.NoError(t, err)
@@ -2834,7 +2782,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 
 	inst := newTestInstance("push-pr-drafted-body-test")
 	inst.UUID = sessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir, "push-pr-drafted-body-test", "backlog/push-pr-drafted-body-test", baseSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir, "push-pr-drafted-body-test", "backlog/push-pr-drafted-body-test", baseSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 	is := backlogdto.ItemSessionSummary{ID: itemSession.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
 
@@ -2897,7 +2845,7 @@ func TestPushAndCreatePR_ReusesExistingPR_WhenAlreadySet(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, existingNum, fetched.PrNumber)
 }
 
@@ -2914,7 +2862,7 @@ func TestPushAndCreatePR_NoWorktree_FallsBackToDone(t *testing.T) {
 		Title:              "No worktree test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -2923,7 +2871,7 @@ func TestPushAndCreatePR_NoWorktree_FallsBackToDone(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status)
 }
 
 // TestPushAndCreatePR_ZeroDiffBranch_FallsBackToDone is the regression test for
@@ -2955,7 +2903,7 @@ func TestPushAndCreatePR_ZeroDiffBranch_FallsBackToDone(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status, "a genuinely empty diff must resolve to done, not get stuck in review or silently land in pr_pending")
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status, "a genuinely empty diff must resolve to done, not get stuck in review or silently land in pr_pending")
 }
 
 // TestPushAndCreatePR_AheadOfMainCheckErrors_StillAttemptsPRCreation verifies
@@ -2985,7 +2933,7 @@ func TestPushAndCreatePR_AheadOfMainCheckErrors_StillAttemptsPRCreation(t *testi
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 }
 
 // TestRecordPRCreatedOutOfBand_TransitionsReviewToPRPending verifies the core
@@ -3009,7 +2957,7 @@ func TestRecordPRCreatedOutOfBand_TransitionsReviewToPRPending(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status,
 		"item must leave review so ReconcilePRPending's FindPRPendingItems can find it")
 	assert.Equal(t, 157, fetched.PrNumber)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/157", fetched.PrURL)
@@ -3047,7 +2995,7 @@ func TestRecordPRCreatedOutOfBand_NoOp_WhenItemNotInReview(t *testing.T) {
 		Title:              "Not in review test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -3068,7 +3016,7 @@ func TestRecordPRCreatedOutOfBand_NoOp_WhenItemNotInReview(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusInProgress), fetched.Status,
 		"must not transition an item that isn't in review")
 	assert.Equal(t, 0, fetched.PrNumber, "must not stamp PR fields onto an item it declined to transition")
 }
@@ -3093,7 +3041,7 @@ func TestRecordPRCreatedOutOfBand_NoOp_WhenListenerDisabled(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "disabled listener must not transition the item")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "disabled listener must not transition the item")
 }
 
 // TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasStuck
@@ -3111,7 +3059,7 @@ func TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasSt
 	ctx := context.Background()
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 
-	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAbandonedReview, session.BacklogStatusReview, "review abandoned before manual PR creation")
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAbandonedReview, domain.BacklogStatusReview, "review abandoned before manual PR creation")
 	require.NoError(t, err)
 	require.True(t, applied, "test setup: MarkStuck must actually open a row")
 
@@ -3123,7 +3071,7 @@ func TestRecordPRCreatedOutOfBand_ClearsAbandonedReviewStuckReason_WhenItemWasSt
 
 	rows, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, stillOpen := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
+	_, stillOpen := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonAbandonedReview)
 	assert.False(t, stillOpen, "abandoned_review must be resolved once an out-of-band PR moves the item out of review")
 }
 
@@ -3154,7 +3102,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActive
 	// Simulate the race: something else moves the item off "review" while
 	// pushAndCreatePR's own network calls (push, create PR, enable auto-merge)
 	// are still in flight, before its resolveToPRPending call runs.
-	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -3170,7 +3118,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActive
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status,
 		"item must be recovered to pr_pending immediately, not left stranded at in_progress with a live PR")
 	assert.Equal(t, 251, fetched.PrNumber)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/251", fetched.PrURL)
@@ -3194,7 +3142,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessi
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
 
-	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// A brand-new work session starts for the item — e.g. AutoReopenAfterFailedReview
@@ -3219,7 +3167,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessi
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusInProgress), fetched.Status,
 		"must not force the item back to pr_pending while a new session is actively working it")
 	assert.Equal(t, 252, fetched.PrNumber, "PR fields are still persisted even though the status transition lost its race")
 	assert.NotContains(t, notifier.Titles(), "Backlog item recovered from stuck state")
@@ -3243,7 +3191,7 @@ func TestReconcileDriftedPRItems_RecoversDriftedItemWithNoActiveSession(t *testi
 		Title:              "Drifted PR item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -3262,7 +3210,7 @@ func TestReconcileDriftedPRItems_RecoversDriftedItemWithNoActiveSession(t *testi
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status,
 		"self-heal must anchor on the real PR reference and recover the item back to pr_pending")
 	assert.Equal(t, prNumber, fetched.PrNumber)
 	assert.Equal(t, prURL, fetched.PrURL)
@@ -3290,7 +3238,7 @@ func TestReconcileDriftedPRItems_DoesNotTouchItem_WhenActiveSessionExists(t *tes
 		Title:              "Mid-fix PR item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -3318,7 +3266,7 @@ func TestReconcileDriftedPRItems_DoesNotTouchItem_WhenActiveSessionExists(t *tes
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusInProgress), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusInProgress), fetched.Status,
 		"must not touch an item with an active work session mid-fix")
 	assert.Empty(t, notifier.Calls, "must not notify about a recovery that never happened")
 }
@@ -3338,7 +3286,7 @@ func TestReconcileDriftedPRItems_DoesNotTouchHealthyItem_WithNoPR(t *testing.T) 
 		Title:              "Healthy in-review item, no PR yet",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -3352,7 +3300,7 @@ func TestReconcileDriftedPRItems_DoesNotTouchHealthyItem_WithNoPR(t *testing.T) 
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "must not touch a healthy item with no PR")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "must not touch a healthy item with no PR")
 	assert.Empty(t, notifier.Calls)
 }
 
@@ -3369,7 +3317,7 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *session.Storage,
 		Title:              "Handle review session exited test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -3386,7 +3334,7 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *session.Storage,
 
 	inst := newTestInstance(workSessionName)
 	inst.UUID = workSessionUUID
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/fake-repo", "/tmp/fake-repo/../worktrees/"+workSessionName, workSessionName, "backlog/"+workSessionName, "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
@@ -3432,7 +3380,7 @@ func TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR(
 	ctx := context.Background()
 
 	item, reviewIS, workSessionName, workIS := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
@@ -3453,7 +3401,7 @@ func TestHandleReviewSessionExited_Pass_EndedWorkSession_InvokesPushAndCreatePR(
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 }
 
 // TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechanicalPush
@@ -3469,7 +3417,7 @@ func TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechan
 	ctx := context.Background()
 
 	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
@@ -3493,7 +3441,7 @@ func TestShipViaAgentOrFallback_EndedWorkSession_AttemptsOneShotShip_SkipsMechan
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/42", fetched.PrURL)
 	assert.Equal(t, 42, fetched.PrNumber)
 }
@@ -3511,7 +3459,7 @@ func TestShipViaAgentOrFallback_OneShotShipErrors_FallsBackToMechanicalPush(t *t
 	ctx := context.Background()
 
 	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
@@ -3533,7 +3481,7 @@ func TestShipViaAgentOrFallback_OneShotShipErrors_FallsBackToMechanicalPush(t *t
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "the mechanical fallback must still successfully ship the PR")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "the mechanical fallback must still successfully ship the PR")
 }
 
 // TestShipViaAgentOrFallback_OneShotShipReturnsNoURL_FallsBackToMechanicalPush
@@ -3548,7 +3496,7 @@ func TestShipViaAgentOrFallback_OneShotShipReturnsNoURL_FallsBackToMechanicalPus
 	ctx := context.Background()
 
 	_, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
@@ -3585,7 +3533,7 @@ func TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone(t *testi
 		Title:              "No worktree recorded test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
@@ -3606,7 +3554,7 @@ func TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone(t *testi
 		SessionUUID: reviewSessionUUID,
 		SessionRole: session.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
@@ -3627,7 +3575,7 @@ func TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone(t *testi
 	require.Len(t, runner.calls, 1)
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status, "genuinely nothing to ship must still resolve via pushAndCreatePR's pre-existing fallbackToDone, unchanged by this fix")
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status, "genuinely nothing to ship must still resolve via pushAndCreatePR's pre-existing fallbackToDone, unchanged by this fix")
 }
 
 // TestShipViaAgentOrFallback_WorktreeGoneOnDisk_NotifiesOperator_DoesNotSilentlyDrop
@@ -3647,7 +3595,7 @@ func TestShipViaAgentOrFallback_WorktreeGoneOnDisk_NotifiesOperator_DoesNotSilen
 	ctx := context.Background()
 
 	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
@@ -3671,7 +3619,7 @@ func TestShipViaAgentOrFallback_WorktreeGoneOnDisk_NotifiesOperator_DoesNotSilen
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "PASS verdict must not be silently dropped — item stays in review, not done, when nothing could actually be shipped")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "PASS verdict must not be silently dropped — item stays in review, not done, when nothing could actually be shipped")
 	assert.Contains(t, notifier.Titles(), "PR creation failed", "operator must be notified rather than the verdict silently vanishing")
 }
 
@@ -3696,7 +3644,7 @@ func TestShipViaAgentOrFallback_OneShotReturnsUnparseablePRURL_StaysInReview_Doe
 	ctx := context.Background()
 
 	item, reviewIS, _, workIS := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
@@ -3720,7 +3668,7 @@ func TestShipViaAgentOrFallback_OneShotReturnsUnparseablePRURL_StaysInReview_Doe
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "must stay in review, not silently transition to pr_pending with an unpersisted/invalid PR number")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "must stay in review, not silently transition to pr_pending with an unpersisted/invalid PR number")
 	assert.Equal(t, 0, fetched.PrNumber, "must never persist a bogus PR number")
 	assert.Contains(t, notifier.Titles(), "PR creation failed", "operator must be notified rather than the verdict silently vanishing into an invisible pr_pending/pr_number=0 dead end")
 }
@@ -3742,7 +3690,7 @@ func TestHandleReviewSessionExited_Pass_LiveWorkSession_DoesNotInvokePushAndCrea
 	ctx := context.Background()
 
 	item, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictPass,
+		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
 		Summary:        "all good",
 	})
@@ -3759,7 +3707,7 @@ func TestHandleReviewSessionExited_Pass_LiveWorkSession_DoesNotInvokePushAndCrea
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "item must stay in review so the live agent's /backlog/ship has something to act on")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "item must stay in review so the live agent's /backlog/ship has something to act on")
 }
 
 // TestHandleReviewSessionExited_Fail_InvokesAutoReopener verifies that a FAIL
@@ -3772,13 +3720,13 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 	ctx := context.Background()
 
 	item, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictFail,
+		OverallOutcome: domain.ReviewVerdictFail,
 		PerCriterion:   `[]`,
 		Summary:        "criteria not met",
 	})
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	fakeCreator := &fakePRCreator{}
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
@@ -3788,7 +3736,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID)
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
@@ -3809,7 +3757,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, nil)
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -3817,7 +3765,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
@@ -3845,7 +3793,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 // this fix — RemediationDue's own ungated-until-first-detected default means
 // the reopen genuinely gets attempted here too), then a "bouncing" row opens
 // mid-backoff in between ticks (the shape reconcileBouncingItems produces once
-// its own bounceThreshold trips, mirroring TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue's
+// its own stuck.BounceThreshold trips, mirroring TestMarkAbandonedReview_SkipsRespawn_WhenBouncingGateNotDue's
 // identical seed for the live DB state BUG-043 found on this same item), then
 // tick 2 reprocesses the SAME dead SessionUUID with the gate now blocked.
 // Pre-fix, tick 2 notifies again regardless of the gate; post-fix it must not.
@@ -3858,7 +3806,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, nil)
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -3872,7 +3820,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 	listener.handleReviewSessionExited(ctx, reviewIS, true)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
 	}
@@ -3880,9 +3828,9 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 		"tick 1 is a fresh detection and must notify")
 
 	// Between ticks: a "bouncing" stuck row opens mid-backoff — mirrors
-	// reconcileBouncingItems tripping its own bounceThreshold independently,
+	// reconcileBouncingItems tripping its own stuck.BounceThreshold independently,
 	// the live DB state BUG-043 found on this exact item.
-	_, err := er.MarkStuck(ctx, reviewIS.BacklogItemID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bounced previously")
+	_, err := er.MarkStuck(ctx, reviewIS.BacklogItemID, domain.StuckReasonBouncing, domain.BacklogStatusReview, "bounced previously")
 	require.NoError(t, err)
 	future := time.Now().Add(2 * time.Hour)
 	_, err = er.RecordRemediationAttempt(ctx, reviewIS.BacklogItemID, domain.StuckReasonBouncing, 1, &future)
@@ -3896,7 +3844,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 	listener.handleReviewSessionExited(ctx, reviewIS, true)
 
 	select {
-	case id := <-reopener.called:
+	case id := <-reopener.Called:
 		t.Fatalf("bouncing gate is mid-backoff on tick 2 — AutoReopenAfterFailedReview must not be invoked, got call for item=%s", id)
 	case <-time.After(300 * time.Millisecond):
 	}
@@ -3919,11 +3867,11 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bounce cap exhausted test item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusInProgress, "3 cycles")
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "3 cycles")
 	require.NoError(t, err)
 	require.True(t, applied)
 	// Seed one attempt short of the cap, eligible immediately (nil next_remediation_at).
@@ -3932,26 +3880,26 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, hasCapRowYet := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	_, hasCapRowYet := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
 	require.False(t, hasCapRowYet, "must not have a bounce_cap_exhausted row before the cap is actually crossed")
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
-	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, session.BacklogStatusInProgress)
+	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, domain.BacklogStatusInProgress)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
 	require.True(t, ok, "crossing the cap while bouncing is still open must mark a durable bounce_cap_exhausted row")
 	assert.NotNil(t, row.NotifiedAt, "the differentiated notify fires immediately (not dwell-gated), so the row must already be marked notified")
 
@@ -3974,11 +3922,11 @@ func TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetP
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bounce not yet parked test item",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusInProgress, "2 cycles")
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, domain.BacklogStatusInProgress, "2 cycles")
 	require.NoError(t, err)
 	require.True(t, applied)
 	// Two attempts short of the cap: this call's attempt lands at
@@ -3987,22 +3935,22 @@ func TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetP
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
 
-	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, session.BacklogStatusInProgress)
+	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, domain.BacklogStatusInProgress)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, hasCapRow := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	_, hasCapRow := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
 	assert.False(t, hasCapRow, "must not mark bounce_cap_exhausted before remediation_attempts actually reaches the cap")
 	assert.Empty(t, notifier.Calls, "must not fire the differentiated cap-exhausted notify before justParked")
 }
@@ -4025,18 +3973,18 @@ func TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounc
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bounce cap exhausted, review-status item",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusReview, "3 cycles")
+	applied, err := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, domain.BacklogStatusReview, "3 cycles")
 	require.NoError(t, err)
 	require.True(t, applied)
 	_, err = er.RecordRemediationAttempt(ctx, item.ID, domain.StuckReasonBouncing, session.MaxRemediationAttempts-1, nil)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -4044,19 +3992,19 @@ func TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounc
 	// Pass the item's REAL current status (review), exactly as
 	// handleReviewSessionExited does via BacklogStatus(item.Status) — not a
 	// hardcoded BacklogStatusInProgress.
-	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, session.BacklogStatusReview)
+	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, domain.BacklogStatusReview)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonBounceCapExhausted)
 	require.True(t, ok, "MarkStuck's expectedStatus precondition must match the item's real (review) status, not a hardcoded in_progress — otherwise this row would silently never appear")
-	assert.Equal(t, session.BacklogStatusReview, row.ItemStatus)
+	assert.Equal(t, domain.BacklogStatusReview, row.ItemStatus)
 }
 
 // TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleReviewSessionExited
@@ -4070,13 +4018,13 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleRe
 	defer cleanup()
 
 	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, &backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewVerdictFail,
+		OverallOutcome: domain.ReviewVerdictFail,
 		PerCriterion:   `[]`,
 		Summary:        "criteria not met",
 	})
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 
 	done := make(chan struct{})
@@ -4087,7 +4035,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleRe
 	waitWithTimeout(t, done)
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, reviewIS.BacklogItemID, gotItemID)
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called via onSessionExited routing")
@@ -4107,9 +4055,9 @@ func TestBacklogLifecycleListener_SetSessionCreator_WiresPostConstruction(t *tes
 	listener := NewBacklogLifecycleListener(storage)
 	require.Nil(t, listener.getSessionCreator())
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	listener.SetSessionCreator(spawner)
-	assert.Equal(t, ReviewGateSpawner(spawner), listener.getSessionCreator())
+	assert.Equal(t, reviewgate.ReviewGateSpawner(spawner), listener.getSessionCreator())
 }
 
 // TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSpawn
@@ -4127,7 +4075,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 		Title:              "Headless pool alone test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
+		Status:             string(domain.BacklogStatusInProgress),
 		RepoPath:           "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -4157,7 +4105,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	// gate never spawns.
 	wait.RequireEventually(t, func() bool {
 		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
-		return ferr == nil && fetched.Status == string(session.BacklogStatusReview)
+		return ferr == nil && fetched.Status == string(domain.BacklogStatusReview)
 	}, 10*time.Second, 20*time.Millisecond)
 
 	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
@@ -4187,8 +4135,8 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 		Title:              "Built-in review gate still fires",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusInProgress),
-		RepoPath:           newNonEmptyDiffGitRepo(t),
+		Status:             string(domain.BacklogStatusInProgress),
+		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	})
 	require.NoError(t, err)
 
@@ -4201,7 +4149,7 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 	require.NoError(t, err)
 
 	reviewInstance := &session.Instance{UUID: uuid.New().String()}
-	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	listener := NewBacklogLifecycleListenerWithSpawner(storage, spawner)
 	// Explicitly confirm the nil-workflowEngine default this test relies on —
 	// transitionHasAutomatedReviewGate's literal `to == BacklogStatusReview`
@@ -4232,11 +4180,11 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 		}
 		return reviewEntry != nil
 	}, 10*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
-	require.Equal(t, 1, spawner.getCallCount())
+	require.Equal(t, 1, spawner.CallCount())
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusReview), fetchedItem.Status)
+	require.Equal(t, string(domain.BacklogStatusReview), fetchedItem.Status)
 
 	require.NotNil(t, reviewEntry, "a review ItemSession must be created")
 	assert.Equal(t, reviewInstance.UUID, reviewEntry.SessionUUID)
@@ -4258,9 +4206,9 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 	client := storage.GetEntClient()
 
 	require.NoError(t, session.EnsureBuiltInWorkflowStages(ctx, client))
-	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(session.BacklogStatusInProgress))).Only(ctx)
+	fromStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusInProgress))).Only(ctx)
 	require.NoError(t, err)
-	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(session.BacklogStatusReview))).Only(ctx)
+	toStage, err := client.BacklogStage.Query().Where(backlogstage.Slug(string(domain.BacklogStatusReview))).Only(ctx)
 	require.NoError(t, err)
 	transition, err := client.StageTransition.Query().
 		Where(stagetransition.FromStageID(fromStage.ID), stagetransition.ToStageID(toStage.ID)).
@@ -4268,7 +4216,7 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 	require.NoError(t, err)
 	_, err = client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindAutomatedReview)).
+		SetKind(string(domain.GateKindAutomatedReview)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
@@ -4283,7 +4231,7 @@ func TestResolveReviewGateContext_should_ReturnBuiltIn_When_ToIsReview_Regardles
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetWorkflowEngine(engine)
 
-	gateContext, ok := listener.resolveReviewGateContext(session.BacklogStatusInProgress, session.BacklogStatusReview)
+	gateContext, ok := listener.resolveReviewGateContext(domain.BacklogStatusInProgress, domain.BacklogStatusReview)
 	require.True(t, ok)
 	assert.Equal(t, builtInReviewGateContext, gateContext, "to==BacklogStatusReview must always resolve to the built-in literal, even when a configured gate also matches this edge")
 }
@@ -4307,7 +4255,7 @@ func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransit
 	require.NoError(t, err)
 	gate, err := client.TransitionGate.Create().
 		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindAutomatedReview)).
+		SetKind(string(domain.GateKindAutomatedReview)).
 		SetStateful(true).
 		SetEnabled(true).
 		SetConfig(map[string]interface{}{"requires_diff": false, "pipeline_mode": "sdd"}).
@@ -4322,12 +4270,12 @@ func TestResolveReviewGateContext_should_ReturnConfiguredGate_When_CustomTransit
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetWorkflowEngine(engine)
 
-	gateContext, ok := listener.resolveReviewGateContext(session.BacklogStatus(fromStage.Slug), session.BacklogStatus(toStage.Slug))
+	gateContext, ok := listener.resolveReviewGateContext(domain.BacklogStatus(fromStage.Slug), domain.BacklogStatus(toStage.Slug))
 	require.True(t, ok)
 	assert.Equal(t, gate.ID.String(), gateContext.GateID)
 	assert.False(t, gateContext.RequiresDiff)
 	assert.Equal(t, "sdd", gateContext.PipelineMode)
-	assert.Equal(t, session.BacklogStatus(toStage.Slug), gateContext.TargetTransition)
+	assert.Equal(t, domain.BacklogStatus(toStage.Slug), gateContext.TargetTransition)
 }
 
 // TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCustomTransition
@@ -4355,7 +4303,7 @@ func TestResolveReviewGateContext_should_ReturnNotOK_When_NoGateConfiguredForCus
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetWorkflowEngine(engine)
 
-	_, ok := listener.resolveReviewGateContext(session.BacklogStatus(fromStage.Slug), session.BacklogStatus(toStage.Slug))
+	_, ok := listener.resolveReviewGateContext(domain.BacklogStatus(fromStage.Slug), domain.BacklogStatus(toStage.Slug))
 	assert.False(t, ok)
 }
 
@@ -4410,7 +4358,7 @@ func newShipSnapshotTestItem(t *testing.T, storage *session.Storage, repoPath st
 		Title:              "Ship snapshot test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           repoPath,
 	})
 	require.NoError(t, err)
@@ -4443,7 +4391,7 @@ func TestCaptureShipSnapshot_ShouldWriteAllSixFieldsBeforeDoneTransition_WhenBot
 
 	prStatus := &git.PRStatus{ApprovedCount: 2, ChangesRequestedCount: 0, CIFailing: false}
 	lastWork := &backlogdto.ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
-	wt := &session.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: baseSHA}
+	wt := &domain.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: baseSHA}
 
 	err := CaptureShipSnapshot(ctx, storage, item, prStatus, lastWork, wt)
 	require.NoError(t, err, "CaptureShipSnapshot must never return an error")
@@ -4516,7 +4464,7 @@ func TestCaptureShipSnapshot_ShouldPreserveSuccessfulGithubGroup_WhenFileStatsBe
 
 			item := newShipSnapshotTestItem(t, storage, repoPath, 9002)
 			lastWork := &backlogdto.ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
-			wt := &session.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: tt.baseSHA}
+			wt := &domain.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: tt.baseSHA}
 
 			err := CaptureShipSnapshot(ctx, storage, item, tt.prStatus, lastWork, wt)
 			require.NoError(t, err, "CaptureShipSnapshot must never return an error, even when both groups fail")
@@ -4587,7 +4535,7 @@ func TestReconcilePRPending_ShouldCallCaptureShipSnapshotBeforeTransitionToDone_
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
 	require.NotNil(t, fetched.ShippedSnapshotAt, "CaptureShipSnapshot must have run and captured at least the GitHub group before the done transition")
 	assert.Equal(t, "success", fetched.ShippedCheckConclusion)
 	assert.Equal(t, 1, fetched.ShippedApprovedCount)
@@ -4612,14 +4560,14 @@ func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T
 	worktreePath := t.TempDir()
 	contextPath := filepath.Join(worktreePath, ".backlog-context.md")
 	require.NoError(t, os.WriteFile(contextPath, []byte("stale context"), 0o644))
-	cmdDir := filepath.Join(worktreePath, backlogCommandsDir)
+	cmdDir := filepath.Join(worktreePath, ".claude/commands/backlog")
 	require.NoError(t, os.MkdirAll(cmdDir, 0o755))
 	statusPath := filepath.Join(cmdDir, "status.md")
 	require.NoError(t, os.WriteFile(statusPath, []byte("stale status"), 0o644))
 
 	inst := newTestInstance("pr-pending-worktree")
 	inst.UUID = uuid.New().String()
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", worktreePath, "pr-pending-worktree", "backlog/some-item", "abc123")
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", worktreePath, "pr-pending-worktree", "backlog/some-item", "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -4641,7 +4589,7 @@ func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
+	require.Equal(t, string(domain.BacklogStatusDone), fetched.Status, "PR merged — item must reach done")
 
 	_, statErr := os.Stat(contextPath)
 	assert.True(t, os.IsNotExist(statErr), ".backlog-context.md must be cleaned up once the item reaches done")
@@ -4662,14 +4610,14 @@ func newOrphanedAgentPRTestItem(t *testing.T, storage *session.Storage, branchNa
 		Title:              "Orphaned agent PR test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 		RepoPath:           "/tmp/orphaned-agent-pr-test-repo",
 	})
 	require.NoError(t, err)
 
 	inst := newTestInstance("orphaned-agent-pr-worktree")
 	inst.UUID = uuid.New().String()
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage("/tmp/orphaned-agent-pr-test-repo", "/tmp/orphaned-agent-pr-test-repo/../wt", "orphaned-agent-pr-worktree", branchName, "abc123")
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage("/tmp/orphaned-agent-pr-test-repo", "/tmp/orphaned-agent-pr-test-repo/../wt", "orphaned-agent-pr-worktree", branchName, "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -4716,7 +4664,7 @@ func TestReconcileOrphanedAgentPRs_should_LinkPR_When_ReviewStatusNoLiveSessionP
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, 77, fetched.PrNumber)
 	assert.Equal(t, "https://github.com/tstapler/stapler-squad/pull/77", fetched.PrURL)
 }
@@ -4743,7 +4691,7 @@ func TestReconcileOrphanedAgentPRs_should_NoOp_When_NoMatchingPR(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "no matching PR — item must stay in review")
+	assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "no matching PR — item must stay in review")
 	assert.Equal(t, 0, fetched.PrNumber)
 }
 
@@ -4832,7 +4780,7 @@ func TestTransitionBouncingItemToDone_TriggersCleanup(t *testing.T) {
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with merged PR, cleanup wiring",
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 		RepoPath: "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -4846,9 +4794,9 @@ func TestTransitionBouncingItemToDone_TriggersCleanup(t *testing.T) {
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged-cleanup", "")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -4862,7 +4810,7 @@ func TestTransitionBouncingItemToDone_TriggersCleanup(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	require.Equal(t, string(domain.BacklogStatusDone), fetched.Status)
 	assert.Contains(t, cleaner.calls(), item.ID,
 		"the internal bounce-to-done transition must trigger synchronous cleanup, not just the 60s sweep")
 }
@@ -4879,7 +4827,7 @@ func TestTransitionBouncingItemToDone_SkipsCleanup_When_TransitionFails(t *testi
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Bouncing item whose done transition fails",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 

@@ -15,6 +15,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -186,10 +187,10 @@ func TestTmuxBackend_Start_RecordsSpanWithTmuxBackendLabel(t *testing.T) {
 // wrapper types, not to whatever ProcessManagerBackend string an Instance's
 // (possibly stale/empty) Backend field happens to hold.
 func TestProcessManagerBackendLabel_MatchesConcreteType(t *testing.T) {
-	assert.Equal(t, BackendTmux, processManagerBackendKey(NewTmuxBackend(&mockTmuxManager{})))
-	assert.Equal(t, BackendTymux, processManagerBackendKey(NewTymuxBackend(&fakeTymuxManagerForStartRestore{})))
-	assert.Equal(t, BackendNative, processManagerBackendKey(NewNativeProcessManager(ProcessManagerOptions{})))
-	assert.Equal(t, ProcessManagerBackend(""), processManagerBackendKey(nil))
+	assert.Equal(t, domain.BackendTmux, processManagerBackendKey(NewTmuxBackend(&mockTmuxManager{})))
+	assert.Equal(t, domain.BackendTymux, processManagerBackendKey(NewTymuxBackend(&fakeTymuxManagerForStartRestore{})))
+	assert.Equal(t, domain.BackendNative, processManagerBackendKey(NewNativeProcessManager(ProcessManagerOptions{})))
+	assert.Equal(t, domain.ProcessManagerBackend(""), processManagerBackendKey(nil))
 }
 
 func TestTymuxBackend_Start_RecordsSpanWithTymuxBackendLabel(t *testing.T) {

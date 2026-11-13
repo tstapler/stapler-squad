@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/migrations"
 )
 
@@ -31,7 +32,7 @@ func TestStatusCorruptionRepair_FixesOnceThenStaysStable(t *testing.T) {
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
 	data := createTestSession("corrupted")
-	data.Status = Status(207)
+	data.Status = domain.Status(207)
 	require.NoError(t, repo.Create(ctx, data))
 	require.NoError(t, repo.Close())
 
@@ -42,7 +43,7 @@ func TestStatusCorruptionRepair_FixesOnceThenStaysStable(t *testing.T) {
 	require.NoError(t, err)
 	got, err := repo.Get(ctx, "corrupted")
 	require.NoError(t, err)
-	require.Equal(t, PermanentlyFailed, got.Status, "restart 2: corrupted status 207 was not repaired to its recoverable value (PermanentlyFailed=7)")
+	require.Equal(t, domain.PermanentlyFailed, got.Status, "restart 2: corrupted status 207 was not repaired to its recoverable value (PermanentlyFailed=7)")
 	require.NoError(t, repo.Close())
 
 	// "Restart" 3: the repaired value (7) is inside the valid range, so the
@@ -53,7 +54,7 @@ func TestStatusCorruptionRepair_FixesOnceThenStaysStable(t *testing.T) {
 	require.NoError(t, err)
 	got, err = repo.Get(ctx, "corrupted")
 	require.NoError(t, err)
-	require.Equal(t, PermanentlyFailed, got.Status, "restart 3: already-repaired status changed again — the repair is compounding, not idempotent")
+	require.Equal(t, domain.PermanentlyFailed, got.Status, "restart 3: already-repaired status changed again — the repair is compounding, not idempotent")
 	require.NoError(t, repo.Close())
 }
 
@@ -70,7 +71,7 @@ func TestStatusCorruptionRepair_UnrecoverableValueLeftUnchanged(t *testing.T) {
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
 	data := createTestSession("unrecoverable")
-	data.Status = Status(99) // 99 % 100 == 99, still > migrations.MaxValidPersistedStatus
+	data.Status = domain.Status(99) // 99 % 100 == 99, still > migrations.MaxValidPersistedStatus
 	require.NoError(t, repo.Create(ctx, data))
 	require.NoError(t, repo.Close())
 
@@ -78,7 +79,7 @@ func TestStatusCorruptionRepair_UnrecoverableValueLeftUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	got, err := repo.Get(ctx, "unrecoverable")
 	require.NoError(t, err)
-	require.Equal(t, Status(99), got.Status, "an unrecoverable status must be left unchanged, not guessed at")
+	require.Equal(t, domain.Status(99), got.Status, "an unrecoverable status must be left unchanged, not guessed at")
 	require.NoError(t, repo.Close())
 }
 
@@ -100,7 +101,7 @@ func TestStatusCorruptionRepair_ValueOutsideShiftEligibleRangeLeftUnchanged(t *t
 	repo, err := NewEntRepository(WithDatabasePath(dbPath))
 	require.NoError(t, err)
 	data := createTestSession("not-shift-eligible")
-	data.Status = Status(103) // 103 % 100 == 3 (Stopped) — in [0,8] but not in the shift-eligible [5,8] range
+	data.Status = domain.Status(103) // 103 % 100 == 3 (Stopped) — in [0,8] but not in the shift-eligible [5,8] range
 	require.NoError(t, repo.Create(ctx, data))
 	require.NoError(t, repo.Close())
 
@@ -108,7 +109,7 @@ func TestStatusCorruptionRepair_ValueOutsideShiftEligibleRangeLeftUnchanged(t *t
 	require.NoError(t, err)
 	got, err := repo.Get(ctx, "not-shift-eligible")
 	require.NoError(t, err)
-	require.Equal(t, Status(103), got.Status, "a status whose recovered value was never shift-eligible must be left unchanged, not silently repaired to a plausible-but-wrong value")
+	require.Equal(t, domain.Status(103), got.Status, "a status whose recovered value was never shift-eligible must be left unchanged, not silently repaired to a plausible-but-wrong value")
 	require.NoError(t, repo.Close())
 }
 
@@ -116,6 +117,6 @@ func TestStatusCorruptionRepair_ValueOutsideShiftEligibleRangeLeftUnchanged(t *t
 // without the Status enum; a new top status must bump both in the same commit.
 func TestStatusCorruptionRepair_FrozenConstantsMatchEnum(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, int(Failed), migrations.MaxValidPersistedStatus)
-	require.Equal(t, int(Restoring), migrations.MinShiftEligibleStatus)
+	require.Equal(t, int(domain.Failed), migrations.MaxValidPersistedStatus)
+	require.Equal(t, int(domain.Restoring), migrations.MinShiftEligibleStatus)
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func addTestInstance(t *testing.T, storage *Storage, inst *Instance) {
@@ -26,38 +27,38 @@ func addTestInstance(t *testing.T, storage *Storage, inst *Instance) {
 
 func TestWorkspaceKey_distinctForDifferentRepos(t *testing.T) {
 	t.Parallel()
-	keyA := WorkspaceKey("acme", "widgets", "", "")
-	keyB := WorkspaceKey("acme", "gadgets", "", "")
+	keyA := domain.WorkspaceKey("acme", "widgets", "", "")
+	keyB := domain.WorkspaceKey("acme", "gadgets", "", "")
 	assert.NotEqual(t, keyA, keyB)
 }
 
 func TestWorkspaceKey_sameForDifferentWorktreesOfSameRepo(t *testing.T) {
 	t.Parallel()
 	// Same GitHub repo, different worktree paths — must produce the same key.
-	keyMain := WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets")
-	keyWorktree := WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets-feature-branch")
+	keyMain := domain.WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets")
+	keyWorktree := domain.WorkspaceKey("acme", "widgets", "/repos/widgets", "/repos/widgets-feature-branch")
 	assert.Equal(t, keyMain, keyWorktree)
 }
 
 func TestWorkspaceKey_isCaseInsensitiveOnGitHubOwnerRepo(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, WorkspaceKey("Acme", "Widgets", "", ""), WorkspaceKey("acme", "widgets", "", ""))
+	assert.Equal(t, domain.WorkspaceKey("Acme", "Widgets", "", ""), domain.WorkspaceKey("acme", "widgets", "", ""))
 }
 
 func TestWorkspaceKey_fallsBackToMainRepoPathWithoutGitHub(t *testing.T) {
 	t.Parallel()
-	key := WorkspaceKey("", "", "/repos/widgets", "/repos/widgets-worktree")
+	key := domain.WorkspaceKey("", "", "/repos/widgets", "/repos/widgets-worktree")
 	assert.Equal(t, "path:/repos/widgets", key)
 }
 
 func TestWorkspaceKey_emptyWhenNothingIsSet(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", WorkspaceKey("", "", "", ""))
+	assert.Equal(t, "", domain.WorkspaceKey("", "", "", ""))
 }
 
 func TestWorkspaceKey_fallsBackToBarePathWithoutGitHubOrMainRepoPath(t *testing.T) {
 	t.Parallel()
-	key := WorkspaceKey("", "", "", "/repos/widgets")
+	key := domain.WorkspaceKey("", "", "", "/repos/widgets")
 	assert.Equal(t, "path:/repos/widgets", key)
 }
 
@@ -68,11 +69,11 @@ func TestListWorkspacePeers_excludesCallerAndDifferentRepos(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: Active, Program: "claude",
+	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
-	samePeer := &Instance{Title: "same-repo-peer", UUID: "peer-uuid", Path: "/repos/widgets-wt", Status: Active, Program: "claude",
+	samePeer := &Instance{Title: "same-repo-peer", UUID: "peer-uuid", Path: "/repos/widgets-wt", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
-	otherRepo := &Instance{Title: "other-repo", UUID: "other-uuid", Path: "/repos/gadgets", Status: Active, Program: "claude",
+	otherRepo := &Instance{Title: "other-repo", UUID: "other-uuid", Path: "/repos/gadgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "gadgets"}
 	addTestInstance(t, storage, caller)
 	addTestInstance(t, storage, samePeer)
@@ -89,9 +90,9 @@ func TestListWorkspacePeers_includesDifferentBranchesAndWorktreesOfSameRepo(t *t
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Branch: "main", Status: Active, Program: "claude",
+	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Branch: "main", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
-	worktreePeer := &Instance{Title: "feature-peer", UUID: "peer-uuid", Path: "/repos/widgets-feature", Branch: "feature-x", Status: Active, Program: "claude",
+	worktreePeer := &Instance{Title: "feature-peer", UUID: "peer-uuid", Path: "/repos/widgets-feature", Branch: "feature-x", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, caller)
 	addTestInstance(t, storage, worktreePeer)
@@ -118,7 +119,7 @@ func TestListWorkspacePeers_crashedSessionGoalStillVisible(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	crashed := &Instance{Title: "crashed", UUID: "crashed-uuid", Path: "/repos/widgets", Status: Stopped, Program: "claude",
+	crashed := &Instance{Title: "crashed", UUID: "crashed-uuid", Path: "/repos/widgets", Status: domain.Stopped, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, crashed)
 	_, err := storage.SetSessionGoal(context.Background(), "crashed-uuid", "finish the migration", GoalStatusWorking, nil, "", "")
@@ -143,9 +144,9 @@ func TestListWorkspacePeers_scopedToOwnStorageInstance(t *testing.T) {
 	storageB, cleanupB := createTestStorage(t)
 	defer cleanupB()
 
-	instA := &Instance{Title: "instance-a-session", UUID: "a-uuid", Path: "/repos/widgets", Status: Active, Program: "claude",
+	instA := &Instance{Title: "instance-a-session", UUID: "a-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
-	instB := &Instance{Title: "instance-b-session", UUID: "b-uuid", Path: "/repos/widgets", Status: Active, Program: "claude",
+	instB := &Instance{Title: "instance-b-session", UUID: "b-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storageA, instA)
 	addTestInstance(t, storageB, instB)
@@ -162,14 +163,14 @@ func TestListWorkspacePeers_clockSkewDoesNotReadAsFresh(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	inst := &Instance{Title: "skewed", UUID: "skewed-uuid", Path: "/repos/widgets", Status: Active, Program: "claude",
+	inst := &Instance{Title: "skewed", UUID: "skewed-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, inst)
 	_, err := storage.SetSessionGoal(context.Background(), "skewed-uuid", "goal", GoalStatusWorking, nil, "", "")
 	require.NoError(t, err)
 	require.NoError(t, storage.SetSessionGoalWorkspaceKey(context.Background(), "skewed-uuid", inst.WorkspaceKey()))
 
-	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: Active, Program: "claude",
+	caller := &Instance{Title: "caller", UUID: "caller-uuid", Path: "/repos/widgets", Status: domain.Active, Program: "claude",
 		GitHubOwner: "acme", GitHubRepo: "widgets"}
 	addTestInstance(t, storage, caller)
 

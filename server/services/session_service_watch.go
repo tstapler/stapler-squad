@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
 	"connectrpc.com/connect"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -23,7 +26,7 @@ func (s *SessionService) WatchSessions(
 	req *connect.Request[sessionv1.WatchSessionsRequest],
 	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
-	done := TrackOpenStream("WatchSessions")
+	done := streammetrics.TrackOpenStream("WatchSessions")
 	defer done()
 
 	// Subscribe before building the snapshot so no events are lost between the
@@ -67,7 +70,7 @@ func (s *SessionService) WatchSessions(
 				// inst.Status directly -- see reconcileSessions' identical fix
 				// (9fcded805) for why a raw field read here races with the actor's
 				// transitionToLocked write under -race.
-				instProto, err := adapters.StatusToProto(session.Status(inst.GetStatus()))
+				instProto, err := adapters.StatusToProto(domain.Status(inst.GetStatus()))
 				if err != nil {
 					log.Error("WatchSessions: unrecognized session.Status", "status", inst.GetStatus(), "err", err)
 					continue
@@ -143,7 +146,7 @@ func (s *SessionService) WatchSessions(
 
 			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 				if event.Session != nil {
-					evtProto, err := adapters.StatusToProto(session.Status(event.Session.GetStatus()))
+					evtProto, err := adapters.StatusToProto(domain.Status(event.Session.GetStatus()))
 					if err != nil {
 						log.Error("WatchSessions: unrecognized session.Status on event", "status", event.Session.GetStatus(), "err", err)
 						continue
@@ -228,7 +231,7 @@ func (s *SessionService) GetSessionDiff(
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list sessions: %w", err))
 		}
-		var found *session.InstanceData
+		var found *domain.InstanceData
 		for i := range allData {
 			if allData[i].MatchesID(req.Msg.Id) {
 				found = &allData[i]

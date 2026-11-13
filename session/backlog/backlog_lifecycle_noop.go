@@ -6,12 +6,13 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // SetNoopDispatchThresholdFn overrides the consecutive no-op work-session
-// count that flags repeated_noop_dispatch (default DefaultNoopDispatchThreshold).
+// count that flags repeated_noop_dispatch (default stuck.DefaultNoopDispatchThreshold).
 func (l *BacklogLifecycleListener) SetNoopDispatchThresholdFn(fn func() int) {
 	l.noopThresholdMu.Lock()
 	defer l.noopThresholdMu.Unlock()
@@ -27,7 +28,7 @@ func (l *BacklogLifecycleListener) noopDispatchThreshold() int {
 			return n
 		}
 	}
-	return DefaultNoopDispatchThreshold
+	return stuck.DefaultNoopDispatchThreshold
 }
 
 // reconcileRepeatedNoopDispatch flags PASS-verdict items in review/in_progress
@@ -36,7 +37,7 @@ func (l *BacklogLifecycleListener) noopDispatchThreshold() int {
 // archived duplicates are resolved by selfHealStuck.
 func (l *BacklogLifecycleListener) reconcileRepeatedNoopDispatch(ctx context.Context, er *session.EntRepository) {
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusInProgress), string(session.BacklogStatusReview)},
+		Statuses: []string{string(domain.BacklogStatusInProgress), string(domain.BacklogStatusReview)},
 	})
 	if err != nil {
 		log.Warn("[BacklogLifecycle] reconcileRepeatedNoopDispatch list error", "error", err)
@@ -54,19 +55,19 @@ func (l *BacklogLifecycleListener) reconcileRepeatedNoopDispatch(ctx context.Con
 			log.Warn("[BacklogLifecycle] reconcileRepeatedNoopDispatch GetRecentReviewVerdictSummaries failed", "item", item.ID, "error", verdictErr)
 			continue
 		}
-		hasPass := len(verdicts) > 0 && verdicts[0].OverallOutcome == string(session.ReviewOutcomePass)
-		noops := consecutiveNoopWorkSessions(sessions)
+		hasPass := len(verdicts) > 0 && verdicts[0].OverallOutcome == string(domain.ReviewOutcomePass)
+		noops := stuck.ConsecutiveNoopWorkSessions(sessions)
 
-		if !isRepeatedNoopDispatch(noops, threshold, hasPass) {
+		if !stuck.IsRepeatedNoopDispatch(noops, threshold, hasPass) {
 			l.resolveStuckLogged(ctx, er, item.ID, domain.StuckReasonRepeatedNoopDispatch, "reconcileRepeatedNoopDispatch/cleared")
 			continue
 		}
 
 		detail := fmt.Sprintf("%d consecutive work sessions ended with no new commits on an item with a PASS verdict", noops)
-		if ref := PendingDuplicateRef(sessions); ref != "" && item.Status == string(session.BacklogStatusReview) {
+		if ref := stuck.PendingDuplicateRef(sessions); ref != "" && item.Status == string(domain.BacklogStatusReview) {
 			detail += fmt.Sprintf("; a duplicate of %s is awaiting operator confirmation", ref)
 		}
-		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonRepeatedNoopDispatch, session.BacklogStatus(item.Status), detail)
+		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonRepeatedNoopDispatch, domain.BacklogStatus(item.Status), detail)
 		if markErr != nil {
 			log.Warn("[BacklogLifecycle] reconcileRepeatedNoopDispatch MarkStuck failed", "item", item.ID, "error", markErr)
 			continue
@@ -79,7 +80,7 @@ func (l *BacklogLifecycleListener) reconcileRepeatedNoopDispatch(ctx context.Con
 			log.Warn("[BacklogLifecycle] reconcileRepeatedNoopDispatch FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonRepeatedNoopDispatch)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonRepeatedNoopDispatch)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}

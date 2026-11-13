@@ -27,7 +27,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/chains"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -57,7 +57,7 @@ func transitionGateToProto(g *session.GateData) *sessionv1.TransitionGate {
 		TransitionId: g.TransitionID.String(),
 		Kind:         g.Kind,
 		Config:       configMapToProto(g.Config),
-		Stateful:     session.EffectiveGateStateful(session.GateKind(g.Kind), g.Stateful),
+		Stateful:     session.EffectiveGateStateful(domain.GateKind(g.Kind), g.Stateful),
 		OrderIndex:   int32(g.OrderIndex),
 		Enabled:      g.Enabled,
 		CreatedAt:    timestamppb.New(g.CreatedAt),
@@ -102,7 +102,7 @@ func validateGateConfig(kind string, config map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("marshal gate config: %w", err)
 	}
-	if _, err := session.ParseGateConfig(session.GateKind(kind), raw); err != nil {
+	if _, err := domain.ParseGateConfig(domain.GateKind(kind), raw); err != nil {
 		return err
 	}
 	return nil
@@ -117,11 +117,11 @@ func mapTransitionGraphError(err error) error {
 		return connect.NewError(connect.CodeNotFound, err)
 	case errors.Is(err, domain.ErrConflict):
 		return connect.NewError(connect.CodeAlreadyExists, err)
-	case errors.Is(err, backlog.ErrStageDeadEnd),
-		errors.Is(err, backlog.ErrStageUnreachable):
+	case errors.Is(err, chains.ErrStageDeadEnd),
+		errors.Is(err, chains.ErrStageUnreachable):
 		return connect.NewError(connect.CodeInvalidArgument, err)
-	case errors.Is(err, backlog.ErrDisableWouldStrandLiveItems),
-		errors.Is(err, backlog.ErrDisableSystemRequiredEdge):
+	case errors.Is(err, chains.ErrDisableWouldStrandLiveItems),
+		errors.Is(err, chains.ErrDisableSystemRequiredEdge):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	default:
 		return connect.NewError(connect.CodeInternal, err)
@@ -149,7 +149,7 @@ func (s *BacklogService) rejectStrandedStatuses(ctx context.Context, tx session.
 		}
 		counts[slug] = n
 	}
-	stranded := backlog.StrandedStatuses(candidateEdges, counts)
+	stranded := chains.StrandedStatuses(candidateEdges, counts)
 	if len(stranded) == 0 {
 		return nil
 	}
@@ -165,11 +165,11 @@ type strandedStatusError struct {
 	ids    []string
 }
 
-func (e *strandedStatusError) Unwrap() error { return backlog.ErrDisableWouldStrandLiveItems }
+func (e *strandedStatusError) Unwrap() error { return chains.ErrDisableWouldStrandLiveItems }
 
 func (e *strandedStatusError) Error() string {
 	msg := fmt.Sprintf("%v: status %q has %d live item(s) with no allowed outgoing transition",
-		backlog.ErrDisableWouldStrandLiveItems, e.status, e.count)
+		chains.ErrDisableWouldStrandLiveItems, e.status, e.count)
 	if len(e.ids) > 0 {
 		msg += " (e.g. " + strings.Join(e.ids, ", ") + "); override_reason is the only exit"
 	}
@@ -181,7 +181,7 @@ func (e *strandedStatusError) Error() string {
 func candidateStatusSlugs(stages []session.StageDefinition) []string {
 	seen := make(map[string]bool)
 	var out []string
-	for _, st := range backlog.BuiltInStatuses() {
+	for _, st := range chains.BuiltInStatuses() {
 		seen[string(st)] = true
 		out = append(out, string(st))
 	}
@@ -241,7 +241,7 @@ func (s *BacklogService) CreateStageTransition(
 		if err != nil {
 			return fmt.Errorf("load graph for validation: %w", err)
 		}
-		w, verr := backlog.ValidateGraph(stages, transitions)
+		w, verr := chains.ValidateGraph(stages, transitions)
 		if verr != nil {
 			return verr
 		}
@@ -295,7 +295,7 @@ func (s *BacklogService) UpdateStageTransition(
 	txErr := s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
 		isDisabling := req.Msg.Enabled != nil && !*req.Msg.Enabled && existing.Enabled
 		if isDisabling {
-			if err := backlog.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
+			if err := chains.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
 				return err
 			}
 			_, transitions, err := tx.ListGraphForValidation(ctx)
@@ -320,7 +320,7 @@ func (s *BacklogService) UpdateStageTransition(
 			if err := s.rejectStrandedStatuses(ctx, tx, candidateEdges); err != nil {
 				return err
 			}
-			if err := backlog.ValidateDisableTransition(
+			if err := chains.ValidateDisableTransition(
 				candidateEdges, existing.FromStageSlug, map[string]int{existing.FromStageSlug: liveCount},
 			); err != nil {
 				return err
@@ -339,7 +339,7 @@ func (s *BacklogService) UpdateStageTransition(
 			// successful update over a failure to compute them.
 			return nil
 		}
-		if w, verr := backlog.ValidateGraph(stages, transitions); verr != nil {
+		if w, verr := chains.ValidateGraph(stages, transitions); verr != nil {
 			warnings = []string{verr.Error()}
 		} else {
 			warnings = w
@@ -386,7 +386,7 @@ func (s *BacklogService) DeleteStageTransition(
 
 	txErr := s.stageCRUDRepo.WithTx(ctx, func(tx session.TransitionTxRepository) error {
 		if existing.Enabled {
-			if err := backlog.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
+			if err := chains.ValidateDisableSystemRequiredEdge(existing.FromStageSlug, existing.ToStageSlug); err != nil {
 				return err
 			}
 			_, transitions, err := tx.ListGraphForValidation(ctx)
@@ -411,7 +411,7 @@ func (s *BacklogService) DeleteStageTransition(
 			if err := s.rejectStrandedStatuses(ctx, tx, candidateEdges); err != nil {
 				return err
 			}
-			if err := backlog.ValidateDisableTransition(
+			if err := chains.ValidateDisableTransition(
 				candidateEdges, existing.FromStageSlug, map[string]int{existing.FromStageSlug: liveCount},
 			); err != nil {
 				return err
@@ -513,7 +513,7 @@ func (s *BacklogService) CreateTransitionGate(
 		TransitionID: transitionID,
 		Kind:         req.Msg.Kind,
 		Config:       configMapFromProto(req.Msg.Config),
-		Stateful:     session.EffectiveGateStateful(session.GateKind(req.Msg.Kind), req.Msg.Stateful),
+		Stateful:     session.EffectiveGateStateful(domain.GateKind(req.Msg.Kind), req.Msg.Stateful),
 		OrderIndex:   int(req.Msg.OrderIndex),
 		Enabled:      req.Msg.Enabled,
 	})
@@ -582,7 +582,7 @@ func (s *BacklogService) UpdateTransitionGate(
 // resolveUpdateStateful rejects an explicit stateful=false on a recorded kind
 // and stores true when a recorded kind arrives with stateful unset.
 func resolveUpdateStateful(kind string, requested *bool) (*bool, error) {
-	if !session.IsRecordedGateKind(session.GateKind(kind)) {
+	if !session.IsRecordedGateKind(domain.GateKind(kind)) {
 		return requested, nil
 	}
 	if requested != nil && !*requested {

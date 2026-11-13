@@ -12,6 +12,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 func leaseTestInstance(t *testing.T, title string) (*session.Instance, *steerRecordingPM) {
@@ -67,7 +68,7 @@ func writeToSessionReq(id string) *connect.Request[sessionv1.WriteToSessionReque
 
 func newLeaseTerminalService(t *testing.T, inst *session.Instance) *TerminalService {
 	t.Helper()
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	poller.SetInstances([]*session.Instance{inst})
 	ts := NewTerminalService()
 	ts.SetPoller(poller)

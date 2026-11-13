@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -472,9 +473,9 @@ type fakePRInstanceStore struct {
 	saveCalls      int
 }
 
-func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)       { return nil, nil }
-func (f *fakePRInstanceStore) ListInstanceData() ([]session.InstanceData, error) { return nil, nil }
-func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*session.InstanceData, error) {
+func (f *fakePRInstanceStore) LoadInstances() ([]*session.Instance, error)      { return nil, nil }
+func (f *fakePRInstanceStore) ListInstanceData() ([]domain.InstanceData, error) { return nil, nil }
+func (f *fakePRInstanceStore) FindInstanceDataByID(string) (*domain.InstanceData, error) {
 	return nil, session.ErrInstanceDataNotFound
 }
 func (f *fakePRInstanceStore) AddInstance(*session.Instance) error                    { return nil }
@@ -811,7 +812,7 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 	ctx := context.Background()
 	item, err := backlogStorage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Backlog item behind this session",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	_, err = backlogStorage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -835,6 +836,6 @@ func TestCreatePullRequest_should_CallRecordPRCreatedOutOfBand_When_BacklogListe
 
 	updated, err := backlogStorage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), updated.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), updated.Status,
 		"RecordPRCreatedOutOfBand must be called unconditionally and transition the linked item to pr_pending")
 }

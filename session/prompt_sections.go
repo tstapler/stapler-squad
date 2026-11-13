@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"strings"
 )
 
@@ -56,7 +57,7 @@ const SecOnFail = `FAIL or PARTIAL: fix the noted gaps in this same session and 
 	`Its request_review call reports which attempt you are on out of %d allowed in THIS session. The count is tracked server-side, so trust what it reports rather than counting your own calls. ` +
 	`Once it says you have hit the cap, STOP looping: run ¦/backlog/ship¦ anyway to open a PR so a human can pick up the review directly, rather than retrying ¦/backlog/review¦.`
 
-func OnFailSection() string { return fmt.Sprintf(SecOnFail, MaxSameSessionReviewAttempts) }
+func OnFailSection() string { return fmt.Sprintf(SecOnFail, domain.MaxSameSessionReviewAttempts) }
 
 const SecDoneNote = `Call report_progress with item_id={{item_id}}, criteria_index={{criteria_index}}, status=pass. ` +
 	`Before calling this, run the command or test that proves the criterion. Include the optional note parameter with that exact command and its one-line result ` +

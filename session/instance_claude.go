@@ -5,6 +5,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -23,7 +25,7 @@ import (
 // (instance_tmux.go) reads claudeSession unconditionally before dispatching
 // on programKind. It therefore does NOT implement programExtension: nothing
 // here starts or stops a controller. The default StartController/
-// StopController path (ClaudeController) is separate, unrelated business
+// StopController path (claudectl.ClaudeController) is separate, unrelated business
 // logic that happens to share the "claude" name -- see StartController's
 // doc comment in instance_controller.go.
 //
@@ -40,33 +42,13 @@ type claudeExtension struct {
 	claudeSessionMu sync.RWMutex
 	// claudeSession is Claude Code session information for persistence and
 	// re-attachment.
-	claudeSession *ClaudeSessionData
+	claudeSession *domain.ClaudeSessionData
 	// conversationClearedAt records when ClearConversationState() last ran, so
 	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
 	// predating an explicit "start fresh" request. In-memory only -- does not
 	// survive a process restart (see ADR-001, Consequences).
 	conversationClearedAt time.Time
 }
-
-// ReviveOutcome records the outcome of the most recent start/cold-restore
-// decision (session-revive-uuid-loss AC3). See Instance.LastReviveOutcome.
-type ReviveOutcome string
-
-const (
-	ReviveOutcomeUnspecified ReviveOutcome = ""
-	// ReviveOutcomeResumeLive means a conversation UUID was already in memory;
-	// no disk-based recovery was needed.
-	ReviveOutcomeResumeLive ReviveOutcome = "resume_live"
-	// ReviveOutcomeResumeRecovered means no UUID was in memory, but
-	// tryExtractConversationUUID's disk-based fallback found one before launch.
-	ReviveOutcomeResumeRecovered ReviveOutcome = "resume_recovered"
-	// ReviveOutcomeFreshExpected means the session started fresh with no prior
-	// conversation history to lose (first-time setup or genuinely no history).
-	ReviveOutcomeFreshExpected ReviveOutcome = "fresh_expected"
-	// ReviveOutcomeFreshLostHistory means the session started fresh even though
-	// EverHadConversationHistory was true — recovery ran and found nothing.
-	ReviveOutcomeFreshLostHistory ReviveOutcome = "fresh_lost_history"
-)
 
 // isStaleResumeExit returns true when the PTY exit tail contains CLI errors
 // indicating a stale or expired resume argument for program.
@@ -202,7 +184,7 @@ func (i *Instance) handleClaudeSessionReattachment() error {
 		log.Info("successfully re-attached to claude code session", "session_id", session.ID)
 	} else {
 		// No specific session ID stored, try to find matching sessions by project
-		if i.GitManager.HasWorktree() {
+		if i.gitManager.HasWorktree() {
 			return i.findAndAttachToProjectSession(sessionManager)
 		}
 	}
@@ -236,7 +218,7 @@ func (i *Instance) createNewClaudeSession() error {
 	}
 
 	// Update the instance's Claude session data
-	i.claudeSession = &ClaudeSessionData{
+	i.claudeSession = &domain.ClaudeSessionData{
 		ConversationUUID: newSession.ID,
 		SquadSessionID:   newSession.ConversationID,
 		ProjectName:      newSession.ProjectName,
@@ -289,7 +271,7 @@ func (i *Instance) findAndAttachToProjectSession(sessionManager *ClaudeSessionMa
 
 	// Update the instance's Claude session data
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = selectedSession.ID
 	i.claudeSession.SquadSessionID = selectedSession.ConversationID
@@ -307,7 +289,7 @@ func (i *Instance) findAndAttachToProjectSession(sessionManager *ClaudeSessionMa
 
 // GetClaudeSession returns the Claude session data for this instance.
 // Thread-safe: acquires stateMutex read lock.
-func (i *Instance) GetClaudeSession() *ClaudeSessionData {
+func (i *Instance) GetClaudeSession() *domain.ClaudeSessionData {
 	i.claudeSessionMu.RLock()
 	defer i.claudeSessionMu.RUnlock()
 	return i.claudeSession
@@ -315,7 +297,7 @@ func (i *Instance) GetClaudeSession() *ClaudeSessionData {
 
 // SetClaudeSession sets the Claude session data for this instance.
 // Thread-safe: acquires stateMutex write lock.
-func (i *Instance) SetClaudeSession(sessionData *ClaudeSessionData) {
+func (i *Instance) SetClaudeSession(sessionData *domain.ClaudeSessionData) {
 	i.claudeSessionMu.Lock()
 	defer i.claudeSessionMu.Unlock()
 	i.claudeSession = sessionData
@@ -433,7 +415,7 @@ func (i *Instance) tryExtractConversationUUID() {
 	i.claudeSessionMu.Lock()
 	i.mu.Lock()
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = info.ConversationUUID
 	i.HistoryFilePath = info.HistoryFilePath
@@ -519,7 +501,7 @@ func (i *Instance) RunWithResume(ctx context.Context, message string) (string, e
 func (i *Instance) SetClaudeConversationUUID(uuid string) {
 	i.claudeSessionMu.Lock()
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	if i.claudeSession.ConversationUUID == uuid {
 		i.claudeSessionMu.Unlock()
@@ -589,7 +571,7 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	// i.mu.Lock() from outside the actor.
 	i.mu.Lock()
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = conversationUUID
 	i.HistoryFilePath = historyFilePath
@@ -608,4 +590,59 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	}
 
 	log.ForSession(i.Title).Info("conversation uuid set", "uuid", conversationUUID, "history", historyFilePath)
+}
+
+// parseJSONField extracts a string field value from a JSON blob.
+// Works with both --output-format json (single object) and stream-json (one
+// JSON object per line). Searches recursively through nested objects, so it
+// handles both top-level fields (e.g. "result") and nested fields (e.g.
+// "session_id" inside a "data" sub-object). Returns empty string if the field
+// is not found or its value is not a string.
+func parseJSONField(output, field string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, field) {
+			continue
+		}
+		var tree interface{}
+		if err := json.Unmarshal([]byte(line), &tree); err != nil {
+			continue
+		}
+		if s := searchJSONString(tree, field); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// searchJSONString recursively searches a parsed JSON tree for the first
+// occurrence of a string-valued field with the given key.
+func searchJSONString(v interface{}, field string) string {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		if s, ok := val[field]; ok {
+			if str, ok := s.(string); ok {
+				return str
+			}
+		}
+		for _, child := range val {
+			if s := searchJSONString(child, field); s != "" {
+				return s
+			}
+		}
+	case []interface{}:
+		for _, item := range val {
+			if s := searchJSONString(item, field); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// parseClaudeSessionID extracts the "session_id" value from a JSON blob
+// (both --output-format json and --output-format stream-json).
+// Returns empty string if not found.
+func parseClaudeSessionID(output string) string {
+	return parseJSONField(output, "session_id")
 }

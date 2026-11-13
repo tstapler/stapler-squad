@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -29,7 +30,7 @@ func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, Sta
 	ctx := context.Background()
 	require.NoError(t, EnsureBuiltInWorkflowStages(ctx, repo.GetEntClient()))
 	for range ideaItems {
-		_, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "replay item", Status: string(BacklogStatusIdea)})
+		_, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "replay item", Status: string(domain.BacklogStatusIdea)})
 		require.NoError(t, err)
 	}
 	if mutate != nil {
@@ -39,7 +40,7 @@ func replayFixture(t *testing.T, ideaItems int, mutate func(context.Context, Sta
 	return path
 }
 
-func replayDisableEdge(t *testing.T, edge SystemEdge) func(context.Context, StageCRUDRepository) {
+func replayDisableEdge(t *testing.T, edge domain.SystemEdge) func(context.Context, StageCRUDRepository) {
 	return func(ctx context.Context, repo StageCRUDRepository) {
 		t.Helper()
 		ts, err := repo.ListAllTransitions(ctx, string(edge.From))
@@ -67,17 +68,23 @@ func dirNames(t *testing.T, dir string) []string {
 	return names
 }
 
+// entStageRepoFactory is the production wiring, supplied by tests because the
+// engine itself no longer names the ent constructor.
+func entStageRepoFactory(client *ent.Client) StageConfigRepository {
+	return NewEntStageConfigRepository(client)
+}
+
 func replayReport(t *testing.T, path string) *ReplayReport {
 	t.Helper()
 	client, closeFn, err := OpenReplayCopy(path, nil)
 	require.NoError(t, err)
 	defer closeFn()
-	report, err := BuildWorkflowEngineReplay(context.Background(), client)
+	report, err := BuildWorkflowEngineReplay(context.Background(), client, entStageRepoFactory)
 	require.NoError(t, err)
 	return report
 }
 
-func (r *ReplayReport) find(caller TransitionCaller, from, to BacklogStatus) (ReplayDecision, bool) {
+func (r *ReplayReport) find(caller domain.TransitionCaller, from, to domain.BacklogStatus) (ReplayDecision, bool) {
 	for _, d := range r.Decisions {
 		if d.Caller == caller && d.Edge.From == from && d.Edge.To == to {
 			return d, true
@@ -134,7 +141,7 @@ func TestRunWorkflowEngineReplay_RefusesAPathInsideALiveDirectoryBeforeOpeningIt
 	inside := filepath.Join(live, "copy.db")
 	require.NoError(t, os.Rename(path, inside))
 
-	_, _, err := RunWorkflowEngineReplay(context.Background(), inside, []string{live})
+	_, _, err := RunWorkflowEngineReplay(context.Background(), inside, []string{live}, entStageRepoFactory)
 
 	require.ErrorIs(t, err, ErrReplayLiveDatabase)
 }
@@ -145,7 +152,7 @@ func TestReplay_OpensTheCopyReadOnlyAndLeavesItByteIdentical(t *testing.T) {
 	require.NoError(t, err)
 	namesBefore := dirNames(t, filepath.Dir(path))
 
-	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, nil)
+	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, nil, entStageRepoFactory)
 	require.NoError(t, err)
 	require.False(t, failed)
 	require.NotEmpty(t, out)
@@ -171,50 +178,50 @@ func TestReplay_SeededCopy_AllowsEveryAgentAndSystemEdgeAndGatesEachSystemRequir
 	assert.Zero(t, report.StrandedAll)
 
 	want := 0
-	for _, spec := range TransitionCallers() {
+	for _, spec := range domain.TransitionCallers() {
 		want += len(replayEdges(spec))
 	}
 	assert.Len(t, report.Decisions, want, "one row per registered caller and declared edge")
 
-	merge, ok := report.find(CallerReconcilePRPendingMerge, BacklogStatusPRPending, BacklogStatusDone)
+	merge, ok := report.find(domain.CallerReconcilePRPendingMerge, domain.BacklogStatusPRPending, domain.BacklogStatusDone)
 	require.True(t, ok)
 	assert.Equal(t, "allowed", merge.Live)
-	assert.Equal(t, "denied:"+DeniedOperatorGate, merge.Synthetic, "the edited path: an unsatisfied operator gate denies the merge advance")
+	assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, merge.Synthetic, "the edited path: an unsatisfied operator gate denies the merge advance")
 
 	for _, d := range report.Decisions {
 		if d.Synthetic != "-" && d.Synthetic != replayNoStoredTransition {
-			assert.Equal(t, "denied:"+DeniedOperatorGate, d.Synthetic, "%s %s->%s", d.Caller, d.Edge.From, d.Edge.To)
+			assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, d.Synthetic, "%s %s->%s", d.Caller, d.Edge.From, d.Edge.To)
 		}
 	}
 	assert.Positive(t, report.SyntheticRan)
 }
 
 func TestReplayDecision_Failure_FlagsOnlyAgentAndSystemGraphDenials(t *testing.T) {
-	denied := func(class CallerClass, reason string) ReplayDecision {
-		return ReplayDecision{Caller: "c", Class: class, Edge: SystemEdge{From: BacklogStatusIdea, To: BacklogStatusReady}, Live: replayDeniedPrefix + reason}
+	denied := func(class domain.CallerClass, reason string) ReplayDecision {
+		return ReplayDecision{Caller: "c", Class: class, Edge: domain.SystemEdge{From: domain.BacklogStatusIdea, To: domain.BacklogStatusReady}, Live: replayDeniedPrefix + reason}
 	}
-	for _, class := range []CallerClass{ClassAgent, ClassSystem} {
-		msg, failed := denied(class, DeniedConfigGraph).failure()
+	for _, class := range []domain.CallerClass{domain.ClassAgent, domain.ClassSystem} {
+		msg, failed := denied(class, backlogdto.DeniedConfigGraph).failure()
 		assert.True(t, failed, class)
 		assert.Contains(t, msg, "no gate involved")
-		_, failed = denied(class, DeniedTargetStageRemoved).failure()
+		_, failed = denied(class, backlogdto.DeniedTargetStageRemoved).failure()
 		assert.True(t, failed, class)
-		_, failed = denied(class, DeniedOperatorGate).failure()
+		_, failed = denied(class, backlogdto.DeniedOperatorGate).failure()
 		assert.False(t, failed, "a denial by a real operator gate is the configuration working")
 	}
-	_, failed := denied(ClassOperator, DeniedConfigGraph).failure()
+	_, failed := denied(domain.ClassOperator, backlogdto.DeniedConfigGraph).failure()
 	assert.False(t, failed, "operators choose their edge, so a disabled edge denies them by design")
-	_, failed = (ReplayDecision{Class: ClassSystem, Live: "allowed"}).failure()
+	_, failed = (ReplayDecision{Class: domain.ClassSystem, Live: "allowed"}).failure()
 	assert.False(t, failed)
 }
 
 func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing.T) {
 	addGate := func(ctx context.Context, repo StageCRUDRepository) {
-		ts, err := repo.ListAllTransitions(ctx, string(BacklogStatusPRPending))
+		ts, err := repo.ListAllTransitions(ctx, string(domain.BacklogStatusPRPending))
 		require.NoError(t, err)
 		for _, tr := range ts {
-			if tr.ToStageSlug == string(BacklogStatusDone) {
-				_, err := repo.CreateGate(ctx, GateCreateInput{TransitionID: tr.ID, Kind: string(GateKindHumanApproval), Enabled: true})
+			if tr.ToStageSlug == string(domain.BacklogStatusDone) {
+				_, err := repo.CreateGate(ctx, GateCreateInput{TransitionID: tr.ID, Kind: string(domain.GateKindHumanApproval), Enabled: true})
 				require.NoError(t, err)
 			}
 		}
@@ -223,26 +230,26 @@ func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing
 	report := replayReport(t, replayFixture(t, 0, addGate))
 
 	assert.Equal(t, "edited", report.Config)
-	merge, ok := report.find(CallerReconcilePRPendingMerge, BacklogStatusPRPending, BacklogStatusDone)
+	merge, ok := report.find(domain.CallerReconcilePRPendingMerge, domain.BacklogStatusPRPending, domain.BacklogStatusDone)
 	require.True(t, ok)
-	assert.Equal(t, "denied:"+DeniedOperatorGate, merge.Live)
+	assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, merge.Live)
 	assert.False(t, report.Failed(), strings.Join(report.Failures, "\n"))
 }
 
 func TestReplay_SystemRequiredEdgeWithNoStoredTransitionCannotCarryAGate(t *testing.T) {
 	report := replayReport(t, replayFixture(t, 0, nil))
 
-	d, ok := report.find(CallerRecoverDriftedPR, BacklogStatusReady, BacklogStatusPRPending)
+	d, ok := report.find(domain.CallerRecoverDriftedPR, domain.BacklogStatusReady, domain.BacklogStatusPRPending)
 	require.True(t, ok)
 	assert.Equal(t, "allowed", d.Live)
 	assert.Equal(t, replayNoStoredTransition, d.Synthetic)
 }
 
 func TestReplay_PreviewsItemsStrandedByAnEditedGraph(t *testing.T) {
-	report := replayReport(t, replayFixture(t, 2, replayDisableEdge(t, SystemEdge{From: BacklogStatusIdea, To: BacklogStatusRefining})))
+	report := replayReport(t, replayFixture(t, 2, replayDisableEdge(t, domain.SystemEdge{From: domain.BacklogStatusIdea, To: domain.BacklogStatusRefining})))
 
 	assert.Equal(t, 2, report.LiveItems)
-	assert.Equal(t, 2, report.Stranded[BacklogStatusIdea], "both idea items lose idea->refining under enforce")
+	assert.Equal(t, 2, report.Stranded[domain.BacklogStatusIdea], "both idea items lose idea->refining under enforce")
 	out := report.Render()
 	assert.Contains(t, out, "stranded-item preview: 2 of 2 live item(s)")
 	assert.Contains(t, out, "idea")
@@ -251,7 +258,7 @@ func TestReplay_PreviewsItemsStrandedByAnEditedGraph(t *testing.T) {
 func TestReplay_RenderListsEveryCallerAndTheVerdict(t *testing.T) {
 	out := replayReport(t, replayFixture(t, 0, nil)).Render()
 
-	for _, spec := range TransitionCallers() {
+	for _, spec := range domain.TransitionCallers() {
 		if len(replayEdges(spec)) > 0 {
 			assert.Contains(t, out, string(spec.Name))
 		}
@@ -269,7 +276,7 @@ func TestWorkflowEngineReplayCommand(t *testing.T) {
 	if path == "" {
 		t.Skip("set WORKFLOW_ENGINE_REPLAY_DB to a COPY of the database (make workflow-engine-replay DB=<copy>)")
 	}
-	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, LiveStateDirs())
+	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, LiveStateDirs(), entStageRepoFactory)
 	require.NoError(t, err)
 	_, _ = os.Stdout.WriteString(out)
 	if failed {
@@ -283,7 +290,7 @@ func TestReplayGateOverlay_AddsOneUnsatisfiedGateInMemoryOnly(t *testing.T) {
 	require.NoError(t, err)
 	defer closeFn()
 	base := NewEntStageConfigRepository(client)
-	edge := SystemEdge{From: BacklogStatusReady, To: BacklogStatusQueued}
+	edge := domain.SystemEdge{From: domain.BacklogStatusReady, To: domain.BacklogStatusQueued}
 
 	plain, err := base.ListEnabledTransitions(context.Background())
 	require.NoError(t, err)

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -170,7 +172,7 @@ func (s *UnfinishedWorkService) WatchUnfinishedWork(
 	_ *connect.Request[sessionv1.WatchUnfinishedWorkRequest],
 	stream *connect.ServerStream[sessionv1.UnfinishedWorkEvent],
 ) error {
-	done := TrackOpenStream("WatchUnfinishedWork")
+	done := streammetrics.TrackOpenStream("WatchUnfinishedWork")
 	defer done()
 
 	// 1. Send initial snapshot.

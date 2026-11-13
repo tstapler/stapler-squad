@@ -80,7 +80,7 @@ const restartGracePeriod = 60 * time.Second
 // startup failures (see server/services/session_service.go).
 func markStartFailed(instance *Instance, err error) {
 	instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", err.Error()))
-	instance.ForceStatus(Stopped)
+	instance.ForceStatus(domain.Stopped)
 	log.ForSession(instance.Title).Error("session failed: working directory missing, giving up", "err", err)
 }
 
@@ -262,15 +262,15 @@ func healthCheckSkipReason(instance *Instance) (string, bool) {
 		return "", false
 	}
 	switch status {
-	case Paused:
+	case domain.Paused:
 		return "Skipped (session is paused)", true
-	case Hibernated:
+	case domain.Hibernated:
 		return "Skipped (session is hibernated)", true
-	case Stopped:
+	case domain.Stopped:
 		return "Skipped (session is stopped)", true
-	case Crashed:
+	case domain.Crashed:
 		return "Skipped (session has crashed, awaiting resume)", true
-	case PermanentlyFailed:
+	case domain.PermanentlyFailed:
 		return "Skipped (session is permanently failed, awaiting retry)", true
 	default:
 		return "Skipped (session is suspended)", true
@@ -297,7 +297,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// deferStart=true so a bulk load at server startup doesn't block HTTP bind
 	// on cold-restoring every session -- but that leaves Started() false on
 	// every freshly-deserialized Active instance, even though its tmux backend
-	// is already wired (fromInstanceData's SetSession call runs regardless of
+	// is already wired (instanceFromData's SetSession call runs regardless of
 	// deferStart). Every CheckAllSessions() tick goes through LoadInstances(),
 	// so without this, checkTmuxHealth -- and therefore all dead-pane
 	// detection -- was skipped entirely for every Active session, on every
@@ -306,14 +306,14 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// exists to catch. instance here is a throwaway copy LoadInstances()
 	// constructs fresh on every call (not the live, actor-managed instance),
 	// so marking it started has no effect beyond this health check.
-	if instance.Status == Active && !instance.Started() {
+	if instance.Status == domain.Active && !instance.Started() {
 		instance.started.Store(true)
 	}
 
 	// Check if instance thinks it's started but tmux session doesn't exist.
 	// Skipped for push-liveness backends (ProcessManagerBackend.SkipsPollBasedLiveness) --
 	// their throwaway LoadInstances() copy can never populate real session
-	// state without an RPC round-trip fromInstanceData deliberately skips,
+	// state without an RPC round-trip instanceFromData deliberately skips,
 	// so this probe would only ever misreport them as missing.
 	if instance.Started() && !instance.Snapshot().Backend.SkipsPollBasedLiveness() {
 		h.checkTmuxHealth(instance, paneStatus, &result)
@@ -578,10 +578,10 @@ func respawnDeadPane(instance *Instance) error {
 // checkWorktreeHealth flags a session whose git worktree directory has been
 // removed out from under it.
 func checkWorktreeHealth(instance *Instance, result *HealthCheckResult) {
-	if instance.Paused() || !instance.GitManager.HasWorktree() {
+	if instance.Paused() || !instance.GitManager().HasWorktree() {
 		return
 	}
-	worktreePath := instance.GitManager.GetWorktreePath()
+	worktreePath := instance.GitManager().GetWorktreePath()
 	if worktreePath == "" {
 		return
 	}

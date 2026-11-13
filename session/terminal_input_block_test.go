@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 	"time"
 )
@@ -10,16 +11,16 @@ func TestTerminalInputBlock(t *testing.T) {
 	archived := time.Now()
 	cases := []struct {
 		name                   string
-		snap                   InstanceSnapshot
+		snap                   domain.InstanceSnapshot
 		wantBlocked, wantRecov bool
 	}{
-		{"tymux active", InstanceSnapshot{Backend: BackendTymux, Status: Active}, false, false},
-		{"tymux permanently failed", InstanceSnapshot{Backend: BackendTymux, Status: PermanentlyFailed}, true, true},
-		{"tymux paused", InstanceSnapshot{Backend: BackendTymux, Status: Paused}, true, true},
-		{"tmux stopped still forwards input", InstanceSnapshot{Backend: BackendTmux, Status: Stopped}, false, false},
-		{"archived recovers on unarchive", InstanceSnapshot{Backend: BackendTymux, Status: Active, ArchivedAt: &archived}, true, true},
-		{"hidden never recovers", InstanceSnapshot{Backend: BackendTymux, Status: Stopped, Hidden: true}, true, false},
-		{"hidden and archived never recovers", InstanceSnapshot{Backend: BackendTymux, Status: Active, Hidden: true, ArchivedAt: &archived}, true, false},
+		{"tymux active", domain.InstanceSnapshot{Backend: domain.BackendTymux, Status: domain.Active}, false, false},
+		{"tymux permanently failed", domain.InstanceSnapshot{Backend: domain.BackendTymux, Status: domain.PermanentlyFailed}, true, true},
+		{"tymux paused", domain.InstanceSnapshot{Backend: domain.BackendTymux, Status: domain.Paused}, true, true},
+		{"tmux stopped still forwards input", domain.InstanceSnapshot{Backend: domain.BackendTmux, Status: domain.Stopped}, false, false},
+		{"archived recovers on unarchive", domain.InstanceSnapshot{Backend: domain.BackendTymux, Status: domain.Active, ArchivedAt: &archived}, true, true},
+		{"hidden never recovers", domain.InstanceSnapshot{Backend: domain.BackendTymux, Status: domain.Stopped, Hidden: true}, true, false},
+		{"hidden and archived never recovers", domain.InstanceSnapshot{Backend: domain.BackendTymux, Status: domain.Active, Hidden: true, ArchivedAt: &archived}, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

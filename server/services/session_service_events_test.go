@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const failureType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE)
@@ -82,15 +83,15 @@ func notificationsOf(evs []*events.Event, typ int32) []*events.Event {
 	return out
 }
 
-func crashedSnap(uuid, title, reason string, at time.Time) *session.InstanceSnapshot {
-	return &session.InstanceSnapshot{UUID: uuid, Title: title, ExitReason: reason, Status: session.Crashed, UpdatedAt: at}
+func crashedSnap(uuid, title, reason string, at time.Time) *domain.InstanceSnapshot {
+	return &domain.InstanceSnapshot{UUID: uuid, Title: title, ExitReason: reason, Status: domain.Crashed, UpdatedAt: at}
 }
 
 func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_WhenCrashedAndNoneWhenStopped(t *testing.T) {
 	e := newCrashEnv(t, false)
 	storage := e.svc.storage.(*session.Storage)
 	require.NoError(t, storage.AddInstance(&session.Instance{
-		Title: "crashy", Path: "/tmp/test", Status: session.Paused, Program: "claude",
+		Title: "crashy", Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
 	instances, err := e.svc.loadInstancesWithWiring()
@@ -99,8 +100,8 @@ func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_When
 	inst := instances[0]
 
 	inst.ExitReason = "pane exited 137"
-	inst.ForceStatus(session.Crashed)
-	inst.FireLifecycleEventForTest(session.EventExited, "dead-pane-crashed")
+	inst.ForceStatus(domain.Crashed)
+	inst.FireLifecycleEventForTest(domain.EventExited, "dead-pane-crashed")
 	// The publisher goroutine publishes session.updated then the FAILURE.
 	var seen []*events.Event
 	for len(notificationsOf(seen, failureType)) == 0 {
@@ -130,7 +131,7 @@ func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_When
 	assert.Equal(t, 1, updated, "the existing session.updated publish still happens once")
 
 	// A Stopped exit publishes no crash notification.
-	e.svc.publishCrash(&session.InstanceSnapshot{UUID: "u2", Title: "stopped", Status: session.Stopped})
+	e.svc.publishCrash(&domain.InstanceSnapshot{UUID: "u2", Title: "stopped", Status: domain.Stopped})
 	assert.Empty(t, notificationsOf(e.collect(t), failureType))
 }
 
@@ -138,15 +139,15 @@ func TestSessionExitedPublisher_ShouldPublishOnlyWhenSnapshotStatusCrashed_WhenE
 	e := newCrashEnv(t, false)
 	storage := e.svc.storage.(*session.Storage)
 	require.NoError(t, storage.AddInstance(&session.Instance{
-		Title: "other-exit", Path: "/tmp/test", Status: session.Paused, Program: "claude",
+		Title: "other-exit", Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
 	instances, err := e.svc.loadInstancesWithWiring()
 	require.NoError(t, err)
 	inst := instances[0]
 
-	inst.ForceStatus(session.Active) // not Crashed when the publisher reads it
-	inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+	inst.ForceStatus(domain.Active) // not Crashed when the publisher reads it
+	inst.FireLifecycleEventForTest(domain.EventExited, "pty-eof")
 	for { // wait for the publisher's session.updated, which precedes any crash publish
 		ev := <-e.ch
 		if ev.Type == events.EventSessionUpdated {
@@ -155,8 +156,8 @@ func TestSessionExitedPublisher_ShouldPublishOnlyWhenSnapshotStatusCrashed_WhenE
 	}
 	assert.Empty(t, notificationsOf(e.collect(t), failureType))
 
-	inst.ForceStatus(session.Crashed)
-	inst.FireLifecycleEventForTest(session.EventExited, "dead-pane-crashed")
+	inst.ForceStatus(domain.Crashed)
+	inst.FireLifecycleEventForTest(domain.EventExited, "dead-pane-crashed")
 	for { // the crash's own FAILURE arrives after its session.updated
 		ev := <-e.ch
 		if ev.Type == events.EventNotification && ev.NotificationType == failureType {
@@ -230,7 +231,7 @@ func TestCrashCoalescing_ShouldCountHiddenAndVisibleInOneLimiter_WhenMixedCrashe
 	e := newCrashEnv(t, false)
 	clk := newGateTestClock()
 	e.svc.crashes.now = clk.Now
-	snaps := []*session.InstanceSnapshot{
+	snaps := []*domain.InstanceSnapshot{
 		crashedSnap("h1", "hidden-1", "x", clk.Now()), crashedSnap("v1", "visible-1", "x", clk.Now()),
 		crashedSnap("h2", "hidden-2", "x", clk.Now()), crashedSnap("v2", "visible-2", "x", clk.Now()),
 	}
@@ -257,7 +258,7 @@ func TestSessionExitedPublisher_ShouldReadStatusViaSnapshot_WhenInstanceMutatedC
 	e := newCrashEnv(t, false)
 	storage := e.svc.storage.(*session.Storage)
 	require.NoError(t, storage.AddInstance(&session.Instance{
-		Title: "racy-exit", Path: "/tmp/test", Status: session.Paused, Program: "claude",
+		Title: "racy-exit", Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
 	instances, err := e.svc.loadInstancesWithWiring()
@@ -271,14 +272,14 @@ func TestSessionExitedPublisher_ShouldReadStatusViaSnapshot_WhenInstanceMutatedC
 		defer close(done)
 		for i := 0; i < exits; i++ {
 			if i%2 == 0 {
-				inst.ForceStatus(session.Crashed)
+				inst.ForceStatus(domain.Crashed)
 			} else {
-				inst.ForceStatus(session.Active)
+				inst.ForceStatus(domain.Active)
 			}
 		}
 	}()
 	for i := 0; i < exits; i++ {
-		inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+		inst.FireLifecycleEventForTest(domain.EventExited, "pty-eof")
 	}
 	<-done
 

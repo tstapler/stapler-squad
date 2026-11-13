@@ -2,14 +2,14 @@ package adapters
 
 import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // subStatusFromItem derives the proto SubStatus for a ReviewItem from its ClaudeStatus.
 // This is the fine-grained activity state used by the frontend deriveWorkingState() utility.
-func subStatusFromItem(item *session.ReviewItem) sessionv1.SubStatus {
+func subStatusFromItem(item *queue.ReviewItem) sessionv1.SubStatus {
 	switch item.ClaudeStatus {
 	case detection.StatusWaitingForAgent:
 		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
@@ -41,7 +41,7 @@ func subStatusFromItem(item *session.ReviewItem) sessionv1.SubStatus {
 // extraMetadata entries are merged into the item's Metadata map; callers use
 // this to inject enrichment (e.g. pending_approval_id) at conversion time so
 // that no mutation is needed after the proto is built.
-func ReviewItemToProto(item *session.ReviewItem, extraMetadata map[string]string) *sessionv1.ReviewItem {
+func ReviewItemToProto(item *queue.ReviewItem, extraMetadata map[string]string) *sessionv1.ReviewItem {
 	if item == nil {
 		return nil
 	}
@@ -93,7 +93,7 @@ func ReviewItemToProto(item *session.ReviewItem, extraMetadata map[string]string
 // ReviewQueueToProto converts session.ReviewQueue to proto ReviewQueue.
 // approvalIDs is a map of sessionID → pending approval ID used to enrich
 // APPROVAL_PENDING items inline; pass nil if no enrichment is needed.
-func ReviewQueueToProto(queue *session.ReviewQueue, approvalIDs map[string]string) *sessionv1.ReviewQueue {
+func ReviewQueueToProto(queue *queue.ReviewQueue, approvalIDs map[string]string) *sessionv1.ReviewQueue {
 	if queue == nil {
 		return &sessionv1.ReviewQueue{
 			TotalItems: 0,
@@ -145,15 +145,15 @@ func ReviewQueueToProto(queue *session.ReviewQueue, approvalIDs map[string]strin
 }
 
 // priorityToProto converts session.Priority to proto Priority enum.
-func priorityToProto(priority session.Priority) sessionv1.Priority {
+func priorityToProto(priority queue.Priority) sessionv1.Priority {
 	switch priority {
-	case session.PriorityUrgent:
+	case queue.PriorityUrgent:
 		return sessionv1.Priority_PRIORITY_URGENT
-	case session.PriorityHigh:
+	case queue.PriorityHigh:
 		return sessionv1.Priority_PRIORITY_HIGH
-	case session.PriorityMedium:
+	case queue.PriorityMedium:
 		return sessionv1.Priority_PRIORITY_MEDIUM
-	case session.PriorityLow:
+	case queue.PriorityLow:
 		return sessionv1.Priority_PRIORITY_LOW
 	default:
 		return sessionv1.Priority_PRIORITY_UNSPECIFIED
@@ -161,25 +161,25 @@ func priorityToProto(priority session.Priority) sessionv1.Priority {
 }
 
 // attentionReasonToProto converts session.AttentionReason to proto AttentionReason enum.
-func attentionReasonToProto(reason session.AttentionReason) sessionv1.AttentionReason {
+func attentionReasonToProto(reason queue.AttentionReason) sessionv1.AttentionReason {
 	switch reason {
-	case session.ReasonApprovalPending:
+	case queue.ReasonApprovalPending:
 		return sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING
-	case session.ReasonInputRequired:
+	case queue.ReasonInputRequired:
 		return sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED
-	case session.ReasonErrorState:
+	case queue.ReasonErrorState:
 		return sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE
-	case session.ReasonIdleTimeout:
+	case queue.ReasonIdleTimeout:
 		return sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT
-	case session.ReasonTaskComplete:
+	case queue.ReasonTaskComplete:
 		return sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE
-	case session.ReasonUncommittedChanges:
+	case queue.ReasonUncommittedChanges:
 		return sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES
-	case session.ReasonIdle:
+	case queue.ReasonIdle:
 		return sessionv1.AttentionReason_ATTENTION_REASON_IDLE
-	case session.ReasonStale:
+	case queue.ReasonStale:
 		return sessionv1.AttentionReason_ATTENTION_REASON_STALE
-	case session.ReasonWaitingForUser:
+	case queue.ReasonWaitingForUser:
 		return sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER
 	default:
 		return sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED
@@ -187,43 +187,43 @@ func attentionReasonToProto(reason session.AttentionReason) sessionv1.AttentionR
 }
 
 // ProtoToPriority converts proto Priority enum to session.Priority.
-func ProtoToPriority(priority sessionv1.Priority) session.Priority {
+func ProtoToPriority(priority sessionv1.Priority) queue.Priority {
 	switch priority {
 	case sessionv1.Priority_PRIORITY_URGENT:
-		return session.PriorityUrgent
+		return queue.PriorityUrgent
 	case sessionv1.Priority_PRIORITY_HIGH:
-		return session.PriorityHigh
+		return queue.PriorityHigh
 	case sessionv1.Priority_PRIORITY_MEDIUM:
-		return session.PriorityMedium
+		return queue.PriorityMedium
 	case sessionv1.Priority_PRIORITY_LOW:
-		return session.PriorityLow
+		return queue.PriorityLow
 	default:
-		return session.PriorityMedium // Default to medium
+		return queue.PriorityMedium // Default to medium
 	}
 }
 
 // ProtoToAttentionReason converts proto AttentionReason enum to session.AttentionReason.
-func ProtoToAttentionReason(reason sessionv1.AttentionReason) session.AttentionReason {
+func ProtoToAttentionReason(reason sessionv1.AttentionReason) queue.AttentionReason {
 	switch reason {
 	case sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING:
-		return session.ReasonApprovalPending
+		return queue.ReasonApprovalPending
 	case sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED:
-		return session.ReasonInputRequired
+		return queue.ReasonInputRequired
 	case sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE:
-		return session.ReasonErrorState
+		return queue.ReasonErrorState
 	case sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT:
-		return session.ReasonIdleTimeout
+		return queue.ReasonIdleTimeout
 	case sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE:
-		return session.ReasonTaskComplete
+		return queue.ReasonTaskComplete
 	case sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES:
-		return session.ReasonUncommittedChanges
+		return queue.ReasonUncommittedChanges
 	case sessionv1.AttentionReason_ATTENTION_REASON_IDLE:
-		return session.ReasonIdle
+		return queue.ReasonIdle
 	case sessionv1.AttentionReason_ATTENTION_REASON_STALE:
-		return session.ReasonStale
+		return queue.ReasonStale
 	case sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER:
-		return session.ReasonWaitingForUser
+		return queue.ReasonWaitingForUser
 	default:
-		return session.ReasonInputRequired // Default to input required
+		return queue.ReasonInputRequired // Default to input required
 	}
 }

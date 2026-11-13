@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -26,7 +27,7 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	t.Cleanup(cleanup)
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title: "item prs", AcceptanceCriteria: `[]`, Priority: 1,
-		Status: string(BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
+		Status: string(domain.BacklogStatusPRPending), RepoPath: "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
 	f := &itemPRFixture{t: t, storage: storage, repo: storage.Repo, itemID: item.ID}
@@ -38,8 +39,8 @@ func newItemPRFixture(t *testing.T, legacyNumber int) *itemPRFixture {
 	return f
 }
 
-func testRef(n int) PRRef {
-	ref, err := NewPRRef("github.com", "acme", "app", n)
+func testRef(n int) domain.PRRef {
+	ref, err := domain.NewPRRef("github.com", "acme", "app", n)
 	if err != nil {
 		panic(err)
 	}
@@ -54,10 +55,10 @@ func (f *itemPRFixture) session(role string) string {
 	return id
 }
 
-func (f *itemPRFixture) link(owner PROwner, n int, state PRState) {
+func (f *itemPRFixture) link(owner PROwner, n int, state domain.PRState) {
 	f.t.Helper()
-	res, err := f.repo.UpsertSessionPR(context.Background(), owner, testRef(n), PRLink{
-		Role: PRRolePrimary, Source: AttachSourceManual, Initial: PRInitial{State: state, Terminal: state.Terminal()},
+	res, err := f.repo.UpsertSessionPR(context.Background(), owner, testRef(n), domain.PRLink{
+		Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: state, Terminal: state.Terminal()},
 	})
 	require.NoError(f.t, err)
 	require.False(f.t, res.Tombstoned)
@@ -103,7 +104,7 @@ func TestItemPRs_ShouldSynthesizeUnknownPR_WhenLegacyNumberUnrepresented(t *test
 	require.NoError(t, err)
 	require.Len(t, prs, 1)
 	assert.Equal(t, 21, prs[0].Ref.Number())
-	assert.Equal(t, PRStateUnknown, prs[0].State)
+	assert.Equal(t, domain.PRStateUnknown, prs[0].State)
 	assert.False(t, prs[0].Terminal())
 	assert.Equal(t, ItemVerdictOpen, ItemPRVerdict(prs), "an unmigrated item is never read as all terminal")
 }
@@ -112,9 +113,9 @@ func TestItemPRs_ShouldNotSynthesize_WhenNumberRepresentedOnlyBySupersededRound(
 	t.Parallel()
 	f := newItemPRFixture(t, 30)
 	s1 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s1), 30, PRStateOpen)
+	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
 	s2 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s2), 31, PRStateOpen)
+	f.link(SessionPROwner(s2), 31, domain.PRStateOpen)
 	assert.Equal(t, []int{31}, f.numbers(), "stale mirror value is not unmigrated")
 }
 
@@ -123,7 +124,7 @@ func TestItemPRs_ShouldNotSynthesize_WhenAnyTombstoneCoversNumber(t *testing.T) 
 	t.Run("session tombstone", func(t *testing.T) {
 		f := newItemPRFixture(t, 30)
 		s := f.session(SessionRoleWork)
-		f.link(SessionPROwner(s), 30, PRStateOpen)
+		f.link(SessionPROwner(s), 30, domain.PRStateOpen)
 		f.detach(SessionPROwner(s), 30)
 		assert.Empty(t, f.numbers())
 	})
@@ -141,7 +142,7 @@ type countingSource struct {
 	sessionLinkCalls int
 }
 
-func (c *countingSource) ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error) {
+func (c *countingSource) ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error) {
 	c.sessionLinkCalls++
 	return c.itemPRSource.ListBySessionUUIDs(ctx, uuids)
 }
@@ -150,7 +151,7 @@ func TestItemPRs_ShouldShortCircuitFallback_WhenNumberAlreadyInSet(t *testing.T)
 	t.Parallel()
 	f := newItemPRFixture(t, 21)
 	s := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s), 21, PRStateOpen)
+	f.link(SessionPROwner(s), 21, domain.PRStateOpen)
 	src := &countingSource{itemPRSource: f.repo}
 	it := f.itemEnt()
 	prs, err := deriveItemPRs(context.Background(), src, f.itemID, it.PrURL, it.PrNumber)
@@ -163,8 +164,8 @@ func TestItemPRs_ShouldReturnOnePR_WhenSameStateViaItemAndSessionLink(t *testing
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	s := f.session(SessionRoleWork)
-	f.link(ItemPROwner(f.itemID), 21, PRStateOpen)
-	f.link(SessionPROwner(s), 21, PRStateOpen)
+	f.link(ItemPROwner(f.itemID), 21, domain.PRStateOpen)
+	f.link(SessionPROwner(s), 21, domain.PRStateOpen)
 	assert.Equal(t, []int{21}, f.numbers())
 }
 
@@ -172,7 +173,7 @@ func TestItemPRs_ShouldDropPR_WhenOnlySessionLinkDetachedOrSessionDeleted(t *tes
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	s := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s), 30, PRStateOpen)
+	f.link(SessionPROwner(s), 30, domain.PRStateOpen)
 	require.Equal(t, []int{30}, f.numbers())
 	f.detach(SessionPROwner(s), 30)
 	assert.Empty(t, f.numbers())
@@ -182,9 +183,9 @@ func TestItemPRs_ShouldUseLatestWorkRoundOnly_WhenReopened(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	s1 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s1), 30, PRStateOpen)
+	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
 	s2 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s2), 31, PRStateMerged)
+	f.link(SessionPROwner(s2), 31, domain.PRStateMerged)
 	assert.Equal(t, []int{31}, f.numbers())
 	assert.Equal(t, ItemVerdictDone, f.verdict(), "verdict is Done regardless of #30")
 	byS1, err := f.repo.ListBySessionUUIDs(context.Background(), []string{s1})
@@ -196,7 +197,7 @@ func TestItemPRs_ShouldNotSupersede_WhenLaterReviewSession(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	w1 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(w1), 30, PRStateOpen)
+	f.link(SessionPROwner(w1), 30, domain.PRStateOpen)
 	f.session(SessionRoleReview)
 	assert.Equal(t, []int{30}, f.numbers())
 }
@@ -208,7 +209,7 @@ func TestCurrentRoundSession_ShouldBreakCreatedAtTiesByLargerID(t *testing.T) {
 		{ID: "a", SessionUUID: "ua", CreatedAt: now},
 		{ID: "b", SessionUUID: "ub", CreatedAt: now},
 	}
-	links := map[string][]PRView{"ua": {{}}, "ub": {{}}}
+	links := map[string][]domain.PRView{"ua": {{}}, "ub": {{}}}
 	got, skipped := currentRoundSession(work, links, nil)
 	assert.Equal(t, "ub", got)
 	assert.False(t, skipped)
@@ -218,9 +219,9 @@ func TestItemPRs_ShouldNotResurrectEarlierRound_WhenLatestRoundLinkDetached(t *t
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	s1 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s1), 30, PRStateMerged)
+	f.link(SessionPROwner(s1), 30, domain.PRStateMerged)
 	s2 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s2), 31, PRStateOpen)
+	f.link(SessionPROwner(s2), 31, domain.PRStateOpen)
 	f.detach(SessionPROwner(s2), 31)
 	assert.Empty(t, f.numbers())
 	assert.Equal(t, ItemVerdictNoPRs, f.verdict())
@@ -230,20 +231,20 @@ func TestItemPRs_ShouldKeepLivePR_WhenNewerWorkSessionHasNoLinkYet(t *testing.T)
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	s1 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s1), 30, PRStateOpen)
+	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
 	s2 := f.session(SessionRoleWork)
 	assert.Equal(t, []int{30}, f.numbers())
 	assert.Equal(t, ItemVerdictOpen, f.verdict())
-	f.link(SessionPROwner(s2), 31, PRStateOpen)
+	f.link(SessionPROwner(s2), 31, domain.PRStateOpen)
 	assert.Equal(t, []int{31}, f.numbers(), "#30 leaves once the new session links")
 }
 
 func TestItemPRs_ShouldKeepItemDirectPR_WhenRound2Merges(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	f.link(ItemPROwner(f.itemID), 30, PRStateOpen)
+	f.link(ItemPROwner(f.itemID), 30, domain.PRStateOpen)
 	s2 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s2), 31, PRStateMerged)
+	f.link(SessionPROwner(s2), 31, domain.PRStateMerged)
 	assert.ElementsMatch(t, []int{30, 31}, f.numbers())
 	assert.Equal(t, ItemVerdictOpen, f.verdict())
 	f.detach(ItemPROwner(f.itemID), 30)
@@ -254,14 +255,14 @@ func TestItemPRs_ShouldKeepSharedPR_WhenOneOfTwoRoundsDetaches(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	s1 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s1), 30, PRStateOpen)
+	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
 	s2 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s2), 30, PRStateOpen)
+	f.link(SessionPROwner(s2), 30, domain.PRStateOpen)
 	f.detach(SessionPROwner(s1), 30)
 	assert.Equal(t, []int{30}, f.numbers())
 	assert.Equal(t, ItemVerdictOpen, f.verdict())
 
-	f.link(ItemPROwner(f.itemID), 30, PRStateOpen)
+	f.link(ItemPROwner(f.itemID), 30, domain.PRStateOpen)
 	f.detach(SessionPROwner(s2), 30)
 	assert.Equal(t, []int{30}, f.numbers(), "item-direct link still holds it")
 
@@ -273,8 +274,8 @@ func TestItemPRs_ShouldIgnoreItemTombstoneOverSessionLink_WhenBothHoldIt(t *test
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
 	s := f.session(SessionRoleWork)
-	f.link(ItemPROwner(f.itemID), 30, PRStateUnknown)
-	f.link(SessionPROwner(s), 30, PRStateUnknown)
+	f.link(ItemPROwner(f.itemID), 30, domain.PRStateUnknown)
+	f.link(SessionPROwner(s), 30, domain.PRStateUnknown)
 	f.detach(ItemPROwner(f.itemID), 30)
 	assert.Empty(t, f.numbers())
 	links, err := f.repo.ListBySessionUUIDs(context.Background(), []string{s})
@@ -285,15 +286,15 @@ func TestItemPRs_ShouldIgnoreItemTombstoneOverSessionLink_WhenBothHoldIt(t *test
 func TestItemPRs_ShouldIgnoreUnrelatedSession_WhenManualAttachToOtherSession(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	f.link(ItemPROwner(f.itemID), 21, PRStateOpen)
-	f.link(SessionPROwner(uuid.New().String()), 50, PRStateOpen)
+	f.link(ItemPROwner(f.itemID), 21, domain.PRStateOpen)
+	f.link(SessionPROwner(uuid.New().String()), 50, domain.PRStateOpen)
 	assert.Equal(t, []int{21}, f.numbers())
 }
 
 func TestItemPRs_ShouldStillReturnItemDirect_WhenSessionLinkBroken(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 0)
-	f.link(ItemPROwner(f.itemID), 21, PRStateOpen)
+	f.link(ItemPROwner(f.itemID), 21, domain.PRStateOpen)
 	assert.Equal(t, []int{21}, f.numbers(), "no ItemSession rows at all")
 }
 
@@ -301,7 +302,7 @@ func TestRoundMembership_ShouldCreateNoItemDirectLink_WhenBackfillRunsOnSessionD
 	t.Parallel()
 	f := newItemPRFixture(t, 30)
 	s := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s), 30, PRStateOpen)
+	f.link(SessionPROwner(s), 30, domain.PRStateOpen)
 	for run := 0; run < 2; run++ {
 		_, err := f.repo.runPRBackfill(context.Background(), nil)
 		require.NoError(t, err)
@@ -309,7 +310,7 @@ func TestRoundMembership_ShouldCreateNoItemDirectLink_WhenBackfillRunsOnSessionD
 		require.NoError(t, err)
 		assert.Empty(t, direct, "run %d: a session-derived PR gets no item-direct link", run)
 	}
-	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, PRStateOpen)
+	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, domain.PRStateOpen)
 	assert.Equal(t, []int{31}, f.numbers(), "#30 leaves the set when the next round links #31")
 }
 
@@ -322,8 +323,8 @@ func TestItemMirror_ShouldFollowSet_WhenSetChanges(t *testing.T) {
 	t.Parallel()
 	f := newItemPRFixture(t, 21)
 	ctx := context.Background()
-	f.link(ItemPROwner(f.itemID), 21, PRStateMerged)
-	f.link(ItemPROwner(f.itemID), 22, PRStateOpen)
+	f.link(ItemPROwner(f.itemID), 21, domain.PRStateMerged)
+	f.link(ItemPROwner(f.itemID), 22, domain.PRStateOpen)
 
 	changed, err := f.repo.RecomputeItemPRMirror(ctx, f.itemID)
 	require.NoError(t, err)
@@ -345,7 +346,7 @@ func TestItemMirror_ShouldNeverZeroStoredNumber_WhenSetEmpty(t *testing.T) {
 	f := newItemPRFixture(t, 30)
 	ctx := context.Background()
 	s := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s), 30, PRStateOpen)
+	f.link(SessionPROwner(s), 30, domain.PRStateOpen)
 	f.detach(SessionPROwner(s), 30)
 	require.Empty(t, f.numbers())
 
@@ -359,7 +360,7 @@ func TestItemMirror_ShouldLoseToConcurrentWriter_WhenStoredNumberChangedUndernea
 	t.Parallel()
 	f := newItemPRFixture(t, 21)
 	ctx := context.Background()
-	f.link(ItemPROwner(f.itemID), 22, PRStateOpen)
+	f.link(ItemPROwner(f.itemID), 22, domain.PRStateOpen)
 	stale := f.itemEnt()
 	n := 99
 	_, err := f.storage.UpdateBacklogItem(ctx, f.itemID, backlogdto.BacklogItemUpdate{PrNumber: &n}, nil)
@@ -376,12 +377,12 @@ func TestItemMirror_ShouldFollowCurrentRound_WhenLaterWorkSessionLinks(t *testin
 	f := newItemPRFixture(t, 30)
 	ctx := context.Background()
 	s1 := f.session(SessionRoleWork)
-	f.link(SessionPROwner(s1), 30, PRStateOpen)
+	f.link(SessionPROwner(s1), 30, domain.PRStateOpen)
 	for run := 0; run < 2; run++ {
 		_, err := f.repo.runPRBackfill(ctx, nil)
 		require.NoError(t, err)
 	}
-	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, PRStateOpen)
+	f.link(SessionPROwner(f.session(SessionRoleWork)), 31, domain.PRStateOpen)
 	_, err := f.repo.RecomputeItemPRMirror(ctx, f.itemID)
 	require.NoError(t, err)
 	assert.Equal(t, 31, f.mirror())
@@ -396,7 +397,7 @@ func TestAttachItemPRLink_ShouldLinkOnceAndHonorItemTombstone(t *testing.T) {
 
 	for i := 0; i < 2; i++ { // second pass is a re-poll
 		for _, u := range []string{url31, url32} {
-			ok, err := f.storage.AttachItemPRLink(ctx, f.itemID, u, AttachSourceJules)
+			ok, err := f.storage.AttachItemPRLink(ctx, f.itemID, u, domain.AttachSourceJules)
 			require.NoError(t, err)
 			require.True(t, ok)
 		}
@@ -405,13 +406,13 @@ func TestAttachItemPRLink_ShouldLinkOnceAndHonorItemTombstone(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, views, 2)
 	for _, v := range views {
-		assert.Equal(t, AttachSourceJules, v.AttachSource)
+		assert.Equal(t, domain.AttachSourceJules, v.AttachSource)
 	}
-	roles := []PRRole{views[0].Role, views[1].Role}
-	assert.ElementsMatch(t, []PRRole{PRRolePrimary, PRRoleFollowup}, roles)
+	roles := []domain.PRRole{views[0].Role, views[1].Role}
+	assert.ElementsMatch(t, []domain.PRRole{domain.PRRolePrimary, domain.PRRoleFollowup}, roles)
 
 	f.detach(ItemPROwner(f.itemID), 32)
-	ok, err := f.storage.AttachItemPRLink(ctx, f.itemID, url32, AttachSourceJules)
+	ok, err := f.storage.AttachItemPRLink(ctx, f.itemID, url32, domain.AttachSourceJules)
 	require.NoError(t, err)
 	assert.False(t, ok, "a re-poll cannot undo a detach")
 	assert.Equal(t, []int{31}, f.numbers())

@@ -5,19 +5,22 @@ import (
 	"sync"
 
 	"github.com/puzpuzpuz/xsync/v4"
+
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // InstanceStatusInfo provides extended status information for an instance.
 type InstanceStatusInfo struct {
-	BasicStatus        Status                   // Creating, Active, Paused, Stopped, Hibernated
-	ClaudeStatus       detection.DetectedStatus // If ClaudeController is active
+	BasicStatus        domain.Status            // Creating, Active, Paused, Stopped, Hibernated
+	ClaudeStatus       detection.DetectedStatus // If claudectl.ClaudeController is active
 	StatusContext      string                   // Context/details about current status (e.g., error message)
 	PendingApprovals   int                      // Number of pending approvals
 	QueuedCommands     int                      // Number of queued commands
 	LastCommandStatus  string                   // Status of last command
-	IsControllerActive bool                     // Whether ClaudeController is running
+	IsControllerActive bool                     // Whether claudectl.ClaudeController is running
 	IdleState          detection.IdleStateInfo  // NEW: Idle state information
 	// SubagentCount is the count of background agents/shells/monitors from the
 	// WaitingForAgent detector; 0 unless ClaudeStatus == detection.StatusWaitingForAgent.
@@ -27,14 +30,14 @@ type InstanceStatusInfo struct {
 // InstanceStatusManager manages status information for instances.
 type InstanceStatusManager struct {
 	// ponytail: xsync.Map replaces map+RWMutex — lock-free reads on the hot GetStatus path
-	controllers *xsync.Map[string, *ClaudeController]
+	controllers *xsync.Map[string, *claudectl.ClaudeController]
 
 	// piSources holds registered PiStatusSources, keyed by instance title —
 	// a parallel map to controllers, not a shared interface. See plan.md's
 	// Pattern Decisions table: pi status is a purpose-built event-to-status
 	// mapping (session/pi_status_source.go) with no PTY-scraping, queued
 	// commands, or subagent concepts, so unifying it behind
-	// ClaudeController's interface would force those concepts onto pi for
+	// claudectl.ClaudeController's interface would force those concepts onto pi for
 	// no benefit.
 	piSources *xsync.Map[string, *PiStatusSource]
 
@@ -44,13 +47,13 @@ type InstanceStatusManager struct {
 	// ReviewQueuePoller's approvalProvider field/mutex pattern
 	// (session/review_queue_poller.go).
 	approvalProviderMu sync.RWMutex
-	approvalProvider   ApprovalMetadataProvider
+	approvalProvider   domain.ApprovalMetadataProvider
 }
 
 // NewInstanceStatusManager creates a new status manager.
 func NewInstanceStatusManager() *InstanceStatusManager {
 	return &InstanceStatusManager{
-		controllers: xsync.NewMap[string, *ClaudeController](),
+		controllers: xsync.NewMap[string, *claudectl.ClaudeController](),
 		piSources:   xsync.NewMap[string, *PiStatusSource](),
 	}
 }
@@ -78,20 +81,20 @@ func (ism *InstanceStatusManager) GetPiStatusSource(instanceTitle string) (*PiSt
 // by GetStatus()'s pi-fallback branch to override an inferred Idle status
 // with NeedsApproval (Story 5.3.1). Optional: GetStatus() skips the override
 // entirely when no provider has been set (e.g. in tests that don't need it).
-func (ism *InstanceStatusManager) SetApprovalProvider(provider ApprovalMetadataProvider) {
+func (ism *InstanceStatusManager) SetApprovalProvider(provider domain.ApprovalMetadataProvider) {
 	ism.approvalProviderMu.Lock()
 	defer ism.approvalProviderMu.Unlock()
 	ism.approvalProvider = provider
 }
 
-func (ism *InstanceStatusManager) getApprovalProvider() ApprovalMetadataProvider {
+func (ism *InstanceStatusManager) getApprovalProvider() domain.ApprovalMetadataProvider {
 	ism.approvalProviderMu.RLock()
 	defer ism.approvalProviderMu.RUnlock()
 	return ism.approvalProvider
 }
 
 // RegisterController registers a controller for an instance.
-func (ism *InstanceStatusManager) RegisterController(instanceTitle string, controller *ClaudeController) {
+func (ism *InstanceStatusManager) RegisterController(instanceTitle string, controller *claudectl.ClaudeController) {
 	ism.controllers.Store(instanceTitle, controller)
 	log.Debug("registered controller", "session", instanceTitle, "count", ism.controllers.Size())
 }
@@ -102,14 +105,14 @@ func (ism *InstanceStatusManager) UnregisterController(instanceTitle string) {
 }
 
 // GetController retrieves a controller for an instance.
-func (ism *InstanceStatusManager) GetController(instanceTitle string) (*ClaudeController, bool) {
+func (ism *InstanceStatusManager) GetController(instanceTitle string) (*claudectl.ClaudeController, bool) {
 	return ism.controllers.Load(instanceTitle)
 }
 
 // GetAllControllers returns all registered controllers.
-func (ism *InstanceStatusManager) GetAllControllers() map[string]*ClaudeController {
-	out := make(map[string]*ClaudeController, ism.controllers.Size())
-	ism.controllers.Range(func(k string, v *ClaudeController) bool {
+func (ism *InstanceStatusManager) GetAllControllers() map[string]*claudectl.ClaudeController {
+	out := make(map[string]*claudectl.ClaudeController, ism.controllers.Size())
+	ism.controllers.Range(func(k string, v *claudectl.ClaudeController) bool {
 		out[k] = v
 		return true
 	})
@@ -186,11 +189,11 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 func (info InstanceStatusInfo) GetStatusIcon() string {
 	if !info.IsControllerActive {
 		switch info.BasicStatus {
-		case Active:
+		case domain.Active:
 			return "●" // Active but no controller
-		case Paused:
+		case domain.Paused:
 			return "⏸"
-		case Hibernated:
+		case domain.Hibernated:
 			return "❄"
 		default:
 			return "?"
@@ -222,19 +225,19 @@ func (info InstanceStatusInfo) GetStatusIcon() string {
 func (info InstanceStatusInfo) GetStatusDescription() string {
 	if !info.IsControllerActive {
 		switch info.BasicStatus {
-		case Active:
+		case domain.Active:
 			return "Active"
-		case Creating:
+		case domain.Creating:
 			return "Creating"
-		case Paused:
+		case domain.Paused:
 			return "Paused"
-		case Stopped:
+		case domain.Stopped:
 			return "Stopped"
-		case Hibernated:
+		case domain.Hibernated:
 			return "Hibernated"
-		case Crashed:
+		case domain.Crashed:
 			return "Crashed"
-		case PermanentlyFailed:
+		case domain.PermanentlyFailed:
 			return "Failed"
 		default:
 			return "Unknown"
@@ -313,11 +316,11 @@ func (info InstanceStatusInfo) GetColorCode() string {
 		return "39" // Blue
 	}
 
-	if info.BasicStatus == Active && info.IsControllerActive {
+	if info.BasicStatus == domain.Active && info.IsControllerActive {
 		return "82" // Green
 	}
 
-	if info.BasicStatus == Paused || info.BasicStatus == Hibernated {
+	if info.BasicStatus == domain.Paused || info.BasicStatus == domain.Hibernated {
 		return "240" // Gray
 	}
 

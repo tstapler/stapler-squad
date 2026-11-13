@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFails confirms
@@ -35,9 +36,9 @@ func TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFa
 	itemID := createResp.Msg.Item.Id
 
 	// Walk the state machine to a terminal status: idea -> ready -> in_progress -> review -> done.
-	for _, target := range []session.BacklogStatus{
-		session.BacklogStatusReady, session.BacklogStatusInProgress,
-		session.BacklogStatusReview, session.BacklogStatusDone,
+	for _, target := range []domain.BacklogStatus{
+		domain.BacklogStatusReady, domain.BacklogStatusInProgress,
+		domain.BacklogStatusReview, domain.BacklogStatusDone,
 	} {
 		_, err := storage.RawTransitionBacklogItemStatus(t.Context(), itemID, target, nil, session.TriggeredBySystem)
 		require.NoError(t, err, "transition to %s", target)
@@ -66,8 +67,8 @@ func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_Conf
 	storage := svctest.CreateTestStorage(t)
 	engine := disabledEdgeWorkflowEngine{
 		WorkflowEngine: session.NewDefaultWorkflowEngine(),
-		deniedFrom:     session.BacklogStatusReady,
-		deniedTo:       session.BacklogStatusInProgress,
+		deniedFrom:     domain.BacklogStatusReady,
+		deniedTo:       domain.BacklogStatusInProgress,
 	}
 	svc := NewBacklogService(storage, nil, nil, engine, nil, nil)
 
@@ -82,7 +83,7 @@ func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_Conf
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
 
-	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	resp, err := svc.AttachSessionToItem(t.Context(), connect.NewRequest(&sessionv1.AttachSessionToItemRequest{
@@ -94,7 +95,7 @@ func TestAttachSessionToItem_should_NotCallTransitionBacklogItemStatus_When_Conf
 
 	final, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusReady), final.Status, "item must stay at ready when the engine refuses ready->in_progress")
+	assert.Equal(t, string(domain.BacklogStatusReady), final.Status, "item must stay at ready when the engine refuses ready->in_progress")
 }
 
 // TestAttachSessionToItem_should_RegenerateSlashCommandsWithNewItemID_When_RelinkedToDifferentItem
@@ -138,7 +139,7 @@ func TestAttachSessionToItem_should_RegenerateSlashCommandsWithNewItemID_When_Re
 		// Paused (not Active) so LoadInstances doesn't attempt a real cold-restore
 		// tmux/claude process start, matching the precedent in
 		// TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions.
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

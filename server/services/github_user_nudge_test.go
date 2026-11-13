@@ -17,6 +17,7 @@ import (
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ---- fakes ----
@@ -399,7 +400,7 @@ func TestNudgeSessionForPR_should_ReturnPRNotFoundWithoutTryingOtherAccount_When
 
 func TestNudgeSessionForPR_should_ReturnPausedWithDistinctCopyForPausedVsNotTracked_When_StatusPausedOrFindLiveInstanceNil(t *testing.T) {
 	f := newNudgeFixture(t)
-	f.inst.Status = session.Paused
+	f.inst.Status = domain.Paused
 	paused, err := f.call("fix-ci")
 	require.NoError(t, err)
 	assert.Equal(t, sessionv1.NudgeOutcome_NUDGE_OUTCOME_PAUSED, paused.Outcome)

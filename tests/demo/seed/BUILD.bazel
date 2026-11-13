@@ -10,6 +10,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//session",
+        "//session/domain",
         "//tests/demo",
         "//tests/demo/scenario",
     ],

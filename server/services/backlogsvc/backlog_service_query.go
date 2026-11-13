@@ -17,7 +17,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -244,7 +245,7 @@ func (s *BacklogService) SuggestNextItem(
 
 	// Load ready items ordered by priority (lower number = higher priority).
 	items, err := s.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusReady)},
+		Statuses: []string{string(domain.BacklogStatusReady)},
 		SortBy:   "priority",
 	})
 	if err != nil {
@@ -482,7 +483,7 @@ func (s *BacklogService) GetBacklogItemDiff(
 	// makes the diff work identically whether the work session's worktree
 	// directory still exists or has already been cleaned up (the normal state
 	// once an item is done) — see GetGitDiffRef's doc comment.
-	diffContent, _, diffErr := backlog.GetGitDiffRef(ctx, item.RepoPath, diffBaseSHA, headRef)
+	diffContent, _, diffErr := pipeline.GetGitDiffRef(ctx, item.RepoPath, diffBaseSHA, headRef)
 	if diffErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to compute diff: %w", diffErr))
 	}
@@ -603,10 +604,10 @@ func (s *BacklogService) GetSessionBacklogIndex(
 // item from the item sessions ListBacklogItemSummaries already batch-loaded, so
 // no per-item query is needed. Only review items can be pending.
 func annotateDuplicatePending(p *sessionv1.BacklogItem, sessions []backlogdto.ItemSessionSummary) {
-	if p.Status != string(session.BacklogStatusReview) {
+	if p.Status != string(domain.BacklogStatusReview) {
 		return
 	}
-	if ref := backlog.PendingDuplicateRef(sessions); ref != "" {
+	if ref := stuck.PendingDuplicateRef(sessions); ref != "" {
 		p.DuplicatePending = true
 		p.DuplicateRef = ref
 	}

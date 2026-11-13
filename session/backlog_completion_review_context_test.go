@@ -5,12 +5,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 func completionTestItem(t *testing.T) *backlogdto.BacklogItemData {
 	t.Helper()
-	acs, err := SerializeAcCriteria([]AcCriterion{
+	acs, err := domain.SerializeAcCriteria([]domain.AcCriterion{
 		{Index: 0, Text: "fires on done", Status: "done"},
 		{Index: 1, Text: "never blocks", Status: "done"},
 	})

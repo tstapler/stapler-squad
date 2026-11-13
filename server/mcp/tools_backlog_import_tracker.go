@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/itemsources"
 )
@@ -58,7 +59,7 @@ func (h *backlogHandlers) importTrackerIssue(ctx context.Context, toolName, trac
 		Title:       title,
 		Description: description,
 		Priority:    ext.Priority,
-		Status:      string(session.BacklogStatusIdea),
+		Status:      string(domain.BacklogStatusIdea),
 		RepoPath:    repoPath,
 		Labels:      ext.Labels,
 		Notes:       fmt.Sprintf("Imported from %s issue %s (%s)", tracker, ext.ExternalID, ext.URL),

@@ -30,9 +30,9 @@ import (
 // Scope boundary (Story 2.1.4): intentionally built-in-only, not sourced
 // from any stage engine — same "does not automatically inherit" resolution
 // as allowedSelfResolveSourceStatuses in tools_backlog.go.
-var reportPRCreatedAllowedSourceStatuses = map[session.BacklogStatus]bool{
-	session.BacklogStatusReview:    true,
-	session.BacklogStatusPRPending: true,
+var reportPRCreatedAllowedSourceStatuses = map[domain.BacklogStatus]bool{
+	domain.BacklogStatusReview:    true,
+	domain.BacklogStatusPRPending: true,
 }
 
 // sessionBranch resolves the branch sessionUUID is working on, via the
@@ -236,7 +236,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// surface as the generic "item state changed since your last read..."
 	// CAS-race message below, indistinguishable from a genuine concurrent
 	// write race (AC7's message, which this check must not alter).
-	if !reportPRCreatedAllowedSourceStatuses[session.BacklogStatus(item.Status)] {
+	if !reportPRCreatedAllowedSourceStatuses[domain.BacklogStatus(item.Status)] {
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
 			"item %s is at status %q — report_pr_created is only allowed from status 'review' or 'pr_pending'", itemID, item.Status), ""), nil
 	}
@@ -254,7 +254,7 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	}
 
 	// Idempotency: already pr_pending with this exact PR number is a no-op success.
-	if item.Status == string(session.BacklogStatusPRPending) && item.PrNumber == prNumber {
+	if item.Status == string(domain.BacklogStatusPRPending) && item.PrNumber == prNumber {
 		return mcpgo.NewToolResultText(fmt.Sprintf(
 			"PR #%d already recorded for item %s (status already pr_pending) — no changes made.", prNumber, itemID,
 		)), nil
@@ -273,8 +273,8 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 	// override_reason, no reassignment guard, status unchanged. The branch check below
 	// still applies. Scope off: today's reassignment rules.
 	_, replacesPresent := args["replaces_pr_number"]
-	additive := item.Status == string(session.BacklogStatusPRPending) && !replacesPresent && h.backlogReaderEnabled()
-	isReassignment := item.Status == string(session.BacklogStatusPRPending) && !additive
+	additive := item.Status == string(domain.BacklogStatusPRPending) && !replacesPresent && h.backlogReaderEnabled()
+	isReassignment := item.Status == string(domain.BacklogStatusPRPending) && !additive
 	if isReassignment && overrideReason == "" {
 		return errResult(ErrInvalidArgument, fmt.Sprintf(
 			"item %s already has PR #%d tracked (status pr_pending) — reassigning it to PR #%d requires override_reason explaining why, even if the new PR's branch matches this item's tracked branch. "+
@@ -433,11 +433,11 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		}
 	}
 
-	if setErr := h.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
-		Caller: session.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
-	}, session.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: session.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
+	if setErr := h.storage.GatedSetPRAndTransition(ctx, backlogdto.TransitionRequest{
+		Caller: domain.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
+	}, backlogdto.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: domain.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
 		if isTransitionDenied(setErr) {
-			return transitionDeniedResult(setErr, session.BacklogStatus(item.Status), session.BacklogStatusPRPending), nil
+			return transitionDeniedResult(setErr, domain.BacklogStatus(item.Status), domain.BacklogStatusPRPending), nil
 		}
 		if errors.Is(setErr, domain.ErrPreconditionFailed) {
 			// AC8: the item's status changed out from under this call between
@@ -533,7 +533,7 @@ func (h *backlogHandlers) sessionRepo(ctx context.Context, sessionUUID string) (
 func sameRepo(a, b githubpkg.RepoRef) bool { return repoIdentity(a) == repoIdentity(b) }
 
 func repoIdentity(r githubpkg.RepoRef) string {
-	host := strings.TrimPrefix(githubpkg.NormalizeHost(r.Host()), "www.")
+	host := strings.TrimPrefix(domain.NormalizeHost(r.Host()), "www.")
 	return host + "/" + strings.ToLower(r.Owner()) + "/" + strings.TrimSuffix(strings.ToLower(r.Repo()), ".git")
 }
 

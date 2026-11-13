@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // slowPanePM models the tmux exec behind GetPanePID: it blocks for delay
@@ -39,7 +40,7 @@ func BenchmarkHistoryLinker_CorrelateParallel(b *testing.B) {
 	insts := make([]*session.Instance, 0, n)
 	for i := 0; i < n; i++ {
 		title := "bench-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		inst := &session.Instance{Title: title, Path: b.TempDir(), Status: session.Active}
+		inst := &session.Instance{Title: title, Path: b.TempDir(), Status: domain.Active}
 		inst.SetProcessManagerForTest(slowPanePM{delay: 200 * time.Microsecond, calls: &calls})
 		inst.SetHistoryInfo("uuid-"+title, "/projects/p/uuid-"+title+".jsonl")
 		insts = append(insts, inst)

@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/flow"
 )
@@ -93,7 +93,7 @@ func TestGetItemFlowTimeline_should_TruncateNoteTo300AndSanitize_When_800CharNot
 func TestListFlowThrashEpisodes_should_PageAndLabel_When_35ThrashItems(t *testing.T) {
 	t.Parallel()
 	agg := &liveShapedAgg{}
-	h := &flowHandlers{svc: services.NewBacklogFlowService(agg)}
+	h := &flowHandlers{svc: backlogflow.NewBacklogFlowService(agg)}
 
 	_, m := callFlowTool(t, h.listFlowThrashEpisodes, map[string]any{})
 
@@ -124,7 +124,7 @@ func TestListFlowThrashEpisodes_should_TruncateNotesTo300_When_800CharNote(t *te
 func TestListFlowDeadlockCandidates_should_PageAndLabel_When_41Candidates(t *testing.T) {
 	t.Parallel()
 	agg := &liveShapedAgg{}
-	h := &flowHandlers{svc: services.NewBacklogFlowService(agg)}
+	h := &flowHandlers{svc: backlogflow.NewBacklogFlowService(agg)}
 
 	_, m := callFlowTool(t, h.listFlowDeadlockCandidates, map[string]any{})
 

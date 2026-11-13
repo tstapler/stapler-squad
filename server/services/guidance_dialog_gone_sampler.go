@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // guidance_dialog_gone_sampler.go owns the "dialog gone on two samples"
@@ -49,7 +50,7 @@ func judgeRow(row *session.GuidanceRequestData, capture string, err error) dialo
 		return judgeTabbed(tabbedHeadersMatch(qs), capture, presence)
 	}
 	dialog, known := dialogFromRow(row)
-	if known && session.DialogMatch(capture, dialog) {
+	if known && panereply.DialogMatch(capture, dialog) {
 		return verdictMatch
 	}
 	switch {

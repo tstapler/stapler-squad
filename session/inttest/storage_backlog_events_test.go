@@ -16,6 +16,7 @@ import (
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -32,7 +33,7 @@ func createBacklogItemForEvents(t *testing.T, repo *session.EntRepository, ctx c
 	t.Helper()
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item for storage_backlog event test",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 	return item
@@ -182,7 +183,7 @@ func TestSaveReviewVerdict_should_publishVerdictInlineOnPayload_When_VerdictIsSa
 	}
 
 	err = repo.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewOutcomePass,
+		OverallOutcome: domain.ReviewOutcomePass,
 		Summary:        "looks good",
 	})
 	require.NoError(t, err)
@@ -192,7 +193,7 @@ func TestSaveReviewVerdict_should_publishVerdictInlineOnPayload_When_VerdictIsSa
 		require.NotNil(t, ev.BacklogItemPayload)
 		assert.Equal(t, pkgevents.BacklogChangeVerdictRecorded, ev.BacklogItemPayload.Kind)
 		require.NotNil(t, ev.BacklogItemPayload.Verdict)
-		assert.Equal(t, session.ReviewOutcomePass, ev.BacklogItemPayload.Verdict.OverallOutcome)
+		assert.Equal(t, domain.ReviewOutcomePass, ev.BacklogItemPayload.Verdict.OverallOutcome)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for BacklogItemChanged event")
 	}
@@ -215,7 +216,7 @@ func TestSaveReviewVerdict_should_notPublish_When_UnderlyingWriteFails(t *testin
 	defer bus.Unsubscribe(subID)
 
 	err := repo.SaveReviewVerdict(ctx, "not-a-valid-uuid", backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewOutcomePass,
+		OverallOutcome: domain.ReviewOutcomePass,
 	})
 	require.Error(t, err)
 
@@ -260,7 +261,7 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 	}
 
 	err = repo.SaveReviewVerdict(ctx, rpcSession.ID, backlogdto.ReviewVerdictData{
-		OverallOutcome: session.ReviewOutcomePass,
+		OverallOutcome: domain.ReviewOutcomePass,
 		Summary:        "rpc path verdict",
 	})
 	require.NoError(t, err)
@@ -270,7 +271,7 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 		require.NotNil(t, ev.BacklogItemPayload)
 		assert.Equal(t, pkgevents.BacklogChangeVerdictRecorded, ev.BacklogItemPayload.Kind)
 		require.NotNil(t, ev.BacklogItemPayload.Verdict)
-		assert.Equal(t, session.ReviewOutcomePass, ev.BacklogItemPayload.Verdict.OverallOutcome)
+		assert.Equal(t, domain.ReviewOutcomePass, ev.BacklogItemPayload.Verdict.OverallOutcome)
 		assert.Equal(t, "rpc path verdict", ev.BacklogItemPayload.Verdict.Summary)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for RPC-path BacklogItemChanged event")
@@ -285,7 +286,7 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 			SessionRole: "review",
 		},
 		backlogdto.ReviewVerdictData{
-			OverallOutcome: session.ReviewOutcomeFail,
+			OverallOutcome: domain.ReviewOutcomeFail,
 			Summary:        "mcp path verdict",
 		},
 	)
@@ -296,7 +297,7 @@ func TestVerdictRecordingPaths_should_convergeOnSameEventKind_When_RPCPathAndMCP
 		require.NotNil(t, ev.BacklogItemPayload)
 		assert.Equal(t, pkgevents.BacklogChangeVerdictRecorded, ev.BacklogItemPayload.Kind)
 		require.NotNil(t, ev.BacklogItemPayload.Verdict)
-		assert.Equal(t, session.ReviewOutcomeFail, ev.BacklogItemPayload.Verdict.OverallOutcome)
+		assert.Equal(t, domain.ReviewOutcomeFail, ev.BacklogItemPayload.Verdict.OverallOutcome)
 		assert.Equal(t, "mcp path verdict", ev.BacklogItemPayload.Verdict.Summary)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for MCP-path BacklogItemChanged event")

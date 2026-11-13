@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -31,7 +32,7 @@ type itemSessionBatchLookup interface {
 type hiddenOutcomeEntry struct {
 	proto  *sessionv1.Session
 	uuid   string
-	status session.Status
+	status domain.Status
 }
 
 // populateBackgroundOutcomes sets Session.background_outcome for hidden_only

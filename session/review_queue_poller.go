@@ -1,20 +1,23 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/linkdata/deadlock"
 	"github.com/puzpuzpuz/xsync/v4"
+
+	"github.com/tstapler/stapler-squad/internal/proflabel"
 	"github.com/tstapler/stapler-squad/internal/qos"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -22,7 +25,7 @@ import (
 // Defined at the consumption point (the poller), not the production point.
 type StatusProvider interface {
 	GetStatus(inst *Instance) InstanceStatusInfo
-	GetController(instanceTitle string) (*ClaudeController, bool)
+	GetController(instanceTitle string) (*claudectl.ClaudeController, bool)
 }
 
 // ContentProvider fetches terminal content for a session.
@@ -72,34 +75,6 @@ func baseReviewQueuePollerConfig() ReviewQueuePollerConfig {
 	}
 }
 
-// ApprovalMetadata holds metadata about a pending approval for enriching review queue items.
-type ApprovalMetadata struct {
-	ApprovalID string
-	ToolName   string
-	ToolInput  map[string]interface{}
-	Cwd        string
-	Orphaned   bool
-
-	// EscalationReason and EscalationCategory explain why this request was
-	// escalated for manual review (no-match/explicit-rule/domain-age/
-	// unclassifiable/unexpected). Copied from PendingApproval via
-	// ApprovalStore.GetApprovalMetadataBySession.
-	EscalationReason   string
-	EscalationCategory string
-
-	// RiskLevel is the classifier-assigned risk level ("low"/"medium"/"high"/"critical"),
-	// copied from PendingApproval.RiskLevel. "" means not recorded — never treated as "low".
-	RiskLevel string
-}
-
-// ApprovalMetadataProvider provides approval metadata for enriching review queue items.
-// This interface decouples the poller (session package) from the ApprovalStore (services package).
-type ApprovalMetadataProvider interface {
-	// GetApprovalMetadataBySession returns approval metadata for the given session ID.
-	// Returns nil if no approvals exist for the session.
-	GetApprovalMetadataBySession(sessionID string) []ApprovalMetadata
-}
-
 // riskLevelRankTable orders RiskLevel strings by severity, highest first. Unrecorded ("")
 // ranks alongside "high" — fail-safe, since an unclassified request must never be treated as
 // safe. Never read this map directly — use riskLevelRank(), which falls back to the
@@ -129,7 +104,7 @@ func riskLevelRank(level string) int {
 // approval, since approvals is already in creation order.
 //
 // Panics if approvals is empty — the only call site guards with len(approvals) > 0 first.
-func highestRiskApproval(approvals []ApprovalMetadata) ApprovalMetadata {
+func highestRiskApproval(approvals []domain.ApprovalMetadata) domain.ApprovalMetadata {
 	best := approvals[0]
 	for _, a := range approvals[1:] {
 		if riskLevelRank(a.RiskLevel) > riskLevelRank(best.RiskLevel) {
@@ -142,19 +117,19 @@ func highestRiskApproval(approvals []ApprovalMetadata) ApprovalMetadata {
 // ReviewQueuePoller automatically monitors sessions and adds them to the review queue
 // when they become idle or need attention.
 type ReviewQueuePoller struct {
-	queue            *ReviewQueue
+	queue            *queue.ReviewQueue
 	statusManager    StatusProvider
 	storage          *Storage
 	instances        []*Instance
 	config           ReviewQueuePollerConfig
-	statusDetector   detection.TerminalDetector // For detecting status in sessions without ClaudeController
-	approvalProvider ApprovalMetadataProvider   // Optional: enriches approval items with hook metadata
-	contentProvider  ContentProvider            // Fetches and caches terminal content
-	statusDeterminer StatusDeterminer           // Evaluates whether session should be in queue
-	tmuxSocket       TmuxSocketQuerier          // Tmux server-socket queries for reconcileSessions; fakeable in tests
-	optionsSource    FlagOptionsSource          // Attention flags, read once per poll cycle; nil = all off
-	explain          suppressionExplainer       // Why-suppressed and why-skipped visibility
-	recorder         SessionEventRecorder       // Attention raised/cleared sink; nil = no-op
+	statusDetector   detection.TerminalDetector      // For detecting status in sessions without claudectl.ClaudeController
+	approvalProvider domain.ApprovalMetadataProvider // Optional: enriches approval items with hook metadata
+	contentProvider  ContentProvider                 // Fetches and caches terminal content
+	statusDeterminer StatusDeterminer                // Evaluates whether session should be in queue
+	tmuxSocket       TmuxSocketQuerier               // Tmux server-socket queries for reconcileSessions; fakeable in tests
+	optionsSource    FlagOptionsSource               // Attention flags, read once per poll cycle; nil = all off
+	explain          suppressionExplainer            // Why-suppressed and why-skipped visibility
+	recorder         SessionEventRecorder            // Attention raised/cleared sink; nil = no-op
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -209,13 +184,13 @@ func (p *pollerContentProvider) EvictInstance(title string) {
 
 // NewReviewQueuePoller creates a new poller for automatically managing the review queue.
 // The storage parameter is optional (can be nil) but required for persisting LastAddedToQueue timestamps.
-func NewReviewQueuePoller(queue *ReviewQueue, statusManager StatusProvider, storage *Storage) *ReviewQueuePoller {
+func NewReviewQueuePoller(queue *queue.ReviewQueue, statusManager StatusProvider, storage *Storage) *ReviewQueuePoller {
 	return NewReviewQueuePollerWithConfig(queue, statusManager, storage, DefaultReviewQueuePollerConfig())
 }
 
 // NewReviewQueuePollerWithConfig creates a poller with custom configuration.
 // The storage parameter is optional (can be nil) but required for persisting LastAddedToQueue timestamps.
-func NewReviewQueuePollerWithConfig(queue *ReviewQueue, statusManager StatusProvider, storage *Storage, config ReviewQueuePollerConfig) *ReviewQueuePoller {
+func NewReviewQueuePollerWithConfig(queue *queue.ReviewQueue, statusManager StatusProvider, storage *Storage, config ReviewQueuePollerConfig) *ReviewQueuePoller {
 	return &ReviewQueuePoller{
 		queue:            queue,
 		statusManager:    statusManager,
@@ -242,7 +217,7 @@ func (rqp *ReviewQueuePoller) AddInstance(instance *Instance) {
 	defer rqp.mu.Unlock()
 	// Stagger this session's dirty-cache TTL so sessions added in a burst
 	// (e.g. bulk startup) don't all run git-status subprocesses simultaneously.
-	instance.GitManager.PrimeDirtyCacheJitter()
+	instance.GitManager().PrimeDirtyCacheJitter()
 	rqp.instances = append(rqp.instances, instance)
 }
 
@@ -273,7 +248,7 @@ func (rqp *ReviewQueuePoller) RemoveInstance(instanceTitle string) {
 }
 
 // SetApprovalProvider sets the approval metadata provider for enriching review queue items.
-func (rqp *ReviewQueuePoller) SetApprovalProvider(provider ApprovalMetadataProvider) {
+func (rqp *ReviewQueuePoller) SetApprovalProvider(provider domain.ApprovalMetadataProvider) {
 	rqp.mu.Lock()
 	defer rqp.mu.Unlock()
 	rqp.approvalProvider = provider
@@ -546,8 +521,8 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 			// Stopped.
 			archived := inst.IsArchived()
 
-			switch Status(inst.GetStatus()) {
-			case Active:
+			switch domain.Status(inst.GetStatus()) {
+			case domain.Active:
 				// Active but tmux session gone — mark Stopped.
 				if !liveSessions[sessionName] {
 					log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
@@ -565,18 +540,18 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						s.inst.mu.RLock()
 						status := s.inst.Status
 						s.inst.mu.RUnlock()
-						if status == Active {
-							if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+						if status == domain.Active {
+							if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 								log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
-								s.inst.loadStatus(Stopped)
+								s.inst.loadStatus(domain.Stopped)
 							}
 						}
 					})
 					cancel()
 					rqp.removeFromQueue(inst.Title)
-					inst.FireLifecycleEvent(EventExited, "reconcile-session-missing")
+					inst.FireLifecycleEvent(domain.EventExited, "reconcile-session-missing")
 				}
-			case Stopped:
+			case domain.Stopped:
 				// Stopped but tmux session is alive — revive to Active only if
 				// the wrapped program is genuinely still running. liveSessions
 				// only proves the tmux pane object exists; remain-on-exit keeps
@@ -603,16 +578,16 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						s.inst.mu.RLock()
 						status := s.inst.Status
 						s.inst.mu.RUnlock()
-						if status == Stopped {
-							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+						if status == domain.Stopped {
+							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
 								log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
 							}
 						}
 					})
 					cancel()
-					inst.FireLifecycleEvent(EventStarted, "reconcile-session-revived")
+					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-revived")
 				}
-			case Hibernated:
+			case domain.Hibernated:
 				// Hibernated sessions intentionally have no tmux session (Hibernate()
 				// explicitly kills it) -- that's the expected steady state, so do
 				// nothing when the tmux session is also gone. But if one is found
@@ -634,16 +609,16 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						s.inst.mu.RLock()
 						status := s.inst.Status
 						s.inst.mu.RUnlock()
-						if status == Hibernated {
-							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+						if status == domain.Hibernated {
+							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
 								log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
 							}
 						}
 					})
 					cancel()
-					inst.FireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
+					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-hibernated-but-alive")
 				}
-			case Crashed:
+			case domain.Crashed:
 				// Crashed sessions intentionally have no tmux session (MarkCrashed
 				// kills it before setting this status, session/instance_crash.go) --
 				// that's the expected steady state until an explicit resume. But if
@@ -658,16 +633,16 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					log.Warn("reconcileSessions: crashed session found alive in tmux, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == Crashed {
-							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+						if s.inst.Status == domain.Crashed {
+							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
 								log.Warn("reconcileSessions: revival from crashed failed", "session", inst.Title, "err", err)
 							}
 						}
 					})
 					cancel()
-					inst.FireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
+					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-crashed-but-alive")
 				}
-			case PermanentlyFailed:
+			case domain.PermanentlyFailed:
 				// Deliberately not auto-revived even if tmux is alive, unlike
 				// Stopped/Hibernated/Crashed above — PermanentlyFailed means the
 				// configurable retry policy already exhausted its attempt budget
@@ -755,10 +730,10 @@ func paneActivitySettled(activity, captureStart time.Time) bool {
 // GetContent returns the terminal content for inst, using a cache to avoid
 // spawning a subprocess when no new output has arrived since the last poll.
 //
-// For sessions with an active ClaudeController: the idle detector's lastActivity
+// For sessions with an active claudectl.ClaudeController: the idle detector's lastActivity
 // timestamp (driven by PTY reads, no subprocess) is the change signal.
 //
-// For sessions without a ClaudeController: #{window_activity} from the
+// For sessions without a claudectl.ClaudeController: #{window_activity} from the
 // paneActivity snapshot (one `tmux list-panes -a` call shared across all sessions)
 // is the change signal. capture-pane is only called when that timestamp advances.
 // A 30s TTL acts as a fallback when paneActivity is nil (tmux unavailable).
@@ -869,7 +844,7 @@ func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
 	return reason != SkipNone
 }
 
-func skipReasonOf(snap *InstanceSnapshot, started bool) SkipReason {
+func skipReasonOf(snap *domain.InstanceSnapshot, started bool) SkipReason {
 	switch {
 	case snap.Hidden:
 		return SkipHidden
@@ -907,7 +882,7 @@ func (rqp *ReviewQueuePoller) removeFromQueue(title string) {
 
 // addToQueue is the poller's single add path; it records AttentionRaised when the item is
 // new or its reason differs from the queued one.
-func (rqp *ReviewQueuePoller) addToQueue(item, prior *ReviewItem) {
+func (rqp *ReviewQueuePoller) addToQueue(item, prior *queue.ReviewItem) {
 	rqp.queue.Add(item)
 	if prior == nil || prior.Reason != item.Reason {
 		rqp.eventRecorder().RecordAttentionRaised(item.SessionID, item.Reason)
@@ -961,7 +936,7 @@ func (rqp *ReviewQueuePoller) evaluateSession(inst *Instance, paneActivity map[s
 
 	// If the determiner saw a clean worktree, remove any stale UncommittedChanges entry.
 	if result.CleanWorktree {
-		if existing, exists := rqp.queue.Get(snap.Title); exists && existing.Reason == ReasonUncommittedChanges {
+		if existing, exists := rqp.queue.Get(snap.Title); exists && existing.Reason == queue.ReasonUncommittedChanges {
 			log.Debug("changes committed, removing UncommittedChanges entry", "session", snap.Title)
 			rqp.removeFromQueue(snap.Title)
 		}
@@ -1006,13 +981,13 @@ func (rqp *ReviewQueuePoller) handleDetectedRemove(title string, statusInfo Inst
 }
 
 // addDetectedItem builds, enriches and enqueues the review item for an Add action.
-func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo) {
+func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *domain.InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo) {
 	reason, priority, context := result.Reason, result.Priority, result.Context
 
 	detectedAt := time.Now()
 	isUpdate := false
 	unchanged := false
-	var prior *ReviewItem
+	var prior *queue.ReviewItem
 	if existingItem, exists := rqp.queue.Get(snap.Title); exists {
 		isUpdate = true
 		prior = existingItem
@@ -1035,7 +1010,7 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 		lastActivity = snap.CreatedAt
 	}
 
-	item := &ReviewItem{
+	item := &queue.ReviewItem{
 		SessionID:   snap.Title,
 		SessionName: snap.Title,
 		Reason:      reason,
@@ -1079,11 +1054,11 @@ func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *InstanceSnap
 // ApprovalHandler.resolveSessionID stores PendingApproval.SessionID as the session's stable
 // ID (UUID when present, Title only as a fallback), but ReviewItem is keyed by Title, so
 // look up by UUID first and fall back to Title for sessions without a UUID.
-func (rqp *ReviewQueuePoller) enrichApprovalMetadata(item *ReviewItem, snap *InstanceSnapshot) {
+func (rqp *ReviewQueuePoller) enrichApprovalMetadata(item *queue.ReviewItem, snap *domain.InstanceSnapshot) {
 	rqp.mu.RLock()
 	provider := rqp.approvalProvider
 	rqp.mu.RUnlock()
-	if item.Reason != ReasonApprovalPending || provider == nil {
+	if item.Reason != queue.ReasonApprovalPending || provider == nil {
 		return
 	}
 	approvals := provider.GetApprovalMetadataBySession(snap.UUID)

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -51,7 +52,7 @@ func TestCommitImportExternalSession_ReturnsErrPathAlreadyManaged_When_PathColli
 	t.Parallel()
 	path := t.TempDir()
 	store := &fakeInstanceStore{
-		instances: []session.InstanceData{{Title: "existing", Path: path}},
+		instances: []domain.InstanceData{{Title: "existing", Path: path}},
 	}
 	detector := newNotFoundDetector(t)
 
@@ -197,7 +198,7 @@ func TestCommitImportExternalSession_HonorsSessionNameOverrideMap(t *testing.T) 
 	require.NotNil(t, result.Instance)
 	t.Cleanup(func() { _ = result.Instance.Kill() })
 
-	assert.Equal(t, session.BackendTmux, result.Instance.Backend,
+	assert.Equal(t, domain.BackendTmux, result.Instance.Backend,
 		"a TymuxSessionOverrides entry keyed by the sanitized tmux session name must force the backend even though the process-wide default is tymux")
 
 	_ = session.ResumeOriginalProcess(pid)

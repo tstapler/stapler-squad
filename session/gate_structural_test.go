@@ -1,21 +1,25 @@
 package session
 
-import "testing"
+import (
+	"testing"
 
-// threeCriteriaOneIncomplete builds a 3-criterion AcCriteriaJSON fixture with
+	"github.com/tstapler/stapler-squad/session/domain"
+)
+
+// threeCriteriaOneIncomplete builds a 3-criterion domain.AcCriteriaJSON fixture with
 // exactly 1 incomplete — matching validation.md's exact scenario for Story
 // 2.4.2 ("1 of 3 acceptance criteria incomplete"), distinct from
 // configured_workflow_engine_test.go's 2-criterion acCriteriaOneUnchecked
 // fixture used elsewhere in this package.
-func threeCriteriaOneIncomplete(t *testing.T) AcCriteriaJSON {
+func threeCriteriaOneIncomplete(t *testing.T) domain.AcCriteriaJSON {
 	t.Helper()
-	raw, err := SerializeAcCriteria([]AcCriterion{
-		{Index: 0, Text: "criterion one", Status: AcStatusDone},
-		{Index: 1, Text: "criterion two", Status: AcStatusDone},
-		{Index: 2, Text: "criterion three", Status: AcStatusPending},
+	raw, err := domain.SerializeAcCriteria([]domain.AcCriterion{
+		{Index: 0, Text: "criterion one", Status: domain.AcStatusDone},
+		{Index: 1, Text: "criterion two", Status: domain.AcStatusDone},
+		{Index: 2, Text: "criterion three", Status: domain.AcStatusPending},
 	})
 	if err != nil {
-		t.Fatalf("SerializeAcCriteria: %v", err)
+		t.Fatalf("domain.SerializeAcCriteria: %v", err)
 	}
 	return raw
 }
@@ -23,12 +27,12 @@ func threeCriteriaOneIncomplete(t *testing.T) AcCriteriaJSON {
 // TestStructuralGate_should_ReportSatisfied_When_AcCompleteAllCriteriaChecked
 // covers Story 2.4.2's happy path: a structural gate configured with
 // check_id "ac_complete" reports satisfied when every acceptance criterion is
-// AcStatusDone.
+// domain.AcStatusDone.
 func TestStructuralGate_should_ReportSatisfied_When_AcCompleteAllCriteriaChecked(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{AcCriteria: acCriteriaAllDone(t)}
+	item := domain.BacklogItemTransitionInput{AcCriteria: acCriteriaAllDone(t)}
 
-	result := evaluateStructuralCheck(StructuralCheckACComplete, item)
+	result := domain.EvaluateStructuralCheck(domain.StructuralCheckACComplete, item)
 
 	if !result.Satisfied {
 		t.Fatalf("expected satisfied, got unsatisfied: %s", result.Description)
@@ -45,9 +49,9 @@ func TestStructuralGate_should_ReportSatisfied_When_AcCompleteAllCriteriaChecked
 // never touches storage/session machinery at all).
 func TestStructuralGate_should_ReportUnsatisfiedWithCountDescription_When_AcCompleteHasIncompleteCriteria(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{AcCriteria: threeCriteriaOneIncomplete(t)}
+	item := domain.BacklogItemTransitionInput{AcCriteria: threeCriteriaOneIncomplete(t)}
 
-	result := evaluateStructuralCheck(StructuralCheckACComplete, item)
+	result := domain.EvaluateStructuralCheck(domain.StructuralCheckACComplete, item)
 
 	if result.Satisfied {
 		t.Fatal("expected unsatisfied when an acceptance criterion is incomplete")
@@ -67,9 +71,9 @@ func TestStructuralGate_should_ReportUnsatisfiedWithCountDescription_When_AcComp
 // silently pass because "there's nothing to be incomplete."
 func TestStructuralGate_should_ReportUnsatisfied_When_NoAcceptanceCriteriaDefined(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{AcCriteria: AcCriteriaJSON("[]")}
+	item := domain.BacklogItemTransitionInput{AcCriteria: domain.AcCriteriaJSON("[]")}
 
-	result := evaluateStructuralCheck(StructuralCheckACComplete, item)
+	result := domain.EvaluateStructuralCheck(domain.StructuralCheckACComplete, item)
 
 	if result.Satisfied {
 		t.Fatal("expected unsatisfied when no acceptance criteria are defined")
@@ -80,9 +84,9 @@ func TestStructuralGate_should_ReportUnsatisfied_When_NoAcceptanceCriteriaDefine
 // covers the "no_open_blockers" structural check's fail path.
 func TestStructuralGate_should_ReportUnsatisfied_When_NoOpenBlockersCheckHasUnresolvedBlockers(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{HasUnresolvedBlockers: true}
+	item := domain.BacklogItemTransitionInput{HasUnresolvedBlockers: true}
 
-	result := evaluateStructuralCheck(StructuralCheckNoOpenBlockers, item)
+	result := domain.EvaluateStructuralCheck(domain.StructuralCheckNoOpenBlockers, item)
 
 	if result.Satisfied {
 		t.Fatal("expected unsatisfied when the item has unresolved blockers")
@@ -93,9 +97,9 @@ func TestStructuralGate_should_ReportUnsatisfied_When_NoOpenBlockersCheckHasUnre
 // covers the "no_open_blockers" structural check's pass path.
 func TestStructuralGate_should_ReportSatisfied_When_NoOpenBlockersCheckHasNoBlockers(t *testing.T) {
 	t.Parallel()
-	item := BacklogItemTransitionInput{HasUnresolvedBlockers: false}
+	item := domain.BacklogItemTransitionInput{HasUnresolvedBlockers: false}
 
-	result := evaluateStructuralCheck(StructuralCheckNoOpenBlockers, item)
+	result := domain.EvaluateStructuralCheck(domain.StructuralCheckNoOpenBlockers, item)
 
 	if !result.Satisfied {
 		t.Fatalf("expected satisfied when the item has no unresolved blockers, got: %s", result.Description)
@@ -105,10 +109,10 @@ func TestStructuralGate_should_ReportSatisfied_When_NoOpenBlockersCheckHasNoBloc
 // TestStructuralGate_should_ReportUnsatisfied_When_PrGreenCheckHasNoDataSource
 // covers "pr_green"'s documented not-yet-wired state: it must always fail
 // closed (never a false PASS) with a description naming the gap, since no
-// PR/CI status field exists on BacklogItemTransitionInput yet.
+// PR/CI status field exists on domain.BacklogItemTransitionInput yet.
 func TestStructuralGate_should_ReportUnsatisfied_When_PrGreenCheckHasNoDataSource(t *testing.T) {
 	t.Parallel()
-	result := evaluateStructuralCheck(StructuralCheckPRGreen, BacklogItemTransitionInput{})
+	result := domain.EvaluateStructuralCheck(domain.StructuralCheckPRGreen, domain.BacklogItemTransitionInput{})
 
 	if result.Satisfied {
 		t.Fatal("pr_green must never report satisfied — no PR/CI status data source exists yet")
@@ -120,7 +124,7 @@ func TestStructuralGate_should_ReportUnsatisfied_When_PrGreenCheckHasNoDataSourc
 // empty) check_id must fail closed, never panic or default to satisfied.
 func TestStructuralGate_should_ReportUnsatisfied_When_CheckIDIsUnrecognized(t *testing.T) {
 	t.Parallel()
-	result := evaluateStructuralCheck("not-a-real-check", BacklogItemTransitionInput{})
+	result := domain.EvaluateStructuralCheck("not-a-real-check", domain.BacklogItemTransitionInput{})
 
 	if result.Satisfied {
 		t.Fatal("an unrecognized check_id must never report satisfied")

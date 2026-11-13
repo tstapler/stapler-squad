@@ -230,7 +230,7 @@ func (s *BacklogService) skipForForeignClaim(ctx context.Context, item *backlogd
 func (s *BacklogService) notifyBlockedByClaim(ctx context.Context, item *backlogdto.BacklogItemData, claim hostclaim.ClaimRecord) {
 	message := fmt.Sprintf("claimed by host %s (%s); override to work on it from this host",
 		claim.ClaimingHostID.String(), claim.ItemDeepLink)
-	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonBlockedByClaim, session.BacklogStatus(item.Status), message)
+	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonBlockedByClaim, domain.BacklogStatus(item.Status), message)
 	if err != nil {
 		log.Warn("[notifyBlockedByClaim] MarkStuck failed", "item", item.ID, "error", err)
 		return
@@ -276,8 +276,8 @@ func (s *BacklogService) claimBlockStillApplies(ctx context.Context, itemID stri
 		// Keep the row on a transient read error; drop it only when the item is gone.
 		return !errors.Is(err, domain.ErrNotFound)
 	}
-	if status := session.BacklogStatus(item.Status); item.ExternalURL == "" ||
-		(status != session.BacklogStatusQueued && status != session.BacklogStatusReady) {
+	if status := domain.BacklogStatus(item.Status); item.ExternalURL == "" ||
+		(status != domain.BacklogStatusQueued && status != domain.BacklogStatusReady) {
 		return false
 	}
 	_, held := claims.heldFor(item.ExternalURL)
@@ -310,7 +310,7 @@ func (s *BacklogService) OverrideClaimBlock(ctx context.Context, req *connect.Re
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load backlog item: %w", err))
 	}
-	if status := session.BacklogStatus(item.Status); status != session.BacklogStatusQueued && status != session.BacklogStatusReady {
+	if status := domain.BacklogStatus(item.Status); status != domain.BacklogStatusQueued && status != domain.BacklogStatusReady {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("item is %q; only queued or ready items can have a claim block overridden", item.Status))
 	}

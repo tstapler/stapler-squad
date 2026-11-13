@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -59,7 +60,7 @@ func (e *steerEnv) addSession(title string, hidden bool, role string, tweak ...f
 	inst := session.NewStartedInstanceForTest(e.t, title, pm)
 	inst.UUID = title + "-uuid"
 	inst.Path = e.t.TempDir()
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	inst.Program = "claude"
 	inst.Hidden = hidden
 	inst.CreatedAt, inst.UpdatedAt = time.Now(), time.Now()
@@ -78,7 +79,7 @@ func (e *steerEnv) linkRow(inst *session.Instance, role string) string {
 	e.t.Helper()
 	ctx := context.Background()
 	item, err := e.fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
-		Title: "Item for " + inst.Title, Status: string(session.BacklogStatusReview),
+		Title: "Item for " + inst.Title, Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(e.t, err)
 	row, err := e.fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -252,7 +253,7 @@ func TestBacklogSteer_ShouldReturnNoLinkWithZeroWrites_WhenInstanceStoppedEndedA
 	t.Run("instance stopped before EndedAt is written", func(t *testing.T) {
 		e := newSteerEnv(t)
 		tgt := e.addSession("review-stopped", true, session.SessionRoleReview)
-		tgt.inst.Status = session.Stopped
+		tgt.inst.Status = domain.Stopped
 
 		err := e.steer(e.localCtx(), tgt.inst.Title, "go")
 		require.Error(t, err)

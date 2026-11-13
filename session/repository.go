@@ -1,10 +1,7 @@
 package session
 
 import (
-	"context"
 	"time"
-
-	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // ApprovalRuleData is the domain model for an auto-approval rule.
@@ -112,27 +109,6 @@ type ProjectData struct {
 	Description string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
-}
-
-// ShellRepository is the minimal persistence interface for per-session shell management.
-// It is implemented by EntRepository; pass nil to disable persistence (e.g., tests).
-type ShellRepository interface {
-	// CreateShell persists a new shell record under the given session title.
-	CreateShell(ctx context.Context, sessionTitle string, data ShellData) (*ent.Shell, error)
-	// ListShells returns all shell records for the given session title, ordered by order_index.
-	ListShells(ctx context.Context, sessionTitle string) ([]*ent.Shell, error)
-	// UpdateShellStatus sets the status (and optionally exit code) for the shell with the given ID.
-	UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error
-	// DeleteShell removes the shell record with the given ID.
-	DeleteShell(ctx context.Context, shellID string) error
-}
-
-// InitialPromptRepository is the minimal persistence interface for recording when
-// Instance.InitialPrompt was actually sent. It is implemented by EntRepository;
-// pass nil to disable persistence (e.g., tests).
-type InitialPromptRepository interface {
-	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
-	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
 }
 
 // RepositoryOption is a function that configures a repository

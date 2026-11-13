@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func newClearTerminalService(insts ...*session.Instance) *SessionService {
@@ -40,14 +41,14 @@ func TestClearTerminalStatusOne_Outcomes(t *testing.T) {
 		live      bool
 		want      string
 		wantProbe bool
-		want0     session.Status
+		want0     domain.Status
 	}{
-		{"not live is untouched", &session.Instance{Title: "x", Status: session.PermanentlyFailed}, false, "not_live", true, session.PermanentlyFailed},
-		{"archived is rejected without probing", &session.Instance{Title: "x", Status: session.Failed, ArchivedAt: &now}, true, "archived", false, session.Failed},
-		{"active is not terminal", &session.Instance{Title: "x", Status: session.Active}, true, "not_terminal", false, session.Active},
+		{"not live is untouched", &session.Instance{Title: "x", Status: domain.PermanentlyFailed}, false, "not_live", true, domain.PermanentlyFailed},
+		{"archived is rejected without probing", &session.Instance{Title: "x", Status: domain.Failed, ArchivedAt: &now}, true, "archived", false, domain.Failed},
+		{"active is not terminal", &session.Instance{Title: "x", Status: domain.Active}, true, "not_terminal", false, domain.Active},
 		// No process manager is wired, so the hot attach itself fails: proves the
 		// live seam reached Start, and the prior terminal status is restored.
-		{"live reaches hot attach and failure restores status", &session.Instance{Title: "x", Status: session.Failed}, true, "error", true, session.Failed},
+		{"live reaches hot attach and failure restores status", &session.Instance{Title: "x", Status: domain.Failed}, true, "error", true, domain.Failed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -71,7 +72,7 @@ func TestClearTerminalStatusOne_UnknownSession(t *testing.T) {
 
 func TestClearTerminalStatusIfLive_RPCValidation(t *testing.T) {
 	t.Parallel()
-	svc := newClearTerminalService(&session.Instance{Title: "dead", Status: session.PermanentlyFailed})
+	svc := newClearTerminalService(&session.Instance{Title: "dead", Status: domain.PermanentlyFailed})
 
 	_, err := svc.ClearTerminalStatusIfLive(t.Context(), connect.NewRequest(&sessionv1.ClearTerminalStatusIfLiveRequest{}))
 	require.Error(t, err)
@@ -94,7 +95,7 @@ func clearReq(ids ...string) *connect.Request[sessionv1.ClearTerminalStatusIfLiv
 
 func TestClearTerminalStatusIfLive_ClearedPublishesSessionUpdated(t *testing.T) {
 	t.Parallel()
-	inst := session.NewHotRestorableInstanceForTest(t, "alive", session.PermanentlyFailed)
+	inst := session.NewHotRestorableInstanceForTest(t, "alive", domain.PermanentlyFailed)
 	svc := newClearTerminalService(inst)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -104,7 +105,7 @@ func TestClearTerminalStatusIfLive_ClearedPublishesSessionUpdated(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.Results, 1)
 	assert.Equal(t, "cleared", resp.Msg.Results[0].Outcome, resp.Msg.Results[0].Message)
-	assert.Equal(t, session.Active, inst.GetLifecycleStatus())
+	assert.Equal(t, domain.Active, inst.GetLifecycleStatus())
 
 	select {
 	case ev := <-ch:
@@ -136,7 +137,7 @@ func TestClearTerminalStatusIfLive_BatchCapBoundary(t *testing.T) {
 
 func TestClearTerminalStatusIfLive_RejectsBlankIDs(t *testing.T) {
 	t.Parallel()
-	svc := newClearTerminalService(&session.Instance{Title: "x", Status: session.Failed})
+	svc := newClearTerminalService(&session.Instance{Title: "x", Status: domain.Failed})
 	for _, bad := range []string{"", "   "} {
 		_, err := svc.ClearTerminalStatusIfLive(t.Context(), clearReq("x", bad))
 		assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err), "id %q", bad)
@@ -152,9 +153,9 @@ func TestClearTerminalStatusIfLive_SingleIDErrorMapping(t *testing.T) {
 		want connect.Code
 	}{
 		// IsLiveOrStoredSessionLive is false for a bare instance: not_live.
-		{"not_live", &session.Instance{Title: "x", Status: session.PermanentlyFailed}, connect.CodeFailedPrecondition},
-		{"archived", &session.Instance{Title: "x", Status: session.Failed, ArchivedAt: &now}, connect.CodeFailedPrecondition},
-		{"not_terminal", &session.Instance{Title: "x", Status: session.Active}, connect.CodeFailedPrecondition},
+		{"not_live", &session.Instance{Title: "x", Status: domain.PermanentlyFailed}, connect.CodeFailedPrecondition},
+		{"archived", &session.Instance{Title: "x", Status: domain.Failed, ArchivedAt: &now}, connect.CodeFailedPrecondition},
+		{"not_terminal", &session.Instance{Title: "x", Status: domain.Active}, connect.CodeFailedPrecondition},
 		{"read_only", hiddenFailedInstance(t), connect.CodeFailedPrecondition},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,7 +170,7 @@ func TestClearTerminalStatusIfLive_SingleIDErrorMapping(t *testing.T) {
 
 func hiddenFailedInstance(t *testing.T) *session.Instance {
 	t.Helper()
-	inst := session.NewHotRestorableInstanceForTest(t, "x", session.Failed)
+	inst := session.NewHotRestorableInstanceForTest(t, "x", domain.Failed)
 	session.SetHiddenForTest(t, inst, true)
 	return inst
 }
@@ -181,7 +182,7 @@ func TestClearTerminalStatusIfLive_HiddenSessionIsReadOnly(t *testing.T) {
 	resp, err := svc.ClearTerminalStatusIfLive(t.Context(), clearReq("x", "missing"))
 	require.NoError(t, err)
 	assert.Equal(t, "read_only", resp.Msg.Results[0].Outcome)
-	assert.Equal(t, session.Failed, inst.GetLifecycleStatus(), "a hidden session is never revived")
+	assert.Equal(t, domain.Failed, inst.GetLifecycleStatus(), "a hidden session is never revived")
 }
 
 func TestClearTerminalStatusIfLive_ExternalDiscoveryOnlySessionIsNotFound(t *testing.T) {
@@ -194,7 +195,7 @@ func TestClearTerminalStatusIfLive_ExternalDiscoveryOnlySessionIsNotFound(t *tes
 
 func TestClearTerminalStatusIfLive_DuplicateIDsClearOnce(t *testing.T) {
 	t.Parallel()
-	inst := session.NewHotRestorableInstanceForTest(t, "dup", session.Failed)
+	inst := session.NewHotRestorableInstanceForTest(t, "dup", domain.Failed)
 	svc := newClearTerminalService(inst)
 	resp, err := svc.ClearTerminalStatusIfLive(t.Context(), clearReq("dup", "dup"))
 	require.NoError(t, err)
@@ -205,7 +206,7 @@ func TestClearTerminalStatusIfLive_DuplicateIDsClearOnce(t *testing.T) {
 
 func TestClearTerminalStatusIfLive_CanceledContextStopsTheBatch(t *testing.T) {
 	t.Parallel()
-	inst := session.NewHotRestorableInstanceForTest(t, "late", session.Failed)
+	inst := session.NewHotRestorableInstanceForTest(t, "late", domain.Failed)
 	svc := newClearTerminalService(inst)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -214,5 +215,5 @@ func TestClearTerminalStatusIfLive_CanceledContextStopsTheBatch(t *testing.T) {
 	for _, r := range resp.Msg.Results {
 		assert.Equal(t, "canceled", r.Outcome)
 	}
-	assert.Equal(t, session.Failed, inst.GetLifecycleStatus())
+	assert.Equal(t, domain.Failed, inst.GetLifecycleStatus())
 }

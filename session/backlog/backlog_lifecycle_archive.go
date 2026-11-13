@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -89,12 +90,12 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	}
 	archived := 0
 	for _, item := range items {
-		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusDone)}
-		if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
-			Caller: session.CallerArchiveStaleDone, ItemID: item.ID, To: session.BacklogStatusArchived, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusDone)}
+		if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+			Caller: domain.CallerArchiveStaleDone, ItemID: item.ID, To: domain.BacklogStatusArchived, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			// A denial is reported once by the gate; the item stays done and is retried next tick.
-			logSystemTransitionFailure("archiveStaleDoneItems", item.ID, session.BacklogStatusArchived, transErr)
+			logSystemTransitionFailure("archiveStaleDoneItems", item.ID, domain.BacklogStatusArchived, transErr)
 			continue
 		}
 		archived++
@@ -122,7 +123,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 		return
 	}
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusDone), string(session.BacklogStatusArchived)},
+		Statuses: []string{string(domain.BacklogStatusDone), string(domain.BacklogStatusArchived)},
 	})
 	if err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemSessions ListBacklogItems error: %v", err)
@@ -204,7 +205,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemWorktrees(ctx context.Co
 		return
 	}
 	items, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
-		Statuses: []string{string(session.BacklogStatusDone), string(session.BacklogStatusArchived)},
+		Statuses: []string{string(domain.BacklogStatusDone), string(domain.BacklogStatusArchived)},
 	})
 	if err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] reconcileTerminalItemWorktrees ListBacklogItems error: %v", err)

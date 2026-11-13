@@ -4,7 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 )
 
 // fakeStatusProvider is a test double for StatusProvider that returns predetermined statuses.
@@ -19,7 +22,7 @@ func (f *fakeStatusProvider) GetStatus(inst *Instance) InstanceStatusInfo {
 	return InstanceStatusInfo{}
 }
 
-func (f *fakeStatusProvider) GetController(instanceTitle string) (*ClaudeController, bool) {
+func (f *fakeStatusProvider) GetController(instanceTitle string) (*claudectl.ClaudeController, bool) {
 	return nil, false
 }
 
@@ -49,7 +52,7 @@ func makeStartedInstance(title string) *Instance {
 	inst := &Instance{
 		Title:  title,
 		UUID:   "uuid-" + title,
-		Status: Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	return inst
@@ -71,7 +74,7 @@ func TestStartupScanner_Scan_AddsSessionWithApprovalPrompt(t *testing.T) {
 		inst.Title: approvalContent,
 	})
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
 	added := scanner.Scan([]*Instance{inst}, queue)
 
@@ -82,8 +85,8 @@ func TestStartupScanner_Scan_AddsSessionWithApprovalPrompt(t *testing.T) {
 	if !exists {
 		t.Fatal("expected session in review queue")
 	}
-	if item.Reason != ReasonApprovalPending {
-		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	if item.Reason != queuepkg.ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", queuepkg.ReasonApprovalPending, item.Reason)
 	}
 }
 
@@ -105,7 +108,7 @@ func TestStartupScanner_Scan_SkipsSessionWithNoApproval(t *testing.T) {
 		inst.Title: "$ go test ./...\nok  github.com/example/project 0.042s\n",
 	})
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
 	added := scanner.Scan([]*Instance{inst}, queue)
 
@@ -123,7 +126,7 @@ func TestStartupScanner_Scan_SkipsPausedInstances(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title:  "paused-session",
-		Status: Paused,
+		Status: domain.Paused,
 	}
 	inst.started.Store(true)
 
@@ -133,7 +136,7 @@ func TestStartupScanner_Scan_SkipsPausedInstances(t *testing.T) {
 		inst.Title: approvalContent,
 	})
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
 	added := scanner.Scan([]*Instance{inst}, queue)
 
@@ -158,7 +161,7 @@ func TestStartupScanner_Scan_ControllerActiveWithApproval(t *testing.T) {
 		inst.Title: "",
 	})
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
 	added := scanner.Scan([]*Instance{inst}, queue)
 
@@ -169,8 +172,8 @@ func TestStartupScanner_Scan_ControllerActiveWithApproval(t *testing.T) {
 	if !exists {
 		t.Fatal("session must be in queue")
 	}
-	if item.Reason != ReasonApprovalPending {
-		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	if item.Reason != queuepkg.ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", queuepkg.ReasonApprovalPending, item.Reason)
 	}
 }
 
@@ -199,7 +202,7 @@ func TestStartupScanner_Scan_MultipleSessionsMixedState(t *testing.T) {
 		inputRequired.Title: "Please enter your name: ",
 	})
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
 	added := scanner.Scan([]*Instance{needsApproval, activeSession, inputRequired}, queue)
 
@@ -237,7 +240,7 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 			inst.Title: "",
 		})
 
-		queue := NewReviewQueue()
+		queue := queuepkg.NewReviewQueue()
 		scanner := NewStartupScanner(statusProvider, contentProvider)
 		added := scanner.Scan([]*Instance{inst}, queue)
 
@@ -264,7 +267,7 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 			inst.Title: "",
 		})
 
-		queue := NewReviewQueue()
+		queue := queuepkg.NewReviewQueue()
 		scanner := NewStartupScanner(statusProvider, contentProvider)
 		added := scanner.Scan([]*Instance{inst}, queue)
 
@@ -275,8 +278,8 @@ func TestScan_SkipsHiddenInstance_ForSuppressedReasonsOnly(t *testing.T) {
 		if !exists {
 			t.Fatal("Hidden instance with ReasonErrorState must appear in review queue")
 		}
-		if item.Reason != ReasonErrorState {
-			t.Errorf("expected reason %s, got %s", ReasonErrorState, item.Reason)
+		if item.Reason != queuepkg.ReasonErrorState {
+			t.Errorf("expected reason %s, got %s", queuepkg.ReasonErrorState, item.Reason)
 		}
 	})
 }
@@ -304,7 +307,7 @@ func TestStartupScanner_Scan_SkipsArchivedInstance(t *testing.T) {
 		inst.Title: "",
 	})
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
 	added := scanner.Scan([]*Instance{inst}, queue)
 
@@ -322,7 +325,7 @@ func TestStartupScanner_Scan_EmptyInstanceList(t *testing.T) {
 	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{})
 	contentProvider := newFakeContentProvider(map[string]string{})
 
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	scanner := NewStartupScanner(statusProvider, contentProvider)
 	added := scanner.Scan([]*Instance{}, queue)
 
@@ -344,7 +347,7 @@ func TestStartupScanner_Should_ReadOptionsFromSamePerCycleSourceAsPoller_When_Fi
 		return DeterminerOptions{ProseQuestion: true, IdleClockOutput: true}, RuleOptions{}
 	}
 	scanner.SetOptionsSource(source)
-	scanner.Scan(insts, NewReviewQueue())
+	scanner.Scan(insts, queuepkg.NewReviewQueue())
 
 	if reads != 1 {
 		t.Errorf("source reads = %d, want 1 per Scan", reads)

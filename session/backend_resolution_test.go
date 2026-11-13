@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // setGlobalTymuxForTest forces the live "tymux" feature flag (the actual
@@ -26,10 +27,10 @@ func TestResolveSessionBackend_RequestOverrideWinsOverEverything(t *testing.T) {
 		TymuxSessionOverrides: map[string]bool{"my-session": false},
 	}
 
-	got := ResolveSessionBackend(cfg, "my-session", BackendNative)
+	got := ResolveSessionBackend(cfg, "my-session", domain.BackendNative)
 
-	if got != BackendNative {
-		t.Fatalf("ResolveSessionBackend() = %q, want %q (request override must win over both the session override and the global default)", got, BackendNative)
+	if got != domain.BackendNative {
+		t.Fatalf("ResolveSessionBackend() = %q, want %q (request override must win over both the session override and the global default)", got, domain.BackendNative)
 	}
 }
 
@@ -40,8 +41,8 @@ func TestResolveSessionBackend_SessionOverrideForcesTymuxOverGlobalTmux(t *testi
 
 	got := ResolveSessionBackend(cfg, "my-session", "")
 
-	if got != BackendTymux {
-		t.Fatalf("ResolveSessionBackend() = %q, want %q (a true session override must win over a BackendTmux global default)", got, BackendTymux)
+	if got != domain.BackendTymux {
+		t.Fatalf("ResolveSessionBackend() = %q, want %q (a true session override must win over a BackendTmux global default)", got, domain.BackendTymux)
 	}
 }
 
@@ -64,8 +65,8 @@ func TestResolveSessionBackend_SessionOverrideForcesTmuxOverGlobalTymux(t *testi
 
 	got := ResolveSessionBackend(cfg, "my-session", "")
 
-	if got != BackendTmux {
-		t.Fatalf("ResolveSessionBackend() = %q, want %q (a false session override must win over a BackendTymux global default — this is the resolveLocked bug class this function must not replicate)", got, BackendTmux)
+	if got != domain.BackendTmux {
+		t.Fatalf("ResolveSessionBackend() = %q, want %q (a false session override must win over a BackendTymux global default — this is the resolveLocked bug class this function must not replicate)", got, domain.BackendTmux)
 	}
 }
 
@@ -76,8 +77,8 @@ func TestResolveSessionBackend_FallsBackToGlobalWhenNoOverrides(t *testing.T) {
 
 	got := ResolveSessionBackend(cfg, "my-session", "")
 
-	if got != BackendTymux {
-		t.Fatalf("ResolveSessionBackend() = %q, want %q (no request override and no session override must fall back to the global default)", got, BackendTymux)
+	if got != domain.BackendTymux {
+		t.Fatalf("ResolveSessionBackend() = %q, want %q (no request override and no session override must fall back to the global default)", got, domain.BackendTymux)
 	}
 }
 
@@ -86,7 +87,7 @@ func TestResolveSessionBackend_FallsBackToTmuxWhenNothingSet(t *testing.T) {
 
 	got := ResolveSessionBackend(cfg, "my-session", "")
 
-	if got != BackendTmux {
-		t.Fatalf("ResolveSessionBackend() = %q, want %q (nothing set anywhere must fall back to BackendTmux)", got, BackendTmux)
+	if got != domain.BackendTmux {
+		t.Fatalf("ResolveSessionBackend() = %q, want %q (nothing set anywhere must fall back to BackendTmux)", got, domain.BackendTmux)
 	}
 }

@@ -76,17 +76,17 @@ func TestGetBacklogStuckReport_RendersAcceptanceCriteriaTimelineSessionsAndNotes
 		Title:              "test: app shell coverage",
 		AcceptanceCriteria: `[{"index":0,"text":"History cap boundary covered","status":"fail"}]`,
 		Priority:           3,
-		Status:             string(session.BacklogStatusReview),
+		Status:             string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 
-	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatusReview, "bounced 13 times in 24h")
+	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, domain.BacklogStatusReview, "bounced 13 times in 24h")
 	require.NoError(t, err)
 	resolved, err := storage.ResolveStuck(ctx, item.ID, domain.StuckReasonBouncing)
 	require.NoError(t, err)
 	require.True(t, resolved)
 
-	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatusReview, "stop_reason=max_turns")
+	_, err = storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, domain.BacklogStatusReview, "stop_reason=max_turns")
 	require.NoError(t, err)
 
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -154,7 +154,7 @@ func TestGetBacklogStuckReport_CICrossCheck_FlagsOutOfDiffFailureAndSuggestsReru
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "test: app shell coverage",
 		Priority: 3,
-		Status:   string(session.BacklogStatusPRPending),
+		Status:   string(domain.BacklogStatusPRPending),
 		RepoPath: "/repo",
 	})
 	require.NoError(t, err)
@@ -213,28 +213,28 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "multi pr", Status: string(session.BacklogStatusPRPending)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "multi pr", Status: string(domain.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	sessUUID := uuid.New().String()
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessUUID, SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)
 
-	ref := func(n int) session.PRRef {
-		r, rerr := session.NewPRRef("github.com", "acme", "app", n)
+	ref := func(n int) domain.PRRef {
+		r, rerr := domain.NewPRRef("github.com", "acme", "app", n)
 		require.NoError(t, rerr)
 		return r
 	}
-	link := func(owner session.PROwner, n int, st session.PRState, at time.Time) {
-		_, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), session.PRLink{
-			Role: session.PRRolePrimary, Source: session.AttachSourceManual, AttachedAt: at,
-			Initial: session.PRInitial{State: st, Terminal: st.Terminal()},
+	link := func(owner session.PROwner, n int, st domain.PRState, at time.Time) {
+		_, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), domain.PRLink{
+			Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, AttachedAt: at,
+			Initial: domain.PRInitial{State: st, Terminal: st.Terminal()},
 		})
 		require.NoError(t, lerr)
 	}
-	link(session.ItemPROwner(item.ID), 21, session.PRStateMerged, time.Time{})
+	link(session.ItemPROwner(item.ID), 21, domain.PRStateMerged, time.Time{})
 	old := time.Now().Add(-2 * time.Hour)
-	link(session.ItemPROwner(item.ID), 23, session.PRStateUnknown, old)
-	link(session.SessionPROwner(sessUUID), 23, session.PRStateUnknown, old)
+	link(session.ItemPROwner(item.ID), 23, domain.PRStateUnknown, old)
+	link(session.SessionPROwner(sessUUID), 23, domain.PRStateUnknown, old)
 
 	run := func(on bool) string {
 		h := &backlogHandlers{storage: storage, backlogReaderOverride: func() bool { return on }}
@@ -256,7 +256,7 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 func TestStuckReport_ShouldListBlockedCleanupWithHolder_WhenGateWithholdsWorktree(t *testing.T) {
 	storage := newTestBacklogStorage(t)
 	svc := backlogsvc.NewBacklogService(storage, nil, nil, nil, nil, nil)
-	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "blocked cleanup", Status: string(session.BacklogStatusDone)})
+	item, err := storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "blocked cleanup", Status: string(domain.BacklogStatusDone)})
 	require.NoError(t, err)
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "work-blocked", SessionRole: session.SessionRoleWork})
 	require.NoError(t, err)

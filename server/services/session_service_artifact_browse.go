@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/telemetry"
 	"go.opentelemetry.io/otel/metric"
@@ -90,12 +91,12 @@ func (f browseFilter) keeps(rec *sessionv1.ArtifactRecordProto, pr *sessionv1.Se
 // session only saw gets a minimal entry in state "unknown".
 func pullRequestFor(inst *session.Instance, rec *sessionv1.ArtifactRecordProto) (*sessionv1.SessionPullRequest, string) {
 	r := rec.GetPr()
-	ref, err := session.NewPRRef(r.GetHost(), r.GetOwner(), r.GetRepo(), int(r.GetNumber()))
+	ref, err := domain.NewPRRef(r.GetHost(), r.GetOwner(), r.GetRepo(), int(r.GetNumber()))
 	if err == nil {
 		snap := inst.Snapshot()
 		for _, v := range snap.GitHub.PRs {
 			if v.Ref == ref {
-				return adapters.SessionPullRequests([]session.PRView{v}, snap.Branch)[0], string(search.PRSourceSessionPR)
+				return adapters.SessionPullRequests([]domain.PRView{v}, snap.Branch)[0], string(search.PRSourceSessionPR)
 			}
 		}
 	}

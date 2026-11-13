@@ -21,13 +21,18 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
+	"github.com/tstapler/stapler-squad/server/services/insights"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/wakes"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/chains"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
@@ -36,16 +41,20 @@ import (
 	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
+	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/session/prpoller"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/scanqueue"
 	"github.com/tstapler/stapler-squad/session/scanstate"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tcc"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
+	"github.com/tstapler/stapler-squad/session/wtconsistency"
 )
 
 // Delays before the startup transcript backfill begins (live file changes are
@@ -68,7 +77,7 @@ type ServerDependencies struct {
 	Instances         []*session.Instance
 	EventBus          *events.EventBus
 	StatusManager     *session.InstanceStatusManager
-	ReviewQueue       *session.ReviewQueue
+	ReviewQueue       *queuepkg.ReviewQueue
 	ReviewQueuePoller *session.ReviewQueuePoller
 	PRStatusPoller    *prpoller.PRStatusPoller
 
@@ -112,19 +121,19 @@ type ServerDependencies struct {
 	// JulesSessionPoller polls open Jules sessions (google-jules-integration
 	// Epic 2.3/2.4). Nil unless config.Config.Jules.Enabled and the API key
 	// resolves at startup — see BuildRuntimeDeps' jules wiring block.
-	JulesSessionPoller *session.JulesSessionPoller
+	JulesSessionPoller *sessionjules.JulesSessionPoller
 
 	// GitHub user PR cache and service. Nil when no GitHub token is available.
 	UserPRCache       *githubpkg.UserPRCache
 	GitHubUserService *services.GitHubUserService
 
 	// Token usage analytics.
-	InsightsService *services.InsightsService
+	InsightsService *insights.InsightsService
 
 	BacklogService *backlogsvc.BacklogService
 	// BacklogFlowService is the single flow-observability service; the RPC handler and
 	// the HTTP MCP core both use it so they share one aggregator cache.
-	BacklogFlowService *services.BacklogFlowService
+	BacklogFlowService *backlogflow.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -195,12 +204,12 @@ type ServerDependencies struct {
 	// Nil when storage is not ent-backed. Its NotificationDecisionLister/TokenStore
 	// dependencies are wired later via SetNotificationLister/SetTokenStore (see
 	// server.go's RunServer) — see the comment on SetNotificationLister for why.
-	SessionSummaryGenerator *session.SessionSummaryGenerator
+	SessionSummaryGenerator *summaries.SessionSummaryGenerator
 
 	// HandoffSummaryGenerator drives async restart-handoff-summary generation
 	// (Story 2.2.1). Nil when storage is not ent-backed, mirroring
 	// SessionSummaryGenerator.
-	HandoffSummaryGenerator *session.HandoffSummaryGenerator
+	HandoffSummaryGenerator *summaries.HandoffSummaryGenerator
 
 	// BacklogLifecycleListener drives backlog item state transitions and, via its
 	// TriggerPRFixForEvent method, satisfies services.PRFixEventRouter for the
@@ -355,11 +364,11 @@ func syncOrphanedApprovalsToQueue(
 			}
 		}
 
-		item := &session.ReviewItem{
+		item := &queuepkg.ReviewItem{
 			SessionID:   approval.SessionID,
 			SessionName: approval.SessionID,
-			Reason:      session.ReasonApprovalPending,
-			Priority:    session.PriorityHigh,
+			Reason:      queuepkg.ReasonApprovalPending,
+			Priority:    queuepkg.PriorityHigh,
 			DetectedAt:  approval.CreatedAt,
 			Context:     context,
 			Metadata: map[string]string{
@@ -413,7 +422,7 @@ type CoreDeps struct {
 	SessionService *services.SessionService
 	Storage        *session.Storage
 	EventBus       *events.EventBus
-	ReviewQueue    *session.ReviewQueue
+	ReviewQueue    *queuepkg.ReviewQueue
 	ApprovalStore  *services.ApprovalStore
 	ErrorRegistry  *services.ErrorRegistry
 
@@ -545,18 +554,18 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	core.SessionService.SetRegistry(registry)
 
 	w := warren.NewWire("ServiceDeps")
-	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
+	warren.Set(w, "ApprovalProvider", reviewQueuePoller.SetApprovalProvider, domain.ApprovalMetadataProvider(core.ApprovalStore))
 	// Story 5.3.1: the same provider wired into StatusManager.GetStatus()'s
 	// pi-fallback branch, so a pi session actually blocked on a pending
 	// approval reports NeedsApproval instead of a stale Idle.
-	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, session.ApprovalMetadataProvider(core.ApprovalStore))
+	warren.Set(w, "StatusManagerApprovalProvider", statusManager.SetApprovalProvider, domain.ApprovalMetadataProvider(core.ApprovalStore))
 	warren.Set(w, "StatusManager", core.SessionService.SetStatusManager, statusManager)
 	warren.Set(w, "ReviewQueuePoller", core.SessionService.SetReviewQueuePoller, reviewQueuePoller)
 	// The session header's Refresh awaits one poll of a single PR row. There is no
 	// user_refresh observation source yet, so it uses reconciler_refresh.
 	// A successful fetch resolves an unverified-terminal row and resets
 	// poll_fail_count; a counted failure leaves it unverified and increments it.
-	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref session.PRRef) error {
+	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref domain.PRRef) error {
 		return prStatusPoller.Refresh(ctx, ref, session.PRSourceReconcilerRefresh)
 	})
 	if err := w.Validate(); err != nil {
@@ -606,19 +615,19 @@ type RuntimeDeps struct {
 
 	// JulesSessionPoller (see the identically-named field on ServerDependencies
 	// for its full doc comment).
-	JulesSessionPoller *session.JulesSessionPoller
+	JulesSessionPoller *sessionjules.JulesSessionPoller
 
 	// GitHub user PR cache and service.
 	UserPRCache       *githubpkg.UserPRCache
 	GitHubUserService *services.GitHubUserService
 
 	// Token usage analytics.
-	InsightsService *services.InsightsService
+	InsightsService *insights.InsightsService
 
 	BacklogService *backlogsvc.BacklogService
 	// BacklogFlowService is the single flow-observability service; the RPC handler and
 	// the HTTP MCP core both use it so they share one aggregator cache.
-	BacklogFlowService *services.BacklogFlowService
+	BacklogFlowService *backlogflow.BacklogFlowService
 	// QuotaGate owns the account-wide session-quota pause/resume decision for
 	// backlog automation (see BacklogService/BacklogEnabledCheck above).
 	QuotaGate *services.QuotaGate
@@ -682,11 +691,11 @@ type RuntimeDeps struct {
 
 	// SessionSummaryGenerator drives async session-completion-summary generation.
 	// Nil when storage is not ent-backed.
-	SessionSummaryGenerator *session.SessionSummaryGenerator
+	SessionSummaryGenerator *summaries.SessionSummaryGenerator
 
 	// HandoffSummaryGenerator drives async restart-handoff-summary generation
 	// (Story 2.2.1). Nil when storage is not ent-backed.
-	HandoffSummaryGenerator *session.HandoffSummaryGenerator
+	HandoffSummaryGenerator *summaries.HandoffSummaryGenerator
 
 	// BacklogLifecycleListener satisfies services.PRFixEventRouter for the
 	// pr-event-webhooks feature — see the identical field's doc comment on
@@ -704,8 +713,8 @@ type RuntimeDeps struct {
 }
 
 // reviewQueueLookupAdapter adapts session.Storage's ItemSession/ReviewVerdict
-// queries to session.ReviewQueueLookup, which BuildDecisionsSnapshot
-// (session/session_summary_snapshot.go) needs. A session's resolved/still-open
+// queries to summaries.ReviewQueueLookup, which BuildDecisionsSnapshot
+// (session/summaries/session_summary_snapshot.go) needs. A session's resolved/still-open
 // review counts are derived from every ItemSession attached to the same backlog
 // item as this session's own ItemSession (siblings included) — the backlog item,
 // not just this one session, is the natural "review queue" scope, mirroring how
@@ -715,7 +724,7 @@ type reviewQueueLookupAdapter struct {
 	storage *session.Storage
 }
 
-// ReviewQueueResolvedCount implements session.ReviewQueueLookup.
+// ReviewQueueResolvedCount implements summaries.ReviewQueueLookup.
 func (a *reviewQueueLookupAdapter) ReviewQueueResolvedCount(ctx context.Context, sessionID string) (resolved, stillOpen int, err error) {
 	itemSession, err := a.storage.GetItemSessionBySessionUUID(ctx, sessionID)
 	if err != nil {
@@ -864,7 +873,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// the entClient-available branch below) because services.NewBacklogService
 	// (Epic 2.2) needs the same repository instance to back its PipelineMode CRUD
 	// RPCs, independent of whether pipelineEngine construction itself succeeded.
-	var pipelineEngine backlog.PipelineEngine
+	var pipelineEngine pipeline.PipelineEngine
 	var pipelineModeRepo session.PipelineModeRepository
 	if entClient := storage.GetEntClient(); entClient != nil {
 		// Seed the built-in 9-stage/edge workflow graph (backlog_stages +
@@ -889,7 +898,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		if seedErr := session.EnsureDefaultSDDPipelineMode(context.Background(), pipelineModeRepo); seedErr != nil {
 			log.Warn("failed to seed default sdd pipeline mode, continuing without it", "err", seedErr)
 		}
-		if cachingPipelineEngine, err := backlog.NewPipelineEngine(pipelineModeRepo); err != nil {
+		if cachingPipelineEngine, err := pipeline.NewPipelineEngine(pipelineModeRepo); err != nil {
 			log.Warn("pipelineEngine construction failed; continuing with the default pipeline for all backlog items", "err", err)
 		} else {
 			pipelineEngine = cachingPipelineEngine
@@ -910,11 +919,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// NewBacklogService constructor parameter, to avoid touching every
 	// existing NewBacklogService test call site for a dependency this epic
 	// introduces.
-	var livenessRepo backlog.LivenessRepository
-	var livenessEngine backlog.LivenessEngine
+	var livenessRepo liveness.LivenessRepository
+	var livenessEngine liveness.LivenessEngine
 	if entClient := storage.GetEntClient(); entClient != nil {
-		livenessRepo = backlog.NewEntLivenessRepository(entClient)
-		if cachingLivenessEngine, err := backlog.NewCachingLivenessEngine(livenessRepo); err != nil {
+		livenessRepo = liveness.NewEntLivenessRepository(entClient)
+		if cachingLivenessEngine, err := liveness.NewCachingLivenessEngine(livenessRepo); err != nil {
 			log.Warn("livenessEngine construction failed; continuing with DefaultLivenessEngine's built-in thresholds", "err", err)
 		} else {
 			livenessEngine = cachingLivenessEngine
@@ -1017,9 +1026,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// "Set* called long after construction" ordering constraint SetHeadlessPool used
 	// to have (see the comment above backlogLifecycleListener). Nil when storage isn't
 	// ent-backed.
-	var sessionSummaryGenerator *session.SessionSummaryGenerator
+	var sessionSummaryGenerator *summaries.SessionSummaryGenerator
 	if entClient := storage.GetEntClient(); entClient != nil {
-		sessionSummaryGenerator = session.NewSessionSummaryGenerator(
+		sessionSummaryGenerator = summaries.NewSessionSummaryGenerator(
 			entClient,
 			llmClient,
 			nil, // NotificationDecisionLister — wired later via SetNotificationLister
@@ -1036,9 +1045,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// wiring onto sessionService needed: unlike SessionSummaryGenerator, nothing
 	// in the live-instance lifecycle dispatches handoff-summary generation —
 	// it's only triggered on demand via HandoffSummaryService's RPC handlers.
-	var handoffSummaryGenerator *session.HandoffSummaryGenerator
+	var handoffSummaryGenerator *summaries.HandoffSummaryGenerator
 	if entClient := storage.GetEntClient(); entClient != nil {
-		handoffSummaryGenerator = session.NewHandoffSummaryGenerator(entClient, llmClient)
+		handoffSummaryGenerator = summaries.NewHandoffSummaryGenerator(entClient, llmClient)
 	} else {
 		log.Warn("handoff summary generation unavailable: storage is not ent-backed")
 	}
@@ -1073,7 +1082,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		inst.SetStatusManager(statusManager)
 		backlogLifecycleListener.WireToInstance(inst)
 		if sessionSummaryGenerator != nil {
-			session.WireSessionSummaryListener(sessionSummaryGenerator, inst)
+			summaries.WireSessionSummaryListener(sessionSummaryGenerator, inst)
 		}
 	}
 
@@ -1234,7 +1243,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		for _, inst := range instances {
 			started := inst.Started()
 			paused := inst.Paused()
-			if started && !paused && inst.GetLifecycleStatus() != session.Stopped {
+			if started && !paused && inst.GetLifecycleStatus() != domain.Stopped {
 				if inst.GetController() == nil {
 					if err := inst.StartController(); err != nil {
 						log.Warn("failed to start controller", "session", inst.Title, "err", err)
@@ -1258,7 +1267,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 				continue
 			}
 			status := inst.GetLifecycleStatus()
-			if status == session.Paused || status == session.Stopped || status == session.Hibernated {
+			if status == domain.Paused || status == domain.Stopped || status == domain.Hibernated {
 				continue
 			}
 			session.StartSessionDriver(inst, inst.GetEffectiveRootDir())
@@ -1348,7 +1357,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 		backlogLifecycleListener.WireToInstance(instance)
 		if sessionSummaryGenerator != nil {
-			session.WireSessionSummaryListener(sessionSummaryGenerator, instance)
+			summaries.WireSessionSummaryListener(sessionSummaryGenerator, instance)
 		}
 		log.Info("added external session to review queue poller, PR status poller, and history linker", "session", instance.Title)
 	})
@@ -1388,11 +1397,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			context = "Permission request detected"
 		}
 
-		item := &session.ReviewItem{
+		item := &queuepkg.ReviewItem{
 			SessionID:   event.SessionTitle,
 			SessionName: event.SessionTitle,
-			Reason:      session.ReasonApprovalPending,
-			Priority:    session.PriorityHigh,
+			Reason:      queuepkg.ReasonApprovalPending,
+			Priority:    queuepkg.PriorityHigh,
 			DetectedAt:  event.Request.Timestamp,
 			Context:     context,
 		}
@@ -1672,12 +1681,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// against live `git worktree` state, gated by FeatureFlagWorktreeConsistencySweep
 	// (default off). config.LoadConfig is passed directly, not a closure over cfg, so
 	// the flag can be flipped live with no restart (matches quotaGate/julesDispatchSvc).
-	go session.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
+	go wtconsistency.StartWorktreeConsistencySweeper(context.Background(), storage, &services.EventBusNotifier{Bus: eventBus}, config.LoadConfig)
 
 	// Per-item /backlog/* commands live in session worktrees only; a user-scope copy is stale
 	// scaffolding from an old build and shadows the real ones with a wrong item ID.
 	if home, hErr := os.UserHomeDir(); hErr == nil {
-		if removed, rmErr := backlog.RemoveStaleUserLevelBacklogCommands(home); rmErr != nil {
+		if removed, rmErr := pipeline.RemoveStaleUserLevelBacklogCommands(home); rmErr != nil {
 			log.WarningLog().Printf("failed to remove stale user-level backlog commands: %v", rmErr)
 		} else if removed {
 			log.InfoLog().Printf("removed stale user-level ~/.claude/commands/backlog (per-item commands belong in session worktrees)")
@@ -1686,7 +1695,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	backlogSvc := backlogsvc.NewBacklogService(storage, sessionService, cfg, workflowEngine.Engine, pipelineEngine, pipelineModeRepo)
 	// One flow reader, aggregator and service for both the RPC handler and the HTTP MCP core.
-	backlogFlowSvc := services.NewFlowServiceFromStorage(storage, flow.WithObserver(services.NewFlowObserver()))
+	backlogFlowSvc := backlogflow.NewFlowServiceFromStorage(storage, flow.WithObserver(backlogflow.NewFlowObserver()))
 	backlogFlowSvc.SetEnabledCheck(backlogCtrl.IsEnabled)
 	if gateErr := workflowEngine.InjectTransitionGate(storage, backlogSvc.TransitionDeniedReporter()); gateErr != nil {
 		return nil, gateErr
@@ -1906,7 +1915,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// block only builds the InsightsService/ArtifactExtractor machinery that
 	// depends on them, plus backlogSvc/sessionSummaryGenerator, all of which
 	// need backlogSvc (constructed after that early wiring).
-	var insightsSvc *services.InsightsService
+	var insightsSvc *insights.InsightsService
 	var geminiCaller *headless.GeminiCaller
 	if tokenStore != nil {
 		pricing := tokens.DefaultPricingTable()
@@ -1944,7 +1953,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 
 		associator := tokens.NewAssociator(storage)
-		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator, storage)
+		insightsSvc = insights.NewInsightsService(tokenStore, pricing, associator, storage)
 		insightsSvc.SetDismissedFindingsStore(storage)
 		insightsSvc.SetContextHistoryStore(ctxHistoryStore)
 		sessionService.SetTokenStoreReader(tokenStore)
@@ -1979,7 +1988,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		artifactIndex := search.NewArtifactIndex(storage)
 		attachScan := artifactScanCompleteHandler(historyLinker.Instances, eventBus)
 		indexScan := indexScannedArtifacts(historyLinker.Instances, artifactIndex)
-		artifactExtractor.OnScanComplete = func(title string, blob *artifacts.SessionArtifactsBlob) {
+		artifactExtractor.OnScanComplete = func(title string, blob *domain.SessionArtifactsBlob) {
 			attachScan(title, blob)
 			indexScan(title, blob)
 		}
@@ -2071,8 +2080,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// "done" transition commits — AC9) and BacklogLifecycleListener (the
 		// restart-recovery reconciler, running on the existing 60s tick).
 		if triggerFireEventRepo != nil {
-			if chainFirer := backlog.WireChainFirer(storage, workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
-				backlogLifecycleListener.SetChainReconciler(backlog.NewTriggerChainReconciler(chainFirer))
+			if chainFirer := chains.WireChainFirer(storage, workflowRepo, triggerFireEventRepo, workflowScheduler, cfg); chainFirer != nil {
+				backlogLifecycleListener.SetChainReconciler(chains.NewTriggerChainReconciler(chainFirer))
 				log.Info("ChainFirer and TriggerChainReconciler initialized")
 			}
 		}
@@ -2105,7 +2114,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// server/services/credentials.go's SetJulesTokenSource.
 	sessionService.SetJulesKeyringTokenSource(julesKeys)
 	var julesSourceRegistry *jules.JulesSourceRegistry
-	var julesPoller *session.JulesSessionPoller
+	var julesPoller *sessionjules.JulesSessionPoller
 	switch {
 	case !cfg.Jules.Enabled:
 		log.Info("jules disabled", "reason", "feature not enabled")
@@ -2126,12 +2135,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			julesDispatchSvc := services.NewJulesDispatchService(storage, backlogSvc, julesClient, julesSourceRegistry, config.LoadConfig)
 			julesDispatchSvc.SetUsageCounter(julesUsage)
 			backlogSvc.SetJulesDispatcher(julesDispatchSvc)
-			julesPoller = session.NewJulesSessionPoller(julesClient, storage, session.DefaultJulesSessionPollerConfig())
+			julesPoller = sessionjules.NewJulesSessionPoller(julesClient, storage, sessionjules.DefaultJulesSessionPollerConfig())
 			julesPoller.SetUsageCounter(julesUsage)
 		}
 	}
 	// Passed as separate nil literals (not the possibly-nil *jules.JulesSourceRegistry/
-	// *session.JulesSessionPoller pointers directly) when unconfigured, to avoid handing
+	// *sessionjules.JulesSessionPoller pointers directly) when unconfigured, to avoid handing
 	// SetJulesConfigDependencies a non-nil interface wrapping a nil pointer — its own
 	// nil checks (julesConfigToProto, TestJulesConnection) compare the interface itself
 	// to nil, which a typed-nil pointer would defeat.
@@ -2307,7 +2316,7 @@ func shouldBootStart(inst *session.Instance) bool {
 
 func deferToReconcile(inst *session.Instance) bool {
 	switch inst.GetLifecycleStatus() {
-	case session.PermanentlyFailed, session.Failed:
+	case domain.PermanentlyFailed, domain.Failed:
 		return true
 	default:
 		return false

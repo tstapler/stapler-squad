@@ -10,7 +10,7 @@ import (
 
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
@@ -108,7 +108,7 @@ func (r *closedPRReverifier) noteUnverifiable(key string, now time.Time) (releas
 	}
 	st.failures++
 	r.unverifiable[key] = st
-	return st.failures >= session.VerifyAttemptLimit && now.Sub(st.first) >= reverifyUnverifiableSpan, st
+	return st.failures >= domain.VerifyAttemptLimit && now.Sub(st.first) >= reverifyUnverifiableSpan, st
 }
 
 func (r *closedPRReverifier) clear(key string) {
@@ -122,17 +122,17 @@ func (r *closedPRReverifier) clear(key string) {
 // reopened webhook, so a missed webhook would otherwise let a reopened PR's
 // worktree be deleted. Reopened, rate-limited, network and over-budget outcomes
 // hold the session; an unverifiable PR holds it until the count/age rule releases it.
-func (s *SessionRetentionSweeper) closedPRsStayClosed(ctx context.Context, d session.InstanceData, p *sweepPRData) (bool, string) {
+func (s *SessionRetentionSweeper) closedPRsStayClosed(ctx context.Context, d domain.InstanceData, p *sweepPRData) (bool, string) {
 	if s.reverifyClosed == nil {
 		return true, ""
 	}
-	var views []session.PRView
+	var views []domain.PRView
 	views = append(views, p.views[d.UUID]...)
 	for _, id := range p.itemIDs[d.UUID] {
 		views = append(views, p.guards[id].Direct...)
 	}
 	for _, v := range views {
-		if v.State != session.PRStateClosed {
+		if v.State != domain.PRStateClosed {
 			continue
 		}
 		if safe, reason := s.reverifyOne(ctx, d, v.Ref); !safe {
@@ -142,7 +142,7 @@ func (s *SessionRetentionSweeper) closedPRsStayClosed(ctx context.Context, d ses
 	return true, ""
 }
 
-func (s *SessionRetentionSweeper) reverifyOne(ctx context.Context, d session.InstanceData, ref session.PRRef) (bool, string) {
+func (s *SessionRetentionSweeper) reverifyOne(ctx context.Context, d domain.InstanceData, ref domain.PRRef) (bool, string) {
 	now := s.now()
 	if !s.reverify.take(now) {
 		return false, fmt.Sprintf("closed PR %s not re-verified: per-sweep GitHub budget used, retrying next sweep", ref)
@@ -166,7 +166,7 @@ func (s *SessionRetentionSweeper) reverifyOne(ctx context.Context, d session.Ins
 		if released {
 			return true, ""
 		}
-		return false, fmt.Sprintf("closed PR %s unverifiable (%d/%d): %v", ref, st.failures, session.VerifyAttemptLimit, err)
+		return false, fmt.Sprintf("closed PR %s unverifiable (%d/%d): %v", ref, st.failures, domain.VerifyAttemptLimit, err)
 	default:
 		return false, fmt.Sprintf("could not re-verify closed PR %s, retrying next sweep: %v", ref, err)
 	}
@@ -174,9 +174,9 @@ func (s *SessionRetentionSweeper) reverifyOne(ctx context.Context, d session.Ins
 
 // newClosedPRReverifier is the production reverifyClosed: one conditional GET
 // per PR, with a process-lifetime ETag cache so repeat sweeps cost a 304.
-func newClosedPRReverifier() func(context.Context, session.PRRef) (bool, error) {
+func newClosedPRReverifier() func(context.Context, domain.PRRef) (bool, error) {
 	cache := githubpkg.NewETagCache()
-	return func(ctx context.Context, ref session.PRRef) (bool, error) {
+	return func(ctx context.Context, ref domain.PRRef) (bool, error) {
 		repo, err := githubpkg.NewRepoRefWithHost(ref.Owner(), ref.Repo(), ref.Host())
 		if err != nil {
 			return false, err

@@ -21,7 +21,8 @@ import (
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -66,11 +67,11 @@ func (r *failAfterNListEnabledRepo) ListEnabled(ctx context.Context) ([]*ent.Pip
 // ent-backed PipelineModeRepository and a real CachingPipelineEngine
 // constructed over that same repository — mirroring how
 // server/dependencies.go wires production (both share one instance).
-func newPipelineModeTestService(t *testing.T) (*BacklogService, session.PipelineModeRepository, *backlog.CachingPipelineEngine) {
+func newPipelineModeTestService(t *testing.T) (*BacklogService, session.PipelineModeRepository, *pipeline.CachingPipelineEngine) {
 	t.Helper()
 	storage := svctest.CreateTestStorage(t)
 	repo := session.NewEntPipelineModeRepository(storage.GetEntClient())
-	engine, err := backlog.NewPipelineEngine(repo)
+	engine, err := pipeline.NewPipelineEngine(repo)
 	require.NoError(t, err)
 	svc := NewBacklogService(storage, nil, nil, nil, engine, repo)
 	return svc, repo, engine
@@ -101,7 +102,7 @@ func TestGetPipelineMode_should_ReturnDerivedContentHash_When_ModeHasNonEmptyTem
 	}))
 	require.NoError(t, err)
 
-	wantHash := backlog.ComputeContentHash(
+	wantHash := pipeline.ComputeContentHash(
 		"status content", "", "", "", "", "", "Fix {{item_id}} fast.", "", "",
 	)
 	assert.Equal(t, wantHash, getResp.Msg.Item.ContentHash)
@@ -189,11 +190,11 @@ func TestCreatePipelineMode_should_ReturnDenseStageExecutorHashesForAllThreeRole
 	require.Contains(t, hashes, "review")
 	require.Contains(t, hashes, "work")
 
-	assert.Equal(t, backlog.ComputeExecutorHash("", "claude-haiku-4-5"), hashes["triage"])
+	assert.Equal(t, pipeline.ComputeExecutorHash("", "claude-haiku-4-5"), hashes["triage"])
 	// review/work have no configured override — each must hash as the
 	// zero-value PipelineStageExecutor{}, identical to what an unconfigured
 	// session's own executor_snapshot_hash computes.
-	defaultHash := backlog.ComputeExecutorHash("", "")
+	defaultHash := pipeline.ComputeExecutorHash("", "")
 	assert.Equal(t, defaultHash, hashes["review"])
 	assert.Equal(t, defaultHash, hashes["work"])
 	assert.NotEqual(t, defaultHash, hashes["triage"], "a configured role must not collide with the default hash")
@@ -286,7 +287,7 @@ func TestUpdatePipelineMode_should_ReturnSuccessWithWarnLog_When_CacheInvalidati
 	// the mode actually exists to update). Call 3 — UpdatePipelineMode's
 	// invalidation — is the one under test and must fail.
 	wrapped := &failAfterNListEnabledRepo{PipelineModeRepository: realRepo, failAfter: 2}
-	engine, err := backlog.NewPipelineEngine(wrapped)
+	engine, err := pipeline.NewPipelineEngine(wrapped)
 	require.NoError(t, err)
 	svc := NewBacklogService(storage, nil, nil, nil, engine, wrapped)
 	ctx := t.Context()
@@ -370,12 +371,12 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 
 	_, err = svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "item referencing quick",
-		Status:       string(session.BacklogStatusIdea),
+		Status:       string(domain.BacklogStatusIdea),
 		PipelineMode: "quick",
 	})
 	require.NoError(t, err)
 
-	_, ok := engine.ContentHashFor(backlog.PipelineMode("quick"))
+	_, ok := engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	require.True(t, ok, "setup: 'quick' must resolve before delete")
 
 	_, err = svc.DeletePipelineMode(ctx, connect.NewRequest(&sessionv1.DeletePipelineModeRequest{Id: id}))
@@ -386,7 +387,7 @@ func TestDeletePipelineMode_should_SucceedAndInvalidateCache_When_ModeStillRefer
 	assert.Empty(t, all)
 
 	// Cache invalidated synchronously: the mode no longer resolves.
-	_, ok = engine.ContentHashFor(backlog.PipelineMode("quick"))
+	_, ok = engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	assert.False(t, ok, "expected the cache to no longer resolve 'quick' after delete+invalidate")
 }
 
@@ -415,7 +416,7 @@ func TestTriggerTriage_should_FallBackToDefaultWithWarnLog_When_ReferencedModeDe
 
 	item, err := svc.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:        "quick-mode item about to lose its mode",
-		Status:       string(session.BacklogStatusIdea),
+		Status:       string(domain.BacklogStatusIdea),
 		Priority:     3,
 		RepoPath:     t.TempDir(),
 		PipelineMode: "quick",

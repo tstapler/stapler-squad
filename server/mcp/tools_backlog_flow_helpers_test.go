@@ -10,12 +10,12 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/backlogflow"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/flow"
 )
 
-// fakeFlowAgg is a services.FlowAggregator returning canned results.
+// fakeFlowAgg is a backlogflow.FlowAggregator returning canned results.
 type fakeFlowAgg struct {
 	summary  *flow.FlowSummary
 	compare  *flow.CompareResult
@@ -125,11 +125,11 @@ func mergedEvent(i int, t time.Time) flow.Event {
 
 func newRealFlowHandlers(src *memFlowSources) *flowHandlers {
 	agg := flow.NewAggregator(src.sources(), flow.FixedClock{T: flowToolNow})
-	return &flowHandlers{svc: services.NewBacklogFlowService(agg)}
+	return &flowHandlers{svc: backlogflow.NewBacklogFlowService(agg)}
 }
 
 func newFakeFlowHandlers(agg *fakeFlowAgg) *flowHandlers {
-	return &flowHandlers{svc: services.NewBacklogFlowService(agg)}
+	return &flowHandlers{svc: backlogflow.NewBacklogFlowService(agg)}
 }
 
 // callFlowTool runs a handler and returns the result text and decoded JSON.

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	creackpty "github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
@@ -137,7 +139,7 @@ func NewTestInstance(t *testing.T, title string) *TestInstanceBuilder {
 			Title:            title,
 			Path:             t.TempDir(),                              // Each test gets its own temp directory
 			Program:          "bash -c 'echo test session; exec bash'", // Safe default program
-			SessionType:      SessionTypeDirectory,
+			SessionType:      domain.SessionTypeDirectory,
 			AutoYes:          true,              // Tests shouldn't prompt for input
 			TmuxServerSocket: testTmuxSocket(t), // Isolated tmux server per test
 		},
@@ -157,7 +159,7 @@ func (b *TestInstanceBuilder) WithPath(path string) *TestInstanceBuilder {
 }
 
 // WithSessionType sets the session type
-func (b *TestInstanceBuilder) WithSessionType(sessionType SessionType) *TestInstanceBuilder {
+func (b *TestInstanceBuilder) WithSessionType(sessionType domain.SessionType) *TestInstanceBuilder {
 	b.opts.SessionType = sessionType
 	return b
 }
@@ -383,10 +385,10 @@ func testSessionCreationValidation(t *testing.T) {
 	})
 
 	t.Run("SessionTypeValidation", func(t *testing.T) {
-		validSessionTypes := []SessionType{
-			SessionTypeDirectory,
-			SessionTypeNewWorktree,
-			SessionTypeExistingWorktree,
+		validSessionTypes := []domain.SessionType{
+			domain.SessionTypeDirectory,
+			domain.SessionTypeNewWorktree,
+			domain.SessionTypeExistingWorktree,
 		}
 
 		for _, sessionType := range validSessionTypes {
@@ -521,7 +523,7 @@ func testSessionCreationStates(t *testing.T) {
 		}()
 
 		// Initial state should be appropriate
-		assert.NotEqual(t, Running, instance.Status, "Instance should not be running before start")
+		assert.NotEqual(t, domain.Active, instance.Status, "Instance should not be running before start")
 
 		// Start the session
 		startCleanup, err := instance.StartWithCleanup(true)
@@ -535,7 +537,7 @@ func testSessionCreationStates(t *testing.T) {
 		}()
 
 		// Should be running after successful start
-		assert.Equal(t, Running, instance.Status, "Instance should be running after start")
+		assert.Equal(t, domain.Active, instance.Status, "Instance should be running after start")
 
 		// Test Started() method
 		assert.True(t, instance.Started(), "Started() should return true for running instance")
@@ -574,7 +576,7 @@ func testSessionCreationStates(t *testing.T) {
 		assert.False(t, beforeStart, "Should not be started initially")
 		assert.True(t, afterStart, "Should be started after StartWithCleanup")
 		assert.NotEqual(t, statusBeforeStart, statusAfterStart, "Status should change after starting")
-		assert.Equal(t, Running, statusAfterStart, "Status should be Running after start")
+		assert.Equal(t, domain.Active, statusAfterStart, "Status should be Running after start")
 	})
 }
 
@@ -880,7 +882,7 @@ func testSessionCreationWorktreeManagement(t *testing.T) {
 		instance, cleanup, err := NewTestInstance(t, "worktree-creation-test").
 			WithPath(tempRepo).
 			WithProgram("bash -c 'git status; echo worktree test'").
-			WithSessionType(SessionTypeNewWorktree).
+			WithSessionType(domain.SessionTypeNewWorktree).
 			Build()
 		require.NoError(t, err)
 		defer func() {
@@ -939,7 +941,7 @@ func testSessionCreationWorktreeManagement(t *testing.T) {
 			}
 		}()
 
-		assert.Equal(t, SessionTypeDirectory, instance.SessionType)
+		assert.Equal(t, domain.SessionTypeDirectory, instance.SessionType)
 		t.Logf("✓ Directory session created successfully")
 	})
 }

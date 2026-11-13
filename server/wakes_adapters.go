@@ -94,7 +94,7 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 			Exists:   true,
 			Archived: snap.ArchivedAt != nil,
 			OneShot:  session.IsOneShot(inst),
-			Live:     snap.Status == session.Active,
+			Live:     snap.Status == domain.Active,
 			Starting: isStartingStatus(snap.Status),
 
 			WorkspaceKey: inst.WorkspaceKey(),
@@ -123,8 +123,8 @@ func (o wakeOwners) Owner(ctx context.Context, sessionUUID string) (wakes.OwnerF
 }
 
 // isStartingStatus: a session that is still coming up is neither live nor stopped.
-func isStartingStatus(s session.Status) bool {
-	return s == session.Creating || s == session.Restoring
+func isStartingStatus(s domain.Status) bool {
+	return s == domain.Creating || s == domain.Restoring
 }
 
 // itemTerminal reports whether the backlog item this session works is done or
@@ -138,7 +138,7 @@ func (o wakeOwners) itemTerminal(ctx context.Context, sessionUUID string) bool {
 	if err != nil {
 		return false
 	}
-	return item.Status == string(session.BacklogStatusDone) || item.Status == string(session.BacklogStatusArchived)
+	return item.Status == string(domain.BacklogStatusDone) || item.Status == string(domain.BacklogStatusArchived)
 }
 
 // wakeBacklogState reads the persisted item state reconcile predicates use.
@@ -154,7 +154,7 @@ func (b wakeBacklogState) ItemState(ctx context.Context, itemID string) (wakes.I
 	}
 	st := wakes.ItemState{
 		Exists:   true,
-		Archived: item.ArchivedAt != nil || item.Status == string(session.BacklogStatusArchived),
+		Archived: item.ArchivedAt != nil || item.Status == string(domain.BacklogStatusArchived),
 		Status:   item.Status,
 	}
 	for _, s := range item.ItemSessions {

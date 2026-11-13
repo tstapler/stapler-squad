@@ -4,14 +4,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 )
 
 // artifactRecordsToProto maps the blob's typed records to the wire, keeping order.
-func artifactRecordsToProto(recs artifacts.RecordList) []*sessionv1.ArtifactRecordProto {
+func artifactRecordsToProto(recs domain.RecordList) []*sessionv1.ArtifactRecordProto {
 	if len(recs) == 0 {
 		return nil
 	}
@@ -24,33 +25,33 @@ func artifactRecordsToProto(recs artifacts.RecordList) []*sessionv1.ArtifactReco
 	return out
 }
 
-func artifactRecordToProto(r artifacts.ArtifactRecord) *sessionv1.ArtifactRecordProto {
+func artifactRecordToProto(r domain.ArtifactRecord) *sessionv1.ArtifactRecordProto {
 	p := &sessionv1.ArtifactRecordProto{Kind: u(string(r.Kind()))}
 	switch v := r.(type) {
-	case artifacts.PRRecord:
+	case domain.PRRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_Pr{Pr: &sessionv1.ArtifactPRRecord{
 			Host: u(v.Host), Owner: u(v.Owner), Repo: u(v.Repo), Number: int32(v.Number), //#nosec G115 -- PR numbers are far below int32 max
 			Source: u(string(v.Source)), Branch: u(v.Branch), Base: u(v.Base),
 		}}
-	case artifacts.BranchRecord:
+	case domain.BranchRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_Branch{Branch: &sessionv1.ArtifactBranchRecord{Name: u(v.Name), Action: u(v.Action)}}
-	case artifacts.CommitRecord:
+	case domain.CommitRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_Commit{Commit: &sessionv1.ArtifactCommitRecord{Sha: u(v.SHA), Subject: u(v.Subject), Branch: u(v.Branch)}}
-	case artifacts.IssueRecord:
+	case domain.IssueRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_Issue{Issue: &sessionv1.ArtifactIssueRecord{
 			Host: u(v.Host), Owner: u(v.Owner), Repo: u(v.Repo), Number: int32(v.Number), Relation: u(v.Relation), //#nosec G115 -- issue numbers are far below int32 max
 		}}
-	case artifacts.PlanDocRecord:
+	case domain.PlanDocRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_PlanDoc{PlanDoc: &sessionv1.ArtifactPlanDocRecord{Path: u(v.Path)}}
-	case artifacts.CILinkRecord:
+	case domain.CILinkRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_CiLink{CiLink: &sessionv1.ArtifactCILinkRecord{Url: u(v.URL)}}
-	case artifacts.CommandRecord:
+	case domain.CommandRecord:
 		p.FirstSeenAt = seenAt(v.FirstSeenAt)
 		p.Record = &sessionv1.ArtifactRecordProto_Command{Command: &sessionv1.ArtifactCommandRecord{
 			Type: u(v.Type), Command: u(v.Command), Detail: u(v.Detail), Result: u(v.Result),
@@ -70,7 +71,7 @@ func seenAt(t time.Time) *timestamppb.Timestamp {
 }
 
 // ArtifactRecordToProto maps one typed record to the wire (nil for an unknown variant).
-func ArtifactRecordToProto(r artifacts.ArtifactRecord) *sessionv1.ArtifactRecordProto {
+func ArtifactRecordToProto(r domain.ArtifactRecord) *sessionv1.ArtifactRecordProto {
 	return artifactRecordToProto(r)
 }
 

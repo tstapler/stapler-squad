@@ -5,6 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // terminalStatusStore is the narrow storage capability commitTerminalStatus
@@ -15,7 +16,7 @@ import (
 // capability none of them exercise. *session.Storage satisfies this
 // structurally with no extra wiring.
 type terminalStatusStore interface {
-	UpdateInstanceIfEpoch(ctx context.Context, id string, capturedEpoch uint64, status session.Status, failureReason string) (bool, error)
+	UpdateInstanceIfEpoch(ctx context.Context, id string, capturedEpoch uint64, status domain.Status, failureReason string) (bool, error)
 }
 
 // commitTerminalStatus is the one terminal-write entry point every background
@@ -37,7 +38,7 @@ type terminalStatusStore interface {
 // false immediately without ever touching in-memory state: the database is the
 // source of truth for a terminal write, and it already reflects a later
 // writer's outcome, so there is nothing to reconcile.
-func commitTerminalStatus(ctx context.Context, storage terminalStatusStore, instance *session.Instance, capturedEpoch uint64, status session.Status, failureReason string) bool {
+func commitTerminalStatus(ctx context.Context, storage terminalStatusStore, instance *session.Instance, capturedEpoch uint64, status domain.Status, failureReason string) bool {
 	applied, err := storage.UpdateInstanceIfEpoch(ctx, instance.GetStableID(), capturedEpoch, status, failureReason)
 	if err != nil {
 		log.Error("commitTerminalStatus: durable persist failed", "session", instance.GetStableID(), "status", status, "err", err)

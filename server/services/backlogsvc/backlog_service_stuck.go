@@ -21,7 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -217,7 +217,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 	// fetch them for every such item in one batch instead of per row.
 	var reviewIDs []string
 	for _, row := range rows {
-		if row.ItemStatus == session.BacklogStatusReview {
+		if row.ItemStatus == domain.BacklogStatusReview {
 			reviewIDs = append(reviewIDs, row.ItemID)
 		}
 	}
@@ -232,7 +232,7 @@ func (s *BacklogService) ListStuckBacklogItems(
 	items := make([]*sessionv1.StuckBacklogItem, len(rows))
 	for i, row := range rows {
 		items[i] = stuckBacklogItemToProto(row)
-		if ref := backlog.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
+		if ref := stuck.PendingDuplicateRef(sessionsByItem[row.ItemID]); ref != "" {
 			items[i].DuplicatePending = true
 			items[i].DuplicateRef = ref
 		}

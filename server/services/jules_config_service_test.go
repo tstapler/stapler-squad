@@ -17,7 +17,9 @@ import (
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -49,7 +51,7 @@ func (f *fakeJulesKeyManager) DeleteJulesAPIKey(_ context.Context) error {
 
 // fakeJulesPollerStorage is a minimal fake session.julesPollerStorage (an
 // unexported interface — satisfied structurally) so a real
-// *session.JulesSessionPoller can be exercised here without a real
+// *sessionjules.JulesSessionPoller can be exercised here without a real
 // *session.Storage. Only ListOpenJulesItemSessions/GetItemSessionBySessionUUID
 // carry test-controlled data; every write is a no-op success.
 type fakeJulesPollerStorage struct {
@@ -77,15 +79,15 @@ func (f *fakeJulesPollerStorage) AppendProgressNote(_ context.Context, _ string,
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, _ session.TransitionRequest, _ session.PRAssociation) error {
+func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, _ backlogdto.TransitionRequest, _ backlogdto.PRAssociation) error {
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, _, _ string, _ session.AttachSource) (bool, error) {
+func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, _, _ string, _ domain.AttachSource) (bool, error) {
 	return true, nil
 }
 
-func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, _ session.TransitionRequest) (*backlogdto.BacklogItemData, error) {
+func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, _ backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
 	return &backlogdto.BacklogItemData{}, nil
 }
 
@@ -196,12 +198,12 @@ func TestJulesConfigService_GetJulesConfig_should_ReflectPollerAuthReconnectRequ
 		}},
 		summary: backlogdto.ItemSessionSummary{ID: "is-1", SessionUUID: "jules-sessions/xyz", Role: session.SessionRoleJulesWork},
 	}
-	pollerCfg := session.JulesSessionPollerConfig{
+	pollerCfg := sessionjules.JulesSessionPollerConfig{
 		PollInterval:  5 * time.Millisecond,
 		CallTimeout:   time.Second,
 		MaxSessionAge: time.Hour,
 	}
-	poller := session.NewJulesSessionPoller(client, storage, pollerCfg)
+	poller := sessionjules.NewJulesSessionPoller(client, storage, pollerCfg)
 	svc := NewJulesConfigService(nil, nil, poller)
 
 	poller.Start(t.Context())

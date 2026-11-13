@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
@@ -32,7 +34,7 @@ func mustInt64CounterWorktreeTypeMismatch(meter metric.Meter, name string, opts 
 // recordSessionCreationWorktreeTypeMismatch increments
 // sessionCreationWorktreeTypeMismatchTotal, labeled by the SessionType the
 // instance actually resolved to, for one detected mismatch.
-func recordSessionCreationWorktreeTypeMismatch(resolvedSessionType SessionType) {
+func recordSessionCreationWorktreeTypeMismatch(resolvedSessionType domain.SessionType) {
 	sessionCreationWorktreeTypeMismatchTotal.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("resolved_session_type", string(resolvedSessionType)),
 	))

@@ -36,7 +36,7 @@ func newTrackedWorkSession(t *testing.T, storage *session.Storage, itemID, repoP
 
 	inst := newTestInstance("tracked-work-session")
 	inst.UUID = uuid.New().String()
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath+"/../wt", "tracked-work-session", branchName, "abc123")
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath+"/../wt", "tracked-work-session", branchName, "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
@@ -182,7 +182,7 @@ func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetect
 		Title:              "Branch-mismatch superseded test item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           dir,
 	})
 	require.NoError(t, err)
@@ -208,7 +208,7 @@ func TestCloseIfSupersededByMain_should_NotClosePR_When_HeadBranchMismatchDetect
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "the item must remain pr_pending, not be auto-completed")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "the item must remain pr_pending, not be auto-completed")
 	assert.Equal(t, prNumber, fetched.PrNumber, "PrNumber must remain set — not cleared by a guard-blocked close")
 }
 
@@ -241,7 +241,7 @@ func TestPRMergeDone_TriggersCleanup(t *testing.T) {
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	require.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	require.Equal(t, string(domain.BacklogStatusDone), fetched.Status)
 	assert.Contains(t, cleaner.calls(), item.ID,
 		"ReconcilePRPending's merge-detected done transition must trigger synchronous cleanup, not rely solely on the 60s sweep")
 }
@@ -266,7 +266,7 @@ func TestReconcilePRPending_should_NotTransitionToDone_When_HeadBranchMismatchDe
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status,
 		"a merged PR whose head branch no longer matches the tracked branch must not auto-complete the item")
 }
 
@@ -298,7 +298,7 @@ func TestReconcilePRPending_should_TransitionToDone_When_WorkSessionRowAlreadyDe
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status,
 		"a merged PR must still auto-complete the item when the work session's Session/Worktree rows are already gone, as long as ItemSession.BranchName records the tracked branch")
 }
 
@@ -314,7 +314,7 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:    "Bouncing item with merged PR, mismatched head branch",
-		Status:   string(session.BacklogStatusInProgress),
+		Status:   string(domain.BacklogStatusInProgress),
 		RepoPath: "/tmp/fake-repo",
 	})
 	require.NoError(t, err)
@@ -328,9 +328,9 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/tracked-branch", "")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusReview, nil, session.TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReview, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -346,7 +346,7 @@ func TestReconcileBouncingItems_should_NotTransitionToDone_When_HeadBranchMismat
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.NotEqual(t, string(session.BacklogStatusDone), fetched.Status,
+	assert.NotEqual(t, string(domain.BacklogStatusDone), fetched.Status,
 		"a merged PR whose head branch no longer matches the tracked branch must not auto-complete the item")
 }
 
@@ -379,7 +379,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_ClosedPRHead
 		Title:              "Closed PR, unverified association",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           dir,
 	})
 	require.NoError(t, err)
@@ -436,7 +436,7 @@ func TestReconcilePRPending_should_IncludeUnverifiedDisclaimer_When_CIFailingPRH
 		Title:              "CI-failing PR, unverified association",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           dir,
 	})
 	require.NoError(t, err)
@@ -498,7 +498,7 @@ func TestReconcilePRPending_should_OmitUnverifiedDisclaimer_When_CIFailingPRHead
 		Title:              "CI-failing PR, verified association",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           dir,
 	})
 	require.NoError(t, err)
@@ -556,7 +556,7 @@ func TestReconcilePRPending_should_TransitionToDone_When_StampedBranchLacksBackl
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status)
 }
 
 // TestReconcilePRPending_should_TransitionToDone_When_OnlyTipCommitSurvives
@@ -591,7 +591,7 @@ func TestReconcilePRPending_should_TransitionToDone_When_OnlyTipCommitSurvives(t
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status)
 }
 
 // TestReconcilePRPending_should_MarkStuckAndNotifyOnce_When_MergedPRCannotBeVerified
@@ -618,10 +618,10 @@ func TestReconcilePRPending_should_MarkStuckAndNotifyOnce_When_MergedPRCannotBeV
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "an unverifiable merged PR must not auto-complete the item")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "an unverifiable merged PR must not auto-complete the item")
 	rows, err := storage.Repo.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, found := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonMergedPRUnverified)
+	_, found := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonMergedPRUnverified)
 	assert.True(t, found, "the refusal must be recorded as an open merged_pr_unverified stuck row")
 	assert.Len(t, notifier.Calls, 1, "the operator must be notified exactly once across ticks")
 }
@@ -665,7 +665,7 @@ func TestReconcilePRPending_should_RetryWithoutMarkingStuck_When_OwnershipVerifi
 	listener.ReconcilePRPending(ctx, storage.Repo)
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status, "once the transient rejection clears, the merge must still be detected and auto-completed")
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status, "once the transient rejection clears, the merge must still be detected and auto-completed")
 }
 
 // assertNotStuckAsMergedPRUnverified asserts itemID is still pr_pending with
@@ -676,10 +676,10 @@ func assertNotStuckAsMergedPRUnverified(t *testing.T, storage *session.Storage, 
 	t.Helper()
 	fetched, err := storage.GetBacklogItem(context.Background(), itemID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "a transient rejection must not block the item from later completing")
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status, "a transient rejection must not block the item from later completing")
 	rows, err := storage.Repo.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	_, found := session.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMergedPRUnverified)
+	_, found := backlogdto.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMergedPRUnverified)
 	assert.False(t, found, "a transient admission-control rejection must never be recorded as a merged_pr_unverified stuck row")
 	assert.Empty(t, notifier.Calls, "a retryable error must not trigger the never-auto-resolving operator notification")
 }
@@ -693,7 +693,7 @@ func TestPROwnershipFor(t *testing.T) {
 		assert.Equal(t, []string{"x", session.BacklogBranchPrefix + "x"}, own.branches)
 	})
 	t.Run("already-prefixed branch is not double-prefixed and dedupes the worktree copy", func(t *testing.T) {
-		own := prOwnershipFor(&backlogdto.ItemSessionSummary{BranchName: "backlog/x"}, &session.GitWorktreeData{BranchName: "backlog/x"})
+		own := prOwnershipFor(&backlogdto.ItemSessionSummary{BranchName: "backlog/x"}, &domain.GitWorktreeData{BranchName: "backlog/x"})
 		assert.Equal(t, []string{"backlog/x"}, own.branches)
 	})
 	t.Run("tip commit is evidence", func(t *testing.T) {
@@ -705,7 +705,7 @@ func TestPROwnershipFor(t *testing.T) {
 		assert.True(t, own.empty())
 	})
 	t.Run("nothing recorded is empty", func(t *testing.T) {
-		assert.True(t, prOwnershipFor(nil, &session.GitWorktreeData{}).empty())
+		assert.True(t, prOwnershipFor(nil, &domain.GitWorktreeData{}).empty())
 	})
 }
 

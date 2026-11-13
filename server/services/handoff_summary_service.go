@@ -9,8 +9,8 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -24,11 +24,11 @@ var _ sessionv1connect.HandoffSummaryServiceHandler = (*HandoffSummaryService)(n
 // no_ent_in_services/forbidigo rules), translated to the domain.ErrNotFound
 // sentinel at the boundary.
 type HandoffSummaryService struct {
-	generator *session.HandoffSummaryGenerator
+	generator *summaries.HandoffSummaryGenerator
 }
 
 // NewHandoffSummaryService creates a HandoffSummaryService.
-func NewHandoffSummaryService(generator *session.HandoffSummaryGenerator) *HandoffSummaryService {
+func NewHandoffSummaryService(generator *summaries.HandoffSummaryGenerator) *HandoffSummaryService {
 	return &HandoffSummaryService{generator: generator}
 }
 
@@ -146,10 +146,10 @@ func (s *HandoffSummaryService) TriggerHandoffSummary(
 	return connect.NewResponse(&sessionv1.TriggerHandoffSummaryResponse{Summary: toHandoffSummaryProto(current)}), nil
 }
 
-// toHandoffSummaryProto maps a *session.HandoffSummary domain row to its
+// toHandoffSummaryProto maps a *summaries.HandoffSummary domain row to its
 // proto representation. Returns nil for a nil row (mirrors
 // GetHandoffSummaryResponse.Summary's "unset when no row exists" contract).
-func toHandoffSummaryProto(row *session.HandoffSummary) *sessionv1.HandoffSummaryProto {
+func toHandoffSummaryProto(row *summaries.HandoffSummary) *sessionv1.HandoffSummaryProto {
 	if row == nil {
 		return nil
 	}
@@ -180,14 +180,14 @@ func toHandoffSummaryProto(row *session.HandoffSummary) *sessionv1.HandoffSummar
 // rather than panicking (defensive against a future status value the proto
 // hasn't caught up to yet).
 func toHandoffSummaryStatusProto(status string) sessionv1.HandoffSummaryStatus {
-	switch session.HandoffSummaryStatus(status) {
-	case session.HandoffSummaryStatusPending:
+	switch summaries.HandoffSummaryStatus(status) {
+	case summaries.HandoffSummaryStatusPending:
 		return sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_PENDING
-	case session.HandoffSummaryStatusGenerating:
+	case summaries.HandoffSummaryStatusGenerating:
 		return sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_GENERATING
-	case session.HandoffSummaryStatusReady:
+	case summaries.HandoffSummaryStatusReady:
 		return sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_READY
-	case session.HandoffSummaryStatusError:
+	case summaries.HandoffSummaryStatusError:
 		return sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_ERROR
 	default:
 		return sessionv1.HandoffSummaryStatus_HANDOFF_SUMMARY_STATUS_UNSPECIFIED

@@ -2,6 +2,8 @@ package session
 
 import (
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/domain"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"testing"
 	"time"
 )
@@ -10,34 +12,34 @@ import (
 func TestReviewQueueWorkflow(t *testing.T) {
 	t.Parallel()
 	// Create a review queue
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	// Simulate three sessions needing attention
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:   "web-app",
 		SessionName: "Web App Development",
-		Reason:      ReasonApprovalPending,
-		Priority:    PriorityHigh,
+		Reason:      queuepkg.ReasonApprovalPending,
+		Priority:    queuepkg.PriorityHigh,
 		DetectedAt:  time.Now(),
 		Context:     "Would you like me to proceed with the database migration?",
 		PatternName: "approval_dialog",
 	})
 
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:   "api-service",
 		SessionName: "API Service",
-		Reason:      ReasonErrorState,
-		Priority:    PriorityUrgent,
+		Reason:      queuepkg.ReasonErrorState,
+		Priority:    queuepkg.PriorityUrgent,
 		DetectedAt:  time.Now().Add(-5 * time.Minute),
 		Context:     "Error: Failed to connect to database",
 		PatternName: "error_message",
 	})
 
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:   "backend-tests",
 		SessionName: "Backend Tests",
-		Reason:      ReasonTaskComplete,
-		Priority:    PriorityLow,
+		Reason:      queuepkg.ReasonTaskComplete,
+		Priority:    queuepkg.PriorityLow,
 		DetectedAt:  time.Now().Add(-10 * time.Minute),
 		Context:     "All tests passed successfully",
 		PatternName: "task_complete",
@@ -60,13 +62,13 @@ func TestReviewQueueWorkflow(t *testing.T) {
 	}
 
 	// Verify priority order
-	if items[0].Priority != PriorityUrgent {
+	if items[0].Priority != queuepkg.PriorityUrgent {
 		t.Error("First item should be urgent (error state)")
 	}
-	if items[1].Priority != PriorityHigh {
+	if items[1].Priority != queuepkg.PriorityHigh {
 		t.Error("Second item should be high priority (approval)")
 	}
-	if items[2].Priority != PriorityLow {
+	if items[2].Priority != queuepkg.PriorityLow {
 		t.Error("Third item should be low priority (task complete)")
 	}
 
@@ -99,12 +101,12 @@ func TestReviewQueueWorkflow(t *testing.T) {
 func TestReviewQueueIntegrationWithInstance(t *testing.T) {
 	t.Parallel()
 	// Create a shared review queue
-	queue := NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	// Create a session instance
 	inst := &Instance{
 		Title:  "test-session",
-		Status: Running,
+		Status: domain.Active,
 	}
 
 	// Wire up the review queue
@@ -116,11 +118,11 @@ func TestReviewQueueIntegrationWithInstance(t *testing.T) {
 	}
 
 	// Add instance to review queue
-	queue.Add(&ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:   inst.Title,
 		SessionName: inst.Title,
-		Reason:      ReasonInputRequired,
-		Priority:    PriorityMedium,
+		Reason:      queuepkg.ReasonInputRequired,
+		Priority:    queuepkg.PriorityMedium,
 		DetectedAt:  time.Now(),
 		Context:     "Waiting for user input",
 	})

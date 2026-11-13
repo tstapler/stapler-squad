@@ -1,9 +1,12 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"os"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ErrShellStopped is returned when an operation is attempted on a shell that has been stopped.
@@ -67,22 +70,6 @@ type Shell struct {
 	watcherDone chan struct{}
 }
 
-// ShellData carries the input fields for creating a new shell.
-type ShellData struct {
-	// ID is the UUID for the shell. If empty, the caller must populate it.
-	ID string
-	// Name is the user-visible label.
-	Name string
-	// Command is the command to run in the shell.
-	Command string
-	// WorkingDir is the starting directory for the shell process.
-	WorkingDir string
-	// TmuxSessionName is the full sibling tmux session name.
-	TmuxSessionName string
-	// OrderIndex is the display order for the tab.
-	OrderIndex int
-}
-
 // SpawnShellRequest carries the parameters for Instance.SpawnShell.
 type SpawnShellRequest struct {
 	// Name is the optional user-visible label. Defaults to the command base name.
@@ -91,4 +78,25 @@ type SpawnShellRequest struct {
 	Command string
 	// WorkingDir is the starting directory. Defaults to the session's WorkingDir.
 	WorkingDir string
+}
+
+// ShellRepository is the minimal persistence interface for per-session shell management.
+// It is implemented by EntRepository; pass nil to disable persistence (e.g., tests).
+type ShellRepository interface {
+	// CreateShell persists a new shell record under the given session title.
+	CreateShell(ctx context.Context, sessionTitle string, data domain.ShellData) error
+	// ListShells returns all shell records for the given session title, ordered by order_index.
+	ListShells(ctx context.Context, sessionTitle string) ([]domain.ShellData, error)
+	// UpdateShellStatus sets the status (and optionally exit code) for the shell with the given ID.
+	UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error
+	// DeleteShell removes the shell record with the given ID.
+	DeleteShell(ctx context.Context, shellID string) error
+}
+
+// InitialPromptRepository is the minimal persistence interface for recording when
+// Instance.InitialPrompt was actually sent. It is implemented by EntRepository;
+// pass nil to disable persistence (e.g., tests).
+type InitialPromptRepository interface {
+	// UpdateInitialPromptSentAt sets the initial_prompt_sent_at field for a session.
+	UpdateInitialPromptSentAt(ctx context.Context, title string, t time.Time) error
 }

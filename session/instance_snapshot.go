@@ -1,8 +1,9 @@
 package session
 
-// instance_snapshot.go defines InstanceSnapshot and buildSnapshot.
+// instance_snapshot.go defines buildSnapshot. The InstanceSnapshot struct itself
+// lives in session/domain; Snapshot() and the actor setters stay with Instance.
 //
-// IMPORTANT: InstanceSnapshot's field set must be kept in sync with Instance's
+// IMPORTANT: domain.InstanceSnapshot's field set must be kept in sync with Instance's
 // mutable fields. Whenever a field is added to Instance, add it here too — this
 // is the single authoritative place that "knows" every mutable field, replacing
 // the silently-drifting ad hoc read-allowlists that produced the unguarded-access
@@ -31,165 +32,15 @@ package session
 // copies them back out so a full save never rebuilds them away.
 
 import (
-	"time"
-
-	"github.com/tstapler/stapler-squad/github"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/tokens"
 )
-
-// GitHubIntegration groups all GitHub PR / URL integration fields within
-// InstanceSnapshot (CDD Epic 3, Task 3.1a). Access via snap.GitHub.GitHubPRURL etc.
-type GitHubIntegration struct {
-	// Repository identity and PR linkage
-	GitHubPRNumber  int
-	GitHubPRURL     string
-	GitHubOwner     string
-	GitHubRepo      string
-	GitHubHost      string
-	GitHubSourceRef string
-	ClonedRepoPath  string
-	MainRepoPath    string
-	IsWorktree      bool
-	GitHubIsFork    bool
-
-	// PR status fields (populated by PRStatusPoller)
-	GitHubPRState          string
-	GitHubPRIsDraft        bool
-	GitHubPRPriority       string
-	GitHubApprovedCount    int
-	GitHubChangesReqCount  int
-	GitHubCheckConclusion  string
-	GitHubChecks           []github.CheckItem
-	GitHubReviewFeedback   []github.ReviewItem
-	GitHubMergeable        string
-	GitHubPRStatusTerminal bool
-	LastPRStatusCheck      time.Time
-
-	// Multi-PR set. PRs is a private copy per snapshot (PRView holds only
-	// values); the scalars above mirror ActivePR(PRs) whenever PRs is non-empty.
-	// LegacyPRUnrepresented and HasPRLinks are carried, never derived here.
-	PRs                   []PRView
-	LegacyPRUnrepresented bool
-	HasPRLinks            bool
-}
-
-// AutonomousModeState groups all autonomous-mode fields within InstanceSnapshot
-// (CDD Epic 3, Task 3.1b). Access via snap.Autonomous.AutonomousMode etc.
-type AutonomousModeState struct {
-	AutonomousMode     bool
-	AutonomousTurn     int32
-	AutonomousMaxTurns int32
-	AutonomousOutcome  string
-	// AutonomousStopReason is why the last autonomous run ended ("" if none).
-	AutonomousStopReason domain.StopReason
-}
-
-// InstanceSnapshot is a point-in-time, read-safe copy of all mutable Instance
-// fields. Published via Instance.snapshot (atomic.Pointer) inside stateMutex
-// at the end of every mutator so lock-free readers always see consistent state.
-//
-// Excluded: manager/dependency objects (gitManager, vncManager, cdpManager,
-// processManager, controllerManager, tagManager, shellRepo, historyDetector)
-// and callback registrations (lifecycleListeners, onRateLimitDetected,
-// onStatusChange). Those are behavior, not data; callers needing them go
-// through dedicated accessors or mailbox round-trips (Epic 3).
-type InstanceSnapshot struct {
-	// Identity / config
-	ID                    string
-	UUID                  string
-	Title                 string
-	Path                  string
-	WorkingDir            string
-	Branch                string
-	CreationWarning       string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	Status                Status
-	Program               string
-	AltScreenActive       bool
-	AltScreenBootstrapped bool
-	Height                int
-	Width                 int
-	AutoYes               bool
-	AutoApprove           bool
-	IsExpanded            bool
-	Prompt                string
-	InitialPrompt         string
-	InitialPromptSentAt   time.Time
-	Category              string
-	Note                  string
-	SessionType           SessionType
-	TmuxPrefix            string
-	TmuxServerSocket      string
-	Backend               ProcessManagerBackend
-	Tags                  []string // defensive deep copy — see buildSnapshot
-
-	// RuleTagProvenance/SuppressedRuleTags mirror Instance's ADR-002 tag-provenance
-	// fields — both defensive deep copies, see buildSnapshot.
-	RuleTagProvenance  map[string]string
-	SuppressedRuleTags map[string]bool
-
-	// Autonomous mode (grouped — access as snap.Autonomous.AutonomousMode)
-	Autonomous AutonomousModeState
-
-	// GitHub PR / URL integration (grouped — access as snap.GitHub.GitHubPRURL)
-	GitHub GitHubIntegration
-
-	// Checkpoints
-	Checkpoints      CheckpointList // defensive deep copy — see buildSnapshot
-	ActiveCheckpoint string
-	ForkedFromID     string
-	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
-	RestartedFromSessionID string
-
-	// Misc config
-	OneShot                    bool
-	Hidden                     bool
-	Pinned                     bool
-	ProjectID                  string
-	HistoryFilePath            string
-	EverHadConversationHistory bool
-	LastReviveOutcome          ReviveOutcome
-	MCPServerURL               string
-	AppendSystemPrompt         string
-	AllowedTools               string
-	PermissionMode             string
-	RateLimitAutoResume        *bool // copy of pointee — see buildSnapshot
-	PauseReason                string
-	ExitReason                 string
-	WorkflowID                 string
-	EnvVars                    map[string]string // defensive deep copy — see buildSnapshot
-	CLIFlags                   string
-	ArchivedAt                 *time.Time // copy of pointee — see buildSnapshot
-
-	// CreationProgressUpdatedAt mirrors Instance.creationProgressUpdatedAt (Epic
-	// 1.1.4/4.1) — see ToInstanceData/FromInstanceData for the persisted round trip.
-	CreationProgressUpdatedAt time.Time
-
-	// LastMeaningfulChangeAt and TurnEnded mirror the Instance fields of the same name.
-	LastMeaningfulChangeAt time.Time
-	TurnEnded              TurnEnded
-
-	// Review queue / activity state (embedded value — copied by value)
-	ReviewState
-
-	// Instance type and management metadata
-	InstanceType     InstanceType
-	IsManaged        bool
-	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
-	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
-	Artifacts        *artifacts.SessionArtifactsBlob
-	ContextHealth    tokens.ContextHealthVerdict // flat value; no deep copy needed
-}
 
 // buildSnapshot builds a point-in-time InstanceSnapshot from i.
 // Must be called while i.mu is held so all fields are stable.
 // All reference types (slices, maps, pointers) are deep-copied so that
 // mutations to the live Instance after Unlock cannot corrupt the snapshot.
-func buildSnapshot(i *Instance) *InstanceSnapshot {
-	s := &InstanceSnapshot{
+func buildSnapshot(i *Instance) *domain.InstanceSnapshot {
+	s := &domain.InstanceSnapshot{
 		ID:                        i.ID,
 		UUID:                      i.UUID,
 		Title:                     i.Title,
@@ -219,14 +70,14 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		TmuxServerSocket:          i.TmuxServerSocket,
 		Backend:                   i.Backend,
 		Tags:                      append([]string(nil), i.Tags...),
-		Autonomous: AutonomousModeState{
+		Autonomous: domain.AutonomousModeState{
 			AutonomousMode:       i.AutonomousMode,
 			AutonomousTurn:       i.AutonomousTurn,
 			AutonomousMaxTurns:   i.AutonomousMaxTurns,
 			AutonomousOutcome:    i.AutonomousOutcome,
 			AutonomousStopReason: i.AutonomousStopReason,
 		},
-		GitHub: GitHubIntegration{
+		GitHub: domain.GitHubIntegration{
 			GitHubPRNumber:         i.GitHubPRNumber,
 			GitHubPRURL:            i.GitHubPRURL,
 			GitHubOwner:            i.GitHubOwner,
@@ -243,16 +94,16 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			GitHubApprovedCount:    i.GitHubApprovedCount,
 			GitHubChangesReqCount:  i.GitHubChangesReqCount,
 			GitHubCheckConclusion:  i.GitHubCheckConclusion,
-			GitHubChecks:           append([]github.CheckItem(nil), i.GitHubChecks...),
-			GitHubReviewFeedback:   append([]github.ReviewItem(nil), i.GitHubReviewFeedback...),
+			GitHubChecks:           append([]domain.GitHubCheckItem(nil), i.GitHubChecks...),
+			GitHubReviewFeedback:   append([]domain.GitHubReviewItem(nil), i.GitHubReviewFeedback...),
 			GitHubMergeable:        i.GitHubMergeable,
 			GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
 			LastPRStatusCheck:      i.LastPRStatusCheck,
-			PRs:                    append([]PRView(nil), i.PRs...),
+			PRs:                    append([]domain.PRView(nil), i.PRs...),
 			LegacyPRUnrepresented:  i.LegacyPRUnrepresented,
 			HasPRLinks:             i.HasPRLinks,
 		},
-		Checkpoints:                append(CheckpointList(nil), i.Checkpoints...),
+		Checkpoints:                append(domain.CheckpointList(nil), i.Checkpoints...),
 		ActiveCheckpoint:           i.ActiveCheckpoint,
 		ForkedFromID:               i.ForkedFromID,
 		RestartedFromSessionID:     i.RestartedFromSessionID,
@@ -271,6 +122,11 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		ExitReason:                 i.ExitReason,
 		WorkflowID:                 i.WorkflowID,
 		CLIFlags:                   i.CLIFlags,
+		ExistingWorktree:           i.ExistingWorktree,
+		ExtraArgs:                  append([]string(nil), i.ExtraArgs...),
+		LaunchCommand:              i.LaunchCommand,
+		CreationProgress:           i.CreationProgress,
+		Retry:                      i.RetryState,
 		ReviewState:                i.ReviewState,
 		LastMeaningfulChangeAt:     i.LastMeaningfulChangeAt,
 		TurnEnded:                  i.TurnEnded,
@@ -286,6 +142,8 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 		s.GitHub.GitHubPRURL = m.URL
 		s.GitHub.GitHubPRStatusTerminal = m.Terminal
 	}
+
+	s.Retry.RetryHistory = append([]domain.RetryAttemptRecord(nil), i.RetryHistory...)
 
 	// Deep copy RateLimitAutoResume *bool
 	if i.RateLimitAutoResume != nil {

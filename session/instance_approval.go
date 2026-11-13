@@ -7,27 +7,37 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // GetReviewQueue returns the review queue for this instance.
-func (i *Instance) GetReviewQueue() *ReviewQueue {
+func (i *Instance) GetReviewQueue() *queue.ReviewQueue {
 	return i.reviewQueue
 }
 
 // SetReviewQueue sets the review queue for this instance.
-func (i *Instance) SetReviewQueue(queue *ReviewQueue) {
-	i.reviewQueue = queue
+func (i *Instance) SetReviewQueue(q *queue.ReviewQueue) {
+	i.reviewQueue = q
+}
+
+// InstanceNotifier is the notification port Instance consumes. Its method set
+// equals Notifier's (backlog_shared.go), so any Notifier satisfies it; it is
+// declared here so Instance code does not depend on the backlog-owned type.
+type InstanceNotifier interface {
+	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
+	NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool)
 }
 
 // GetNotifier returns the notifier for this instance, or nil if unset.
-func (i *Instance) GetNotifier() Notifier {
+func (i *Instance) GetNotifier() InstanceNotifier {
 	return i.notifier
 }
 
 // SetNotifier sets the notifier for this instance, used by
 // markSessionPermanentlyFailed to push a proactive notification when the
 // retry policy exhausts its attempt budget.
-func (i *Instance) SetNotifier(notifier Notifier) {
+func (i *Instance) SetNotifier(notifier InstanceNotifier) {
 	i.notifier = notifier
 }
 
@@ -40,7 +50,7 @@ func (i *Instance) NeedsReview() bool {
 }
 
 // GetReviewItem returns the review item for this instance if it exists.
-func (i *Instance) GetReviewItem() (*ReviewItem, bool) {
+func (i *Instance) GetReviewItem() (*queue.ReviewItem, bool) {
 	if i.reviewQueue == nil {
 		return nil, false
 	}
@@ -106,11 +116,11 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 		// the actor. See runActor's doc comment in actor.go.
 		s.inst.mu.Lock()
 		prevMeaningful := s.inst.LastMeaningfulOutput
-		changed := s.inst.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, s.inst.Title)
+		changed := updateReviewTimestamps(&s.inst.ReviewState, content, filteredContent, shouldUpdateMeaningful, s.inst.Title)
 		if changed && !s.inst.LastMeaningfulOutput.Equal(prevMeaningful) {
 			s.inst.touchLocked(SessionEventOutput, s.inst.LastMeaningfulOutput)
 		}
-		var snap *InstanceSnapshot
+		var snap *domain.InstanceSnapshot
 		if changed {
 			snap = buildSnapshot(s.inst)
 		}
@@ -128,7 +138,7 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 // i.mu-guarded read, since i.mu doesn't synchronize with actor commands' direct
 // field writes (see GetStatus's doc comment).
 func (i *Instance) GetTimeSinceLastMeaningfulOutput() time.Duration {
-	ns := i.loadLastMeaningfulOutputNs()
+	ns := i.LoadLastMeaningfulOutputNs()
 	if ns != 0 {
 		return time.Since(time.Unix(0, ns))
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestListSessionPRViewsByUUIDs_ShouldStayWithinStatementBudget_WhenManySessions(t *testing.T) {
@@ -17,10 +18,10 @@ func TestListSessionPRViewsByUUIDs_ShouldStayWithinStatementBudget_WhenManySessi
 	uuids := make([]string, 0, 1001)
 	for i := 0; i < 200; i++ {
 		uuids = append(uuids, fmt.Sprintf("sess-%03d", i))
-		upsertLink(t, repo, SessionPROwner(uuids[i]), mustPRRef(t, "", "acme", "app", i+1), AttachSourceBackfill)
+		upsertLink(t, repo, SessionPROwner(uuids[i]), mustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceBackfill)
 	}
 
-	var got map[string][]PRView
+	var got map[string][]domain.PRView
 	stmts := countStatements(t, repo, func() {
 		var err error
 		got, err = s.ListSessionPRViewsByUUIDs(ctx, uuids)
@@ -47,8 +48,8 @@ func TestListItemGuardViewsByItemIDs_ShouldReturnDirectLinksWithoutTombstoned(t 
 	item := addLegacyItem(t, repo, "item", "in_progress", 0, "")
 	open := mustPRRef(t, "", "acme", "app", 22)
 	gone := mustPRRef(t, "", "acme", "app", 23)
-	upsertLink(t, repo, ItemPROwner(item), open, AttachSourceReportPRCreated)
-	upsertLink(t, repo, ItemPROwner(item), gone, AttachSourceReportPRCreated)
+	upsertLink(t, repo, ItemPROwner(item), open, domain.AttachSourceReportPRCreated)
+	upsertLink(t, repo, ItemPROwner(item), gone, domain.AttachSourceReportPRCreated)
 	_, err := repo.DeleteSessionPR(ctx, ItemPROwner(item), gone)
 	require.NoError(t, err)
 
@@ -68,9 +69,9 @@ func TestListItemGuardViewsByItemIDs_ShouldFlagLegacyUnrepresented_WhenNumberHas
 	unlinked := addLegacyItem(t, repo, "unlinked", "pr_pending", 5, synthesizePRURL(ref))
 	badRef := addLegacyItem(t, repo, "bad-ref", "pr_pending", 5, "")
 	linked := addLegacyItem(t, repo, "linked", "pr_pending", 5, synthesizePRURL(ref))
-	upsertLink(t, repo, ItemPROwner(linked), ref, AttachSourceBackfill)
+	upsertLink(t, repo, ItemPROwner(linked), ref, domain.AttachSourceBackfill)
 	tombstoned := addLegacyItem(t, repo, "tombstoned", "pr_pending", 5, synthesizePRURL(ref))
-	upsertLink(t, repo, ItemPROwner(tombstoned), ref, AttachSourceBackfill)
+	upsertLink(t, repo, ItemPROwner(tombstoned), ref, domain.AttachSourceBackfill)
 	_, err := repo.DeleteSessionPR(ctx, ItemPROwner(tombstoned), ref)
 	require.NoError(t, err)
 	noNumber := addLegacyItem(t, repo, "no-number", "pr_pending", 0, "")
@@ -93,7 +94,7 @@ func TestListItemGuardViewsByItemIDs_ShouldStayWithinStatementBudget_WhenManyIte
 	for i := 0; i < 200; i++ {
 		id := addLegacyItem(t, repo, fmt.Sprintf("item-%03d", i), "in_progress", 0, "")
 		ids = append(ids, id)
-		upsertLink(t, repo, ItemPROwner(id), mustPRRef(t, "", "acme", "app", i+1), AttachSourceReportPRCreated)
+		upsertLink(t, repo, ItemPROwner(id), mustPRRef(t, "", "acme", "app", i+1), domain.AttachSourceReportPRCreated)
 	}
 	stmts := countStatements(t, repo, func() {
 		got, err := s.ListItemGuardViewsByItemIDs(ctx, ids)
@@ -123,17 +124,17 @@ func TestListItemIDsBySessionUUIDs_ShouldReturnEveryItemOfASession(t *testing.T)
 
 func TestLegacyOnlyPRSafe_ShouldFollowThePersistedTerminalFlag(t *testing.T) {
 	t.Parallel()
-	assert.True(t, LegacyOnlyPRSafe(InstanceData{GitHubPRNumber: 9, GitHubPRStatusTerminal: true}))
-	assert.False(t, LegacyOnlyPRSafe(InstanceData{GitHubPRNumber: 9, GitHubPRStatusTerminal: false}))
+	assert.True(t, LegacyOnlyPRSafe(domain.InstanceData{GitHubPRNumber: 9, GitHubPRStatusTerminal: true}))
+	assert.False(t, LegacyOnlyPRSafe(domain.InstanceData{GitHubPRNumber: 9, GitHubPRStatusTerminal: false}))
 }
 
 func TestLegacyNumberRepresented_ShouldMatchRepoAndNumber(t *testing.T) {
 	t.Parallel()
-	d := InstanceData{GitHubPRNumber: 12, GitHubOwner: "Acme", GitHubRepo: "App", GitHubHost: "github.com"}
-	rows := make([]PRView, 0, 2)
-	rows = append(rows, PRView{Ref: mustPRRef(t, "", "acme", "app", 11)})
+	d := domain.InstanceData{GitHubPRNumber: 12, GitHubOwner: "Acme", GitHubRepo: "App", GitHubHost: "github.com"}
+	rows := make([]domain.PRView, 0, 2)
+	rows = append(rows, domain.PRView{Ref: mustPRRef(t, "", "acme", "app", 11)})
 	assert.False(t, LegacyNumberRepresented(d, rows), "links {#11} do not carry legacy #12")
-	rows = append(rows, PRView{Ref: mustPRRef(t, "", "acme", "app", 12)})
+	rows = append(rows, domain.PRView{Ref: mustPRRef(t, "", "acme", "app", 12)})
 	assert.True(t, LegacyNumberRepresented(d, rows))
-	assert.False(t, LegacyNumberRepresented(InstanceData{GitHubPRNumber: 12}, rows), "unbuildable ref is never represented")
+	assert.False(t, LegacyNumberRepresented(domain.InstanceData{GitHubPRNumber: 12}, rows), "unbuildable ref is never represented")
 }

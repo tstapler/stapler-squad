@@ -109,7 +109,7 @@ type transitionCallerKey struct{}
 // another operator-facing component forwards to TransitionBacklogItemStatus.
 // resolveTransitionCaller honors only session.CallerOperatorNotificationAction,
 // and only for the user actor.
-func WithTransitionCaller(ctx context.Context, caller session.TransitionCaller) context.Context {
+func WithTransitionCaller(ctx context.Context, caller domain.TransitionCaller) context.Context {
 	return context.WithValue(ctx, transitionCallerKey{}, caller)
 }
 
@@ -117,14 +117,14 @@ func WithTransitionCaller(ctx context.Context, caller session.TransitionCaller) 
 // the user actor is an operator; the agent actor, and any unknown value, is the
 // MCP delegate (class agent), so an unknown actor never gains the operator
 // override. Both context keys are unexported, so only in-process code sets them.
-func ResolveTransitionCaller(ctx context.Context) session.TransitionCaller {
+func ResolveTransitionCaller(ctx context.Context) domain.TransitionCaller {
 	if TransitionActorFromContext(ctx) != session.TriggeredByUser {
-		return session.CallerMCPTransitionDelegate
+		return domain.CallerMCPTransitionDelegate
 	}
-	if c, ok := ctx.Value(transitionCallerKey{}).(session.TransitionCaller); ok && c == session.CallerOperatorNotificationAction {
+	if c, ok := ctx.Value(transitionCallerKey{}).(domain.TransitionCaller); ok && c == domain.CallerOperatorNotificationAction {
 		return c
 	}
-	return session.CallerOperatorTransitionRPC
+	return domain.CallerOperatorTransitionRPC
 }
 
 func TransitionActorFromContext(ctx context.Context) string {

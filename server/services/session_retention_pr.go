@@ -6,12 +6,13 @@ import (
 	"sort"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // sweepPRSource is the three bulk reads the retention sweeper makes once per
 // cycle; *session.Storage is the production implementation.
 type sweepPRSource interface {
-	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]session.PRView, error)
+	ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error)
 	ListItemIDsBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]string, error)
 	ListItemGuardViewsByItemIDs(ctx context.Context, itemIDs []string) (map[string]session.ItemGuardView, error)
 }
@@ -20,7 +21,7 @@ type sweepPRSource interface {
 // Any read error aborts the whole cycle (loadSweepPRData), so a missing key is
 // real absence, except in guards, where a missing item is treated as unknown.
 type sweepPRData struct {
-	views   map[string][]session.PRView
+	views   map[string][]domain.PRView
 	itemIDs map[string][]string
 	guards  map[string]session.ItemGuardView
 }
@@ -61,14 +62,14 @@ func distinctItemIDs(byUUID map[string][]string) []string {
 // prEligible is the ordered PR decision list for one session (first match wins).
 // It reads only InstanceData and the bulk evidence, never a live Instance, and
 // is not behind any feature flag: it can only withhold a delete.
-func (p *sweepPRData) prEligible(d session.InstanceData) (bool, string) {
+func (p *sweepPRData) prEligible(d domain.InstanceData) (bool, string) {
 	if safe, reason := p.ownPRsEligible(d); !safe {
 		return false, reason
 	}
 	return p.itemsEligible(d)
 }
 
-func (p *sweepPRData) ownPRsEligible(d session.InstanceData) (bool, string) {
+func (p *sweepPRData) ownPRsEligible(d domain.InstanceData) (bool, string) {
 	if reason := session.OwnPRsBlockReason(d, p.views[d.UUID]); reason != "" {
 		return false, reason
 	}
@@ -78,7 +79,7 @@ func (p *sweepPRData) ownPRsEligible(d session.InstanceData) (bool, string) {
 // itemsEligible holds the session while any item it ever served still has an
 // item-direct PR that is not terminal, an unrepresented legacy PR number, or no
 // evidence at all (fail closed).
-func (p *sweepPRData) itemsEligible(d session.InstanceData) (bool, string) {
+func (p *sweepPRData) itemsEligible(d domain.InstanceData) (bool, string) {
 	for _, id := range p.itemIDs[d.UUID] {
 		g, ok := p.guards[id]
 		if reason := session.ItemGuardBlockReason(id, g, ok); reason != "" {

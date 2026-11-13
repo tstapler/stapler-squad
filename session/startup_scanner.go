@@ -5,6 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // StartupScanner scans running sessions for pre-existing approval prompts and adds
@@ -71,12 +72,12 @@ func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) i
 }
 
 // buildStartupItem creates a ReviewItem from an instance and a DetectionResult.
-func buildStartupItem(inst *Instance, result DetectionResult) *ReviewItem {
+func buildStartupItem(inst *Instance, result DetectionResult) *queue.ReviewItem {
 	lastActivity := inst.LastMeaningfulOutput
 	if lastActivity.IsZero() {
 		lastActivity = inst.CreatedAt
 	}
-	return &ReviewItem{
+	return &queue.ReviewItem{
 		SessionID:       inst.Title,
 		SessionName:     inst.Title,
 		Reason:          result.Reason,

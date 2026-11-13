@@ -27,6 +27,7 @@ go_library(
         "//config",
         "//log",
         "//proto/session/v1:sessionv1_go",
+        "//session/domain",
         "//session/pricing",
         "//session/scanbuf",
         "//session/scanqueue",
@@ -64,6 +65,7 @@ go_test(
         "//config",
         "//log",
         "//proto/session/v1:sessionv1_go",
+        "//session/domain",
         "//session/pricing",
         "//session/scanstate",
         "//testutil/wait",
@@ -77,6 +79,8 @@ filegroup(
     srcs = glob(["testdata/**"]),
     visibility = [
         "//server/services:__pkg__",
+        "//server/services/insights:__pkg__",
         "//session:__pkg__",
+        "//session/summaries:__pkg__",
     ],
 )

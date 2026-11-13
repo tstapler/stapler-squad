@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -78,7 +79,7 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 	inst := session.NewStartedInstanceForTest(t, "hidden-review-session", pm)
 	inst.UUID = sessionUUID
 	inst.Path = t.TempDir()
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	inst.Program = "claude"
 	inst.Hidden = true
 	inst.CreatedAt = time.Now()
@@ -87,7 +88,7 @@ func TestUpdateSessionSteer_ShouldSucceedOnMain_WhenHiddenLinkedReviewSession(t 
 
 	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "Awaiting review",
-		Status: string(session.BacklogStatusReview),
+		Status: string(domain.BacklogStatusReview),
 	})
 	require.NoError(t, err)
 	_, err = fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{

@@ -20,6 +20,7 @@ go_library(
         "//linear",
         "//log",
         "//session",
+        "//session/domain",
         "//session/domain/backlogdto",
         "@org_golang_x_sync//errgroup",
     ],
@@ -46,6 +47,7 @@ go_test(
         "//jira",
         "//linear",
         "//session",
+        "//session/domain",
         "@com_github_stretchr_testify//require",
     ],
 )

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
+	"github.com/tstapler/stapler-squad/session/domain"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -82,7 +83,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 		if uuidStr != "" {
 			inst.claudeSessionMu.Lock()
 			if inst.claudeSession == nil {
-				inst.claudeSession = &ClaudeSessionData{}
+				inst.claudeSession = &domain.ClaudeSessionData{}
 			}
 			inst.claudeSession.ConversationUUID = uuidStr
 			inst.claudeSessionMu.Unlock()

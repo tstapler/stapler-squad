@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestRollbackMigration_Success tests successful rollback
@@ -18,7 +19,7 @@ func TestRollbackMigration_Success(t *testing.T) {
 
 	// Create backup and a stub database file (simulating any DB file on disk)
 	backupPath := filepath.Join(tmpDir, "backup.json")
-	sessions := []InstanceData{createTestSession("session-1")}
+	sessions := []domain.InstanceData{createTestSession("session-1")}
 	writeJSONFile(t, backupPath, sessions)
 
 	dbPath := filepath.Join(tmpDir, "sessions.db")
@@ -61,7 +62,7 @@ func TestMigrateJSONToEnt_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "sessions.json")
-	sessions := []InstanceData{
+	sessions := []domain.InstanceData{
 		createTestSession("ent-session-1"),
 		createTestSession("ent-session-2"),
 		createTestSession("ent-session-3"),
@@ -105,7 +106,7 @@ func TestMigrateJSONToEnt_EmptyJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "empty.json")
-	writeJSONFile(t, jsonPath, []InstanceData{})
+	writeJSONFile(t, jsonPath, []domain.InstanceData{})
 
 	entDBPath := filepath.Join(tmpDir, "ent_sessions.db")
 
@@ -126,7 +127,7 @@ func TestMigrateJSONToEnt_DryRun(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "sessions.json")
-	sessions := []InstanceData{
+	sessions := []domain.InstanceData{
 		createTestSession("ent-session-1"),
 		createTestSession("ent-session-2"),
 	}
@@ -155,7 +156,7 @@ func TestMigrateJSONToEnt_ForceOverwrite(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "sessions.json")
-	sessions := []InstanceData{createTestSession("new-ent-session")}
+	sessions := []domain.InstanceData{createTestSession("new-ent-session")}
 	writeJSONFile(t, jsonPath, sessions)
 
 	entDBPath := filepath.Join(tmpDir, "ent_sessions.db")
@@ -200,7 +201,7 @@ func TestValidateEntMigration_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "sessions.json")
-	sessions := []InstanceData{
+	sessions := []domain.InstanceData{
 		createTestSession("ent-validate-1"),
 		createTestSession("ent-validate-2"),
 	}
@@ -223,7 +224,7 @@ func TestValidateEntMigration_CountMismatch(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	jsonPath := filepath.Join(tmpDir, "sessions.json")
-	sessions := []InstanceData{
+	sessions := []domain.InstanceData{
 		createTestSession("ent-s1"),
 		createTestSession("ent-s2"),
 		createTestSession("ent-s3"),
@@ -245,7 +246,7 @@ func TestValidateEntMigration_CountMismatch(t *testing.T) {
 }
 
 // Helper function to write JSON file
-func writeJSONFile(t *testing.T, path string, sessions []InstanceData) {
+func writeJSONFile(t *testing.T, path string, sessions []domain.InstanceData) {
 	data, err := json.MarshalIndent(sessions, "", "  ")
 	require.NoError(t, err)
 	err = os.WriteFile(path, data, 0644)

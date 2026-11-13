@@ -15,6 +15,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -25,7 +26,7 @@ func TestGetPendingGates_should_ReturnNotFound_When_ItemDoesNotExist(t *testing.
 
 	_, err := svc.GetPendingGates(ctx, connect.NewRequest(&sessionv1.GetPendingGatesRequest{
 		ItemId:   "00000000-0000-0000-0000-000000000000",
-		ToStatus: string(session.BacklogStatusRefining),
+		ToStatus: string(domain.BacklogStatusRefining),
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
@@ -46,13 +47,13 @@ func TestGetPendingGates_should_ReturnEmpty_When_TransitionHasNoConfiguredGates(
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "an item",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	resp, err := svc.GetPendingGates(ctx, connect.NewRequest(&sessionv1.GetPendingGatesRequest{
 		ItemId:   item.ID,
-		ToStatus: string(session.BacklogStatusRefining),
+		ToStatus: string(domain.BacklogStatusRefining),
 	}))
 	require.NoError(t, err)
 	assert.Empty(t, resp.Msg.Gates, "the built-in idea->refining edge has no configured gates")
@@ -96,15 +97,15 @@ func TestGetPendingGates_should_ReturnPopulatedGateStatus_When_TransitionHasConf
 	require.NoError(t, err)
 	gate, err := repo.CreateGate(ctx, session.GateCreateInput{
 		TransitionID: transition.ID,
-		Kind:         string(session.GateKindStructural),
-		Config:       map[string]interface{}{"check_id": session.StructuralCheckACComplete},
+		Kind:         string(domain.GateKindStructural),
+		Config:       map[string]interface{}{"check_id": domain.StructuralCheckACComplete},
 		Enabled:      true,
 	})
 	require.NoError(t, err)
 	require.NoError(t, engine.InvalidateCache(ctx))
 
-	criteria, err := session.SerializeAcCriteria([]session.AcCriterion{
-		{Index: 0, Text: "criterion one", Status: session.AcStatusPending},
+	criteria, err := domain.SerializeAcCriteria([]domain.AcCriterion{
+		{Index: 0, Text: "criterion one", Status: domain.AcStatusPending},
 	})
 	require.NoError(t, err)
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
@@ -123,7 +124,7 @@ func TestGetPendingGates_should_ReturnPopulatedGateStatus_When_TransitionHasConf
 
 	got := resp.Msg.Gates[0]
 	assert.Equal(t, gate.ID.String(), got.GateId)
-	assert.Equal(t, string(session.GateKindStructural), got.Kind)
+	assert.Equal(t, string(domain.GateKindStructural), got.Kind)
 	assert.False(t, got.Satisfied, "the AC criterion is still pending, so the gate must not report satisfied")
 	assert.Equal(t, "1 of 1 acceptance criteria incomplete", got.Description)
 	assert.Empty(t, got.ConfigError, "a correctly configured gate must not carry a ConfigError")
@@ -149,7 +150,7 @@ func TestGetPendingGates_should_SetConfigError_When_CustomGateReferencesUnregist
 	const unregisteredSkill = "no-such-skill"
 	_, err = repo.CreateGate(ctx, session.GateCreateInput{
 		TransitionID: transition.ID,
-		Kind:         string(session.GateKindCustom),
+		Kind:         string(domain.GateKindCustom),
 		Config:       map[string]interface{}{"skill": unregisteredSkill},
 		Enabled:      true,
 	})

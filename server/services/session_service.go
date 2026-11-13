@@ -36,9 +36,11 @@ import (
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/prompts"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -320,9 +322,9 @@ type SessionService struct {
 	// sessionSummaryGenerator is wired to each newly created session (alongside
 	// backlogLifecycleListener, at the same call sites) so that session-completion-
 	// summary generation fires on exit/stop. Nil until SetSessionSummaryGenerator is
-	// called (session/session_summary_service.go's ent-client/headless-pool wiring
+	// called (session/summaries/session_summary_service.go's ent-client/headless-pool wiring
 	// happens after SessionService construction).
-	sessionSummaryGenerator *session.SessionSummaryGenerator
+	sessionSummaryGenerator *summaries.SessionSummaryGenerator
 
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
@@ -789,7 +791,7 @@ func testModeGitHubResolver() func(ctx context.Context, input string, enterprise
 // a separate, larger mechanical refactor — out of scope here; this seam exists so new or
 // updated tests can opt in without waiting on that migration.
 func NewSessionServiceWithSearchEngine(storage session.InstanceStore, eventBus *events.EventBus, searchEngine *search.SearchEngine) *SessionService {
-	reviewQueue := session.NewReviewQueue()
+	reviewQueue := queue.NewReviewQueue()
 
 	// concStorage is the concrete backing store used by sub-services that haven't migrated to
 	// InstanceStore yet (ReviewQueueService, GitHubService, WorkspaceService). In tests using a
@@ -1263,7 +1265,7 @@ func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
 
 	// state.json stores instances inside a wrapper: {"instances": [...], ...}
 	type stateFileFormat struct {
-		Instances []session.InstanceData `json:"instances"`
+		Instances []domain.InstanceData `json:"instances"`
 	}
 	// #nosec G304 -- stateJSONPath is configDir+"/state.json", built from the internal
 	// config dir and a literal filename; never network/RPC input.

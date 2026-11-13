@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -54,7 +55,7 @@ func useSeamFake(t *testing.T) *seamFakeTymux {
 func TestSeam_UnstartedRestoredInstanceKeepsStoredDaemonID(t *testing.T) {
 	useSeamFake(t)
 	data := restoredPausedData(t, "unstarted")
-	data.Backend = BackendTymux
+	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-77"
 
 	inst, err := FromInstanceDataDeferred(data)
@@ -68,7 +69,7 @@ func TestSeam_UnstartedRestoredInstanceKeepsStoredDaemonID(t *testing.T) {
 func TestSeam_KillSessionReleasesDaemonSessionOfUnrestoredRecord(t *testing.T) {
 	fake := useSeamFake(t)
 	data := restoredPausedData(t, "kill-unrestored")
-	data.Backend = BackendTymux
+	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-78"
 	inst, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)
@@ -88,9 +89,9 @@ func TestSeam_UnpinnedRecordWithDaemonIDRestoresOnTymux(t *testing.T) {
 	inst, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 
-	assert.Equal(t, BackendTymux, inst.Backend)
+	assert.Equal(t, domain.BackendTymux, inst.Backend)
 	assert.Equal(t, "d-79", fake.gotStoredID)
-	assert.Equal(t, BackendTymux, inst.ToInstanceData().Backend)
+	assert.Equal(t, domain.BackendTymux, inst.ToInstanceData().Backend)
 }
 
 // A newly built Instance records the backend it actually resolved, as the
@@ -111,7 +112,7 @@ func TestSeam_NewInstancePinsResolvedBackend(t *testing.T) {
 func TestSeam_StaleDaemonIDOnTmuxBackendIsDropped(t *testing.T) {
 	fake := useSeamFake(t)
 	data := restoredPausedData(t, "tmux-with-stale-id")
-	data.Backend = BackendTmux
+	data.Backend = domain.BackendTmux
 	data.TymuxSessionID = "stale"
 
 	inst, err := FromInstanceDataDeferred(data)
@@ -154,7 +155,7 @@ func TestSeam_InstanceOptionsCannotCarryDaemonIdentity(t *testing.T) {
 
 func TestSeam_NewInstanceStartsWithoutDaemonIdentity(t *testing.T) {
 	useSeamFake(t)
-	inst, err := NewInstance(InstanceOptions{Title: "fresh", Path: t.TempDir(), Program: "claude", Backend: BackendTymux})
+	inst, err := NewInstance(InstanceOptions{Title: "fresh", Path: t.TempDir(), Program: "claude", Backend: domain.BackendTymux})
 	require.NoError(t, err)
 	assert.Empty(t, inst.ToInstanceData().TymuxSessionID)
 }
@@ -176,7 +177,7 @@ func TestSeam_ShadowLivenessUsesStoredDaemonSession(t *testing.T) {
 	newTymuxSessionFn = func() tymux.TymuxManager { return probe }
 	t.Cleanup(func() { newTymuxSessionFn = orig })
 	data := restoredPausedData(t, "shadow-live")
-	data.Backend = BackendTymux
+	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-90"
 	shadow, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)
@@ -196,7 +197,7 @@ func TestSeam_IsBackendProcessAliveIgnoresStoredSessionOfUnrestoredView(t *testi
 	newTymuxSessionFn = func() tymux.TymuxManager { return probe }
 	t.Cleanup(func() { newTymuxSessionFn = orig })
 	data := restoredPausedData(t, "unrestored-stream")
-	data.Backend = BackendTymux
+	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-91"
 	view, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)
@@ -225,7 +226,7 @@ func TestSeam_FailedStartOfUnrestoredRecordDoesNotKillStoredSession(t *testing.T
 	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
 	t.Cleanup(func() { newTymuxSessionFn = orig })
 	data := restoredPausedData(t, "failed-start-keeps-session")
-	data.Backend = BackendTymux
+	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-80"
 	inst, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)
@@ -255,7 +256,7 @@ func restoredTymuxWith(t *testing.T, fake tymux.TymuxManager, title string) *Ins
 	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
 	t.Cleanup(func() { newTymuxSessionFn = orig })
 	data := restoredPausedData(t, title)
-	data.Backend = BackendTymux
+	data.Backend = domain.BackendTymux
 	data.TymuxSessionID = "d-81"
 	inst, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)

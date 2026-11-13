@@ -8,8 +8,8 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // notification_actions.go computes the inline-action descriptors of a
@@ -157,7 +157,7 @@ type OpenGuidance struct {
 	// PeerHelp marks an agent-to-agent request: the operator may also withdraw it.
 	PeerHelp bool
 	// Tabbed holds the questions of a hook row in the measured multi-question shape.
-	Tabbed []session.TabbedQuestion
+	Tabbed []panereply.TabbedQuestion
 }
 
 // GuidanceLookup returns the open guidance requests among ids.

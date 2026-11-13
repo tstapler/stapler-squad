@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // benchEventBusBufferSize is the channel capacity for the EventBus used in benchmarks.
@@ -83,11 +84,11 @@ func preloadSessions(b *testing.B, repo *session.EntRepository, n int) {
 	b.Helper()
 	ctx := context.Background()
 	for i := 0; i < n; i++ {
-		data := session.InstanceData{
+		data := domain.InstanceData{
 			Title:   fmt.Sprintf("bench-session-%04d", i),
 			Path:    "/tmp/bench",
 			Branch:  "main",
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 		}
 		if err := repo.Create(ctx, data); err != nil {
@@ -162,11 +163,11 @@ func BenchmarkSessionService_GetSession(b *testing.B) {
 
 	const targetTitle = "bench-get-target"
 	ctx := context.Background()
-	if err := fix.repo.Create(ctx, session.InstanceData{
+	if err := fix.repo.Create(ctx, domain.InstanceData{
 		Title:   targetTitle,
 		Path:    "/tmp/bench",
 		Branch:  "main",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	}); err != nil {
 		b.Fatalf("failed to create target session: %v", err)
@@ -236,11 +237,11 @@ func BenchmarkSessionService_StreamTerminal_NotStarted(b *testing.B) {
 
 	const targetTitle = "bench-stream-target"
 	ctx := context.Background()
-	if err := fix.repo.Create(ctx, session.InstanceData{
+	if err := fix.repo.Create(ctx, domain.InstanceData{
 		Title:   targetTitle,
 		Path:    "/tmp/bench",
 		Branch:  "main",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	}); err != nil {
 		b.Fatalf("failed to create target session: %v", err)

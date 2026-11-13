@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // TestAttentionReasonFromDetected verifies every DetectedStatus maps to the expected reason.
@@ -11,14 +13,14 @@ func TestAttentionReasonFromDetected(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		detected detection.DetectedStatus
-		want     AttentionReason
+		want     queue.AttentionReason
 	}{
-		{detection.StatusNeedsApproval, ReasonApprovalPending},
-		{detection.StatusInputRequired, ReasonInputRequired},
-		{detection.StatusError, ReasonErrorState},
-		{detection.StatusTestsFailing, ReasonTestsFailing},
-		{detection.StatusSuccess, ReasonTaskComplete},
-		{detection.StatusIdle, ReasonIdle},
+		{detection.StatusNeedsApproval, queue.ReasonApprovalPending},
+		{detection.StatusInputRequired, queue.ReasonInputRequired},
+		{detection.StatusError, queue.ReasonErrorState},
+		{detection.StatusTestsFailing, queue.ReasonTestsFailing},
+		{detection.StatusSuccess, queue.ReasonTaskComplete},
+		{detection.StatusIdle, queue.ReasonIdle},
 		// States that do not require attention
 		{detection.StatusExecuting, ""},
 		{detection.StatusProcessing, ""},
@@ -47,18 +49,18 @@ func TestStatusFromDetected(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		detected detection.DetectedStatus
-		want     Status
+		want     domain.Status
 	}{
-		{detection.StatusReady, Active},
-		{detection.StatusIdle, Active},
-		{detection.StatusSuccess, Active},
-		{detection.StatusProcessing, Active},
-		{detection.StatusExecuting, Active},
-		{detection.StatusNeedsApproval, Active},
-		{detection.StatusInputRequired, Active},
-		{detection.StatusError, Active},
-		{detection.StatusTestsFailing, Active},
-		{detection.StatusUnknown, Active},
+		{detection.StatusReady, domain.Active},
+		{detection.StatusIdle, domain.Active},
+		{detection.StatusSuccess, domain.Active},
+		{detection.StatusProcessing, domain.Active},
+		{detection.StatusExecuting, domain.Active},
+		{detection.StatusNeedsApproval, domain.Active},
+		{detection.StatusInputRequired, domain.Active},
+		{detection.StatusError, domain.Active},
+		{detection.StatusTestsFailing, domain.Active},
+		{detection.StatusUnknown, domain.Active},
 	}
 
 	for _, tt := range tests {

@@ -16,7 +16,6 @@ import (
 	"entgo.io/ent/dialect"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -27,247 +26,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
-// InstanceData represents the serializable data of an Instance
-type InstanceData struct {
-	Title         string    `json:"title"`
-	UUID          string    `json:"uuid,omitempty"`
-	Path          string    `json:"path"`
-	WorkingDir    string    `json:"working_dir"`
-	Branch        string    `json:"branch"`
-	Status        Status    `json:"status"`
-	Height        int       `json:"height"`
-	Width         int       `json:"width"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	AutoYes       bool      `json:"auto_yes"`
-	AutoApprove   bool      `json:"auto_approve"`
-	Prompt        string    `json:"prompt"`
-	InitialPrompt string    `json:"initial_prompt,omitempty"`
-	// InitialPromptSentAt records when InitialPrompt was actually typed into the
-	// terminal, persisted so a service restart's fresh driver goroutine doesn't
-	// have to re-derive (and potentially get wrong) whether it was already sent.
-	InitialPromptSentAt time.Time `json:"initial_prompt_sent_at,omitempty"`
-
-	Program          string          `json:"program"`
-	ExistingWorktree string          `json:"existing_worktree,omitempty"`
-	Worktree         GitWorktreeData `json:"worktree"`
-	DiffStats        DiffStatsData   `json:"diff_stats"`
-
-	// New fields for session organization and grouping
-	Category   string   `json:"category,omitempty"`
-	Note       string   `json:"note,omitempty"`
-	IsExpanded bool     `json:"is_expanded,omitempty"`
-	Tags       []string `json:"tags,omitempty"` // Multi-valued tags for flexible organization
-
-	// RuleTagProvenance/SuppressedRuleTags back Instance's ADR-002 tag-provenance
-	// fields — see their doc comments on Instance for the full semantics.
-	RuleTagProvenance  map[string]string `json:"rule_tag_provenance,omitempty"`
-	SuppressedRuleTags map[string]bool   `json:"suppressed_rule_tags,omitempty"`
-
-	// Session type determines the workflow (directory, new_worktree, existing_worktree)
-	SessionType SessionType `json:"session_type,omitempty"`
-
-	// GitHub integration fields for PR/URL-based session creation
-	GitHubPRNumber  int    `json:"github_pr_number,omitempty"`
-	GitHubPRURL     string `json:"github_pr_url,omitempty"`
-	GitHubOwner     string `json:"github_owner,omitempty"`
-	GitHubRepo      string `json:"github_repo,omitempty"`
-	GitHubHost      string `json:"github_host,omitempty"`
-	GitHubSourceRef string `json:"github_source_ref,omitempty"`
-	ClonedRepoPath  string `json:"cloned_repo_path,omitempty"`
-	// Worktree detection fields
-	MainRepoPath string `json:"main_repo_path,omitempty"` // Path to main repo when this is a worktree
-	IsWorktree   bool   `json:"is_worktree,omitempty"`    // True if path is a git worktree
-	GitHubIsFork bool   `json:"github_is_fork,omitempty"` // True when remote repo is a fork
-	// PR status fields — populated by PRStatusPoller
-	GitHubPRState          string    `json:"github_pr_state,omitempty"`
-	GitHubPRIsDraft        bool      `json:"github_pr_is_draft,omitempty"`
-	GitHubPRPriority       string    `json:"github_pr_priority,omitempty"`
-	GitHubApprovedCount    int       `json:"github_approved_count,omitempty"`
-	GitHubChangesReqCount  int       `json:"github_changes_req_count,omitempty"`
-	GitHubCheckConclusion  string    `json:"github_check_conclusion,omitempty"`
-	GitHubPRStatusTerminal bool      `json:"github_pr_status_terminal,omitempty"`
-	LastPRStatusCheck      time.Time `json:"last_pr_status_check,omitempty"`
-	// Multi-PR link set carried through full saves (never JSON-serialized: the
-	// links table is the store). See Instance.PRs.
-	PRs                   []PRView `json:"-"`
-	LegacyPRUnrepresented bool     `json:"-"`
-	HasPRLinks            bool     `json:"-"`
-	// TerminalClearPending asks the full save to write terminal=false even for a
-	// session without links, whose normal save only ever sets the flag.
-	TerminalClearPending bool `json:"-"`
-	// Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation.
-	AutonomousMode bool `json:"autonomous_mode,omitempty"`
-
-	// Claude Code session persistence
-	ClaudeSession ClaudeSessionData `json:"claude_session,omitempty"`
-	// Tmux session prefix for isolation
-	TmuxPrefix string `json:"tmux_prefix,omitempty"`
-	// Tmux server socket name for isolation (used with tmux -L flag)
-	TmuxServerSocket string `json:"tmux_server_socket,omitempty"`
-	// TymuxSessionID is the tymuxd session id this Instance owns. Restore adopts
-	// it first so a rename (title -> session label) cannot orphan the live session.
-	// Empty on records saved before it existed.
-	TymuxSessionID string `json:"tymux_session_id,omitempty"`
-	// Backend is the per-session ProcessManager backend pin (e.g. BackendTymux),
-	// persisted so a process restart doesn't silently drop it — see
-	// Instance.Backend's doc comment for precedence. Empty means "no pin,
-	// fall through to the process-wide default."
-	Backend ProcessManagerBackend `json:"backend,omitempty"`
-
-	// Terminal update timestamps for activity tracking
-	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
-	LastMeaningfulOutput time.Time `json:"last_meaningful_output,omitempty"`
-
-	// Content signature for detecting actual terminal changes vs restarts
-	// This is a SHA256 hash of the terminal content used to prevent false "new activity"
-	// notifications when app restarts but terminal content hasn't changed
-	LastOutputSignature string `json:"last_output_signature,omitempty"`
-
-	// Review queue spam prevention
-	LastAddedToQueue time.Time `json:"last_added_to_queue,omitempty"`
-
-	// User interaction tracking
-	// LastViewed tracks when the user last viewed this session (terminal, session details, etc.)
-	// Used for smarter review queue notifications (don't notify if just viewed)
-	LastViewed time.Time `json:"last_viewed,omitempty"`
-
-	// Review queue snooze tracking
-	// LastAcknowledged tracks when the user last dismissed this session from review queue
-	// Sessions acknowledged after their last update won't appear in the queue until they update again
-	LastAcknowledged time.Time `json:"last_acknowledged,omitempty"`
-
-	// CreationProgressUpdatedAt records when Instance.CreationProgress was last set
-	// (Instance.creationProgressUpdatedAt, Epic 1.1.4). Persisted so the
-	// Stale-Creation Sweeper (Epic 4.1) can judge a restored Creating row's actual
-	// last-progress time after a process restart, not just its Creating-onset time.
-	CreationProgressUpdatedAt time.Time `json:"creation_progress_updated_at,omitempty"`
-
-	// Prompt detection and interaction tracking for smart review queue behavior
-	LastPromptDetected   time.Time `json:"last_prompt_detected,omitempty"`
-	LastPromptSignature  string    `json:"last_prompt_signature,omitempty"`
-	LastUserResponse     time.Time `json:"last_user_response,omitempty"`
-	ProcessingGraceUntil time.Time `json:"processing_grace_until,omitempty"`
-
-	// Checkpoint metadata for session state bookmarking (session resumption)
-	Checkpoints      CheckpointList `json:"checkpoints,omitempty"`
-	ActiveCheckpoint string         `json:"active_checkpoint,omitempty"`
-	ForkedFromID     string         `json:"forked_from_id,omitempty"`
-	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
-	RestartedFromSessionID string `json:"restarted_from_session_id,omitempty"`
-
-	// History file linkage for cold restore
-	HistoryFilePath string `json:"history_file_path,omitempty"`
-
-	// EverHadConversationHistory and LastReviveOutcome persist the
-	// session-revive-uuid-loss AC3 signal across full process restarts, not
-	// just tmux restarts — see Instance.EverHadConversationHistory.
-	EverHadConversationHistory bool   `json:"ever_had_conversation_history,omitempty"`
-	LastReviveOutcome          string `json:"last_revive_outcome,omitempty"`
-
-	// OneShot runs claude in -p mode; session exits after task completes.
-	OneShot bool `json:"one_shot,omitempty"`
-
-	// Hidden excludes this session from the default session list and review queue.
-	Hidden bool `json:"hidden,omitempty"`
-	// Pinned mirrors Instance.Pinned for JSON snapshot / ent round-trip.
-	Pinned bool `json:"pinned,omitempty"`
-
-	// ProjectID is the optional project this session belongs to.
-	ProjectID string `json:"project_id,omitempty"`
-
-	// LaunchCommand is the full command passed to tmux on session start, including
-	// any injected flags (--resume, --mcp-config, -y, initial prompt).
-	LaunchCommand string `json:"launch_command,omitempty"`
-
-	// MCPServerURL is the stapler-squad HTTP MCP endpoint passed to claude via
-	// --mcp-config on session start. Persisted so restarts re-inject the flag.
-	MCPServerURL string `json:"mcp_server_url,omitempty"`
-
-	// PauseReason records why this session was paused.
-	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource".
-	// Empty when session has never been paused.
-	PauseReason string `json:"pause_reason,omitempty"`
-
-	// ExitReason records why this session's pane crashed (Status == Crashed).
-	// Empty otherwise. Set by SessionHealthChecker (session/health.go).
-	ExitReason string `json:"exit_reason,omitempty"`
-
-	// WorkflowID is the UUID of the Workflow that spawned this session.
-	// Empty for manually-created sessions.
-	WorkflowID string `json:"workflow_id,omitempty"`
-
-	// ArchivedAt is set when the session is archived. Nil means not archived.
-	ArchivedAt *time.Time `json:"archived_at,omitempty"`
-}
-
-// GitWorktreeData represents the serializable data of a GitWorktree
-type GitWorktreeData struct {
-	RepoPath      string `json:"repo_path"`
-	WorktreePath  string `json:"worktree_path"`
-	SessionName   string `json:"session_name"`
-	BranchName    string `json:"branch_name"`
-	BaseCommitSHA string `json:"base_commit_sha"`
-}
-
-// DiffStatsData represents the serializable data of a DiffStats
-// Note: Content is excluded from JSON serialization to reduce state file size.
-// Diffs are generated on-demand via GetSessionDiff RPC when needed.
-type DiffStatsData struct {
-	Added   int    `json:"added"`
-	Removed int    `json:"removed"`
-	Content string `json:"-"` // Excluded from serialization - generated on-demand
-}
-
-// ClaudeSessionData represents Claude Code session information
-type ClaudeSessionData struct {
-	ConversationUUID string            `json:"session_id,omitempty"`       // Claude Code conversation UUID (used for --resume)
-	SquadSessionID   string            `json:"squad_session_id,omitempty"` // claude-squad's own session identifier (= Instance.UUID)
-	ProjectName      string            `json:"project_name,omitempty"`     // Project name in Claude Code
-	LastAttached     time.Time         `json:"last_attached,omitempty"`    // When this session was last used
-	Settings         ClaudeSettings    `json:"settings,omitempty"`         // User preferences for Claude Code
-	Metadata         map[string]string `json:"metadata,omitempty"`         // Additional session metadata
-}
-
-// PiSessionData represents pi-coding-agent session information needed to
-// resume a prior conversation via `pi --session <id>` (see buildPiCommand).
-// Unlike ClaudeSessionData's ConversationUUID, SessionID's format is not
-// validated here — pi 0.84.4 reports it as a standard dashed UUID in the
-// JSONL "session" header event's "id" field (see plan.md's Phase 1 spike
-// RESULTS), but this struct only requires it be non-empty to be usable.
-type PiSessionData struct {
-	SessionID    string    `json:"session_id,omitempty"`
-	LastAttached time.Time `json:"last_attached,omitempty"`
-}
-
-// UnmarshalJSON keeps backward compatibility with persisted state written
-// before SquadSessionID was renamed from ConversationID. The legacy
-// "conversation_id" key is read as a fallback when "squad_session_id" is
-// absent, so existing JSON state files continue to hydrate the field on load.
-func (c *ClaudeSessionData) UnmarshalJSON(data []byte) error {
-	type alias ClaudeSessionData
-	aux := struct {
-		*alias
-		LegacyConversationID string `json:"conversation_id,omitempty"`
-	}{alias: (*alias)(c)}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	if c.SquadSessionID == "" && aux.LegacyConversationID != "" {
-		c.SquadSessionID = aux.LegacyConversationID
-	}
-	return nil
-}
-
-// ClaudeSettings contains user preferences for Claude Code integration
-type ClaudeSettings struct {
-	AutoReattach          bool   `json:"auto_reattach"`           // Automatically reattach to last session on resume
-	PreferredSessionName  string `json:"preferred_session_name"`  // Preferred session naming pattern
-	CreateNewOnMissing    bool   `json:"create_new_on_missing"`   // Create new session if previous one is missing
-	ShowSessionSelector   bool   `json:"show_session_selector"`   // Show session selection menu on resume
-	SessionTimeoutMinutes int    `json:"session_timeout_minutes"` // Consider sessions stale after this time
-}
-
 // InstanceStore is the minimal interface the server layer needs for session persistence.
 // Defining it here (alongside the concrete Storage) allows test fakes to be built without
 // depending on the full Storage implementation.
@@ -276,11 +34,11 @@ type InstanceStore interface {
 	// ListInstanceData returns raw persisted InstanceData without constructing Instance
 	// objects or spawning PTY processes. Use this for read-only existence/title checks
 	// where calling LoadInstances() would create unnecessary side effects.
-	ListInstanceData() ([]InstanceData, error)
+	ListInstanceData() ([]domain.InstanceData, error)
 	// FindInstanceDataByID finds the single InstanceData whose stable ID or title
 	// matches id via an indexed WHERE clause, rather than ListInstanceData() plus a
 	// linear scan. Returns ErrInstanceDataNotFound when no match exists.
-	FindInstanceDataByID(id string) (*InstanceData, error)
+	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 	SaveInstances([]*Instance) error
 	AddInstance(*Instance) error
 	DeleteInstance(title string) error
@@ -444,7 +202,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
 		// load (server startup) doesn't block on cold-restoring every dead
 		// session before the HTTP server can bind.
-		inst, err := fromInstanceData(data, true)
+		inst, err := FromInstanceDataDeferred(data)
 		if err != nil {
 			log.Warn("skipping instance from repository", "session", data.Title, "err", err)
 			continue
@@ -510,7 +268,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 				if raw == "" {
 					continue
 				}
-				var blob artifacts.SessionArtifactsBlob
+				var blob domain.SessionArtifactsBlob
 				if err := json.Unmarshal([]byte(raw), &blob); err == nil {
 					inst.Artifacts = &blob
 				}
@@ -527,15 +285,15 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 // neither a link nor a tombstone is marked LegacyPRUnrepresented so full saves
 // leave the legacy columns alone. If the bulk read fails, every legacy number is
 // treated as unrepresented (protected) rather than guessed at.
-func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []InstanceData) {
+func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []domain.InstanceData) {
 	uuids := make([]string, 0, len(rows))
 	for i := range rows {
 		if rows[i].UUID != "" {
 			uuids = append(uuids, rows[i].UUID)
 		}
 	}
-	var links map[string][]PRView
-	var tombs map[string][]PRRef
+	var links map[string][]domain.PRView
+	var tombs map[string][]domain.PRRef
 	var loadErr error
 	if len(uuids) > 0 {
 		if links, loadErr = s.Repo.ListBySessionUUIDs(ctx, uuids); loadErr == nil {
@@ -557,7 +315,7 @@ func (s *Storage) hydrateSessionPRs(ctx context.Context, rows []InstanceData) {
 
 // legacyPRUnrepresented: the session's scalar number is neither a link nor tombstoned.
 // An unbuildable ref (no owner/repo) can never become a link, so it stays protected.
-func legacyPRUnrepresented(d InstanceData, tombstones []PRRef, unknown bool) bool {
+func legacyPRUnrepresented(d domain.InstanceData, tombstones []domain.PRRef, unknown bool) bool {
 	if d.GitHubPRNumber <= 0 {
 		return false
 	}
@@ -579,16 +337,16 @@ func legacyPRUnrepresented(d InstanceData, tombstones []PRRef, unknown bool) boo
 	return true
 }
 
-func sortedByAttach(prs []PRView) []PRView {
+func sortedByAttach(prs []domain.PRView) []domain.PRView {
 	out := slices.Clone(prs)
-	slices.SortStableFunc(out, func(a, b PRView) int { return a.AttachedAt.Compare(b.AttachedAt) })
+	slices.SortStableFunc(out, func(a, b domain.PRView) int { return a.AttachedAt.Compare(b.AttachedAt) })
 	return out
 }
 
 // ListInstanceData returns raw InstanceData from the repository without constructing
 // Instance objects. This avoids the side effect of FromInstanceData() calling Start()
 // (which spawns PTY processes). Use for read-only existence and title checks.
-func (s *Storage) ListInstanceData() ([]InstanceData, error) {
+func (s *Storage) ListInstanceData() ([]domain.InstanceData, error) {
 	return s.Repo.ListWithOptions(context.Background(), LoadMinimal)
 }
 
@@ -597,25 +355,8 @@ func (s *Storage) ListInstanceData() ([]InstanceData, error) {
 // RepoPath/BranchName/BaseCommitSHA (e.g. to stat the worktree or check dirty status) — plain
 // ListInstanceData uses LoadMinimal, which never populates Worktree, so any such field will
 // silently read as its zero value under that call.
-func (s *Storage) ListInstanceDataWithWorktree() ([]InstanceData, error) {
+func (s *Storage) ListInstanceDataWithWorktree() ([]domain.InstanceData, error) {
 	return s.Repo.ListWithOptions(context.Background(), LoadOptions{LoadWorktree: true})
-}
-
-// GetStableID mirrors Instance.GetStableID for InstanceData: returns UUID when set,
-// Title otherwise. Used by Registry.AcquireAll and ListInstanceIDs to produce stable
-// per-session keys without constructing live Instance objects.
-func (d InstanceData) GetStableID() string {
-	if d.UUID != "" {
-		return d.UUID
-	}
-	return d.Title
-}
-
-// MatchesID reports whether id refers to this InstanceData. Unlike Instance.MatchesID,
-// there is no tmux-name arm because InstanceData has no GetTmuxSessionName (that method
-// requires the live processManager). For tmux-name matching, call Instance.MatchesID.
-func (d InstanceData) MatchesID(id string) bool {
-	return d.Title == id || d.GetStableID() == id
 }
 
 // ErrInstanceDataNotFound is returned by FindInstanceDataByID when no match exists.
@@ -649,7 +390,7 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 		return false, nil
 	}
 	data.ArchivedAt = &at
-	data.Status = Stopped
+	data.Status = domain.Stopped
 	// The row now differs from what the live instance last saved; the caller's
 	// re-save must not be skipped as "unchanged".
 	if err := s.writeRow(data.Title, func() error { return s.Repo.Update(context.Background(), *data) }); err != nil {
@@ -668,7 +409,7 @@ func (s *Storage) ArchivedSessionUUIDs(ctx context.Context, uuids []string) (map
 // an indexed WHERE clause (EntRepository.FindByIDWithOptions) rather than loading and
 // linear-scanning every session row — see that method's doc comment for the CPU-profile
 // finding that motivated this. Returns ErrInstanceDataNotFound when no match exists.
-func (s *Storage) FindInstanceDataByID(id string) (*InstanceData, error) {
+func (s *Storage) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	return s.Repo.FindByIDWithOptions(context.Background(), id, LoadMinimal)
 }
 
@@ -781,7 +522,7 @@ func (s *Storage) AddInstance(instance *Instance) error {
 // for callers building a DB-only fixture row with no backing tmux process
 // (e.g. e2e debug seed handlers). Use AddInstance for anything with a live
 // Instance.
-func (s *Storage) CreateInstanceData(ctx context.Context, data InstanceData) error {
+func (s *Storage) CreateInstanceData(ctx context.Context, data domain.InstanceData) error {
 	return s.writeRow(data.Title, func() error { return s.Repo.Create(ctx, data) })
 }
 
@@ -903,7 +644,7 @@ func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
 // AttachSessionPR writes one PR link, its state row (insert-if-absent) and the
 // session's legacy mirror columns in a single transaction, keyed by session uuid.
 // See EntRepository.AttachSessionPR for the error contract.
-func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
+func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror PRMirror) (domain.PRLinkResult, error) {
 	res, err := s.Repo.AttachSessionPR(ctx, sessionUUID, ref, link, mirror)
 	if err == nil {
 		s.saved.reset() // the row changed behind the save fingerprints
@@ -922,9 +663,9 @@ func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal 
 
 // DetachSessionPR deletes the session's link to ref and writes its tombstone in
 // one transaction (the user's "Not mine").
-func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref PRRef) error {
+func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef) error {
 	if sessionUUID == "" {
-		return ErrNoSessionUUID
+		return domain.ErrNoSessionUUID
 	}
 	_, err := s.Repo.DeleteSessionPR(ctx, SessionPROwner(sessionUUID), ref)
 	if err == nil {
@@ -935,9 +676,9 @@ func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref P
 
 // AttachItemPR writes an item-direct PR link (agent-reported, Jules, manual). A
 // tombstoned PR is not attached (PRLinkResult.Tombstoned).
-func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref PRRef, link PRLink) (PRLinkResult, error) {
+func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
 	if itemID == "" {
-		return PRLinkResult{}, ErrInvalidPROwner
+		return domain.PRLinkResult{}, ErrInvalidPROwner
 	}
 	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, link)
 	if err == nil {
@@ -949,7 +690,7 @@ func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref PRRef, li
 // DetachItemPR deletes the item-direct link to ref and writes the item's
 // tombstone in one transaction; it reports whether a link existed. Session links
 // are untouched.
-func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref PRRef) (bool, error) {
+func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref domain.PRRef) (bool, error) {
 	if itemID == "" {
 		return false, ErrInvalidPROwner
 	}
@@ -961,9 +702,9 @@ func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref PRRef) (b
 }
 
 // SetSessionPRPinned pins or unpins one of the session's PRs; pinning clears the others.
-func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref PRRef, pinned bool) error {
+func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref domain.PRRef, pinned bool) error {
 	if sessionUUID == "" {
-		return ErrNoSessionUUID
+		return domain.ErrNoSessionUUID
 	}
 	err := s.Repo.SetPinned(ctx, SessionPROwner(sessionUUID), ref, pinned)
 	if err == nil {
@@ -973,9 +714,9 @@ func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, re
 }
 
 // ClearSessionPRTombstone removes the session's tombstone for ref, if any.
-func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref PRRef) error {
+func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref domain.PRRef) error {
 	if sessionUUID == "" {
-		return ErrNoSessionUUID
+		return domain.ErrNoSessionUUID
 	}
 	return s.Repo.ClearTombstone(ctx, SessionPROwner(sessionUUID), ref)
 }
@@ -987,17 +728,17 @@ func (s *Storage) ListPRMirrors(ctx context.Context) (map[string]PRMirror, error
 
 // UpdatePullRequestState applies one poll observation to a PR state row. Invariant I1:
 // the PR status poller is its only production caller.
-func (s *Storage) UpdatePullRequestState(ctx context.Context, ref PRRef, obs PRObservation) (PRObservationResult, error) {
+func (s *Storage) UpdatePullRequestState(ctx context.Context, ref domain.PRRef, obs PRObservation) (PRObservationResult, error) {
 	return s.Repo.UpdatePullRequestState(ctx, ref, obs)
 }
 
 // ListPollableStates is the PR poller's work list (see EntRepository.ListPollableStates).
-func (s *Storage) ListPollableStates(ctx context.Context) ([]PRView, error) {
+func (s *Storage) ListPollableStates(ctx context.Context) ([]domain.PRView, error) {
 	return s.Repo.ListPollableStates(ctx)
 }
 
 // GetPullRequestState returns the state columns of one PR.
-func (s *Storage) GetPullRequestState(ctx context.Context, ref PRRef) (PRView, error) {
+func (s *Storage) GetPullRequestState(ctx context.Context, ref domain.PRRef) (domain.PRView, error) {
 	return s.Repo.GetPullRequestState(ctx, ref)
 }
 
@@ -1034,7 +775,7 @@ func (s *Storage) GetInstanceArtifacts(title string) (string, error) {
 // id is matched against both uuid and title, mirroring InstanceData.MatchesID's
 // stable-ID-with-title-fallback convention used elsewhere in this file (e.g.
 // FindInstanceDataByID).
-func (s *Storage) UpdateInstanceIfEpoch(ctx context.Context, id string, capturedEpoch uint64, status Status, failureReason string) (bool, error) {
+func (s *Storage) UpdateInstanceIfEpoch(ctx context.Context, id string, capturedEpoch uint64, status domain.Status, failureReason string) (bool, error) {
 	client := s.GetEntClient()
 	if client == nil {
 		return false, fmt.Errorf("UpdateInstanceIfEpoch not supported by this backend")
@@ -1066,34 +807,8 @@ func (s *Storage) GetAllInstanceArtifacts() (map[string]string, error) {
 // GetSessionArtifactsByUUID loads and parses the artifact blob for the session
 // identified by its stable UUID. Returns (nil, nil) when the session exists but
 // has no stored artifacts.
-func (s *Storage) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*artifacts.SessionArtifactsBlob, error) {
+func (s *Storage) GetSessionArtifactsByUUID(ctx context.Context, sessionUUID string) (*domain.SessionArtifactsBlob, error) {
 	return s.Repo.GetSessionArtifactsByUUID(ctx, sessionUUID)
-}
-
-// --- Session-first convenience methods (Task 2.5) ---
-// These delegate directly to the Repository's Session-based methods.
-// Prefer these over the deprecated InstanceData-based methods for new code.
-
-// GetSession retrieves a session by title using the Session domain model.
-// Use ContextOptions presets (ContextMinimal, ContextUIView, etc.) to control what is loaded.
-func (s *Storage) GetSession(ctx context.Context, title string, opts ContextOptions) (*Session, error) {
-	return s.Repo.GetSession(ctx, title, opts)
-}
-
-// ListSessions retrieves all sessions using the Session domain model.
-// Use ContextOptions presets (ContextMinimal, ContextUIView, etc.) to control what is loaded.
-func (s *Storage) ListSessions(ctx context.Context, opts ContextOptions) ([]*Session, error) {
-	return s.Repo.ListSessions(ctx, opts)
-}
-
-// SaveSession upserts a session using the Session domain model.
-// If the session exists it is updated; otherwise it is created.
-// Deprecated InstanceData-based methods (SaveInstances, LoadInstances) remain for backward compatibility.
-func (s *Storage) SaveSession(ctx context.Context, session *Session) error {
-	if err := s.Repo.UpdateSession(ctx, session); err != nil {
-		return s.Repo.CreateSession(ctx, session)
-	}
-	return nil
 }
 
 // --- Permissions & Analytics --------------------------------------------------
@@ -1271,7 +986,7 @@ func (s *Storage) CreateBacklogItem(ctx context.Context, data backlogdto.Backlog
 func (s *Storage) CreateBacklogItemForDebug(ctx context.Context, data backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 	created, err := s.CreateBacklogItem(ctx, data)
 	if err == nil {
-		RecordEngineBypass(CallerDebugCreate)
+		RecordEngineBypass(backlogdto.CallerDebugCreate)
 	}
 	return created, err
 }
@@ -1368,7 +1083,7 @@ func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
 }
 
 // RawTransitionBacklogItemStatus changes the status of a backlog item.
-func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string, toStatus domain.BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
 	return s.Repo.RawTransitionBacklogItemStatus(ctx, id, toStatus, precondition, triggeredBy)
 }
 
@@ -1430,24 +1145,24 @@ func (s *Storage) RawTransitionBacklogItemStatus(ctx context.Context, id string,
 // guard is ignored (may be nil) when observed.Status is review — a
 // first-time recording never needs one.
 func (s *Storage) RawSetBacklogItemPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, prURL string, prNumber int, summary string, guard *backlogdto.PRReassignmentGuard) error {
-	return s.setPRAndTransition(ctx, observed, PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard})
+	return s.setPRAndTransition(ctx, observed, backlogdto.PRAssociation{URL: prURL, Number: prNumber, Summary: summary, Guard: guard})
 }
 
 // setPRAndTransition is the single-UPDATE write shared by
 // RawSetBacklogItemPRAndTransition and GatedSetPRAndTransition; the contract
 // is documented on the former.
-func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, pr PRAssociation) error {
+func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.BacklogItemData, pr backlogdto.PRAssociation) error {
 	prURL, prNumber, summary, guard := pr.URL, pr.Number, pr.Summary, pr.Guard
-	if observed.Status == string(BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
+	if observed.Status == string(domain.BacklogStatusPRPending) && observed.PrNumber == prNumber && prNumber > 0 {
 		return nil // already recorded — idempotent no-op
 	}
-	if pr.Additive && observed.Status == string(BacklogStatusPRPending) {
+	if pr.Additive && observed.Status == string(domain.BacklogStatusPRPending) {
 		return s.attachAdditivePR(ctx, observed, pr)
 	}
-	if observed.Status != string(BacklogStatusReview) && observed.Status != string(BacklogStatusPRPending) {
-		return fmt.Errorf("%w: expected status %q or %q, got %q", domain.ErrPreconditionFailed, BacklogStatusReview, BacklogStatusPRPending, observed.Status)
+	if observed.Status != string(domain.BacklogStatusReview) && observed.Status != string(domain.BacklogStatusPRPending) {
+		return fmt.Errorf("%w: expected status %q or %q, got %q", domain.ErrPreconditionFailed, domain.BacklogStatusReview, domain.BacklogStatusPRPending, observed.Status)
 	}
-	isReassignment := observed.Status == string(BacklogStatusPRPending)
+	isReassignment := observed.Status == string(domain.BacklogStatusPRPending)
 	if isReassignment {
 		switch {
 		case guard == nil:
@@ -1494,7 +1209,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 		ExpectedUpdatedAt: &expectedUpdatedAt,
 		Note:              fmt.Sprintf("[%s] %s", noteLabel, summary),
 	}
-	var replaced *PRRef
+	var replaced *domain.PRRef
 	if isReassignment {
 		if old, perr := ParseItemPRRef(observed.PrURL, observed.PrNumber); perr == nil {
 			replaced = &old
@@ -1502,7 +1217,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 	}
 	// The item-direct link is written for every item PR writer, flag on or off, in the
 	// same transaction as the pr_number write.
-	if _, err := s.Repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
+	if _, err := s.Repo.rawTransitionBacklogItemStatusWithPRFields(ctx, observed.ID, domain.BacklogStatusPRPending, prURL, prNumber, precondition, TriggeredBySystem, newItemPRLinkWrite(pr, replaced)); err != nil {
 		return fmt.Errorf("transition to pr_pending with PR fields: %w", err)
 	}
 
@@ -1536,7 +1251,7 @@ func (s *Storage) setPRAndTransition(ctx context.Context, observed *backlogdto.B
 }
 
 // SetItemPRFieldsWithLink writes pr_url/pr_number and the item-direct link atomically.
-func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source AttachSource) error {
+func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL string, prNumber int, source domain.AttachSource) error {
 	return s.Repo.SetItemPRFieldsWithLink(ctx, itemID, prURL, prNumber, source)
 }
 
@@ -1545,17 +1260,17 @@ func (s *Storage) SetItemPRFieldsWithLink(ctx context.Context, itemID, prURL str
 // mirror follow the derived active PR. The status never changes and no override_reason
 // or reassignment guard applies. If the mirror recompute fails, the next
 // ReconcilePRPending pass repairs it.
-func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.BacklogItemData, pr PRAssociation) error {
+func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.BacklogItemData, pr backlogdto.PRAssociation) error {
 	ref, err := ParseItemPRRef(pr.URL, pr.Number)
 	if err != nil {
 		return fmt.Errorf("additive PR: %w", err)
 	}
 	src := pr.Source
 	if src == "" {
-		src = AttachSourceReportPRCreated
+		src = domain.AttachSourceReportPRCreated
 	}
-	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(observed.ID), ref, PRLink{
-		Role: PRRoleFollowup, Source: src, Initial: PRInitial{State: PRStateOpen, URL: pr.URL},
+	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(observed.ID), ref, domain.PRLink{
+		Role: domain.PRRoleFollowup, Source: src, Initial: domain.PRInitial{State: domain.PRStateOpen, URL: pr.URL},
 	})
 	if err != nil {
 		return fmt.Errorf("additive PR: record link: %w", err)
@@ -1606,7 +1321,7 @@ func (s *Storage) HasOpenStuckReason(ctx context.Context, itemID string, reason 
 	if err != nil {
 		return false, err
 	}
-	_, ok := FindOpenStuckStateFor(rows, itemID, reason)
+	_, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	return ok, nil
 }
 
@@ -1623,7 +1338,7 @@ func (s *Storage) SnoozeStuckState(ctx context.Context, itemID string, reason do
 // (e.g. server/services, which cannot reach the unexported repo field) can
 // write stuck state. Returns false, nil when the backend does not support
 // stuck-state writes — never an error for an unsupported backend.
-func (s *Storage) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus BacklogStatus, stuckContext string) (bool, error) {
+func (s *Storage) MarkStuck(ctx context.Context, itemID string, reason domain.StuckReason, expectedStatus domain.BacklogStatus, stuckContext string) (bool, error) {
 	return s.Repo.MarkStuck(ctx, itemID, reason, expectedStatus, stuckContext)
 }
 
@@ -1713,19 +1428,19 @@ func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID s
 
 // ListSessionPRViewsByUUIDs returns each session's PR links joined to their
 // states as row data (no live Instance needed). Sessions without links are absent.
-func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error) {
+func (s *Storage) ListSessionPRViewsByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error) {
 	return s.Repo.ListBySessionUUIDs(ctx, uuids)
 }
 
 // SessionUUIDsByPR returns the sessions holding a link to ref (see EntRepository.SessionUUIDsByPR).
-func (s *Storage) SessionUUIDsByPR(ctx context.Context, ref PRRef) ([]string, error) {
+func (s *Storage) SessionUUIDsByPR(ctx context.Context, ref domain.PRRef) ([]string, error) {
 	return s.Repo.SessionUUIDsByPR(ctx, ref)
 }
 
 // AttachItemPRLink upserts an item-direct link (state row plus link) for prURL.
 // It reports attached=false, with no error, when the item carries a tombstone for
 // that PR, so a re-poll cannot undo a detach.
-func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, source AttachSource) (bool, error) {
+func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, source domain.AttachSource) (bool, error) {
 	n, err := ParsePRNumberFromURL(prURL)
 	if err != nil {
 		return false, err
@@ -1738,9 +1453,9 @@ func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, so
 	if err != nil {
 		return false, fmt.Errorf("attach item pr link: list links: %w", err)
 	}
-	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, PRLink{
-		Role: AssignRole(existing, ""), Source: source,
-		Initial: PRInitial{State: PRStateOpen, URL: strings.TrimSpace(prURL)},
+	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, domain.PRLink{
+		Role: domain.AssignRole(existing, ""), Source: source,
+		Initial: domain.PRInitial{State: domain.PRStateOpen, URL: strings.TrimSpace(prURL)},
 	})
 	if err != nil {
 		return false, fmt.Errorf("attach item pr link %s: %w", ref, err)
@@ -1749,7 +1464,7 @@ func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, so
 }
 
 // ItemPRs returns the item's derived PR set (see PRSetReader).
-func (s *Storage) ItemPRs(ctx context.Context, itemID string) ([]PRView, error) {
+func (s *Storage) ItemPRs(ctx context.Context, itemID string) ([]domain.PRView, error) {
 	return s.Repo.ItemPRsByID(ctx, itemID)
 }
 
@@ -1800,14 +1515,14 @@ func (s *Storage) ClaimDiagnoseNudgeAttempt(ctx context.Context, sessionUUID str
 }
 
 // GetWorktreeDataBySessionUUIDs forwards to EntRepository.GetWorktreeDataBySessionUUIDs.
-func (s *Storage) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]GitWorktreeData, error) {
+func (s *Storage) GetWorktreeDataBySessionUUIDs(ctx context.Context, sessionUUIDs []string) (map[string]domain.GitWorktreeData, error) {
 	return s.Repo.GetWorktreeDataBySessionUUIDs(ctx, sessionUUIDs)
 }
 
 // GetWorktreeDataBySessionUUID returns the git worktree data for the Session with
 // the given UUID. Returns empty GitWorktreeData for directory-mode sessions or if
 // the session is not found.
-func (s *Storage) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (GitWorktreeData, error) {
+func (s *Storage) GetWorktreeDataBySessionUUID(ctx context.Context, sessionUUID string) (domain.GitWorktreeData, error) {
 	return s.Repo.GetWorktreeDataBySessionUUID(ctx, sessionUUID)
 }
 
@@ -1930,7 +1645,7 @@ func (s *Storage) GetClaudeConversationUUIDBySessionUUID(ctx context.Context, se
 
 // GetMostRecentReviewVerdictForItem returns the OverallOutcome of the most recent
 // ReviewVerdict linked to any ItemSession for itemID. Returns "" when none exists.
-func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (ReviewOutcome, error) {
+func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (domain.ReviewOutcome, error) {
 	return s.Repo.GetMostRecentReviewVerdictForItem(ctx, itemID)
 }
 
@@ -1951,7 +1666,7 @@ func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, v
 // queries, not GetBacklogItem/ListItemSessions' unbounded eager-loaded
 // fetch) and returns a content hash of that diff (git.DiffHashBetween), for
 // stamping onto a review verdict's DiffHash at save time — see
-// stuck_decisions.go's IsFlakyVerdictFlipFlop, which the hash feeds.
+// stuck/decisions.go's IsFlakyVerdictFlipFlop, which the hash feeds.
 //
 // Best-effort: any resolution failure (item/session lookup, missing SHAs, a
 // git error) returns "" rather than propagating an error, matching this

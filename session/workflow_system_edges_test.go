@@ -8,14 +8,14 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func edgeKey(from, to BacklogStatus) string { return fmt.Sprintf("%s->%s", from, to) }
+func edgeKey(from, to domain.BacklogStatus) string { return fmt.Sprintf("%s->%s", from, to) }
 
 func TestSystemRequiredEdges_IsSubsetOfValidTransitionsPlusArchiveEdges_AndContainsAutomationEdges(t *testing.T) {
 	t.Parallel()
 	valid := domain.ValidTransitions()
-	archiveGroup := map[string]bool{edgeKey(BacklogStatusArchived, BacklogStatusArchived): true}
+	archiveGroup := map[string]bool{edgeKey(domain.BacklogStatusArchived, domain.BacklogStatusArchived): true}
 	for _, s := range BuiltInStageOrder {
-		archiveGroup[edgeKey(s, BacklogStatusArchived)] = true
+		archiveGroup[edgeKey(s, domain.BacklogStatusArchived)] = true
 	}
 	for _, e := range systemRequiredOffGraph {
 		archiveGroup[edgeKey(e.From, e.To)] = true
@@ -29,29 +29,29 @@ func TestSystemRequiredEdges_IsSubsetOfValidTransitionsPlusArchiveEdges_AndConta
 		require.Truef(t, IsSystemRequired(e.From, e.To), "%s enumerated but IsSystemRequired is false", k)
 	}
 
-	for _, want := range []BacklogStatus{BacklogStatusIdea, BacklogStatusRefining, BacklogStatusReady, BacklogStatusQueued} {
-		require.Truef(t, got[edgeKey(want, BacklogStatusArchived)], "SyncLoop edge %s->archived", want)
+	for _, want := range []domain.BacklogStatus{domain.BacklogStatusIdea, domain.BacklogStatusRefining, domain.BacklogStatusReady, domain.BacklogStatusQueued} {
+		require.Truef(t, got[edgeKey(want, domain.BacklogStatusArchived)], "SyncLoop edge %s->archived", want)
 	}
 	for _, k := range []string{
-		edgeKey(BacklogStatusReady, BacklogStatusQueued),
-		edgeKey(BacklogStatusQueued, BacklogStatusInProgress),
-		edgeKey(BacklogStatusReady, BacklogStatusInProgress),
-		edgeKey(BacklogStatusInProgress, BacklogStatusArchived),
-		edgeKey(BacklogStatusArchived, BacklogStatusArchived),
+		edgeKey(domain.BacklogStatusReady, domain.BacklogStatusQueued),
+		edgeKey(domain.BacklogStatusQueued, domain.BacklogStatusInProgress),
+		edgeKey(domain.BacklogStatusReady, domain.BacklogStatusInProgress),
+		edgeKey(domain.BacklogStatusInProgress, domain.BacklogStatusArchived),
+		edgeKey(domain.BacklogStatusArchived, domain.BacklogStatusArchived),
 	} {
 		require.Truef(t, got[k], "missing %s", k)
 	}
-	require.False(t, got[edgeKey(BacklogStatusDone, BacklogStatusRefining)], "the generic MCP delegate contributes no system edge")
-	require.False(t, IsSystemRequired(BacklogStatusDone, BacklogStatusRefining))
+	require.False(t, got[edgeKey(domain.BacklogStatusDone, domain.BacklogStatusRefining)], "the generic MCP delegate contributes no system edge")
+	require.False(t, IsSystemRequired(domain.BacklogStatusDone, domain.BacklogStatusRefining))
 
-	require.True(t, IsSystemRequired("custom-stage", BacklogStatusArchived), "custom-slug to=archived")
-	require.False(t, IsSystemRequired("custom-stage", BacklogStatusReady))
+	require.True(t, IsSystemRequired("custom-stage", domain.BacklogStatusArchived), "custom-slug to=archived")
+	require.False(t, IsSystemRequired("custom-stage", domain.BacklogStatusReady))
 }
 
 func TestSystemRequiredTargets_ExcludesArchiveGroup(t *testing.T) {
 	t.Parallel()
 	for _, from := range BuiltInStageOrder {
-		require.NotContains(t, SystemRequiredTargets(from), BacklogStatusArchived, from)
+		require.NotContains(t, SystemRequiredTargets(from), domain.BacklogStatusArchived, from)
 	}
-	require.ElementsMatch(t, []BacklogStatus{BacklogStatusReview, BacklogStatusReady}, SystemRequiredTargets(BacklogStatusInProgress))
+	require.ElementsMatch(t, []domain.BacklogStatus{domain.BacklogStatusReview, domain.BacklogStatusReady}, SystemRequiredTargets(domain.BacklogStatusInProgress))
 }

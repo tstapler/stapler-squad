@@ -3,13 +3,15 @@ package session
 import (
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/internal/dirwatch"
+	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -137,7 +139,7 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 		Title:            "recovery-test",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd; read'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
@@ -223,7 +225,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		Title:            "test-session-1",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
@@ -237,7 +239,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		Title:            "test-session-2",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
@@ -346,7 +348,7 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 		Title:            "test-changes-session",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		TmuxServerSocket: uniqueTestTmuxSocket(t, ""),
 	})
 	require.NoError(t, err)
@@ -566,7 +568,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 		Title:            sessionName + "-1",
 		Path:             tempRepo,
 		Program:          "bash -c 'echo first && sleep 30'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
@@ -597,7 +599,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 		Title:            sessionName + "-2",
 		Path:             tempRepo,
 		Program:          "bash -c 'echo second && sleep 30'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
@@ -674,7 +676,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		Title:            sessionTitle,
 		Path:             tempRepo,
 		Program:          "bash -c 'echo initial session && sleep 30'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		TmuxServerSocket: uniqueTestTmuxSocket(t, "1"),
 	})
 	require.NoError(t, err)
@@ -707,7 +709,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		Title:            sessionTitle, // Same title
 		Path:             tempRepo,     // Same path
 		Program:          "bash -c 'echo resumed session && sleep 30'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		TmuxServerSocket: uniqueTestTmuxSocket(t, "2"),
 	})
 	require.NoError(t, err)
@@ -801,7 +803,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 		// Simulate kill and restore. This is a directory session (no git
 		// worktree), so gitManager.GetWorktreePath() returns "" — fall back
 		// to tempRepo like the production resume path does (instance.go).
-		worktreePath := instance.GitManager.GetWorktreePath()
+		worktreePath := instance.GitManager().GetWorktreePath()
 		if worktreePath == "" {
 			worktreePath = tempRepo
 		}

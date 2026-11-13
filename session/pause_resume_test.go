@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakePauseResumeProcessManager is a minimal ProcessManager test double for
@@ -69,14 +70,14 @@ func TestPause_should_NoOpSucceed_When_ActiveInstanceNeverStarted(t *testing.T) 
 	t.Parallel()
 	inst := &Instance{
 		Title:       "never-started",
-		Status:      Active,
-		Permissions: GetManagedPermissions(),
+		Status:      domain.Active,
+		Permissions: domain.GetManagedPermissions(),
 	}
 
 	err := inst.Pause()
 
 	require.NoError(t, err)
-	assert.Equal(t, Paused, inst.Status)
+	assert.Equal(t, domain.Paused, inst.Status)
 	assert.True(t, inst.Started(), "no-op pause should mark the instance as started")
 }
 
@@ -88,8 +89,8 @@ func TestPause_should_ReturnErrPauseNotPermitted_When_PermissionDenied(t *testin
 	t.Parallel()
 	inst := &Instance{
 		Title:       "no-pause-perm",
-		Status:      Active,
-		Permissions: GetExternalPermissions(false),
+		Status:      domain.Active,
+		Permissions: domain.GetExternalPermissions(false),
 	}
 	inst.started.Store(true)
 
@@ -104,8 +105,8 @@ func TestPause_should_ReturnAlreadyPausedError_When_AlreadyPaused(t *testing.T) 
 	t.Parallel()
 	inst := &Instance{
 		Title:       "already-paused",
-		Status:      Paused,
-		Permissions: GetManagedPermissions(),
+		Status:      domain.Paused,
+		Permissions: domain.GetManagedPermissions(),
 	}
 
 	err := inst.Pause()
@@ -119,21 +120,21 @@ func TestPause_should_ReturnAlreadyPausedError_When_AlreadyPaused(t *testing.T) 
 // Creating/Stopped/Hibernated -> Paused are not valid transitions.
 func TestPause_should_ReturnInvalidTransition_When_NeverStartedFromNonPauseableState(t *testing.T) {
 	t.Parallel()
-	for _, status := range []Status{Creating, Stopped, Hibernated} {
+	for _, status := range []domain.Status{domain.Creating, domain.Stopped, domain.Hibernated} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			inst := &Instance{
 				Title:       "never-started-" + status.String(),
 				Status:      status,
-				Permissions: GetManagedPermissions(),
+				Permissions: domain.GetManagedPermissions(),
 			}
 
 			err := inst.Pause()
 
-			var transErr ErrInvalidTransition
+			var transErr domain.ErrInvalidTransition
 			require.ErrorAs(t, err, &transErr)
 			assert.Equal(t, status, transErr.From)
-			assert.Equal(t, Paused, transErr.To)
+			assert.Equal(t, domain.Paused, transErr.To)
 		})
 	}
 }
@@ -146,8 +147,8 @@ func TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverS
 	t.Parallel()
 	inst := &Instance{
 		Title:       "never-started-paused",
-		Status:      Paused,
-		Permissions: GetManagedPermissions(),
+		Status:      domain.Paused,
+		Permissions: domain.GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
 	fakePM := newFakePauseResumeProcessManager(t)
@@ -156,7 +157,7 @@ func TestResume_should_PerformRealResumeAndMarkStarted_When_PausedInstanceNeverS
 	err := inst.Resume()
 
 	require.NoError(t, err)
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.True(t, inst.Started())
 	assert.Equal(t, 1, fakePM.startCall, "Resume should start a fresh session when the old one is dead")
 }
@@ -169,8 +170,8 @@ func TestResume_should_AttachPTY_When_TmuxWasKilledOnPause(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title:       "resume-pty",
-		Status:      Paused,
-		Permissions: GetManagedPermissions(),
+		Status:      domain.Paused,
+		Permissions: domain.GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
 	fakePM := newFakePauseResumeProcessManager(t)
@@ -187,8 +188,8 @@ func TestResume_should_ReturnErrResumeNotPermitted_When_PermissionDenied(t *test
 	t.Parallel()
 	inst := &Instance{
 		Title:       "no-resume-perm",
-		Status:      Paused,
-		Permissions: GetExternalPermissions(false),
+		Status:      domain.Paused,
+		Permissions: domain.GetExternalPermissions(false),
 	}
 
 	err := inst.Resume()
@@ -204,13 +205,13 @@ func TestResume_should_NotFailFatally_When_ClaudeSessionReattachmentFails(t *tes
 	t.Parallel()
 	inst := &Instance{
 		Title:       "never-started-paused-claude",
-		Status:      Paused,
-		Permissions: GetManagedPermissions(),
+		Status:      domain.Paused,
+		Permissions: domain.GetManagedPermissions(),
 		Path:        t.TempDir(),
 	}
-	inst.claudeSession = &ClaudeSessionData{
+	inst.claudeSession = &domain.ClaudeSessionData{
 		ConversationUUID: "does-not-exist",
-		Settings:         ClaudeSettings{AutoReattach: true},
+		Settings:         domain.ClaudeSettings{AutoReattach: true},
 	}
 	fakePM := newFakePauseResumeProcessManager(t)
 	inst.processManager = fakePM
@@ -218,7 +219,7 @@ func TestResume_should_NotFailFatally_When_ClaudeSessionReattachmentFails(t *tes
 	err := inst.Resume()
 
 	require.NoError(t, err)
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.True(t, inst.Started())
 }
 

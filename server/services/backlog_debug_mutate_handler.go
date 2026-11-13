@@ -18,7 +18,7 @@ package services
 // ValidateGates business rules (plan approval, AC criteria, review verdict,
 // etc.) that a legitimate multi-step UI flow would otherwise require.
 //
-// Mirrors backlog_debug_seed_handler.go's shape and gating exactly: these
+// Mirrors debugseed/backlog_debug_seed_handler.go's shape and gating exactly: these
 // routes are registered by server.go ONLY when
 // STAPLER_SQUAD_INSTANCE=e2e-local — never reachable in a normal deploy.
 
@@ -28,6 +28,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -91,25 +92,25 @@ func (h *BacklogDebugMutateHandler) handleCreate(w http.ResponseWriter, r *http.
 	}
 	status := req.Status
 	if status == "" {
-		status = string(session.BacklogStatusIdea)
+		status = string(domain.BacklogStatusIdea)
 	}
 	priority := req.Priority
 	if priority == 0 {
 		priority = 3
 	}
 
-	var acJSON session.AcCriteriaJSON
+	var acJSON domain.AcCriteriaJSON
 	if len(req.AcCriteria) > 0 {
-		criteria := make([]session.AcCriterion, len(req.AcCriteria))
+		criteria := make([]domain.AcCriterion, len(req.AcCriteria))
 		for i, text := range req.AcCriteria {
-			criteria[i] = session.AcCriterion{Index: i, Text: text, Status: "pending"}
+			criteria[i] = domain.AcCriterion{Index: i, Text: text, Status: "pending"}
 		}
 		raw, err := json.Marshal(criteria)
 		if err != nil {
 			http.Error(w, "failed to encode acCriteria: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		acJSON = session.AcCriteriaJSON(raw)
+		acJSON = domain.AcCriteriaJSON(raw)
 	}
 
 	ctx := r.Context()
@@ -170,7 +171,7 @@ func (h *BacklogDebugMutateHandler) HandleTransition(w http.ResponseWriter, r *h
 	}
 
 	ctx := r.Context()
-	if _, err := h.storage.DebugForce(ctx, req.ItemID, session.BacklogStatus(req.TargetStatus), session.TriggeredBySystem); err != nil {
+	if _, err := h.storage.DebugForce(ctx, req.ItemID, domain.BacklogStatus(req.TargetStatus), session.TriggeredBySystem); err != nil {
 		log.Error("backlog debug mutate: transition failed", "err", err)
 		http.Error(w, "failed to transition backlog item: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -251,7 +252,7 @@ func (h *BacklogDebugMutateHandler) HandleArchive(w http.ResponseWriter, r *http
 	}
 
 	ctx := r.Context()
-	if _, err := h.storage.DebugForce(ctx, req.ItemID, session.BacklogStatusArchived, session.TriggeredByUser); err != nil {
+	if _, err := h.storage.DebugForce(ctx, req.ItemID, domain.BacklogStatusArchived, session.TriggeredByUser); err != nil {
 		log.Error("backlog debug mutate: archive failed", "err", err)
 		http.Error(w, "failed to archive backlog item: "+err.Error(), http.StatusInternalServerError)
 		return

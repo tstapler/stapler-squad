@@ -14,6 +14,7 @@ import (
 
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -79,7 +80,7 @@ func seedBacklogItems(t *testing.T, repo *session.EntRepository, ctx context.Con
 		title := fmt.Sprintf("%s-%d", titlePrefix, i)
 		_, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  title,
-			Status: string(session.BacklogStatusIdea),
+			Status: string(domain.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
 		titles = append(titles, title)
@@ -164,11 +165,11 @@ func TestMergeDatabase_should_stillPersistCopiedItems_When_EventPublishIsSuppres
 	sourceRepo, sourcePath, sourceCleanup := newTempEntRepoForMergeTest(t)
 	defer sourceCleanup()
 	seedBacklogItems(t, sourceRepo, ctx, 5, "source-item")
-	require.NoError(t, sourceRepo.Create(ctx, session.InstanceData{
+	require.NoError(t, sourceRepo.Create(ctx, domain.InstanceData{
 		Title:     "merged-session-1",
 		Path:      "/tmp/merge-test-session-1",
 		Program:   "claude",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}))
@@ -209,11 +210,11 @@ func TestMergeDatabase_should_makeCopiedItemsVisibleOnNextSnapshot_When_ClientRe
 	sourceRepo, sourcePath, sourceCleanup := newTempEntRepoForMergeTest(t)
 	defer sourceCleanup()
 	sourceTitles := seedBacklogItems(t, sourceRepo, ctx, 5, "source-item")
-	require.NoError(t, sourceRepo.Create(ctx, session.InstanceData{
+	require.NoError(t, sourceRepo.Create(ctx, domain.InstanceData{
 		Title:     "merged-session-2",
 		Path:      "/tmp/merge-test-session-2",
 		Program:   "claude",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}))

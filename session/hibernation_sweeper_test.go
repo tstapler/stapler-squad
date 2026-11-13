@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appconfig "github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/memory/memorytest"
 )
 
@@ -100,7 +101,7 @@ func makeIdleInstance(t *testing.T, uuid, title string, idleFor time.Duration) *
 		UUID:      uuid,
 		Title:     title,
 		Path:      "/tmp/test",
-		Status:    Active,
+		Status:    domain.Active,
 		Program:   "claude",
 		CreatedAt: now.Add(-idleFor),
 		UpdatedAt: now,
@@ -143,7 +144,7 @@ func TestSweeper_sweepResourcePressure_should_notHibernate_When_BelowThreshold(t
 	sweeper.sweepResourcePressure(context.Background(), instances)
 
 	// Session should still be Active — no hibernation occurred.
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 }
 
 // TestSweeper_sweepResourcePressure_should_skip_When_SystemPctIsZero verifies that
@@ -157,7 +158,7 @@ func TestSweeper_sweepResourcePressure_should_skip_When_SystemPctIsZero(t *testi
 	inst := makeIdleInstance(t, "uuid-b", "test-session", 10*time.Minute)
 	sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
 
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 }
 
 // TestSweeper_sweepResourcePressure_should_beSkipped_When_ThresholdIsZero verifies that
@@ -175,7 +176,7 @@ func TestSweeper_sweepResourcePressure_should_beSkipped_When_ThresholdIsZero(t *
 	calls := reader.GetSystemMemoryCalls()
 	// SystemMemory should NOT be called if threshold=0 (entire block gated)
 	assert.Equal(t, 0, calls)
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 }
 
 // TestSweeper_sweepResourcePressure_should_notHibernate_When_NoEligibleIdleSessions verifies
@@ -190,7 +191,7 @@ func TestSweeper_sweepResourcePressure_should_notHibernate_When_NoEligibleIdleSe
 	inst := makeIdleInstance(t, "uuid-d", "recent-session", 2*time.Minute)
 	sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
 
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 }
 
 // TestSweeper_sweepResourcePressure_should_hibernateOnlyOne_When_MultipleEligible verifies
@@ -281,7 +282,7 @@ func TestSweeper_warmRSSCache_should_skipInactive_When_InstanceNotActive(t *test
 	defer cleanup()
 
 	inst := makeIdleInstance(t, "uuid-inactive", "paused-session", 10*time.Minute)
-	inst.Status = Paused
+	inst.Status = domain.Paused
 	sweeper.warmRSSCache(context.Background(), []*Instance{inst})
 
 	assert.Equal(t, 0, reader.GetSessionRSSCalls(), "SessionsRSSMB should not be called when there are no active sessions")
@@ -315,7 +316,7 @@ func TestSweeper_warmRSSCache_should_batchAllActiveSessions_When_Multiple(t *tes
 	instB := makeIdleInstance(t, "uuid-b", "session-b", time.Minute)
 	instB.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: "tmux-b"})
 	instC := makeIdleInstance(t, "uuid-c", "session-c", time.Minute)
-	instC.Status = Paused // inactive — should be excluded from the batch
+	instC.Status = domain.Paused // inactive — should be excluded from the batch
 
 	sweeper.warmRSSCache(context.Background(), []*Instance{instA, instB, instC})
 
@@ -366,7 +367,7 @@ func TestSweeper_sweepResourcePressure_should_respectGracePeriod_When_SessionHad
 	inst := makeIdleInstance(t, "uuid-h", "recent-session", 4*time.Minute+59*time.Second)
 	sweeper.sweepResourcePressure(context.Background(), []*Instance{inst})
 
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 }
 
 type terminalViewLiveProvider struct{ instances []*Instance }
@@ -392,7 +393,7 @@ func TestSweeper_AttachedTerminalPreventsAutomaticHibernation(t *testing.T) {
 				sweeper.cfg.Hibernation.IdleTimeoutMinutes = 20
 				sweeper.sweep(context.Background())
 			}
-			assert.Equal(t, Active, inst.GetLifecycleStatus())
+			assert.Equal(t, domain.Active, inst.GetLifecycleStatus())
 			assert.Empty(t, inst.hibernateReason)
 		})
 	}

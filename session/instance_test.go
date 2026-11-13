@@ -12,10 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
@@ -43,13 +46,13 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
-		Status:    Ready,
+		Status:    domain.Active,
 		Height:    100,
 		Width:     200,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Program:   "claude",
-		GitManager: GitWorktreeManager{
+		gitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(
 				"/path/to/repo",
 				worktreePath,
@@ -77,13 +80,13 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
-		Status:    Ready,
+		Status:    domain.Active,
 		Height:    100,
 		Width:     200,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Program:   "claude",
-		GitManager: GitWorktreeManager{
+		gitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(
 				"/path/to/repo",
 				worktreePath,
@@ -100,11 +103,11 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 	// earlier instance.Paused() call above already cached a snapshot, and a
 	// raw field write wouldn't republish it — Paused() below would then keep
 	// reading the stale pre-mutation snapshot. ForceStatus republishes.
-	if !instance.Paused() && instance.GitManager.Worktree != nil {
-		worktreePath := instance.GitManager.Worktree.GetWorktreePath()
+	if !instance.Paused() && instance.gitManager.Worktree != nil {
+		worktreePath := instance.gitManager.Worktree.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted, mark instance as paused
-			instance.ForceStatus(Paused)
+			instance.ForceStatus(domain.Paused)
 		}
 	}
 
@@ -125,32 +128,21 @@ func TestStatusEnumValues(t *testing.T) {
 	// Test that all status values match the new 5-state model:
 	// Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
 	tests := []struct {
-		status Status
+		status domain.Status
 		value  int
 		name   string
 	}{
-		{Creating, 0, "Creating"},
-		{Active, 1, "Active"},
-		{Paused, 2, "Paused"},
-		{Stopped, 3, "Stopped"},
-		{Hibernated, 4, "Hibernated"},
+		{domain.Creating, 0, "Creating"},
+		{domain.Active, 1, "Active"},
+		{domain.Paused, 2, "Paused"},
+		{domain.Stopped, 3, "Stopped"},
+		{domain.Hibernated, 4, "Hibernated"},
 	}
 
 	for _, test := range tests {
 		if int(test.status) != test.value {
 			t.Errorf("Expected %s status to have value %d, got %d", test.name, test.value, int(test.status))
 		}
-	}
-
-	// Verify deprecated aliases point to their canonical equivalents.
-	if Running != Active {
-		t.Errorf("Running alias should equal Active (1), got %d", int(Running))
-	}
-	if Ready != Active {
-		t.Errorf("Ready alias should equal Active (1), got %d", int(Ready))
-	}
-	if Loading != Creating {
-		t.Errorf("Loading alias should equal Creating (0), got %d", int(Loading))
 	}
 }
 
@@ -263,11 +255,11 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// Create instance data with potentially corrupted path
-			data := InstanceData{
+			data := domain.InstanceData{
 				Title:   "Test Session",
 				Path:    tt.corruptedPath,
 				Program: "claude",
-				Status:  Paused, // Use paused to avoid starting actual session
+				Status:  domain.Paused, // Use paused to avoid starting actual session
 			}
 
 			instance, err := FromInstanceData(data)
@@ -305,7 +297,7 @@ func TestNewInstance_PopulatesEnvVars_WhenPassedInOptions(t *testing.T) {
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 		EnvVars:     map[string]string{"X": "1", "Y": "2"},
 	}
 	inst, err := NewInstance(opts)
@@ -322,7 +314,7 @@ func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 		CLIFlags:    "--foo --bar",
 	}
 	inst, err := NewInstance(opts)
@@ -339,7 +331,7 @@ func TestNewInstance_should_PreserveExtraArgsExactly_When_OptionsIncludeExtraArg
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 		ExtraArgs:   []string{"-t", "host", "cd ~/repo && exec claude"},
 	}
 	inst, err := NewInstance(opts)
@@ -362,7 +354,7 @@ func TestNewInstance_should_LeaveExtraArgsNil_When_OptionsOmitExtraArgs(t *testi
 	opts := InstanceOptions{
 		Title:       "test",
 		Path:        t.TempDir(),
-		SessionType: SessionTypeDirectory,
+		SessionType: domain.SessionTypeDirectory,
 	}
 	inst, err := NewInstance(opts)
 	if err != nil {
@@ -400,7 +392,7 @@ func TestDestroy_should_CaptureDiffStatsBeforeCleanupWorktree_When_UpdateDiffSta
 	}
 
 	inst := &Instance{Title: "diff-capture-test", UUID: "sess-diff-capture"}
-	inst.RegisterLifecycleListener(&funcLifecycleListener{fn: func(LifecycleEvent, string) {}})
+	inst.RegisterLifecycleListener(&funcLifecycleListener{fn: func(domain.LifecycleEvent, string) {}})
 	inst.SetGitWorktree(wt) // also sets started=true
 
 	if err := inst.ForceDestroy(); err != nil {
@@ -489,7 +481,7 @@ func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCom
 		t.Fatalf("CommitChanges(): %v", err)
 	}
 
-	inst := &Instance{Title: "has-commits-ahead-test", UUID: "sess-has-commits-ahead", Status: Ready}
+	inst := &Instance{Title: "has-commits-ahead-test", UUID: "sess-has-commits-ahead", Status: domain.Active}
 	inst.SetGitWorktree(wt) // also sets started=true
 
 	if err := inst.UpdateDiffStats(); err != nil {
@@ -508,7 +500,7 @@ func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCom
 // it must stay at its false zero value through a real UpdateDiffStats pass.
 func TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "dir-session-no-worktree-test", UUID: "sess-dir-no-worktree", Status: Ready, Path: t.TempDir()}
+	inst := &Instance{Title: "dir-session-no-worktree-test", UUID: "sess-dir-no-worktree", Status: domain.Active, Path: t.TempDir()}
 	inst.started.Store(true)
 
 	if err := inst.UpdateDiffStats(); err != nil {
@@ -523,7 +515,7 @@ func TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree(t *testi
 // TestInstance_GetBaseCommitSHA_should_ReturnWorktreeBaseSHA_When_WorktreeModeSession
 // covers GetBaseCommitSHA's worktree-mode branch (session/instance_worktree.go):
 // with a worktree set via SetGitWorktree, it must delegate to
-// GitWorktreeManager.GetBaseCommitSHA() rather than the directory-mode
+// gitwt.Manager.GetBaseCommitSHA() rather than the directory-mode
 // GetDirBaseSHA() fallback. Uses NewGitWorktreeFromStorage (plain struct
 // construction, no real git repo needed) since this only exercises the
 // delegation, not actual git plumbing.
@@ -543,7 +535,7 @@ func TestInstance_GetBaseCommitSHA_should_ReturnWorktreeBaseSHA_When_WorktreeMod
 // TestInstance_GetBaseCommitSHA_should_ReturnDirBaseSHA_When_DirectoryModeSession
 // covers the directory-mode fallback a prior review found untested: no worktree
 // set, only SetDirBaseSHA — GetBaseCommitSHA must fall through to
-// GitWorktreeManager.GetDirBaseSHA() rather than returning "" just because
+// gitwt.Manager.GetDirBaseSHA() rather than returning "" just because
 // HasWorktree() is false.
 func TestInstance_GetBaseCommitSHA_should_ReturnDirBaseSHA_When_DirectoryModeSession(t *testing.T) {
 	t.Parallel()
@@ -580,10 +572,10 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 	t.Parallel()
 	inst := &Instance{Title: "never-started-test", UUID: "sess-never-started"}
 
-	var gotEvent LifecycleEvent
+	var gotEvent domain.LifecycleEvent
 	fired := false
 	inst.RegisterLifecycleListener(&funcLifecycleListener{
-		fn: func(event LifecycleEvent, _ string) {
+		fn: func(event domain.LifecycleEvent, _ string) {
 			fired = true
 			gotEvent = event
 		},
@@ -593,7 +585,7 @@ func TestDestroy_should_FireEventStoppedWithEmptyDiff_When_InstanceNeverStarted(
 		t.Fatalf("Destroy() on a never-started instance should not error, got: %v", err)
 	}
 
-	if !fired || gotEvent != EventStopped {
+	if !fired || gotEvent != domain.EventStopped {
 		t.Fatalf("expected EventStopped to fire, fired=%v event=%v", fired, gotEvent)
 	}
 
@@ -613,7 +605,7 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 		Title:     "note-round-trip-test",
 		UUID:      "sess-note-round-trip",
 		Path:      "/path/to/repo",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -635,7 +627,7 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 }
 
 // TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume is the
-// regression test for a production bug caught during review: fromInstanceData
+// regression test for a production bug caught during review: instanceFromData
 // special-cases Paused/Stopped/Hibernated but, before this fix, fell through to
 // the generic branch for Crashed -- leaving Started()==false with deferStart.
 // server/dependencies.go's Step 6 startup loop unconditionally calls Start(false)
@@ -648,22 +640,22 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 // skips it.
 func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testing.T) {
 	t.Parallel()
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:      "crashed-restore-test",
 		Path:       "/tmp/crashed-restore-test",
-		Status:     Crashed,
+		Status:     domain.Crashed,
 		ExitReason: "signal SIGKILL (exit code 137)",
 		Program:    "claude",
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
 
-	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	instance, err := instanceFromData(data, true /* deferStart, matches LoadInstances() */)
 	if err != nil {
-		t.Fatalf("fromInstanceData returned error: %v", err)
+		t.Fatalf("instanceFromData returned error: %v", err)
 	}
 
-	if instance.Status != Crashed {
+	if instance.Status != domain.Crashed {
 		t.Fatalf("expected Status=Crashed, got %v", instance.Status)
 	}
 	if !instance.Started() {
@@ -676,31 +668,31 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 // TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe is a
 // regression guard for the fork-pressure fix: an archived session's tmux pane
 // is already deliberately killed at archive time (archiveItemWorkSessions),
-// so fromInstanceData must not attempt to "recover" it back to Active via the
+// so instanceFromData must not attempt to "recover" it back to Active via the
 // IsAlive()/PaneExitStatus() tmux subprocess probe every restored Stopped
 // session used to pay on every single LoadInstances() call. This pins the
 // observable postcondition (stays Stopped, Started()=true); the underlying
-// subprocess-avoidance isn't directly assertable here since fromInstanceData
+// subprocess-avoidance isn't directly assertable here since instanceFromData
 // always wires a real TmuxBackend with no injection point for a fake.
 func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *testing.T) {
 	t.Parallel()
 	archivedAt := time.Now()
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:      "archived-stopped-restore-test",
 		Path:       "/tmp/archived-stopped-restore-test",
-		Status:     Stopped,
+		Status:     domain.Stopped,
 		Program:    "claude",
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 		ArchivedAt: &archivedAt,
 	}
 
-	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	instance, err := instanceFromData(data, true /* deferStart, matches LoadInstances() */)
 	if err != nil {
-		t.Fatalf("fromInstanceData returned error: %v", err)
+		t.Fatalf("instanceFromData returned error: %v", err)
 	}
 
-	if instance.Status != Stopped {
+	if instance.Status != domain.Stopped {
 		t.Fatalf("expected Status=Stopped (archived sessions must never be revived to Active), got %v", instance.Status)
 	}
 	if !instance.Started() {
@@ -709,16 +701,16 @@ func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *te
 }
 
 // TestFromInstanceData_RestoresAutoYesAndAutoApprove is a regression guard for a bug
-// found while adding AutoApprove: fromInstanceData's Instance{} literal never copied
+// found while adding AutoApprove: instanceFromData's Instance{} literal never copied
 // AutoYes from the persisted InstanceData at all, silently losing it on every server
-// restart (LoadInstances always calls fromInstanceData). Fixed alongside wiring
+// restart (LoadInstances always calls instanceFromData). Fixed alongside wiring
 // AutoApprove through the same literal -- this pins both fields survive the round trip.
 func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 	t.Parallel()
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:       "auto-yes-approve-restore-test",
 		Path:        "/tmp/auto-yes-approve-restore-test",
-		Status:      Stopped,
+		Status:      domain.Stopped,
 		Program:     "claude",
 		AutoYes:     true,
 		AutoApprove: true,
@@ -726,9 +718,9 @@ func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 		UpdatedAt:   time.Now(),
 	}
 
-	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	instance, err := instanceFromData(data, true /* deferStart, matches LoadInstances() */)
 	if err != nil {
-		t.Fatalf("fromInstanceData returned error: %v", err)
+		t.Fatalf("instanceFromData returned error: %v", err)
 	}
 
 	if !instance.AutoYes {
@@ -865,9 +857,9 @@ func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoo
 		UUID:            "guard-structural-fail-uuid",
 		Path:            repoDir,
 		Program:         "sleep 300",
-		SessionType:     SessionTypeNewWorktree,
+		SessionType:     domain.SessionTypeNewWorktree,
 		Branch:          "existing-branch",
-		Permissions:     GetManagedPermissions(),
+		Permissions:     domain.GetManagedPermissions(),
 		ExecutionTarget: forceWorktreeAddFailureTarget{},
 	}
 
@@ -877,7 +869,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoo
 	assert.ErrorIs(t, startErr, ErrWorktreeResolutionFailed)
 	assert.Contains(t, startErr.Error(), "resolved to no real worktree")
 	assert.False(t, inst.pm().IsAlive(), "no tmux/process should ever have been spawned")
-	assert.NotEqual(t, Active, inst.Status, "status must never reach Active")
+	assert.NotEqual(t, domain.Active, inst.Status, "status must never reach Active")
 }
 
 // TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly is
@@ -899,7 +891,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 		Title:            title,
 		Path:             repoDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		Branch:           "feature-guard-ok",
 		TmuxPrefix:       fmt.Sprintf("test_newworktreeguardok_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -909,9 +901,9 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 
 	require.NoError(t, inst.Start(true))
 
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.True(t, inst.pm().IsAlive())
-	assert.NotEqual(t, repoDir, inst.GitManager.GetWorktreePath(), "a real, isolated worktree must have been created")
+	assert.NotEqual(t, repoDir, inst.gitManager.GetWorktreePath(), "a real, isolated worktree must have been created")
 }
 
 // TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturnsError
@@ -944,9 +936,9 @@ func TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturn
 		UUID:             "guard-collision-fail-uuid",
 		Path:             repoDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeExistingWorktree,
+		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: repoDir,
-		Permissions:      GetManagedPermissions(),
+		Permissions:      domain.GetManagedPermissions(),
 	}
 	inst.SetPreSpawnCollisionGuard(func(string) error { return errors.New("forced collision") })
 
@@ -955,7 +947,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturn
 	require.Error(t, startErr, "Start(true) must fail when the collision guard refuses the worktree")
 	assert.Contains(t, startErr.Error(), "forced collision")
 	assert.False(t, inst.pm().IsAlive(), "no tmux/process should ever have been spawned")
-	assert.NotEqual(t, Active, inst.Status, "status must never reach Active")
+	assert.NotEqual(t, domain.Active, inst.Status, "status must never reach Active")
 }
 
 // TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected is Epic
@@ -977,7 +969,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testin
 		Title:            title,
 		Path:             repoDir,
 		Program:          "sleep 300",
-		SessionType:      SessionTypeExistingWorktree,
+		SessionType:      domain.SessionTypeExistingWorktree,
 		ExistingWorktree: repoDir,
 		TmuxPrefix:       fmt.Sprintf("test_noguardcollision_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -987,6 +979,6 @@ func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testin
 
 	require.NoError(t, inst.Start(true))
 
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.True(t, inst.pm().IsAlive())
 }

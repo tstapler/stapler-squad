@@ -28,7 +28,7 @@ func (s *BacklogService) notifyTransitionDenied(ctx context.Context, item *backl
 	}
 
 	stuckCtx := domain.FormatTransitionDeniedContext(d, denyErr.Error())
-	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonTransitionDenied, session.BacklogStatus(d.From), stuckCtx)
+	applied, err := s.storage.MarkStuck(ctx, item.ID, domain.StuckReasonTransitionDenied, domain.BacklogStatus(d.From), stuckCtx)
 	if err != nil {
 		log.Warn("[notifyTransitionDenied] MarkStuck failed", "item", item.ID, "error", err)
 		return false
@@ -84,12 +84,12 @@ type transitionDeniedReporter struct{ svc *BacklogService }
 // TransitionDeniedReporter returns the reporter to inject into
 // session.Storage.SetTransitionGate. Idempotence per (item, caller, from, to,
 // reason) is notifyTransitionDenied's.
-func (s *BacklogService) TransitionDeniedReporter() session.TransitionDeniedReporter {
+func (s *BacklogService) TransitionDeniedReporter() backlogdto.TransitionDeniedReporter {
 	return transitionDeniedReporter{svc: s}
 }
 
 // Report implements session.TransitionDeniedReporter.
-func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller session.TransitionCaller, from, to session.BacklogStatus, reason string, denyErr error) {
+func (r transitionDeniedReporter) Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to domain.BacklogStatus, reason string, denyErr error) {
 	r.svc.notifyTransitionDenied(ctx, item, domain.TransitionDenial{
 		Caller: string(caller),
 		From:   string(from),
@@ -113,7 +113,7 @@ func (s *BacklogService) resolveTransitionDeniedLogged(ctx context.Context, item
 // transition (graph or gate) rather than a write failure; the gate has already
 // reported such a denial for an agent or system caller.
 func isEngineDenial(err error) bool {
-	return errors.Is(err, session.ErrTransitionNotAllowed) || errors.Is(err, session.ErrGateNotSatisfied)
+	return errors.Is(err, session.ErrTransitionNotAllowed) || errors.Is(err, domain.ErrGateNotSatisfied)
 }
 
 // heldByTransitionDenial is the one guard every spawn point calls (Story
@@ -139,7 +139,7 @@ func (s *BacklogService) transitionDenialHoldError(ctx context.Context, itemID s
 	if err != nil {
 		return nil
 	}
-	d, open, err := s.storage.OpenTransitionDenial(ctx, itemID, session.BacklogStatus(item.Status))
+	d, open, err := s.storage.OpenTransitionDenial(ctx, itemID, domain.BacklogStatus(item.Status))
 	if err != nil || !open || !s.storage.TransitionDenialHolds(ctx, item) {
 		return nil
 	}

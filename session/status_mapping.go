@@ -1,6 +1,10 @@
 package session
 
-import "github.com/tstapler/stapler-squad/session/detection"
+import (
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
+)
 
 // status_mapping.go documents the relationship between the three status types:
 //
@@ -14,20 +18,20 @@ import "github.com/tstapler/stapler-squad/session/detection"
 // AttentionReasonFromDetected maps a DetectedStatus to the AttentionReason that should be
 // used when adding the session to the review queue.  Returns the zero AttentionReason
 // (empty string) when no attention is needed for that status.
-func AttentionReasonFromDetected(detected detection.DetectedStatus) AttentionReason {
+func AttentionReasonFromDetected(detected detection.DetectedStatus) queue.AttentionReason {
 	switch detected {
 	case detection.StatusNeedsApproval:
-		return ReasonApprovalPending
+		return queue.ReasonApprovalPending
 	case detection.StatusInputRequired:
-		return ReasonInputRequired
+		return queue.ReasonInputRequired
 	case detection.StatusError:
-		return ReasonErrorState
+		return queue.ReasonErrorState
 	case detection.StatusTestsFailing:
-		return ReasonTestsFailing
+		return queue.ReasonTestsFailing
 	case detection.StatusSuccess:
-		return ReasonTaskComplete
+		return queue.ReasonTaskComplete
 	case detection.StatusIdle:
-		return ReasonIdle
+		return queue.ReasonIdle
 	// Active/processing states do not require attention.
 	case detection.StatusExecuting, detection.StatusProcessing, detection.StatusWaitingForAgent, detection.StatusReady, detection.StatusUnknown, detection.StatusCompacting:
 		return ""
@@ -40,7 +44,11 @@ func AttentionReasonFromDetected(detected detection.DetectedStatus) AttentionRea
 // All detected states map to Active because the instance process is still executing.
 // NeedsApproval, InputRequired, Error, and TestsFailing are sub-status signals
 // surfaced via GetEffectiveStatus() — they do not change the lifecycle state.
-func StatusFromDetected(detected detection.DetectedStatus) Status {
+func StatusFromDetected(detected detection.DetectedStatus) domain.Status {
 	// All detected states indicate an active process.
-	return Active
+	return domain.Active
+}
+
+func isIdleStatus(s detection.DetectedStatus) bool {
+	return s == detection.StatusIdle || s == detection.StatusReady || s == detection.StatusSuccess
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -40,7 +41,7 @@ func wireEnforcedGate(t *testing.T, svc *BacklogService) *systemGateHarness {
 	return &systemGateHarness{repo: repo, engine: engine}
 }
 
-func (h *systemGateHarness) transitionID(t *testing.T, from, to session.BacklogStatus) *session.TransitionData {
+func (h *systemGateHarness) transitionID(t *testing.T, from, to domain.BacklogStatus) *session.TransitionData {
 	t.Helper()
 	ts, err := h.repo.ListAllTransitions(context.Background(), string(from))
 	require.NoError(t, err)
@@ -55,12 +56,12 @@ func (h *systemGateHarness) transitionID(t *testing.T, from, to session.BacklogS
 
 // blockWithGate adds an unsatisfiable human_approval gate to from->to and
 // returns the function that removes it.
-func (h *systemGateHarness) blockWithGate(t *testing.T, from, to session.BacklogStatus) (remove func()) {
+func (h *systemGateHarness) blockWithGate(t *testing.T, from, to domain.BacklogStatus) (remove func()) {
 	t.Helper()
 	ctx := context.Background()
 	gate, err := h.repo.CreateGate(ctx, session.GateCreateInput{
 		TransitionID: h.transitionID(t, from, to).ID,
-		Kind:         string(session.GateKindHumanApproval),
+		Kind:         string(domain.GateKindHumanApproval),
 		Enabled:      true,
 	})
 	require.NoError(t, err)
@@ -71,7 +72,7 @@ func (h *systemGateHarness) blockWithGate(t *testing.T, from, to session.Backlog
 	}
 }
 
-func systemItemAt(t *testing.T, svc *BacklogService, status session.BacklogStatus) *backlogdto.BacklogItemData {
+func systemItemAt(t *testing.T, svc *BacklogService, status domain.BacklogStatus) *backlogdto.BacklogItemData {
 	t.Helper()
 	item, err := svc.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status)})
 	require.NoError(t, err)
@@ -92,14 +93,14 @@ func TestGuardedTransitionCaller_should_NameQueueClaimAndJulesDispatch_When_Give
 	t.Parallel()
 	cases := []struct {
 		name        string
-		to          session.BacklogStatus
+		to          domain.BacklogStatus
 		triggeredBy string
-		want        session.TransitionCaller
+		want        domain.TransitionCaller
 	}{
-		{"queue", session.BacklogStatusQueued, session.TriggeredByUser, session.CallerQueueBacklogItem},
-		{"queue autonomous", session.BacklogStatusQueued, session.TriggeredBySystem, session.CallerQueueBacklogItem},
-		{"dequeue claim", session.BacklogStatusInProgress, session.TriggeredBySystem, session.CallerClaimAndSpawn},
-		{"jules dispatch", session.BacklogStatusInProgress, session.TriggeredByUser, session.CallerJulesDispatchStart},
+		{"queue", domain.BacklogStatusQueued, session.TriggeredByUser, domain.CallerQueueBacklogItem},
+		{"queue autonomous", domain.BacklogStatusQueued, session.TriggeredBySystem, domain.CallerQueueBacklogItem},
+		{"dequeue claim", domain.BacklogStatusInProgress, session.TriggeredBySystem, domain.CallerClaimAndSpawn},
+		{"jules dispatch", domain.BacklogStatusInProgress, session.TriggeredByUser, domain.CallerJulesDispatchStart},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, guardedTransitionCaller(tc.to, tc.triggeredBy), tc.name)
@@ -109,12 +110,12 @@ func TestGuardedTransitionCaller_should_NameQueueClaimAndJulesDispatch_When_Give
 func TestForceResetItem_should_ReturnDenialAndLeaveStatus_When_OperatorGateBlocksReviewToInProgress(t *testing.T) {
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
-	item := systemItemAt(t, svc, session.BacklogStatusReview)
-	remove := h.blockWithGate(t, session.BacklogStatusReview, session.BacklogStatusInProgress)
+	item := systemItemAt(t, svc, domain.BacklogStatusReview)
+	remove := h.blockWithGate(t, domain.BacklogStatusReview, domain.BacklogStatusInProgress)
 
 	_, err := svc.forceResetItem(context.Background(), item, session.TriggeredByUser)
 
-	require.ErrorIs(t, err, session.ErrGateNotSatisfied)
+	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 	assert.Equal(t, "review", itemStatus(t, svc, item.ID))
 	assert.Empty(t, transitionDeniedRows(t, svc, item.ID), "an operator denial returns the error; it raises no stuck row")
 
@@ -127,7 +128,7 @@ func TestForceResetItem_should_ReturnDenialAndLeaveStatus_When_OperatorGateBlock
 func TestForceResetItem_should_ReDecideAgainstTheTrueStatus_When_ItemLeftReviewAfterTheRead(t *testing.T) {
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
-	stale := systemItemAt(t, svc, session.BacklogStatusReview)
+	stale := systemItemAt(t, svc, domain.BacklogStatusReview)
 	_, err := svc.storage.RawArchiveBacklogItem(context.Background(), stale.ID, nil, session.TriggeredByUser, "")
 	require.NoError(t, err)
 
@@ -141,9 +142,9 @@ func TestMaybeTriggerTriage_should_ReportOnceUnderItsOwnCallerAndStartNoTriage_W
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	svc.SetHeadlessPool(&fakeHeadlessPool{})
 	h := wireEnforcedGate(t, svc)
-	h.blockWithGate(t, session.BacklogStatusIdea, session.BacklogStatusReady)
+	h.blockWithGate(t, domain.BacklogStatusIdea, domain.BacklogStatusReady)
 	item, err := svc.storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
-		Title: "has a plan already", Status: string(session.BacklogStatusIdea), RepoPath: t.TempDir(), PlanApproved: true,
+		Title: "has a plan already", Status: string(domain.BacklogStatusIdea), RepoPath: t.TempDir(), PlanApproved: true,
 	})
 	require.NoError(t, err)
 
@@ -153,13 +154,13 @@ func TestMaybeTriggerTriage_should_ReportOnceUnderItsOwnCallerAndStartNoTriage_W
 
 	require.NotEmpty(t, newItemTriageSkipReason(item), "the fixture must hit a skip rule")
 	assert.Equal(t, "idea", itemStatus(t, svc, item.ID))
-	assert.Equal(t, []string{string(session.CallerMaybeTriggerTriage)}, deniedCallers(t, svc, item.ID), "one row for the repeated denial")
+	assert.Equal(t, []string{string(domain.CallerMaybeTriggerTriage)}, deniedCallers(t, svc, item.ID), "one row for the repeated denial")
 }
 
 func TestAttachSessionToItem_should_ReportDenialAndKeepStatus_When_SystemGateBlocksReadyToInProgress(t *testing.T) {
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
-	h.blockWithGate(t, session.BacklogStatusReady, session.BacklogStatusInProgress)
+	h.blockWithGate(t, domain.BacklogStatusReady, domain.BacklogStatusInProgress)
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:              "attach behind a gate",
 		AcceptanceCriteria: []*sessionv1.AcCriterion{{Index: 0, Text: "test", Status: "pending"}},
@@ -168,46 +169,46 @@ func TestAttachSessionToItem_should_ReportDenialAndKeepStatus_When_SystemGateBlo
 	}))
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
-	_, err = svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, session.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.AttachSessionToItem(t.Context(), connect.NewRequest(&sessionv1.AttachSessionToItemRequest{ItemId: itemID, SessionUuid: "attach-behind-gate"}))
 
 	require.NoError(t, err, "the attach itself succeeds; only the follow-on transition is denied")
 	assert.Equal(t, "ready", itemStatus(t, svc, itemID))
-	assert.Equal(t, []string{string(session.CallerAttachSessionToItem)}, deniedCallers(t, svc, itemID))
+	assert.Equal(t, []string{string(domain.CallerAttachSessionToItem)}, deniedCallers(t, svc, itemID))
 }
 
 func TestRollbackFailedReopen_should_RestoreReviewEvenWhenAGateBlocksInProgressToReview(t *testing.T) {
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
-	item := systemItemAt(t, svc, session.BacklogStatusReview)
-	inProgress, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
-		Caller: session.CallerAutoReopenFailedReview, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
+	item := systemItemAt(t, svc, domain.BacklogStatusReview)
+	inProgress, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
+		Caller: domain.CallerAutoReopenFailedReview, ItemID: item.ID, To: domain.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
 	})
 	require.NoError(t, err)
-	h.blockWithGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
-	before := session.EngineBypassCount(session.CallerRollback)
+	h.blockWithGate(t, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
+	before := session.EngineBypassCount(backlogdto.CallerRollback)
 
 	svc.rollbackFailedReopen(context.Background(), item, inProgress, errors.New("spawn failed"))
 
 	assert.Equal(t, "review", itemStatus(t, svc, item.ID), "a rollback is never engine-denied")
-	assert.Equal(t, before+1, session.EngineBypassCount(session.CallerRollback))
+	assert.Equal(t, before+1, session.EngineBypassCount(backlogdto.CallerRollback))
 }
 
 func TestRollbackFailedPRFixReopen_should_RestorePRPendingAndNotOverwriteAConcurrentMover(t *testing.T) {
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
-	item := systemItemAt(t, svc, session.BacklogStatusPRPending)
-	_, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
-		Caller: session.CallerAutoReopenForPRFix, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
+	item := systemItemAt(t, svc, domain.BacklogStatusPRPending)
+	_, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
+		Caller: domain.CallerAutoReopenForPRFix, ItemID: item.ID, To: domain.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
 	})
 	require.NoError(t, err)
 
 	svc.rollbackFailedPRFixReopen(context.Background(), item, errors.New("spawn failed"))
 	assert.Equal(t, "pr_pending", itemStatus(t, svc, item.ID))
 
-	_, err = svc.storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, session.BacklogStatusDone, nil, session.TriggeredBySystem)
+	_, err = svc.storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, domain.BacklogStatusDone, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 	svc.rollbackFailedPRFixReopen(context.Background(), item, errors.New("spawn failed"))
 	assert.Equal(t, "done", itemStatus(t, svc, item.ID), "the status-only CAS keeps the rollback off an item that moved on")
@@ -217,8 +218,8 @@ func TestDebugMutateHandler_should_WriteAnyStatusAndCountDebug_When_EnforceAndGr
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
 	handler := services.NewBacklogDebugMutateHandler(svc.storage)
-	item := systemItemAt(t, svc, session.BacklogStatusIdea)
-	before := session.EngineBypassCount(session.CallerDebug)
+	item := systemItemAt(t, svc, domain.BacklogStatusIdea)
+	before := session.EngineBypassCount(backlogdto.CallerDebug)
 
 	post := func(fn http.HandlerFunc, body string) int {
 		rec := httptest.NewRecorder()
@@ -229,6 +230,6 @@ func TestDebugMutateHandler_should_WriteAnyStatusAndCountDebug_When_EnforceAndGr
 	assert.Equal(t, "done", itemStatus(t, svc, item.ID))
 	assert.Equal(t, http.StatusNoContent, post(handler.HandleArchive, `{"itemId":"`+item.ID+`"}`))
 	assert.Equal(t, "archived", itemStatus(t, svc, item.ID))
-	assert.Equal(t, before+2, session.EngineBypassCount(session.CallerDebug))
+	assert.Equal(t, before+2, session.EngineBypassCount(backlogdto.CallerDebug))
 	assert.Empty(t, transitionDeniedRows(t, svc, item.ID))
 }

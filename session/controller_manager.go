@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/claudectl"
 )
 
 // noCopy prevents ControllerManager from being copied after first use.
@@ -13,7 +14,7 @@ type noCopy struct{}
 func (*noCopy) Lock()   {}
 func (*noCopy) Unlock() {}
 
-// ControllerManager owns the ClaudeController and InstanceStatusManager
+// ControllerManager owns the claudectl.ClaudeController and InstanceStatusManager
 // references that were previously bare fields on Instance.
 //
 // Instance keeps thin wrapper methods (with lifecycle guards) that delegate
@@ -32,23 +33,23 @@ func (*noCopy) Unlock() {}
 // ControllerManager must not be copied after first use (enforced by noCopy).
 type ControllerManager struct {
 	_             noCopy
-	controller    atomic.Pointer[ClaudeController]
+	controller    atomic.Pointer[claudectl.ClaudeController]
 	statusManager atomic.Pointer[InstanceStatusManager]
 }
 
-// HasController reports whether a ClaudeController has been registered.
+// HasController reports whether a claudectl.ClaudeController has been registered.
 func (cm *ControllerManager) HasController() bool {
 	return cm.controller.Load() != nil
 }
 
-// GetController returns the current ClaudeController (may be nil).
-func (cm *ControllerManager) GetController() *ClaudeController {
+// GetController returns the current claudectl.ClaudeController (may be nil).
+func (cm *ControllerManager) GetController() *claudectl.ClaudeController {
 	return cm.controller.Load()
 }
 
 // SetController replaces the controller. Callers are responsible for stopping
 // the old controller before calling this.
-func (cm *ControllerManager) SetController(c *ClaudeController) {
+func (cm *ControllerManager) SetController(c *claudectl.ClaudeController) {
 	cm.controller.Store(c)
 }
 
@@ -81,7 +82,7 @@ func (cm *ControllerManager) SetStatusManager(m *InstanceStatusManager) {
 
 // RegisterController wires a new controller into the status manager and stores
 // it. Any existing controller is stopped first.
-func (cm *ControllerManager) RegisterController(title string, controller *ClaudeController) {
+func (cm *ControllerManager) RegisterController(title string, controller *claudectl.ClaudeController) {
 	cm.stopAndClear()
 	if mgr := cm.statusManager.Load(); mgr != nil {
 		mgr.RegisterController(title, controller)

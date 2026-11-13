@@ -10,6 +10,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
@@ -53,8 +55,8 @@ func suppressDecision(rule string) SuppressionDecision {
 // ruleCtx is everything a suppression rule may read; rules are pure functions of it.
 type ruleCtx struct {
 	action           DetectionAction
-	priority         Priority
-	reason           AttentionReason
+	priority         queuepkg.Priority
+	reason           queuepkg.AttentionReason
 	controllerActive bool
 	ackedAfterOutput bool
 	lastAcknowledged time.Time
@@ -63,7 +65,7 @@ type ruleCtx struct {
 	// episodeChanged marks an item whose episode differs from the queued one; always
 	// false until episode ids exist.
 	episodeChanged bool
-	existing       func() (*ReviewItem, bool)
+	existing       func() (*queuepkg.ReviewItem, bool)
 	opts           RuleOptions
 }
 
@@ -83,7 +85,7 @@ var suppressionRules = []suppressionRule{
 }
 
 // suppressionPolicy runs the rule chain for one session's detection result.
-func suppressionPolicy(snap *InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo, queue *ReviewQueue, opts RuleOptions) SuppressionDecision {
+func suppressionPolicy(snap *domain.InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo, queue *queuepkg.ReviewQueue, opts RuleOptions) SuppressionDecision {
 	rc := ruleCtx{
 		action:           result.Action,
 		priority:         result.Priority,
@@ -93,7 +95,7 @@ func suppressionPolicy(snap *InstanceSnapshot, result DetectionResult, statusInf
 		lastAcknowledged: snap.LastAcknowledged,
 		lastAddedToQueue: snap.LastAddedToQueue,
 		now:              time.Now(),
-		existing:         func() (*ReviewItem, bool) { return queue.Get(snap.Title) },
+		existing:         func() (*queuepkg.ReviewItem, bool) { return queue.Get(snap.Title) },
 		opts:             opts,
 	}
 	return evaluateRules(suppressionRules, rc)
@@ -111,19 +113,21 @@ func evaluateRules(rules []suppressionRule, rc ruleCtx) SuppressionDecision {
 // needsHumanReasons are the reasons that block the agent on a person; with
 // RuleOptions.AckBypassFix they escape the output-based ack snooze. The plan's fourth
 // reason, prose_question, arrives in PR B with the prose-question detector.
-var needsHumanReasons = []AttentionReason{ReasonApprovalPending, ReasonInputRequired, ReasonErrorState}
+var needsHumanReasons = []queuepkg.AttentionReason{queuepkg.ReasonApprovalPending, queuepkg.ReasonInputRequired, queuepkg.ReasonErrorState}
 
 // NeedsHumanReasons returns a copy of the needs-human reason set.
-func NeedsHumanReasons() []AttentionReason { return slices.Clone(needsHumanReasons) }
+func NeedsHumanReasons() []queuepkg.AttentionReason { return slices.Clone(needsHumanReasons) }
 
-func isNeedsHumanReason(r AttentionReason) bool { return slices.Contains(needsHumanReasons, r) }
+func isNeedsHumanReason(r queuepkg.AttentionReason) bool {
+	return slices.Contains(needsHumanReasons, r)
+}
 
 // ackSnooze drops items the user acknowledged after the last output. Active high-priority
 // adds bypass it: content-signature dedup leaves LastMeaningfulOutput unchanged when an
 // identical prompt reappears, so the ack would otherwise hide a live blocking prompt.
 // With AckBypassFix the same holds for every needs-human reason, whatever its priority.
 func ackSnooze(c ruleCtx) (SuppressionDecision, bool) {
-	bypass := c.shouldAdd() && (c.priority <= PriorityHigh || (c.opts.AckBypassFix && isNeedsHumanReason(c.reason)))
+	bypass := c.shouldAdd() && (c.priority <= queuepkg.PriorityHigh || (c.opts.AckBypassFix && isNeedsHumanReason(c.reason)))
 	if !bypass && c.ackedAfterOutput {
 		return removeDecision("ackSnooze"), true
 	}
@@ -135,7 +139,7 @@ func grace(c ruleCtx) (SuppressionDecision, bool) {
 	if !c.shouldAdd() || c.episodeChanged {
 		return SuppressionDecision{}, false
 	}
-	if c.priority != PriorityLow && c.controllerActive {
+	if c.priority != queuepkg.PriorityLow && c.controllerActive {
 		return SuppressionDecision{}, false
 	}
 	if !c.lastAcknowledged.IsZero() && c.now.Sub(c.lastAcknowledged) < graceAfterAck {

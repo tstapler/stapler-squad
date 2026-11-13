@@ -18,6 +18,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // newNotificationTestServer creates an httptest server running a real SessionService
@@ -54,7 +56,7 @@ func TestSendNotification_ResolvesSessionTitleToStableID(t *testing.T) {
 	svc, bus, srv := newNotificationTestServer(t)
 
 	// Wire a ReviewQueuePoller containing an instance whose title differs from its UUID.
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -124,7 +126,7 @@ func TestSendNotification_PollerMissFallsBackToStorage(t *testing.T) {
 
 	// Wire an empty poller (simulates the poller not having this session yet) — this
 	// is also what wires storage into notificationSvc, via SetReviewQueuePoller.
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -135,7 +137,7 @@ func TestSendNotification_PollerMissFallsBackToStorage(t *testing.T) {
 		Title:     sessionTitle,
 		UUID:      sessionUUID,
 		Path:      t.TempDir(),
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -195,7 +197,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession(t *testing.T) {
 	t.Parallel()
 	svc, bus, srv := newNotificationTestServer(t)
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -251,7 +253,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallba
 
 	// Wire an empty poller (simulates the poller not having this session yet), same as
 	// TestSendNotification_PollerMissFallsBackToStorage.
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -261,7 +263,7 @@ func TestSendNotification_SuppressesLowPriorityForHiddenSession_ViaStorageFallba
 		Title:     sessionTitle,
 		UUID:      "hidden-uuid-storage-fallback",
 		Path:      t.TempDir(),
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		Hidden:    true,
 		CreatedAt: time.Now(),
@@ -302,7 +304,7 @@ func TestSendNotification_SurfacesHighPriorityForHiddenSession(t *testing.T) {
 	t.Parallel()
 	svc, bus, srv := newNotificationTestServer(t)
 
-	queue := session.NewReviewQueue()
+	queue := queue.NewReviewQueue()
 	statusMgr := session.NewInstanceStatusManager()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)

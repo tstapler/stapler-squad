@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	sessiongit "github.com/tstapler/stapler-squad/session/git"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 )
 
 // ---------------------------------------------------------------------------
@@ -18,14 +18,14 @@ import (
 func TestPriorityToProto(t *testing.T) {
 	tests := []struct {
 		name  string
-		input session.Priority
+		input queuepkg.Priority
 		want  sessionv1.Priority
 	}{
-		{"urgent", session.PriorityUrgent, sessionv1.Priority_PRIORITY_URGENT},
-		{"high", session.PriorityHigh, sessionv1.Priority_PRIORITY_HIGH},
-		{"medium", session.PriorityMedium, sessionv1.Priority_PRIORITY_MEDIUM},
-		{"low", session.PriorityLow, sessionv1.Priority_PRIORITY_LOW},
-		{"unknown defaults to unspecified", session.Priority(99), sessionv1.Priority_PRIORITY_UNSPECIFIED},
+		{"urgent", queuepkg.PriorityUrgent, sessionv1.Priority_PRIORITY_URGENT},
+		{"high", queuepkg.PriorityHigh, sessionv1.Priority_PRIORITY_HIGH},
+		{"medium", queuepkg.PriorityMedium, sessionv1.Priority_PRIORITY_MEDIUM},
+		{"low", queuepkg.PriorityLow, sessionv1.Priority_PRIORITY_LOW},
+		{"unknown defaults to unspecified", queuepkg.Priority(99), sessionv1.Priority_PRIORITY_UNSPECIFIED},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,19 +41,19 @@ func TestPriorityToProto(t *testing.T) {
 func TestAttentionReasonToProto(t *testing.T) {
 	tests := []struct {
 		name  string
-		input session.AttentionReason
+		input queuepkg.AttentionReason
 		want  sessionv1.AttentionReason
 	}{
-		{"approval_pending", session.ReasonApprovalPending, sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING},
-		{"input_required", session.ReasonInputRequired, sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED},
-		{"error_state", session.ReasonErrorState, sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE},
-		{"idle_timeout", session.ReasonIdleTimeout, sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT},
-		{"task_complete", session.ReasonTaskComplete, sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE},
-		{"uncommitted_changes", session.ReasonUncommittedChanges, sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES},
-		{"idle", session.ReasonIdle, sessionv1.AttentionReason_ATTENTION_REASON_IDLE},
-		{"stale", session.ReasonStale, sessionv1.AttentionReason_ATTENTION_REASON_STALE},
-		{"waiting_for_user", session.ReasonWaitingForUser, sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER},
-		{"unknown defaults to unspecified", session.AttentionReason("not_a_reason"), sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED},
+		{"approval_pending", queuepkg.ReasonApprovalPending, sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING},
+		{"input_required", queuepkg.ReasonInputRequired, sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED},
+		{"error_state", queuepkg.ReasonErrorState, sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE},
+		{"idle_timeout", queuepkg.ReasonIdleTimeout, sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT},
+		{"task_complete", queuepkg.ReasonTaskComplete, sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE},
+		{"uncommitted_changes", queuepkg.ReasonUncommittedChanges, sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES},
+		{"idle", queuepkg.ReasonIdle, sessionv1.AttentionReason_ATTENTION_REASON_IDLE},
+		{"stale", queuepkg.ReasonStale, sessionv1.AttentionReason_ATTENTION_REASON_STALE},
+		{"waiting_for_user", queuepkg.ReasonWaitingForUser, sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER},
+		{"unknown defaults to unspecified", queuepkg.AttentionReason("not_a_reason"), sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,14 +70,14 @@ func TestProtoToPriority(t *testing.T) {
 	tests := []struct {
 		name  string
 		input sessionv1.Priority
-		want  session.Priority
+		want  queuepkg.Priority
 	}{
-		{"urgent", sessionv1.Priority_PRIORITY_URGENT, session.PriorityUrgent},
-		{"high", sessionv1.Priority_PRIORITY_HIGH, session.PriorityHigh},
-		{"medium", sessionv1.Priority_PRIORITY_MEDIUM, session.PriorityMedium},
-		{"low", sessionv1.Priority_PRIORITY_LOW, session.PriorityLow},
+		{"urgent", sessionv1.Priority_PRIORITY_URGENT, queuepkg.PriorityUrgent},
+		{"high", sessionv1.Priority_PRIORITY_HIGH, queuepkg.PriorityHigh},
+		{"medium", sessionv1.Priority_PRIORITY_MEDIUM, queuepkg.PriorityMedium},
+		{"low", sessionv1.Priority_PRIORITY_LOW, queuepkg.PriorityLow},
 		// PRIORITY_UNSPECIFIED defaults to medium
-		{"unspecified defaults to medium", sessionv1.Priority_PRIORITY_UNSPECIFIED, session.PriorityMedium},
+		{"unspecified defaults to medium", sessionv1.Priority_PRIORITY_UNSPECIFIED, queuepkg.PriorityMedium},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,19 +94,19 @@ func TestProtoToAttentionReason(t *testing.T) {
 	tests := []struct {
 		name  string
 		input sessionv1.AttentionReason
-		want  session.AttentionReason
+		want  queuepkg.AttentionReason
 	}{
-		{"approval_pending", sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING, session.ReasonApprovalPending},
-		{"input_required", sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED, session.ReasonInputRequired},
-		{"error_state", sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE, session.ReasonErrorState},
-		{"idle_timeout", sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT, session.ReasonIdleTimeout},
-		{"task_complete", sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE, session.ReasonTaskComplete},
-		{"uncommitted_changes", sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES, session.ReasonUncommittedChanges},
-		{"idle", sessionv1.AttentionReason_ATTENTION_REASON_IDLE, session.ReasonIdle},
-		{"stale", sessionv1.AttentionReason_ATTENTION_REASON_STALE, session.ReasonStale},
-		{"waiting_for_user", sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER, session.ReasonWaitingForUser},
+		{"approval_pending", sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING, queuepkg.ReasonApprovalPending},
+		{"input_required", sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED, queuepkg.ReasonInputRequired},
+		{"error_state", sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE, queuepkg.ReasonErrorState},
+		{"idle_timeout", sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT, queuepkg.ReasonIdleTimeout},
+		{"task_complete", sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE, queuepkg.ReasonTaskComplete},
+		{"uncommitted_changes", sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES, queuepkg.ReasonUncommittedChanges},
+		{"idle", sessionv1.AttentionReason_ATTENTION_REASON_IDLE, queuepkg.ReasonIdle},
+		{"stale", sessionv1.AttentionReason_ATTENTION_REASON_STALE, queuepkg.ReasonStale},
+		{"waiting_for_user", sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER, queuepkg.ReasonWaitingForUser},
 		// ATTENTION_REASON_UNSPECIFIED defaults to input_required
-		{"unspecified defaults to input_required", sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED, session.ReasonInputRequired},
+		{"unspecified defaults to input_required", sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED, queuepkg.ReasonInputRequired},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -128,11 +128,11 @@ func TestReviewItemToProto_Basic(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	lastActivity := now.Add(-5 * time.Minute)
 
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:    "sess-001",
 		SessionName:  "my-session",
-		Reason:       session.ReasonInputRequired,
-		Priority:     session.PriorityHigh,
+		Reason:       queuepkg.ReasonInputRequired,
+		Priority:     queuepkg.PriorityHigh,
 		DetectedAt:   now,
 		Context:      "waiting for user input",
 		PatternName:  "input-detection",
@@ -176,11 +176,11 @@ func TestReviewItemToProto_Basic(t *testing.T) {
 
 func TestReviewItemToProto_WithDiffStats(t *testing.T) {
 	now := time.Now()
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:    "sess-002",
 		SessionName:  "diff-session",
-		Reason:       session.ReasonUncommittedChanges,
-		Priority:     session.PriorityLow,
+		Reason:       queuepkg.ReasonUncommittedChanges,
+		Priority:     queuepkg.PriorityLow,
 		DetectedAt:   now,
 		LastActivity: now,
 		DiffStats: &sessiongit.DiffStats{
@@ -201,11 +201,11 @@ func TestReviewItemToProto_WithDiffStats(t *testing.T) {
 
 func TestReviewItemToProto_ExtraMetadataIsMerged(t *testing.T) {
 	now := time.Now()
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:    "sess-003",
 		SessionName:  "approval-session",
-		Reason:       session.ReasonApprovalPending,
-		Priority:     session.PriorityUrgent,
+		Reason:       queuepkg.ReasonApprovalPending,
+		Priority:     queuepkg.PriorityUrgent,
 		DetectedAt:   now,
 		LastActivity: now,
 		Metadata:     map[string]string{"base_key": "base_val"},
@@ -221,11 +221,11 @@ func TestReviewItemToProto_ExtraMetadataIsMerged(t *testing.T) {
 
 func TestReviewItemToProto_ExtraMetadataOverwritesBase(t *testing.T) {
 	now := time.Now()
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:    "sess-004",
 		SessionName:  "overwrite-session",
-		Reason:       session.ReasonErrorState,
-		Priority:     session.PriorityUrgent,
+		Reason:       queuepkg.ReasonErrorState,
+		Priority:     queuepkg.PriorityUrgent,
 		DetectedAt:   now,
 		LastActivity: now,
 		Metadata:     map[string]string{"conflict_key": "from_item"},
@@ -241,11 +241,11 @@ func TestReviewItemToProto_ExtraMetadataOverwritesBase(t *testing.T) {
 
 func TestReviewItemToProto_MetadataIsIndependentCopy(t *testing.T) {
 	now := time.Now()
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:    "sess-005",
 		SessionName:  "copy-session",
-		Reason:       session.ReasonIdle,
-		Priority:     session.PriorityLow,
+		Reason:       queuepkg.ReasonIdle,
+		Priority:     queuepkg.PriorityLow,
 		DetectedAt:   now,
 		LastActivity: now,
 		Metadata:     map[string]string{"original": "value"},
@@ -267,11 +267,11 @@ func TestReviewItemToProto_MetadataIsIndependentCopy(t *testing.T) {
 
 func TestReviewItemToProto_NilMetadataFields(t *testing.T) {
 	now := time.Now()
-	item := &session.ReviewItem{
+	item := &queuepkg.ReviewItem{
 		SessionID:    "sess-006",
 		SessionName:  "no-meta",
-		Reason:       session.ReasonStale,
-		Priority:     session.PriorityMedium,
+		Reason:       queuepkg.ReasonStale,
+		Priority:     queuepkg.PriorityMedium,
 		DetectedAt:   now,
 		LastActivity: now,
 		// Metadata intentionally nil
@@ -301,20 +301,20 @@ func TestReviewQueueToProto_NilQueue(t *testing.T) {
 func TestReviewQueueToProto_WithItems(t *testing.T) {
 	now := time.Now()
 
-	queue := session.NewReviewQueue()
-	queue.Add(&session.ReviewItem{
+	queue := queuepkg.NewReviewQueue()
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:    "s1",
 		SessionName:  "Session One",
-		Reason:       session.ReasonErrorState,
-		Priority:     session.PriorityUrgent,
+		Reason:       queuepkg.ReasonErrorState,
+		Priority:     queuepkg.PriorityUrgent,
 		DetectedAt:   now,
 		LastActivity: now,
 	})
-	queue.Add(&session.ReviewItem{
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:    "s2",
 		SessionName:  "Session Two",
-		Reason:       session.ReasonTaskComplete,
-		Priority:     session.PriorityLow,
+		Reason:       queuepkg.ReasonTaskComplete,
+		Priority:     queuepkg.PriorityLow,
 		DetectedAt:   now,
 		LastActivity: now,
 	})
@@ -341,12 +341,12 @@ func TestReviewQueueToProto_WithItems(t *testing.T) {
 func TestReviewQueueToProto_ApprovalIDEnrichment(t *testing.T) {
 	now := time.Now()
 
-	queue := session.NewReviewQueue()
-	queue.Add(&session.ReviewItem{
+	queue := queuepkg.NewReviewQueue()
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:    "approval-sess",
 		SessionName:  "Approval Session",
-		Reason:       session.ReasonApprovalPending,
-		Priority:     session.PriorityHigh,
+		Reason:       queuepkg.ReasonApprovalPending,
+		Priority:     queuepkg.PriorityHigh,
 		DetectedAt:   now,
 		LastActivity: now,
 	})
@@ -367,12 +367,12 @@ func TestReviewQueueToProto_ApprovalIDEnrichment(t *testing.T) {
 func TestReviewQueueToProto_NoApprovalIDForOtherSessions(t *testing.T) {
 	now := time.Now()
 
-	queue := session.NewReviewQueue()
-	queue.Add(&session.ReviewItem{
+	queue := queuepkg.NewReviewQueue()
+	queue.Add(&queuepkg.ReviewItem{
 		SessionID:    "other-sess",
 		SessionName:  "Other Session",
-		Reason:       session.ReasonInputRequired,
-		Priority:     session.PriorityMedium,
+		Reason:       queuepkg.ReasonInputRequired,
+		Priority:     queuepkg.PriorityMedium,
 		DetectedAt:   now,
 		LastActivity: now,
 	})
@@ -390,7 +390,7 @@ func TestReviewQueueToProto_NoApprovalIDForOtherSessions(t *testing.T) {
 }
 
 func TestReviewQueueToProto_EmptyQueue(t *testing.T) {
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 
 	proto := ReviewQueueToProto(queue, nil)
 	require.NotNil(t, proto)

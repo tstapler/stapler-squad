@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -21,31 +22,31 @@ func TestComputeBackgroundOutcome(t *testing.T) {
 	verdict := &backlogdto.ReviewVerdictSummary{OverallOutcome: "PASS"}
 	tests := []struct {
 		name   string
-		status Status
+		status domain.Status
 		is     *backlogdto.ItemSessionSummary
 		want   BackgroundOutcome
 	}{
-		{"ComputeBackgroundOutcome_should_returnCompleted_When_reviewVerdictRecorded", Stopped,
+		{"ComputeBackgroundOutcome_should_returnCompleted_When_reviewVerdictRecorded", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, ReviewVerdict: verdict}, BackgroundOutcomeCompleted},
-		{"completed_When_triageResultRecorded", Stopped,
+		{"completed_When_triageResultRecorded", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleTriage, TriageResult: `{"summary":"x"}`}, BackgroundOutcomeCompleted},
-		{"ComputeBackgroundOutcome_should_returnFailed_When_statusCrashed", Crashed,
+		{"ComputeBackgroundOutcome_should_returnFailed_When_statusCrashed", domain.Crashed,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleReview}, BackgroundOutcomeFailed},
-		{"failed_When_crashedAndNoItemSession", Crashed, nil, BackgroundOutcomeFailed},
-		{"ComputeBackgroundOutcome_should_returnUnknown_When_endReasonShutdown", Stopped,
+		{"failed_When_crashedAndNoItemSession", domain.Crashed, nil, BackgroundOutcomeFailed},
+		{"ComputeBackgroundOutcome_should_returnUnknown_When_endReasonShutdown", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, EndReason: "shutdown"}, BackgroundOutcomeUnknown},
-		{"ComputeBackgroundOutcome_should_returnUnknown_When_diagnoseRole", Stopped,
+		{"ComputeBackgroundOutcome_should_returnUnknown_When_diagnoseRole", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleDiagnose}, BackgroundOutcomeUnknown},
-		{"unknown_When_diagnoseRoleEvenWithFailureReason", Stopped,
+		{"unknown_When_diagnoseRoleEvenWithFailureReason", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleDiagnose, EndReason: "timeout"}, BackgroundOutcomeUnknown},
-		{"ComputeBackgroundOutcome_should_returnUnknown_When_noItemSession", Stopped, nil, BackgroundOutcomeUnknown},
-		{"ComputeBackgroundOutcome_should_treatTimeoutAsFailed", Stopped,
+		{"ComputeBackgroundOutcome_should_returnUnknown_When_noItemSession", domain.Stopped, nil, BackgroundOutcomeUnknown},
+		{"ComputeBackgroundOutcome_should_treatTimeoutAsFailed", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, EndReason: "timeout"}, BackgroundOutcomeFailed},
-		{"_JulesCompletedAsUnknown", Stopped,
+		{"_JulesCompletedAsUnknown", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleJulesWork, EndReason: "jules_completed"}, BackgroundOutcomeUnknown},
-		{"_UnlistedReasonAsUnknown", Stopped,
+		{"_UnlistedReasonAsUnknown", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, EndReason: "some_future_reason"}, BackgroundOutcomeUnknown},
-		{"_VerdictBeatsFailureReason", Stopped,
+		{"_VerdictBeatsFailureReason", domain.Stopped,
 			&backlogdto.ItemSessionSummary{Role: SessionRoleReview, ReviewVerdict: verdict, EndReason: "timeout"}, BackgroundOutcomeCompleted},
 	}
 	for _, tc := range tests {

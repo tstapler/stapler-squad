@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // T-CR-02 and T-CR-03: the crash FAILURE reaches history, push and the watcher
@@ -30,7 +31,7 @@ func TestCrashNotification_ShouldDeliverOneHistoryRowAndOnePush_WhenHiddenGateOn
 	env.bus.Publish(&events.Event{
 		Type: events.EventSessionUpdated,
 		// The instance is Hidden: the gate (not a check in the push builder) drops it.
-		Session:       &session.Instance{ID: "id-h", UUID: "u-h", Title: hiddenTitle, Status: session.Stopped, Hidden: true},
+		Session:       &session.Instance{ID: "id-h", UUID: "u-h", Title: hiddenTitle, Status: domain.Stopped, Hidden: true},
 		UpdatedFields: []string{events.FieldStatus},
 	})
 	env.bus.Publish(notifEvent(visibleTitle, sessionv1.NotificationType_NOTIFICATION_TYPE_INFO, sentinelID))

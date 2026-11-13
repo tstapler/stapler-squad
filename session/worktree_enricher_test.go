@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tcc"
 )
 
@@ -52,9 +53,9 @@ var clockBase = time.Unix(1_700_000_000, 0)
 func (c *enrichClock) Now() time.Time          { return clockBase.Add(time.Duration(c.ns.Load())) }
 func (c *enrichClock) Advance(d time.Duration) { c.ns.Add(int64(d)) }
 
-func loadData(title, path string, status Status, worktree string) InstanceData {
+func loadData(title, path string, status domain.Status, worktree string) domain.InstanceData {
 	now := time.Now()
-	d := InstanceData{Title: title, Path: path, Status: status, CreatedAt: now, UpdatedAt: now, Program: "claude"}
+	d := domain.InstanceData{Title: title, Path: path, Status: status, CreatedAt: now, UpdatedAt: now, Program: "claude"}
 	if worktree != "" {
 		d.Worktree.WorktreePath = worktree
 		d.Worktree.RepoPath = path
@@ -74,7 +75,7 @@ func TestLoad_PausesMissingWorktreeOnAllPaths(t *testing.T) {
 		if withEnricher {
 			startEnricher(t, WorktreeEnricherConfig{Probe: func(string) (*WorktreeInfo, error) { select {} }}, true)
 		}
-		data := loadData("gone", "/repo", Ready, "/gone/worktree")
+		data := loadData("gone", "/repo", domain.Active, "/gone/worktree")
 
 		inst, err := FromInstanceData(data)
 		require.NoError(t, err)
@@ -118,7 +119,7 @@ func TestLoadInstances_BlockedProbeDoesNotStallLoad(t *testing.T) {
 	})
 
 	storage := newTestStorageForItemLink(t)
-	for _, d := range []InstanceData{loadData("stuck", "/stuck", Paused, ""), loadData("a", "/a", Paused, ""), loadData("b", "/b", Paused, "")} {
+	for _, d := range []domain.InstanceData{loadData("stuck", "/stuck", domain.Paused, ""), loadData("a", "/a", domain.Paused, ""), loadData("b", "/b", domain.Paused, "")} {
 		require.NoError(t, storage.CreateInstanceData(context.Background(), d))
 	}
 	byTitle := func() map[string]*Instance {
@@ -407,7 +408,7 @@ func TestLoad_CachedErrorResultLeavesInstanceUntouched(t *testing.T) {
 	}, true)
 	e.Request("/err")
 	enrichWaitUntil(t, func() bool { _, ok := e.Result("/err"); return ok })
-	inst, err := FromInstanceDataDeferred(loadData("err", "/err", Paused, ""))
+	inst, err := FromInstanceDataDeferred(loadData("err", "/err", domain.Paused, ""))
 	require.NoError(t, err)
 	require.Empty(t, ghOwner(inst))
 }
@@ -420,7 +421,7 @@ func TestLoad_CachedEmptyDetectionIsNotApplied(t *testing.T) {
 	}, true)
 	e.Request("/gone")
 	enrichWaitUntil(t, func() bool { _, ok := e.Result("/gone"); return ok })
-	data := loadData("wt", "/gone", Paused, "")
+	data := loadData("wt", "/gone", domain.Paused, "")
 	data.IsWorktree = true
 	inst, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)

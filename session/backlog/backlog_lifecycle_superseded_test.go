@@ -11,6 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -43,7 +46,7 @@ func supersededItem(t *testing.T, storage *session.Storage, repoPath, baseSHA st
 		Title:              "bug: reviewer session that submits a verdict but never exits wedges the item",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           repoPath,
 	})
 	require.NoError(t, err)
@@ -76,7 +79,7 @@ func attachWorktree(t *testing.T, storage *session.Storage, repoPath, branch, he
 	t.Helper()
 	inst := newTestInstance("bug047-instance")
 	inst.UUID = "bug047-work-session"
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "bug047-instance", branch, headSHA)
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath, "bug047-instance", branch, headSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 }
 
@@ -128,7 +131,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_LastCommi
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status,
 		"the item must stay in pr_pending, not be marked done against a base SHA it never authored")
 	assert.Equal(t, 342, fetched.PrNumber, "the PR reference must not be cleared")
 	assert.True(t, spawner.spawnCalled,
@@ -165,7 +168,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_SessionHe
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status,
 		"fail closed: when the session's real tip is unknown, the item stays put")
 }
 
@@ -211,7 +214,7 @@ func TestReconcilePRPending_should_StillCloseSupersededPR_When_SessionsRealTipIs
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusDone), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusDone), fetched.Status)
 }
 
 // TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommitShaWasNeverRecorded
@@ -255,7 +258,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 		Title:              "feat: user-extensible agent detection plugins",
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
-		Status:             string(session.BacklogStatusPRPending),
+		Status:             string(domain.BacklogStatusPRPending),
 		RepoPath:           repoPath,
 	})
 	require.NoError(t, err)
@@ -297,7 +300,7 @@ func TestReconcilePRPending_should_NotCloseUnmergedPRAsSuperseded_When_BaseCommi
 
 	fetched, err := storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status,
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status,
 		"the item must stay in pr_pending, not be marked done against a base commit no session ever advanced past")
 	assert.Equal(t, 307, fetched.PrNumber, "the PR reference must not be cleared")
 }
@@ -354,7 +357,7 @@ func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_Whe
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item whose session rebased a backdated commit",
-		Status: string(session.BacklogStatusInProgress),
+		Status: string(domain.BacklogStatusInProgress),
 	})
 	require.NoError(t, err)
 
@@ -382,8 +385,8 @@ func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_Whe
 	require.NotNil(t, sessions[0].LastProgressAt)
 	assert.False(t, sessions[0].LastProgressAt.Before(before.Add(-time.Second)),
 		"last_progress_at must be observation time, not the backdated author time — otherwise a rebase instantly marks a healthy session stale")
-	assert.True(t, staleWork(authoredAt, time.Now(), maxWorkSessionStaleness),
+	assert.True(t, stuck.StaleWork(authoredAt, time.Now(), liveness.MaxWorkSessionStaleness),
 		"precondition: the author date really is old enough to trip the staleness threshold, so this test would fail if the author date leaked through")
-	assert.False(t, staleWork(*sessions[0].LastProgressAt, time.Now(), maxWorkSessionStaleness),
+	assert.False(t, stuck.StaleWork(*sessions[0].LastProgressAt, time.Now(), liveness.MaxWorkSessionStaleness),
 		"the session must not be considered stale after just reporting a commit")
 }

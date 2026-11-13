@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/shadowledger"
 	"github.com/tstapler/stapler-squad/session/dbpool"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
@@ -146,7 +147,7 @@ func TestHandleActuatorDB_ReportsEntPool(t *testing.T) {
 }
 
 func TestHandleActuatorMetrics_ShowsEngineBypassCounter(t *testing.T) {
-	const caller = session.TransitionCaller("actuator_test_caller")
+	const caller = domain.TransitionCaller("actuator_test_caller")
 	session.RecordEngineBypass(caller)
 
 	rec := httptest.NewRecorder()
@@ -196,12 +197,12 @@ func soakReadyLedger() session.ShadowLedger {
 		NotCompared: map[string]int64{}, ConfigSeen: map[string]int64{session.ConfigSeeded: 300},
 		Edges: map[string]session.EdgeStats{}, FirstSampleAt: soakTestNow.Add(-8 * 24 * time.Hour),
 	}
-	for _, edge := range session.ExpectedEdgesForClass(session.ClassOperator) {
+	for _, edge := range session.ExpectedEdgesForClass(domain.ClassOperator) {
 		cl.Edges[session.EdgeKey(edge.From, edge.To)] = session.EdgeStats{TransitionSamples: 25}
 	}
 	return session.ShadowLedger{
 		Version: 1, BinaryStarts: []time.Time{soakTestNow.Add(-8 * 24 * time.Hour)},
-		Classes: map[string]*session.ClassLedger{string(session.ClassOperator): cl},
+		Classes: map[string]*session.ClassLedger{string(domain.ClassOperator): cl},
 	}
 }
 
@@ -504,11 +505,11 @@ func TestSoakStatus_EvaluatesEachClassFromItsOwnLedgerSection_AndExposesGuardNew
 	t.Parallel()
 	dir := t.TempDir()
 	rec := shadowledger.NewShadowLedgerRecorder(dir, shadowledger.WithShadowClock(fixedClock{soakTestNow.Add(-1 * time.Hour)}))
-	rec.RecordShadowCallFor(session.ClassAgent, session.MethodValidateGates, session.PathTransition)
-	rec.RecordDivergenceFor(session.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
+	rec.RecordShadowCallFor(domain.ClassAgent, session.MethodValidateGates, session.PathTransition)
+	rec.RecordDivergenceFor(domain.ClassAgent, session.MethodValidateGates, session.ClassGuardNew, session.ConfigSeeded, session.PathTransition)
 	rec.RecordObservation(session.ShadowObservation{
-		Method: session.MethodValidateGates, Path: session.PathTransition, From: session.BacklogStatusReady, To: session.BacklogStatusInProgress,
-		Class: session.ClassGuardNew, Config: session.ConfigSeeded, CallerClass: session.ClassAgent, Caller: session.CallerMCPResumeWork,
+		Method: session.MethodValidateGates, Path: session.PathTransition, From: domain.BacklogStatusReady, To: domain.BacklogStatusInProgress,
+		Class: session.ClassGuardNew, Config: session.ConfigSeeded, CallerClass: domain.ClassAgent, Caller: domain.CallerMCPResumeWork,
 	})
 	if err := rec.Flush(); err != nil {
 		t.Fatal(err)

@@ -13,7 +13,9 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -51,7 +53,7 @@ func newWorktreeGuardHandlers(t *testing.T, occupants ...*session.Instance) *lif
 	t.Cleanup(func() { bus.Close() })
 	t.Cleanup(func() { svc.Shutdown() })
 
-	poller := session.NewReviewQueuePoller(session.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
 	poller.SetInstances(occupants)
 	svc.SetReviewQueuePoller(poller)
 
@@ -78,7 +80,7 @@ func newLiveOccupant(t *testing.T, title, paneCWD string) *session.Instance {
 // GetEffectiveRootDir resolves to worktreePath, which both pause_session and
 // stop_session would delete.
 func newWorktreeTargetInstance(uuid, worktreePath string) *session.Instance {
-	inst := &session.Instance{Title: "guard-target-" + uuid, UUID: uuid, Path: worktreePath, Status: session.Active}
+	inst := &session.Instance{Title: "guard-target-" + uuid, UUID: uuid, Path: worktreePath, Status: domain.Active}
 	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(worktreePath, worktreePath, "guard-target", "guard-branch", ""))
 	return inst
 }
@@ -125,7 +127,7 @@ func TestRefuseIfWorktreeSharedWithOtherLiveSession_AllowsWhenNothingElseOccupie
 	lh := newWorktreeGuardHandlers(t, elsewhere)
 
 	t.Run("directory session has no worktree to protect", func(t *testing.T) {
-		plain := &session.Instance{Title: "guard-plain", UUID: "uuid-plain", Path: worktree, Status: session.Active}
+		plain := &session.Instance{Title: "guard-plain", UUID: "uuid-plain", Path: worktree, Status: domain.Active}
 		require.False(t, plain.HasGitWorktree(), "test setup: this instance must have no worktree")
 		assert.Nil(t, lh.refuseIfWorktreeSharedWithOtherLiveSession(plain))
 	})

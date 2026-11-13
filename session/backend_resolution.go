@@ -2,6 +2,7 @@ package session
 
 import (
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -13,21 +14,21 @@ import (
 //
 // sessionName must be the sanitized tmux session name (see tmux.NewSessionName),
 // not the raw request title — that's the key TymuxSessionOverrides is keyed by.
-func ResolveSessionBackend(cfg *config.Config, sessionName string, requestOverride ProcessManagerBackend) ProcessManagerBackend {
+func ResolveSessionBackend(cfg *config.Config, sessionName string, requestOverride domain.ProcessManagerBackend) domain.ProcessManagerBackend {
 	RecordBackendInfo(cfg)
 	if requestOverride != "" {
 		return requestOverride
 	}
 	if forceTymux, ok := cfg.GetTymuxSessionOverride(sessionName); ok {
 		if forceTymux {
-			return BackendTymux
+			return domain.BackendTymux
 		}
-		return BackendTmux
+		return domain.BackendTmux
 	}
 	if backend := getSelectedBackend(); backend != "" {
 		return backend
 	}
-	return BackendTmux
+	return domain.BackendTmux
 }
 
 // ResolveSessionBackendForTitle derives the sanitized tmux session key from
@@ -40,7 +41,7 @@ func ResolveSessionBackend(cfg *config.Config, sessionName string, requestOverri
 // wrong silently (it would compile, and would just never match an existing
 // TymuxSessionOverrides entry). Centralizing it here closes that gap for
 // every current and future caller.
-func ResolveSessionBackendForTitle(cfg *config.Config, title string, requestOverride ProcessManagerBackend) ProcessManagerBackend {
+func ResolveSessionBackendForTitle(cfg *config.Config, title string, requestOverride domain.ProcessManagerBackend) domain.ProcessManagerBackend {
 	return ResolveSessionBackend(cfg, tmux.NewSessionName(title, tmux.TmuxPrefix).String(), requestOverride)
 }
 
@@ -54,4 +55,25 @@ func (i *Instance) pinResolvedBackend() {
 		return
 	}
 	i.Backend = processManagerBackendKey(i.processManager)
+}
+
+// getSelectedBackend resolves the process-wide default backend live, on
+// every call — no process restart required to change it. cfg.ProcessManagerBackend
+// (hand-editable in config.json) or the "tymux" feature flag
+// (config.EffectiveTymuxEnabled, live-settable via SetTymuxGlobalOverride)
+// each force BackendTymux; otherwise cfg.ProcessManagerBackend passes
+// through as-is (so "native" still works), and "" falls through to
+// NewProcessManager's defaultBackend/BackendTmux.
+func getSelectedBackend() domain.ProcessManagerBackend {
+	return selectedBackendFromConfig(config.LoadConfig())
+}
+
+// selectedBackendFromConfig is getSelectedBackend's pure core over an
+// already-loaded config.
+func selectedBackendFromConfig(cfg *config.Config) domain.ProcessManagerBackend {
+	backend := domain.ProcessManagerBackend(cfg.ProcessManagerBackend)
+	if backend == domain.BackendTymux || config.EffectiveTymuxEnabled(cfg) {
+		return domain.BackendTymux
+	}
+	return backend
 }

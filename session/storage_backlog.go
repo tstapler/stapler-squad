@@ -983,7 +983,7 @@ func (r *EntRepository) CreateItemSessionWithVerdict(ctx context.Context, isData
 func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]backlogdto.BacklogItemData, error) {
 	items, err := r.Client.BacklogItem.Query().
 		Where(
-			backlogitem.Status(string(BacklogStatusInProgress)),
+			backlogitem.Status(string(domain.BacklogStatusInProgress)),
 			backlogitem.HasItemSessions(),
 			backlogitem.Not(
 				backlogitem.HasItemSessionsWith(itemsession.EndedAtIsNil()),
@@ -1007,7 +1007,7 @@ func (r *EntRepository) FindStuckInProgressCandidates(ctx context.Context) ([]ba
 func (r *EntRepository) FindReviewItemsWithoutGate(ctx context.Context) ([]*ent.BacklogItem, error) {
 	items, err := r.Client.BacklogItem.Query().
 		Where(
-			backlogitem.Status(string(BacklogStatusReview)),
+			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.SkipReviewGate(false),
 			backlogitem.Not(backlogitem.HasItemSessionsWith(itemsession.SessionRole(SessionRoleReview))),
 		).
@@ -1042,7 +1042,7 @@ func (r *EntRepository) FindReviewItemsWithoutGate(ctx context.Context) ([]*ent.
 func (r *EntRepository) FindStuckReviewItems(ctx context.Context) ([]*ent.BacklogItem, error) {
 	items, err := r.Client.BacklogItem.Query().
 		Where(
-			backlogitem.Status(string(BacklogStatusReview)),
+			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(itemsession.SessionRole(SessionRoleReview)),
 			backlogitem.Not(backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
@@ -1061,7 +1061,7 @@ func (r *EntRepository) FindStuckReviewItems(ctx context.Context) ([]*ent.Backlo
 func (r *EntRepository) FindPRPendingItems(ctx context.Context) ([]*ent.BacklogItem, error) {
 	items, err := r.Client.BacklogItem.Query().
 		Where(
-			backlogitem.Status(string(BacklogStatusPRPending)),
+			backlogitem.Status(string(domain.BacklogStatusPRPending)),
 			backlogitem.PrNumberGT(0),
 		).
 		All(ctx)
@@ -1100,9 +1100,9 @@ func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogI
 			backlogitem.PrNumberGT(0),
 			backlogitem.PrURLNEQ(""),
 			backlogitem.StatusNotIn(
-				string(BacklogStatusPRPending),
-				string(BacklogStatusDone),
-				string(BacklogStatusArchived),
+				string(domain.BacklogStatusPRPending),
+				string(domain.BacklogStatusDone),
+				string(domain.BacklogStatusArchived),
 			),
 			backlogitem.Not(backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
@@ -1120,6 +1120,20 @@ func (r *EntRepository) FindDriftedPRItems(ctx context.Context) ([]*ent.BacklogI
 // e.g. "https://github.com/owner/repo/pull/148" -> 148.
 var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 
+// ParsePRNumberFromURL extracts the trailing PR number from a GitHub PR URL,
+// sharing the regex BackfillMissingPRNumbers uses so both parses agree.
+func ParsePRNumberFromURL(prURL string) (int, error) {
+	m := prNumberFromURLRe.FindStringSubmatch(prURL)
+	if m == nil {
+		return 0, fmt.Errorf("no PR number found in %q", prURL)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, fmt.Errorf("parsing PR number from %q: %w", prURL, err)
+	}
+	return n, nil
+}
+
 // BackfillMissingPRNumbers finds pr_pending items with a pr_url but no
 // pr_number (pr_number == 0) and parses the number out of the URL. Such items
 // are otherwise permanently invisible to FindPRPendingItems' PrNumberGT(0)
@@ -1130,7 +1144,7 @@ var prNumberFromURLRe = regexp.MustCompile(`/pull/(\d+)/?$`)
 func (r *EntRepository) BackfillMissingPRNumbers(ctx context.Context) (int, error) {
 	items, err := r.Client.BacklogItem.Query().
 		Where(
-			backlogitem.Status(string(BacklogStatusPRPending)),
+			backlogitem.Status(string(domain.BacklogStatusPRPending)),
 			backlogitem.PrNumberEQ(0),
 			backlogitem.PrURLNotNil(),
 			backlogitem.PrURLNEQ(""),
@@ -1209,7 +1223,7 @@ func (r *EntRepository) FindOpenStuckStates(ctx context.Context) ([]backlogdto.O
 		}
 		if item := row.Edges.Item; item != nil {
 			data.ItemTitle = item.Title
-			data.ItemStatus = BacklogStatus(item.Status)
+			data.ItemStatus = domain.BacklogStatus(item.Status)
 			data.PrNumber = item.PrNumber
 			data.PrURL = item.PrURL
 			data.PlanArtifactsPath = item.PlanArtifactsPath
@@ -1277,7 +1291,7 @@ func (r *EntRepository) ListStuckStatesForItem(ctx context.Context, itemID strin
 // GetMostRecentReviewVerdictForItem returns the OverallOutcome from the
 // most recently created ReviewVerdict associated with any ItemSession for the
 // given BacklogItem UUID. Returns "" (not an error) when no verdict exists yet.
-func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (ReviewOutcome, error) {
+func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (domain.ReviewOutcome, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return "", fmt.Errorf("invalid item id %q: %w", itemID, err)
@@ -1302,14 +1316,14 @@ func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, i
 	if is.Edges.ReviewVerdict == nil {
 		return "", nil
 	}
-	return ReviewOutcome(is.Edges.ReviewVerdict.OverallOutcome), nil
+	return domain.ReviewOutcome(is.Edges.ReviewVerdict.OverallOutcome), nil
 }
 
 // GetRecentReviewVerdictSummaries returns up to limit ReviewVerdicts for the
 // given BacklogItem UUID, most recent first. Reuses the existing
 // ReviewVerdictSummary DTO (see repository.go) — only OverallOutcome,
 // Summary, and DiffHash are populated, since that's all callers
-// (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck_decisions.go) need.
+// (IsRepeatedFailure and IsFlakyVerdictFlipFlop in stuck/decisions.go) need.
 func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, itemID string, limit int) ([]backlogdto.ReviewVerdictSummary, error) {
 	parsedItemID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
@@ -1352,11 +1366,11 @@ func (r *EntRepository) GetRecentReviewVerdictSummaries(ctx context.Context, ite
 
 // UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
 func (r *EntRepository) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
-	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: status, reason: note}, func(c *AcCriterion) error {
-		if c.Status == AcStatusWaived {
+	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: status, reason: note}, func(c *domain.AcCriterion) error {
+		if c.Status == domain.AcStatusWaived {
 			return backlogdto.ErrAcCriterionWaived
 		}
-		c.Status = AcStatus(status)
+		c.Status = domain.AcStatus(status)
 		if note != "" {
 			c.Note = note
 		}
@@ -1372,14 +1386,14 @@ func (r *EntRepository) WaiveAcCriterion(ctx context.Context, itemID string, cri
 		return backlogdto.ErrWaiverReasonRequired
 	}
 	actor := AcActorFrom(ctx)
-	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: string(AcStatusWaived), reason: reason}, func(c *AcCriterion) error {
+	return r.mutateAcCriterion(ctx, itemID, criterionIndex, acChange{newStatus: string(domain.AcStatusWaived), reason: reason}, func(c *domain.AcCriterion) error {
 		switch c.Status {
-		case AcStatusDone:
+		case domain.AcStatusDone:
 			return backlogdto.ErrAcCriterionAlreadyDone
-		case AcStatusWaived:
+		case domain.AcStatusWaived:
 			return backlogdto.ErrAcCriterionAlreadyWaived
 		}
-		c.Status = AcStatusWaived
+		c.Status = domain.AcStatusWaived
 		c.WaiverReason = reason
 		c.WaivedBy = actor.Label()
 		c.WaivedAt = time.Now().UTC().Format(time.RFC3339)
@@ -1397,7 +1411,7 @@ type acChange struct {
 // criterionIndex, and persists the result together with an AcAuditEvent in one
 // transaction. A mutation that reaches an existing item but is refused still
 // leaves an audit row (outcome "rejected:...").
-func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, criterionIndex int, change acChange, mutate func(*AcCriterion) error) error {
+func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, criterionIndex int, change acChange, mutate func(*domain.AcCriterion) error) error {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -1420,7 +1434,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 		return fmt.Errorf("failed to get backlog item %s: %w", itemID, err)
 	}
 
-	criteria, parseErr := ParseAcCriteria(AcCriteriaJSON(item.AcceptanceCriteria))
+	criteria, parseErr := domain.ParseAcCriteria(domain.AcCriteriaJSON(item.AcceptanceCriteria))
 	if parseErr != nil {
 		return fmt.Errorf("failed to parse AC criteria: %w", parseErr)
 	}
@@ -1450,7 +1464,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 		return reject(prev, err)
 	}
 
-	serialized, serErr := SerializeAcCriteria(criteria)
+	serialized, serErr := domain.SerializeAcCriteria(criteria)
 	if serErr != nil {
 		return fmt.Errorf("failed to serialize AC criteria: %w", serErr)
 	}
@@ -1496,7 +1510,7 @@ func (r *EntRepository) mutateAcCriterion(ctx context.Context, itemID string, cr
 func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.BacklogItem, error) {
 	items, err := r.Client.BacklogItem.Query().
 		Where(
-			backlogitem.Status(string(BacklogStatusReview)),
+			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(
 				itemsession.EndedAtIsNil(),
 				itemsession.SessionRoleIn(SessionRoleReview, SessionRoleWork),
@@ -1528,7 +1542,7 @@ func (r *EntRepository) FindZombieReviewItems(ctx context.Context) ([]*ent.Backl
 func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Context) ([]*ent.BacklogItem, error) {
 	items, err := r.Client.BacklogItem.Query().
 		Where(
-			backlogitem.Status(string(BacklogStatusReview)),
+			backlogitem.Status(string(domain.BacklogStatusReview)),
 			backlogitem.HasItemSessionsWith(
 				itemsession.SessionRole(SessionRoleReview),
 				itemsession.HasReviewVerdict(),
@@ -1553,7 +1567,7 @@ func (r *EntRepository) FindReviewItemsWithUnprocessedVerdict(ctx context.Contex
 // abandoned_review 15-minute grace check (abandonedReview pure fn) so a item
 // that JUST entered review isn't flagged before the reconciler has had a
 // chance to re-spawn a review gate.
-func (r *EntRepository) GetMostRecentStatusEventAt(ctx context.Context, itemID string, toStatus BacklogStatus) (time.Time, bool, error) {
+func (r *EntRepository) GetMostRecentStatusEventAt(ctx context.Context, itemID string, toStatus domain.BacklogStatus) (time.Time, bool, error) {
 	parsedID, err := r.resolveBacklogItemLookup(ctx, itemID)
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("invalid item id %q: %w", itemID, err)
@@ -1587,8 +1601,8 @@ func (r *EntRepository) CountReviewCyclesSince(ctx context.Context, itemID strin
 	n, err := r.Client.BacklogStatusEvent.Query().
 		Where(
 			backlogstatusevent.ItemID(parsedID),
-			backlogstatusevent.FromStatus(string(BacklogStatusInProgress)),
-			backlogstatusevent.ToStatus(string(BacklogStatusReview)),
+			backlogstatusevent.FromStatus(string(domain.BacklogStatusInProgress)),
+			backlogstatusevent.ToStatus(string(domain.BacklogStatusReview)),
 			backlogstatusevent.CreatedAtGTE(since),
 		).
 		Count(ctx)

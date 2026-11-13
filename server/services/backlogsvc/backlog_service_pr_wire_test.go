@@ -32,7 +32,7 @@ func TestUpdateBacklogItem_ShouldReportEachPRAssociationOutcome_WhenTrackingByUR
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	ctx := context.Background()
-	create := func(status session.BacklogStatus) string {
+	create := func(status domain.BacklogStatus) string {
 		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "pr wire", Status: string(status)})
 		require.NoError(t, err)
 		return item.ID
@@ -40,27 +40,27 @@ func TestUpdateBacklogItem_ShouldReportEachPRAssociationOutcome_WhenTrackingByUR
 
 	t.Run("review links and moves to pr_pending", func(t *testing.T) {
 		t.Parallel()
-		got, err := associatePR(t, svc, create(session.BacklogStatusReview), 320)
+		got, err := associatePR(t, svc, create(domain.BacklogStatusReview), 320)
 		require.NoError(t, err)
 		assert.Equal(t, sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_LINKED_AND_MOVED, got.PrAssociation)
-		assert.Equal(t, string(session.BacklogStatusPRPending), got.Item.Status)
+		assert.Equal(t, string(domain.BacklogStatusPRPending), got.Item.Status)
 		assert.EqualValues(t, 320, got.Item.PrNumber)
 	})
 
 	t.Run("pr_pending on the same PR is already tracked and writes nothing", func(t *testing.T) {
 		t.Parallel()
-		id := create(session.BacklogStatusReview)
+		id := create(domain.BacklogStatusReview)
 		_, err := associatePR(t, svc, id, 321)
 		require.NoError(t, err)
 		got, err := associatePR(t, svc, id, 321)
 		require.NoError(t, err)
 		assert.Equal(t, sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_ALREADY_TRACKED, got.PrAssociation)
-		assert.Equal(t, string(session.BacklogStatusPRPending), got.Item.Status)
+		assert.Equal(t, string(domain.BacklogStatusPRPending), got.Item.Status)
 	})
 
 	t.Run("pr_pending on a different PR is refused, not reassigned", func(t *testing.T) {
 		t.Parallel()
-		id := create(session.BacklogStatusReview)
+		id := create(domain.BacklogStatusReview)
 		_, err := associatePR(t, svc, id, 322)
 		require.NoError(t, err)
 		_, err = associatePR(t, svc, id, 323)
@@ -72,18 +72,18 @@ func TestUpdateBacklogItem_ShouldReportEachPRAssociationOutcome_WhenTrackingByUR
 
 	t.Run("an item outside review/pr_pending is refused and unchanged", func(t *testing.T) {
 		t.Parallel()
-		id := create(session.BacklogStatusInProgress)
+		id := create(domain.BacklogStatusInProgress)
 		_, err := associatePR(t, svc, id, 324)
 		assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
 		final, gerr := storage.GetBacklogItem(ctx, id)
 		require.NoError(t, gerr)
-		assert.Equal(t, string(session.BacklogStatusInProgress), final.Status)
+		assert.Equal(t, string(domain.BacklogStatusInProgress), final.Status)
 		assert.Zero(t, final.PrNumber, "no PR fields were written")
 	})
 
 	t.Run("a call without PR fields reports unspecified", func(t *testing.T) {
 		t.Parallel()
-		id := create(session.BacklogStatusReview)
+		id := create(domain.BacklogStatusReview)
 		resp, err := svc.UpdateBacklogItem(ctx, connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{ItemId: id, Title: "renamed"}))
 		require.NoError(t, err)
 		assert.Equal(t, sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_UNSPECIFIED, resp.Msg.PrAssociation)
@@ -94,19 +94,19 @@ func seedItemPRs(t *testing.T, storage *session.Storage, itemID string, merged, 
 	t.Helper()
 	ctx := context.Background()
 	n := 100
-	attach := func(state session.PRState) {
+	attach := func(state domain.PRState) {
 		n++
-		ref, err := session.NewPRRef("", "acme", "app", n)
+		ref, err := domain.NewPRRef("", "acme", "app", n)
 		require.NoError(t, err)
-		_, err = storage.AttachItemPR(ctx, itemID, ref, session.PRLink{Role: session.PRRolePrimary, Source: session.AttachSourceManual,
-			Initial: session.PRInitial{State: state, Terminal: state.Terminal()}})
+		_, err = storage.AttachItemPR(ctx, itemID, ref, domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual,
+			Initial: domain.PRInitial{State: state, Terminal: state.Terminal()}})
 		require.NoError(t, err)
 	}
 	for range merged {
-		attach(session.PRStateMerged)
+		attach(domain.PRStateMerged)
 	}
 	for range open {
-		attach(session.PRStateOpen)
+		attach(domain.PRStateOpen)
 	}
 }
 
@@ -114,10 +114,10 @@ func TestListStuckBacklogItems_ShouldCountMergedPRsOfTheItemSet_WhenMultiPRBackl
 	t.Parallel()
 	storage := svctest.CreateTestStorage(t)
 	ctx := context.Background()
-	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stuck multi", Status: string(session.BacklogStatusPRPending)})
+	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stuck multi", Status: string(domain.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	seedItemPRs(t, storage, item.ID, 2, 1)
-	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, session.BacklogStatusPRPending, "ctx")
+	applied, err := storage.MarkStuck(ctx, item.ID, domain.StuckReasonAutonomousStuck, domain.BacklogStatusPRPending, "ctx")
 	require.NoError(t, err)
 	require.True(t, applied)
 
@@ -143,7 +143,7 @@ func TestGetBacklogItem_ShouldFlagItemDirectPRs_WhenSetHoldsItemAndSessionLinks(
 	t.Parallel()
 	fix := setupForkTestFixture(t)
 	ctx := context.Background()
-	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "mixed", Status: string(session.BacklogStatusPRPending)})
+	item, err := fix.storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "mixed", Status: string(domain.BacklogStatusPRPending)})
 	require.NoError(t, err)
 	seedItemPRs(t, fix.storage, item.ID, 0, 1) // #101, item-direct
 

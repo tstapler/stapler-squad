@@ -291,7 +291,7 @@ func (s *WebhookRegistrationService) buildReconcileInput(caller *WebhookCaller, 
 		Workflow:          spec,
 	}
 	if req.Secret != "" {
-		encrypted, encErr := session.EncryptToken(encKey, req.Secret)
+		encrypted, encErr := domain.EncryptToken(encKey, req.Secret)
 		if encErr != nil {
 			return nil, apiErr(http.StatusInternalServerError, "INTERNAL", "secret storage unavailable")
 		}
@@ -409,7 +409,7 @@ func validateWebhookSpec(b WebhookSpecBody, allowedRoot string) (session.Webhook
 	if b.InputTemplate != nil && len(*b.InputTemplate) > maxWebhookTemplateBytes {
 		return invalid("webhook.input_template exceeds its size limit")
 	}
-	if b.SessionType != nil && !config.SessionType(*b.SessionType).IsValid() {
+	if b.SessionType != nil && !domain.SessionType(*b.SessionType).IsValid() {
 		return invalid("webhook.session_type is not supported")
 	}
 	if b.Model != nil {

@@ -13,65 +13,14 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
-
-// RetryAttemptRecord is one entry in RetryState.RetryHistory.
-type RetryAttemptRecord struct {
-	Attempt   int       `json:"attempt"`
-	Reason    string    `json:"reason"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// maxRetryHistoryEntries caps RetryState.RetryHistory so a long-lived,
-// repeatedly crash-looping session doesn't grow this slice unboundedly.
-const maxRetryHistoryEntries = 10
-
-// RetryState holds the automated crash/stall retry lifecycle for one session:
-// attempt count, resolved max, last failure reason, pending-retry timestamp,
-// and history. Embedded (by value) into Instance, mirroring ReviewState.
-// Protected by inst.mu.
-type RetryState struct {
-	// RetryAttempt is the number of automated retry attempts consumed so far in
-	// the current failure episode. Reset to 0 by RetryNow().
-	RetryAttempt int `json:"retry_attempt,omitempty"`
-	// RetryMaxAttempts is the policy-resolved cap, snapshotted at driver start
-	// (or by RetryNow) so a live config edit mid-cycle doesn't change the cap a
-	// session is already partway through.
-	RetryMaxAttempts int `json:"retry_max_attempts,omitempty"`
-	// LastFailureReason is the most recent classifyFailureReason result:
-	// "crashed", "stalled", or "tmux_exited".
-	LastFailureReason string `json:"last_failure_reason,omitempty"`
-	// NextRetryAt is when the next backed-off restart is due. Zero means no
-	// retry is pending.
-	NextRetryAt time.Time `json:"next_retry_at,omitempty"`
-	// RetryHistory records reason + timestamp per attempt, newest-last, capped
-	// at maxRetryHistoryEntries. Preserved across RetryNow() episodes (AC5 wants
-	// history to survive a manual retry, not just the automated ones).
-	RetryHistory []RetryAttemptRecord `json:"retry_history,omitempty"`
-}
-
-// recordAttempt appends a RetryAttemptRecord to RetryHistory, dropping the
-// oldest entry once maxRetryHistoryEntries is exceeded. Caller must hold
-// inst.mu.
-func (rs *RetryState) recordAttempt(attempt int, reason string, now time.Time) {
-	rs.RetryHistory = append(rs.RetryHistory, RetryAttemptRecord{Attempt: attempt, Reason: reason, Timestamp: now})
-	if len(rs.RetryHistory) > maxRetryHistoryEntries {
-		rs.RetryHistory = rs.RetryHistory[len(rs.RetryHistory)-maxRetryHistoryEntries:]
-	}
-}
-
-// reset clears the attempt/backoff bookkeeping back to a fresh episode, used
-// by RetryNow(). RetryHistory is deliberately preserved. Caller must hold
-// inst.mu.
-func (rs *RetryState) reset() {
-	rs.RetryAttempt = 0
-	rs.LastFailureReason = ""
-	rs.NextRetryAt = time.Time{}
-}
 
 // RetryPolicy is the resolved, already-defaulted retry policy — the output of
 // resolveRetryPolicy. Distinct from config.RetryPolicyConfig (the raw,
@@ -244,7 +193,7 @@ const (
 // package var directly) so tests can simulate "server booted recently"
 // without process-level tricks — matches evaluateRemediation's own bootTime
 // param.
-func evaluateSessionRetry(rs RetryState, policy RetryPolicy, reason string, now, bootTime time.Time) retryDecision {
+func evaluateSessionRetry(rs domain.RetryState, policy RetryPolicy, reason string, now, bootTime time.Time) retryDecision {
 	if !policy.Enabled {
 		return retryDecisionNotEligible
 	}
@@ -277,15 +226,24 @@ func (i *Instance) retryExhausted() bool {
 	return i.RetryMaxAttempts > 0 && i.RetryAttempt >= i.RetryMaxAttempts
 }
 
+// SetRetryProgress applies update to the retry state under the instance lock and
+// republishes the snapshot, so Snapshot().Retry never lags a driver write.
+func (i *Instance) SetRetryProgress(update func(rs *domain.RetryState)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	update(&i.RetryState)
+	i.snapshot.Store(buildSnapshot(i))
+}
+
 // RetrySnapshot returns a race-free copy of RetryState for wire-boundary
 // conversion (server/adapters.InstanceToProto) and read-only UI consumers,
 // mirroring how GitHubPRState and its siblings are read directly rather than
 // through the InstanceSnapshot atomic pointer.
-func (i *Instance) RetrySnapshot() RetryState {
+func (i *Instance) RetrySnapshot() domain.RetryState {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	rs := i.RetryState
-	rs.RetryHistory = append([]RetryAttemptRecord(nil), i.RetryHistory...)
+	rs.RetryHistory = append([]domain.RetryAttemptRecord(nil), i.RetryHistory...)
 	return rs
 }
 
@@ -306,9 +264,7 @@ func (i *Instance) retryPendingElapsed(now time.Time) (pending, elapsed bool) {
 // clearNextRetryAt clears a pending retry timestamp, called after a
 // successful automated restart consumes it.
 func (i *Instance) clearNextRetryAt() {
-	i.mu.Lock()
-	i.NextRetryAt = time.Time{}
-	i.mu.Unlock()
+	i.SetRetryProgress(func(rs *domain.RetryState) { rs.NextRetryAt = time.Time{} })
 }
 
 // lastRetryFailureReason returns the most recently recorded failure reason,
@@ -318,72 +274,6 @@ func (i *Instance) lastRetryFailureReason() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.LastFailureReason
-}
-
-// restartForRetry is the single choke point every restart path (automated
-// backoff-expiry, restart-grace, manual RetryNow) goes through. It claims
-// retryInFlight via CAS before doing anything else — a caller whose CAS fails
-// gets ErrRetryInFlight without touching RetryState or attempting any
-// restart, which is the whole guarantee retryInFlight exists for.
-//
-// stop is the stop channel the new driver goroutine should watch. Pass the
-// current goroutine's own stop channel when calling from within a running
-// driver loop (the standard "handleDriverFailure spawns a continuation"
-// pattern); pass nil when calling from outside any driver loop (RetryNow) —
-// restartForRetry then reuses the instance's existing stopper, or creates one
-// if none exists yet.
-func restartForRetry(inst *Instance, allowedPath, continuationPrompt string, policy RetryPolicy, stop <-chan struct{}) error {
-	if !inst.retryInFlight.CompareAndSwap(false, true) {
-		return ErrRetryInFlight
-	}
-	defer inst.retryInFlight.Store(false)
-
-	var restartErr error
-	if inst.IsHotRestoreRecoverable() {
-		inst.RecoverFromStopped()
-		// A prior failure may have been the session's worktree directory vanishing
-		// (see recreateWorktreeIfMissing); a failure there fails the retry now.
-		if setupErr := inst.recreateWorktreeIfMissing(); setupErr != nil {
-			restartErr = fmt.Errorf("failed to recreate missing worktree before retry: %w", setupErr)
-		} else {
-			// Clear the old (possibly dead) controller so StartController below creates a fresh one.
-			inst.StopController()
-			restartErr = inst.Start(false)
-		}
-		if restartErr == nil {
-			if ctrlErr := inst.StartController(); ctrlErr != nil {
-				log.Warn("SessionDriver: failed to restart controller after retry restart",
-					"session", inst.Title, "err", ctrlErr)
-			}
-		}
-	} else {
-		restartErr = inst.Restart(false, "")
-	}
-
-	if restartErr != nil {
-		log.Error("SessionDriver: retry restart failed; marking for attention",
-			"session", inst.Title, "err", restartErr,
-		)
-		markSessionNeedsAttention(inst, "restart error: "+restartErr.Error())
-		return restartErr
-	}
-
-	// Register before spawning to close the race window between an exiting
-	// goroutine's driverRunning bookkeeping and the new one starting
-	// (mirrors handleDriverFailure's existing D3 mitigation).
-	driverStop, ok := inst.registerContinuation(stop)
-	if !ok {
-		// Destroy already ran. The restart above has already happened; it is cleaned up only when
-		// this ran on a driver goroutine that StopSessionDriver waited for (within driverStopTimeout).
-		log.Info("SessionDriver: instance destroyed, not spawning retry continuation", "session", inst.Title)
-		return nil
-	}
-	go func() {
-		defer inst.driverWG.Done()
-		defer inst.driverGoroutineExited()
-		runSessionDriverWithPrompt(inst, allowedPath, continuationPrompt, policy, driverStop)
-	}()
-	return nil
 }
 
 // SetRetryInFlightForTest sets retryInFlight directly, for tests outside this
@@ -443,13 +333,171 @@ func (i *Instance) IsRetryPending() bool {
 // restartForRetry actually takes (Start()'s Creating→Active transition, or
 // Restart()'s own handling), mirroring the automated entry points exactly.
 func (i *Instance) RetryNow(allowedPath string) error {
-	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, i.RetryPolicyOverride)
+	policy := resolveRetryPolicy(config.LoadConfig().RetryPolicy, i.retryPolicyOverride)
 
-	i.mu.Lock()
-	i.reset()
-	i.RetryMaxAttempts = policy.MaxAttempts
-	i.mu.Unlock()
+	i.SetRetryProgress(func(rs *domain.RetryState) {
+		rs.ResetEpisode()
+		rs.RetryMaxAttempts = policy.MaxAttempts
+	})
 
 	prompt := buildRetryContinuationPrompt(i, "manual retry")
 	return restartForRetry(i, allowedPath, prompt, policy, nil)
 }
+
+// RetryPolicyOverride returns the per-session retry policy override, nil when
+// the session inherits the global default. It is an accessor, not a snapshot
+// field, so the snapshot does not carry a config type.
+func (i *Instance) RetryPolicyOverride() *config.RetryPolicyConfig {
+	return i.retryPolicyOverride
+}
+
+// markSessionPermanentlyFailed transitions the session to the terminal
+// PermanentlyFailed status (ADR-001), adds the existing ReviewQueue entry
+// (unchanged ReasonStale), and fires a proactive notification — edge-
+// triggered on the actual transition, so a later observation of an
+// already-PermanentlyFailed session never re-fires either. Only RetryNow()
+// re-arms the one-shot by transitioning back to Active.
+func markSessionPermanentlyFailed(inst *Instance, reason string) {
+	inst.mu.Lock()
+	alreadyFailed := inst.Status == domain.PermanentlyFailed
+	var snap *domain.InstanceSnapshot
+	if !alreadyFailed {
+		inst.Status = domain.PermanentlyFailed
+		// Publish the transition to inst.snapshot (the atomic pointer
+		// GetEffectiveStatus()/Snapshot() actually read) — this write, unlike
+		// transitionToLocked's, doesn't route through the state machine (there
+		// is no PermanentlyFailed entry in transitionIndex), so nothing else
+		// republishes it. Without this, GetEffectiveStatus() kept returning
+		// the instance's pre-failure status (e.g. Active) until some unrelated
+		// mutator happened to rebuild the snapshot, which broke both the UI's
+		// status display and restartForRetry's branch decision for a manual
+		// RetryNow() on this instance.
+		snap = buildSnapshot(inst)
+	}
+	attempt := inst.RetryAttempt
+	maxAttempts := inst.RetryMaxAttempts
+	inst.mu.Unlock()
+
+	if alreadyFailed {
+		return
+	}
+	inst.snapshot.Store(snap)
+
+	log.Warn("SessionDriver: session exhausted retry budget; marking permanently failed",
+		"session", inst.Title, "reason", reason, "attempts", attempt, "max_attempts", maxAttempts,
+	)
+	markSessionNeedsAttention(inst, reason)
+
+	if n := inst.GetNotifier(); n != nil {
+		n.Notify(inst.UUID,
+			"Session gave up after repeated failures",
+			fmt.Sprintf("%s failed to recover after %d attempt(s) (last reason: %s) and will not be retried automatically. Use \"Retry now\" to try again.", inst.Title, attempt, reason),
+			7,          // sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR
+			true, true, // urgent, important — automatic recovery gave up; a genuine dead end
+		)
+	}
+}
+
+// buildRetryContinuationPrompt builds the continuation prompt for an
+// automated or manual retry: the existing JSONL-derived (or
+// InitialPrompt-fallback) continuation text, prefixed with "Previous attempt
+// failed due to {reason}." (AC3) plus a one-line worktree-integrity hint —
+// not a detection mechanism, just surfacing the possibility to whoever reads
+// the resumed session (research/pitfalls.md §4).
+func buildRetryContinuationPrompt(inst *Instance, reason string) string {
+	base := buildContinuationPrompt(inst)
+	if base == "Your previous session exited unexpectedly. Please continue from where you left off." &&
+		inst.InitialPrompt != "" {
+		if sanitized := cleanDriverPromptText(inst.InitialPrompt); sanitized != "" {
+			base = sanitized
+		}
+	}
+	if reason == "" {
+		return base
+	}
+	attempt := inst.Snapshot().Retry.RetryAttempt
+	prefix := fmt.Sprintf(
+		"Previous attempt failed due to %s. (This is retry attempt %d; if this failure looks identical to the last one, the worktree itself may be the problem.) ",
+		reason, attempt,
+	)
+	return prefix + base
+}
+
+// markSessionNeedsAttention adds the instance to its ReviewQueue (if any)
+// so the UI surfaces it for operator intervention.
+//
+// BLOCK-2 fix: ReviewQueue.Add takes *ReviewItem, not (string, string).
+func markSessionNeedsAttention(inst *Instance, reason string) {
+	rq := inst.GetReviewQueue()
+	if rq == nil {
+		log.Warn("SessionDriver: ReviewQueue not set on instance, cannot mark NeedsAttention",
+			"session", inst.Title,
+		)
+		return
+	}
+	rq.Add(&queue.ReviewItem{
+		SessionID:    inst.UUID,
+		SessionName:  inst.Title,
+		Reason:       queue.ReasonStale, // closest existing reason: "no output for extended period"
+		Priority:     queue.PriorityMedium,
+		DetectedAt:   time.Now(),
+		Context:      reason, // "inactivity timeout" or "unexpected exit" or "restart error: ..."
+		Tags:         inst.GetTags(),
+		Path:         inst.GetPath(),
+		Status:       inst.GetEffectiveStatus().String(),
+		LastActivity: inst.LastMeaningfulOutputTime(),
+	})
+}
+
+// cleanDriverPromptText drops NUL bytes (tmux drops them unpredictably) and
+// surrounding whitespace. Empty means "fall back to driverInitialPrompt".
+func cleanDriverPromptText(s string) string {
+	return strings.TrimSpace(strings.ReplaceAll(s, "\x00", ""))
+}
+
+// buildContinuationPrompt reads the last N messages from the session's JSONL
+// conversation log and produces a brief prompt summarizing the last assistant
+// turn. Falls back to a generic prompt if the log is unavailable.
+func buildContinuationPrompt(inst *Instance) string {
+	histPath := inst.Snapshot().HistoryFilePath
+	if histPath == "" {
+		return "Your previous session exited unexpectedly. Please continue from where you left off."
+	}
+
+	msgs, err := readLastNMessagesFromFile(histPath, driverContinuationMaxMessages)
+	if err != nil || len(msgs) == 0 {
+		log.Warn("SessionDriver: could not read conversation history for continuation prompt",
+			"session", inst.Title, "path", histPath, "err", err,
+		)
+		return "Your previous session exited unexpectedly. Please continue from where you left off."
+	}
+
+	// Find the last assistant message.
+	// BLOCK-3 fix: ClaudeConversationMessage has a Role field (not Type).
+	// Content is already a plain string after extractMsgContent processing — no
+	// extractMsgText helper needed or available.
+	var lastAssistant string
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "assistant" {
+			lastAssistant = msgs[i].Content
+			break
+		}
+	}
+
+	if lastAssistant == "" {
+		return "Your previous session exited unexpectedly. Please continue from where you left off."
+	}
+
+	if len(lastAssistant) > driverContinuationMaxChars {
+		lastAssistant = lastAssistant[:driverContinuationMaxChars] + "..."
+	}
+
+	return "Your session restarted after an unexpected exit. Your last message was:\n---\n" +
+		lastAssistant + "\n---\nPlease continue from where you left off. " +
+		"Do not re-introduce yourself or repeat completed work."
+}
+
+// Continuation prompt constants.
+const driverContinuationMaxMessages = 10
+
+const driverContinuationMaxChars = 500

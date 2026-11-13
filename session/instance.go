@@ -15,20 +15,22 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
+
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/ansi"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
-	"github.com/tstapler/stapler-squad/session/artifacts"
+	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/ptyio"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/tymux"
+	"github.com/tstapler/stapler-squad/session/vnc"
 )
 
 // logPTYUnavailableIfUnexpected logs a GetPTY() failure as ERROR unless it's
@@ -55,129 +57,6 @@ var ErrWorktreeResolutionFailed = errors.New("resolved to no real worktree")
 // session's active directory (or claimed by a racing in-flight spawn).
 // Pipeline-level error classification matches on this sentinel via errors.Is.
 var ErrDirectoryCollision = errors.New("worktree already in use by another live session")
-
-type Status int
-
-const (
-	// Creating is the status when the instance is being initialized.
-	Creating Status = 0
-	// Active is the status when the instance has a live AI process (running or ready).
-	Active Status = 1
-	// Paused is if the instance is paused (worktree removed but branch preserved).
-	Paused Status = 2
-	// Stopped is a terminal state: the instance has been shut down and cannot transition further.
-	Stopped Status = 3
-	// Hibernated is the status when the instance has been checkpointed and the tmux session killed.
-	Hibernated Status = 4
-	// Restoring is the transient startup state when a hibernated session is being restored.
-	// Never persisted to the database — transitions to Active or Creating on completion.
-	Restoring Status = 5
-	// Crashed is a terminal state distinct from Stopped: the wrapped program exited
-	// abnormally (non-zero exit code or signal) and tmux's remain-on-exit left a dead
-	// pane placeholder, detected by SessionHealthChecker's polling (see session/health.go).
-	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
-	// it surfaces to the user/automation for an explicit resume (see ExitReason).
-	Crashed Status = 6
-	// PermanentlyFailed is a terminal state reached when the configurable retry
-	// policy's automated crash/stall recovery (session/retry_state.go) exhausts
-	// MaxAttempts, or a failure reason isn't in RetryOn at all. Unlike Stopped, it
-	// is not auto-revived by reconcileSessions even if tmux is alive — it's a
-	// deliberate terminal state pending human action via "Retry now"
-	// (Instance.RetryNow), not an incidental stop. See ADR-001.
-	PermanentlyFailed Status = 7
-	// Failed is a non-terminal state: the async creation pipeline (Background
-	// Resolution Pipeline, Epic 2.2) failed before the session ever reached
-	// Active. Distinct from Crashed (a previously-Active session whose process
-	// later exited abnormally): Failed→Creating is a legal transition, used by
-	// the retry path (Epic 1.2's TryStartRetry), while Crashed only recovers to
-	// Active. See ADR-001 and SESSION_STATUS_FAILED in
-	// proto/session/v1/types.proto.
-	Failed Status = 8
-
-	// Deprecated: use Active.
-	Running = Active
-	// Deprecated: use Active.
-	Ready = Active
-	// Deprecated: use Creating.
-	Loading = Creating
-)
-
-// String returns a human-readable name for the status.
-func (s Status) String() string {
-	switch s {
-	case Creating:
-		return "Creating"
-	case Active:
-		return "Active"
-	case Paused:
-		return "Paused"
-	case Stopped:
-		return "Stopped"
-	case Hibernated:
-		return "Hibernated"
-	case Restoring:
-		return "Restoring"
-	case Crashed:
-		return "Crashed"
-	case PermanentlyFailed:
-		return "PermanentlyFailed"
-	case Failed:
-		return "Failed"
-	default:
-		return fmt.Sprintf("Status(%d)", int(s))
-	}
-}
-
-// IsSuspended reports whether a session in this status is not actively running
-// and so must not be treated as a live target for background work that assumes
-// a running process or tmux session (health checks, PR/CI status polling, etc.):
-// Paused and Hibernated sessions have no tmux session at all; Stopped, Crashed,
-// and PermanentlyFailed are terminal states awaiting an explicit resume/retry,
-// not incidental gaps that background pollers should paper over. See
-// healthCheckSkipReason (session/health.go) for the health-checker's per-status
-// skip messages, and pr_status_poller.go's checkAllSessions for another consumer.
-func (s Status) IsSuspended() bool {
-	switch s {
-	case Paused, Hibernated, Stopped, Crashed, PermanentlyFailed:
-		return true
-	default:
-		return false
-	}
-}
-
-// LifecycleEvent is a notification type emitted by an Instance when key state
-// transitions occur (e.g., the session starts, or the program exits unexpectedly).
-type LifecycleEvent int
-
-const (
-	// EventStarted fires at the end of start() when the instance has successfully
-	// transitioned to Running and the controller is up.
-	EventStarted LifecycleEvent = iota
-	// EventExited fires when the underlying program exits unexpectedly (not via an
-	// operator-initiated Kill/Stop). Callers may use this to drive auto-restart logic.
-	EventExited
-	// EventStopped fires when Destroy() tears down the instance via an explicit
-	// operator-initiated Kill/Stop (e.g. the stop_session MCP tool, DeleteSession
-	// RPC, or backlog stale-work remediation). Kept distinct from EventExited so a
-	// future auto-restart listener can still ignore deliberate stops, while
-	// listeners that only care "is this session now gone" (e.g.
-	// BacklogLifecycleListener's ItemSession.EndedAt bookkeeping) can subscribe to
-	// both.
-	EventStopped
-)
-
-// ReasonColdRestoreLostHistory is passed to fireLifecycleEvent(EventStarted, ...)
-// when a cold restore was forced fresh after recoverConversationBeforeLaunch's
-// recovery attempt found nothing, despite EverHadConversationHistory being true
-// (session-revive-uuid-loss AC3).
-const ReasonColdRestoreLostHistory = "cold-restore-fresh-lost-history"
-
-// LifecycleListener is implemented by any component that wants to receive Instance
-// lifecycle notifications. Implementations must be non-blocking; use a goroutine
-// or channel if the handler needs to do significant work.
-type LifecycleListener interface {
-	OnLifecycleEvent(event LifecycleEvent, reason string)
-}
 
 // TagFireRecorder records that a tagging rule matched, independent of whether the
 // resulting tag survives suppression filtering. Declared here (not imported from
@@ -230,7 +109,7 @@ type Instance struct {
 	// requires for fields background goroutines can mutate later.
 	CreationWarning string
 	// Status is the status of the instance.
-	Status Status
+	Status domain.Status
 	// Program is the program to run in the instance.
 	Program string
 	// AltScreenActive reports whether the pane's PTY output stream is
@@ -287,7 +166,7 @@ type Instance struct {
 	// IsExpanded indicates whether this session's category is expanded in the UI
 	IsExpanded bool
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
-	SessionType SessionType
+	SessionType domain.SessionType
 	// CreateIfMissing: when SessionTypeDirectory, create the directory and run git init
 	// if the path does not exist. Set from the request's create_if_missing field.
 	// Not persisted — only relevant during initial session start.
@@ -311,7 +190,7 @@ type Instance struct {
 	// global, or BackendTmux). See ProcessManagerOptions.Backend's doc comment for
 	// precedence. Can also change post-construction via Restart's migration path;
 	// read it via Snapshot(), not this raw field.
-	Backend ProcessManagerBackend `json:"backend,omitempty"`
+	Backend domain.ProcessManagerBackend `json:"backend,omitempty"`
 	// Tags are multi-valued labels for flexible session organization
 	// Sessions can have multiple tags and appear in multiple groups simultaneously
 	// Examples: ["frontend", "urgent", "client-work"]
@@ -380,10 +259,10 @@ type Instance struct {
 	// GitHubCheckConclusion is the CI rollup: success/failure/pending/action_required/neutral/""
 	GitHubCheckConclusion string `json:"github_check_conclusion,omitempty"`
 	// GitHubChecks is the itemized statusCheckRollup from the last successful poll.
-	GitHubChecks []github.CheckItem `json:"github_checks,omitempty"`
+	GitHubChecks []domain.GitHubCheckItem `json:"github_checks,omitempty"`
 	// GitHubReviewFeedback is the itemized review list (author/state/body) from the
 	// last successful poll.
-	GitHubReviewFeedback []github.ReviewItem `json:"github_review_feedback,omitempty"`
+	GitHubReviewFeedback []domain.GitHubReviewItem `json:"github_review_feedback,omitempty"`
 	// GitHubMergeable mirrors PRInfo.Mergeable: "mergeable"/"conflicting"/"unknown".
 	GitHubMergeable string `json:"github_mergeable,omitempty"`
 	// GitHubPRStatusTerminal is true when the PR is merged/closed and polling should stop
@@ -391,9 +270,9 @@ type Instance struct {
 	// PRs, LegacyPRUnrepresented and HasPRLinks back Snapshot().GitHub.PRs and its
 	// siblings. Written only by the PR setters (instance_pr_set.go) and load
 	// hydration; never serialized from here (links live in their own table).
-	PRs                   []PRView `json:"-"`
-	LegacyPRUnrepresented bool     `json:"-"`
-	HasPRLinks            bool     `json:"-"`
+	PRs                   []domain.PRView `json:"-"`
+	LegacyPRUnrepresented bool            `json:"-"`
+	HasPRLinks            bool            `json:"-"`
 	// prPersistMu serializes this session's PR persists; prPersister is the
 	// storage seam (nil until injected); prPersistPending marks a PR set change
 	// the next full save must write. See instance_pr_set.go.
@@ -410,7 +289,7 @@ type Instance struct {
 	// LastPRStatusCheck is when the PR status was last successfully fetched
 	LastPRStatusCheck time.Time `json:"last_pr_status_check,omitempty"`
 
-	Checkpoints      CheckpointList
+	Checkpoints      domain.CheckpointList
 	ActiveCheckpoint string
 	ForkedFromID     string
 	// RestartedFromSessionID is the ID of the source session this session was
@@ -447,7 +326,7 @@ type Instance struct {
 
 	// LastReviveOutcome records the outcome of the most recent start/cold-restore
 	// decision. Guarded by claudeSessionMu, same lock order as HistoryFilePath.
-	LastReviveOutcome ReviveOutcome
+	LastReviveOutcome domain.ReviveOutcome
 
 	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint, passed
 	// as --mcp-config to claude on session start. A one-shot value resolved
@@ -593,43 +472,43 @@ type Instance struct {
 	piExtension
 
 	// Review queue integration for tracking sessions needing attention
-	reviewQueue *ReviewQueue
+	reviewQueue *queue.ReviewQueue
 
 	// ReviewState holds all review queue and terminal activity timestamps.
 	// Fields are embedded (promoted) so external code can still access inst.LastViewed etc.
 	// Protected by mu (via sendSyncErr / Snapshot).
-	ReviewState
+	domain.ReviewState
 
 	// RetryState holds the automated crash/stall retry lifecycle (attempt
 	// count, resolved max, last failure reason, pending-retry timestamp,
 	// history) for the configurable retry policy (session-retry-backoff).
 	// Fields are embedded (promoted) so callers can access inst.RetryAttempt
 	// etc. directly, mirroring ReviewState. Protected by mu.
-	RetryState
+	domain.RetryState
 
-	// RetryPolicyOverride is a per-session override for the global
+	// retryPolicyOverride is a per-session override for the global
 	// RetryPolicyConfig default, resolved once (global (+) override) at
 	// StartSessionDriver via resolveRetryPolicy. Mirrors ReworkCapOverride's
 	// nil-means-inherit convention. Nil means "use the global default".
-	RetryPolicyOverride *config.RetryPolicyConfig `json:"retry_policy_override,omitempty"`
+	retryPolicyOverride *config.RetryPolicyConfig
 
 	// notifier delivers proactive notifications (e.g. a session giving up after
 	// exhausting its retry budget) independent of the passive ReviewQueue.
 	// Set via SetNotifier, mirroring reviewQueue/SetReviewQueue.
-	notifier Notifier
+	notifier InstanceNotifier
 
-	// controllerManager owns the ClaudeController and InstanceStatusManager references.
+	// controllerManager owns the claudectl.ClaudeController and InstanceStatusManager references.
 	controllerManager ControllerManager
 
 	// Instance type and management metadata
 	// InstanceType indicates whether this is a squad-managed or external instance
-	InstanceType InstanceType
+	InstanceType domain.InstanceType
 	// IsManaged is true if this is a squad-managed session (backward compatible helper)
 	IsManaged bool
 	// ExternalMetadata contains additional information for externally discovered instances
-	ExternalMetadata *ExternalInstanceMetadata
+	ExternalMetadata *domain.ExternalInstanceMetadata
 	// Permissions defines what operations are allowed on this instance
-	Permissions InstancePermissions
+	Permissions domain.InstancePermissions
 
 	// The below fields are initialized upon calling Start().
 
@@ -651,15 +530,15 @@ type Instance struct {
 	trustStoreMu         sync.Mutex
 	claudeTrustStoreImpl claudeTrustStore
 	// gitManager owns the git worktree and diff stats.
-	GitManager GitWorktreeManager
+	gitManager gitwt.Manager
 	// vncManager owns the Xvfb + x11vnc lifecycle for this session.
 	// Always non-nil after NewInstance() — on unsupported platforms or missing deps,
 	// a no-op manager is returned. VNCManager() returns it for external access.
-	vncManager VNCProcessManager
+	vncManager vnc.VNCProcessManager
 	// cdpManager owns the Chrome DevTools Protocol screencast lifecycle for this
 	// session. Always non-nil after NewInstance() — when Chrome is absent, a
 	// no-op manager is returned. CDPManager() returns it for external access.
-	cdpManager CDPStreamManager
+	cdpManager cdp.CDPStreamManager
 
 	// tagManager provides CRUD operations for session tags.
 	// Backed by a pointer to Instance.Tags for zero-sync compatibility with
@@ -713,12 +592,12 @@ type Instance struct {
 	terminalViewers      atomic.Int64
 	terminalViewClosedAt atomic.Int64
 
-	snapshot atomic.Pointer[InstanceSnapshot]
+	snapshot atomic.Pointer[domain.InstanceSnapshot]
 
 	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
 	LastMeaningfulChangeAt time.Time
 	// TurnEnded is the latest agent turn-end fact (zero until one is recorded).
-	TurnEnded TurnEnded
+	TurnEnded domain.TurnEnded
 
 	// collabMu guards the registration-time collaborators below; nil means no-op.
 	collabMu      sync.RWMutex
@@ -846,8 +725,8 @@ type Instance struct {
 	restartTriggerMu deadlock.Mutex
 
 	// lifecycleListeners receives EventStarted / EventExited notifications.
-	LifecycleListeners   []LifecycleListener
-	LifecycleListenersMu deadlock.Mutex
+	lifecycleListeners   []domain.LifecycleListener
+	lifecycleListenersMu deadlock.Mutex
 
 	// rateLimitCallbacksMu protects the rate limit event callback fields below.
 	rateLimitCallbacksMu deadlock.Mutex
@@ -858,7 +737,7 @@ type Instance struct {
 	// success=true means recovery input was sent; false means it failed.
 	onRateLimitRecovery func(sessionID string, success bool, errMsg string)
 
-	// onStatusChange is called when the ClaudeController detects a status transition.
+	// onStatusChange is called when the claudectl.ClaudeController detects a status transition.
 	// Wired by the server layer to trigger reactive queue checks.
 	onStatusChange ptyio.Locked[func(detection.DetectedStatus, string)]
 
@@ -868,11 +747,11 @@ type Instance struct {
 
 	// Artifacts holds structured artifacts extracted from the session's JSONL history.
 	// Populated asynchronously by ArtifactExtractor. Protected by mu.
-	Artifacts *artifacts.SessionArtifactsBlob
+	Artifacts *domain.SessionArtifactsBlob
 
 	// ContextHealth is the latest transcript-derived verdict, pushed by the
 	// server's TokenStore subscriber. Zero value is HealthUnknown. Protected by mu.
-	ContextHealth tokens.ContextHealthVerdict
+	ContextHealth domain.ContextHealthVerdict
 
 	// ExecutionTarget selects where this session's TmuxSession/GitWorktree
 	// subprocess commands run (session/execution_target.go, ssh-remote-workspaces
@@ -1010,23 +889,6 @@ const (
 	PermissionModeManual            = "manual"
 )
 
-// SessionType is an alias for config.SessionType so callers can use either package.
-type SessionType = config.SessionType
-
-const (
-	// SessionTypeDirectory creates a simple directory session without git worktree
-	SessionTypeDirectory = config.SessionTypeDirectory
-	// SessionTypeNewWorktree creates a new git worktree for the session
-	SessionTypeNewWorktree = config.SessionTypeNewWorktree
-	// SessionTypeExistingWorktree uses an existing git worktree
-	SessionTypeExistingWorktree = config.SessionTypeExistingWorktree
-	// SessionTypeNewProject creates a new directory, initializes a git repo with an
-	// initial commit, and opens the session. The directory need not exist beforehand.
-	SessionTypeNewProject = config.SessionTypeNewProject
-	// SessionTypeOneOff generates a fresh temporary directory under one_off_base_dir.
-	SessionTypeOneOff = config.SessionTypeOneOff
-)
-
 // Options for creating a new instance
 type InstanceOptions struct {
 	// Title is the title of the instance.
@@ -1069,7 +931,7 @@ type InstanceOptions struct {
 	// Tags are multi-valued labels for flexible organization
 	Tags []string
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
-	SessionType SessionType
+	SessionType domain.SessionType
 	// TmuxPrefix is the prefix to use for tmux session names (e.g., "staplersquad_")
 	TmuxPrefix string
 	// TmuxServerSocket is the server socket name for tmux isolation (used with -L flag)
@@ -1078,7 +940,7 @@ type InstanceOptions struct {
 	TmuxServerSocket string
 	// Backend mirrors Instance.Backend — see its doc comment. Copied onto the new
 	// Instance in NewInstance before the ProcessManager is constructed.
-	Backend ProcessManagerBackend
+	Backend domain.ProcessManagerBackend
 	// GitHub integration fields for PR/URL-based session creation
 	GitHubPRNumber  int    // PR number if created from PR URL
 	GitHubPRURL     string // Full URL to the PR
@@ -1202,17 +1064,17 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	// Default to directory session if not specified for backward compatibility
 	sessionType := opts.SessionType
 	if sessionType == "" {
-		sessionType = SessionTypeDirectory
+		sessionType = domain.SessionTypeDirectory
 	}
 	if !sessionType.IsValid() {
 		return nil, fmt.Errorf("invalid session type %q: must be one of %q, %q, %q, %q",
-			sessionType, SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree, SessionTypeNewProject)
+			sessionType, domain.SessionTypeDirectory, domain.SessionTypeNewWorktree, domain.SessionTypeExistingWorktree, domain.SessionTypeNewProject)
 	}
 
 	instance := &Instance{
 		Title:            opts.Title,
 		UUID:             uuid.New().String(),
-		Status:           Creating,
+		Status:           domain.Creating,
 		Path:             absPath,
 		Branch:           opts.Branch,
 		CreationWarning:  opts.CreationWarning,
@@ -1234,11 +1096,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		TmuxServerSocket: opts.TmuxServerSocket,
 		Backend:          opts.Backend,
 		IsExpanded:       true, // Default to expanded for newly created instances
-		InstanceType:     InstanceTypeManaged,
+		InstanceType:     domain.InstanceTypeManaged,
 		IsManaged:        true,
-		ExternalMetadata: nil,                     // Only set for external instances
-		Permissions:      GetManagedPermissions(), // Full permissions for managed instances
-		ReviewState: ReviewState{
+		ExternalMetadata: nil,                            // Only set for external instances
+		Permissions:      domain.GetManagedPermissions(), // Full permissions for managed instances
+		ReviewState: domain.ReviewState{
 			LastTerminalUpdate:   t, // Initialize to creation time
 			LastMeaningfulOutput: t, // Initialize to creation time
 		},
@@ -1281,7 +1143,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The session itself is wired later by initTmuxSession() at Start() time.
-	pm, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend, SessionName: instance.Title})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct process manager for instance %q: %w", instance.Title, err)
 	}
@@ -1304,7 +1166,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	// Handle ResumeId - set up claudeSession so the --resume flag gets added on Start()
 	if opts.ResumeId != "" {
-		instance.claudeSession = &ClaudeSessionData{
+		instance.claudeSession = &domain.ClaudeSessionData{
 			ConversationUUID: opts.ResumeId,
 			LastAttached:     t,
 			Metadata: map[string]string{
@@ -1324,7 +1186,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	if opts.GitHubPRNumber > 0 {
 		// Created from a PR URL: the PR joins the set (its write is deferred to the
 		// first full save, see persistPRAttach).
-		instance.setLegacyPR(opts.GitHubPRURL, opts.GitHubPRNumber, AttachSourceCreatedFromURL)
+		instance.setLegacyPR(opts.GitHubPRURL, opts.GitHubPRNumber, domain.AttachSourceCreatedFromURL)
 	}
 	return instance, nil
 }
@@ -1336,7 +1198,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 // On the first call for an Instance that bypassed finishInstanceConstruction
 // (e.g. struct literals in tests), the snapshot is built lazily under stateMutex
 // and stored via CAS so concurrent first-callers converge on one value.
-func (i *Instance) Snapshot() *InstanceSnapshot {
+func (i *Instance) Snapshot() *domain.InstanceSnapshot {
 	if snap := i.snapshot.Load(); snap != nil {
 		return snap
 	}
@@ -1440,7 +1302,7 @@ func (i *Instance) ReclassifyTagsAfterCreate() {
 // depends on — lives in exactly one place.
 //
 // setupFirstTimeWorktree() runs under Instance.startMu, never i.mu (see its own doc comment /
-// git_worktree_manager.go:22-26) — by the time it returns here, startMu is fully released on
+// gitwt/manager.go:22-26) — by the time it returns here, startMu is fully released on
 // this call stack, so ReclassifyTagsAfterCreate's own i.mu.Lock() below never nests under
 // startMu. No lock-ordering cycle is possible between the two on this or any other path
 // (pre-mortem.md Failure #5, P3).
@@ -1472,7 +1334,7 @@ func (i *Instance) HasGitHubPR() bool {
 }
 
 // SetArtifacts atomically updates the in-memory Artifacts cache.
-func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
+func (i *Instance) SetArtifacts(blob *domain.SessionArtifactsBlob) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		s.inst.Artifacts = blob
 		return nil
@@ -1480,7 +1342,7 @@ func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
 }
 
 // SetContextHealth atomically updates the transcript-derived ContextHealth verdict.
-func (i *Instance) SetContextHealth(v tokens.ContextHealthVerdict) {
+func (i *Instance) SetContextHealth(v domain.ContextHealthVerdict) {
 	_ = i.sendSyncErr(func(s *instanceState) error {
 		setContextHealthLocked(s, v)
 		return nil
@@ -1544,8 +1406,8 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		// could publish the SessionUpdated event while the transition is still
 		// in-flight, racing GetStatus()/Snapshot() reads on the delivery path.
 		if err := i.sendSyncErr(func(s *instanceState) error {
-			if s.inst.Status == Active {
-				if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+			if s.inst.Status == domain.Active {
+				if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}
 			}
@@ -1564,7 +1426,7 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		if i.hasLifecycleListeners() {
 			_ = i.UpdateDiffStats()
 		}
-		i.FireLifecycleEvent(EventExited, reason)
+		i.FireLifecycleEvent(domain.EventExited, reason)
 	}
 }
 
@@ -1592,34 +1454,6 @@ func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 		return
 	}
 	i.tryExtractConversationUUID()
-}
-
-// reasonForReviveOutcome returns the fireLifecycleEvent(EventStarted, ...)
-// reason for outcome — non-empty only for ReviveOutcomeFreshLostHistory, so
-// the notification listener in server/services/session_service.go can filter
-// on the reason string alone (session-revive-uuid-loss AC3).
-func reasonForReviveOutcome(outcome ReviveOutcome) string {
-	if outcome == ReviveOutcomeFreshLostHistory {
-		return ReasonColdRestoreLostHistory
-	}
-	return ""
-}
-
-// reviveOutcomeForColdRestore derives the ColdRestore branch's ReviveOutcome
-// (session-revive-uuid-loss AC3) from its three decision inputs. Pure and
-// side-effect-free so startLocked/start share one definition instead of
-// duplicating the branch logic.
-func reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory bool) ReviveOutcome {
-	if hasClaudeSession {
-		if hadUUIDBeforeRecovery {
-			return ReviveOutcomeResumeLive
-		}
-		return ReviveOutcomeResumeRecovered
-	}
-	if everHadHistory {
-		return ReviveOutcomeFreshLostHistory
-	}
-	return ReviveOutcomeFreshExpected
 }
 
 // startLocked is the actor-safe body of Start(). Called only from within
@@ -1659,7 +1493,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// resolve to SessionTypeNewWorktree by here — a remote target is deliberately
 	// remapped to ExistingWorktree (see setupFirstTimeWorktree), the one known
 	// exception. See research/architecture.md Q1/Q2 for why this is otherwise impossible.
-	if resolvedType := i.Snapshot().SessionType; firstTimeSetup && i.RequestedNewWorktree && !i.executionTarget().IsRemote() && resolvedType != SessionTypeNewWorktree {
+	if resolvedType := i.Snapshot().SessionType; firstTimeSetup && i.RequestedNewWorktree && !i.executionTarget().IsRemote() && resolvedType != domain.SessionTypeNewWorktree {
 		recordSessionCreationWorktreeTypeMismatch(resolvedType)
 		log.Warn("session_creation_worktree_type_mismatch: SESSION_TYPE_NEW_WORKTREE request resolved to a non-NewWorktree SessionType",
 			"session", i.Title, "uuid", i.UUID, "resolved_session_type", resolvedType)
@@ -1669,7 +1503,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// LastReviveOutcome never goes stale across a later cycle that doesn't
 	// enter the ColdRestore branch — session-revive-uuid-loss AC3. Written
 	// once, under lock, at this function's existing final buildSnapshot call.
-	var reviveOutcome ReviveOutcome
+	var reviveOutcome domain.ReviveOutcome
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -1713,7 +1547,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			i.claudeSessionMu.RLock()
 			everHadHistory := i.EverHadConversationHistory
 			i.claudeSessionMu.RUnlock()
-			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
+			reviveOutcome = domain.ReviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			i.applyLaunchEnv()
@@ -1739,12 +1573,12 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			i.tryExtractConversationUUID()
 		} else {
 			// HotRestore: tmux never died, so nothing was ever at risk of loss.
-			reviveOutcome = ReviveOutcomeResumeLive
+			reviveOutcome = domain.ReviveOutcomeResumeLive
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			workDir := i.Path
-			if i.GitManager.HasWorktree() {
-				workDir = i.GitManager.GetWorktreePath()
+			if i.gitManager.HasWorktree() {
+				workDir = i.gitManager.GetWorktreePath()
 			}
 			log.Info("restoring existing tmux session", "session", i.Title, "path", workDir)
 			if err := i.pm().RestoreWithWorkDir(workDir); err != nil {
@@ -1755,32 +1589,32 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		}
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
-		reviveOutcome = ReviveOutcomeFreshExpected
+		reviveOutcome = domain.ReviveOutcomeFreshExpected
 		basePath := i.Path
-		if i.GitManager.HasWorktree() {
+		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
-			if i.SessionType != SessionTypeExistingWorktree {
+			if i.SessionType != domain.SessionTypeExistingWorktree {
 				log.Info("setting up git worktree", "session", i.Title)
-				if err := i.GitManager.Setup(); err != nil {
+				if err := i.gitManager.Setup(); err != nil {
 					log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
 					setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 					return setupErr
 				}
 			}
-			basePath = i.GitManager.GetWorktreePath()
+			basePath = i.gitManager.GetWorktreePath()
 		}
 
 		// Pre-spawn structural guard: a SessionTypeNewWorktree session whose
 		// resolved basePath is still the bare repo root means no real worktree was
 		// actually created. Fail loudly and BEFORE any tmux/process spawn instead
 		// of silently running in the shared repo directory.
-		if repoPath := i.GetPath(); i.SessionType == SessionTypeNewWorktree && basePath == repoPath {
+		if repoPath := i.GetPath(); i.SessionType == domain.SessionTypeNewWorktree && basePath == repoPath {
 			setupErr = fmt.Errorf("%w: session %q resolved to no real worktree (basePath == repo root %q)",
 				ErrWorktreeResolutionFailed, i.Title, repoPath)
 			return setupErr
 		}
 
-		if i.GitManager.HasWorktree() {
+		if i.gitManager.HasWorktree() {
 			// Per-path spawn reservation (Story 3.3.2c): closes the TOCTOU race between
 			// two concurrent CreateSession calls resolving the same worktree path before
 			// either has spawned -- claimed BEFORE the liveness-based collision guard
@@ -1844,8 +1678,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			i.allocateCDPPort()
 			i.applyLaunchEnv()
 			if err := i.pm().Start(startPath); err != nil {
-				if i.GitManager.HasWorktree() {
-					if cleanupErr := i.GitManager.Cleanup(); cleanupErr != nil {
+				if i.gitManager.HasWorktree() {
+					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 						err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 					}
 				}
@@ -1860,8 +1694,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	// Transition to Active — no stateMutex needed inside actor command.
-	if i.Status != Active {
-		if err := transitionToLocked(actorState, context.Background(), Active); err != nil {
+	if i.Status != domain.Active {
+		if err := transitionToLocked(actorState, context.Background(), domain.Active); err != nil {
 			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
 			return setupErr
 		}
@@ -1881,7 +1715,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	i.mu.Unlock()
 	i.claudeSessionMu.Unlock()
 	i.snapshot.Store(snap)
-	i.FireLifecycleEvent(EventStarted, reasonForReviveOutcome(reviveOutcome))
+	i.FireLifecycleEvent(domain.EventStarted, domain.ReasonForReviveOutcome(reviveOutcome))
 
 	i.startVNCServer(context.Background())
 	i.startCDP(context.Background())
@@ -1935,7 +1769,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	// LastReviveOutcome never goes stale across a later cycle that doesn't
 	// enter the ColdRestore branch — session-revive-uuid-loss AC3. Written
 	// once, under lock, at this function's existing final buildSnapshot call.
-	var reviveOutcome ReviveOutcome
+	var reviveOutcome domain.ReviveOutcome
 
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
@@ -1987,7 +1821,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			i.claudeSessionMu.RLock()
 			everHadHistory := i.EverHadConversationHistory
 			i.claudeSessionMu.RUnlock()
-			reviveOutcome = reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
+			reviveOutcome = domain.ReviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory)
 			// Phase 1: Allocate X display before creating the tmux session so DISPLAY
 			// can be injected via ExtraEnv at new-session time.
 			// context.Background() is safe here: the VNC manager creates its own internal
@@ -2025,7 +1859,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		} else {
 			// Hot restore: tmux session is alive — attach to it. Never died, so
 			// nothing was ever at risk of loss.
-			reviveOutcome = ReviveOutcomeResumeLive
+			reviveOutcome = domain.ReviveOutcomeResumeLive
 			// Phase 1 (display) runs here too so VNC is available for the browser tab.
 			// DISPLAY injection via ExtraEnv is not possible for an already-running
 			// session, but x11vnc still needs to start so the browser passthrough works.
@@ -2036,8 +1870,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// goroutine can connect to Chrome if it is already running.
 			i.allocateCDPPort()
 			workDir := i.Path
-			if i.GitManager.HasWorktree() {
-				workDir = i.GitManager.GetWorktreePath()
+			if i.gitManager.HasWorktree() {
+				workDir = i.gitManager.GetWorktreePath()
 			}
 			log.Info("restoring existing tmux session", "session", i.Title, "path", workDir)
 			if err := i.pm().RestoreWithWorkDir(workDir); err != nil {
@@ -2048,24 +1882,24 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		}
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
-		reviveOutcome = ReviveOutcomeFreshExpected
+		reviveOutcome = domain.ReviveOutcomeFreshExpected
 		// KNOWN GAP: this legacy path skips the worktree-resolution, collision, and
 		// spawn-reservation guards startLocked's firstTimeSetup branch runs. Currently
 		// inert in production — every StartWithCleanup caller is in a _test.go file
 		// (repo-wide grep) — but a future production caller would bypass isolation
 		// safety entirely. Track consolidation under Epic 7.
 		basePath := i.Path
-		if i.GitManager.HasWorktree() {
+		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
-			if i.SessionType != SessionTypeExistingWorktree {
+			if i.SessionType != domain.SessionTypeExistingWorktree {
 				log.Info("setting up git worktree", "session", i.Title)
-				if err := i.GitManager.Setup(); err != nil {
+				if err := i.gitManager.Setup(); err != nil {
 					log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
 					setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 					return setupErr
 				}
 			}
-			basePath = i.GitManager.GetWorktreePath()
+			basePath = i.gitManager.GetWorktreePath()
 		}
 		// Build the launch command (and, for large prompts, write the temp file
 		// promptArg() arms a cleanup timer on) only now that worktree setup — an
@@ -2086,8 +1920,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		i.allocateCDPPort()
 		i.applyLaunchEnv()
 		if err := i.pm().Start(startPath); err != nil {
-			if i.GitManager.HasWorktree() {
-				if cleanupErr := i.GitManager.Cleanup(); cleanupErr != nil {
+			if i.gitManager.HasWorktree() {
+				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 				}
 			}
@@ -2112,8 +1946,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.mu.Lock()
 	// Only transition if not already Active (e.g., recovery/restart after KillSession
 	// preserves the Active status).
-	if i.Status != Active {
-		if err := i.transitionTo(context.Background(), Active); err != nil {
+	if i.Status != domain.Active {
+		if err := i.transitionTo(context.Background(), domain.Active); err != nil {
 			i.mu.Unlock()
 			i.claudeSessionMu.Unlock()
 			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
@@ -2129,7 +1963,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
 	i.claudeSessionMu.Unlock()
-	i.FireLifecycleEvent(EventStarted, reasonForReviveOutcome(reviveOutcome))
+	i.FireLifecycleEvent(domain.EventStarted, domain.ReasonForReviveOutcome(reviveOutcome))
 
 	// Phase 2: Start x11vnc and window tracker now that the tmux session is live.
 	// Run unconditionally (not gated on firstTimeSetup) so hot-restores also get VNC.
@@ -2183,7 +2017,7 @@ func (i *Instance) Kill() error {
 // uncommitted work: there is no worktree, it is gone from disk, or it is clean. It returns
 // ErrWorktreeDirty (or ErrDirtyStateUnknown when the check itself fails) otherwise.
 func (i *Instance) CheckWorktreeRemovable() error {
-	if !i.GitManager.HasWorktree() {
+	if !i.gitManager.HasWorktree() {
 		return nil // CleanupWorktree is a no-op without one
 	}
 	// Not worktreeNeedsCommit: its IsWorktree gate would let an attached worktree through
@@ -2193,7 +2027,7 @@ func (i *Instance) CheckWorktreeRemovable() error {
 		return err
 	}
 	if dirty {
-		return fmt.Errorf("%w: %s", ErrWorktreeDirty, i.GitManager.GetWorktreePath())
+		return fmt.Errorf("%w: %s", ErrWorktreeDirty, i.gitManager.GetWorktreePath())
 	}
 	return nil
 }
@@ -2235,16 +2069,16 @@ func (i *Instance) destroy(force bool) error {
 
 	// Evict this session's entry from PiExtensionHealthTracker (pi-support
 	// Epic 4.2 MAJOR 1 fix) so the tracker's map doesn't grow unboundedly for
-	// the life of the process. Gated on isPi to avoid a no-op resolver call on
+	// the life of the process. Gated on IsPi to avoid a no-op resolver call on
 	// every single non-pi session's destroy; nil-checked since not every
 	// deployment wires SetPiExtensionHealthForgetter (e.g. tests).
-	if isPi(i.Program) {
+	if IsPi(i.Program) {
 		if forgetter := getPiExtensionHealthForgetter(); forgetter != nil {
 			forgetter(i.GetStableID())
 		}
 	}
 
-	defer i.FireLifecycleEvent(EventStopped, "operator-destroy")
+	defer i.FireLifecycleEvent(domain.EventStopped, "operator-destroy")
 	defer i.cleanupPromptFile()
 
 	// Stop any running (or not-yet-started) SessionDriver goroutine and mark
@@ -2341,7 +2175,7 @@ func (i *Instance) worktreeNeedsCommit() (bool, error) {
 	if !i.IsWorktree {
 		return false, nil
 	}
-	if !i.GitManager.HasWorktree() {
+	if !i.gitManager.HasWorktree() {
 		return false, fmt.Errorf("%w: git worktree not initialized", ErrDirtyStateUnknown)
 	}
 	return i.worktreeDirtyOnDisk()
@@ -2350,19 +2184,19 @@ func (i *Instance) worktreeNeedsCommit() (bool, error) {
 // worktreeDirtyOnDisk reports whether the attached worktree directory holds uncommitted
 // changes, bypassing IsDirty's TTL cache. Requires gitManager.HasWorktree().
 func (i *Instance) worktreeDirtyOnDisk() (bool, error) {
-	if _, err := os.Stat(i.GitManager.GetWorktreePath()); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(i.gitManager.GetWorktreePath()); errors.Is(err, os.ErrNotExist) {
 		return false, nil // nothing on disk to lose
 	} else if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
 	}
-	dirty, err := i.GitManager.IsDirtyUncached()
+	dirty, err := i.gitManager.IsDirtyUncached()
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
 	}
 	if dirty {
 		// CommitChanges gates on the cached IsDirty; a stale "clean" there would
 		// skip the commit and Remove() would then delete the files.
-		i.GitManager.InvalidateDirtyCache()
+		i.gitManager.InvalidateDirtyCache()
 	}
 	return dirty, nil
 }
@@ -2377,7 +2211,7 @@ func (i *Instance) commitBeforeRemove(commitMsg string) error {
 		return err
 	}
 	if needs {
-		if err := i.GitManager.CommitChanges(commitMsg); err != nil {
+		if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 			return fmt.Errorf("failed to commit changes: %w", err)
 		}
 	}
@@ -2390,7 +2224,7 @@ func pauseLocked(s *instanceState) error {
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		return fmt.Errorf("instance is already paused")
 	}
 	if !i.started.Load() {
@@ -2399,7 +2233,7 @@ func pauseLocked(s *instanceState) error {
 		// tear down, so just perform the state transition — transitionToLocked
 		// still rejects transitions that aren't valid from the current status
 		// (e.g. Creating/Stopped/Hibernated -> Paused).
-		if err := transitionToLocked(s, context.Background(), Paused); err != nil {
+		if err := transitionToLocked(s, context.Background(), domain.Paused); err != nil {
 			return fmt.Errorf("failed to transition to Paused: %w", err)
 		}
 		i.started.Store(true)
@@ -2422,7 +2256,7 @@ func pauseLocked(s *instanceState) error {
 	if i.IsWorktree {
 		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))
-			if err := i.GitManager.CommitChanges(commitMsg); err != nil {
+			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 				errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
 				log.Error("failed to commit changes on pause", "err", err)
 				return i.combineErrors(errs)
@@ -2441,18 +2275,18 @@ func pauseLocked(s *instanceState) error {
 
 	// Check if worktree exists before trying to remove it.
 	if i.IsWorktree {
-		if _, err := os.Stat(i.GitManager.GetWorktreePath()); err == nil {
+		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
 			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))); err != nil {
 				// Return err bare: combineErrors would flatten it and lose errors.Is.
 				log.Warn("aborting before worktree removal; worktree kept", "session", i.Title, "prior_errs", errs, "err", err)
 				return err
 			}
-			if err := i.GitManager.Remove(); err != nil {
+			if err := i.gitManager.Remove(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
 				log.Error("failed to remove git worktree", "err", err)
 				return i.combineErrors(errs)
 			}
-			if err := i.GitManager.Prune(); err != nil {
+			if err := i.gitManager.Prune(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
 				log.Error("failed to prune git worktrees", "err", err)
 				return i.combineErrors(errs)
@@ -2465,12 +2299,12 @@ func pauseLocked(s *instanceState) error {
 		return err
 	}
 
-	if err := transitionToLocked(s, context.Background(), Paused); err != nil {
+	if err := transitionToLocked(s, context.Background(), domain.Paused); err != nil {
 		return fmt.Errorf("failed to transition to Paused: %w", err)
 	}
-	i.GitManager.InvalidateDirtyCache()
+	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session paused")
-	_ = clipboard.WriteAll(i.GitManager.GetBranchName())
+	_ = clipboard.WriteAll(i.gitManager.GetBranchName())
 	return nil
 }
 
@@ -2480,15 +2314,15 @@ func (i *Instance) Resume() error {
 		return ErrResumeNotPermitted
 	}
 	// Status is actor-managed; use Snapshot() to avoid racing with concurrent actor writes.
-	if i.Snapshot().Status != Paused {
+	if i.Snapshot().Status != domain.Paused {
 		return fmt.Errorf("can only resume paused instances")
 	}
 
 	// Setup git worktree if this session has one
 	var worktreePath string
-	if i.GitManager.HasWorktree() {
+	if i.gitManager.HasWorktree() {
 		// Check if branch is checked out
-		if checked, err := i.GitManager.IsBranchCheckedOut(); err != nil {
+		if checked, err := i.gitManager.IsBranchCheckedOut(); err != nil {
 			log.Error("failed to check if branch is checked out", "session", i.Title, "err", err)
 			return fmt.Errorf("failed to check if branch is checked out: %w", err)
 		} else if checked {
@@ -2496,13 +2330,13 @@ func (i *Instance) Resume() error {
 		}
 
 		// Setup git worktree
-		if err := i.GitManager.Setup(); err != nil {
+		if err := i.gitManager.Setup(); err != nil {
 			log.Error("failed to setup git worktree on resume", "err", err)
 			log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
 			return fmt.Errorf("failed to setup git worktree: %w", err)
 		}
 
-		worktreePath = i.GitManager.GetWorktreePath()
+		worktreePath = i.gitManager.GetWorktreePath()
 	} else {
 		// No git worktree, use the original path
 		worktreePath = i.Path
@@ -2523,8 +2357,8 @@ func (i *Instance) Resume() error {
 			if err := i.pm().Start(worktreePath); err != nil {
 				log.Error("failed to start new session after restore failure", "err", err)
 				// Cleanup git worktree if tmux session creation fails
-				if i.GitManager.HasWorktree() {
-					if cleanupErr := i.GitManager.Cleanup(); cleanupErr != nil {
+				if i.gitManager.HasWorktree() {
+					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 						err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 						log.Error("cleanup also failed", "err", err)
 					}
@@ -2550,8 +2384,8 @@ func (i *Instance) Resume() error {
 		if err := i.pm().Start(worktreePath); err != nil {
 			log.Error("failed to start new tmux session on resume", "err", err)
 			// Cleanup git worktree if tmux session creation fails
-			if i.GitManager.HasWorktree() {
-				if cleanupErr := i.GitManager.Cleanup(); cleanupErr != nil {
+			if i.gitManager.HasWorktree() {
+				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 					log.Error("cleanup also failed", "err", err)
 				}
@@ -2562,16 +2396,16 @@ func (i *Instance) Resume() error {
 	}
 
 	i.mu.Lock()
-	if err := i.transitionTo(context.Background(), Active); err != nil {
+	if err := i.transitionTo(context.Background(), domain.Active); err != nil {
 		i.mu.Unlock()
 		return fmt.Errorf("failed to transition to Active on resume: %w", err)
 	}
 	i.mu.Unlock()
 	i.started.Store(true)
-	i.GitManager.InvalidateDirtyCache()
+	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session resumed")
 
-	// Start ClaudeController for idle detection and automation
+	// Start claudectl.ClaudeController for idle detection and automation
 	// This is non-critical - we log errors but don't fail the resume
 	if err := i.StartController(); err != nil {
 		log.Warn("failed to start controller on resume", "session", i.Title, "err", err)
@@ -2615,14 +2449,14 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
 	}
-	if i.Status == Stopped {
+	if i.Status == domain.Stopped {
 		return fmt.Errorf("instance is already stopped")
 	}
 	// Validate the transition before any destructive side effect (kill tmux, remove
 	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
 	// the tmux session and worktree untouched.
-	if !canTransitionLocked(s, Stopped) {
-		return ErrInvalidTransition{From: i.Status, To: Stopped}
+	if !canTransitionLocked(s, domain.Stopped) {
+		return domain.ErrInvalidTransition{From: i.Status, To: domain.Stopped}
 	}
 
 	// Fail closed before any side effect — see pauseLocked.
@@ -2643,7 +2477,7 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	if i.IsWorktree && !keepWorktree {
 		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
-			if err := i.GitManager.CommitChanges(commitMsg); err != nil {
+			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to commit changes: %w", err)))
 			}
 		}
@@ -2656,16 +2490,16 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	}
 
 	if i.IsWorktree && !keepWorktree {
-		if _, err := os.Stat(i.GitManager.GetWorktreePath()); err == nil {
+		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
 			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))); err != nil {
 				// Return err bare: combineErrors would flatten it and lose errors.Is.
 				log.Warn("aborting before worktree removal; worktree kept", "session", i.Title, "prior_errs", errs, "err", err)
 				return err
 			}
-			if err := i.GitManager.Remove(); err != nil {
+			if err := i.gitManager.Remove(); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))
 			}
-			_ = i.GitManager.Prune()
+			_ = i.gitManager.Prune()
 		}
 	}
 
@@ -2673,12 +2507,12 @@ func stopByUserLocked(s *instanceState, force bool) error {
 		return err
 	}
 
-	if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+	if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 		// Should not happen — canTransitionLocked already validated this above — but
 		// keep the check as defense-in-depth against the two functions' logic diverging.
 		return fmt.Errorf("failed to transition to Stopped: %w", err)
 	}
-	i.GitManager.InvalidateDirtyCache()
+	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session stopped by user")
 	return nil
 }
@@ -2689,9 +2523,9 @@ func stopByUserLocked(s *instanceState, force bool) error {
 // one, so --resume with it would fail with "no conversation found").
 func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *string) (string, error) {
 	var worktreePath string
-	if i.GitManager.HasWorktree() {
+	if i.gitManager.HasWorktree() {
 		if waspaused {
-			if err := i.GitManager.Setup(); err != nil {
+			if err := i.gitManager.Setup(); err != nil {
 				return "", fmt.Errorf("failed to recreate worktree for paused session: %w", err)
 			}
 			*claudeSessionID = ""
@@ -2700,8 +2534,8 @@ func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *s
 				i.HistoryFilePath = ""
 			}
 		}
-		worktreePath = i.GitManager.GetWorktreePath()
-	} else if i.SessionType == SessionTypeExistingWorktree && i.ExistingWorktree != "" {
+		worktreePath = i.gitManager.GetWorktreePath()
+	} else if i.SessionType == domain.SessionTypeExistingWorktree && i.ExistingWorktree != "" {
 		worktreePath = i.ExistingWorktree
 	} else {
 		worktreePath = i.Path
@@ -2720,7 +2554,7 @@ func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *s
 // that backend instead of respawning in place: there's no live hand-off
 // between daemons, so this kills, rebuilds under the new backend, and
 // resumes -- same mechanism as an in-place restart.
-func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBackend) (retErr error) {
+func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessManagerBackend) (retErr error) { //nolint:gocognit,gocyclo // pre-existing complexity; only the Backend type qualifier changed in the domain lowering
 	if err := validateBackendOverride(backendOverride); err != nil {
 		return err
 	}
@@ -2732,7 +2566,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	recovered := false
 	if !i.started.Load() {
 		prev := i.GetLifecycleStatus()
-		if prev != PermanentlyFailed && prev != Failed {
+		if prev != domain.PermanentlyFailed && prev != domain.Failed {
 			return ErrCannotRestart
 		}
 		i.RecoverFromStopped()
@@ -2757,7 +2591,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 		}
 	}
 
-	waspaused := i.Status == Paused
+	waspaused := i.Status == domain.Paused
 
 	// Capture terminal output if requested
 	var savedOutput string
@@ -2792,7 +2626,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 
 	// Suppress pi's --session resume injection (buildLaunchCommand reads
 	// i.piSession directly for piProgram, unlike claude's explicit
-	// claudeSessionID param) unless both isPi(i.Program) and the pi-support
+	// claudeSessionID param) unless both IsPi(i.Program) and the pi-support
 	// feature flag are true — mirroring the claudeSessionID capture above's
 	// gating intent. The field itself is restored afterward rather than
 	// cleared outright, so a stale piSession isn't lost if the flag is later
@@ -2805,7 +2639,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	// that goroutine alive). The lock makes this safe structurally instead.
 	i.piSessionMu.Lock()
 	restorePiSession := i.piSession
-	if !isPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
+	if !IsPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
 		i.piSession = nil
 	}
 	i.piSessionMu.Unlock()
@@ -2852,9 +2686,9 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	// For already-active sessions, preserve the existing status.
 	i.mu.Lock()
 	if waspaused || recovered {
-		if err := i.transitionTo(context.Background(), Active); err != nil {
+		if err := i.transitionTo(context.Background(), domain.Active); err != nil {
 			log.Warn("restart: failed to transition to active", "session", i.Title, "err", err)
-			i.setStatus(Active)
+			i.setStatus(domain.Active)
 		}
 		i.started.Store(true)
 	}
@@ -2868,10 +2702,10 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 
 // restoreTerminalStatus undoes RecoverFromStopped after a failed restart so the
 // session stays a restart/retry candidate instead of stranding in Creating.
-func (i *Instance) restoreTerminalStatus(prev Status) {
+func (i *Instance) restoreTerminalStatus(prev domain.Status) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status != Creating || i.started.Load() {
+	if i.Status != domain.Creating || i.started.Load() {
 		return // a concurrent restart/retry already moved it on; don't clobber
 	}
 	i.loadStatus(prev)
@@ -2882,7 +2716,7 @@ func (i *Instance) restoreTerminalStatus(prev Status) {
 // vanished from disk (see tmux.ErrWorkDirMissing); Start/Restart never do this on
 // their own, so a retry would otherwise fail identically forever.
 func (i *Instance) recreateWorktreeIfMissing() error {
-	if !i.GitManager.HasWorktree() {
+	if !i.gitManager.HasWorktree() {
 		return nil
 	}
 	workDir := i.GetEffectiveRootDir()
@@ -2892,7 +2726,7 @@ func (i *Instance) recreateWorktreeIfMissing() error {
 	if _, statErr := os.Stat(workDir); !errors.Is(statErr, os.ErrNotExist) {
 		return nil
 	}
-	if err := i.GitManager.Setup(); err != nil {
+	if err := i.gitManager.Setup(); err != nil {
 		return err
 	}
 	log.Info("recreated missing worktree", "session", i.Title, "path", workDir)

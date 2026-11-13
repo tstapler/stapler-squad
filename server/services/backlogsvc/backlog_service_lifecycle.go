@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -32,20 +33,20 @@ import (
 // returned. Mirrors (but does not replace) the reconcile self-heal sweep in
 // session/backlog_lifecycle.go, which remains the correctness backstop for
 // any transition path this handler doesn't cover.
-func resolveStuckOnManualTransition(ctx context.Context, storage *session.Storage, itemID string, to session.BacklogStatus) {
+func resolveStuckOnManualTransition(ctx context.Context, storage *session.Storage, itemID string, to domain.BacklogStatus) {
 	if storage == nil {
 		return
 	}
 	var reasons []domain.StuckReason
 	switch to {
-	case session.BacklogStatusInProgress:
+	case domain.BacklogStatusInProgress:
 		// Leaving review/pr_pending for rework — the cap-hit and
 		// review-abandonment conditions no longer apply.
 		reasons = []domain.StuckReason{domain.StuckReasonReworkCap, domain.StuckReasonAbandonedReview}
-	case session.BacklogStatusDone, session.BacklogStatusArchived:
+	case domain.BacklogStatusDone, domain.BacklogStatusArchived:
 		// Terminal — every reason is obsolete.
 		reasons = domain.AllStuckReasons
-	case session.BacklogStatusPRPending:
+	case domain.BacklogStatusPRPending:
 		reasons = []domain.StuckReason{domain.StuckReasonAbandonedReview, domain.StuckReasonStaleWork}
 	default:
 		// A custom stage (or any other built-in not listed above) falls here:
@@ -76,7 +77,7 @@ func encryptAndMergeToken(cfg *config.Config, token, existingConfig string) (str
 		if err != nil {
 			return "", fmt.Errorf("get encryption key: %w", err)
 		}
-		encrypted, err := session.EncryptToken(key, token)
+		encrypted, err := domain.EncryptToken(key, token)
 		if err != nil {
 			return "", fmt.Errorf("encrypt token: %w", err)
 		}
@@ -112,7 +113,7 @@ func encryptAndMergeToken(cfg *config.Config, token, existingConfig string) (str
 // checkNoNewWaivers is the early, user-facing error for a rewrite that introduces a waiver; the
 // repository re-checks authoritatively inside its transaction and carries existing waivers
 // forward by criterion text, so nothing here rewrites the list.
-func checkNoNewWaivers(incoming, existing session.AcCriteriaJSON) error {
+func checkNoNewWaivers(incoming, existing domain.AcCriteriaJSON) error {
 	if incoming == "" {
 		return nil
 	}
@@ -120,16 +121,16 @@ func checkNoNewWaivers(incoming, existing session.AcCriteriaJSON) error {
 }
 
 // acCriteriaToJSON serializes proto AcCriterion slice to JSON string for storage.
-func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (session.AcCriteriaJSON, error) {
+func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (domain.AcCriteriaJSON, error) {
 	if len(protoAC) == 0 {
 		return "", nil
 	}
-	criteria := make([]session.AcCriterion, len(protoAC))
+	criteria := make([]domain.AcCriterion, len(protoAC))
 	for i, c := range protoAC {
-		criteria[i] = session.AcCriterion{
+		criteria[i] = domain.AcCriterion{
 			Index:  int(c.Index),
 			Text:   c.Text,
-			Status: session.AcStatus(c.Status),
+			Status: domain.AcStatus(c.Status),
 
 			WaiverReason: c.WaiverReason,
 			WaivedBy:     c.WaivedBy,
@@ -140,7 +141,7 @@ func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (session.AcCriteriaJSON,
 	if err != nil {
 		return "", err
 	}
-	return session.AcCriteriaJSON(b), nil
+	return domain.AcCriteriaJSON(b), nil
 }
 
 // defaultPipelineModeForNewItem resolves the pipeline_mode value a brand-new
@@ -202,7 +203,7 @@ func (s *BacklogService) CreateBacklogItem(
 
 	priority := int(req.Msg.Priority)
 	if priority == 0 {
-		priority = session.DefaultBacklogPriority
+		priority = domain.DefaultBacklogPriority
 	}
 
 	repoPath, err := s.resolveRepoPathInput(req.Msg.RepoPath)
@@ -238,7 +239,7 @@ func (s *BacklogService) CreateBacklogItem(
 		ExternalURL:            externalURL,
 		AcceptanceCriteria:     acJSON,
 		Priority:               priority,
-		Status:                 string(session.BacklogStatusIdea),
+		Status:                 string(domain.BacklogStatusIdea),
 		RepoPath:               repoPath,
 		BaseBranch:             baseBranch,
 		SkipReviewGate:         req.Msg.SkipReviewGate,
@@ -334,7 +335,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		touchedFields = append(touchedFields, "priority")
 	}
 	if len(touchedFields) > 0 {
-		merged, mergeErr := session.MergeUserModifiedFields(existing.UserModifiedFields, touchedFields...)
+		merged, mergeErr := domain.MergeUserModifiedFields(existing.UserModifiedFields, touchedFields...)
 		if mergeErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to merge user modified fields: %w", mergeErr))
 		}
@@ -455,7 +456,7 @@ func (s *BacklogService) UpdateBacklogItem(
 	}
 
 	updated, err := s.storage.UpdateBacklogItem(ctx, req.Msg.ItemId, update, precondition)
-	var clearedWaivers []session.AcCriterion
+	var clearedWaivers []domain.AcCriterion
 	if updated != nil {
 		clearedWaivers = updated.ClearedAcWaivers
 	}
@@ -502,11 +503,11 @@ func (s *BacklogService) UpdateBacklogItem(
 		// it can no longer silently swap an already-tracked PR (including a
 		// merged one) with zero verification.
 		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
-		setErr := s.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
-			Caller:      session.CallerOperatorPRAssociation,
+		setErr := s.storage.GatedSetPRAndTransition(ctx, backlogdto.TransitionRequest{
+			Caller:      domain.CallerOperatorPRAssociation,
 			Observed:    updated,
 			TriggeredBy: session.TriggeredByUser,
-		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: session.AttachSourceManual})
+		}, backlogdto.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: domain.AttachSourceManual})
 		if setErr != nil {
 			if isTransitionDenial(setErr) {
 				return nil, transitionConnectError(setErr, req.Msg.ItemId, "associate PR")
@@ -522,7 +523,7 @@ func (s *BacklogService) UpdateBacklogItem(
 					status = current.Status
 				}
 				return nil, connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("cannot associate PR: item must be in %q or %q status to link a PR, but is currently %q", session.BacklogStatusReview, session.BacklogStatusPRPending, status))
+					fmt.Errorf("cannot associate PR: item must be in %q or %q status to link a PR, but is currently %q", domain.BacklogStatusReview, domain.BacklogStatusPRPending, status))
 			}
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to associate PR: %w", setErr))
 		}
@@ -546,7 +547,7 @@ func (s *BacklogService) UpdateBacklogItem(
 // idempotent no-op (setPRAndTransition), anything else that succeeds is a first
 // link from review. Failures never reach a response, so they need no value.
 func prAssociationOutcome(before *backlogdto.BacklogItemData, prNumber int) sessionv1.PrAssociationResult {
-	if before.Status == string(session.BacklogStatusPRPending) && before.PrNumber == prNumber {
+	if before.Status == string(domain.BacklogStatusPRPending) && before.PrNumber == prNumber {
 		return sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_ALREADY_TRACKED
 	}
 	return sessionv1.PrAssociationResult_PR_ASSOCIATION_RESULT_LINKED_AND_MOVED
@@ -566,8 +567,8 @@ func (s *BacklogService) ArchiveBacklogItem(
 
 	// The gate decides first; work branches are then pushed before the write so
 	// changes are durable. A denied archive pushes nothing and cleans up nothing.
-	archived, err := s.storage.GatedArchive(ctx, session.TransitionRequest{
-		Caller:      session.CallerOperatorArchiveRPC,
+	archived, err := s.storage.GatedArchive(ctx, backlogdto.TransitionRequest{
+		Caller:      domain.CallerOperatorArchiveRPC,
 		ItemID:      req.Msg.ItemId,
 		TriggeredBy: session.TriggeredByUser,
 		BeforeCommit: func(ctx context.Context) error {
@@ -604,8 +605,8 @@ func (s *BacklogService) UnarchiveBacklogItem(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
-	unarchived, err := s.storage.GatedUnarchive(ctx, session.TransitionRequest{
-		Caller:      session.CallerOperatorUnarchiveRPC,
+	unarchived, err := s.storage.GatedUnarchive(ctx, backlogdto.TransitionRequest{
+		Caller:      domain.CallerOperatorUnarchiveRPC,
 		ItemID:      req.Msg.ItemId,
 		TriggeredBy: session.TriggeredByUser,
 	})
@@ -654,7 +655,7 @@ func (s *BacklogService) WaiveAcceptanceCriterion(
 	case session.AcActorFrom(ctx).Class == session.AcActorAgentSession:
 		return deny(connect.CodePermissionDenied, "denied:agent_session",
 			errors.New("acceptance criteria cannot be waived from a request carrying an agent-session identity"))
-	case current.ArchivedAt != nil || current.Status == string(session.BacklogStatusDone) || current.Status == string(session.BacklogStatusArchived):
+	case current.ArchivedAt != nil || current.Status == string(domain.BacklogStatusDone) || current.Status == string(domain.BacklogStatusArchived):
 		return deny(connect.CodeFailedPrecondition, "denied:item_terminal",
 			fmt.Errorf("backlog item %q is %s; its criteria can no longer be waived", m.ItemId, current.Status))
 	case strings.TrimSpace(m.Reason) == "":
@@ -883,7 +884,7 @@ func (s *BacklogService) resolveLatestWorkCommit(ctx context.Context, sessionUUI
 	}
 	if wt.WorktreePath != "" {
 		if info, statErr := os.Stat(wt.WorktreePath); statErr == nil && info.IsDir() {
-			if sha, headErr := backlog.GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
+			if sha, headErr := pipeline.GetGitHeadSHA(wt.WorktreePath); headErr == nil && sha != "" {
 				return sha
 			}
 		}
@@ -948,9 +949,9 @@ func (s *BacklogService) isCodeShippedToMain(ctx context.Context, itemID, repoPa
 // or Done item can still carry a stale, never-torn-down session row (the
 // terminal-transition archive sweep kills the tmux pane but never calls
 // UpdateItemSessionEnded) that this send-back path must stop too.
-func isLiveBacklogStatusForSendBack(from session.BacklogStatus) bool {
-	return from == session.BacklogStatusInProgress || from == session.BacklogStatusReview ||
-		from == session.BacklogStatusPRPending || from == session.BacklogStatusDone
+func isLiveBacklogStatusForSendBack(from domain.BacklogStatus) bool {
+	return from == domain.BacklogStatusInProgress || from == domain.BacklogStatusReview ||
+		from == domain.BacklogStatusPRPending || from == domain.BacklogStatusDone
 }
 
 // isFailedPreconditionGuardError reports whether guardErr is one of
@@ -960,14 +961,14 @@ func isLiveBacklogStatusForSendBack(from session.BacklogStatus) bool {
 // uses to choose CodeFailedPrecondition over CodeInvalidArgument.
 func isFailedPreconditionGuardError(guardErr error) bool {
 	for _, sentinel := range []error{
-		session.ErrACRequired,
-		session.ErrPlanRequired,
-		session.ErrPlanArtifactsRequired,
-		session.ErrPlanArtifactsMissing,
-		session.ErrVerdictRequired,
-		session.ErrCodeNotOnMain,
-		session.ErrVerdictClearRequiredForReady,
-		session.ErrUnresolvedBlockers,
+		domain.ErrACRequired,
+		domain.ErrPlanRequired,
+		domain.ErrPlanArtifactsRequired,
+		domain.ErrPlanArtifactsMissing,
+		domain.ErrVerdictRequired,
+		domain.ErrCodeNotOnMain,
+		domain.ErrVerdictClearRequiredForReady,
+		domain.ErrUnresolvedBlockers,
 	} {
 		if errors.Is(guardErr, sentinel) {
 			return true
@@ -980,7 +981,7 @@ func isFailedPreconditionGuardError(guardErr error) bool {
 // (graph, Configured gate or Default guard) rather than a write failure.
 func isTransitionDenial(err error) bool {
 	return errors.Is(err, session.ErrTransitionNotAllowed) ||
-		errors.Is(err, session.ErrGateNotSatisfied) ||
+		errors.Is(err, domain.ErrGateNotSatisfied) ||
 		isFailedPreconditionGuardError(err)
 }
 
@@ -1023,8 +1024,8 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	from := session.BacklogStatus(item.Status)
-	to := session.BacklogStatus(req.Msg.TargetStatus)
+	from := domain.BacklogStatus(item.Status)
+	to := domain.BacklogStatus(req.Msg.TargetStatus)
 	// Gather the guard inputs (review verdict, unshipped code, unresolved
 	// blockers) so TransitionGuard can evaluate its business rules. A PrURL alone
 	// is not proof the code shipped, so buildGuardInput verifies the most recent
@@ -1049,7 +1050,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// operator gate, then writes. For done, work branches are pushed after the
 	// decision and before the write so changes are durable before the status
 	// changes and the worktree is removed.
-	gateReq := session.TransitionRequest{
+	gateReq := backlogdto.TransitionRequest{
 		Caller:         services.ResolveTransitionCaller(ctx),
 		ItemID:         req.Msg.ItemId,
 		Observed:       item,
@@ -1059,7 +1060,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 		OverrideReason: req.Msg.OverrideReason,
 		Guard:          &guardInput,
 	}
-	if to == session.BacklogStatusDone {
+	if to == domain.BacklogStatusDone {
 		gateReq.BeforeCommit = func(ctx context.Context) error {
 			if sessions, lsErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId); lsErr == nil {
 				s.commitAndPushItemWorktrees(ctx, sessions)
@@ -1099,7 +1100,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 
 	// Backward to idea/refining: reset planning approval so triage must re-run.
 	// Best-effort — a warning is logged but the transition itself is already committed.
-	if to == session.BacklogStatusIdea || to == session.BacklogStatusRefining {
+	if to == domain.BacklogStatusIdea || to == domain.BacklogStatusRefining {
 		planApproved := false
 		planArtifactsPath := ""
 		rejectionReason := ""
@@ -1120,7 +1121,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// forceResetItem's teardown for "Restart Session" — see pitfalls.md §1: the
 	// 2026-07-29 OOM leak shape this closes, and hasActiveWorkSession's later
 	// spawn-block this prevents).
-	if to == session.BacklogStatusReady && isLiveBacklogStatusForSendBack(from) {
+	if to == domain.BacklogStatusReady && isLiveBacklogStatusForSendBack(from) {
 		s.stopLiveWorkAndReviewSessions(ctx, req.Msg.ItemId)
 	}
 
@@ -1400,9 +1401,9 @@ func (s *BacklogService) OverrideVerdict(
 	}
 
 	// 3. Determine outcome based on to_status.
-	outcome := session.ReviewVerdictPass
-	if req.Msg.ToStatus == string(session.BacklogStatusInProgress) {
-		outcome = session.ReviewVerdictFail
+	outcome := domain.ReviewVerdictPass
+	if req.Msg.ToStatus == string(domain.BacklogStatusInProgress) {
+		outcome = domain.ReviewVerdictFail
 	}
 
 	// 4. Save/upsert the ReviewVerdict with override fields.
@@ -1422,7 +1423,7 @@ func (s *BacklogService) OverrideVerdict(
 	// 5. Transition item to target status if valid (validate via state machine).
 	var updatedItem *backlogdto.BacklogItemData
 	if req.Msg.ToStatus != "" {
-		toStatus := session.BacklogStatus(req.Msg.ToStatus)
+		toStatus := domain.BacklogStatus(req.Msg.ToStatus)
 		currentItem, currentErr := s.storage.GetBacklogItem(ctx, itemID)
 		if currentErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item for transition: %w", currentErr))
@@ -1433,8 +1434,8 @@ func (s *BacklogService) OverrideVerdict(
 		// happened concurrently between the GetBacklogItem read above and
 		// this write.
 		updatedAt := currentItem.UpdatedAt
-		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{ //nolint:silenttransition a denial is returned below; any other write failure is shown by the fallback reload, which returns the item's true post-transition state in the RPC response
-			Caller:   session.CallerOperatorOverrideVerdict,
+		updated, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{ //nolint:silenttransition a denial is returned below; any other write failure is shown by the fallback reload, which returns the item's true post-transition state in the RPC response
+			Caller:   domain.CallerOperatorOverrideVerdict,
 			ItemID:   itemID,
 			Observed: currentItem,
 			To:       toStatus,
@@ -1488,7 +1489,7 @@ func (s *BacklogService) SubmitManualReview(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("summary is required"))
 	}
 
-	overall := session.ReviewOutcome(req.Msg.OverallOutcome)
+	overall := domain.ReviewOutcome(req.Msg.OverallOutcome)
 	if !overall.IsValid() {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("overall_outcome must be PASS, FAIL, PARTIAL, or UNVERIFIABLE; got %q", req.Msg.OverallOutcome))
@@ -1504,12 +1505,12 @@ func (s *BacklogService) SubmitManualReview(
 	}
 
 	// Build per-criterion verdicts: use provided ones or synthesize from overall.
-	var cvs []session.CriterionVerdict
+	var cvs []domain.CriterionVerdict
 	if len(req.Msg.PerCriterionVerdicts) > 0 {
 		for _, pv := range req.Msg.PerCriterionVerdicts {
-			cvs = append(cvs, session.CriterionVerdict{
+			cvs = append(cvs, domain.CriterionVerdict{
 				CriterionIndex: int(pv.CriterionIndex),
-				Outcome:        session.ReviewOutcome(pv.Outcome),
+				Outcome:        domain.ReviewOutcome(pv.Outcome),
 				Evidence:       pv.Evidence,
 				FailureClass:   domain.FailureClass(pv.FailureClass),
 				ProposedWaiver: pv.ProposedWaiver,
@@ -1517,9 +1518,9 @@ func (s *BacklogService) SubmitManualReview(
 		}
 	} else {
 		// Synthesize one verdict per AC using the overall outcome.
-		criteria, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
+		criteria, _ := domain.ParseAcCriteria(item.AcceptanceCriteria)
 		for _, ac := range criteria {
-			cvs = append(cvs, session.CriterionVerdict{
+			cvs = append(cvs, domain.CriterionVerdict{
 				CriterionIndex: ac.Index,
 				Outcome:        overall,
 				Evidence:       fmt.Sprintf("Manual review: %s", req.Msg.Summary),
@@ -1561,21 +1562,21 @@ func (s *BacklogService) SubmitManualReview(
 	// The item's "Ship PR" action (backlog_service_ship.go) is the intended
 	// recovery path once left here (docs/tasks/backlog-feature-improvement.md,
 	// 2026-07-18 update).
-	if overall == session.ReviewVerdictPass {
-		if item.Status == string(session.BacklogStatusReview) {
+	if overall == domain.ReviewVerdictPass {
+		if item.Status == string(domain.BacklogStatusReview) {
 			if !s.isCodeShippedToMain(ctx, req.Msg.ItemId, item.RepoPath, "SubmitManualReview") {
 				log.InfoLog().Printf("[SubmitManualReview] item=%s PASS verdict but code not verified on main — leaving in review for manual transition/override", req.Msg.ItemId)
 			} else {
 				// Observed is left unset so the gate re-reads the item: the
 				// verdict was just saved, and the guard input below already says
 				// PASS on main. That keeps the write's CAS on status alone.
-				guard := session.NewBacklogItemTransitionInput(item, session.BacklogStatusReview)
+				guard := backlogdto.NewBacklogItemTransitionInput(item, domain.BacklogStatusReview)
 				guard.OverallOutcome = overall
-				if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
-					Caller:       session.CallerOperatorManualReview,
+				if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
+					Caller:       domain.CallerOperatorManualReview,
 					ItemID:       req.Msg.ItemId,
-					To:           session.BacklogStatusDone,
-					Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)},
+					To:           domain.BacklogStatusDone,
+					Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)},
 					TriggeredBy:  session.TriggeredByUser,
 					Guard:        &guard,
 				}); transErr != nil {

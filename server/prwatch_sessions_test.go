@@ -25,15 +25,15 @@ func (f fakeSessionView) SessionProgram(id string) (string, bool) { return "clau
 func (f fakeSessionView) IsHiddenSession(id string) bool          { return f.hidden[id] }
 func (f fakeSessionView) IsReadyForSteer(id string) bool          { return f.ready[id] }
 
-func prSnap(id string, st session.Status) *session.InstanceSnapshot {
-	return &session.InstanceSnapshot{
+func prSnap(id string, st domain.Status) *domain.InstanceSnapshot {
+	return &domain.InstanceSnapshot{
 		UUID: id, Title: id, Status: st,
-		GitHub: session.GitHubIntegration{GitHubOwner: "acme", GitHubRepo: "widget", GitHubPRNumber: 5},
+		GitHub: domain.GitHubIntegration{GitHubOwner: "acme", GitHubRepo: "widget", GitHubPRNumber: 5},
 	}
 }
 
-func newTestPRWatchSessions(snaps []*session.InstanceSnapshot, store prwatchBacklogStore) *prwatchSessions {
-	return newPRWatchSessions(func() []*session.InstanceSnapshot { return snaps }, fakeSessionView{}, store, nil)
+func newTestPRWatchSessions(snaps []*domain.InstanceSnapshot, store prwatchBacklogStore) *prwatchSessions {
+	return newPRWatchSessions(func() []*domain.InstanceSnapshot { return snaps }, fakeSessionView{}, store, nil)
 }
 
 type noBacklog struct{}
@@ -49,25 +49,25 @@ func (noBacklog) GetBacklogItem(context.Context, string) (*backlogdto.BacklogIte
 }
 
 func TestPRWatchSessions_should_ReportResumedAt_When_PausedSessionBecomesActive(t *testing.T) {
-	snap := prSnap("a", session.Active)
-	s := newTestPRWatchSessions([]*session.InstanceSnapshot{snap}, noBacklog{})
+	snap := prSnap("a", domain.Active)
+	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{snap}, noBacklog{})
 	refs, err := s.List(context.Background())
 	require.NoError(t, err)
 	assert.True(t, refs[0].ResumedAt.IsZero(), "live at startup is not a resume")
-	snap.Status = session.Paused
+	snap.Status = domain.Paused
 	refs, _ = s.List(context.Background())
 	assert.Equal(t, prwatch.StateSuspended, refs[0].State)
-	snap.Status = session.Active
+	snap.Status = domain.Active
 	refs, _ = s.List(context.Background())
 	assert.False(t, refs[0].ResumedAt.IsZero())
 	assert.Equal(t, prwatch.StateLive, refs[0].State)
 }
 
 func TestPRWatchSessions_should_ResolveRepoFromRemoteOnce_When_OwnerRepoMissing(t *testing.T) {
-	snap := prSnap("a", session.Active)
+	snap := prSnap("a", domain.Active)
 	snap.GitHub.GitHubOwner, snap.GitHub.GitHubRepo = "", ""
 	snap.Path = "/x"
-	s := newTestPRWatchSessions([]*session.InstanceSnapshot{snap}, noBacklog{})
+	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{snap}, noBacklog{})
 	calls := 0
 	s.resolve = func(string) (string, string, string, bool) { calls++; return "acme", "widget", "", true }
 	for i := 0; i < 2; i++ {
@@ -109,12 +109,12 @@ func TestBacklogLinkLookup_should_UseBatchedLinkQueryAndOneItemReadPerDistinctIt
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 
-	mkItem := func(status session.BacklogStatus) string {
+	mkItem := func(status domain.BacklogStatus) string {
 		it, err := storage.CreateBacklogItemForDebug(ctx, backlogdto.BacklogItemData{Title: "i", AcceptanceCriteria: `[]`, Priority: 1, Status: string(status)})
 		require.NoError(t, err)
 		return it.ID
 	}
-	pendingItem, doneItem, progressItem := mkItem(session.BacklogStatusPRPending), mkItem(session.BacklogStatusDone), mkItem(session.BacklogStatusInProgress)
+	pendingItem, doneItem, progressItem := mkItem(domain.BacklogStatusPRPending), mkItem(domain.BacklogStatusDone), mkItem(domain.BacklogStatusInProgress)
 	link := func(item string) string {
 		id := uuid.New().String()
 		_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item, SessionUUID: id, SessionRole: "work"})
@@ -138,16 +138,16 @@ func TestBacklogLinkLookup_should_UseBatchedLinkQueryAndOneItemReadPerDistinctIt
 }
 
 func TestPRWatchSessions_should_SkipAsPRTerminal_When_SnapshotPRIsTerminal(t *testing.T) {
-	snap := prSnap("a", session.Active)
+	snap := prSnap("a", domain.Active)
 	snap.GitHub.GitHubPRStatusTerminal = true
-	s := newTestPRWatchSessions([]*session.InstanceSnapshot{snap}, noBacklog{})
+	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{snap}, noBacklog{})
 	refs, err := s.List(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, prwatch.SkipPRTerminal, refs[0].SkipReason)
 }
 
-func unresolvedSnap(id, path string) *session.InstanceSnapshot {
-	sn := prSnap(id, session.Active)
+func unresolvedSnap(id, path string) *domain.InstanceSnapshot {
+	sn := prSnap(id, domain.Active)
 	sn.GitHub.GitHubOwner, sn.GitHub.GitHubRepo = "", ""
 	sn.Path = path
 	return sn
@@ -159,7 +159,7 @@ func TestPRWatchSessions_should_NotHoldMutexAcrossResolver_When_OnePathBlocks(t 
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	entered := make(chan struct{})
-	s := newTestPRWatchSessions([]*session.InstanceSnapshot{unresolvedSnap("fast", "/fast")}, noBacklog{})
+	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{unresolvedSnap("fast", "/fast")}, noBacklog{})
 	s.resolve = func(path string) (string, string, string, bool) {
 		if path == "/blocked" {
 			close(entered)
@@ -182,7 +182,7 @@ func TestPRWatchSessions_should_NotHoldMutexAcrossResolver_When_OnePathBlocks(t 
 }
 
 func TestPRWatchSessions_should_RetryResolution_When_ResolverReportsUnresolved(t *testing.T) {
-	s := newTestPRWatchSessions([]*session.InstanceSnapshot{unresolvedSnap("a", "/x")}, noBacklog{})
+	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{unresolvedSnap("a", "/x")}, noBacklog{})
 	var calls atomic.Int32
 	s.resolve = func(string) (string, string, string, bool) {
 		if calls.Add(1) == 1 {
@@ -217,7 +217,7 @@ func TestDetectRemote_should_ServeOtherSessions_When_ProbeBlocks(t *testing.T) {
 	session.SetWorktreeEnricher(e)
 	t.Cleanup(e.Stop)
 
-	s := newTestPRWatchSessions([]*session.InstanceSnapshot{
+	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{
 		unresolvedSnap("slow", "/blocked"), unresolvedSnap("fast", "/fast"),
 	}, noBacklog{})
 	repos := func() map[string]string {
@@ -233,25 +233,25 @@ func TestDetectRemote_should_ServeOtherSessions_When_ProbeBlocks(t *testing.T) {
 	assert.Empty(t, repos()["slow"], "blocked path stays unresolved without stalling List")
 }
 
-func twoPRSnap(t *testing.T, id string, merged, open int) *session.InstanceSnapshot {
+func twoPRSnap(t *testing.T, id string, merged, open int) *domain.InstanceSnapshot {
 	t.Helper()
-	ref := func(n int) session.PRRef {
-		r, err := session.NewPRRef("", "acme", "widget", n)
+	ref := func(n int) domain.PRRef {
+		r, err := domain.NewPRRef("", "acme", "widget", n)
 		require.NoError(t, err)
 		return r
 	}
-	snap := prSnap(id, session.Active)
+	snap := prSnap(id, domain.Active)
 	snap.GitHub.GitHubPRNumber, snap.GitHub.GitHubPRStatusTerminal = open, false
-	snap.GitHub.PRs = []session.PRView{
-		{Ref: ref(merged), State: session.PRStateMerged, StoredTerminal: true},
-		{Ref: ref(open), State: session.PRStateOpen},
-		{Ref: ref(open + 1), State: session.PRStateOpen},
+	snap.GitHub.PRs = []domain.PRView{
+		{Ref: ref(merged), State: domain.PRStateMerged, StoredTerminal: true},
+		{Ref: ref(open), State: domain.PRStateOpen},
+		{Ref: ref(open + 1), State: domain.PRStateOpen},
 	}
 	return snap
 }
 
 func TestPRWatchSessions_should_EmitOneEntryPerOpenPR_When_PollerScopeOn(t *testing.T) {
-	s := newTestPRWatchSessions([]*session.InstanceSnapshot{twoPRSnap(t, "u1", 11, 12)}, noBacklog{})
+	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{twoPRSnap(t, "u1", 11, 12)}, noBacklog{})
 	s.perPR = func() bool { return true }
 
 	refs, err := s.List(context.Background())
@@ -267,7 +267,7 @@ func TestPRWatchSessions_should_EmitOneEntryPerOpenPR_When_PollerScopeOn(t *test
 }
 
 func TestPRWatchSessions_should_KeepSingleLegacyEntry_When_PollerScopeOff(t *testing.T) {
-	s := newTestPRWatchSessions([]*session.InstanceSnapshot{twoPRSnap(t, "u1", 11, 12)}, noBacklog{})
+	s := newTestPRWatchSessions([]*domain.InstanceSnapshot{twoPRSnap(t, "u1", 11, 12)}, noBacklog{})
 	s.perPR = func() bool { return false }
 
 	refs, err := s.List(context.Background())

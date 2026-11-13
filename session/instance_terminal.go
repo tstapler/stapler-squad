@@ -9,7 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -42,7 +43,7 @@ func (i *Instance) GetStableID() string {
 // (SetProgram/SwitchProgram and friends) write i.Program directly outside
 // i.mu, publishing the change only by atomically storing a fresh snapshot at
 // the end of the mutation — the same reasoning as GetStatus's doc comment.
-// ClaudeController.Start reads this from a different goroutine than whatever
+// claudectl.ClaudeController.Start reads this from a different goroutine than whatever
 // last set it, so only the atomic snapshot read is synchronized with that
 // write; a direct field read or an i.mu-guarded read would not be.
 func (i *Instance) GetProgram() string {
@@ -150,12 +151,12 @@ func (i *Instance) combineErrors(errs []error) error {
 // Preview() and PreviewFullHistory() share this check so the two can't drift.
 func (i *Instance) previewBlocked() bool {
 	status := i.Snapshot().Status
-	return !i.started.Load() || status == Paused || status == Stopped || status == Hibernated
+	return !i.started.Load() || status == domain.Paused || status == domain.Stopped || status == domain.Hibernated
 }
 
 // Preview returns the current visible terminal content.
 // Prefers tmux's own capture-pane (authoritative rendered screen) for tmux-backed
-// instances; falls back to the in-memory PTY buffer from ClaudeController otherwise.
+// instances; falls back to the in-memory PTY buffer from claudectl.ClaudeController otherwise.
 //
 // Its underlying capture-pane subprocess runs with context.Background() and
 // cannot be cancelled. Driver-loop callers (session_driver.go) MUST use
@@ -300,8 +301,8 @@ func (i *Instance) CaptureCurrentState() error {
 	if path == "" {
 		return nil
 	}
-	if i.GitManager.HasWorktree() {
-		if worktreePath := i.GitManager.GetWorktreePath(); worktreePath != "" && pathEscapesRoot(worktreePath, path) {
+	if i.gitManager.HasWorktree() {
+		if worktreePath := i.gitManager.GetWorktreePath(); worktreePath != "" && pathEscapesRoot(worktreePath, path) {
 			log.Warn("refusing to persist working dir outside worktree", "session", i.Title, "path", path, "worktree", worktreePath)
 			return nil
 		}
@@ -314,15 +315,15 @@ func (i *Instance) CaptureCurrentState() error {
 }
 
 // GetPermissions returns the permissions for this instance based on its type.
-func (i *Instance) GetPermissions() InstancePermissions {
+func (i *Instance) GetPermissions() domain.InstancePermissions {
 	if i.IsManaged {
-		return GetManagedPermissions()
+		return domain.GetManagedPermissions()
 	}
 
 	// External instance - permissions depend on discovery configuration
 	// For now, we'll use a conservative default (view-only)
 	// TODO: This should be configurable via PTYDiscoveryConfig
-	return GetExternalPermissions(false)
+	return domain.GetExternalPermissions(false)
 }
 
 // GetStatusIconForType returns the appropriate status icon based on instance type.
@@ -333,13 +334,13 @@ func (i *Instance) GetStatusIconForType() string {
 
 	// Managed instance - use standard status icons
 	switch i.Status {
-	case Active:
+	case domain.Active:
 		return "●"
-	case Creating:
+	case domain.Creating:
 		return "⏳"
-	case Paused:
+	case domain.Paused:
 		return "⏸"
-	case Hibernated:
+	case domain.Hibernated:
 		return "❄"
 	default:
 		return "?"
@@ -423,8 +424,8 @@ type PRStatusUpdate struct {
 	ChangesReqCount int
 	IsDraft         bool
 	Terminal        bool
-	Checks          []github.CheckItem
-	Reviews         []github.ReviewItem
+	Checks          []domain.GitHubCheckItem
+	Reviews         []domain.GitHubReviewItem
 }
 
 // UpdatePRStatus atomically updates the PR status fields on this instance.

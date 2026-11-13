@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -34,7 +35,7 @@ func reportPRArgs(itemID string, extra map[string]interface{}) map[string]interf
 func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testing.T) {
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
-	item, linkedUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, linkedUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	handler := &backlogHandlers{storage: storage}
 
 	t.Run("unlinked caller is rejected", func(t *testing.T) {
@@ -46,7 +47,7 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 		assert.Equal(t, ErrPermissionDenied, m["error"].(map[string]interface{})["code"])
 		fetched, gerr := storage.GetBacklogItem(context.Background(), item.ID)
 		require.NoError(t, gerr)
-		assert.Equal(t, string(session.BacklogStatusReview), fetched.Status, "nothing was written")
+		assert.Equal(t, string(domain.BacklogStatusReview), fetched.Status, "nothing was written")
 		assert.Zero(t, fetched.PrNumber)
 	})
 
@@ -81,7 +82,7 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 		require.NoError(t, err)
 		fetched, gerr := storage.GetBacklogItem(context.Background(), item.ID)
 		require.NoError(t, gerr)
-		assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+		assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 		assert.Equal(t, 42, fetched.PrNumber)
 	})
 }
@@ -89,12 +90,12 @@ func TestReportPRCreated_ShouldReject_WhenCallerSessionNotLinkedToItem(t *testin
 func TestReportPRCreated_ShouldRejectMismatchedReplacesNumber_AndAcceptTrackedNumber(t *testing.T) {
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	n := 21
 	url := "https://github.com/tstapler/stapler-squad/pull/21"
 	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, domain.BacklogStatusPRPending, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 
 	h := &backlogHandlers{storage: storage}
@@ -122,7 +123,7 @@ func pendingItemWithPR21(t *testing.T, storage *session.Storage, itemID string) 
 	n, url := 21, "https://github.com/tstapler/stapler-squad/pull/21"
 	_, err := storage.UpdateBacklogItem(context.Background(), itemID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &url}, nil)
 	require.NoError(t, err)
-	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), itemID, session.BacklogStatusPRPending, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(context.Background(), itemID, domain.BacklogStatusPRPending, nil, session.TriggeredBySystem)
 	require.NoError(t, err)
 }
 
@@ -140,7 +141,7 @@ func additiveHandler(storage *session.Storage, scopeOn bool) *backlogHandlers {
 func TestReportPRCreated_ShouldAttachAdditionalPR_WhenScopeOnAndNoReplacesNumber(t *testing.T) {
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)
 	h := additiveHandler(storage, true)
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
@@ -151,24 +152,24 @@ func TestReportPRCreated_ShouldAttachAdditionalPR_WhenScopeOnAndNoReplacesNumber
 	require.False(t, result.IsError, "no override_reason is required: %v", result.Content)
 	fetched, gerr := storage.GetBacklogItem(context.Background(), item.ID)
 	require.NoError(t, gerr)
-	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status)
+	assert.Equal(t, string(domain.BacklogStatusPRPending), fetched.Status)
 	assert.Equal(t, 42, fetched.PrNumber, "the open follow-up outranks the stale scalar")
 	views, lerr := storage.ItemPRs(context.Background(), item.ID)
 	require.NoError(t, lerr)
-	var followup *session.PRView
+	var followup *domain.PRView
 	for i := range views {
 		if views[i].Ref.Number() == 42 {
 			followup = &views[i]
 		}
 	}
 	require.NotNil(t, followup, "#42 is in the derived set")
-	assert.Equal(t, session.PRRoleFollowup, followup.Role)
+	assert.Equal(t, domain.PRRoleFollowup, followup.Role)
 }
 
 func TestReportPRCreated_ShouldKeepReassignmentRules_WhenScopeOffOrReplacesNumberGiven(t *testing.T) {
 	t.Parallel()
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
 
@@ -189,7 +190,7 @@ func TestReportPRCreated_ShouldKeepReassignmentRules_WhenScopeOffOrReplacesNumbe
 
 func TestReportPRCreated_ShouldStoreCanonicalURL_AndRejectNonHTTPScheme(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	h := additiveHandler(storage, true)
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
 
@@ -211,7 +212,7 @@ func TestReportPRCreated_ShouldStoreCanonicalURL_AndRejectNonHTTPScheme(t *testi
 
 func TestReportPRCreated_ShouldRejectAdditivePR_WhenInForeignRepo(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)
 	var posted int
 	h := additiveHandler(storage, true)
@@ -235,7 +236,7 @@ func TestReportPRCreated_ShouldRejectAdditivePR_WhenInForeignRepo(t *testing.T) 
 
 func TestReportPRCreated_ShouldNotStampProvenance_WhenReassignedToForeignRepo(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)
 	host, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 	require.NoError(t, err)
@@ -277,7 +278,7 @@ func TestReportPRCreated_ShouldRequireOverride_WhenFirstPRIsInForeignOrUnresolve
 	} {
 		t.Run(name, func(t *testing.T) {
 			storage := newTestBacklogStorage(t)
-			item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+			item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 			host, err := hostclaim.LoadOrCreateHostIdentity(t.TempDir())
 			require.NoError(t, err)
 			storage.SetPRProvenanceSource(fakeProvenanceSource{host: host})
@@ -314,7 +315,7 @@ func TestReportPRCreated_ShouldRequireOverride_WhenFirstPRIsInForeignOrUnresolve
 
 func TestReportPRCreated_ShouldAcceptSchemelessURL_AndNormalizeRepoIdentity(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	h := additiveHandler(storage, true)
 	ctx := WithSessionUUID(context.Background(), sessionUUID)
 	result, err := callReportPR(h, ctx, makeToolReq(reportPRArgs(item.ID, map[string]interface{}{
@@ -332,7 +333,7 @@ func TestReportPRCreated_ShouldAcceptSchemelessURL_AndNormalizeRepoIdentity(t *t
 
 func TestReportPRCreated_ShouldNameUnparseableTrackedURL_WhenAdditive(t *testing.T) {
 	storage := newTestBacklogStorage(t)
-	item, sessionUUID := setupReportPRCreatedFixture(t, storage, session.BacklogStatusReview)
+	item, sessionUUID := setupReportPRCreatedFixture(t, storage, domain.BacklogStatusReview)
 	pendingItemWithPR21(t, storage, item.ID)
 	n, bad := 21, "not a url"
 	_, err := storage.UpdateBacklogItem(context.Background(), item.ID, backlogdto.BacklogItemUpdate{PrNumber: &n, PrURL: &bad}, nil)

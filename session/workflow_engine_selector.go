@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
 
@@ -39,7 +40,7 @@ type EngineModeSource interface {
 // ClassModeSource is an EngineModeSource that resolves a mode per caller class.
 type ClassModeSource interface {
 	EngineModeSource
-	ModeFor(class CallerClass) EngineMode
+	ModeFor(class domain.CallerClass) EngineMode
 }
 
 // EngineMethod, CallPath, DivergenceClass and NotComparedReason are the closed
@@ -91,9 +92,9 @@ type ShadowRecorder interface {
 // separate series per caller class; the selector uses it when the recorder
 // implements it and falls back to the unclassed methods otherwise.
 type ClassedShadowRecorder interface {
-	RecordShadowCallFor(class CallerClass, m EngineMethod, p CallPath)
-	RecordDivergenceFor(class CallerClass, m EngineMethod, c DivergenceClass, config string, p CallPath)
-	RecordNotComparedFor(class CallerClass, r NotComparedReason)
+	RecordShadowCallFor(class domain.CallerClass, m EngineMethod, p CallPath)
+	RecordDivergenceFor(class domain.CallerClass, m EngineMethod, c DivergenceClass, config string, p CallPath)
+	RecordNotComparedFor(class domain.CallerClass, r NotComparedReason)
 }
 
 // ShadowObservation is one shadowed call as the ledger recorder needs it: the
@@ -102,7 +103,7 @@ type ClassedShadowRecorder interface {
 type ShadowObservation struct {
 	Method           EngineMethod
 	Path             CallPath
-	From, To         BacklogStatus
+	From, To         domain.BacklogStatus
 	ItemHash         string
 	Class            DivergenceClass // empty: no divergence
 	Config           string
@@ -110,8 +111,8 @@ type ShadowObservation struct {
 	SkippedStateful  bool
 	// CallerClass and Caller identify the registry caller; empty means the
 	// selector's own (operator-policy) methods were called.
-	CallerClass CallerClass
-	Caller      TransitionCaller
+	CallerClass domain.CallerClass
+	Caller      domain.TransitionCaller
 }
 
 // ObservationRecorder is the optional richer recorder interface; the selector
@@ -193,7 +194,7 @@ type SwitchableWorkflowEngine struct {
 	shadowErrors atomic.Int64
 }
 
-var _ WorkflowEngine = (*SwitchableWorkflowEngine)(nil)
+var _ domain.WorkflowEngine = (*SwitchableWorkflowEngine)(nil)
 
 // SelectorOption customizes a SwitchableWorkflowEngine.
 type SelectorOption func(*SwitchableWorkflowEngine)
@@ -263,22 +264,22 @@ func (s *SwitchableWorkflowEngine) EnforceDeniedTotal(src DenialSource) int64 {
 func (s *SwitchableWorkflowEngine) ShadowErrorsTotal() int64 { return s.shadowErrors.Load() }
 
 // CanTransition implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) CanTransition(from, to BacklogStatus, snap *StageConfigSnapshot) bool {
+func (s *SwitchableWorkflowEngine) CanTransition(from, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	return s.operatorView().CanTransition(from, to, snap)
 }
 
 // AllowedTransitions implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) AllowedTransitions(from BacklogStatus, snap *StageConfigSnapshot) []BacklogStatus {
+func (s *SwitchableWorkflowEngine) AllowedTransitions(from domain.BacklogStatus, snap *domain.StageConfigSnapshot) []domain.BacklogStatus {
 	return s.operatorView().AllowedTransitions(from, snap)
 }
 
 // PendingGates implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]GateStatus, error) {
+func (s *SwitchableWorkflowEngine) PendingGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	return s.operatorView().PendingGates(item, to, snap)
 }
 
 // ValidateGates implements WorkflowEngine for the operator policy.
-func (s *SwitchableWorkflowEngine) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) error {
+func (s *SwitchableWorkflowEngine) ValidateGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	return s.operatorView().ValidateGates(item, to, snap)
 }
 
@@ -286,7 +287,7 @@ func (s *SwitchableWorkflowEngine) ValidateGates(item BacklogItemTransitionInput
 // else Shadow if the shadow flag is on, else Off. A source that is not a
 // ClassModeSource only knows the operator mode; every other class is then
 // capped at Shadow, since no enforce flag can exist for it yet.
-func (s *SwitchableWorkflowEngine) ModeFor(class CallerClass) EngineMode {
+func (s *SwitchableWorkflowEngine) ModeFor(class domain.CallerClass) EngineMode {
 	if s.Modes == nil {
 		return ModeOff
 	}
@@ -294,7 +295,7 @@ func (s *SwitchableWorkflowEngine) ModeFor(class CallerClass) EngineMode {
 		return cm.ModeFor(class)
 	}
 	m := s.Modes.Mode()
-	if class != ClassOperator && m == ModeEnforce {
+	if class != domain.ClassOperator && m == ModeEnforce {
 		return ModeShadow
 	}
 	return m
@@ -303,24 +304,24 @@ func (s *SwitchableWorkflowEngine) ModeFor(class CallerClass) EngineMode {
 // ForClass returns a WorkflowEngine bound to class and guard policy, so the
 // gate and legacy callers share one interface. The legacy answer is the
 // Default engine's.
-func (s *SwitchableWorkflowEngine) ForClass(class CallerClass, guards GuardPolicy) WorkflowEngine {
+func (s *SwitchableWorkflowEngine) ForClass(class domain.CallerClass, guards domain.GuardPolicy) domain.WorkflowEngine {
 	return engineView{s: s, pol: callPolicy{Class: class, Guards: guards}}
 }
 
 // ForClassQuiet is ForClass without enforce-denial counting, for re-deciding or
 // probing a denial that was already counted.
-func (s *SwitchableWorkflowEngine) ForClassQuiet(class CallerClass, guards GuardPolicy) WorkflowEngine {
+func (s *SwitchableWorkflowEngine) ForClassQuiet(class domain.CallerClass, guards domain.GuardPolicy) domain.WorkflowEngine {
 	return engineView{s: s, pol: callPolicy{Class: class, Guards: guards}, quiet: true}
 }
 
 // ForCaller returns a WorkflowEngine bound to a registry entry: its class,
 // guard policy and forwarding flag, with an Unchecked caller's legacy answer
 // being "allow".
-func (s *SwitchableWorkflowEngine) ForCaller(spec TransitionCallerSpec) WorkflowEngine {
+func (s *SwitchableWorkflowEngine) ForCaller(spec domain.TransitionCallerSpec) domain.WorkflowEngine {
 	return engineView{
 		s:      s,
 		pol:    callPolicy{Class: spec.Class, Guards: spec.Guards, Forwarding: spec.Forwarding},
-		caller: spec.Name, unchecked: spec.Legacy == LegacyUnchecked,
+		caller: spec.Name, unchecked: spec.Legacy == domain.LegacyUnchecked,
 	}
 }
 
@@ -333,7 +334,7 @@ func (s *SwitchableWorkflowEngine) operatorView() engineView {
 type engineView struct {
 	s         *SwitchableWorkflowEngine
 	pol       callPolicy
-	caller    TransitionCaller
+	caller    domain.TransitionCaller
 	unchecked bool // a bare storage write today: the legacy answer is allow
 	// quiet suppresses enforce-denial counting and logging: a re-decide or probe
 	// of an already-recorded denial is not a new denial of a real attempt.
@@ -341,36 +342,36 @@ type engineView struct {
 }
 
 // Quiet returns the same view without denial counting.
-func (v engineView) Quiet() WorkflowEngine {
+func (v engineView) Quiet() domain.WorkflowEngine {
 	v.quiet = true
 	return v
 }
 
 // NoteGraphDenied counts a graph denial that the caller confirmed after
 // evaluating quietly (no operator override freed it).
-func (v engineView) NoteGraphDenied(from, to BacklogStatus) {
+func (v engineView) NoteGraphDenied(from, to domain.BacklogStatus) {
 	if v.quiet || v.mode() != ModeEnforce {
 		return
 	}
 	v.s.noteDenied(from, to, DenialConfigGraph)
 }
 
-var _ WorkflowEngine = engineView{}
+var _ domain.WorkflowEngine = engineView{}
 
 func (v engineView) mode() EngineMode { return v.s.ModeFor(v.pol.Class) }
 
-func (v engineView) legacyCan(from, to BacklogStatus, snap *StageConfigSnapshot) bool {
+func (v engineView) legacyCan(from, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	return v.unchecked || v.s.def.CanTransition(from, to, snap)
 }
 
-func (v engineView) legacyGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]GateStatus, error) {
+func (v engineView) legacyGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	if v.unchecked {
 		return nil, nil
 	}
 	return v.s.def.PendingGates(item, to, snap)
 }
 
-func (v engineView) legacyValidate(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) error {
+func (v engineView) legacyValidate(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	if v.unchecked {
 		return nil
 	}
@@ -378,7 +379,7 @@ func (v engineView) legacyValidate(item BacklogItemTransitionInput, to BacklogSt
 }
 
 // CanTransition implements WorkflowEngine.
-func (v engineView) CanTransition(from, to BacklogStatus, snap *StageConfigSnapshot) bool {
+func (v engineView) CanTransition(from, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) bool {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -409,8 +410,8 @@ func (v engineView) CanTransition(from, to BacklogStatus, snap *StageConfigSnaps
 // authority; Off and Shadow keep the legacy answer. Only the operator
 // transition RPC qualifies: other operator writers (OverrideVerdict) always
 // carry a reason for a different purpose and must still honor a disabled edge.
-func (v engineView) OverridesGraph(overrideReason string, to BacklogStatus) bool {
-	if v.caller != CallerOperatorTransitionRPC || v.mode() != ModeEnforce || !v.s.Enf.bypassesGraph(v.pol, overrideReason, to) {
+func (v engineView) OverridesGraph(overrideReason string, to domain.BacklogStatus) bool {
+	if v.caller != domain.CallerOperatorTransitionRPC || v.mode() != ModeEnforce || !v.s.Enf.bypassesGraph(v.pol, overrideReason, to) {
 		return false
 	}
 	v.s.infof("[SwitchableWorkflowEngine] operator override bypassed the graph to=%s", to)
@@ -419,7 +420,7 @@ func (v engineView) OverridesGraph(overrideReason string, to BacklogStatus) bool
 
 // AllowedTransitions implements WorkflowEngine. It is a read: Default answers
 // in Off and Shadow whatever the caller's legacy policy.
-func (v engineView) AllowedTransitions(from BacklogStatus, snap *StageConfigSnapshot) []BacklogStatus {
+func (v engineView) AllowedTransitions(from domain.BacklogStatus, snap *domain.StageConfigSnapshot) []domain.BacklogStatus {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -443,7 +444,7 @@ func (v engineView) AllowedTransitions(from BacklogStatus, snap *StageConfigSnap
 }
 
 // PendingGates implements WorkflowEngine.
-func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) ([]GateStatus, error) {
+func (v engineView) PendingGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) ([]domain.GateStatus, error) {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -467,7 +468,7 @@ func (v engineView) PendingGates(item BacklogItemTransitionInput, to BacklogStat
 }
 
 // ValidateGates implements WorkflowEngine.
-func (v engineView) ValidateGates(item BacklogItemTransitionInput, to BacklogStatus, snap *StageConfigSnapshot) error {
+func (v engineView) ValidateGates(item domain.BacklogItemTransitionInput, to domain.BacklogStatus, snap *domain.StageConfigSnapshot) error {
 	s := v.s
 	switch v.mode() {
 	case ModeEnforce:
@@ -503,7 +504,7 @@ func (v engineView) compareGateErrors(legacy error, ans gateAnswer) DivergenceCl
 	return CompareGateErrors(legacy, ans.Err)
 }
 
-func (v engineView) compareGateStatuses(legacy, enf []GateStatus) DivergenceClass {
+func (v engineView) compareGateStatuses(legacy, enf []domain.GateStatus) DivergenceClass {
 	cls := compareGateStatuses(legacy, enf)
 	if v.unchecked && cls == ClassGateExtra {
 		return classifyExtraGates(legacy, enf)
@@ -513,7 +514,7 @@ func (v engineView) compareGateStatuses(legacy, enf []GateStatus) DivergenceClas
 
 // classifyExtraGates returns guard_new when every extra unsatisfied gate is a
 // Default built-in guard, else gate_extra.
-func classifyExtraGates(legacy, enf []GateStatus) DivergenceClass {
+func classifyExtraGates(legacy, enf []domain.GateStatus) DivergenceClass {
 	d := unsatisfiedKeys(legacy)
 	for _, g := range enf {
 		if !g.Satisfied && !d[fmt.Sprintf("%s/%s", g.GateID, g.Kind)] && !strings.HasPrefix(g.GateID, builtInGateIDPrefix) {
@@ -543,7 +544,7 @@ func (v engineView) recordNotCompared(r NotComparedReason) {
 // shadow runs compare under recover, records the call, and records the
 // divergence class compare returns ("" means none). Read-path calls are
 // sampled. Nothing in here may alter the caller's answer.
-func (v engineView) shadow(m EngineMethod, p CallPath, from, to BacklogStatus, itemID string, compare func() shadowResult) {
+func (v engineView) shadow(m EngineMethod, p CallPath, from, to domain.BacklogStatus, itemID string, compare func() shadowResult) {
 	s := v.s
 	if p == PathRead && !s.sampleRead() {
 		return
@@ -592,7 +593,7 @@ func errText(err error) string {
 	return err.Error()
 }
 
-func unsatisfiedText(statuses []GateStatus) string {
+func unsatisfiedText(statuses []domain.GateStatus) string {
 	keys := make([]string, 0, len(statuses))
 	for k := range unsatisfiedKeys(statuses) {
 		keys = append(keys, k)
@@ -623,15 +624,15 @@ type classEnforceFlag struct {
 
 // classEnforceFlags maps a class to its enforce flag; a class absent here
 // resolves from the shadow flag alone (ADR-007 D8).
-var classEnforceFlags = map[CallerClass]classEnforceFlag{
-	ClassOperator: {Name: config.WorkflowEngineEnforceFeatureFlag, Default: config.WorkflowEngineEnforceDefault},
-	ClassAgent:    {Name: config.WorkflowEngineEnforceAgentFeatureFlag, Default: config.WorkflowEngineEnforceAgentDefault},
-	ClassSystem:   {Name: config.WorkflowEngineEnforceSystemFeatureFlag, Default: config.WorkflowEngineEnforceSystemDefault},
+var classEnforceFlags = map[domain.CallerClass]classEnforceFlag{
+	domain.ClassOperator: {Name: config.WorkflowEngineEnforceFeatureFlag, Default: config.WorkflowEngineEnforceDefault},
+	domain.ClassAgent:    {Name: config.WorkflowEngineEnforceAgentFeatureFlag, Default: config.WorkflowEngineEnforceAgentDefault},
+	domain.ClassSystem:   {Name: config.WorkflowEngineEnforceSystemFeatureFlag, Default: config.WorkflowEngineEnforceSystemDefault},
 }
 
 // ClassEnforceFlag returns class's enforce flag name and registered default;
 // ok is false while no flag is registered for the class.
-func ClassEnforceFlag(class CallerClass) (name string, def bool, ok bool) {
+func ClassEnforceFlag(class domain.CallerClass) (name string, def bool, ok bool) {
 	f, ok := classEnforceFlags[class]
 	return f.Name, f.Default, ok
 }
@@ -639,7 +640,7 @@ func ClassEnforceFlag(class CallerClass) (name string, def bool, ok bool) {
 // ModeForClassFlags is the production mode reader for class: both flags are
 // read with their registered defaults, never plain GetFeatureFlag (which
 // returns false when unset and would switch shadow off).
-func ModeForClassFlags(class CallerClass, cfg *config.Config) EngineMode {
+func ModeForClassFlags(class domain.CallerClass, cfg *config.Config) EngineMode {
 	shadow := cfg.GetFeatureFlagWithDefault(config.WorkflowEngineShadowFeatureFlag, config.WorkflowEngineShadowDefault)
 	enforce := false
 	if f, ok := classEnforceFlags[class]; ok {
@@ -652,32 +653,32 @@ func ModeForClassFlags(class CallerClass, cfg *config.Config) EngineMode {
 // class for the TTL. Mode() is the operator class, so it also serves callers
 // that only know EngineModeSource.
 type FlagClassModeSource struct {
-	byClass map[CallerClass]*CachedModeSource
+	byClass map[domain.CallerClass]*CachedModeSource
 }
 
 var _ ClassModeSource = (*FlagClassModeSource)(nil)
 
 // NewFlagClassModeSource reads load() at most once per ttl per class.
 func NewFlagClassModeSource(load func() *config.Config, ttl time.Duration, clock hostclaim.Clock) *FlagClassModeSource {
-	f := &FlagClassModeSource{byClass: map[CallerClass]*CachedModeSource{}}
-	for _, c := range []CallerClass{ClassOperator, ClassAgent, ClassSystem} {
+	f := &FlagClassModeSource{byClass: map[domain.CallerClass]*CachedModeSource{}}
+	for _, c := range []domain.CallerClass{domain.ClassOperator, domain.ClassAgent, domain.ClassSystem} {
 		f.byClass[c] = NewCachedModeSource(func() EngineMode { return ModeForClassFlags(c, load()) }, ttl, clock)
 	}
 	return f
 }
 
 // Mode implements EngineModeSource as the operator class.
-func (f *FlagClassModeSource) Mode() EngineMode { return f.ModeFor(ClassOperator) }
+func (f *FlagClassModeSource) Mode() EngineMode { return f.ModeFor(domain.ClassOperator) }
 
 // ModeFor implements ClassModeSource; an unknown class is Off.
-func (f *FlagClassModeSource) ModeFor(class CallerClass) EngineMode {
+func (f *FlagClassModeSource) ModeFor(class domain.CallerClass) EngineMode {
 	if src := f.byClass[class]; src != nil {
 		return src.Mode()
 	}
 	return ModeOff
 }
 
-func (s *SwitchableWorkflowEngine) noteDenied(from, to BacklogStatus, src DenialSource) {
+func (s *SwitchableWorkflowEngine) noteDenied(from, to domain.BacklogStatus, src DenialSource) {
 	s.denials.Inc(src)
 	s.infof("[SwitchableWorkflowEngine] enforce denied from=%s to=%s reason=%s", from, to, src)
 }
@@ -711,7 +712,7 @@ func CompareGateErrors(def, enf error) DivergenceClass {
 	}
 }
 
-func unsatisfiedKeys(statuses []GateStatus) map[string]bool {
+func unsatisfiedKeys(statuses []domain.GateStatus) map[string]bool {
 	keys := make(map[string]bool)
 	for _, g := range statuses {
 		if !g.Satisfied {
@@ -721,7 +722,7 @@ func unsatisfiedKeys(statuses []GateStatus) map[string]bool {
 	return keys
 }
 
-func compareGateStatuses(def, enf []GateStatus) DivergenceClass {
+func compareGateStatuses(def, enf []domain.GateStatus) DivergenceClass {
 	d, e := unsatisfiedKeys(def), unsatisfiedKeys(enf)
 	for k := range e {
 		if !d[k] {

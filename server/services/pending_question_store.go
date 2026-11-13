@@ -7,13 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // PendingQuestionStore is the in-memory registry of single-select
 // AskUserQuestion dialogs a hidden session is waiting on (ADR-010 decision 2).
 // It is keyed by the instance UUID. The hook stream only feeds it; which
-// question is on screen is decided by session.DialogMatch at claim time.
+// question is on screen is decided by panereply.DialogMatch at claim time.
 const (
 	pendingQuestionMaxTotal      = 256
 	pendingQuestionMaxPerSession = 8
@@ -50,7 +50,7 @@ const (
 type PendingQuestion struct {
 	QuestionID  string
 	SessionUUID string
-	Dialog      session.QuestionDialog
+	Dialog      panereply.QuestionDialog
 	// Token labels the card, the audit line and the log; it is never an identity.
 	Token     string
 	CreatedAt time.Time
@@ -207,7 +207,7 @@ func (s *PendingQuestionStore) pendingCountLocked(sessionUUID string, now time.T
 	return n
 }
 
-func sameDialog(a, b session.QuestionDialog) bool {
+func sameDialog(a, b panereply.QuestionDialog) bool {
 	if a.Question != b.Question || len(a.Labels) != len(b.Labels) {
 		return false
 	}

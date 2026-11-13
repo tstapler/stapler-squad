@@ -21,10 +21,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/vnc"
 )
 
-// VNCProcessManager is a local alias for the vnc package interface so that
-// files within the session package can reference it without importing vnc directly.
-type VNCProcessManager = vnc.VNCProcessManager
-
 // initVNCManager creates the VNCProcessManager for this instance using the application config.
 // Browser passthrough is enabled when either the feature flag or the explicit config field is set.
 // If disabled or deps are unavailable, a no-op manager is returned.
@@ -50,7 +46,7 @@ func (i *Instance) initVNCManager(appCfg *config.Config) {
 
 // VNCManager returns the VNCProcessManager for this instance.
 // Always non-nil — returns a no-op manager on unsupported platforms.
-func (i *Instance) VNCManager() VNCProcessManager {
+func (i *Instance) VNCManager() vnc.VNCProcessManager {
 	return i.vncManager
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
+	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/testutil/gitfake"
 )
@@ -84,7 +85,7 @@ func TestGitWorktreeManager_GetCurrentCommitSHA_RoutesHeadThroughBackend(t *test
 		}
 		return "", backend.ErrRefNotFound
 	}
-	gm := &GitWorktreeManager{}
+	gm := &gitwt.Manager{}
 	gm.SetWorktree(git.NewGitWorktreeFromStorage("/repo", "/repo-wt", "s", "b", ""))
 
 	got, err := gm.GetCurrentCommitSHA()
@@ -101,7 +102,7 @@ func TestGitWorktreeManager_GetCurrentCommitSHA_UnbornIsEmptyNotError(t *testing
 	fake.OnResolveRef = func(backend.RepoLocation, backend.RefName) (backend.CommitSHA, error) {
 		return "", backend.ErrUnborn
 	}
-	gm := &GitWorktreeManager{}
+	gm := &gitwt.Manager{}
 	gm.SetWorktree(git.NewGitWorktreeFromStorage("/repo", "/repo-wt", "s", "b", ""))
 
 	got, err := gm.GetCurrentCommitSHA()

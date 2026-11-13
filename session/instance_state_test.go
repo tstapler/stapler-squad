@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -20,13 +21,13 @@ func TestTransitionTo_should_AllowCreatingToFailed_When_PipelineFails(t *testing
 	t.Parallel()
 	inst := &Instance{
 		Title:  "test-creating-to-failed",
-		Status: Creating,
+		Status: domain.Creating,
 	}
 
-	err := inst.transitionTo(context.Background(), Failed)
+	err := inst.transitionTo(context.Background(), domain.Failed)
 
 	require.NoError(t, err, "Creating -> Failed must be a legal transition")
-	assert.Equal(t, Failed, inst.Status)
+	assert.Equal(t, domain.Failed, inst.Status)
 }
 
 // TestTransitionTo_should_RejectStoppedToFailed_When_StoppedIsTerminal verifies
@@ -36,14 +37,14 @@ func TestTransitionTo_should_RejectStoppedToFailed_When_StoppedIsTerminal(t *tes
 	t.Parallel()
 	inst := &Instance{
 		Title:  "test-stopped-to-failed",
-		Status: Stopped,
+		Status: domain.Stopped,
 	}
 
-	err := inst.transitionTo(context.Background(), Failed)
+	err := inst.transitionTo(context.Background(), domain.Failed)
 
 	require.Error(t, err, "Stopped -> Failed must be rejected: Stopped stays terminal")
-	assert.Equal(t, ErrInvalidTransition{From: Stopped, To: Failed}, err)
-	assert.Equal(t, Stopped, inst.Status, "status must not change on a rejected transition")
+	assert.Equal(t, domain.ErrInvalidTransition{From: domain.Stopped, To: domain.Failed}, err)
+	assert.Equal(t, domain.Stopped, inst.Status, "status must not change on a rejected transition")
 }
 
 // TestTransitionTo_should_AllowFailedToCreating_When_RetryRequested verifies the
@@ -53,13 +54,13 @@ func TestTransitionTo_should_AllowFailedToCreating_When_RetryRequested(t *testin
 	t.Parallel()
 	inst := &Instance{
 		Title:  "test-failed-to-creating",
-		Status: Failed,
+		Status: domain.Failed,
 	}
 
-	err := inst.transitionTo(context.Background(), Creating)
+	err := inst.transitionTo(context.Background(), domain.Creating)
 
 	require.NoError(t, err, "Failed -> Creating must be a legal transition (retry path)")
-	assert.Equal(t, Creating, inst.Status)
+	assert.Equal(t, domain.Creating, inst.Status)
 }
 
 // TestTransitionTo_should_RejectFailedToActive_When_MustGoThroughCreatingFirst
@@ -69,13 +70,13 @@ func TestTransitionTo_should_RejectFailedToActive_When_MustGoThroughCreatingFirs
 	t.Parallel()
 	inst := &Instance{
 		Title:  "test-failed-to-active",
-		Status: Failed,
+		Status: domain.Failed,
 	}
 
-	err := inst.transitionTo(context.Background(), Active)
+	err := inst.transitionTo(context.Background(), domain.Active)
 
 	require.Error(t, err, "Failed -> Active must be rejected: retry must go through Creating first")
-	assert.Equal(t, ErrInvalidTransition{From: Failed, To: Active}, err)
+	assert.Equal(t, domain.ErrInvalidTransition{From: domain.Failed, To: domain.Active}, err)
 }
 
 // TestFailureReason_should_RoundTrip_When_SetViaLockedHelper verifies the
@@ -86,7 +87,7 @@ func TestTransitionTo_should_RejectFailedToActive_When_MustGoThroughCreatingFirs
 // sendSyncErr the same way that closure will call it.
 func TestFailureReason_should_RoundTrip_When_SetViaLockedHelper(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-failure-reason", Status: Failed}
+	inst := &Instance{Title: "test-failure-reason", Status: domain.Failed}
 
 	assert.Empty(t, inst.FailureReason(), "failureReason must be empty before it is ever set")
 
@@ -107,21 +108,21 @@ func TestFailureReason_should_RoundTrip_When_SetViaLockedHelper(t *testing.T) {
 // and empty/Creating for a fresh one.
 func TestStatusAndFailureReason_should_ReturnBothFieldsFromOneActorRoundTrip_When_Called(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-status-and-failure-reason", Status: Creating}
+	inst := &Instance{Title: "test-status-and-failure-reason", Status: domain.Creating}
 
 	status, reason := inst.StatusAndFailureReason()
-	assert.Equal(t, Creating, status)
+	assert.Equal(t, domain.Creating, status)
 	assert.Empty(t, reason)
 
 	err := inst.sendSyncErr(func(s *instanceState) error {
-		s.inst.Status = Failed
+		s.inst.Status = domain.Failed
 		setFailureReasonLocked(s, "StartupError")
 		return nil
 	})
 	require.NoError(t, err)
 
 	status, reason = inst.StatusAndFailureReason()
-	assert.Equal(t, Failed, status)
+	assert.Equal(t, domain.Failed, status)
 	assert.Equal(t, "StartupError", reason)
 }
 
@@ -131,7 +132,7 @@ func TestStatusAndFailureReason_should_ReturnBothFieldsFromOneActorRoundTrip_Whe
 // the progress-text write (not a second mailbox round-trip).
 func TestSetCreationProgress_should_UpdateTimestamp_When_Called(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-creation-progress-timestamp", Status: Creating}
+	inst := &Instance{Title: "test-creation-progress-timestamp", Status: domain.Creating}
 
 	require.True(t, inst.CreationProgressUpdatedAt().IsZero(), "timestamp must be zero before the first call")
 
@@ -169,7 +170,7 @@ func TestSetCreationProgress_should_UpdateTimestamp_When_Called(t *testing.T) {
 // closing the class rather than just the one instance of it.
 func TestIsHotRestoreRecoverable_MatchesRecoverFromStopped(t *testing.T) {
 	t.Parallel()
-	every := []Status{Creating, Active, Paused, Stopped, Hibernated, Restoring, Crashed, PermanentlyFailed, Failed}
+	every := []domain.Status{domain.Creating, domain.Active, domain.Paused, domain.Stopped, domain.Hibernated, domain.Restoring, domain.Crashed, domain.PermanentlyFailed, domain.Failed}
 
 	for _, status := range every {
 		status := status
@@ -182,7 +183,7 @@ func TestIsHotRestoreRecoverable_MatchesRecoverFromStopped(t *testing.T) {
 			after := inst.GetLifecycleStatus()
 
 			if predicted {
-				assert.Equal(t, Creating, after,
+				assert.Equal(t, domain.Creating, after,
 					"IsHotRestoreRecoverable(%s) = true but RecoverFromStopped() left status = %s, want it reset to Creating",
 					status, after)
 			} else {
@@ -206,14 +207,14 @@ func TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet(t *
 
 	tests := []struct {
 		name       string
-		status     Status
+		status     domain.Status
 		archivedAt *time.Time
 		want       bool
 	}{
-		{name: "stopped_not_archived", status: Stopped, archivedAt: nil, want: false},
-		{name: "stopped_archived", status: Stopped, archivedAt: &now, want: true},
-		{name: "permanently_failed_archived", status: PermanentlyFailed, archivedAt: &now, want: true},
-		{name: "active_archived", status: Active, archivedAt: &now, want: true},
+		{name: "stopped_not_archived", status: domain.Stopped, archivedAt: nil, want: false},
+		{name: "stopped_archived", status: domain.Stopped, archivedAt: &now, want: true},
+		{name: "permanently_failed_archived", status: domain.PermanentlyFailed, archivedAt: &now, want: true},
+		{name: "active_archived", status: domain.Active, archivedAt: &now, want: true},
 	}
 
 	for _, tt := range tests {
@@ -234,7 +235,7 @@ func TestInstance_IsArchived_should_ReadPublishedSnapshot_When_ArchivedAtSet(t *
 // false for the rest of the process lifetime.
 func TestInstance_IsArchived_should_SeeTheWrite_When_SetViaActorSetter(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "archived-via-actor-setter", Status: Stopped}
+	inst := &Instance{Title: "archived-via-actor-setter", Status: domain.Stopped}
 	require.False(t, inst.IsArchived(), "precondition: not archived")
 
 	require.True(t, inst.SetArchivedAtIfNil(time.Now()), "first archive should apply (CAS)")
@@ -258,11 +259,11 @@ func TestGetDetectedStatusInfo_should_ReturnUnknownAndFalse_When_NoStatusManager
 
 func TestTransitionTo_Touch_Should_AdvanceLastMeaningfulChangeBeforeSnapshot_When_StatusChanges(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "touch-transition", Status: Creating}
+	inst := &Instance{Title: "touch-transition", Status: domain.Creating}
 	before := inst.Snapshot().LastMeaningfulChangeAt
 
 	inst.mu.Lock()
-	err := inst.transitionTo(context.Background(), Failed)
+	err := inst.transitionTo(context.Background(), domain.Failed)
 	inst.mu.Unlock()
 
 	require.NoError(t, err)
@@ -273,7 +274,7 @@ func TestTransitionTo_Touch_Should_AdvanceLastMeaningfulChangeBeforeSnapshot_Whe
 
 func TestUpdateTimestamps_Should_NotAdvanceLastMeaningfulChange_When_RenameOrPin(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "touch-rename", Status: Running}
+	inst := &Instance{Title: "touch-rename", Status: domain.Active}
 	before := inst.Snapshot().LastMeaningfulChangeAt
 
 	require.NoError(t, inst.SetPinned(true))
@@ -306,10 +307,10 @@ func TestUpdateTimestamps_Should_RebuildSnapshotOncePerMeaningfulFrameAndZeroOth
 
 func TestRecordTurnEnd_Should_AdvanceLastMeaningfulChange_When_TurnEnded(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "touch-turn", Status: Running}
+	inst := &Instance{Title: "touch-turn", Status: domain.Active}
 	before := inst.Snapshot().LastMeaningfulChangeAt
 
-	inst.RecordTurnEnd("done", TurnEndSourceHook)
+	inst.RecordTurnEnd("done", domain.TurnEndSourceHook)
 
 	snap := inst.Snapshot()
 	assert.True(t, snap.LastMeaningfulChangeAt.After(before))

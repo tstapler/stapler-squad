@@ -14,6 +14,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/gitwiring"
@@ -100,7 +101,7 @@ func vcsStatusFixture(t *testing.T, spy *statusSpyBackend) (*WorkspaceService, s
 		fix.svc.vcsFlights.wait()
 	})
 	dir, baseSHA, _ := svctest.NewVCSStatusTestRepo(t)
-	inst := &session.Instance{Title: "coalesce", Path: dir, Status: session.Paused, Program: "claude"}
+	inst := &session.Instance{Title: "coalesce", Path: dir, Status: domain.Paused, Program: "claude"}
 	inst.SetDirBaseSHA(baseSHA)
 	fix.svc.SetLiveFinder(&svctest.StubLiveFinder{Inst: inst})
 	return fix.svc, dir

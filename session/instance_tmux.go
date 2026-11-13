@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/termlat"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -109,7 +110,7 @@ func (b *claudeLaunchBuilder) PromptChannel() promptChannel { return promptChann
 // piLaunchBuilder implements launchCommandBuilder for the pi binary.
 type piLaunchBuilder struct{}
 
-func (b *piLaunchBuilder) Matches(program string) bool { return isPi(program) }
+func (b *piLaunchBuilder) Matches(program string) bool { return IsPi(program) }
 
 func (b *piLaunchBuilder) Build(i *Instance, base, _ string) launchcmd.ExecCommand {
 	i.piSessionMu.Lock()
@@ -267,12 +268,12 @@ func IsClaude(program string) bool {
 	return false
 }
 
-// isPi reports whether the program command invokes the pi binary. Mirrors
+// IsPi reports whether the program command invokes the pi binary. Mirrors
 // isClaude: it checks each whitespace-delimited token's basename, so it
 // matches bare ("pi") and path-qualified ("/usr/local/bin/pi") invocations
 // while rejecting lookalikes like "pipenv" or "mypi" whose basename isn't
 // exactly "pi". Custom program IDs are resolved first.
-func isPi(program string) bool {
+func IsPi(program string) bool {
 	cfg := config.LoadConfig()
 	if res := config.ResolveProgramConfig(cfg, program); res.IsCustom {
 		program = res.Command
@@ -329,7 +330,7 @@ func AutoApproveSupported(program string) bool {
 // loudly via log.Error (not silently swallowed) and then recovered by
 // constructing the guaranteed-valid BackendTmux explicitly, preserving the
 // non-nil contract every caller of pm() depends on. Construction paths that
-// DO have an error return (NewInstance, fromInstanceData) propagate
+// DO have an error return (NewInstance, instanceFromData) propagate
 // NewProcessManager's error directly instead of going through this
 // fallback — see backend_factory.go's ErrUnrecognizedBackend.
 func (i *Instance) pm() ProcessManager {
@@ -340,10 +341,10 @@ func (i *Instance) pm() ProcessManager {
 	}
 	defer i.pmMu.Unlock()
 	if i.processManager == nil {
-		mgr, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
+		mgr, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: i.Backend, SessionName: i.Title})
 		if err != nil {
 			log.Error("unrecognized process manager backend; falling back to BackendTmux", "session", i.Title, "backend", i.Backend, "err", err)
-			mgr, _ = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})
+			mgr, _ = NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{})
 		}
 		i.processManager = mgr
 	}
@@ -726,7 +727,7 @@ func (i *Instance) GetMCPServerURL() string {
 // environment and the claude --settings override -- always agree on the same
 // resolved set.
 func (i *Instance) resolveExtraEnvVars() map[string]string {
-	// Snapshot() also serves pre-publication callers (fromInstanceData): it lazily builds one.
+	// Snapshot() also serves pre-publication callers (instanceFromData): it lazily builds one.
 	snap := i.Snapshot()
 	envVars := make(map[string]string)
 	cfg := config.LoadConfig()
@@ -847,7 +848,7 @@ func (i *Instance) wireTmuxSession(command launchcmd.LaunchCommand) {
 // this call's type assertions. Nests i.mu *inside* i.pmMu for the Backend
 // write below -- no call site anywhere else in the package nests the other
 // way (mu-then-pmMu), so keep that ordering if this ever changes.
-func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride ProcessManagerBackend, command launchcmd.LaunchCommand) error {
+func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverride domain.ProcessManagerBackend, command launchcmd.LaunchCommand) error {
 	i.pmMu.Lock()
 	defer i.pmMu.Unlock()
 
@@ -866,7 +867,7 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 	// A different backend means a different daemon entirely (tmux vs.
 	// tymuxd) -- no live hand-off is possible, so build a brand-new
 	// ProcessManager via the same factory CreateSession uses.
-	newPM, err := NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{
+	newPM, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{
 		Backend:      backendOverride,
 		SessionName:  i.Title,
 		Program:      shellString(command),
@@ -879,7 +880,7 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 	}
 	i.processManager = newPM
 	i.wireTmuxSession(command)
-	if backendOverride == BackendTymux {
+	if backendOverride == domain.BackendTymux {
 		newPM.AppendLaunchEnv(i.buildExtraEnv()...)
 	}
 	newPM.ResetExitOnce()
@@ -896,11 +897,11 @@ func (i *Instance) updateProcessManagerForRestart(migrating bool, backendOverrid
 // validateBackendOverride rejects an unrecognized backendOverride before
 // Restart tears down the live session -- NewProcessManager's own validation
 // runs too late for this call path, after KillSession has already run.
-func validateBackendOverride(backendOverride ProcessManagerBackend) error {
+func validateBackendOverride(backendOverride domain.ProcessManagerBackend) error {
 	if backendOverride == "" {
 		return nil
 	}
-	if !knownBackend(backendOverride) {
+	if !domain.KnownBackend(backendOverride) {
 		return fmt.Errorf("%w: %q", ErrUnrecognizedBackend, backendOverride)
 	}
 	return nil
@@ -962,7 +963,7 @@ func (i *Instance) KillSessionKeepWorktree() error {
 // This only works for external sessions that were started via ssq-mux with tmux integration.
 // Returns an error if this is not an external instance or lacks tmux session name.
 func (i *Instance) KillExternalSession() error {
-	if i.InstanceType != InstanceTypeExternal {
+	if i.InstanceType != domain.InstanceTypeExternal {
 		return fmt.Errorf("not an external instance")
 	}
 	if i.ExternalMetadata == nil || i.ExternalMetadata.TmuxSessionName == "" {
@@ -987,7 +988,7 @@ func (i *Instance) KillExternalSession() error {
 // HasUpdated reports whether terminal content has changed since the last check.
 // Returns (updated, hasPrompt) and side-effects terminal timestamps on change.
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.started.Load() || i.Status == domain.Paused {
 		return false, false
 	}
 
@@ -1028,7 +1029,7 @@ func (i *Instance) Attach() (chan struct{}, error) {
 
 // SetPreviewSize sets the detached terminal dimensions for preview rendering.
 func (i *Instance) SetPreviewSize(width, height int) error {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.started.Load() || i.Status == domain.Paused {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
 			"is paused")
 	}
@@ -1110,7 +1111,7 @@ func (i *Instance) TmuxSessionExists() bool {
 // reconcileSessions Hibernated-but-alive and Crashed-but-alive cases exist as the
 // safety net for exactly that scenario.
 func (i *Instance) TmuxAlive() bool {
-	if i.Status == Paused || i.Status == Stopped || !i.started.Load() || !i.pm().HasSession() {
+	if i.Status == domain.Paused || i.Status == domain.Stopped || !i.started.Load() || !i.pm().HasSession() {
 		return false
 	}
 	return i.pm().IsAlive()
@@ -1176,7 +1177,7 @@ func (i *Instance) GetCurrentWorkingDirectory() (string, error) {
 // handled distinguishes this read-only path from normal active-session restoration.
 func (i *Instance) PrepareRetainedTerminalView(ctx context.Context) (handled bool, err error) {
 	snap := i.Snapshot()
-	if snap.ArchivedAt == nil && (snap.Status == Active || snap.Status == Creating || snap.Status == Restoring) {
+	if snap.ArchivedAt == nil && (snap.Status == domain.Active || snap.Status == domain.Creating || snap.Status == domain.Restoring) {
 		return false, nil
 	}
 	p, ok := i.pm().(interface{ AdoptForViewing(context.Context) error })
@@ -1191,7 +1192,7 @@ func (i *Instance) PrepareRetainedTerminalView(ctx context.Context) (handled boo
 
 // terminalScreenReady separates retained-screen reads from process/input readiness.
 func (i *Instance) terminalScreenReady() bool {
-	if i.Snapshot().Status == Paused {
+	if i.Snapshot().Status == domain.Paused {
 		return false
 	}
 	if i.started.Load() {
@@ -1401,7 +1402,7 @@ func (i *Instance) ResizePTYContext(ctx context.Context, cols, rows int) error {
 // This is a simple wrapper around TmuxSession.CapturePaneContent() for compatibility
 // with the terminal WebSocket handlers.
 func (i *Instance) CapturePaneContent() (string, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.started.Load() || i.Status == domain.Paused {
 		return "", streamhub.ErrSessionNotStarted
 	}
 	return i.pm().CapturePaneContent()
@@ -1420,7 +1421,7 @@ const terminalResyncExecGateFastLaneFlagName = "terminal:resync-exec-gate-fast-l
 // non-tmux-backed instances (there is no fast lane to reach there, and the
 // plain call is a correct, if unoptimized, behavior).
 func (i *Instance) CapturePaneContentPriority() (string, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.started.Load() || i.Status == domain.Paused {
 		return "", streamhub.ErrSessionNotStarted
 	}
 	if p, ok := capabilityOf[PriorityCapturer](i.processManager); ok {
@@ -1727,7 +1728,7 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 // skip-and-retry branch (hub.go) couldn't recognize, plus logged a spurious
 // WARN on every restart.
 func (i *Instance) SetWindowSize(cols, rows int) error {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.started.Load() || i.Status == domain.Paused {
 		return streamhub.ErrSessionNotStarted
 	}
 	if i.pm().HasSession() {
@@ -1796,7 +1797,7 @@ func BuildSubmittableInputAndSubmit(input string) string {
 
 // SendKeys sends keys to the tmux session.
 func (i *Instance) SendKeys(keys string) error {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.started.Load() || i.Status == domain.Paused {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	_, err := i.pm().SendKeys(keys)
@@ -1807,7 +1808,7 @@ func (i *Instance) SendKeys(keys string) error {
 // that provably wrote nothing (0, err) from one that may have written. Its only
 // caller is SubmitReplyOnce.
 func (i *Instance) SendKeysN(keys string) (int, error) {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.started.Load() || i.Status == domain.Paused {
 		return 0, fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	return i.pm().SendKeys(keys)
@@ -1816,7 +1817,7 @@ func (i *Instance) SendKeysN(keys string) (int, error) {
 // SendInputViaControlMode sends raw bytes through the existing control mode connection,
 // avoiding the subprocess spawn overhead and timeout risk of exec.CommandContext.
 func (i *Instance) SendInputViaControlMode(ctx context.Context, data []byte) error {
-	if !i.started.Load() || i.Status == Paused {
+	if !i.started.Load() || i.Status == domain.Paused {
 		return fmt.Errorf("cannot send input to instance that has not been started or is paused")
 	}
 	return i.pm().SendInputViaControlMode(ctx, data)

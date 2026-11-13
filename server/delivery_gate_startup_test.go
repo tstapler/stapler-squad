@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -52,7 +53,7 @@ func TestBuildRuntimeDeps_ShouldSeedGateAndYieldZeroHistoryRows_WhenHiddenInstan
 	// A paused hidden session: restored from storage without starting tmux.
 	hidden := &session.Instance{
 		Title: "review:restored", UUID: "restored-hidden-uuid", Path: t.TempDir(),
-		Program: "claude", Status: session.Paused, Hidden: true, Tags: []string{"backlog:review"},
+		Program: "claude", Status: domain.Paused, Hidden: true, Tags: []string{"backlog:review"},
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	if err := core.Storage.AddInstance(hidden); err != nil {

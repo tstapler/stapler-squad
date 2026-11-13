@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/zalando/go-keyring"
 
@@ -28,11 +31,10 @@ import (
 	"github.com/tstapler/stapler-squad/server/prwatch"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/artifacts"
-	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/wtconsistency"
 )
 
 // TestWireDepsIntoServer_SharesSingleSlackNotifierInstance_AcrossReactiveQueueManagerApprovalHandlerAndSessionService
@@ -223,11 +225,11 @@ func TestBuildRuntimeDeps_should_ShareSinglePipelineEngineInstance_When_Construc
 		t.Fatal("expected BacklogLifecycleListener.PipelineEngine() to be non-nil")
 	}
 
-	backlogCaching, ok := backlogSvcEngine.(*backlog.CachingPipelineEngine)
+	backlogCaching, ok := backlogSvcEngine.(*pipeline.CachingPipelineEngine)
 	if !ok {
 		t.Fatalf("expected BacklogService.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", backlogSvcEngine)
 	}
-	listenerCaching, ok := listenerEngine.(*backlog.CachingPipelineEngine)
+	listenerCaching, ok := listenerEngine.(*pipeline.CachingPipelineEngine)
 	if !ok {
 		t.Fatalf("expected BacklogLifecycleListener.PipelineEngine() to be a *session.CachingPipelineEngine, got %T", listenerEngine)
 	}
@@ -368,7 +370,7 @@ func TestReconcileTicker_should_KeepRunningReconcileStuck_When_QuotaGateReconcil
 }
 
 // TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_When_DependenciesBuiltNarrow
-// is Task 1.3.2b's wiring smoke test for the session.StartWorktreeConsistencySweeper call
+// is Task 1.3.2b's wiring smoke test for the wtconsistency.StartWorktreeConsistencySweeper call
 // added alongside the 60s reconcile ticker above (server/dependencies.go): confirms the
 // sweeper goroutine starts and returns cleanly on ctx cancellation. Deliberately builds a
 // narrow session/events/config dependency set rather than calling server.BuildDependencies()
@@ -387,7 +389,7 @@ func TestWorktreeConsistencySweeperWiring_should_StartAndStopWithoutPanicking_Wh
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		session.StartWorktreeConsistencySweeper(ctx, storage, notifier, config.LoadConfig)
+		wtconsistency.StartWorktreeConsistencySweeper(ctx, storage, notifier, config.LoadConfig)
 		close(done)
 	}()
 
@@ -528,7 +530,7 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 
 func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When_RunningAndPausedInstances(t *testing.T) {
 	inst, err := session.NewInstance(session.InstanceOptions{
-		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: session.SessionTypeDirectory,
+		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: domain.SessionTypeDirectory,
 	})
 	require.NoError(t, err)
 	snap := inst.Snapshot()
@@ -537,9 +539,9 @@ func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When
 
 	// A paused session (worktree removed, branch kept) still reports a status.
 	paused := *snap
-	paused.Status = session.Paused
+	paused.Status = domain.Paused
 	assert.Equal(t, githubpkg.LinkedSessionPaused, linkedStatusFor(paused.Status))
-	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(session.Crashed))
+	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(domain.Crashed))
 }
 
 func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBranchButNoPR(t *testing.T) {
@@ -689,7 +691,7 @@ func TestOnScanComplete_ShouldNotSeedSessionPR_WhenFlagOn(t *testing.T) {
 			}
 			handler := artifactScanCompleteHandler(func() []*session.Instance { return []*session.Instance{inst} }, serverevents.NewEventBus(4))
 
-			handler("scan-no-seed", &artifacts.SessionArtifactsBlob{PRURLs: []string{"https://github.com/acme/app/pull/99"}})
+			handler("scan-no-seed", &domain.SessionArtifactsBlob{PRURLs: []string{"https://github.com/acme/app/pull/99"}})
 
 			gh := inst.Snapshot().GitHub
 			assert.Empty(t, gh.PRs)
@@ -706,19 +708,19 @@ func TestIndexScannedArtifacts_ShouldMakeANewScanSearchable_WithoutRestart(t *te
 	idx := search.NewArtifactIndex(nil)
 	handler := indexScannedArtifacts(func() []*session.Instance { return []*session.Instance{inst} }, idx)
 
-	handler("indexed", &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-fresh"}}})
+	handler("indexed", &domain.SessionArtifactsBlob{Records: domain.RecordList{domain.BranchRecord{Name: "feat-fresh"}}})
 	hits := idx.Search("feat-fresh", 5)
 	require.Len(t, hits, 1)
 	assert.Equal(t, "uuid-indexed", hits[0].SessionID)
 
-	handler("someone-else", &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-ignored"}}})
+	handler("someone-else", &domain.SessionArtifactsBlob{Records: domain.RecordList{domain.BranchRecord{Name: "feat-ignored"}}})
 	assert.Equal(t, 1, idx.DocCount(), "a title with no live session indexes nothing")
 }
 
 func TestBuildArtifactIndexInBackground_ShouldWaitForTheListener_ThenIndexStoredBlobs(t *testing.T) {
 	t.Parallel()
 	inst := &session.Instance{Title: "stored", UUID: "uuid-stored",
-		Artifacts: &artifacts.SessionArtifactsBlob{Records: artifacts.RecordList{artifacts.BranchRecord{Name: "feat-stored"}}}}
+		Artifacts: &domain.SessionArtifactsBlob{Records: domain.RecordList{domain.BranchRecord{Name: "feat-stored"}}}}
 	idx := search.NewArtifactIndex(nil)
 	ready := make(chan struct{})
 	buildArtifactIndexInBackground(func() []*session.Instance { return []*session.Instance{inst, {Title: "no-blob", UUID: "u2"}} }, idx, ready)

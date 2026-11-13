@@ -13,6 +13,8 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -383,7 +385,7 @@ func TestStartSessionDriver_Idempotent(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title:  "test-idempotent",
-		Status: Stopped,
+		Status: domain.Stopped,
 	}
 
 	// Pre-set driverRunning = true to simulate an already-running driver.
@@ -432,12 +434,12 @@ func TestMarkSessionNeedsAttention_NilReviewQueue(t *testing.T) {
 // RetryState already at its resolved cap).
 func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	t.Parallel()
-	rq := NewReviewQueue()
+	rq := queue.NewReviewQueue()
 	inst := &Instance{
 		Title:       "test-second-failure",
 		UUID:        "test-uuid-second-fail",
 		reviewQueue: rq,
-		Status:      Stopped,
+		Status:      domain.Stopped,
 	}
 	inst.RetryAttempt = 1
 	inst.RetryMaxAttempts = 1 // already at cap — next failure is exhausted
@@ -445,7 +447,7 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed", "stalled", "tmux_exited"}}
 	handleDriverFailure(inst, "/tmp", policy, "unexpected exit", make(chan struct{}))
 
-	if inst.Status != PermanentlyFailed {
+	if inst.Status != domain.PermanentlyFailed {
 		t.Errorf("Status = %v, want PermanentlyFailed", inst.Status)
 	}
 
@@ -460,8 +462,8 @@ func TestSessionDriver_SecondFailure_MarksNeedsAttention(t *testing.T) {
 	if item.SessionID != inst.UUID {
 		t.Errorf("ReviewItem.SessionID = %q, want %q", item.SessionID, inst.UUID)
 	}
-	if item.Reason != ReasonStale {
-		t.Errorf("ReviewItem.Reason = %q, want %q", item.Reason, ReasonStale)
+	if item.Reason != queue.ReasonStale {
+		t.Errorf("ReviewItem.Reason = %q, want %q", item.Reason, queue.ReasonStale)
 	}
 }
 
@@ -479,7 +481,7 @@ func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
 	// the same shape of permanent, non-retryable failure as a dead tmux pane.
 	inst := &Instance{
 		Title:  "test-nudge-failed-send",
-		Status: Ready,
+		Status: domain.Active,
 	}
 
 	before := time.Now()
@@ -502,7 +504,7 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title:  "test-nudge-rate-limit",
-		Status: Ready,
+		Status: domain.Active,
 	}
 
 	var nudgeSentAt time.Time
@@ -579,7 +581,7 @@ func TestRunSessionDriver_selectsInitialPromptWhenNonEmpty(t *testing.T) {
 	inst := &Instance{
 		Title:         "test-custom-prompt",
 		InitialPrompt: "do the thing",
-		Status:        Stopped,
+		Status:        domain.Stopped,
 	}
 	if initialPrompt := resolveInitialPromptForTest(inst); initialPrompt != "do the thing" {
 		t.Errorf("expected initialPrompt = %q, got %q", "do the thing", initialPrompt)
@@ -593,7 +595,7 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty(t *testing.T) {
 	inst := &Instance{
 		Title:         "test-empty-prompt",
 		InitialPrompt: "",
-		Status:        Stopped,
+		Status:        domain.Stopped,
 	}
 	if initialPrompt := resolveInitialPromptForTest(inst); initialPrompt != driverInitialPrompt {
 		t.Errorf("expected driverInitialPrompt fallback, got %q", initialPrompt)
@@ -607,7 +609,7 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 	inst := &Instance{
 		Title:         "test-whitespace-prompt",
 		InitialPrompt: "   ",
-		Status:        Stopped,
+		Status:        domain.Stopped,
 	}
 	if initialPrompt := resolveInitialPromptForTest(inst); initialPrompt != driverInitialPrompt {
 		t.Errorf("expected driverInitialPrompt fallback for whitespace-only InitialPrompt, got %q", initialPrompt)
@@ -962,7 +964,7 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	t.Helper()
 	inst := &Instance{
 		Title:          title,
-		Status:         Ready,
+		Status:         domain.Active,
 		processManager: fakePM,
 		InitialPrompt:  driverInitialPrompt,
 	}
@@ -1053,10 +1055,10 @@ func buildGrowingPrefixContent(chunk string, reps int, dialogText string) string
 // evaluated and rejected as disproportionate scaffolding. Reaching the
 // NeedsApproval branch requires inst.GetStatusManager().GetStatus(inst).ClaudeStatus
 // == detection.StatusNeedsApproval, which in turn requires a REAL, started
-// *ClaudeController registered in an *InstanceStatusManager for this instance's
+// *claudectl.ClaudeController registered in an *InstanceStatusManager for this instance's
 // Title — InstanceStatusManager.GetStatus (instance_status.go:73-104) only
 // consults its internal controllers map, so there is no interface seam to fake
-// this condition directly. ClaudeController.Start (claude_controller.go:128ff)
+// this condition directly. claudectl.ClaudeController.Start (claude_controller.go:128ff)
 // requires a real PTY reader from the instance, persistence directories for its
 // command queue/history, and starts multiple background goroutines — genuinely
 // disproportionate scaffolding for what would still just be exercising the same
@@ -1317,9 +1319,9 @@ func newDialogGiveUpEscalationInstance(fakePM *stuckDialogProcessManager) (*Inst
 	inst := &Instance{
 		Title:          "dialog-give-up-escalation",
 		UUID:           "test-uuid-give-up-escalation",
-		Status:         Ready,
+		Status:         domain.Active,
 		processManager: fakePM,
-		reviewQueue:    NewReviewQueue(),
+		reviewQueue:    queue.NewReviewQueue(),
 	}
 	inst.started.Store(true)
 	inst.RetryAttempt = 1
@@ -1414,9 +1416,9 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 	inst := &Instance{
 		Title:          "concurrent-stop-test",
 		UUID:           "test-uuid-concurrent-stop",
-		Status:         Running,
+		Status:         domain.Active,
 		processManager: fakePM,
-		reviewQueue:    NewReviewQueue(),
+		reviewQueue:    queue.NewReviewQueue(),
 	}
 	inst.started.Store(true)
 
@@ -1560,7 +1562,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 	t.Run("archived_restart_grace_is_not_restarted", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "archived-retry-test", Status: Stopped, ArchivedAt: &archivedAt}
+		inst := &Instance{Title: "archived-retry-test", Status: domain.Stopped, ArchivedAt: &archivedAt}
 		inst.processManager = NewTmuxBackend(mock)
 
 		policy := RetryPolicy{Enabled: true, MaxAttempts: 3, RetryOn: []string{"tmux_exited"}}
@@ -1572,7 +1574,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 		if mock.startCalls != 0 {
 			t.Errorf("expected no restart for an archived session, got %d Start() calls", mock.startCalls)
 		}
-		if got := inst.Snapshot().Status; got != Stopped {
+		if got := inst.Snapshot().Status; got != domain.Stopped {
 			t.Errorf("Status = %v, want Stopped (an archived session must not be marked PermanentlyFailed either)", got)
 		}
 		if inst.IsRetryPending() {
@@ -1583,7 +1585,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 	t.Run("not_archived_still_schedules_a_retry", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "live-retry-scheduled", Status: Stopped}
+		inst := &Instance{Title: "live-retry-scheduled", Status: domain.Stopped}
 		inst.processManager = NewTmuxBackend(mock)
 		inst.RetryAttempt = 0
 		inst.RetryMaxAttempts = 3
@@ -1602,7 +1604,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 	t.Run("not_archived_still_marks_permanently_failed_when_exhausted", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "live-retry-exhausted", Status: Stopped}
+		inst := &Instance{Title: "live-retry-exhausted", Status: domain.Stopped}
 		inst.processManager = NewTmuxBackend(mock)
 		inst.RetryAttempt = 1
 		inst.RetryMaxAttempts = 1 // already at cap
@@ -1610,7 +1612,7 @@ func TestHandleDriverFailure_should_NotRestartOrMarkFailed_When_InstanceArchived
 		policy := RetryPolicy{Enabled: true, MaxAttempts: 1, RetryOn: []string{"crashed"}}
 		handleDriverFailure(inst, "/tmp", policy, "crashed", make(chan struct{}))
 
-		if got := inst.Snapshot().Status; got != PermanentlyFailed {
+		if got := inst.Snapshot().Status; got != domain.PermanentlyFailed {
 			t.Errorf("control: Status = %v, want PermanentlyFailed for an exhausted live session", got)
 		}
 	})
@@ -1627,7 +1629,7 @@ func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(
 		t.Parallel()
 		archivedAt := time.Now()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "archived-pending-retry", Status: Stopped, ArchivedAt: &archivedAt}
+		inst := &Instance{Title: "archived-pending-retry", Status: domain.Stopped, ArchivedAt: &archivedAt}
 		inst.processManager = NewTmuxBackend(mock)
 		inst.NextRetryAt = time.Now().Add(-time.Minute) // already elapsed
 
@@ -1648,7 +1650,7 @@ func TestHandleRetryPendingTick_should_DropScheduledRetry_When_InstanceArchived(
 	t.Run("not_archived_pending_but_not_elapsed_keeps_ticking", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "live-pending-retry", Status: Stopped}
+		inst := &Instance{Title: "live-pending-retry", Status: domain.Stopped}
 		inst.processManager = NewTmuxBackend(mock)
 		inst.NextRetryAt = time.Now().Add(time.Hour) // not yet elapsed
 

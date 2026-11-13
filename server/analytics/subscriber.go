@@ -6,7 +6,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // analyticsSubscriber holds subscriber state including per-session last-known status
@@ -14,13 +14,13 @@ import (
 type analyticsSubscriber struct {
 	provider       AnalyticsProvider
 	mu             sync.Mutex
-	lastStatusByID map[string]session.Status
+	lastStatusByID map[string]domain.Status
 }
 
 func newAnalyticsSubscriber(provider AnalyticsProvider) *analyticsSubscriber {
 	return &analyticsSubscriber{
 		provider:       provider,
-		lastStatusByID: make(map[string]session.Status),
+		lastStatusByID: make(map[string]domain.Status),
 	}
 }
 
@@ -109,7 +109,7 @@ func (s *analyticsSubscriber) recordFromEvent(ctx context.Context, event *events
 		// Read via the locked accessor, not the raw field: Status is written
 		// under Instance.stateMutex from the instance's own goroutine,
 		// concurrently with this EventBus subscriber goroutine.
-		newStatus := session.Status(sess.GetStatus())
+		newStatus := domain.Status(sess.GetStatus())
 
 		s.mu.Lock()
 		oldStatus, seen := s.lastStatusByID[sessionID]

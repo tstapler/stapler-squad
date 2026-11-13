@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -18,27 +19,27 @@ import (
 // the item's own tombstones, plus (when nothing represents it) the legacy
 // pr_number as an `unknown` PR.
 type PRSetReader interface {
-	ItemPRs(ctx context.Context, item *ent.BacklogItem) ([]PRView, error)
+	ItemPRs(ctx context.Context, item *ent.BacklogItem) ([]domain.PRView, error)
 }
 
 // itemPRSource is the slice of the repository the derivation reads.
 type itemPRSource interface {
-	ListByItem(ctx context.Context, itemID string) ([]PRView, error)
-	ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]PRView, error)
-	ListSessionTombstonesByUUIDs(ctx context.Context, uuids []string) (map[string][]PRRef, error)
-	ListItemTombstones(ctx context.Context, itemIDs []string) (map[string][]PRRef, error)
+	ListByItem(ctx context.Context, itemID string) ([]domain.PRView, error)
+	ListBySessionUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRView, error)
+	ListSessionTombstonesByUUIDs(ctx context.Context, uuids []string) (map[string][]domain.PRRef, error)
+	ListItemTombstones(ctx context.Context, itemIDs []string) (map[string][]domain.PRRef, error)
 	ListItemSessions(ctx context.Context, itemID string) ([]backlogdto.ItemSessionSummary, error)
 }
 
 var _ PRSetReader = (*EntRepository)(nil)
 
 // ItemPRs implements PRSetReader over the repository.
-func (r *EntRepository) ItemPRs(ctx context.Context, item *ent.BacklogItem) ([]PRView, error) {
+func (r *EntRepository) ItemPRs(ctx context.Context, item *ent.BacklogItem) ([]domain.PRView, error) {
 	return deriveItemPRs(ctx, r, item.ID.String(), item.PrURL, item.PrNumber)
 }
 
 // ItemPRsByID is ItemPRs for callers holding only the item id (string UUID).
-func (r *EntRepository) ItemPRsByID(ctx context.Context, itemID string) ([]PRView, error) {
+func (r *EntRepository) ItemPRsByID(ctx context.Context, itemID string) ([]domain.PRView, error) {
 	id, err := uuid.Parse(itemID)
 	if err != nil {
 		return nil, fmt.Errorf("item prs: invalid item id %q: %w", itemID, err)
@@ -62,7 +63,7 @@ func workSessionNewer(a, b backlogdto.ItemSessionSummary) bool {
 // link nor tombstone is skipped (skipped reports whether any was); the first one
 // with a link, or with a tombstone and no link, is the round. "" means none.
 // ended_at is deliberately never read.
-func currentRoundSession(work []backlogdto.ItemSessionSummary, links map[string][]PRView, tombs map[string][]PRRef) (uuid string, skipped bool) {
+func currentRoundSession(work []backlogdto.ItemSessionSummary, links map[string][]domain.PRView, tombs map[string][]domain.PRRef) (uuid string, skipped bool) {
 	sorted := append([]backlogdto.ItemSessionSummary(nil), work...)
 	sort.Slice(sorted, func(i, j int) bool { return workSessionNewer(sorted[i], sorted[j]) })
 	for _, s := range sorted {
@@ -84,7 +85,7 @@ func workSessions(all []backlogdto.ItemSessionSummary) (work []backlogdto.ItemSe
 	return work, uuids
 }
 
-func deriveItemPRs(ctx context.Context, src itemPRSource, itemID, prURL string, prNumber int) ([]PRView, error) {
+func deriveItemPRs(ctx context.Context, src itemPRSource, itemID, prURL string, prNumber int) ([]domain.PRView, error) {
 	direct, err := src.ListByItem(ctx, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("item prs: list item links: %w", err)
@@ -99,7 +100,7 @@ func deriveItemPRs(ctx context.Context, src itemPRSource, itemID, prURL string, 
 	}
 	work, uuids := workSessions(sessions)
 
-	var roundLinks []PRView
+	var roundLinks []domain.PRView
 	if len(uuids) > 0 {
 		links, lerr := src.ListBySessionUUIDs(ctx, uuids)
 		if lerr != nil {
@@ -116,11 +117,11 @@ func deriveItemPRs(ctx context.Context, src itemPRSource, itemID, prURL string, 
 		roundLinks = links[round]
 	}
 
-	set := distinctPRs(subtractRefs(append(append([]PRView(nil), direct...), roundLinks...), itemTombs[itemID]))
+	set := domain.DistinctPRs(subtractRefs(append(append([]domain.PRView(nil), direct...), roundLinks...), itemTombs[itemID]))
 	return appendLegacyFallback(ctx, src, set, sessions, itemPRInputs{itemID, prURL, prNumber, direct, itemTombs[itemID]})
 }
 
-func subtractRefs(prs []PRView, drop []PRRef) []PRView {
+func subtractRefs(prs []domain.PRView, drop []domain.PRRef) []domain.PRView {
 	if len(drop) == 0 {
 		return prs
 	}
@@ -137,7 +138,7 @@ func subtractRefs(prs []PRView, drop []PRRef) []PRView {
 // item or any of its sessions represents it and no tombstone of the item or any
 // session covers it. It returns before the all-rounds query when the derived set
 // already holds the number.
-func appendLegacyFallback(ctx context.Context, src itemPRSource, set []PRView, sessions []backlogdto.ItemSessionSummary, in itemPRInputs) ([]PRView, error) {
+func appendLegacyFallback(ctx context.Context, src itemPRSource, set []domain.PRView, sessions []backlogdto.ItemSessionSummary, in itemPRInputs) ([]domain.PRView, error) {
 	prURL, prNumber := in.prURL, in.prNumber
 	if prNumber <= 0 {
 		return set, nil
@@ -158,9 +159,9 @@ func appendLegacyFallback(ctx context.Context, src itemPRSource, set []PRView, s
 	if cov.Represented(ref) || cov.CoveredByTombstone(ref) {
 		return set, nil
 	}
-	return append(set, PRView{
-		Ref: ref, State: PRStateUnknown, URL: strings.TrimSpace(prURL),
-		BacklogItemID: in.itemID, Role: PRRolePrimary, AttachSource: AttachSourceBackfill,
+	return append(set, domain.PRView{
+		Ref: ref, State: domain.PRStateUnknown, URL: strings.TrimSpace(prURL),
+		BacklogItemID: in.itemID, Role: domain.PRRolePrimary, AttachSource: domain.AttachSourceBackfill,
 	}), nil
 }
 
@@ -169,14 +170,14 @@ type itemPRInputs struct {
 	itemID    string
 	prURL     string
 	prNumber  int
-	direct    []PRView
-	itemTombs []PRRef
+	direct    []domain.PRView
+	itemTombs []domain.PRRef
 }
 
 func loadSessionCoverage(ctx context.Context, src itemPRSource, sessions []backlogdto.ItemSessionSummary, in itemPRInputs) (ItemPRCoverage, error) {
 	cov := ItemPRCoverage{
 		ItemTombstones: in.itemTombs,
-		SessionLinks:   map[string][]PRRef{}, SessionTombstones: map[string][]PRRef{},
+		SessionLinks:   map[string][]domain.PRRef{}, SessionTombstones: map[string][]domain.PRRef{},
 	}
 	for _, v := range in.direct {
 		cov.ItemLinks = append(cov.ItemLinks, v.Ref)

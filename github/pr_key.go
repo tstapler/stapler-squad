@@ -3,6 +3,8 @@ package github
 import (
 	"fmt"
 	"strconv"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // PRKey identifies one pull request by host, owner, repo and number. It is
@@ -19,7 +21,7 @@ func NewPRKey(host, owner, repo string, number int) (PRKey, error) {
 	if number <= 0 {
 		return PRKey{}, fmt.Errorf("github PR number must be positive, got %d", number)
 	}
-	ref, err := NewRepoRefWithHost(owner, repo, NormalizeHost(host))
+	ref, err := NewRepoRefWithHost(owner, repo, domain.NormalizeHost(host))
 	if err != nil {
 		return PRKey{}, err
 	}

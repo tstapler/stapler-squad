@@ -50,7 +50,7 @@ func TestBulkResetStuckRemediation_should_resolveToLastWriterDeterministically_W
 		ctx := t.Context()
 		reason := domain.StuckReasonBouncing
 
-		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "racing item", Status: string(domain.BacklogStatusReview)})
 		require.NoError(t, err)
 		svctest.SeedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "bouncing")
 		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)
@@ -75,7 +75,7 @@ func TestBulkResetStuckRemediation_should_resolveToLastWriterDeterministically_W
 		ctx := t.Context()
 		reason := domain.StuckReasonBouncing
 
-		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "racing item", Status: string(session.BacklogStatusReview)})
+		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "racing item", Status: string(domain.BacklogStatusReview)})
 		require.NoError(t, err)
 		svctest.SeedOpenStuckRow(t, storage, item.ID, reason, time.Now(), "bouncing")
 		_, err = storage.RecordRemediationAttempt(ctx, item.ID, reason, session.MaxRemediationAttempts, nil)

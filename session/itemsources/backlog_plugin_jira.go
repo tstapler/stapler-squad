@@ -17,6 +17,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/jira"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -327,7 +328,7 @@ func jiraPriorityToBacklog(name string) int {
 	case "lowest", "trivial":
 		return 1
 	default:
-		return session.DefaultBacklogPriority
+		return domain.DefaultBacklogPriority
 	}
 }
 

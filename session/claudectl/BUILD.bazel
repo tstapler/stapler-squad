@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "claudectl",
+    srcs = [
+        "claude_controller.go",
+        "ratelimit_writer.go",
+        "testseam.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/claudectl",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//pkg/analytics",
+        "//pkg/ansi",
+        "//session/cmdexec",
+        "//session/detection",
+        "//session/detection/binaries",
+        "//session/detection/dtypes",
+        "//session/detection/ratelimit",
+        "//session/ptyio",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":claudectl",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "claudectl_test",
+    srcs = [
+        "claude_controller_test.go",
+        "ptyio_testdoubles_test.go",
+    ],
+    embed = [":claudectl"],
+    deps = [
+        "//envtest",
+        "//pkg/analytics",
+        "//session/cmdexec",
+        "//session/detection",
+        "//session/detection/dtypes",
+        "//session/ptyio",
+        "//testutil/wait",
+    ],
+)

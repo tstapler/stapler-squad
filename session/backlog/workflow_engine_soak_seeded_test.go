@@ -6,12 +6,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestEvaluateSoak_SeededDivergenceStaysNotReady_InAnEditedWindow_EvenWhenEdgeAcked(t *testing.T) {
 	t.Parallel()
 	l := readyLedger()
-	cl := l.Classes[string(session.ClassOperator)]
+	cl := l.Classes[string(domain.ClassOperator)]
 	cl.ConfigSeen[session.ConfigEdited] = 1
 	cl.Divergence["CanTransition|graph|seeded|transition"] = 2
 	cl.Edges["done->refining"] = session.EdgeStats{TransitionSamples: 25, Divergences: 2}

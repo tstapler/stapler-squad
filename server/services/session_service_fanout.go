@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"google.golang.org/protobuf/proto"
 )
@@ -113,11 +114,11 @@ func (s *SessionService) FanOutSession(
 // stopped or been paused/hibernated, or it is Active but sitting at an idle/ready/success
 // prompt. Anything still producing output (or crashed/failed/creating) is rejected so a
 // partial diff is never merged.
-func fanoutWinnerEligibility(status session.Status, claude detection.DetectedStatus) error {
+func fanoutWinnerEligibility(status domain.Status, claude detection.DetectedStatus) error {
 	switch status {
-	case session.Stopped, session.Paused, session.Hibernated:
+	case domain.Stopped, domain.Paused, domain.Hibernated:
 		return nil
-	case session.Active:
+	case domain.Active:
 		switch claude {
 		case detection.StatusIdle, detection.StatusReady, detection.StatusSuccess:
 			return nil
@@ -214,7 +215,7 @@ func (s *SessionService) resolveFanoutWinner(groupID, winnerID string) (winner *
 	if s.statusManager != nil {
 		claude = s.statusManager.GetStatus(winner).ClaudeStatus
 	}
-	if eligErr := fanoutWinnerEligibility(session.Status(winner.GetStatus()), claude); eligErr != nil {
+	if eligErr := fanoutWinnerEligibility(domain.Status(winner.GetStatus()), claude); eligErr != nil {
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition, eligErr)
 	}
 	return winner, members, nil

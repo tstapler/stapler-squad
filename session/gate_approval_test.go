@@ -23,7 +23,7 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 	ctx := context.Background()
 
 	from, to := newCustomTransitionWithGates(t, client, engine,
-		[]GateKind{GateKindHumanApproval},
+		[]domain.GateKind{domain.GateKindHumanApproval},
 		[]bool{true},
 	)
 
@@ -34,7 +34,7 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 	gateID := gates[0].ID
 
 	itemID := uuid.New()
-	item := BacklogItemTransitionInput{ItemID: itemID.String(), Status: from, AcCriteria: acCriteriaAllDone(t)}
+	item := domain.BacklogItemTransitionInput{ItemID: itemID.String(), Status: from, AcCriteria: acCriteriaAllDone(t)}
 
 	// Given: no record exists yet — the gate must report unsatisfied.
 	statuses, err := engine.PendingGates(item, to, nil)
@@ -60,7 +60,7 @@ func TestRecordGateApproval_should_PersistAndNotReAsk_When_ApprovalIsRecorded(t 
 	// one-shot recorded approval is never re-derived from live item state,
 	// unlike a structural gate (TestPendingGates_should_ReportUnsatisfied_
 	// When_PreviouslySatisfiedStructuralGateHasSinceRegressed's converse).
-	regressedItem := BacklogItemTransitionInput{ItemID: itemID.String(), Status: from, AcCriteria: acCriteriaOneUnchecked(t)}
+	regressedItem := domain.BacklogItemTransitionInput{ItemID: itemID.String(), Status: from, AcCriteria: acCriteriaOneUnchecked(t)}
 	statuses, err = engine.PendingGates(regressedItem, to, nil)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)

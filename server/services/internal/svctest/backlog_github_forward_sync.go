@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -42,7 +43,7 @@ func CreateForwardSyncTestItem(t *testing.T, storage *session.Storage, sourceID,
 	t.Helper()
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:      "forward sync test item",
-		Status:     string(session.BacklogStatusDone),
+		Status:     string(domain.BacklogStatusDone),
 		SourceID:   sourceID,
 		ExternalID: externalID,
 		Labels:     labels,

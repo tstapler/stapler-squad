@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tstapler/stapler-squad/server/services/internal/streammetrics"
+	queuepkg "github.com/tstapler/stapler-squad/session/queue"
+
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -27,7 +30,7 @@ import (
 //   - reviewQueuePoller: needed by AcknowledgeSession to refresh poller refs
 //   - eventBus:          needed by AcknowledgeSession and LogUserInteraction
 type ReviewQueueService struct {
-	reviewQueue      *session.ReviewQueue
+	reviewQueue      *queuepkg.ReviewQueue
 	reactiveQueueMgr ReactiveQueueManager
 
 	// Borrowed from SessionService — set via Set* methods after construction.
@@ -39,7 +42,7 @@ type ReviewQueueService struct {
 
 // NewReviewQueueService creates a ReviewQueueService with the required state.
 func NewReviewQueueService(
-	reviewQueue *session.ReviewQueue,
+	reviewQueue *queuepkg.ReviewQueue,
 	storage *session.Storage,
 	eventBus *events.EventBus,
 ) *ReviewQueueService {
@@ -74,7 +77,7 @@ func (rqs *ReviewQueueService) SetApprovalStore(store *ApprovalStore) {
 }
 
 // GetQueue returns the underlying ReviewQueue for wiring reactive components.
-func (rqs *ReviewQueueService) GetQueue() *session.ReviewQueue {
+func (rqs *ReviewQueueService) GetQueue() *queuepkg.ReviewQueue {
 	return rqs.reviewQueue
 }
 
@@ -90,7 +93,7 @@ func (rqs *ReviewQueueService) GetReviewQueue(
 ) (*connect.Response[sessionv1.GetReviewQueueResponse], error) {
 	allItems := rqs.reviewQueue.List()
 
-	filteredItems := make([]*session.ReviewItem, 0, len(allItems))
+	filteredItems := make([]*queuepkg.ReviewItem, 0, len(allItems))
 	for _, item := range allItems {
 		if req.Msg.PriorityFilter != nil {
 			targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
@@ -107,7 +110,7 @@ func (rqs *ReviewQueueService) GetReviewQueue(
 		filteredItems = append(filteredItems, item)
 	}
 
-	queue := session.NewReviewQueue()
+	queue := queuepkg.NewReviewQueue()
 	for _, item := range filteredItems {
 		queue.Add(item)
 	}
@@ -118,7 +121,7 @@ func (rqs *ReviewQueueService) GetReviewQueue(
 	var approvalIDs map[string]string
 	if rqs.approvalStore != nil {
 		for _, item := range filteredItems {
-			if item.Reason == session.ReasonApprovalPending {
+			if item.Reason == queuepkg.ReasonApprovalPending {
 				if pending := rqs.approvalStore.GetBySession(item.SessionID); len(pending) > 0 {
 					if approvalIDs == nil {
 						approvalIDs = make(map[string]string)
@@ -218,7 +221,7 @@ func (rqs *ReviewQueueService) WatchReviewQueue(
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("reactive queue manager not initialized"))
 	}
 
-	done := TrackOpenStream("WatchReviewQueue")
+	done := streammetrics.TrackOpenStream("WatchReviewQueue")
 	defer done()
 
 	filters := &WatchReviewQueueFilters{
@@ -309,19 +312,19 @@ func (rqs *ReviewQueueService) LogUserInteraction(
 
 // WatchReviewQueueFilters contains filters for review queue event streaming.
 type WatchReviewQueueFilters struct {
-	PriorityFilter    []session.Priority
-	ReasonFilter      []session.AttentionReason
+	PriorityFilter    []queuepkg.Priority
+	ReasonFilter      []queuepkg.AttentionReason
 	SessionIDs        []string
 	IncludeStatistics bool
 	InitialSnapshot   bool
 }
 
 // Implement FilterProvider interface for type-safe conversion.
-func (f *WatchReviewQueueFilters) GetPriorityFilter() []session.Priority {
+func (f *WatchReviewQueueFilters) GetPriorityFilter() []queuepkg.Priority {
 	return f.PriorityFilter
 }
 
-func (f *WatchReviewQueueFilters) GetReasonFilter() []session.AttentionReason {
+func (f *WatchReviewQueueFilters) GetReasonFilter() []queuepkg.AttentionReason {
 	return f.ReasonFilter
 }
 
@@ -338,38 +341,38 @@ func (f *WatchReviewQueueFilters) GetInitialSnapshot() bool {
 }
 
 // convertProtoPriorities converts proto Priority values to internal session.Priority.
-func convertProtoPriorities(protoPriorities []sessionv1.Priority) []session.Priority {
-	result := make([]session.Priority, 0, len(protoPriorities))
+func convertProtoPriorities(protoPriorities []sessionv1.Priority) []queuepkg.Priority {
+	result := make([]queuepkg.Priority, 0, len(protoPriorities))
 	for _, p := range protoPriorities {
 		switch p {
 		case sessionv1.Priority_PRIORITY_URGENT:
-			result = append(result, session.PriorityUrgent)
+			result = append(result, queuepkg.PriorityUrgent)
 		case sessionv1.Priority_PRIORITY_HIGH:
-			result = append(result, session.PriorityHigh)
+			result = append(result, queuepkg.PriorityHigh)
 		case sessionv1.Priority_PRIORITY_MEDIUM:
-			result = append(result, session.PriorityMedium)
+			result = append(result, queuepkg.PriorityMedium)
 		case sessionv1.Priority_PRIORITY_LOW:
-			result = append(result, session.PriorityLow)
+			result = append(result, queuepkg.PriorityLow)
 		}
 	}
 	return result
 }
 
 // convertProtoReasons converts proto AttentionReason values to internal session.AttentionReason.
-func convertProtoReasons(protoReasons []sessionv1.AttentionReason) []session.AttentionReason {
-	result := make([]session.AttentionReason, 0, len(protoReasons))
+func convertProtoReasons(protoReasons []sessionv1.AttentionReason) []queuepkg.AttentionReason {
+	result := make([]queuepkg.AttentionReason, 0, len(protoReasons))
 	for _, r := range protoReasons {
 		switch r {
 		case sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING:
-			result = append(result, session.ReasonApprovalPending)
+			result = append(result, queuepkg.ReasonApprovalPending)
 		case sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED:
-			result = append(result, session.ReasonInputRequired)
+			result = append(result, queuepkg.ReasonInputRequired)
 		case sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE:
-			result = append(result, session.ReasonErrorState)
+			result = append(result, queuepkg.ReasonErrorState)
 		case sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT:
-			result = append(result, session.ReasonIdleTimeout)
+			result = append(result, queuepkg.ReasonIdleTimeout)
 		case sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE:
-			result = append(result, session.ReasonTaskComplete)
+			result = append(result, queuepkg.ReasonTaskComplete)
 		}
 	}
 	return result

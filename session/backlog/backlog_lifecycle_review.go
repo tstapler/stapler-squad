@@ -7,26 +7,12 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
+	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
-
-// ReviewGateSpawner can create a short-lived review session for a backlog item.
-// Deprecated: use headless.Pool via NewBacklogLifecycleListenerWithSpawner instead.
-// Retained for backward compatibility with existing tests and callers.
-type ReviewGateSpawner interface {
-	// SpawnReviewSession creates a one-shot review session for item using prompt.
-	// itemSessionID is the UUID of the work ItemSession being reviewed.
-	SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error)
-}
-
-// AutoReopenSpawner can automatically reopen a backlog item for rework after a
-// failed review verdict (FAIL or PARTIAL). It transitions the item back to
-// in_progress and spawns a new work session so the review→rework cycle is
-// fully automated.
-type AutoReopenSpawner interface {
-	AutoReopenAfterFailedReview(ctx context.Context, itemID string) error
-}
 
 // ReviewRespawner can automatically re-trigger the review gate for a backlog
 // item stuck in review with no active session in flight (the
@@ -131,25 +117,25 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 				true, true, // urgent, important
 			)
 		}
-		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title, session.BacklogStatus(item.Status))
+		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title, domain.BacklogStatus(item.Status))
 		return
 	}
 
 	verdict := reviewEntry.ReviewVerdict
-	overall := session.ReviewOutcome(verdict.OverallOutcome)
-	perCriterion, parseErr := session.ParsePerCriterionVerdicts(verdict.PerCriterion)
+	overall := domain.ReviewOutcome(verdict.OverallOutcome)
+	perCriterion, parseErr := domain.ParsePerCriterionVerdicts(verdict.PerCriterion)
 	if parseErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] handleReviewSessionExited parsePerCriterionVerdicts item=%s: %v", item.ID, parseErr)
 	}
-	acSnapshot, _ := session.ParseAcCriteria(reviewIS.AcSnapshot)
+	acSnapshot, _ := domain.ParseAcCriteria(reviewIS.AcSnapshot)
 	applyVerdictsToACs(ctx, l.storage, item, acSnapshot, perCriterion)
 
 	log.InfoLog().Printf("[BacklogLifecycle] handleReviewSessionExited item=%s outcome=%s (review session %s)", item.ID, overall, reviewIS.SessionUUID)
 
 	switch overall {
-	case session.ReviewVerdictFail, session.ReviewVerdictPartial, session.ReviewVerdictUnverifiable:
-		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title, session.BacklogStatus(item.Status))
-	case session.ReviewVerdictPass:
+	case domain.ReviewVerdictFail, domain.ReviewVerdictPartial, domain.ReviewVerdictUnverifiable:
+		l.autoReopenWithBackoffGate(ctx, item.ID, item.Title, domain.BacklogStatus(item.Status))
+	case domain.ReviewVerdictPass:
 		if workEntry == nil {
 			log.ErrorLog().Printf("[BacklogLifecycle] handleReviewSessionExited item=%s: PASS verdict but no work session found — cannot push", item.ID)
 			return
@@ -189,7 +175,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 // fresh attempt every few minutes once a "bouncing" BacklogStuckState row is
 // open. When no such row exists yet (this reason hasn't been detected as
 // stuck), RemediationDue reports due=true unconditionally — the first few
-// reopen attempts, before reconcileBouncingItems' bounceThreshold trips,
+// reopen attempts, before reconcileBouncingItems' stuck.BounceThreshold trips,
 // behave exactly as they did before this gate existed. Best-effort: gate
 // query/write errors are logged, never returned, and fail OPEN (still
 // attempts the reopen) rather than silently stranding the item.
@@ -201,7 +187,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 // status at both of its call sites, never "in_progress"; a hardcoded
 // BacklogStatusInProgress would make that MarkStuck call silently no-op
 // (applied=false) every time.
-func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context, itemID, itemTitle string, itemStatus session.BacklogStatus) {
+func (l *BacklogLifecycleListener) autoReopenWithBackoffGate(ctx context.Context, itemID, itemTitle string, itemStatus domain.BacklogStatus) {
 	reopener := l.getAutoReopener()
 	if reopener == nil {
 		return
@@ -304,7 +290,7 @@ func (l *BacklogLifecycleListener) triggerReviewForSession(workSessionUUID strin
 	if item.SkipReviewGate {
 		return
 	}
-	if session.BacklogStatus(item.Status) != session.BacklogStatusReview {
+	if domain.BacklogStatus(item.Status) != domain.BacklogStatusReview {
 		log.InfoLog().Printf("[BacklogLifecycle] TriggerReviewForSession: skipping item=%s status=%s (not in review)", item.ID, item.Status)
 		return
 	}
@@ -320,30 +306,30 @@ func (l *BacklogLifecycleListener) triggerReviewForSession(workSessionUUID strin
 //	FAIL / UNVERIFIABLE → unchanged (stay "pending")
 //
 // Best-effort: errors are logged but do not block the caller.
-func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, verdicts []session.CriterionVerdict) {
+func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, acSnapshot []domain.AcCriterion, verdicts []domain.CriterionVerdict) {
 	if len(verdicts) == 0 || len(acSnapshot) == 0 {
 		return
 	}
 
-	outcomeByIdx := make(map[int]session.ReviewOutcome, len(verdicts))
+	outcomeByIdx := make(map[int]domain.ReviewOutcome, len(verdicts))
 	for _, v := range verdicts {
 		outcomeByIdx[v.CriterionIndex] = v.Outcome
 	}
 
-	updated := make([]session.AcCriterion, len(acSnapshot))
+	updated := make([]domain.AcCriterion, len(acSnapshot))
 	copy(updated, acSnapshot)
 	changed := false
 	for i, ac := range updated {
 		outcome, ok := outcomeByIdx[ac.Index]
-		if !ok || ac.Status == session.AcStatusWaived {
+		if !ok || ac.Status == domain.AcStatusWaived {
 			continue
 		}
-		var newStatus session.AcStatus
+		var newStatus domain.AcStatus
 		switch outcome {
-		case session.ReviewOutcomePass:
-			newStatus = session.AcStatusDone
-		case session.ReviewOutcomePartial:
-			newStatus = session.AcStatusInProgress
+		case domain.ReviewOutcomePass:
+			newStatus = domain.AcStatusDone
+		case domain.ReviewOutcomePartial:
+			newStatus = domain.AcStatusInProgress
 		default:
 			continue // FAIL / UNVERIFIABLE: leave as-is
 		}
@@ -357,7 +343,7 @@ func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *bac
 		return
 	}
 
-	newJSON, err := session.SerializeAcCriteria(updated)
+	newJSON, err := domain.SerializeAcCriteria(updated)
 	if err != nil {
 		log.ErrorLog().Printf("[BacklogLifecycle] applyVerdictsToACs serialize item=%s: %v", item.ID, err)
 		return
@@ -379,7 +365,7 @@ func applyVerdictsToACs(ctx context.Context, storage *session.Storage, item *bac
 // Every automatic spawn path funnels through here, so this is where the
 // per-item check-then-reserve lives. The reservation is held until Run
 // returns, i.e. past the review ItemSession row being persisted.
-func (l *BacklogLifecycleListener) spawnReviewGate(gateContext GateContext, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
+func (l *BacklogLifecycleListener) spawnReviewGate(gateContext reviewgate.GateContext, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
 	release, ok := l.ReserveReview(l.shutdownCtx, item.ID)
 	if !ok {
 		log.InfoLog().Printf("[BacklogLifecycle] spawnReviewGate: skipping duplicate review spawn item=%s (reviewer already in flight or open)", item.ID)
@@ -462,7 +448,7 @@ func (l *BacklogLifecycleListener) reconcileStuckReviewItems(ctx context.Context
 		if row.Reason != domain.StuckReasonAbandonedReview {
 			continue
 		}
-		if row.ItemStatus != session.BacklogStatusReview {
+		if row.ItemStatus != domain.BacklogStatusReview {
 			continue // not this item's status anymore — self-heal sweep handles it
 		}
 		if seen[row.ItemID] {
@@ -570,7 +556,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 		// against the current review-entry timestamp catches exactly that: a
 		// session created before the item's current review stay began cannot
 		// be what that stay's outcome will be judged on.
-		if reviewAt, found, evErr := er.GetMostRecentStatusEventAt(ctx, item.ID.String(), session.BacklogStatusReview); evErr != nil {
+		if reviewAt, found, evErr := er.GetMostRecentStatusEventAt(ctx, item.ID.String(), domain.BacklogStatusReview); evErr != nil {
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileUnprocessedReviewVerdicts GetMostRecentStatusEventAt item=%s: %v", item.ID, evErr)
 		} else if found && latest.CreatedAt.Before(reviewAt) {
 			continue // verdict belongs to a prior, already-concluded review cycle
@@ -622,7 +608,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 
 // markAbandonedReview writes/refreshes the durable abandoned_review row for
 // itemID and, once the condition has held past the 15-minute grace
-// (abandonedReview pure fn, Story 2.1.0), notifies AND auto-respawns a review
+// (stuck.AbandonedReview pure fn, Story 2.1.0), notifies AND auto-respawns a review
 // pass via the injected ReviewRespawner (if wired) — gives the 60s reconcile
 // one or more ticks to re-spawn a review gate before flagging, avoiding a
 // false positive on an item that just entered review. The row itself is
@@ -636,7 +622,7 @@ func (l *BacklogLifecycleListener) reconcileUnprocessedReviewVerdicts(ctx contex
 // across separate abandoned_review occurrences. Best-effort: errors are
 // logged, never returned.
 func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *session.EntRepository, itemID, itemTitle, contextDesc string) {
-	applied, err := er.MarkStuck(ctx, itemID, domain.StuckReasonAbandonedReview, session.BacklogStatusReview, contextDesc)
+	applied, err := er.MarkStuck(ctx, itemID, domain.StuckReasonAbandonedReview, domain.BacklogStatusReview, contextDesc)
 	if err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview MarkStuck item=%s: %v", itemID, err)
 		return
@@ -648,7 +634,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 	// 15-minute grace, keyed off the most recent to_status="review" transition
 	// (falls back to the row's own first_detected_at if no event is on record,
 	// e.g. an item seeded directly into review by a test or migration).
-	lastReviewAt, found, evErr := er.GetMostRecentStatusEventAt(ctx, itemID, session.BacklogStatusReview)
+	lastReviewAt, found, evErr := er.GetMostRecentStatusEventAt(ctx, itemID, domain.BacklogStatusReview)
 	if evErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview GetMostRecentStatusEventAt item=%s: %v", itemID, evErr)
 	}
@@ -658,14 +644,14 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview FindOpenStuckStates item=%s: %v", itemID, findErr)
 		return
 	}
-	row, ok := session.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonAbandonedReview)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonAbandonedReview)
 	if !ok {
 		return
 	}
 	if !found {
 		lastReviewAt = row.FirstDetectedAt
 	}
-	if !abandonedReview(lastReviewAt, time.Now()) {
+	if !stuck.AbandonedReview(lastReviewAt, time.Now()) {
 		return
 	}
 
@@ -767,13 +753,13 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 
 // reviewVerdictIdleThreshold bounds how long reconcileUnprocessedReviewVerdicts
 // trusts SessionLivenessChecker's "alive" verdict once a review session has
-// actually saved a verdict. Set to maxWorkSessionStaleness's value rather than
-// abandonedReview's much shorter 15-minute grace: a reviewer doing legitimately
+// actually saved a verdict. Set to liveness.MaxWorkSessionStaleness's value rather than
+// stuck.AbandonedReview's much shorter 15-minute grace: a reviewer doing legitimately
 // slow verification (large diff, running a full test suite) must not be reaped
 // mid-review, so this errs conservative — same order of magnitude as the other
 // "is this session still doing real work" threshold in this file, not the much
-// tighter "did anything ever start" grace period abandonedReview enforces.
-const reviewVerdictIdleThreshold = maxWorkSessionStaleness
+// tighter "did anything ever start" grace period stuck.AbandonedReview enforces.
+const reviewVerdictIdleThreshold = liveness.MaxWorkSessionStaleness
 
 // reconcileRespawnBlockedActiveResolution is the resolve-only counterpart to
 // notifyRespawnBlockedByActiveSession (server/services/backlog_service_triage.go),

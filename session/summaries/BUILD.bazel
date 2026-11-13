@@ -1,0 +1,68 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "summaries",
+    srcs = [
+        "handoff_summary_excerpt.go",
+        "handoff_summary_service.go",
+        "session_summary_listener.go",
+        "session_summary_markdown.go",
+        "session_summary_service.go",
+        "session_summary_snapshot.go",
+        "session_summary_types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/summaries",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/domain",
+        "//session/git",
+        "//session/headless",
+        "//session/tokens",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:handoffsummary",
+        "//tools/bzl/ent:sessionsummary",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":summaries",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "summaries_test",
+    srcs = [
+        "handoff_summary_excerpt_test.go",
+        "handoff_summary_service_test.go",
+        "session_summary_listener_test.go",
+        "session_summary_markdown_test.go",
+        "session_summary_service_test.go",
+        "session_summary_snapshot_test.go",
+    ],
+    data = ["//session/tokens:testdata"],
+    embed = [":summaries"],
+    deps = [
+        "//config",
+        "//proto/session/v1:sessionv1_go",
+        "//session",
+        "//session/domain",
+        "//session/git",
+        "//session/headless",
+        "//session/tokens",
+        "//testutil/wait",
+        "//tools/bzl/ent",
+        "//tools/bzl/ent:handoffsummary",
+        "//tools/bzl/ent:hook",
+        "//tools/bzl/ent:sessionsummary",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

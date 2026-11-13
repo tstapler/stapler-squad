@@ -5,6 +5,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -558,39 +560,6 @@ type DirectoryRule struct {
 	Overrides ProfileDefaults `json:"overrides,omitempty"`
 }
 
-// SessionType is the session creation mode (directory, new_worktree, existing_worktree, etc.).
-// Defined here so both the config layer and the session layer share the same type without
-// a circular import — session already imports config.
-type SessionType string
-
-const (
-	// SessionTypeDefault uses the default behavior (directory session).
-	SessionTypeDefault SessionType = ""
-	// SessionTypeDirectory creates a simple directory session without a worktree.
-	SessionTypeDirectory SessionType = "directory"
-	// SessionTypeNewWorktree creates a new git worktree for the session.
-	SessionTypeNewWorktree SessionType = "new_worktree"
-	// SessionTypeExistingWorktree reuses an existing git worktree.
-	SessionTypeExistingWorktree SessionType = "existing_worktree"
-	// SessionTypeNewProject creates a new directory with a git repo.
-	SessionTypeNewProject SessionType = "new_project"
-	// SessionTypeOneOff creates a temporary directory under OneOffBaseDir with a generated name.
-	SessionTypeOneOff SessionType = "one_off"
-)
-
-// IsValid reports whether st is a recognized session type.
-func (st SessionType) IsValid() bool {
-	switch st {
-	case SessionTypeDefault:
-		return false
-	case SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree,
-		SessionTypeNewProject, SessionTypeOneOff:
-		return true
-	default:
-		return false
-	}
-}
-
 // AliasConfig defines a named session preset invoked via @name in the omnibar.
 // Name must match ^[\w-]+$  (letters, digits, hyphens, underscores only).
 type AliasConfig struct {
@@ -617,7 +586,7 @@ type AliasConfig struct {
 	CLIFlags string `json:"cli_flags,omitempty"`
 	// SessionType overrides the session creation mode for this alias.
 	// SessionTypeDefault (empty) means use the default (directory session).
-	SessionType SessionType `json:"session_type,omitempty"`
+	SessionType domain.SessionType `json:"session_type,omitempty"`
 	// NamePrefix is prepended to the user-supplied session label when naming sessions.
 	// For example, prefix "ssq-" + label "my-feature" → session name "ssq-my-feature".
 	NamePrefix string `json:"name_prefix,omitempty"`

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // rangeRefusalPaths are the Story 2.1.4 confinement matrix paths: each must be
@@ -160,8 +160,8 @@ func TestReadRange_ShouldFollowReadPolicy_When_WorktreeIsGoneFromDisk(t *testing
 // pausedWorkspace reports an ActiveDir that is gone, so ExistingDir fell back to the repo root.
 type pausedWorkspace struct{ existing string }
 
-func (p pausedWorkspace) GetWorkspace(string) (session.Workspace, error) {
-	return session.Workspace{ActiveDir: p.existing + "-gone", ExistingDir: p.existing}, nil
+func (p pausedWorkspace) GetWorkspace(string) (domain.Workspace, error) {
+	return domain.Workspace{ActiveDir: p.existing + "-gone", ExistingDir: p.existing}, nil
 }
 
 func TestReadRange_ShouldReturnIdenticalResponses_When_OsRootAndMemBackends(t *testing.T) {

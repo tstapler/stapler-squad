@@ -4,26 +4,28 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func scanFixture(t *testing.T, lines ...string) (ae *ArtifactExtractor, path string, stored *string, completed *[]*SessionArtifactsBlob) {
+func scanFixture(t *testing.T, lines ...string) (ae *ArtifactExtractor, path string, stored *string, completed *[]*domain.SessionArtifactsBlob) {
 	t.Helper()
 	path = filepath.Join(t.TempDir(), "session.jsonl")
 	appendLines(t, path, lines...)
 	var blob string
-	var done []*SessionArtifactsBlob
+	var done []*domain.SessionArtifactsBlob
 	ae = NewArtifactExtractor(
 		func(_, b string) error { blob = b; return nil },
 		func(string) (string, error) { return blob, nil },
 		func(string) (string, bool) { return "sess", true },
 	)
-	ae.OnScanComplete = func(_ string, b *SessionArtifactsBlob) { done = append(done, b) }
+	ae.OnScanComplete = func(_ string, b *domain.SessionArtifactsBlob) { done = append(done, b) }
 	return ae, path, &blob, &done
 }
 
-func decodeBlob(t *testing.T, raw string) SessionArtifactsBlob {
+func decodeBlob(t *testing.T, raw string) domain.SessionArtifactsBlob {
 	t.Helper()
-	var b SessionArtifactsBlob
+	var b domain.SessionArtifactsBlob
 	if err := json.Unmarshal([]byte(raw), &b); err != nil {
 		t.Fatalf("decode %q: %v", raw, err)
 	}
@@ -39,7 +41,7 @@ func TestScan_ShouldPersistNoneFound_WhenTranscriptHasNoMatches(t *testing.T) {
 		t.Fatal("empty scan was not persisted")
 	}
 	b := decodeBlob(t, *stored)
-	if b.ScanState != ScanStateNoneFound {
+	if b.ScanState != domain.ScanStateNoneFound {
 		t.Fatalf("ScanState = %q, want none_found", b.ScanState)
 	}
 	if b.LastScannedAt.IsZero() {
@@ -76,7 +78,7 @@ func TestScan_ShouldPersistNoneFound_WhenUnchangedFileWasScannedBeforeStatesExis
 
 	ae.scanFile(path)
 
-	if got := decodeBlob(t, *stored).ScanState; got != ScanStateNoneFound {
+	if got := decodeBlob(t, *stored).ScanState; got != domain.ScanStateNoneFound {
 		t.Fatalf("unchanged pre-upgrade transcript not upgraded, ScanState = %q", got)
 	}
 }
@@ -85,7 +87,7 @@ func TestScan_ShouldSetHasData_WhenArtifactsFound(t *testing.T) {
 	t.Parallel()
 	ae, path, stored, _ := scanFixture(t, "PR https://github.com/o/r/pull/5")
 	ae.scanFile(path)
-	if got := decodeBlob(t, *stored).ScanState; got != ScanStateHasData {
+	if got := decodeBlob(t, *stored).ScanState; got != domain.ScanStateHasData {
 		t.Fatalf("ScanState = %q, want has_data", got)
 	}
 }
@@ -97,13 +99,13 @@ func TestMarkFailed_ShouldKeepLastGoodData_AndRecordFailedState(t *testing.T) {
 	ae.markFailed(path, "sess")
 
 	b := decodeBlob(t, *stored)
-	if b.ScanState != ScanStateFailed {
+	if b.ScanState != domain.ScanStateFailed {
 		t.Fatalf("ScanState = %q, want failed", b.ScanState)
 	}
 	if len(b.PRURLs) != 1 {
 		t.Fatalf("last good data lost on failure: %+v", b.PRURLs)
 	}
-	if got := (*completed)[len(*completed)-1].ScanState; got != ScanStateFailed {
+	if got := (*completed)[len(*completed)-1].ScanState; got != domain.ScanStateFailed {
 		t.Fatalf("failure not published: %q", got)
 	}
 }
@@ -112,17 +114,17 @@ func TestSessionArtifactsBlob_State(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
-		blob SessionArtifactsBlob
-		want ScanState
+		blob domain.SessionArtifactsBlob
+		want domain.ScanState
 	}{
-		{"explicit not_linked", SessionArtifactsBlob{ScanState: ScanStateNotLinked}, ScanStateNotLinked},
-		{"explicit scanning", SessionArtifactsBlob{ScanState: ScanStateScanning}, ScanStateScanning},
-		{"explicit none_found", SessionArtifactsBlob{ScanState: ScanStateNoneFound}, ScanStateNoneFound},
-		{"explicit has_data", SessionArtifactsBlob{ScanState: ScanStateHasData}, ScanStateHasData},
-		{"explicit failed", SessionArtifactsBlob{ScanState: ScanStateFailed}, ScanStateFailed},
-		{"legacy with data", SessionArtifactsBlob{PRURLs: []string{"u"}}, ScanStateHasData},
-		{"legacy command only", SessionArtifactsBlob{Commands: []CommandArtifact{{Type: "git_commit"}}}, ScanStateHasData},
-		{"legacy empty", SessionArtifactsBlob{}, ScanStateNoneFound},
+		{"explicit not_linked", domain.SessionArtifactsBlob{ScanState: domain.ScanStateNotLinked}, domain.ScanStateNotLinked},
+		{"explicit scanning", domain.SessionArtifactsBlob{ScanState: domain.ScanStateScanning}, domain.ScanStateScanning},
+		{"explicit none_found", domain.SessionArtifactsBlob{ScanState: domain.ScanStateNoneFound}, domain.ScanStateNoneFound},
+		{"explicit has_data", domain.SessionArtifactsBlob{ScanState: domain.ScanStateHasData}, domain.ScanStateHasData},
+		{"explicit failed", domain.SessionArtifactsBlob{ScanState: domain.ScanStateFailed}, domain.ScanStateFailed},
+		{"legacy with data", domain.SessionArtifactsBlob{PRURLs: []string{"u"}}, domain.ScanStateHasData},
+		{"legacy command only", domain.SessionArtifactsBlob{Commands: []domain.CommandArtifact{{Type: "git_commit"}}}, domain.ScanStateHasData},
+		{"legacy empty", domain.SessionArtifactsBlob{}, domain.ScanStateNoneFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

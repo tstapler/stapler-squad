@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -32,7 +31,7 @@ func TestPrFixSteerAndVerdictSteer_ShouldRefuseAHiddenTargetAndDegradeToNotifyOn
 		steerer.hidden = map[string]bool{verdictSteerSessionUUID: true}
 		svc.StartVerdictSteering()
 
-		publishVerdict(bus, item, session.ReviewOutcomePass, "all criteria met")
+		publishVerdict(bus, item, domain.ReviewOutcomePass, "all criteria met")
 
 		assert.Never(t, func() bool { return len(steerer.calls()) > 0 }, 300*time.Millisecond, 20*time.Millisecond,
 			"no write to a hidden session")
@@ -41,7 +40,7 @@ func TestPrFixSteerAndVerdictSteer_ShouldRefuseAHiddenTargetAndDegradeToNotifyOn
 	t.Run("both still steer a visible session", func(t *testing.T) {
 		svc, steerer, bus, item := newVerdictSteerFixture(t, true)
 		svc.StartVerdictSteering()
-		publishVerdict(bus, item, session.ReviewOutcomePass, "ok")
+		publishVerdict(bus, item, domain.ReviewOutcomePass, "ok")
 		require.Eventually(t, func() bool { return len(steerer.calls()) == 1 }, 3*time.Second, 10*time.Millisecond)
 	})
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -138,7 +139,7 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 		Title: "test-session",
 		Path:  workspace,
 		claudeExtension: claudeExtension{
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: uuid,
 			},
 		},
@@ -297,7 +298,7 @@ func TestPortSessionHistory_ClaudeToOpencode(t *testing.T) {
 		Title: "test-opencode-port",
 		Path:  workspace,
 		claudeExtension: claudeExtension{
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: uuid,
 			},
 		},
@@ -514,7 +515,7 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 		Title: "live-port-test",
 		Path:  instWorkspacePath,
 		claudeExtension: claudeExtension{
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: liveSessionUUID,
 			},
 		},
@@ -622,7 +623,7 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 		Title: "live-port-test-agy",
 		Path:  workspace,
 		claudeExtension: claudeExtension{
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: liveSessionUUID,
 			},
 		},
@@ -704,7 +705,7 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 		Title:           "schema-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: uuid}},
+		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
 	}
 	if err := portClaudeToAgy(inst); err != nil {
@@ -808,7 +809,7 @@ func TestPortSessionHistory_WithInhibitionEngineRedaction(t *testing.T) {
 		Title:           "secret-test-session",
 		Path:            workspace,
 		WorkingDir:      workspace,
-		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: uuid}},
+		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: uuid}},
 		HistoryFilePath: claudeLogPath,
 	}
 

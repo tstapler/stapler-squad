@@ -1,0 +1,57 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "chains",
+    srcs = [
+        "firer.go",
+        "graph_validator.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/backlog/chains",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "//session",
+        "//session/backlog/pipeline",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//tools/bzl/ent",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":chains",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "chains_test",
+    srcs = [
+        "firer_test.go",
+        "graph_validator_test.go",
+    ],
+    embed = [":chains"],
+    deps = [
+        "//config",
+        "//session",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//testutil/wait",
+        "//tools/bzl/ent",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Read by session and server/services tests that scan Go sources repo-wide.
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

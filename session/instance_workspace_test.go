@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +31,7 @@ func TestTryExtractConversationUUID_SkipsWhenAlreadyHasID(t *testing.T) {
 	inst := &Instance{
 		Title: "test-skip-existing-id",
 		claudeExtension: claudeExtension{
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: existingID,
 			},
 		},
@@ -78,7 +80,7 @@ func TestTryExtractConversationUUID_EmptySessionIDTriesTmux(t *testing.T) {
 	inst := &Instance{
 		Title: "test-empty-session-id",
 		claudeExtension: claudeExtension{
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: "", // Explicitly empty — guard should NOT fire.
 			},
 		},
@@ -110,7 +112,7 @@ func TestSwitchWorkspace_GuardPreventsExtractionWhenIDPopulated(t *testing.T) {
 	inst := &Instance{
 		Title: "test-guard-at-call-site",
 		claudeExtension: claudeExtension{
-			claudeSession: &ClaudeSessionData{
+			claudeSession: &domain.ClaudeSessionData{
 				ConversationUUID: preexistingID,
 			},
 		},
@@ -179,7 +181,7 @@ func TestTryExtractConversationUUID_PathFallbackRepopulatesAfterClear(t *testing
 		historyDetector: NewHistoryFileDetectorWithHomeDir(nil, tempHome),
 		// Simulates the state right after a cold restore clears the old ID —
 		// no live tmux pane, so the fast path is skipped and DetectByPath runs.
-		claudeExtension: claudeExtension{claudeSession: &ClaudeSessionData{ConversationUUID: ""}},
+		claudeExtension: claudeExtension{claudeSession: &domain.ClaudeSessionData{ConversationUUID: ""}},
 	}
 
 	inst.tryExtractConversationUUID()
@@ -262,7 +264,7 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 	}
 
 	instance, cleanup, err := NewTestInstance(t, "switch-workspace-deadlock-regression").
-		WithSessionType(SessionTypeDirectory).
+		WithSessionType(domain.SessionTypeDirectory).
 		Build()
 	require.NoError(t, err)
 	if cleanup != nil {
@@ -281,7 +283,7 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 
 	// Simulate an already-running session so SwitchWorkspace's guard passes.
 	instance.started.Store(true)
-	instance.Status = Active
+	instance.Status = domain.Active
 
 	done := make(chan struct{})
 	go func() {

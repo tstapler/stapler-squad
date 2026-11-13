@@ -18,7 +18,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//log",
-        "//session",
+        "//session/domain",
         "//session/vc",
     ],
 )
@@ -40,7 +40,7 @@ go_test(
     embed = [":workspace"],
     deps = [
         "//log",
-        "//session",
+        "//session/domain",
         "@com_github_data_dog_go_sqlmock//:go-sqlmock",
     ],
 )

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 // AskedQuestion is the parsed AskUserQuestion payload. Question, Header and
@@ -22,7 +22,7 @@ type AskedQuestion struct {
 	// multi-question stay false until stepwise answering (Story 3.5).
 	Replyable bool
 	// Tabbed is true for the one multi-question shape with a recorded key
-	// sequence (session.MeasuredTabbedShape) whose texts and labels are usable.
+	// sequence (panereply.MeasuredTabbedShape) whose texts and labels are usable.
 	Tabbed bool
 }
 
@@ -82,7 +82,7 @@ func tabbedReplyable(p domain.QuestionPayload) bool {
 		return false
 	}
 	qs := tabbedQuestions(p)
-	if !session.MeasuredTabbedShape(qs) {
+	if !panereply.MeasuredTabbedShape(qs) {
 		return false
 	}
 	for _, q := range qs {

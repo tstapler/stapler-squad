@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,8 +20,8 @@ type markStartedRecorder struct {
 	reasons []string
 }
 
-func (r *markStartedRecorder) OnLifecycleEvent(event LifecycleEvent, reason string) {
-	if event != EventStarted {
+func (r *markStartedRecorder) OnLifecycleEvent(event domain.LifecycleEvent, reason string) {
+	if event != domain.EventStarted {
 		return
 	}
 	r.mu.Lock()
@@ -43,7 +45,7 @@ func (r *markStartedRecorder) count() int {
 // #1 and #4 from the PR #693 review).
 func TestMarkStartedIfTmuxAlive_should_TransitionCreatingToActiveAndFireEvent_When_StartedIsFalse(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-mark-started-creating", Status: Creating}
+	inst := &Instance{Title: "test-mark-started-creating", Status: domain.Creating}
 	recorder := &markStartedRecorder{}
 	inst.RegisterLifecycleListener(recorder)
 
@@ -52,7 +54,7 @@ func TestMarkStartedIfTmuxAlive_should_TransitionCreatingToActiveAndFireEvent_Wh
 	inst.MarkStartedIfTmuxAlive()
 
 	assert.True(t, inst.Started(), "started must be flipped to true")
-	assert.Equal(t, Active, inst.Status, "Status must be transitioned to Active alongside started, not left at Creating")
+	assert.Equal(t, domain.Active, inst.Status, "Status must be transitioned to Active alongside started, not left at Creating")
 	assert.Equal(t, 1, recorder.count(), "EventStarted must fire exactly once so backlog lifecycle / notification listeners observe the self-healed start")
 }
 
@@ -62,14 +64,14 @@ func TestMarkStartedIfTmuxAlive_should_TransitionCreatingToActiveAndFireEvent_Wh
 // this is genuinely the first time Started() flips true for this run.
 func TestMarkStartedIfTmuxAlive_should_OnlySetStarted_When_AlreadyActive(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-mark-started-active", Status: Active}
+	inst := &Instance{Title: "test-mark-started-active", Status: domain.Active}
 	recorder := &markStartedRecorder{}
 	inst.RegisterLifecycleListener(recorder)
 
 	inst.MarkStartedIfTmuxAlive()
 
 	assert.True(t, inst.Started())
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.Equal(t, 1, recorder.count())
 }
 
@@ -79,7 +81,7 @@ func TestMarkStartedIfTmuxAlive_should_OnlySetStarted_When_AlreadyActive(t *test
 // by the time this is invoked).
 func TestMarkStartedIfTmuxAlive_should_BeNoOp_When_AlreadyStarted(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-mark-started-noop", Status: Active}
+	inst := &Instance{Title: "test-mark-started-noop", Status: domain.Active}
 	inst.started.Store(true)
 	recorder := &markStartedRecorder{}
 	inst.RegisterLifecycleListener(recorder)
@@ -87,7 +89,7 @@ func TestMarkStartedIfTmuxAlive_should_BeNoOp_When_AlreadyStarted(t *testing.T) 
 	inst.MarkStartedIfTmuxAlive()
 
 	assert.True(t, inst.Started())
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.Equal(t, 0, recorder.count(), "must not re-fire EventStarted when started was already true")
 }
 
@@ -98,7 +100,7 @@ func TestMarkStartedIfTmuxAlive_should_BeNoOp_When_AlreadyStarted(t *testing.T) 
 // happens to still be alive underneath it.
 func TestMarkStartedIfTmuxAlive_should_NotOverride_When_StatusIsPausedStoppedOrPermanentlyFailed(t *testing.T) {
 	t.Parallel()
-	statuses := []Status{Paused, Stopped, PermanentlyFailed, Hibernated, Crashed, Failed}
+	statuses := []domain.Status{domain.Paused, domain.Stopped, domain.PermanentlyFailed, domain.Hibernated, domain.Crashed, domain.Failed}
 	for _, status := range statuses {
 		status := status
 		t.Run(status.String(), func(t *testing.T) {
@@ -137,7 +139,7 @@ func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCal
 		Title:            title,
 		Path:             t.TempDir(),
 		Program:          "sleep 300",
-		SessionType:      SessionTypeDirectory,
+		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_markstarted_%d_", time.Now().UnixNano()),
 		TmuxServerSocket: coldRestoreSocket(t),
@@ -170,5 +172,5 @@ func TestMarkStartedIfTmuxAlive_should_SerializeWithConcurrentStart_When_BothCal
 	// method itself would have refused to produce, and never a torn
 	// combination where one write only partially applied.
 	require.True(t, li.Started(), "Start(true) must have completed to give this test something to serialize against")
-	assert.Equal(t, Active, li.GetLifecycleStatus(), "a started instance must land on Active, not a torn or refused Status")
+	assert.Equal(t, domain.Active, li.GetLifecycleStatus(), "a started instance must land on Active, not a torn or refused Status")
 }

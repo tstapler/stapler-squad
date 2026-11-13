@@ -11,6 +11,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func seedHiddenAndVisible(t *testing.T, fix *forkTestFixture, hidden, visible int) {
@@ -19,7 +20,7 @@ func seedHiddenAndVisible(t *testing.T, fix *forkTestFixture, hidden, visible in
 		fix.poller.AddInstance(&session.Instance{
 			Title:   fmt.Sprintf("hidden-%03d", i),
 			UUID:    fmt.Sprintf("a1000000-0000-0000-0000-%012d", i),
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 			Path:    "/tmp/test",
 			Hidden:  true,
@@ -29,7 +30,7 @@ func seedHiddenAndVisible(t *testing.T, fix *forkTestFixture, hidden, visible in
 		fix.poller.AddInstance(&session.Instance{
 			Title:   fmt.Sprintf("visible-%03d", i),
 			UUID:    fmt.Sprintf("b2000000-0000-0000-0000-%012d", i),
-			Status:  session.Active,
+			Status:  domain.Active,
 			Program: "claude",
 			Path:    "/tmp/test",
 		})

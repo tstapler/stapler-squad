@@ -20,21 +20,22 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // --- Task 1.5.9c: the four mode flags, read by the production class reader -------
 
 // clsModeProbe is one class's view of the selector and what it can observe.
 type clsModeProbe struct {
-	class  session.CallerClass
-	caller session.TransitionCaller
+	class  domain.CallerClass
+	caller domain.TransitionCaller
 	flag   string
 }
 
 var clsModeProbes = []clsModeProbe{
-	{session.ClassOperator, session.CallerOperatorTransitionRPC, config.WorkflowEngineEnforceFeatureFlag},
-	{session.ClassAgent, session.CallerMCPResumeWork, config.WorkflowEngineEnforceAgentFeatureFlag},
-	{session.ClassSystem, session.CallerAutonomousComplete, config.WorkflowEngineEnforceSystemFeatureFlag},
+	{domain.ClassOperator, domain.CallerOperatorTransitionRPC, config.WorkflowEngineEnforceFeatureFlag},
+	{domain.ClassAgent, domain.CallerMCPResumeWork, config.WorkflowEngineEnforceAgentFeatureFlag},
+	{domain.ClassSystem, domain.CallerAutonomousComplete, config.WorkflowEngineEnforceSystemFeatureFlag},
 }
 
 // clsSelector builds a selector over the production per-class reader after the
@@ -62,13 +63,13 @@ func clsSelector(t *testing.T, set map[string]bool, opts ...session.SelectorOpti
 // edge-less idea->done until its class enforces.
 func clsEnforced(t *testing.T, sel *session.SwitchableWorkflowEngine, p clsModeProbe) bool {
 	t.Helper()
-	spec, ok := session.LookupTransitionCaller(p.caller)
+	spec, ok := domain.LookupTransitionCaller(p.caller)
 	require.True(t, ok)
 	view := sel.ForCaller(spec)
-	if p.class == session.ClassOperator {
-		return view.CanTransition(session.BacklogStatusArchived, session.BacklogStatusArchived, nil)
+	if p.class == domain.ClassOperator {
+		return view.CanTransition(domain.BacklogStatusArchived, domain.BacklogStatusArchived, nil)
 	}
-	return !view.CanTransition(session.BacklogStatusIdea, session.BacklogStatusDone, nil)
+	return !view.CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusDone, nil)
 }
 
 func TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryClass(t *testing.T) {
@@ -77,9 +78,9 @@ func TestConfigSurfaceProof_WorkflowEngineShadowFlag_ChangesShadowCallsForEveryC
 		svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 			rec := &countingShadow{}
 			sel := clsSelector(t, map[string]bool{config.WorkflowEngineShadowFeatureFlag: setting.(bool)}, session.WithShadowRecorder(rec))
-			spec, ok := session.LookupTransitionCaller(p.caller)
+			spec, ok := domain.LookupTransitionCaller(p.caller)
 			require.True(t, ok)
-			sel.ForCaller(spec).CanTransition(session.BacklogStatusIdea, session.BacklogStatusReady, nil)
+			sel.ForCaller(spec).CanTransition(domain.BacklogStatusIdea, domain.BacklogStatusReady, nil)
 			return rec.calls.Load() > 0
 		}, false, true)
 	}

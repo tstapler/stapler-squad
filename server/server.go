@@ -26,19 +26,22 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/debugseed"
 	"github.com/tstapler/stapler-squad/server/services/devtools"
 	"github.com/tstapler/stapler-squad/server/services/sessionbundle"
 	"github.com/tstapler/stapler-squad/server/services/wsconn"
 	"github.com/tstapler/stapler-squad/server/web"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/streamhub"
+	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
@@ -441,7 +444,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			notifStore.SetSessionExistenceLookup(buildSessionExistenceLookup(storage, srv.startedAt))
 
 			// Wire the notification decision lister into SessionSummaryGenerator now
-			// that notifStore exists — session/session_summary_service.go's
+			// that notifStore exists — session/summaries/session_summary_service.go's
 			// SetNotificationLister doc comment explains why this is late-bound rather
 			// than passed at construction (dependencies.go builds the generator before
 			// notifStore exists).
@@ -1239,7 +1242,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// `h.autoReopener != nil` guard would then read true, and calling
 	// AutoReopenAfterFailedReview would panic on the nil receiver instead of
 	// being skipped.
-	var autoReopener backlog.AutoReopenSpawner
+	var autoReopener reviewgate.AutoReopenSpawner
 	if deps.BacklogService != nil {
 		autoReopener = deps.BacklogService
 	}
@@ -1311,7 +1314,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// reconciler's real thresholds and the real WIP-cap spawn flow. Never
 	// registered outside that instance.
 	if os.Getenv("STAPLER_SQUAD_INSTANCE") == "e2e-local" && deps.Storage != nil {
-		backlogSeedHandler := services.NewBacklogDebugSeedHandler(deps.Storage)
+		backlogSeedHandler := debugseed.NewBacklogDebugSeedHandler(deps.Storage)
 		backlogSeedHandler.RegisterRoutes(srv.mux)
 		log.Info("Registered backlog debug seed handlers at /api/debug/backlog/seed-stuck, /api/debug/backlog/seed-queued, /api/debug/backlog/seed-headless-triage-session, /api/debug/backlog/seed-work-item-session, and /api/debug/backlog/seed-work-session-with-worktree (e2e-local only)")
 
@@ -2205,18 +2208,18 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 }
 
 // notificationDecisionListerAdapter adapts *notifications.NotificationHistoryStore.List
-// to session.NotificationDecisionLister, which BuildDecisionsSnapshot
-// (session/session_summary_snapshot.go) needs. session cannot import
+// to summaries.NotificationDecisionLister, which BuildDecisionsSnapshot
+// (session/summaries/session_summary_snapshot.go) needs. session cannot import
 // server/notifications directly (server/notifications -> server/events ->
-// pkg/events -> session is a real import cycle — see session.DecisionRecord's doc
+// pkg/events -> session is a real import cycle — see summaries.DecisionRecord's doc
 // comment), so this thin adapter lives here where both packages are already
 // imported.
 type notificationDecisionListerAdapter struct {
 	store *notifications.NotificationHistoryStore
 }
 
-// ListDecisionRecords implements session.NotificationDecisionLister.
-func (a *notificationDecisionListerAdapter) ListDecisionRecords(_ context.Context, sessionID string) ([]session.DecisionRecord, error) {
+// ListDecisionRecords implements summaries.NotificationDecisionLister.
+func (a *notificationDecisionListerAdapter) ListDecisionRecords(_ context.Context, sessionID string) ([]summaries.DecisionRecord, error) {
 	records, _, err := a.store.List(notifications.ListOptions{
 		SessionID: sessionID,
 		Limit:     notifications.MaxNotifications, // unpaginated — need every record for this session
@@ -2224,9 +2227,9 @@ func (a *notificationDecisionListerAdapter) ListDecisionRecords(_ context.Contex
 	if err != nil {
 		return nil, err
 	}
-	out := make([]session.DecisionRecord, len(records))
+	out := make([]summaries.DecisionRecord, len(records))
 	for i, r := range records {
-		out[i] = session.DecisionRecord{
+		out[i] = summaries.DecisionRecord{
 			NotificationType: r.NotificationType,
 			ApprovalDecision: r.Metadata["approval_decision"],
 		}
@@ -2239,7 +2242,7 @@ func (a *notificationDecisionListerAdapter) ListDecisionRecords(_ context.Contex
 // than in session, per this repo's interface-pollution convention, so a fake with
 // no real *session.Storage (and no ent-backed repository) can stand in for tests.
 type instanceDataLister interface {
-	ListInstanceData() ([]session.InstanceData, error)
+	ListInstanceData() ([]domain.InstanceData, error)
 }
 
 // pruneOrphanedMinUptime gates buildSessionExistenceLookup's returned func so a

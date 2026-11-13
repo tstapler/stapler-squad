@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -45,9 +46,9 @@ func TestDeleteSession_ShouldRemoveItsLinksAndTombstones_WhenSessionDeleted(t *t
 	ref := mustPRRef(t, "", "acme", "app", 12)
 	other := mustPRRef(t, "", "acme", "app", 13)
 
-	upsertLink(t, repo, SessionPROwner("uuid-del-1"), ref, AttachSourceManual)
-	upsertLink(t, repo, SessionPROwner("uuid-del-2"), ref, AttachSourceManual)
-	upsertLink(t, repo, ItemPROwner(itemID), ref, AttachSourceReportPRCreated)
+	upsertLink(t, repo, SessionPROwner("uuid-del-1"), ref, domain.AttachSourceManual)
+	upsertLink(t, repo, SessionPROwner("uuid-del-2"), ref, domain.AttachSourceManual)
+	upsertLink(t, repo, ItemPROwner(itemID), ref, domain.AttachSourceReportPRCreated)
 	_, err := repo.DeleteSessionPR(ctx, SessionPROwner("uuid-del-1"), other)
 	require.NoError(t, err)
 
@@ -72,8 +73,8 @@ func TestDeleteBacklogItem_ShouldRemoveItsLinksAndTombstones_WhenItemDeleted(t *
 	createLiveSession(t, repo, "gc-item-sess", "uuid-item-sess")
 	itemID := createLiveItem(t, repo, "gc-item-delete")
 	ref := mustPRRef(t, "", "acme", "app", 12)
-	upsertLink(t, repo, ItemPROwner(itemID), ref, AttachSourceManual)
-	upsertLink(t, repo, SessionPROwner("uuid-item-sess"), ref, AttachSourceManual)
+	upsertLink(t, repo, ItemPROwner(itemID), ref, domain.AttachSourceManual)
+	upsertLink(t, repo, SessionPROwner("uuid-item-sess"), ref, domain.AttachSourceManual)
 	_, err := repo.DeleteSessionPR(ctx, ItemPROwner(itemID), mustPRRef(t, "", "acme", "app", 14))
 	require.NoError(t, err)
 
@@ -99,12 +100,12 @@ func TestSessionPRLinkGC_ShouldCollectOnlyOrphansOlderThanGrace(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-48 * time.Hour)
 
-	ref := func(n int) PRRef { return mustPRRef(t, "", "acme", "app", n) }
-	upsertLink(t, repo, SessionPROwner("uuid-live"), ref(1), AttachSourceManual)       // owner exists
-	upsertLink(t, repo, ItemPROwner(liveItem), ref(2), AttachSourceManual)             // owner exists
-	upsertLink(t, repo, SessionPROwner("uuid-gone-old"), ref(3), AttachSourceBackfill) // orphan, old
-	upsertLink(t, repo, SessionPROwner("uuid-gone-new"), ref(4), AttachSourceBackfill) // orphan, young
-	upsertLink(t, repo, ItemPROwner("11111111-1111-1111-1111-111111111111"), ref(5), AttachSourceJules)
+	ref := func(n int) domain.PRRef { return mustPRRef(t, "", "acme", "app", n) }
+	upsertLink(t, repo, SessionPROwner("uuid-live"), ref(1), domain.AttachSourceManual)       // owner exists
+	upsertLink(t, repo, ItemPROwner(liveItem), ref(2), domain.AttachSourceManual)             // owner exists
+	upsertLink(t, repo, SessionPROwner("uuid-gone-old"), ref(3), domain.AttachSourceBackfill) // orphan, old
+	upsertLink(t, repo, SessionPROwner("uuid-gone-new"), ref(4), domain.AttachSourceBackfill) // orphan, young
+	upsertLink(t, repo, ItemPROwner("11111111-1111-1111-1111-111111111111"), ref(5), domain.AttachSourceJules)
 	_, err := repo.DeleteSessionPR(ctx, SessionPROwner("uuid-gone-old"), ref(6)) // orphan tombstone, old
 	require.NoError(t, err)
 	_, err = repo.DeleteSessionPR(ctx, SessionPROwner("uuid-gone-new"), ref(7)) // orphan tombstone, young
@@ -142,14 +143,14 @@ func TestSessionPRLinkGC_ShouldKeepStateRow_WhenEnsureStateAndLinkInterleaveWith
 	ref := mustPRRef(t, "", "acme", "app", 21)
 
 	// An attach has run EnsureState (young row, no link yet) when the GC fires.
-	_, err := repo.EnsureState(ctx, ref, PRInitial{})
+	_, err := repo.EnsureState(ctx, ref, domain.PRInitial{})
 	require.NoError(t, err)
 	res, err := repo.RunSessionPRLinkGC(ctx, now)
 	require.NoError(t, err)
 	assert.Equal(t, 0, res.States, "a state younger than the grace is never collected")
 
 	// The link insert that follows finds its state row intact.
-	got := upsertLink(t, repo, SessionPROwner("uuid-attach"), ref, AttachSourceManual)
+	got := upsertLink(t, repo, SessionPROwner("uuid-attach"), ref, domain.AttachSourceManual)
 	assert.True(t, got.Created)
 	assert.Equal(t, 1, countStates(t, repo))
 
@@ -163,7 +164,7 @@ func TestSessionPRLinkGC_ShouldKeepStateRow_WhenEnsureStateAndLinkInterleaveWith
 func TestSessionPRLinkGC_ShouldCollectOnlyWhenFlagOn_AndStopOnCancel(t *testing.T) {
 	t.Parallel()
 	repo := newPRRepo(t)
-	upsertLink(t, repo, SessionPROwner("uuid-gone"), mustPRRef(t, "", "acme", "app", 1), AttachSourceBackfill)
+	upsertLink(t, repo, SessionPROwner("uuid-gone"), mustPRRef(t, "", "acme", "app", 1), domain.AttachSourceBackfill)
 	backdate(t, repo, "session_prs", "attached_at", "session_uuid = ?", time.Now().Add(-48*time.Hour), "uuid-gone")
 
 	var on atomic.Bool

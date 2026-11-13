@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
@@ -37,11 +38,11 @@ func TestBacklogStatusEvent_should_RenderOriginalStageName_When_ReferencedCustom
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item entering a custom stage",
-		Status: string(BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("design-review"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("design-review"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	// The custom stage is later deleted — e.g. an operator removing a
@@ -91,7 +92,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnSortedEnabledDestination
 	_, err = client.StageTransition.Create().SetFromStageID(fromStage.ID).SetToStageID(toDisabledEdge.ID).SetEnabled(false).Save(ctx)
 	require.NoError(t, err)
 
-	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("triage"))
+	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, domain.BacklogStatus("triage"))
 	require.Equal(t, []string{"triage-a", "triage-b"}, got)
 }
 
@@ -107,7 +108,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnEmptyNonNilSlice_When_St
 	_, err := client.BacklogStage.Create().SetSlug("dead-end").SetName("Dead End").SetEnabled(true).Save(ctx)
 	require.NoError(t, err)
 
-	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("dead-end"))
+	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, domain.BacklogStatus("dead-end"))
 	require.NotNil(t, got, "a stage with zero outgoing transitions must still resolve to an empty slice, not nil")
 	require.Empty(t, got)
 }
@@ -122,7 +123,7 @@ func TestResolveAllowedTransitionsSnapshot_should_ReturnNil_When_NoMatchingBackl
 	ctx := context.Background()
 	client := repo.Client
 
-	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, BacklogStatus("no-such-slug"))
+	_, got := resolveStageSnapshotFields(ctx, client.BacklogStage, client.StageTransition, domain.BacklogStatus("no-such-slug"))
 	require.Nil(t, got)
 }
 
@@ -145,20 +146,20 @@ func TestBuildStageConfigSnapshotFallback_should_ReconstructSnapshotFromMostRece
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item entering review-a",
-		Status: string(BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
-	fallback := BuildStageConfigSnapshotFallback(reloaded)
+	fallback := backlogdto.BuildStageConfigSnapshotFallback(reloaded)
 	require.NotNil(t, fallback)
 	require.Equal(t, "Review A", fallback.StageName)
-	require.Equal(t, []BacklogStatus{BacklogStatus("review-b")}, fallback.AllowedTransitions)
+	require.Equal(t, []domain.BacklogStatus{domain.BacklogStatus("review-b")}, fallback.AllowedTransitions)
 }
 
 // TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_ItemHasTransitionedIntoSameStageTwice
@@ -184,19 +185,19 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "item entering review-a twice",
-		Status: string(BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	// First entry into review-a: captures the v1 graph (review-a -> review-b-v1).
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	// Force a measurable CreatedAt delta between the two matching events.
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	// Leave review-a, then change its outgoing graph before re-entering.
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatusIdea, nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusIdea, nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	_, err = client.StageTransition.UpdateOne(edgeV1).SetEnabled(false).Save(ctx)
@@ -209,16 +210,16 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnMostRecentEntry_When_Item
 	sessiontest.WaitForClockDelta(t, 10*time.Millisecond)
 
 	// Second entry into review-a: must capture the v2 graph (review-a -> review-b-v2).
-	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, BacklogStatus("review-a"), nil, TriggeredByUser)
+	_, err = repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatus("review-a"), nil, TriggeredByUser)
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
-	fallback := BuildStageConfigSnapshotFallback(reloaded)
+	fallback := backlogdto.BuildStageConfigSnapshotFallback(reloaded)
 	require.NotNil(t, fallback)
 	require.Equal(t, "Review A", fallback.StageName)
-	require.Equal(t, []BacklogStatus{BacklogStatus("review-b-v2")}, fallback.AllowedTransitions,
+	require.Equal(t, []domain.BacklogStatus{domain.BacklogStatus("review-b-v2")}, fallback.AllowedTransitions,
 		"fallback must reconstruct from the SECOND (most recent) entry into review-a, not the first")
 }
 
@@ -234,12 +235,12 @@ func TestBuildStageConfigSnapshotFallback_should_ReturnNil_When_NoStatusEventMat
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "fresh item, never transitioned",
-		Status: string(BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	reloaded, err := repo.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 
-	require.Nil(t, BuildStageConfigSnapshotFallback(reloaded))
+	require.Nil(t, backlogdto.BuildStageConfigSnapshotFallback(reloaded))
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 )
@@ -78,7 +79,7 @@ func TestDeepLinkResolver_should_ReturnLocalItemPayload_When_HostnameMatchesThis
 
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "deep link happy path",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
@@ -155,7 +156,7 @@ func TestDeepLinkResolver_should_Return404WithDeletedOrArchivedReason_When_ItemN
 	t.Run("deleted", func(t *testing.T) {
 		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "item to delete",
-			Status: string(session.BacklogStatusIdea),
+			Status: string(domain.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
 		require.NoError(t, storage.DeleteBacklogItem(ctx, item.ID))
@@ -178,7 +179,7 @@ func TestDeepLinkResolver_should_Return404WithDeletedOrArchivedReason_When_ItemN
 	t.Run("archived", func(t *testing.T) {
 		item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 			Title:  "item to archive",
-			Status: string(session.BacklogStatusIdea),
+			Status: string(domain.BacklogStatusIdea),
 		})
 		require.NoError(t, err)
 		_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredByUser, "")
@@ -305,20 +306,20 @@ func TestDeepLinkResolver_should_LogResolvedOrFailedEvent_When_EveryOutcomeReaso
 
 	localItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "logging happy path",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 
 	deletedItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "logging deleted",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.DeleteBacklogItem(ctx, deletedItem.ID))
 
 	archivedItem, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{
 		Title:  "logging archived",
-		Status: string(session.BacklogStatusIdea),
+		Status: string(domain.BacklogStatusIdea),
 	})
 	require.NoError(t, err)
 	_, err = storage.RawArchiveBacklogItem(ctx, archivedItem.ID, nil, session.TriggeredByUser, "")

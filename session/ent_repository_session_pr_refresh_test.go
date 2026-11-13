@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // A user refresh (PRSourceReconcilerRefresh) on an unverified-terminal row
@@ -15,17 +16,17 @@ import (
 func TestUpdatePullRequestState_ReconcilerRefreshOnUnverifiedTerminal(t *testing.T) {
 	t.Parallel()
 	later := prRepoT0.Add(time.Hour)
-	seed := func(t *testing.T, n int) (*EntRepository, PRRef) {
+	seed := func(t *testing.T, n int) (*EntRepository, domain.PRRef) {
 		repo := newPRRepo(t)
 		ref := mustPRRef(t, "", "acme", "app", n)
-		seedState(t, repo, ref, PRStateUnknown, true)
+		seedState(t, repo, ref, domain.PRStateUnknown, true)
 		setPolled(t, repo, ref, prRepoT0)
 		require.NoError(t, repo.Client.PullRequestState.Update().Where(refPredicate(ref)).
 			SetPollFailCount(4).SetFirstFailAt(prRepoT0.Add(-time.Hour)).SetPollError("network").Exec(context.Background()))
 		return repo, ref
 	}
 
-	for i, st := range []PRState{PRStateOpen, PRStateMerged, PRStateClosed} {
+	for i, st := range []domain.PRState{domain.PRStateOpen, domain.PRStateMerged, domain.PRStateClosed} {
 		t.Run("fetch "+string(st), func(t *testing.T) {
 			t.Parallel()
 			repo, ref := seed(t, i+1)

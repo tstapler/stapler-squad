@@ -31,6 +31,7 @@ go_library(
         "//executor",
         "//executor/safeexec",
         "//log",
+        "//session/domain",
         "//telemetry",
         "@com_github_gofrs_flock//:flock",
         "@com_github_google_uuid//:uuid",

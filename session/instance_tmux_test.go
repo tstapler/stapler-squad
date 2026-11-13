@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -39,7 +40,7 @@ func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
 	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false, existsNoCacheReturn: true}
 	inst := &Instance{
 		Title:          "t",
-		Status:         Creating,
+		Status:         domain.Creating,
 		processManager: NewTmuxBackend(mock),
 	}
 	// started deliberately left false: TmuxAlive() would report false here,
@@ -65,7 +66,7 @@ func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
 	mock := &mockTmuxManager{hasSessionReturn: false, existsNoCacheReturn: true}
 	inst := &Instance{
 		Title:          "t",
-		Status:         Creating,
+		Status:         domain.Creating,
 		processManager: NewTmuxBackend(mock),
 	}
 
@@ -96,7 +97,7 @@ func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T)
 		processManager: NewTmuxBackend(mock),
 		LaunchCommand:  "claude", // stale command baked in before the crash, with no --resume
 	}
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: uuid})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: uuid})
 
 	inst.initTmuxSession()
 
@@ -283,9 +284,9 @@ func TestIsPi(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.program, func(t *testing.T) {
 			t.Parallel()
-			got := isPi(tc.program)
+			got := IsPi(tc.program)
 			if got != tc.want {
-				t.Errorf("isPi(%q) = %v, want %v", tc.program, got, tc.want)
+				t.Errorf("IsPi(%q) = %v, want %v", tc.program, got, tc.want)
 			}
 		})
 	}
@@ -314,7 +315,7 @@ func wantPiStderrRedirect(t *testing.T, inst *Instance) string {
 
 func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &PiSessionData{SessionID: "abc123"}}}
+	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &domain.PiSessionData{SessionID: "abc123"}}}
 	got := inst.buildLaunchCommand("")
 	want := "pi --session 'abc123'" + wantPiStderrRedirect(t, inst)
 	if got != want {

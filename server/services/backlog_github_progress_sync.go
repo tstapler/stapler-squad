@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -62,7 +63,7 @@ func StartBacklogGitHubProgressSyncSubscriber(ctx context.Context, bus *events.E
 				if payload == nil || payload.Kind != events.BacklogChangeStatusTransition {
 					continue
 				}
-				if payload.NewStatus != string(session.BacklogStatusInProgress) && payload.NewStatus != string(session.BacklogStatusReview) {
+				if payload.NewStatus != string(domain.BacklogStatusInProgress) && payload.NewStatus != string(domain.BacklogStatusReview) {
 					continue
 				}
 				if !flagEnabled() {
@@ -98,9 +99,9 @@ func handleProgressComment(ctx context.Context, registry *session.PluginRegistry
 
 	var body string
 	switch newStatus {
-	case string(session.BacklogStatusInProgress):
+	case string(domain.BacklogStatusInProgress):
 		body = progressStartedComment(current.ClaimingHostID)
-	case string(session.BacklogStatusReview):
+	case string(domain.BacklogStatusReview):
 		urls := progressPRLines(ctx, storage, current)
 		if len(urls) == 0 {
 			return
@@ -138,7 +139,7 @@ func progressCommentAlreadyPosted(lastPosted, newStatus string) bool {
 	if lastPosted == "" {
 		return false
 	}
-	return newStatus == string(session.BacklogStatusInProgress) || lastPosted == newStatus
+	return newStatus == string(domain.BacklogStatusInProgress) || lastPosted == newStatus
 }
 
 // progressCommentTimeout bounds the network I/O done on the subscriber goroutine.
@@ -147,7 +148,7 @@ const progressCommentTimeout = 15 * time.Second
 // progressPR is one PR to name in the review comment.
 type progressPR struct {
 	URL   string
-	State session.PRState
+	State domain.PRState
 }
 
 // progressPRLines lists every PR of the item's set when reader:backlog is on;
@@ -198,7 +199,7 @@ func progressReviewComments(prs []progressPR) string {
 		}
 		state := string(pr.State)
 		if state == "" {
-			state = string(session.PRStateUnknown)
+			state = string(domain.PRStateUnknown)
 		}
 		lines = append(lines, fmt.Sprintf("- %s (%s)", pr.URL, state))
 	}

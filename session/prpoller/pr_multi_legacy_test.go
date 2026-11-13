@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Characterization tests of today's single-PR behavior (session-multi-pr-tracking
@@ -50,7 +51,7 @@ func TestLegacyPoller_TerminalSession_MakesNoGitHubCalls(t *testing.T) {
 			t.Parallel()
 			inst := &session.Instance{
 				Title:                  "legacy-terminal-" + tt.name,
-				Status:                 session.Active,
+				Status:                 domain.Active,
 				GitHubOwner:            "acme",
 				GitHubRepo:             "app",
 				GitHubPRNumber:         11,
@@ -80,7 +81,7 @@ func TestLegacyPoller_ActivePRMerged_KeepsTerminalThroughSnapshot(t *testing.T) 
 	p, _ := newRowPoller(t, client)
 	p.refresherOn = func() bool { return false }
 	inst := newTwoPRInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	p.SetInstances([]*session.Instance{inst})
 
 	p.checkAllSessions()
@@ -89,7 +90,7 @@ func TestLegacyPoller_ActivePRMerged_KeepsTerminalThroughSnapshot(t *testing.T) 
 	if !snap.GitHubPRStatusTerminal {
 		t.Error("terminal flag lost: the projection overwrote the legacy observation")
 	}
-	if got := snap.PRs[1].State; got != session.PRStateMerged {
+	if got := snap.PRs[1].State; got != domain.PRStateMerged {
 		t.Errorf("active PR view state = %q, want merged", got)
 	}
 }
@@ -103,23 +104,23 @@ func TestRefresher_ShouldMarkRowsTerminal_WhenAllScopesOff(t *testing.T) {
 	p, storage := newRowPoller(t, client)
 
 	inst := newTwoPRInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	suspended := newPRTestInstance(t)
-	suspended.UUID, suspended.Title, suspended.Status = "u-suspended", "suspended", session.Paused
-	require.NoError(t, suspended.AttachPR(prRefN(t, 50), session.AttachSourceCreatedFromURL, session.PRInitial{State: session.PRStateOpen}))
+	suspended.UUID, suspended.Title, suspended.Status = "u-suspended", "suspended", domain.Paused
+	require.NoError(t, suspended.AttachPR(prRefN(t, 50), domain.AttachSourceCreatedFromURL, domain.PRInitial{State: domain.PRStateOpen}))
 	p.SetInstances([]*session.Instance{inst, suspended})
 
 	// #11 is a non-active PR of inst (seeded open here), #40 is item-only, #50 belongs to a suspended session.
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 11), session.PRInitial{State: session.PRStateOpen})
-	seedStateRow(t, storage.Repo, session.ItemPROwner("item-1"), prRefN(t, 40), session.PRInitial{State: session.PRStateOpen})
-	seedStateRow(t, storage.Repo, session.SessionPROwner("u-suspended"), prRefN(t, 50), session.PRInitial{State: session.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 11), domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.ItemPROwner("item-1"), prRefN(t, 40), domain.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.SessionPROwner("u-suspended"), prRefN(t, 50), domain.PRInitial{State: domain.PRStateOpen})
 	beforeInst, beforeSuspended := inst.Snapshot().GitHub, suspended.Snapshot().GitHub
 
 	p.checkAllSessions()
 
 	for _, n := range []int{11, 40, 50} {
 		got := rowOf(t, storage, n)
-		assert.Equal(t, session.PRStateMerged, got.State, "#%d", n)
+		assert.Equal(t, domain.PRStateMerged, got.State, "#%d", n)
 		assert.True(t, got.Terminal(), "#%d", n)
 	}
 	assert.Equal(t, beforeInst.PRs[0], inst.Snapshot().GitHub.PRs[0], "the refresher drives no snapshots (only the legacy loop touches its active #12)")
@@ -132,7 +133,7 @@ func TestRefresher_ShouldMakeNoCalls_WhenRefresherOffScopeSet(t *testing.T) {
 	p, storage := newRowPoller(t, client)
 	on := false
 	p.refresherOn = func() bool { return on }
-	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
 	assert.Equal(t, 0, client.callsFor(12), "kill switch: zero GitHub calls")
@@ -149,9 +150,9 @@ func TestRefresher_ShouldBoundFetchesToTwoPerPR_WhenLegacyLoopAlsoRuns(t *testin
 	client := &recordingPRClient{}
 	p, storage := newRowPoller(t, client)
 	inst := newPRTestInstance(t)
-	inst.Status = session.Active
-	require.NoError(t, inst.AttachPR(prRefN(t, 12), session.AttachSourceBranchDiscovery, session.PRInitial{State: session.PRStateOpen}))
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen})
+	inst.Status = domain.Active
+	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 	p.SetInstances([]*session.Instance{inst})
 
 	p.checkAllSessions()

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/panereply"
 )
 
 const mirrorSession = "7c1e0000-0000-4000-8000-0000000000aa"
@@ -214,10 +215,10 @@ func TestRehydrate_should_RestoreReplyableRows_AndFailClosedOnADifferentDialog(t
 
 	q, found := restarted.Peek(QuestionKey{SessionUUID: mirrorSession, QuestionID: id})
 	require.True(t, found, "the card's question id is the row id")
-	assert.True(t, session.DialogMatch(string(frame), q.Dialog), "the same dialog still verifies")
+	assert.True(t, panereply.DialogMatch(string(frame), q.Dialog), "the same dialog still verifies")
 	other, err := os.ReadFile("../../session/testdata/reply_dialogs/question_wrapped_2opts.txt")
 	require.NoError(t, err)
-	assert.False(t, session.DialogMatch(string(other), q.Dialog), "a different dialog on screen: DialogMatch fails, so nothing is written")
+	assert.False(t, panereply.DialogMatch(string(other), q.Dialog), "a different dialog on screen: DialogMatch fails, so nothing is written")
 }
 
 func TestEnsureRegistered_should_ReRegisterAnOpenRow_AfterTheCacheTTL(t *testing.T) {

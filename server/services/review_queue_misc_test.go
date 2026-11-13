@@ -7,7 +7,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // --------------------------------------------------------------------------
@@ -36,11 +36,11 @@ func TestGetReviewQueue_WithItems(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	// Add an item directly to the underlying queue.
-	rqs.reviewQueue.Add(&session.ReviewItem{
+	rqs.reviewQueue.Add(&queue.ReviewItem{
 		SessionID:   "sess-abc",
 		SessionName: "my-session",
-		Reason:      session.ReasonIdle,
-		Priority:    session.PriorityLow,
+		Reason:      queue.ReasonIdle,
+		Priority:    queue.PriorityLow,
 	})
 
 	resp, err := rqs.GetReviewQueue(context.Background(), connect.NewRequest(&sessionv1.GetReviewQueueRequest{}))

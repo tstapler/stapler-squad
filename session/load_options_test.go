@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestGetWithOptions verifies that GetWithOptions respects LoadOptions: core
@@ -30,27 +31,27 @@ func TestSelectiveLoading(t *testing.T) {
 
 	ctx := context.Background()
 
-	testData := InstanceData{
+	testData := domain.InstanceData{
 		Title:      "test-session",
 		Path:       "/tmp/test",
 		WorkingDir: "/tmp/test",
 		Branch:     "main",
-		Status:     Ready,
+		Status:     domain.Active,
 		Program:    "claude",
-		Worktree: GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      "/tmp/repo",
 			WorktreePath:  "/tmp/worktree",
 			SessionName:   "test-session",
 			BranchName:    "feature",
 			BaseCommitSHA: "abc123",
 		},
-		DiffStats: DiffStatsData{
+		DiffStats: domain.DiffStatsData{
 			Added:   100,
 			Removed: 50,
 			Content: "diff content for test",
 		},
 		Tags: []string{"Frontend", "Urgent"},
-		ClaudeSession: ClaudeSessionData{
+		ClaudeSession: domain.ClaudeSessionData{
 			ConversationUUID: "claude-123",
 			SquadSessionID:   "conv-456",
 			ProjectName:      "my-project",
@@ -78,7 +79,7 @@ func TestSelectiveLoading(t *testing.T) {
 			// Core fields are always populated regardless of LoadOptions.
 			assert.Equal(t, "test-session", session.Title)
 			assert.Equal(t, "/tmp/test", session.Path)
-			assert.Equal(t, Ready, session.Status)
+			assert.Equal(t, domain.Active, session.Status)
 
 			// Child-relation fields are only populated when their gating
 			// LoadOptions flag is set — see applyLoadOptions.
@@ -156,14 +157,14 @@ func BenchmarkSelectiveLoading(b *testing.B) {
 		largeDiff[i] = 'x'
 	}
 
-	testData := InstanceData{
+	testData := domain.InstanceData{
 		Title:      "bench-session",
 		Path:       "/tmp/test",
 		WorkingDir: "/tmp/test",
 		Branch:     "main",
-		Status:     Ready,
+		Status:     domain.Active,
 		Program:    "claude",
-		DiffStats: DiffStatsData{
+		DiffStats: domain.DiffStatsData{
 			Added:   5000,
 			Removed: 3000,
 			Content: string(largeDiff),

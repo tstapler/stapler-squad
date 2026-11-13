@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +31,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 			Title:            "test-session-no-hang",
 			Path:             tempDir,
 			Program:          "bash -c 'echo test session created; sleep 1'",
-			SessionType:      SessionTypeDirectory,
+			SessionType:      domain.SessionTypeDirectory,
 			AutoYes:          true,
 			TmuxServerSocket: testTmuxSocket(t),
 		})
@@ -61,7 +63,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		}()
 
 		// Verify the session is running
-		assert.Equal(t, Running, instance.Status)
+		assert.Equal(t, domain.Active, instance.Status)
 		t.Logf("✓ Session created successfully in %v", elapsed)
 	})
 
@@ -72,7 +74,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 			Title:            "test-claude-session",
 			Path:             tempDir,
 			Program:          "bash -c 'echo \"Starting claude session\"; sleep 1; echo \"Ready\"'",
-			SessionType:      SessionTypeDirectory,
+			SessionType:      domain.SessionTypeDirectory,
 			AutoYes:          true,
 			TmuxServerSocket: testTmuxSocket(t),
 		})
@@ -99,7 +101,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 			}
 		}()
 
-		assert.Equal(t, Running, instance.Status)
+		assert.Equal(t, domain.Active, instance.Status)
 		t.Logf("✓ Claude session created successfully in %v", elapsed)
 	})
 }
@@ -148,7 +150,7 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 				Title:            "test-" + strings.ToLower(tc.name) + "-real",
 				Path:             tempDir,
 				Program:          tc.program,
-				SessionType:      SessionTypeDirectory,
+				SessionType:      domain.SessionTypeDirectory,
 				AutoYes:          true,
 				TmuxServerSocket: testTmuxSocket(t),
 			})
@@ -176,7 +178,7 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 				}
 			}()
 
-			assert.Equal(t, Running, instance.Status)
+			assert.Equal(t, domain.Active, instance.Status)
 			t.Logf("✓ %s session created successfully in %v", tc.name, elapsed)
 		})
 	}
@@ -195,7 +197,7 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 		Title:            "test-worktree-session",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd; echo Worktree session ready; sleep 1'",
-		SessionType:      SessionTypeNewWorktree,
+		SessionType:      domain.SessionTypeNewWorktree,
 		AutoYes:          true,
 		TmuxServerSocket: testTmuxSocket(t),
 	})
@@ -221,7 +223,7 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 		}
 	}()
 
-	assert.Equal(t, Running, instance.Status)
+	assert.Equal(t, domain.Active, instance.Status)
 
 	// Verify worktree was created
 	gitWorktree, err := instance.GetGitWorktree()

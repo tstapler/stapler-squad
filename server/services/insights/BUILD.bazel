@@ -1,0 +1,66 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//tools/bzl:go_test.bzl", "go_test")
+
+go_library(
+    name = "insights",
+    srcs = [
+        "insights_backfill.go",
+        "insights_service.go",
+        "insights_session_meta_cache.go",
+        "insights_summary_aggregate.go",
+        "insights_summary_cache.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/services/insights",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//proto/session/v1:sessionv1_go",
+        "//proto/session/v1:sessionv1connect_go",
+        "//server/services/internal/streammetrics",
+        "//session",
+        "//session/contexthistory",
+        "//session/domain/backlogdto",
+        "//session/tokens",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+        "@org_golang_x_sync//singleflight",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":insights",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "insights_test",
+    srcs = [
+        "insights_backfill_test.go",
+        "insights_context_history_test.go",
+        "insights_service_test.go",
+        "insights_session_meta_cache_test.go",
+        "insights_summary_bench_test.go",
+        "insights_summary_cache_test.go",
+    ],
+    data = ["//session/tokens:testdata"],
+    embed = [":insights"],
+    deps = [
+        "//proto/session/v1:sessionv1_go",
+        "//server/services/internal/svctest",
+        "//session",
+        "//session/contexthistory",
+        "//session/domain",
+        "//session/domain/backlogdto",
+        "//session/tokens",
+        "//testutil/wait",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

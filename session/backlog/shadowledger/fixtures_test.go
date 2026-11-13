@@ -40,7 +40,7 @@ type selectorHarness struct {
 	client *ent.Client
 }
 
-func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, enabled bool) {
+func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, enabled bool) {
 	t.Helper()
 	ctx := context.Background()
 	n, err := client.StageTransition.Update().
@@ -55,7 +55,7 @@ func setEdgeEnabled(t *testing.T, client *ent.Client, cfg *session.ConfiguredWor
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to session.BacklogStatus, kind session.GateKind, config map[string]interface{}) {
+func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.ConfiguredWorkflowEngine, from, to domain.BacklogStatus, kind domain.GateKind, config map[string]interface{}) {
 	t.Helper()
 	ctx := context.Background()
 	tr, err := client.StageTransition.Query().
@@ -73,12 +73,12 @@ func addGateToSeededEdge(t *testing.T, client *ent.Client, cfg *session.Configur
 	require.NoError(t, cfg.InvalidateCache(ctx))
 }
 
-func passingReviewItem() session.BacklogItemTransitionInput {
-	return session.BacklogItemTransitionInput{Status: session.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
+func passingReviewItem() domain.BacklogItemTransitionInput {
+	return domain.BacklogItemTransitionInput{Status: domain.BacklogStatusReview, OverallOutcome: domain.ReviewOutcomePass}
 }
 
-type classModes map[session.CallerClass]session.EngineMode
+type classModes map[domain.CallerClass]session.EngineMode
 
-func (c classModes) Mode() session.EngineMode { return c[session.ClassOperator] }
+func (c classModes) Mode() session.EngineMode { return c[domain.ClassOperator] }
 
-func (c classModes) ModeFor(k session.CallerClass) session.EngineMode { return c[k] }
+func (c classModes) ModeFor(k domain.CallerClass) session.EngineMode { return c[k] }
