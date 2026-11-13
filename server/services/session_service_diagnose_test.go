@@ -5,12 +5,36 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
+
+func TestResolveReviewTarget_ShouldRunInWorkWorktreeAndNameBranch_WhenWorktreeExists(t *testing.T) {
+	t.Parallel()
+	wtDir := t.TempDir()
+	got := resolveReviewTarget("/shared/repo", domain.GitWorktreeData{WorktreePath: wtDir, BranchName: "backlog/my-item", BaseCommitSHA: "abc123"})
+	assert.Equal(t, wtDir, got.Dir)
+	assert.Contains(t, got.Preamble, "abc123..backlog/my-item")
+}
+
+func TestResolveReviewTarget_ShouldForbidHEADAndNameBranch_WhenWorktreeGone(t *testing.T) {
+	t.Parallel()
+	got := resolveReviewTarget("/shared/repo", domain.GitWorktreeData{WorktreePath: filepath.Join(t.TempDir(), "gone"), BranchName: "backlog/my-item", BaseCommitSHA: "abc123"})
+	assert.Equal(t, "/shared/repo", got.Dir)
+	assert.Contains(t, got.Preamble, "abc123..backlog/my-item")
+	assert.Contains(t, got.Preamble, "NOT that branch")
+}
+
+func TestResolveReviewTarget_ShouldUseRepoPathWithoutPreamble_WhenNoBranchRecorded(t *testing.T) {
+	t.Parallel()
+	got := resolveReviewTarget("/shared/repo", domain.GitWorktreeData{})
+	assert.Equal(t, reviewTarget{Dir: "/shared/repo"}, got)
+}
 
 // T-IX-16 (index half): a hidden review/triage/diagnose spawn is resolvable by
 // the gate, with its kind, as soon as CreateDirectorySession returns.
@@ -91,4 +115,35 @@ func TestSpawnEntryPoints_ShouldIndexBeforeStart_WhenCreatingHiddenSessions(t *t
 	for name, seen := range spawners {
 		assert.True(t, seen, "%s not found in scanned files", name)
 	}
+}
+
+// Structural guard for the "review runs in the shared checkout" class: the review
+// spawn must take its directory from resolveReviewTarget, never item.RepoPath
+// directly (the shared checkout's HEAD is an arbitrary branch).
+func TestSpawnReviewSession_ShouldNotPassItemRepoPathToCreateDirectorySession(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "session_service_diagnose.go", nil, 0)
+	require.NoError(t, err)
+	found := false
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "SpawnReviewSession" {
+			continue
+		}
+		found = true
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "CreateDirectorySession" || len(call.Args) < 2 {
+				return true
+			}
+			if sel, ok := call.Args[1].(*ast.SelectorExpr); ok && sel.Sel.Name == "RepoPath" {
+				t.Errorf("SpawnReviewSession passes %s to CreateDirectorySession; use resolveReviewTarget", sel.Sel.Name)
+			}
+			return true
+		})
+	}
+	require.True(t, found, "SpawnReviewSession not found")
 }
