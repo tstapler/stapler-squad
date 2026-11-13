@@ -98,7 +98,7 @@ func TestGetPendingGates_should_ReturnPopulatedGateStatus_When_TransitionHasConf
 	gate, err := repo.CreateGate(ctx, session.GateCreateInput{
 		TransitionID: transition.ID,
 		Kind:         string(domain.GateKindStructural),
-		Config:       map[string]interface{}{"check_id": session.StructuralCheckACComplete},
+		Config:       map[string]interface{}{"check_id": domain.StructuralCheckACComplete},
 		Enabled:      true,
 	})
 	require.NoError(t, err)

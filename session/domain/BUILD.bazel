@@ -13,6 +13,7 @@ go_library(
         "errors.go",
         "gate_config.go",
         "gate_status.go",
+        "gate_structural.go",
         "github_host.go",
         "github_pr_items.go",
         "guidance_cancel_reason.go",

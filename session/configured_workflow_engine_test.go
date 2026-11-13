@@ -358,7 +358,7 @@ func newCustomTransitionWithGates(t *testing.T, client *ent.Client, engine *Conf
 		// default to the one pre-registered skill.
 		switch kind {
 		case domain.GateKindStructural:
-			c = c.SetConfig(map[string]interface{}{"check_id": StructuralCheckACComplete})
+			c = c.SetConfig(map[string]interface{}{"check_id": domain.StructuralCheckACComplete})
 		case domain.GateKindCustom:
 			c = c.SetConfig(map[string]interface{}{"skill": "review-feasibility"})
 		}

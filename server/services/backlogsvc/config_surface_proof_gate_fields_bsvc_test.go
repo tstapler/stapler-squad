@@ -14,9 +14,9 @@ import (
 
 const (
 	bkfCheckKey       = "check_id"
-	bkfCheckNoBlocker = session.StructuralCheckNoOpenBlockers
-	bkfCheckPRGreen   = session.StructuralCheckPRGreen
-	bkfCheckACDone    = session.StructuralCheckACComplete
+	bkfCheckNoBlocker = domain.StructuralCheckNoOpenBlockers
+	bkfCheckPRGreen   = domain.StructuralCheckPRGreen
+	bkfCheckACDone    = domain.StructuralCheckACComplete
 )
 
 // Text of the two denials the order proofs tell apart.

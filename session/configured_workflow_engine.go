@@ -589,7 +589,7 @@ func parseResolvedGateConfig(g resolvedGate) (domain.GateConfig, error) {
 // gate's configured check_id, recomputed fresh on every call.
 func evaluateStructuralGate(g resolvedGate, item BacklogItemTransitionInput) domain.GateStatus {
 	checkID, _ := g.Config["check_id"].(string)
-	result := evaluateStructuralCheck(checkID, item)
+	result := domain.EvaluateStructuralCheck(checkID, item)
 	return domain.GateStatus{
 		GateID:      g.ID.String(),
 		Kind:        domain.GateKindStructural,

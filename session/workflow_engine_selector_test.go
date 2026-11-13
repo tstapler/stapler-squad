@@ -129,7 +129,7 @@ func TestSwitchableWorkflowEngine_ShadowCountsGateExtra_WhenOperatorAddsStructur
 	t.Parallel()
 	h := newSeededSelectorHarness(t, ModeShadow)
 	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReady, BacklogStatusInProgress, domain.GateKindStructural,
-		map[string]interface{}{"check_id": StructuralCheckACComplete})
+		map[string]interface{}{"check_id": domain.StructuralCheckACComplete})
 	item := BacklogItemTransitionInput{Status: BacklogStatusReady, SkipPlanning: true, PlanArtifactsPath: "/plan"}
 	require.NoError(t, NewDefaultWorkflowEngine().ValidateGates(item, BacklogStatusInProgress, nil), "fixture: Default must pass")
 
@@ -623,7 +623,7 @@ func TestShadow_UncheckedCallerOperatorGate_IsGateExtraNotGuardNew(t *testing.T)
 	rec := newClassedShadow()
 	h := shadowAll(newSeededSelectorHarness(t, ModeShadow, WithShadowRecorder(rec)))
 	addGateToSeededEdge(t, h.client, h.cfg, BacklogStatusReady, BacklogStatusInProgress, domain.GateKindStructural,
-		map[string]interface{}{"check_id": StructuralCheckACComplete})
+		map[string]interface{}{"check_id": domain.StructuralCheckACComplete})
 	spec, _ := LookupTransitionCaller(CallerMCPResumeWork) // agent, unchecked, ready->in_progress, built-in guards
 	v := h.sel.ForCaller(spec)
 

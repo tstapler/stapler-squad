@@ -84,7 +84,7 @@ func TestShadowRecorder_ClassifiesDivergence_WhenGraphGateExtraErrorKindCacheEmp
 	rig := newShadowRig(t, session.ConfigEdited)
 	setEdgeEnabled(t, rig.h.client, rig.h.cfg, session.BacklogStatusDone, session.BacklogStatusRefining, false)
 	addGateToSeededEdge(t, rig.h.client, rig.h.cfg, session.BacklogStatusReady, session.BacklogStatusInProgress, domain.GateKindStructural,
-		map[string]interface{}{"check_id": session.StructuralCheckACComplete})
+		map[string]interface{}{"check_id": domain.StructuralCheckACComplete})
 
 	require.True(t, rig.sel.CanTransition(session.BacklogStatusDone, session.BacklogStatusRefining, nil), "shadow returns the Default answer")
 	item := session.BacklogItemTransitionInput{Status: session.BacklogStatusReady, SkipPlanning: true, PlanArtifactsPath: "/plan"}
