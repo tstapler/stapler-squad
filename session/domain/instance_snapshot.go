@@ -133,6 +133,17 @@ type InstanceSnapshot struct {
 	// 1.1.4/4.1) — see ToInstanceData/FromInstanceData for the persisted round trip.
 	CreationProgressUpdatedAt time.Time
 
+	// ExistingWorktree, ExtraArgs, LaunchCommand and CreationProgress mirror the
+	// Instance fields of the same name. ExtraArgs is a deep copy.
+	ExistingWorktree string
+	ExtraArgs        []string
+	LaunchCommand    string
+	CreationProgress string
+
+	// Retry is the automated retry lifecycle (RetryHistory deep-copied; the
+	// history is already capped at 10 entries by RetryState.RecordAttempt).
+	Retry RetryState
+
 	// LastMeaningfulChangeAt and TurnEnded mirror the Instance fields of the same name.
 	LastMeaningfulChangeAt time.Time
 	TurnEnded              TurnEnded

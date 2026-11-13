@@ -71,7 +71,7 @@ func TestStopByUser_should_RejectTransition_When_SessionIsRestoring(t *testing.T
 		Permissions: domain.GetManagedPermissions(),
 	}
 	inst.started.Store(true)
-	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+	inst.GitManager().SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
 	pm := &fakeStopByUserProcessManager{hasSession: true}
 	inst.processManager = pm

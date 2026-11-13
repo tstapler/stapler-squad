@@ -484,11 +484,11 @@ type Instance struct {
 	// etc. directly, mirroring ReviewState. Protected by mu.
 	domain.RetryState
 
-	// RetryPolicyOverride is a per-session override for the global
+	// retryPolicyOverride is a per-session override for the global
 	// RetryPolicyConfig default, resolved once (global (+) override) at
 	// StartSessionDriver via resolveRetryPolicy. Mirrors ReworkCapOverride's
 	// nil-means-inherit convention. Nil means "use the global default".
-	RetryPolicyOverride *config.RetryPolicyConfig `json:"retry_policy_override,omitempty"`
+	retryPolicyOverride *config.RetryPolicyConfig
 
 	// notifier delivers proactive notifications (e.g. a session giving up after
 	// exhausting its retry budget) independent of the passive ReviewQueue.
@@ -528,7 +528,7 @@ type Instance struct {
 	trustStoreMu         sync.Mutex
 	claudeTrustStoreImpl claudeTrustStore
 	// gitManager owns the git worktree and diff stats.
-	GitManager gitwt.Manager
+	gitManager gitwt.Manager
 	// vncManager owns the Xvfb + x11vnc lifecycle for this session.
 	// Always non-nil after NewInstance() — on unsupported platforms or missing deps,
 	// a no-op manager is returned. VNCManager() returns it for external access.
@@ -723,8 +723,8 @@ type Instance struct {
 	restartTriggerMu deadlock.Mutex
 
 	// lifecycleListeners receives EventStarted / EventExited notifications.
-	LifecycleListeners   []domain.LifecycleListener
-	LifecycleListenersMu deadlock.Mutex
+	lifecycleListeners   []domain.LifecycleListener
+	lifecycleListenersMu deadlock.Mutex
 
 	// rateLimitCallbacksMu protects the rate limit event callback fields below.
 	rateLimitCallbacksMu deadlock.Mutex
@@ -1575,8 +1575,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			workDir := i.Path
-			if i.GitManager.HasWorktree() {
-				workDir = i.GitManager.GetWorktreePath()
+			if i.gitManager.HasWorktree() {
+				workDir = i.gitManager.GetWorktreePath()
 			}
 			log.Info("restoring existing tmux session", "session", i.Title, "path", workDir)
 			if err := i.pm().RestoreWithWorkDir(workDir); err != nil {
@@ -1589,17 +1589,17 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
 		reviveOutcome = domain.ReviveOutcomeFreshExpected
 		basePath := i.Path
-		if i.GitManager.HasWorktree() {
+		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
 			if i.SessionType != domain.SessionTypeExistingWorktree {
 				log.Info("setting up git worktree", "session", i.Title)
-				if err := i.GitManager.Setup(); err != nil {
+				if err := i.gitManager.Setup(); err != nil {
 					log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
 					setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 					return setupErr
 				}
 			}
-			basePath = i.GitManager.GetWorktreePath()
+			basePath = i.gitManager.GetWorktreePath()
 		}
 
 		// Pre-spawn structural guard: a SessionTypeNewWorktree session whose
@@ -1612,7 +1612,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			return setupErr
 		}
 
-		if i.GitManager.HasWorktree() {
+		if i.gitManager.HasWorktree() {
 			// Per-path spawn reservation (Story 3.3.2c): closes the TOCTOU race between
 			// two concurrent CreateSession calls resolving the same worktree path before
 			// either has spawned -- claimed BEFORE the liveness-based collision guard
@@ -1676,8 +1676,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			i.allocateCDPPort()
 			i.applyLaunchEnv()
 			if err := i.pm().Start(startPath); err != nil {
-				if i.GitManager.HasWorktree() {
-					if cleanupErr := i.GitManager.Cleanup(); cleanupErr != nil {
+				if i.gitManager.HasWorktree() {
+					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 						err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 					}
 				}
@@ -1868,8 +1868,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// goroutine can connect to Chrome if it is already running.
 			i.allocateCDPPort()
 			workDir := i.Path
-			if i.GitManager.HasWorktree() {
-				workDir = i.GitManager.GetWorktreePath()
+			if i.gitManager.HasWorktree() {
+				workDir = i.gitManager.GetWorktreePath()
 			}
 			log.Info("restoring existing tmux session", "session", i.Title, "path", workDir)
 			if err := i.pm().RestoreWithWorkDir(workDir); err != nil {
@@ -1887,17 +1887,17 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// (repo-wide grep) — but a future production caller would bypass isolation
 		// safety entirely. Track consolidation under Epic 7.
 		basePath := i.Path
-		if i.GitManager.HasWorktree() {
+		if i.gitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
 			if i.SessionType != domain.SessionTypeExistingWorktree {
 				log.Info("setting up git worktree", "session", i.Title)
-				if err := i.GitManager.Setup(); err != nil {
+				if err := i.gitManager.Setup(); err != nil {
 					log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
 					setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 					return setupErr
 				}
 			}
-			basePath = i.GitManager.GetWorktreePath()
+			basePath = i.gitManager.GetWorktreePath()
 		}
 		// Build the launch command (and, for large prompts, write the temp file
 		// promptArg() arms a cleanup timer on) only now that worktree setup — an
@@ -1918,8 +1918,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		i.allocateCDPPort()
 		i.applyLaunchEnv()
 		if err := i.pm().Start(startPath); err != nil {
-			if i.GitManager.HasWorktree() {
-				if cleanupErr := i.GitManager.Cleanup(); cleanupErr != nil {
+			if i.gitManager.HasWorktree() {
+				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 				}
 			}
@@ -2015,7 +2015,7 @@ func (i *Instance) Kill() error {
 // uncommitted work: there is no worktree, it is gone from disk, or it is clean. It returns
 // ErrWorktreeDirty (or ErrDirtyStateUnknown when the check itself fails) otherwise.
 func (i *Instance) CheckWorktreeRemovable() error {
-	if !i.GitManager.HasWorktree() {
+	if !i.gitManager.HasWorktree() {
 		return nil // CleanupWorktree is a no-op without one
 	}
 	// Not worktreeNeedsCommit: its IsWorktree gate would let an attached worktree through
@@ -2025,7 +2025,7 @@ func (i *Instance) CheckWorktreeRemovable() error {
 		return err
 	}
 	if dirty {
-		return fmt.Errorf("%w: %s", ErrWorktreeDirty, i.GitManager.GetWorktreePath())
+		return fmt.Errorf("%w: %s", ErrWorktreeDirty, i.gitManager.GetWorktreePath())
 	}
 	return nil
 }
@@ -2173,7 +2173,7 @@ func (i *Instance) worktreeNeedsCommit() (bool, error) {
 	if !i.IsWorktree {
 		return false, nil
 	}
-	if !i.GitManager.HasWorktree() {
+	if !i.gitManager.HasWorktree() {
 		return false, fmt.Errorf("%w: git worktree not initialized", ErrDirtyStateUnknown)
 	}
 	return i.worktreeDirtyOnDisk()
@@ -2182,19 +2182,19 @@ func (i *Instance) worktreeNeedsCommit() (bool, error) {
 // worktreeDirtyOnDisk reports whether the attached worktree directory holds uncommitted
 // changes, bypassing IsDirty's TTL cache. Requires gitManager.HasWorktree().
 func (i *Instance) worktreeDirtyOnDisk() (bool, error) {
-	if _, err := os.Stat(i.GitManager.GetWorktreePath()); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(i.gitManager.GetWorktreePath()); errors.Is(err, os.ErrNotExist) {
 		return false, nil // nothing on disk to lose
 	} else if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
 	}
-	dirty, err := i.GitManager.IsDirtyUncached()
+	dirty, err := i.gitManager.IsDirtyUncached()
 	if err != nil {
 		return false, fmt.Errorf("%w: %w", ErrDirtyStateUnknown, err)
 	}
 	if dirty {
 		// CommitChanges gates on the cached IsDirty; a stale "clean" there would
 		// skip the commit and Remove() would then delete the files.
-		i.GitManager.InvalidateDirtyCache()
+		i.gitManager.InvalidateDirtyCache()
 	}
 	return dirty, nil
 }
@@ -2209,7 +2209,7 @@ func (i *Instance) commitBeforeRemove(commitMsg string) error {
 		return err
 	}
 	if needs {
-		if err := i.GitManager.CommitChanges(commitMsg); err != nil {
+		if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 			return fmt.Errorf("failed to commit changes: %w", err)
 		}
 	}
@@ -2254,7 +2254,7 @@ func pauseLocked(s *instanceState) error {
 	if i.IsWorktree {
 		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))
-			if err := i.GitManager.CommitChanges(commitMsg); err != nil {
+			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 				errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
 				log.Error("failed to commit changes on pause", "err", err)
 				return i.combineErrors(errs)
@@ -2273,18 +2273,18 @@ func pauseLocked(s *instanceState) error {
 
 	// Check if worktree exists before trying to remove it.
 	if i.IsWorktree {
-		if _, err := os.Stat(i.GitManager.GetWorktreePath()); err == nil {
+		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
 			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))); err != nil {
 				// Return err bare: combineErrors would flatten it and lose errors.Is.
 				log.Warn("aborting before worktree removal; worktree kept", "session", i.Title, "prior_errs", errs, "err", err)
 				return err
 			}
-			if err := i.GitManager.Remove(); err != nil {
+			if err := i.gitManager.Remove(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
 				log.Error("failed to remove git worktree", "err", err)
 				return i.combineErrors(errs)
 			}
-			if err := i.GitManager.Prune(); err != nil {
+			if err := i.gitManager.Prune(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
 				log.Error("failed to prune git worktrees", "err", err)
 				return i.combineErrors(errs)
@@ -2300,9 +2300,9 @@ func pauseLocked(s *instanceState) error {
 	if err := transitionToLocked(s, context.Background(), domain.Paused); err != nil {
 		return fmt.Errorf("failed to transition to Paused: %w", err)
 	}
-	i.GitManager.InvalidateDirtyCache()
+	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session paused")
-	_ = clipboard.WriteAll(i.GitManager.GetBranchName())
+	_ = clipboard.WriteAll(i.gitManager.GetBranchName())
 	return nil
 }
 
@@ -2318,9 +2318,9 @@ func (i *Instance) Resume() error {
 
 	// Setup git worktree if this session has one
 	var worktreePath string
-	if i.GitManager.HasWorktree() {
+	if i.gitManager.HasWorktree() {
 		// Check if branch is checked out
-		if checked, err := i.GitManager.IsBranchCheckedOut(); err != nil {
+		if checked, err := i.gitManager.IsBranchCheckedOut(); err != nil {
 			log.Error("failed to check if branch is checked out", "session", i.Title, "err", err)
 			return fmt.Errorf("failed to check if branch is checked out: %w", err)
 		} else if checked {
@@ -2328,13 +2328,13 @@ func (i *Instance) Resume() error {
 		}
 
 		// Setup git worktree
-		if err := i.GitManager.Setup(); err != nil {
+		if err := i.gitManager.Setup(); err != nil {
 			log.Error("failed to setup git worktree on resume", "err", err)
 			log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
 			return fmt.Errorf("failed to setup git worktree: %w", err)
 		}
 
-		worktreePath = i.GitManager.GetWorktreePath()
+		worktreePath = i.gitManager.GetWorktreePath()
 	} else {
 		// No git worktree, use the original path
 		worktreePath = i.Path
@@ -2355,8 +2355,8 @@ func (i *Instance) Resume() error {
 			if err := i.pm().Start(worktreePath); err != nil {
 				log.Error("failed to start new session after restore failure", "err", err)
 				// Cleanup git worktree if tmux session creation fails
-				if i.GitManager.HasWorktree() {
-					if cleanupErr := i.GitManager.Cleanup(); cleanupErr != nil {
+				if i.gitManager.HasWorktree() {
+					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 						err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 						log.Error("cleanup also failed", "err", err)
 					}
@@ -2382,8 +2382,8 @@ func (i *Instance) Resume() error {
 		if err := i.pm().Start(worktreePath); err != nil {
 			log.Error("failed to start new tmux session on resume", "err", err)
 			// Cleanup git worktree if tmux session creation fails
-			if i.GitManager.HasWorktree() {
-				if cleanupErr := i.GitManager.Cleanup(); cleanupErr != nil {
+			if i.gitManager.HasWorktree() {
+				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 					log.Error("cleanup also failed", "err", err)
 				}
@@ -2400,7 +2400,7 @@ func (i *Instance) Resume() error {
 	}
 	i.mu.Unlock()
 	i.started.Store(true)
-	i.GitManager.InvalidateDirtyCache()
+	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session resumed")
 
 	// Start claudectl.ClaudeController for idle detection and automation
@@ -2475,7 +2475,7 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	if i.IsWorktree && !keepWorktree {
 		if needsCommit {
 			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))
-			if err := i.GitManager.CommitChanges(commitMsg); err != nil {
+			if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to commit changes: %w", err)))
 			}
 		}
@@ -2488,16 +2488,16 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	}
 
 	if i.IsWorktree && !keepWorktree {
-		if _, err := os.Stat(i.GitManager.GetWorktreePath()); err == nil {
+		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
 			if err := i.commitBeforeRemove(fmt.Sprintf("[claudesquad] update from '%s' on %s (stopped)", i.Title, time.Now().Format(time.RFC822))); err != nil {
 				// Return err bare: combineErrors would flatten it and lose errors.Is.
 				log.Warn("aborting before worktree removal; worktree kept", "session", i.Title, "prior_errs", errs, "err", err)
 				return err
 			}
-			if err := i.GitManager.Remove(); err != nil {
+			if err := i.gitManager.Remove(); err != nil {
 				return i.combineErrors(append(errs, fmt.Errorf("failed to remove git worktree: %w", err)))
 			}
-			_ = i.GitManager.Prune()
+			_ = i.gitManager.Prune()
 		}
 	}
 
@@ -2510,7 +2510,7 @@ func stopByUserLocked(s *instanceState, force bool) error {
 		// keep the check as defense-in-depth against the two functions' logic diverging.
 		return fmt.Errorf("failed to transition to Stopped: %w", err)
 	}
-	i.GitManager.InvalidateDirtyCache()
+	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session stopped by user")
 	return nil
 }
@@ -2521,9 +2521,9 @@ func stopByUserLocked(s *instanceState, force bool) error {
 // one, so --resume with it would fail with "no conversation found").
 func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *string) (string, error) {
 	var worktreePath string
-	if i.GitManager.HasWorktree() {
+	if i.gitManager.HasWorktree() {
 		if waspaused {
-			if err := i.GitManager.Setup(); err != nil {
+			if err := i.gitManager.Setup(); err != nil {
 				return "", fmt.Errorf("failed to recreate worktree for paused session: %w", err)
 			}
 			*claudeSessionID = ""
@@ -2532,7 +2532,7 @@ func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *s
 				i.HistoryFilePath = ""
 			}
 		}
-		worktreePath = i.GitManager.GetWorktreePath()
+		worktreePath = i.gitManager.GetWorktreePath()
 	} else if i.SessionType == domain.SessionTypeExistingWorktree && i.ExistingWorktree != "" {
 		worktreePath = i.ExistingWorktree
 	} else {
@@ -2714,7 +2714,7 @@ func (i *Instance) restoreTerminalStatus(prev domain.Status) {
 // vanished from disk (see tmux.ErrWorkDirMissing); Start/Restart never do this on
 // their own, so a retry would otherwise fail identically forever.
 func (i *Instance) recreateWorktreeIfMissing() error {
-	if !i.GitManager.HasWorktree() {
+	if !i.gitManager.HasWorktree() {
 		return nil
 	}
 	workDir := i.GetEffectiveRootDir()
@@ -2724,7 +2724,7 @@ func (i *Instance) recreateWorktreeIfMissing() error {
 	if _, statErr := os.Stat(workDir); !errors.Is(statErr, os.ErrNotExist) {
 		return nil
 	}
-	if err := i.GitManager.Setup(); err != nil {
+	if err := i.gitManager.Setup(); err != nil {
 		return err
 	}
 	log.Info("recreated missing worktree", "session", i.Title, "path", workDir)

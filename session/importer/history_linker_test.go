@@ -308,7 +308,7 @@ func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.
 		Path:   repoPath,
 		Status: domain.Active,
 	}
-	inst.GitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+	inst.GitManager().SetWorktree(newTestGitWorktree(repoPath, worktreePath))
 
 	linker := NewHistoryLinker(detector, nil)
 	linker.correlateSession(inst, false)

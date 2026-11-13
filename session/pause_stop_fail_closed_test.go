@@ -27,7 +27,7 @@ func brokenWorktreeInstance(t *testing.T) (*Instance, string) {
 		Status:      domain.Active,
 		IsWorktree:  true,
 		Permissions: domain.GetManagedPermissions(),
-		GitManager: gitwt.Manager{
+		gitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), wtDir, "dirty-check-fails", "branch", ""),
 		},
 	}
@@ -69,15 +69,15 @@ func TestWorktreeNeedsCommit_should_PreserveUntrackedFile_When_WorktreeRemoved(t
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
 
-	inst := &Instance{IsWorktree: true, GitManager: gitwt.Manager{Worktree: wt}}
+	inst := &Instance{IsWorktree: true, gitManager: gitwt.Manager{Worktree: wt}}
 	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "untracked.txt"), []byte("keep me"), 0o644))
 
 	needs, err := inst.worktreeNeedsCommit()
 	require.NoError(t, err)
 	require.True(t, needs, "untracked file must count as uncommitted work")
 
-	require.NoError(t, inst.GitManager.CommitChanges("save"))
-	require.NoError(t, inst.GitManager.Remove())
+	require.NoError(t, inst.GitManager().CommitChanges("save"))
+	require.NoError(t, inst.GitManager().Remove())
 
 	repo, err := git.OpenRepo(repoPath)
 	require.NoError(t, err)
@@ -96,7 +96,7 @@ func TestWorktreeNeedsCommit_should_BeFalse_When_WorktreeDirMissing(t *testing.T
 	t.Parallel()
 	inst := &Instance{
 		IsWorktree: true,
-		GitManager: gitwt.Manager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
+		gitManager: gitwt.Manager{Worktree: git.NewGitWorktreeFromStorage(t.TempDir(), filepath.Join(t.TempDir(), "gone"), "s", "b", "")},
 	}
 
 	needs, err := inst.worktreeNeedsCommit()
@@ -115,9 +115,9 @@ func TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean(t *t
 	require.NoError(t, err)
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
-	inst := &Instance{IsWorktree: true, GitManager: gitwt.Manager{Worktree: wt}}
+	inst := &Instance{IsWorktree: true, gitManager: gitwt.Manager{Worktree: wt}}
 
-	dirty, err := inst.GitManager.IsDirty() // primes the clean cache
+	dirty, err := inst.GitManager().IsDirty() // primes the clean cache
 	require.NoError(t, err)
 	require.False(t, dirty)
 	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), "late.txt"), []byte("late"), 0o644))
@@ -125,7 +125,7 @@ func TestWorktreeNeedsCommit_should_ReachCommit_When_DirtyCacheIsStaleClean(t *t
 	needs, err := inst.worktreeNeedsCommit()
 	require.NoError(t, err)
 	require.True(t, needs)
-	require.NoError(t, inst.GitManager.CommitChanges("save"))
+	require.NoError(t, inst.GitManager().CommitChanges("save"))
 
 	repo, err := git.OpenRepo(repoPath)
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testin
 	inst := &Instance{
 		Title: "force-known-dirty", Status: domain.Active, IsWorktree: true,
 		Permissions: domain.GetManagedPermissions(),
-		GitManager:  gitwt.Manager{Worktree: wt},
+		gitManager:  gitwt.Manager{Worktree: wt},
 	}
 	inst.started.Store(true)
 	inst.processManager = &fakeStopByUserProcessManager{hasSession: true}

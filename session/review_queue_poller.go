@@ -216,7 +216,7 @@ func (rqp *ReviewQueuePoller) AddInstance(instance *Instance) {
 	defer rqp.mu.Unlock()
 	// Stagger this session's dirty-cache TTL so sessions added in a burst
 	// (e.g. bulk startup) don't all run git-status subprocesses simultaneously.
-	instance.GitManager.PrimeDirtyCacheJitter()
+	instance.GitManager().PrimeDirtyCacheJitter()
 	rqp.instances = append(rqp.instances, instance)
 }
 

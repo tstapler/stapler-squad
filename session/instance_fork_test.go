@@ -86,7 +86,7 @@ func TestForkFromCheckpoint_NoGitSHA_Succeeds(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, fork)
-	assert.False(t, fork.GitManager.HasWorktree(), "no git worktree should be created when SHA is empty")
+	assert.False(t, fork.gitManager.HasWorktree(), "no git worktree should be created when SHA is empty")
 }
 
 func TestForkFromCheckpoint_NoConvUUID_EmptyResumeId(t *testing.T) {

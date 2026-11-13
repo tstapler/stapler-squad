@@ -99,7 +99,7 @@ func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64
 	}
 
 	// Collect git SHA — gracefully empty if no worktree.
-	gitSHA, _ := i.GitManager.GetCurrentCommitSHA()
+	gitSHA, _ := i.gitManager.GetCurrentCommitSHA()
 
 	// Conversation UUID — empty if not yet linked.
 	convUUID := ""
@@ -262,13 +262,13 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 	}
 
 	// Attach a git worktree branched from the checkpoint SHA.
-	if i.GitManager.HasWorktree() && cp.GitCommitSHA != "" {
+	if i.gitManager.HasWorktree() && cp.GitCommitSHA != "" {
 		branchName := "fork/" + newTitle
 		wt, _, err := git.NewGitWorktreeFromCommitSHA(i.Path, newTitle, branchName, cp.GitCommitSHA)
 		if err != nil {
 			log.Warn("forkfromcheckpoint: skipping git worktree", "err", err)
 		} else {
-			newInst.GitManager.SetWorktree(wt)
+			newInst.gitManager.SetWorktree(wt)
 		}
 	}
 

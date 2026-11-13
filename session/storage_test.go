@@ -78,7 +78,7 @@ func TestCreateTestStorage_SecondConnectionSeesSameData(t *testing.T) {
 	// disk, since it returns non-nil whenever any of repoPath/worktreePath/
 	// branchName is non-empty.
 	inst := newTestInstance("shared-cache-visibility-test")
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/test", "/tmp/test", "shared-cache-visibility-test", "placeholder-branch",
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
@@ -684,7 +684,7 @@ func TestListSessionRecords_WhenSessionIsWorktree_ExpectPathIsResolvedWorktreeDi
 
 	inst := newTestInstance("worktree-session-records")
 	inst.UUID = "33333333-3333-3333-3333-333333333333"
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session-records", "worktree-session-records", "backlog/some-item", "abc123def")
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
 
@@ -899,7 +899,7 @@ func TestSaveInstances_WorktreeDataQueryableImmediately(t *testing.T) {
 
 	inst := newTestInstance("worktree-session")
 	inst.UUID = "11111111-1111-1111-1111-111111111111"
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/repo", "/repo/../worktrees/worktree-session", "worktree-session", "backlog/some-item", "abc123def")
 
 	require.NoError(t, storage.SaveInstances([]*Instance{inst}))
@@ -1366,10 +1366,10 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 
 	a := newTestInstance("batch-a")
 	a.UUID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	a.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
+	a.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/a", "batch-a", "backlog/a", "sha-a")
 	b := newTestInstance("batch-b")
 	b.UUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	b.GitManager.Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
+	b.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", "/wt/b", "batch-b", "backlog/b", "sha-b")
 	noWT := newTestInstance("batch-dir")
 	noWT.UUID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 	require.NoError(t, storage.SaveInstances([]*Instance{a, b, noWT}))

@@ -36,7 +36,7 @@ func newTrackedWorkSession(t *testing.T, storage *session.Storage, itemID, repoP
 
 	inst := newTestInstance("tracked-work-session")
 	inst.UUID = uuid.New().String()
-	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath+"/../wt", "tracked-work-session", branchName, "abc123")
+	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoPath, repoPath+"/../wt", "tracked-work-session", branchName, "abc123")
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
 
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{

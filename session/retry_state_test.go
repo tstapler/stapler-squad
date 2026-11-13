@@ -413,7 +413,7 @@ func TestRestartForRetry_should_RecreateMissingWorktree_When_DirectoryWasDeleted
 		Path:           repoPath,
 		processManager: &fakeLivenessProcessManager{alive: false},
 	}
-	inst.GitManager.SetWorktree(wt)
+	inst.GitManager().SetWorktree(wt)
 	inst.RetryAttempt = 3
 	inst.RetryMaxAttempts = 3
 	inst.LastFailureReason = "crashed"
@@ -446,7 +446,7 @@ func TestRestartForRetry_should_FailFast_When_WorktreeRecreationFails(t *testing
 		Path:           repoPath,
 		processManager: &fakeLivenessProcessManager{alive: false},
 	}
-	inst.GitManager.SetWorktree(wt)
+	inst.GitManager().SetWorktree(wt)
 	inst.RetryAttempt = 3
 	inst.RetryMaxAttempts = 3
 	inst.LastFailureReason = "crashed"

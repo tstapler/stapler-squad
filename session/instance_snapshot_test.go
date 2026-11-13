@@ -347,3 +347,22 @@ func TestToInstanceData_ShouldCarryPRFlagsOut_WhenSnapshotHasLinks(t *testing.T)
 		t.Errorf("GitHubPRNumber = %d, want mirror 12", data.GitHubPRNumber)
 	}
 }
+
+func TestSetRetryProgressRepublishesSnapshotWithDeepCopiedHistory(t *testing.T) {
+	t.Parallel()
+	inst := minimalInstance(t)
+	now := time.Now()
+	inst.SetRetryProgress(func(rs *domain.RetryState) {
+		rs.RetryAttempt = 2
+		rs.LastFailureReason = "crashed"
+		rs.RecordAttempt(2, "crashed", now)
+	})
+	snap := inst.Snapshot()
+	if snap.Retry.RetryAttempt != 2 || snap.Retry.LastFailureReason != "crashed" || len(snap.Retry.RetryHistory) != 1 {
+		t.Fatalf("snapshot did not republish retry state: %+v", snap.Retry)
+	}
+	inst.SetRetryProgress(func(rs *domain.RetryState) { rs.RecordAttempt(3, "stalled", now) })
+	if len(snap.Retry.RetryHistory) != 1 {
+		t.Fatalf("earlier snapshot history aliased the live slice: %+v", snap.Retry.RetryHistory)
+	}
+}

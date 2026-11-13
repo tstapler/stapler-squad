@@ -122,6 +122,11 @@ func buildSnapshot(i *Instance) *domain.InstanceSnapshot {
 		ExitReason:                 i.ExitReason,
 		WorkflowID:                 i.WorkflowID,
 		CLIFlags:                   i.CLIFlags,
+		ExistingWorktree:           i.ExistingWorktree,
+		ExtraArgs:                  append([]string(nil), i.ExtraArgs...),
+		LaunchCommand:              i.LaunchCommand,
+		CreationProgress:           i.CreationProgress,
+		Retry:                      i.RetryState,
 		ReviewState:                i.ReviewState,
 		LastMeaningfulChangeAt:     i.LastMeaningfulChangeAt,
 		TurnEnded:                  i.TurnEnded,
@@ -137,6 +142,8 @@ func buildSnapshot(i *Instance) *domain.InstanceSnapshot {
 		s.GitHub.GitHubPRURL = m.URL
 		s.GitHub.GitHubPRStatusTerminal = m.Terminal
 	}
+
+	s.Retry.RetryHistory = append([]domain.RetryAttemptRecord(nil), i.RetryHistory...)
 
 	// Deep copy RateLimitAutoResume *bool
 	if i.RateLimitAutoResume != nil {

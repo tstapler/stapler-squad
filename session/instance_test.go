@@ -52,7 +52,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Program:   "claude",
-		GitManager: gitwt.Manager{
+		gitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(
 				"/path/to/repo",
 				worktreePath,
@@ -86,7 +86,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 		Program:   "claude",
-		GitManager: gitwt.Manager{
+		gitManager: gitwt.Manager{
 			Worktree: git.NewGitWorktreeFromStorage(
 				"/path/to/repo",
 				worktreePath,
@@ -103,8 +103,8 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 	// earlier instance.Paused() call above already cached a snapshot, and a
 	// raw field write wouldn't republish it — Paused() below would then keep
 	// reading the stale pre-mutation snapshot. ForceStatus republishes.
-	if !instance.Paused() && instance.GitManager.Worktree != nil {
-		worktreePath := instance.GitManager.Worktree.GetWorktreePath()
+	if !instance.Paused() && instance.gitManager.Worktree != nil {
+		worktreePath := instance.gitManager.Worktree.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted, mark instance as paused
 			instance.ForceStatus(domain.Paused)
@@ -903,7 +903,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 
 	assert.Equal(t, domain.Active, inst.Status)
 	assert.True(t, inst.pm().IsAlive())
-	assert.NotEqual(t, repoDir, inst.GitManager.GetWorktreePath(), "a real, isolated worktree must have been created")
+	assert.NotEqual(t, repoDir, inst.gitManager.GetWorktreePath(), "a real, isolated worktree must have been created")
 }
 
 // TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturnsError
