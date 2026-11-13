@@ -215,7 +215,7 @@ func TestHotRestoreIfLive_ClearedDropsPendingRetryState(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, HotRestoreCleared, got)
 	assert.False(t, inst.IsRetryPending(), "a pending retry would later Restart the healthy pane")
-	pending, _ := inst.retryPendingElapsed(time.Now().Add(2 * time.Hour))
+	pending, _ := inst.RetryPendingElapsed(time.Now().Add(2 * time.Hour))
 	assert.False(t, pending)
 	assert.Zero(t, inst.RetryAttempt)
 }

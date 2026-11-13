@@ -75,7 +75,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 	i.SetProgram(resolvedProgram)
 
 	switch {
-	case isClaudeAntigravityCrossSwitch(i.historyRegistry(), oldProgram, resolvedProgram):
+	case isClaudeAntigravityCrossSwitch(i.HistoryRegistry(), oldProgram, resolvedProgram):
 		if portErr := portSessionHistory(ctx, oldProgram, resolvedProgram, i); portErr != nil {
 			if portHistoryFailureIsExpected(portErr) {
 				// Low-severity: the family-gate above and each adapter's CanHandle
@@ -85,7 +85,7 @@ func (i *Instance) SwitchProgram(ctx context.Context, rawProgram string, persist
 				log.Error("[SwitchProgram] failed to port session history during program switch", "session", i.Title, "old", oldProgram, "new", resolvedProgram, "err", portErr)
 			}
 		}
-	case isClaudeAntigravityFamily(i.historyRegistry(), oldProgram) && !isClaudeAntigravityFamily(i.historyRegistry(), resolvedProgram):
+	case isClaudeAntigravityFamily(i.HistoryRegistry(), oldProgram) && !isClaudeAntigravityFamily(i.HistoryRegistry(), resolvedProgram):
 		// Leaving the Claude/Antigravity family entirely: a stale --resume UUID
 		// captured under the old program would fail against the new one.
 		i.ClearConversationState()
@@ -182,7 +182,9 @@ func portSessionHistory(ctx context.Context, oldProgram, newProgram string, inst
 // above the Instance file set.
 var historyRegistryHook *HistoryAdapterRegistry
 
-func (i *Instance) historyRegistry() *HistoryAdapterRegistry {
+// HistoryRegistry returns the adapter registry this instance resolves programs through;
+// exported for history_transfer.go, which stays outside the Instance package.
+func (i *Instance) HistoryRegistry() *HistoryAdapterRegistry {
 	if historyRegistryHook == nil {
 		panic("session: history adapter registry not registered (history_adapter.go's init must set historyRegistryHook)")
 	}

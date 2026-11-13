@@ -9,8 +9,8 @@ import (
 
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
-	srcAdapter := i.historyRegistry().Resolve(oldProgram)
-	dstAdapter := i.historyRegistry().Resolve(newProgram)
+	srcAdapter := i.HistoryRegistry().Resolve(oldProgram)
+	dstAdapter := i.HistoryRegistry().Resolve(newProgram)
 
 	if srcAdapter == nil || dstAdapter == nil {
 		return ErrNoHistoryAdapter

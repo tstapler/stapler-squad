@@ -47,7 +47,7 @@ func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64
 	var canonicalTurnIndex int
 	var canonicalPath string
 
-	adapter := i.historyRegistry().Resolve(i.Program)
+	adapter := i.HistoryRegistry().Resolve(i.Program)
 
 	if adapter != nil {
 		if turns, err := adapter.Import(context.Background(), i); err == nil {
@@ -251,7 +251,7 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 		newInst.claudeSession.ProjectName = newInst.Title
 		newInst.mu.Unlock()
 
-		adapter := newInst.historyRegistry().Resolve(newInst.Program)
+		adapter := newInst.HistoryRegistry().Resolve(newInst.Program)
 
 		if adapter != nil {
 			turnsToExport := turns[:cp.CanonicalTurnIndex]

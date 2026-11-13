@@ -113,7 +113,7 @@ func gatherStallEvidence(inst *Instance, idle, budget time.Duration) stallEviden
 		Autonomous:       isAutonomousSession(inst),
 		Status:           status,
 		ControllerActive: controllerActive,
-		PaneAlive:        inst.pm().HasLiveSessionNoCache(),
+		PaneAlive:        inst.HasLivePaneNoCache(),
 		Idle:             idle,
 		Budget:           budget,
 	}

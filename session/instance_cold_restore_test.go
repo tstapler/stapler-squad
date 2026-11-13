@@ -217,7 +217,7 @@ func TestColdRestore_WithoutUUID_RecoversFromJSONL(t *testing.T) {
 	// Inject a fake home dir and pre-write a conversation JSONL for this
 	// instance's project path, as if a previous run had captured one. Uses a
 	// no-open-files mock inspector (not nil) because Start's post-launch
-	// tryExtractConversationUUID call re-runs once tmux is alive, hitting the
+	// TryExtractConversationUUID call re-runs once tmux is alive, hitting the
 	// PID fast path — a nil inspector would panic there. Same convention as
 	// history_linker_test.go's "no open files → always falls through to
 	// DetectByPath" mocks.
@@ -464,7 +464,7 @@ func TestIsStaleResumeExit(t *testing.T) {
 // resuming a conversation the user explicitly discarded — while a JSONL written
 // AFTER the clear (e.g. a new conversation, later interrupted again) is still
 // recovered normally, proving the guard is one-sided rather than a permanent
-// recovery kill switch. No live tmux needed: tryExtractConversationUUID's PID
+// recovery kill switch. No live tmux needed: TryExtractConversationUUID's PID
 // fast path is skipped (bare Instance, pm() has no session), so it goes
 // straight to the DetectByPath fallback.
 func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
@@ -501,7 +501,7 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 			}
 			writeJSONLFixture(t, fakeHome, tmpDir, fixtureUUID, clearedAt.Add(tt.offset))
 
-			inst.tryExtractConversationUUID()
+			inst.TryExtractConversationUUID()
 
 			gotUUID := ""
 			if inst.claudeSession != nil {
@@ -522,7 +522,7 @@ func TestTryExtractConversationUUID_ClearedAtGuard(t *testing.T) {
 // conversationOwnershipGuard closure with the same "skip self, skip dead,
 // require both UUID and path to match" contract the real implementation
 // documents (worktree-envvars-hijack plan.md, Story 1.4.2). These tests exist
-// to prove tryExtractConversationUUID's own calling contract -- that it
+// to prove TryExtractConversationUUID's own calling contract -- that it
 // invokes the guard with the detected candidate UUID and effective path, and
 // correctly no-ops when told the conversation is owned by another live
 // session -- not to re-verify ConversationOwnedByOtherLiveSession's own
@@ -582,7 +582,7 @@ func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwn
 		simulatedLiveInstance{uuid: sessionAUUID, conversationUUID: conversationUUID, path: sharedPath, alive: true},
 	))
 
-	instB.tryExtractConversationUUID()
+	instB.TryExtractConversationUUID()
 
 	assert.Nil(t, instB.claudeSession, "B must not silently adopt A's still-live conversation UUID via the path-shared DetectByPath fallback")
 }
@@ -591,7 +591,7 @@ func TestTryExtractConversationUUID_should_NotAdoptUUID_When_OtherLiveSessionOwn
 // is worktree-envvars-hijack Task 1.4.2b's ColdRestore self-recovery
 // regression test (pre-mortem Failure #4, P2). A session undergoing
 // ColdRestore reuses its own, already-registered *Instance object to call
-// tryExtractConversationUUID with no ClaudeConversationUUID set yet -- the
+// TryExtractConversationUUID with no ClaudeConversationUUID set yet -- the
 // guard's sibling registry here contains only this same instance's own
 // record, proving the inst.UUID == selfUUID exclusion actually lets it
 // re-adopt its own conversation rather than treating its own record as
@@ -615,7 +615,7 @@ func TestTryExtractConversationUUID_should_AdoptOwnUUID_When_ColdRestoreSelfReco
 		simulatedLiveInstance{uuid: inst.UUID, conversationUUID: fixtureUUID, path: tmpDir, alive: true},
 	))
 
-	inst.tryExtractConversationUUID()
+	inst.TryExtractConversationUUID()
 
 	require.NotNil(t, inst.claudeSession, "ColdRestore self-recovery must not be blocked by the ownership guard")
 	assert.Equal(t, fixtureUUID, inst.claudeSession.ConversationUUID, "must successfully re-adopt its own JSONL's conversation UUID")

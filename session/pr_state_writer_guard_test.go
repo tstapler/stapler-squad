@@ -37,7 +37,7 @@ func staleSession(t *testing.T, storage *Storage, title, uuid string, ref domain
 	inst := newTestInstance(title)
 	inst.UUID = uuid
 	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}))
 	require.NoError(t, storage.AddInstance(inst)) // create path
 	return inst

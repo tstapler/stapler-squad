@@ -412,7 +412,7 @@ func TestTerminalViewLease(t *testing.T) {
 	assert.True(t, inst.HasTerminalViewers())
 	releaseB()
 	assert.False(t, inst.HasTerminalViewers())
-	assert.Less(t, inst.hibernationIdleDuration(), time.Minute)
+	assert.Less(t, inst.HibernationIdleDuration(), time.Minute)
 }
 
 func TestTerminalViewLeaseRejectsAttachmentDuringAutomaticHibernation(t *testing.T) {

@@ -57,7 +57,7 @@ type rawClaudeTurn struct {
 func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn, error) {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
-		inst.tryExtractConversationUUID()
+		inst.TryExtractConversationUUID()
 		uuidStr = inst.GetClaudeConversationUUID()
 	}
 	if uuidStr == "" {

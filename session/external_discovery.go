@@ -120,9 +120,9 @@ func (e *ExternalSessionDiscovery) GetSessionByTmux(tmuxSessionName string) *Ins
 	e.sessionsMu.RLock()
 	defer e.sessionsMu.RUnlock()
 
-	for _, instance := range e.sessions {
-		if instance.ExternalMetadata != nil && instance.ExternalMetadata.TmuxSessionName == tmuxSessionName {
-			return instance
+	for _, inst := range e.sessions {
+		if inst.ExternalMetadata != nil && inst.ExternalMetadata.TmuxSessionName == tmuxSessionName {
+			return inst
 		}
 	}
 	return nil
@@ -146,7 +146,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 
 	// Create Instance wrapper
 	now := time.Now()
-	instance := &Instance{
+	inst := &Instance{
 		Title:        title,
 		Path:         discovered.Metadata.Cwd,
 		Program:      discovered.Metadata.Command,
@@ -175,15 +175,15 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 	}
 
 	// Initialize the process manager for external instances. An unrecognized
-	// instance.Backend value here means genuinely corrupted/unexpected data —
+	// inst.Backend value here means genuinely corrupted/unexpected data —
 	// log it loudly and skip wrapping this discovered session rather than
 	// registering an Instance with no process manager.
-	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: instance.Backend})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: inst.Backend})
 	if err != nil {
 		log.Error("failed to construct process manager for external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title, "err", err)
 		return
 	}
-	instance.processManager = pm
+	inst.SetProcessManager(pm)
 
 	// UNIFIED ARCHITECTURE: Attach to the existing tmux session so external sessions
 	// use the same streaming/resize infrastructure as regular sessions.
@@ -195,41 +195,41 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		// The streamExternalTerminal fallback can still handle it via capture-pane polling
 	} else {
 		// Successfully attached - set the tmux session on the instance
-		// This also sets instance.started = true, enabling GetPTYReader()
-		instance.SetTmuxSession(tmuxSession)
+		// This also sets inst.started = true, enabling GetPTYReader()
+		inst.SetTmuxSession(tmuxSession)
 		log.Info("attached to tmux session for unified streaming of external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title)
 	}
 
-	finishInstanceConstruction(instance)
+	FinishInstanceConstruction(inst)
 
 	// Register the session
 	e.sessionsMu.Lock()
-	e.sessions[discovered.SocketPath] = instance
+	e.sessions[discovered.SocketPath] = inst
 	e.sessionsMu.Unlock()
 
 	log.Info("discovered external claude session", "title", title, "socket", discovered.SocketPath, "cwd", discovered.Metadata.Cwd, "tmux", discovered.Metadata.TmuxSession)
 
 	// Notify all registered callbacks
 	for _, callback := range e.onSessionAddedCallbacks {
-		callback(instance)
+		callback(inst)
 	}
 }
 
 // handleRemovedSession removes an Instance when the mux session disconnects.
 func (e *ExternalSessionDiscovery) handleRemovedSession(discovered *mux.DiscoveredSession) {
 	e.sessionsMu.Lock()
-	instance, exists := e.sessions[discovered.SocketPath]
+	inst, exists := e.sessions[discovered.SocketPath]
 	if exists {
 		delete(e.sessions, discovered.SocketPath)
 	}
 	e.sessionsMu.Unlock()
 
 	if exists {
-		log.Info("external session disconnected", "title", instance.Title)
+		log.Info("external session disconnected", "title", inst.Title)
 
 		// Notify all registered callbacks
 		for _, callback := range e.onSessionRemovedCallbacks {
-			callback(instance)
+			callback(inst)
 		}
 	}
 }

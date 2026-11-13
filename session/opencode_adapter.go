@@ -51,7 +51,7 @@ type opencodePartJSON struct {
 func resolveOpencodeUUID(ctx context.Context, inst *Instance, dbPath string) (string, error) {
 	uuidStr := inst.GetClaudeConversationUUID()
 	if uuidStr == "" {
-		inst.tryExtractConversationUUID()
+		inst.TryExtractConversationUUID()
 		uuidStr = inst.GetClaudeConversationUUID()
 	}
 
@@ -69,12 +69,7 @@ func resolveOpencodeUUID(ctx context.Context, inst *Instance, dbPath string) (st
 		}
 
 		if uuidStr != "" {
-			inst.claudeSessionMu.Lock()
-			if inst.claudeSession == nil {
-				inst.claudeSession = &domain.ClaudeSessionData{}
-			}
-			inst.claudeSession.ConversationUUID = uuidStr
-			inst.claudeSessionMu.Unlock()
+			inst.WithClaudeSession(func(d *domain.ClaudeSessionData) { d.ConversationUUID = uuidStr })
 		}
 	}
 
@@ -344,12 +339,7 @@ func (a *OpencodeAdapter) Export(ctx context.Context, turns []CanonicalTurn, ins
 		uuidStr = "ses_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:16]
 	}
 
-	inst.claudeSessionMu.Lock()
-	if inst.claudeSession == nil {
-		inst.claudeSession = &domain.ClaudeSessionData{}
-	}
-	inst.claudeSession.ConversationUUID = uuidStr
-	inst.claudeSessionMu.Unlock()
+	inst.WithClaudeSession(func(d *domain.ClaudeSessionData) { d.ConversationUUID = uuidStr })
 
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -307,7 +307,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// constructs fresh on every call (not the live, actor-managed instance),
 	// so marking it started has no effect beyond this health check.
 	if instance.Status == domain.Active && !instance.Started() {
-		instance.started.Store(true)
+		instance.MarkStarted()
 	}
 
 	// Check if instance thinks it's started but tmux session doesn't exist.

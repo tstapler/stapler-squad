@@ -30,12 +30,7 @@ func (a *PiAdapter) CanHandle(program string) bool {
 }
 
 func (a *PiAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn, error) {
-	sessionID := ""
-	inst.piSessionMu.Lock()
-	if inst.piSession != nil {
-		sessionID = inst.piSession.SessionID
-	}
-	inst.piSessionMu.Unlock()
+	sessionID := inst.PiSessionID()
 
 	if sessionID == "" {
 		sessionID = inst.GetClaudeConversationUUID()
@@ -104,28 +99,13 @@ func (a *PiAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTurn
 }
 
 func (a *PiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *Instance) error {
-	sessionID := ""
-	inst.piSessionMu.Lock()
-	if inst.piSession != nil {
-		sessionID = inst.piSession.SessionID
-	}
-	inst.piSessionMu.Unlock()
+	sessionID := inst.PiSessionID()
 
 	if sessionID == "" {
 		sessionID = uuid.New().String()
-		inst.piSessionMu.Lock()
-		if inst.piSession == nil {
-			inst.piSession = &domain.PiSessionData{}
-		}
-		inst.piSession.SessionID = sessionID
-		inst.piSessionMu.Unlock()
+		inst.WithPiSession(func(d *domain.PiSessionData) { d.SessionID = sessionID })
 
-		inst.claudeSessionMu.Lock()
-		if inst.claudeSession == nil {
-			inst.claudeSession = &domain.ClaudeSessionData{}
-		}
-		inst.claudeSession.ConversationUUID = sessionID
-		inst.claudeSessionMu.Unlock()
+		inst.WithClaudeSession(func(d *domain.ClaudeSessionData) { d.ConversationUUID = sessionID })
 	}
 
 	home, err := os.UserHomeDir()

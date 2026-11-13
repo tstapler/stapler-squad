@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -28,12 +29,63 @@ type sessionDriverStopper struct {
 	once sync.Once
 }
 
-// registerContinuation registers a continuation driver goroutine spawned by
+// ErrDriverDestroyed and ErrDriverRunning are BeginDriverRun's two refusals, kept
+// distinct so StartSessionDriver logs the same message for each as before.
+var (
+	ErrDriverDestroyed = errors.New("session driver: instance destroyed")
+	ErrDriverRunning   = errors.New("session driver: already running")
+)
+
+// BeginDriverRun claims the instance's single driver slot for StartSessionDriver
+// (session_driver.go) and returns the stop channel the new goroutine must watch. It
+// refuses with ErrDriverDestroyed once StopSessionDriver ran and ErrDriverRunning
+// while a driver is live. A successful call must be paired with FinishDriverGoroutine.
+func (i *Instance) BeginDriverRun() (<-chan struct{}, error) {
+	i.driverMu.Lock()
+	defer i.driverMu.Unlock()
+	if i.driverDestroyed {
+		return nil, ErrDriverDestroyed
+	}
+	if !i.driverRunning.CompareAndSwap(false, true) {
+		return nil, ErrDriverRunning
+	}
+	i.driverGoroutines++
+	stopper := &sessionDriverStopper{stop: make(chan struct{})}
+	// Add(1) must happen before driverStopper is published (and before driverMu is
+	// released): StopSessionDriver reads driverStopper under driverMu and, if
+	// non-nil, immediately calls driverWG.Wait() outside the lock. Storing the
+	// stopper before Add(1) would let that Wait() race the not-yet-executed Add
+	// on a concurrent goroutine — sync.WaitGroup's own contract forbids Add and
+	// Wait running concurrently without a happens-before edge, and go test -race
+	// flags it. Doing Add under the same critical section as the Store makes the
+	// mutex provide that ordering.
+	i.driverWG.Add(1)
+	i.driverStopper.Store(stopper)
+	return stopper.stop, nil
+}
+
+// FinishDriverGoroutine ends a driver goroutine started by BeginDriverRun or
+// RegisterDriverContinuation: it clears driverRunning when it was the last one, then
+// releases the join WaitGroup (that order, so a waiter sees the cleared flag).
+func (i *Instance) FinishDriverGoroutine() {
+	defer i.driverWG.Done()
+	i.driverGoroutineExited()
+}
+
+// DriverRunning reports whether a driver goroutine is live, for tests and the
+// driver code that stays outside the Instance package.
+func (i *Instance) DriverRunning() bool { return i.driverRunning.Load() }
+
+// IsDestroyed reports whether Destroy has run, so a driver goroutine that outlives
+// it can stop acting on the instance.
+func (i *Instance) IsDestroyed() bool { return i.destroyed.Load() }
+
+// RegisterDriverContinuation registers a continuation driver goroutine spawned by
 // restartForRetry and returns the stop channel it must run with; it pairs with
-// driverGoroutineExited. It refuses (ok=false) once StopSessionDriver has run,
+// FinishDriverGoroutine. It refuses (ok=false) once StopSessionDriver has run,
 // and does driverWG.Add(1) under driverMu so it cannot race StopSessionDriver's
 // Wait — the same ordering StartSessionDriver relies on.
-func (i *Instance) registerContinuation(stop <-chan struct{}) (driverStop <-chan struct{}, ok bool) {
+func (i *Instance) RegisterDriverContinuation(stop <-chan struct{}) (driverStop <-chan struct{}, ok bool) {
 	i.driverMu.Lock()
 	defer i.driverMu.Unlock()
 	if i.driverDestroyed {

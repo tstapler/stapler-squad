@@ -72,7 +72,7 @@ func legacyOnlyScanInstance(t *testing.T) *Instance {
 		GitHubOwner: "acme", GitHubRepo: "app",
 		GitHubPRURL: "https://github.com/acme/app/pull/11", GitHubPRNumber: 11, GitHubPRStatusTerminal: true,
 	}
-	finishInstanceConstruction(inst)
+	FinishInstanceConstruction(inst)
 	return inst
 }
 
@@ -96,7 +96,7 @@ func TestScanAndLinkPRURL_ShouldNotAttach_WhenRepoMismatchOrBareMention(t *testi
 			if tt.configure != nil {
 				tt.configure(inst)
 			}
-			finishInstanceConstruction(inst)
+			FinishInstanceConstruction(inst)
 
 			scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, tt.output)
 
