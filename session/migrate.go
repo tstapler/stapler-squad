@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // MigrationOptions configures the migration from JSON to SQLite
@@ -60,7 +61,7 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 
 	// Step 2: Parse JSON data
 	log.Info("step 2/6: parsing JSON data")
-	var instances []InstanceData
+	var instances []domain.InstanceData
 	if err := json.Unmarshal(jsonData, &instances); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON data: %w", err)
 	}
@@ -181,7 +182,7 @@ func ValidateEntMigration(jsonPath, entDBPath string) error {
 		return fmt.Errorf("failed to read JSON file: %w", err)
 	}
 
-	var jsonInstances []InstanceData
+	var jsonInstances []domain.InstanceData
 	if err := json.Unmarshal(jsonData, &jsonInstances); err != nil {
 		return fmt.Errorf("failed to unmarshal JSON data: %w", err)
 	}
@@ -206,7 +207,7 @@ func ValidateEntMigration(jsonPath, entDBPath string) error {
 	}
 
 	// Create map of Ent sessions by title for quick lookup
-	entMap := make(map[string]InstanceData)
+	entMap := make(map[string]domain.InstanceData)
 	for _, inst := range entInstances {
 		entMap[inst.Title] = inst
 	}

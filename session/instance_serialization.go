@@ -84,7 +84,7 @@ func (i *Instance) tymuxSessionID() string {
 	return ""
 }
 
-func (i *Instance) ToInstanceData() InstanceData {
+func (i *Instance) ToInstanceData() domain.InstanceData {
 	snap, err := sendSyncValue(i, func(s *instanceState) (*domain.InstanceSnapshot, error) {
 		// i.mu guards buildSnapshot here too: legacy setters (MarkViewed & co.)
 		// mutate fields directly under i.mu.Lock() from outside the actor — see
@@ -103,7 +103,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		i.mu.Unlock()
 	}
 
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:               snap.Title,
 		UUID:                snap.UUID,
 		Path:                snap.Path,
@@ -201,7 +201,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 
 	// Only include worktree data if gitWorktree is initialized
 	if i.gitManager.HasWorktree() {
-		data.Worktree = GitWorktreeData{
+		data.Worktree = domain.GitWorktreeData{
 			RepoPath:      i.gitManager.GetRepoPath(),
 			WorktreePath:  i.gitManager.GetWorktreePath(),
 			SessionName:   snap.Title,
@@ -213,7 +213,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 	// Only include diff stats if they exist
 	// GetDiffStats takes gm.mu; the bare field races with SetDiffStats.
 	if ds := i.gitManager.GetDiffStats(); ds != nil {
-		data.DiffStats = DiffStatsData{
+		data.DiffStats = domain.DiffStatsData{
 			Added:   ds.Added,
 			Removed: ds.Removed,
 			Content: ds.Content,
@@ -243,7 +243,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 // dead one) before the HTTP server could bind. See server/dependencies.go's
 // "Step 6" background goroutine, which already exists to start un-started
 // instances asynchronously once the deferred path skips Start() here.
-func FromInstanceData(data InstanceData) (*Instance, error) {
+func FromInstanceData(data domain.InstanceData) (*Instance, error) {
 	return fromInstanceData(data, false)
 }
 
@@ -254,7 +254,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 // truth question (IsBackendProcessAlive()) or act on the real session
 // (KillSession()) for a sessionUUID the live in-memory registry doesn't have
 // tracked — see SessionService.findConfirmedLiveInstance.
-func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
+func FromInstanceDataDeferred(data domain.InstanceData) (*Instance, error) {
 	return fromInstanceData(data, true)
 }
 
@@ -263,7 +263,7 @@ func FromInstanceDataDeferred(data InstanceData) (*Instance, error) {
 // tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
 // the synchronous Start() call, leaving Instance.Started() false so the async
 // Step 6 loop in BuildRuntimeDeps picks it up off the startup critical path.
-func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
+func fromInstanceData(data domain.InstanceData, deferStart bool) (*Instance, error) {
 	// MIGRATION: Fix corrupted paths from before defensive tilde expansion was added
 	// Detect paths like "/absolute/path/~/other/path" and fix them
 	migratedPath := data.Path

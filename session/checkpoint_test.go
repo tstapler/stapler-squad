@@ -49,7 +49,7 @@ func TestInstanceData_BackwardCompatNilCheckpoints(t *testing.T) {
 	t.Parallel()
 	// Old format without checkpoints field
 	oldJSON := `{"title":"test","path":"/tmp","status":0}`
-	var data InstanceData
+	var data domain.InstanceData
 	err := json.Unmarshal([]byte(oldJSON), &data)
 	require.NoError(t, err)
 	assert.Nil(t, data.Checkpoints)
@@ -130,7 +130,7 @@ func TestCreateCheckpoint_StartedInstance_AllFieldsPopulated(t *testing.T) {
 	}
 	inst.started.Store(true)
 	// Set conversation UUID so it gets captured.
-	inst.claudeSession = &ClaudeSessionData{ConversationUUID: "conv-uuid-123"}
+	inst.claudeSession = &domain.ClaudeSessionData{ConversationUUID: "conv-uuid-123"}
 
 	before := time.Now()
 	cp, err := inst.CreateCheckpoint("before-refactor", 42)
@@ -256,7 +256,7 @@ func TestCreateCheckpoint_TitleEscapingConfigDir_RejectsContainment(t *testing.T
 	const maliciousTitle = "../ssq-checkpoint-escape-poc"
 	inst := &Instance{Title: maliciousTitle, Program: "claude", Path: workspace}
 	inst.started.Store(true)
-	inst.claudeSession = &ClaudeSessionData{ConversationUUID: convUUID}
+	inst.claudeSession = &domain.ClaudeSessionData{ConversationUUID: convUUID}
 
 	cp, err := inst.CreateCheckpoint("escape-attempt", 0)
 	require.NoError(t, err, "containment rejection is swallowed, not propagated as an error")
@@ -286,7 +286,7 @@ func TestCreateCheckpoint_LegitimateTitle_WritesUnderConfigDir(t *testing.T) {
 	const legitTitle = "checkpoint-legit-title"
 	inst := &Instance{Title: legitTitle, Program: "claude", Path: workspace}
 	inst.started.Store(true)
-	inst.claudeSession = &ClaudeSessionData{ConversationUUID: convUUID}
+	inst.claudeSession = &domain.ClaudeSessionData{ConversationUUID: convUUID}
 
 	cp, err := inst.CreateCheckpoint("legit", 0)
 	require.NoError(t, err)

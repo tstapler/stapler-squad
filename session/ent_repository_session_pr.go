@@ -337,7 +337,7 @@ func setMirrorTx(ctx context.Context, tx *ent.Tx, rowID int, m PRMirror) error {
 // upsertSessionPRSetTx idempotently writes the links (and, insert-if-absent, their
 // state rows) carried by a full save. It never updates a state column (invariant I1),
 // so a stale snapshot cannot overwrite a fresher poll, and a tombstoned PR is skipped.
-func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data InstanceData) error {
+func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data domain.InstanceData) error {
 	if data.UUID == "" {
 		return nil
 	}

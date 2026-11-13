@@ -61,7 +61,7 @@ func TestFromInstanceData_OldJSONWithoutBackendFieldDefaultsEmpty(t *testing.T) 
 		"program": "claude"
 	}`
 
-	var data InstanceData
+	var data domain.InstanceData
 	if err := json.Unmarshal([]byte(oldJSON), &data); err != nil {
 		t.Fatalf("Unmarshal legacy InstanceData JSON: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestFromInstanceData_should_NotAutoRestoreAndNormalizeOnlyActiveCreating_Wh
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			data := InstanceData{
+			data := domain.InstanceData{
 				Title:   "archived-restore-" + tt.name,
 				Path:    "/tmp/test",
 				Status:  tt.status,

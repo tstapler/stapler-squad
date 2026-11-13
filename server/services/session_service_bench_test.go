@@ -84,7 +84,7 @@ func preloadSessions(b *testing.B, repo *session.EntRepository, n int) {
 	b.Helper()
 	ctx := context.Background()
 	for i := 0; i < n; i++ {
-		data := session.InstanceData{
+		data := domain.InstanceData{
 			Title:   fmt.Sprintf("bench-session-%04d", i),
 			Path:    "/tmp/bench",
 			Branch:  "main",
@@ -163,7 +163,7 @@ func BenchmarkSessionService_GetSession(b *testing.B) {
 
 	const targetTitle = "bench-get-target"
 	ctx := context.Background()
-	if err := fix.repo.Create(ctx, session.InstanceData{
+	if err := fix.repo.Create(ctx, domain.InstanceData{
 		Title:   targetTitle,
 		Path:    "/tmp/bench",
 		Branch:  "main",
@@ -237,7 +237,7 @@ func BenchmarkSessionService_StreamTerminal_NotStarted(b *testing.B) {
 
 	const targetTitle = "bench-stream-target"
 	ctx := context.Background()
-	if err := fix.repo.Create(ctx, session.InstanceData{
+	if err := fix.repo.Create(ctx, domain.InstanceData{
 		Title:   targetTitle,
 		Path:    "/tmp/bench",
 		Branch:  "main",

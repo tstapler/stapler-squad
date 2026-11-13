@@ -62,14 +62,14 @@ func distinctItemIDs(byUUID map[string][]string) []string {
 // prEligible is the ordered PR decision list for one session (first match wins).
 // It reads only InstanceData and the bulk evidence, never a live Instance, and
 // is not behind any feature flag: it can only withhold a delete.
-func (p *sweepPRData) prEligible(d session.InstanceData) (bool, string) {
+func (p *sweepPRData) prEligible(d domain.InstanceData) (bool, string) {
 	if safe, reason := p.ownPRsEligible(d); !safe {
 		return false, reason
 	}
 	return p.itemsEligible(d)
 }
 
-func (p *sweepPRData) ownPRsEligible(d session.InstanceData) (bool, string) {
+func (p *sweepPRData) ownPRsEligible(d domain.InstanceData) (bool, string) {
 	if reason := session.OwnPRsBlockReason(d, p.views[d.UUID]); reason != "" {
 		return false, reason
 	}
@@ -79,7 +79,7 @@ func (p *sweepPRData) ownPRsEligible(d session.InstanceData) (bool, string) {
 // itemsEligible holds the session while any item it ever served still has an
 // item-direct PR that is not terminal, an unrepresented legacy PR number, or no
 // evidence at all (fail closed).
-func (p *sweepPRData) itemsEligible(d session.InstanceData) (bool, string) {
+func (p *sweepPRData) itemsEligible(d domain.InstanceData) (bool, string) {
 	for _, id := range p.itemIDs[d.UUID] {
 		g, ok := p.guards[id]
 		if reason := session.ItemGuardBlockReason(id, g, ok); reason != "" {

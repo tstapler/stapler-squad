@@ -13,6 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
@@ -40,7 +41,7 @@ type claudeExtension struct {
 	claudeSessionMu sync.RWMutex
 	// claudeSession is Claude Code session information for persistence and
 	// re-attachment.
-	claudeSession *ClaudeSessionData
+	claudeSession *domain.ClaudeSessionData
 	// conversationClearedAt records when ClearConversationState() last ran, so
 	// tryExtractConversationUUID's DetectByPath fallback won't resurrect a JSONL
 	// predating an explicit "start fresh" request. In-memory only -- does not
@@ -216,7 +217,7 @@ func (i *Instance) createNewClaudeSession() error {
 	}
 
 	// Update the instance's Claude session data
-	i.claudeSession = &ClaudeSessionData{
+	i.claudeSession = &domain.ClaudeSessionData{
 		ConversationUUID: newSession.ID,
 		SquadSessionID:   newSession.ConversationID,
 		ProjectName:      newSession.ProjectName,
@@ -269,7 +270,7 @@ func (i *Instance) findAndAttachToProjectSession(sessionManager *ClaudeSessionMa
 
 	// Update the instance's Claude session data
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = selectedSession.ID
 	i.claudeSession.SquadSessionID = selectedSession.ConversationID
@@ -287,7 +288,7 @@ func (i *Instance) findAndAttachToProjectSession(sessionManager *ClaudeSessionMa
 
 // GetClaudeSession returns the Claude session data for this instance.
 // Thread-safe: acquires stateMutex read lock.
-func (i *Instance) GetClaudeSession() *ClaudeSessionData {
+func (i *Instance) GetClaudeSession() *domain.ClaudeSessionData {
 	i.claudeSessionMu.RLock()
 	defer i.claudeSessionMu.RUnlock()
 	return i.claudeSession
@@ -295,7 +296,7 @@ func (i *Instance) GetClaudeSession() *ClaudeSessionData {
 
 // SetClaudeSession sets the Claude session data for this instance.
 // Thread-safe: acquires stateMutex write lock.
-func (i *Instance) SetClaudeSession(sessionData *ClaudeSessionData) {
+func (i *Instance) SetClaudeSession(sessionData *domain.ClaudeSessionData) {
 	i.claudeSessionMu.Lock()
 	defer i.claudeSessionMu.Unlock()
 	i.claudeSession = sessionData
@@ -413,7 +414,7 @@ func (i *Instance) tryExtractConversationUUID() {
 	i.claudeSessionMu.Lock()
 	i.mu.Lock()
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = info.ConversationUUID
 	i.HistoryFilePath = info.HistoryFilePath
@@ -499,7 +500,7 @@ func (i *Instance) RunWithResume(ctx context.Context, message string) (string, e
 func (i *Instance) SetClaudeConversationUUID(uuid string) {
 	i.claudeSessionMu.Lock()
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	if i.claudeSession.ConversationUUID == uuid {
 		i.claudeSessionMu.Unlock()
@@ -569,7 +570,7 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	// i.mu.Lock() from outside the actor.
 	i.mu.Lock()
 	if i.claudeSession == nil {
-		i.claudeSession = &ClaudeSessionData{}
+		i.claudeSession = &domain.ClaudeSessionData{}
 	}
 	i.claudeSession.ConversationUUID = conversationUUID
 	i.HistoryFilePath = historyFilePath

@@ -37,7 +37,7 @@ func main() {
 	defer repo.Close()
 
 	now := time.Now()
-	data := session.InstanceData{
+	data := domain.InstanceData{
 		Title:     hiddenReviewTitle,
 		Path:      filepath.Join(dir, "hidden-review"),
 		Branch:    "main",

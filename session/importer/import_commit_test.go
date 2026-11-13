@@ -52,7 +52,7 @@ func TestCommitImportExternalSession_ReturnsErrPathAlreadyManaged_When_PathColli
 	t.Parallel()
 	path := t.TempDir()
 	store := &fakeInstanceStore{
-		instances: []session.InstanceData{{Title: "existing", Path: path}},
+		instances: []domain.InstanceData{{Title: "existing", Path: path}},
 	}
 	detector := newNotFoundDetector(t)
 

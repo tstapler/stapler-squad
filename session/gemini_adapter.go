@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type GeminiAdapter struct{}
@@ -121,7 +122,7 @@ func (a *GeminiAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 
 	inst.claudeSessionMu.Lock()
 	if inst.claudeSession == nil {
-		inst.claudeSession = &ClaudeSessionData{}
+		inst.claudeSession = &domain.ClaudeSessionData{}
 	}
 	inst.claudeSession.ConversationUUID = uuidStr
 	inst.claudeSessionMu.Unlock()

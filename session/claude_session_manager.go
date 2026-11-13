@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,8 +237,8 @@ func (csm *ClaudeSessionManager) AttachToSession(sessionID string) error {
 }
 
 // CreateSessionData creates ClaudeSessionData from a detected session
-func (csm *ClaudeSessionManager) CreateSessionData(session ClaudeSession, settings ClaudeSettings) ClaudeSessionData {
-	return ClaudeSessionData{
+func (csm *ClaudeSessionManager) CreateSessionData(session ClaudeSession, settings domain.ClaudeSettings) domain.ClaudeSessionData {
+	return domain.ClaudeSessionData{
 		ConversationUUID: session.ID,
 		SquadSessionID:   session.ConversationID,
 		ProjectName:      session.ProjectName,

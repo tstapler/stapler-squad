@@ -45,7 +45,7 @@ func TestTymuxSessionID_OldRecordWithoutIDRestoresWithEmptyStoredID(t *testing.T
 	restored := &fakeTymuxManagerForSetCommand{}
 	newTymuxSessionFn = func() tymux.TymuxManager { return restored }
 
-	data := InstanceData{Title: "legacy", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
+	data := domain.InstanceData{Title: "legacy", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: domain.BackendTymux}
 	_, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 	assert.Empty(t, restored.gotStoredID)
@@ -107,7 +107,7 @@ func TestFromInstanceDataDeferred_NeverTouchesDaemonSession(t *testing.T) {
 		fakes = append(fakes, f)
 		return f
 	}
-	data := InstanceData{Title: "twin", Path: t.TempDir(), Program: "claude", Status: domain.Active, Backend: domain.BackendTymux, TymuxSessionID: "daemon-7"}
+	data := domain.InstanceData{Title: "twin", Path: t.TempDir(), Program: "claude", Status: domain.Active, Backend: domain.BackendTymux, TymuxSessionID: "daemon-7"}
 
 	_, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)

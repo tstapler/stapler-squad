@@ -636,7 +636,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 
 	sessionUUID := "e2e-work-wt-" + uuid.New().String()
 	now := time.Now()
-	if err := h.storage.CreateInstanceData(ctx, session.InstanceData{
+	if err := h.storage.CreateInstanceData(ctx, domain.InstanceData{
 		Title:       sessionUUID,
 		UUID:        sessionUUID,
 		Path:        worktreePath,
@@ -645,7 +645,7 @@ func (h *BacklogDebugSeedHandler) handleSeedWorkSessionWithWorktree(w http.Respo
 		SessionType: domain.SessionTypeDirectory,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      worktreePath,
 			WorktreePath:  worktreePath,
 			SessionName:   sessionUUID,

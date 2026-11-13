@@ -697,7 +697,7 @@ func persistedPRSession(t *testing.T) (*Storage, *Instance) {
 	return storage, inst
 }
 
-func sessionMirror(t *testing.T, storage *Storage, title string) InstanceData {
+func sessionMirror(t *testing.T, storage *Storage, title string) domain.InstanceData {
 	t.Helper()
 	data, err := storage.Repo.Get(context.Background(), title)
 	require.NoError(t, err)

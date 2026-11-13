@@ -593,7 +593,7 @@ func TestMatchesIDData_TmuxNameBranch(t *testing.T) {
 	t.Parallel()
 	t.Run("matches_tmux_name_with_prefix", func(t *testing.T) {
 		t.Parallel()
-		d := session.InstanceData{
+		d := domain.InstanceData{
 			Title:      "my.project:work",
 			TmuxPrefix: "ss-",
 			UUID:       "aaaabbbb-1111-2222-3333-ffffffffffff",
@@ -606,7 +606,7 @@ func TestMatchesIDData_TmuxNameBranch(t *testing.T) {
 
 	t.Run("no_match_without_prefix", func(t *testing.T) {
 		t.Parallel()
-		d := session.InstanceData{
+		d := domain.InstanceData{
 			Title:      "my.project:work",
 			TmuxPrefix: "",
 			UUID:       "aaaabbbb-1111-2222-3333-ffffffffffff",
@@ -619,7 +619,7 @@ func TestMatchesIDData_TmuxNameBranch(t *testing.T) {
 
 	t.Run("title_still_matches_directly", func(t *testing.T) {
 		t.Parallel()
-		d := session.InstanceData{
+		d := domain.InstanceData{
 			Title:      "my.project:work",
 			TmuxPrefix: "",
 			UUID:       "aaaabbbb-1111-2222-3333-ffffffffffff",

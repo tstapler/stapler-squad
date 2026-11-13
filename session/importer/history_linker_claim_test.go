@@ -114,7 +114,7 @@ func TestHistoryLinker_PredatingConversation_AcceptedWhenNotFreshlyUnlinked(t *t
 			name: "linked via resume_id",
 			inst: &session.Instance{Title: "resumed", Path: "/repo/p", Status: domain.Active, CreatedAt: created},
 			prep: func(i *session.Instance, path string) {
-				i.SetClaudeSession(&session.ClaudeSessionData{ConversationUUID: claimOther})
+				i.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: claimOther})
 			},
 		},
 	}

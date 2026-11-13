@@ -1164,7 +1164,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	// Handle ResumeId - set up claudeSession so the --resume flag gets added on Start()
 	if opts.ResumeId != "" {
-		instance.claudeSession = &ClaudeSessionData{
+		instance.claudeSession = &domain.ClaudeSessionData{
 			ConversationUUID: opts.ResumeId,
 			LastAttached:     t,
 			Metadata: map[string]string{

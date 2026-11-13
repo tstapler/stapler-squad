@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -311,7 +310,7 @@ func (i *VisibilityIndex) UpsertMany(entries []Entry) {
 	i.state.Store(s)
 }
 
-func entryFromData(d session.InstanceData) Entry {
+func entryFromData(d domain.InstanceData) Entry {
 	e := Entry{UUID: d.UUID, Title: d.Title, Hidden: d.Hidden}
 	if d.Title != "" {
 		e.TmuxName = tmux.NewSessionName(d.Title, d.TmuxPrefix).String()

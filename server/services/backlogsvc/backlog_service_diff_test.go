@@ -31,7 +31,7 @@ func attachWorkSessionWithRange(t *testing.T, storage *session.Storage, repo *se
 	require.NoError(t, repo.UpdateItemSessionGitActivity(t.Context(), is.ID, sha, "work commit", time.Now(), 1))
 
 	now := time.Now()
-	require.NoError(t, repo.Create(t.Context(), session.InstanceData{
+	require.NoError(t, repo.Create(t.Context(), domain.InstanceData{
 		Title:      sessionUUID,
 		UUID:       sessionUUID,
 		Path:       worktreePath,
@@ -41,7 +41,7 @@ func attachWorkSessionWithRange(t *testing.T, storage *session.Storage, repo *se
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      repoPath,
 			WorktreePath:  worktreePath,
 			SessionName:   sessionUUID,

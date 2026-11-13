@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // fakeLister counts calls and can block until released.
@@ -17,13 +17,13 @@ type fakeLister struct {
 	calls   atomic.Int64
 	started chan struct{} // receives one token per call
 	block   chan struct{} // nil = return immediately
-	data    []session.InstanceData
+	data    []domain.InstanceData
 	err     error
 }
 
 func newFakeLister() *fakeLister { return &fakeLister{started: make(chan struct{}, 64)} }
 
-func (f *fakeLister) ListInstanceData() ([]session.InstanceData, error) {
+func (f *fakeLister) ListInstanceData() ([]domain.InstanceData, error) {
 	f.calls.Add(1)
 	f.started <- struct{}{}
 	if f.block != nil {
@@ -162,7 +162,7 @@ func TestRefresh_ShouldCallListAtMostOncePer5s_WhenMissesAndPreviousAttemptFaile
 func TestGate_ShouldCountUnresolvedResolvedLater_WhenRefreshFindsSessionInStorage(t *testing.T) {
 	t.Parallel()
 	l := newFakeLister()
-	l.data = []session.InstanceData{{UUID: "u-late", Title: "late-session", Hidden: true, Tags: []string{"backlog:review"}}}
+	l.data = []domain.InstanceData{{UUID: "u-late", Title: "late-session", Hidden: true, Tags: []string{"backlog:review"}}}
 	g, _ := gateWithLister(l, nil)
 
 	if got := g.Resolver().Resolve("late-session", nil).Visibility; got != VisibilityUnresolved {

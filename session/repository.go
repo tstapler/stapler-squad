@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"time"
 )
 
@@ -116,9 +117,9 @@ type ProjectData struct {
 // It is implemented by EntRepository; pass nil to disable persistence (e.g., tests).
 type ShellRepository interface {
 	// CreateShell persists a new shell record under the given session title.
-	CreateShell(ctx context.Context, sessionTitle string, data ShellData) error
+	CreateShell(ctx context.Context, sessionTitle string, data domain.ShellData) error
 	// ListShells returns all shell records for the given session title, ordered by order_index.
-	ListShells(ctx context.Context, sessionTitle string) ([]ShellData, error)
+	ListShells(ctx context.Context, sessionTitle string) ([]domain.ShellData, error)
 	// UpdateShellStatus sets the status (and optionally exit code) for the shell with the given ID.
 	UpdateShellStatus(ctx context.Context, shellID, status string, exitCode *int) error
 	// DeleteShell removes the shell record with the given ID.

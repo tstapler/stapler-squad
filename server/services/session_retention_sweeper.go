@@ -42,7 +42,7 @@ type SessionRetentionSweeper struct {
 	sessionHolds itemHoldTracker
 	// reread returns the session's current row for the pre-delete re-check;
 	// nil skips the re-read (tests that build the struct directly).
-	reread func(uuid string) (*session.InstanceData, error)
+	reread func(uuid string) (*domain.InstanceData, error)
 	// reverifyClosed asks GitHub whether a PR the store has as closed-unmerged was
 	// reopened; nil uses a conditional GET. An error holds the session.
 	reverifyClosed func(ctx context.Context, ref domain.PRRef) (reopened bool, err error)
@@ -105,7 +105,7 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 	// can evaluate a sibling's own base eligibility without a second storage read per
 	// sibling per candidate — and so every candidate this cycle sees the same consistent
 	// view of every other session's state.
-	byUUID := make(map[string]session.InstanceData, len(dataSlice))
+	byUUID := make(map[string]domain.InstanceData, len(dataSlice))
 	for _, d := range dataSlice {
 		if d.UUID != "" {
 			byUUID[d.UUID] = d
@@ -153,7 +153,7 @@ func (s *SessionRetentionSweeper) sweep(ctx context.Context) {
 // stillPREligible re-reads one session's PR evidence immediately before its
 // delete, since the cycle load can be minutes old (a PR attached mid-cycle must
 // win). The cycle load stays as the prefilter.
-func (s *SessionRetentionSweeper) stillPREligible(ctx context.Context, d session.InstanceData, cutoff time.Time) (bool, string) {
+func (s *SessionRetentionSweeper) stillPREligible(ctx context.Context, d domain.InstanceData, cutoff time.Time) (bool, string) {
 	if d.UUID == "" {
 		return true, ""
 	}
@@ -180,7 +180,7 @@ func (s *SessionRetentionSweeper) stillPREligible(ctx context.Context, d session
 }
 
 // surfaceItemPRHolds reports item-direct holds that outlasted itemPRHoldMaxAge.
-func (s *SessionRetentionSweeper) surfaceItemPRHolds(all []session.InstanceData, pr *sweepPRData, cutoff time.Time) {
+func (s *SessionRetentionSweeper) surfaceItemPRHolds(all []domain.InstanceData, pr *sweepPRData, cutoff time.Time) {
 	days := s.cfg.SessionRetention.RetentionDaysOrDefault()
 	var holds []ItemPRHold
 	for _, d := range all {
@@ -194,7 +194,7 @@ func (s *SessionRetentionSweeper) surfaceItemPRHolds(all []session.InstanceData,
 
 // surfaceSessionPRHolds reports expired archived sessions held by their own
 // linked PRs, so a long-held session is visible rather than Debug-only.
-func (s *SessionRetentionSweeper) surfaceSessionPRHolds(all []session.InstanceData, pr *sweepPRData, cutoff time.Time) {
+func (s *SessionRetentionSweeper) surfaceSessionPRHolds(all []domain.InstanceData, pr *sweepPRData, cutoff time.Time) {
 	days := s.cfg.SessionRetention.RetentionDaysOrDefault()
 	var holds []ItemPRHold
 	for _, d := range all {
@@ -211,7 +211,7 @@ func (s *SessionRetentionSweeper) surfaceSessionPRHolds(all []session.InstanceDa
 
 // expiredUUIDs lists the uuids of archived sessions past the cutoff: the only
 // ones baseSafeToDelete ever asks PR questions about, siblings included.
-func expiredUUIDs(all []session.InstanceData, cutoff time.Time) []string {
+func expiredUUIDs(all []domain.InstanceData, cutoff time.Time) []string {
 	var uuids []string
 	for _, d := range all {
 		if d.UUID != "" && d.ArchivedAt != nil && d.ArchivedAt.Before(cutoff) {
@@ -226,7 +226,7 @@ func expiredUUIDs(all []session.InstanceData, cutoff time.Time) []string {
 // does NOT check worktree sharing with siblings — sessionSafeToDelete calls this both for
 // the top-level candidate and, in its own sibling loop, to test each sibling's own
 // eligibility — the sharing check must not recurse into itself.
-func (s *SessionRetentionSweeper) baseSafeToDelete(d session.InstanceData, pr *sweepPRData, cutoff time.Time) (safe bool, reason string) {
+func (s *SessionRetentionSweeper) baseSafeToDelete(d domain.InstanceData, pr *sweepPRData, cutoff time.Time) (safe bool, reason string) {
 	if d.ArchivedAt == nil || !d.ArchivedAt.Before(cutoff) {
 		return false, "not archived, or not yet past the retention window"
 	}
@@ -291,7 +291,7 @@ func (s *SessionRetentionSweeper) baseSafeToDelete(d session.InstanceData, pr *s
 //
 // Mirrors the sibling-lookup pattern backlog_service.go's cleanupItemWorktreesExcept
 // already uses for the same underlying reason (shared worktree across reopens).
-func (s *SessionRetentionSweeper) sessionSafeToDelete(ctx context.Context, d session.InstanceData, byUUID map[string]session.InstanceData, pr *sweepPRData, cutoff time.Time) (safe bool, reason string) {
+func (s *SessionRetentionSweeper) sessionSafeToDelete(ctx context.Context, d domain.InstanceData, byUUID map[string]domain.InstanceData, pr *sweepPRData, cutoff time.Time) (safe bool, reason string) {
 	safe, reason = s.baseSafeToDelete(d, pr, cutoff)
 	if !safe {
 		return false, reason

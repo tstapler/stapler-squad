@@ -4391,7 +4391,7 @@ func TestCaptureShipSnapshot_ShouldWriteAllSixFieldsBeforeDoneTransition_WhenBot
 
 	prStatus := &git.PRStatus{ApprovedCount: 2, ChangesRequestedCount: 0, CIFailing: false}
 	lastWork := &backlogdto.ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
-	wt := &session.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: baseSHA}
+	wt := &domain.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: baseSHA}
 
 	err := CaptureShipSnapshot(ctx, storage, item, prStatus, lastWork, wt)
 	require.NoError(t, err, "CaptureShipSnapshot must never return an error")
@@ -4464,7 +4464,7 @@ func TestCaptureShipSnapshot_ShouldPreserveSuccessfulGithubGroup_WhenFileStatsBe
 
 			item := newShipSnapshotTestItem(t, storage, repoPath, 9002)
 			lastWork := &backlogdto.ItemSessionSummary{SessionUUID: uuid.New().String(), LastCommitSha: headSHA}
-			wt := &session.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: tt.baseSHA}
+			wt := &domain.GitWorktreeData{RepoPath: repoPath, BaseCommitSHA: tt.baseSHA}
 
 			err := CaptureShipSnapshot(ctx, storage, item, tt.prStatus, lastWork, wt)
 			require.NoError(t, err, "CaptureShipSnapshot must never return an error, even when both groups fail")

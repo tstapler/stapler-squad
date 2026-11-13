@@ -6,9 +6,9 @@ import (
 )
 
 // createTestSession creates a minimal InstanceData for use in tests.
-func createTestSession(title string) InstanceData {
+func createTestSession(title string) domain.InstanceData {
 	now := time.Now()
-	return InstanceData{
+	return domain.InstanceData{
 		Title:      title,
 		Path:       "/home/user/project",
 		WorkingDir: "/home/user/project",

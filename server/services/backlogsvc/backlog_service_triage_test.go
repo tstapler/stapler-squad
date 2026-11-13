@@ -2719,7 +2719,7 @@ func attachPRFixWorkSession(t *testing.T, storage *session.Storage, repo *sessio
 
 	baseCommitSHA := strings.TrimSpace(svctest.RunGitTestCmd(t, worktreePath, "rev-parse", "HEAD"))
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+	require.NoError(t, repo.Create(context.Background(), domain.InstanceData{
 		Title:      sessionUUID,
 		UUID:       sessionUUID,
 		Path:       worktreePath,
@@ -2729,7 +2729,7 @@ func attachPRFixWorkSession(t *testing.T, storage *session.Storage, repo *sessio
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      repoPath,
 			WorktreePath:  worktreePath,
 			SessionName:   sessionUUID,
@@ -2947,7 +2947,7 @@ func TestCleanupItemWorktreesExcept_should_NotifyAndLogWarning_When_WorktreeRowM
 
 	const sessionUUID = "missing-row-work-uuid"
 	now := time.Now()
-	require.NoError(t, storage.CreateInstanceData(ctx, session.InstanceData{
+	require.NoError(t, storage.CreateInstanceData(ctx, domain.InstanceData{
 		Title:       sessionUUID,
 		UUID:        sessionUUID,
 		Path:        t.TempDir(),
@@ -3008,7 +3008,7 @@ func TestCleanupItemWorktreesExcept_should_ContinueSilently_When_SessionDoesNotE
 
 	const sessionUUID = "directory-session-uuid"
 	now := time.Now()
-	require.NoError(t, storage.CreateInstanceData(ctx, session.InstanceData{
+	require.NoError(t, storage.CreateInstanceData(ctx, domain.InstanceData{
 		Title:       sessionUUID,
 		UUID:        sessionUUID,
 		Path:        t.TempDir(),
@@ -4704,7 +4704,7 @@ func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseS
 	// GetGitDiffRef(repo fallback) must fail before the merge-base repair kicks in.
 	goneWT := filepath.Join(t.TempDir(), "worktree-that-is-gone")
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+	require.NoError(t, repo.Create(context.Background(), domain.InstanceData{
 		Title:      workSessionUUID,
 		UUID:       workSessionUUID,
 		Path:       goneWT,
@@ -4714,7 +4714,7 @@ func TestGetWorkSessionDiff_should_RecoverViaMergeBase_When_WorktreeGoneAndBaseS
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      repoDir,
 			WorktreePath:  goneWT,
 			SessionName:   workSessionUUID,
@@ -4789,7 +4789,7 @@ func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsB
 	require.NoError(t, err)
 
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+	require.NoError(t, repo.Create(context.Background(), domain.InstanceData{
 		Title:      workSessionUUID,
 		UUID:       workSessionUUID,
 		Path:       worktreeDir,
@@ -4799,7 +4799,7 @@ func TestGetWorkSessionDiff_should_RecoverUsingWorktreePath_When_WorktreeExistsB
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      repoDir,
 			WorktreePath:  worktreeDir,
 			SessionName:   workSessionUUID,
@@ -4865,7 +4865,7 @@ func TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMisma
 	require.NoError(t, err)
 
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+	require.NoError(t, repo.Create(context.Background(), domain.InstanceData{
 		Title:      workSessionUUID,
 		UUID:       workSessionUUID,
 		Path:       worktreeDir,
@@ -4875,7 +4875,7 @@ func TestGetWorkSessionDiff_should_FallBackToRepoPath_When_WorktreeIdentityMisma
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:      repoDir,
 			WorktreePath:  worktreeDir,
 			SessionName:   workSessionUUID,
@@ -4935,7 +4935,7 @@ func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiff
 
 	goneWT := filepath.Join(t.TempDir(), "worktree-that-is-gone")
 	now := time.Now()
-	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+	require.NoError(t, repo.Create(context.Background(), domain.InstanceData{
 		Title:      workSessionUUID,
 		UUID:       workSessionUUID,
 		Path:       goneWT,
@@ -4945,7 +4945,7 @@ func TestTriggerReReview_should_BlockInsteadOfFalseFail_When_WorktreeGoneAndDiff
 		Program:    "claude",
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Worktree: session.GitWorktreeData{
+		Worktree: domain.GitWorktreeData{
 			RepoPath:     repoDir,
 			WorktreePath: goneWT,
 			SessionName:  workSessionUUID,

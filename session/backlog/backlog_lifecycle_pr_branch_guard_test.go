@@ -693,7 +693,7 @@ func TestPROwnershipFor(t *testing.T) {
 		assert.Equal(t, []string{"x", session.BacklogBranchPrefix + "x"}, own.branches)
 	})
 	t.Run("already-prefixed branch is not double-prefixed and dedupes the worktree copy", func(t *testing.T) {
-		own := prOwnershipFor(&backlogdto.ItemSessionSummary{BranchName: "backlog/x"}, &session.GitWorktreeData{BranchName: "backlog/x"})
+		own := prOwnershipFor(&backlogdto.ItemSessionSummary{BranchName: "backlog/x"}, &domain.GitWorktreeData{BranchName: "backlog/x"})
 		assert.Equal(t, []string{"backlog/x"}, own.branches)
 	})
 	t.Run("tip commit is evidence", func(t *testing.T) {
@@ -705,7 +705,7 @@ func TestPROwnershipFor(t *testing.T) {
 		assert.True(t, own.empty())
 	})
 	t.Run("nothing recorded is empty", func(t *testing.T) {
-		assert.True(t, prOwnershipFor(nil, &session.GitWorktreeData{}).empty())
+		assert.True(t, prOwnershipFor(nil, &domain.GitWorktreeData{}).empty())
 	})
 }
 

@@ -294,7 +294,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 func TestDiffStatsDataSerializationExcludesContent(t *testing.T) {
 	t.Parallel()
 	// Create DiffStatsData with content
-	stats := DiffStatsData{
+	stats := domain.DiffStatsData{
 		Added:   10,
 		Removed: 5,
 		Content: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1,5 +1,10 @@\n+new line\n",
@@ -332,7 +332,7 @@ func TestDiffStatsDataBackwardCompatibility(t *testing.T) {
 	}`
 
 	// Parse into DiffStatsData
-	var stats DiffStatsData
+	var stats domain.DiffStatsData
 	err := json.Unmarshal([]byte(oldJSON), &stats)
 	require.NoError(t, err)
 
@@ -349,10 +349,10 @@ func TestDiffStatsDataBackwardCompatibility(t *testing.T) {
 func TestInstanceDataSaveExcludesDiffContent(t *testing.T) {
 	t.Parallel()
 	// Create InstanceData with diff stats including content
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title: "test-session",
 		Path:  "/test/path",
-		DiffStats: DiffStatsData{
+		DiffStats: domain.DiffStatsData{
 			Added:   25,
 			Removed: 10,
 			Content: "large diff content that should not be persisted to reduce file size...",
@@ -415,7 +415,7 @@ func TestInstanceDataLoadWithDiffContent(t *testing.T) {
 	}`
 
 	// Parse into InstanceData
-	var data InstanceData
+	var data domain.InstanceData
 	err := json.Unmarshal([]byte(oldJSON), &data)
 	require.NoError(t, err)
 
@@ -937,7 +937,7 @@ func TestSaveInstances_SkipsNotYetStartedInstance(t *testing.T) {
 func TestDiffStatsDataRoundTrip(t *testing.T) {
 	t.Parallel()
 	// Original data with content
-	original := DiffStatsData{
+	original := domain.DiffStatsData{
 		Added:   42,
 		Removed: 17,
 		Content: "This content should not survive the round trip...",
@@ -948,7 +948,7 @@ func TestDiffStatsDataRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Deserialize
-	var loaded DiffStatsData
+	var loaded domain.DiffStatsData
 	err = json.Unmarshal(jsonBytes, &loaded)
 	require.NoError(t, err)
 
@@ -1401,7 +1401,7 @@ func TestGetWorktreeDataBySessionUUIDs_Should_MatchSingleLookup_InOneQuery(t *te
 // prLoadFixture creates a persisted Paused session row with an optional legacy PR.
 func prLoadFixture(t *testing.T, storage *Storage, title, uuid, owner, repo string, legacyNumber int) {
 	t.Helper()
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(), GitHubOwner: owner, GitHubRepo: repo,
 	}

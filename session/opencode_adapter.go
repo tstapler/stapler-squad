@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/dbpool"
+	"github.com/tstapler/stapler-squad/session/domain"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
@@ -70,7 +71,7 @@ func resolveOpencodeUUID(ctx context.Context, inst *Instance, dbPath string) (st
 		if uuidStr != "" {
 			inst.claudeSessionMu.Lock()
 			if inst.claudeSession == nil {
-				inst.claudeSession = &ClaudeSessionData{}
+				inst.claudeSession = &domain.ClaudeSessionData{}
 			}
 			inst.claudeSession.ConversationUUID = uuidStr
 			inst.claudeSessionMu.Unlock()
@@ -345,7 +346,7 @@ func (a *OpencodeAdapter) Export(ctx context.Context, turns []CanonicalTurn, ins
 
 	inst.claudeSessionMu.Lock()
 	if inst.claudeSession == nil {
-		inst.claudeSession = &ClaudeSessionData{}
+		inst.claudeSession = &domain.ClaudeSessionData{}
 	}
 	inst.claudeSession.ConversationUUID = uuidStr
 	inst.claudeSessionMu.Unlock()

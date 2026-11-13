@@ -209,7 +209,7 @@ func TestKillTmuxPaneOnly_DeregistersFromPollerOnSuccess(t *testing.T) {
 	const uuid = "uuid-kill-pane-dereg"
 	socket := svctest.StartRealTmuxSession(t, title)
 
-	inst, err := session.FromInstanceDataDeferred(session.InstanceData{
+	inst, err := session.FromInstanceDataDeferred(domain.InstanceData{
 		Title:            title,
 		UUID:             uuid,
 		Path:             t.TempDir(),
@@ -551,7 +551,7 @@ func TestFindConfirmedLiveInstance_MapMiss_TymuxShadowWithLiveStoredSession_Retu
 	storage, err := session.NewStorageWithRepository(repo)
 	require.NoError(t, err)
 	const uuid = "uuid-tymux-stored-live"
-	require.NoError(t, repo.Create(context.Background(), session.InstanceData{
+	require.NoError(t, repo.Create(context.Background(), domain.InstanceData{
 		Title:          "tymux-stored-live",
 		UUID:           uuid,
 		Path:           t.TempDir(),

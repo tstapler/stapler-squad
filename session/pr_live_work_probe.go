@@ -21,7 +21,7 @@ type LiveSnapshotSource interface {
 // InstanceDataReader is the storage read the probe falls back to for a session
 // that is not live. *Storage implements it.
 type InstanceDataReader interface {
-	FindInstanceDataByID(id string) (*InstanceData, error)
+	FindInstanceDataByID(id string) (*domain.InstanceData, error)
 }
 
 // SnapshotLiveWorkProbe is the real LiveWorkProbe. Contract (owner-approved):
@@ -119,7 +119,7 @@ func LiveWorkFactsFromSnapshot(s *domain.InstanceSnapshot) LiveWorkFacts {
 // liveWorkFactsFromData is the persisted fallback for a session that is not live
 // in this process: not Working (nothing is running to be mid-turn), so only a
 // recent output keeps it live.
-func liveWorkFactsFromData(d *InstanceData) LiveWorkFacts {
+func liveWorkFactsFromData(d *domain.InstanceData) LiveWorkFacts {
 	unended := d.ArchivedAt == nil && (d.Status == domain.Creating || d.Status == domain.Active)
 	return LiveWorkFacts{Unended: unended, LastMeaningfulChangeAt: d.LastMeaningfulOutput}
 }

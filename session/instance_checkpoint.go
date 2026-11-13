@@ -245,7 +245,7 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 	if hasCanonicalForked {
 		newInst.mu.Lock()
 		if newInst.claudeSession == nil {
-			newInst.claudeSession = &ClaudeSessionData{}
+			newInst.claudeSession = &domain.ClaudeSessionData{}
 		}
 		newInst.claudeSession.ConversationUUID = newConvUUID
 		newInst.claudeSession.ProjectName = newInst.Title

@@ -20,11 +20,11 @@ func (f fakeSnapshotSource) LiveSnapshot(id string) (*domain.InstanceSnapshot, b
 }
 
 type fakeProbeInstanceStore struct {
-	data map[string]*InstanceData
+	data map[string]*domain.InstanceData
 	err  error
 }
 
-func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*InstanceData, error) {
+func (f *fakeProbeInstanceStore) FindInstanceDataByID(id string) (*domain.InstanceData, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -78,7 +78,7 @@ func TestLiveWorkProbe_ShouldReturnNotLiveWithoutError_WhenSessionAbsentOrPersis
 	t.Parallel()
 	now := prTestEpoch
 	archived := now
-	store := &fakeProbeInstanceStore{data: map[string]*InstanceData{
+	store := &fakeProbeInstanceStore{data: map[string]*domain.InstanceData{
 		"archived": {Status: domain.Active, ArchivedAt: &archived, LastMeaningfulOutput: now},
 		"stopped":  {Status: domain.Stopped, LastMeaningfulOutput: now},
 		"recent":   {Status: domain.Active, LastMeaningfulOutput: now.Add(-time.Minute)},

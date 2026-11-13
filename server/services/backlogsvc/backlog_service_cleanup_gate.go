@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -26,7 +27,7 @@ type cleanupWiring struct {
 	// liveEnabled replaces the reader:backlog lookup in tests.
 	liveEnabled func() bool
 	// removeFn replaces the git worktree removal in tests; nil: git cleanup.
-	removeFn func(wt session.GitWorktreeData) error
+	removeFn func(wt domain.GitWorktreeData) error
 }
 
 func newCleanupWiring(storage *session.Storage) *cleanupWiring {
@@ -65,7 +66,7 @@ func (w *cleanupWiring) ruleLProbe() session.LiveWorkProbe {
 	return w.probe
 }
 
-func (w *cleanupWiring) remove(wt session.GitWorktreeData) error {
+func (w *cleanupWiring) remove(wt domain.GitWorktreeData) error {
 	if w.removeFn != nil {
 		return w.removeFn(wt)
 	}

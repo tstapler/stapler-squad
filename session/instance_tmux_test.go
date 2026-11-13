@@ -97,7 +97,7 @@ func TestInitTmuxSession_StalePointerAliveFalse_RebuildsWithResume(t *testing.T)
 		processManager: NewTmuxBackend(mock),
 		LaunchCommand:  "claude", // stale command baked in before the crash, with no --resume
 	}
-	inst.SetClaudeSession(&ClaudeSessionData{ConversationUUID: uuid})
+	inst.SetClaudeSession(&domain.ClaudeSessionData{ConversationUUID: uuid})
 
 	inst.initTmuxSession()
 
@@ -315,7 +315,7 @@ func wantPiStderrRedirect(t *testing.T, inst *Instance) string {
 
 func TestBuildLaunchCommand_PiSessionResume(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &PiSessionData{SessionID: "abc123"}}}
+	inst := &Instance{Program: "pi", piExtension: piExtension{piSession: &domain.PiSessionData{SessionID: "abc123"}}}
 	got := inst.buildLaunchCommand("")
 	want := "pi --session 'abc123'" + wantPiStderrRedirect(t, inst)
 	if got != want {

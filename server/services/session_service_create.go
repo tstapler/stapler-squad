@@ -45,7 +45,7 @@ import (
 // could collide with. Returns "" with a nil error when RestartFromSessionId
 // is unset. Errors are already-wrapped *connect.Error values, ready to
 // return directly from CreateSession.
-func (s *SessionService) resolveRestartSource(req *sessionv1.CreateSessionRequest, existing []session.InstanceData) (string, error) {
+func (s *SessionService) resolveRestartSource(req *sessionv1.CreateSessionRequest, existing []domain.InstanceData) (string, error) {
 	if req.RestartFromSessionId == "" {
 		return "", nil
 	}
@@ -122,7 +122,7 @@ func generateOneOffPath(cfg *config.Config) (string, error) {
 // FromInstanceData calling Start() on every session) and rejects msg.Title as
 // a duplicate if any existing row already uses it. The returned rows are
 // reused by CreateSession's later restart-source resolution.
-func (s *SessionService) checkTitleConflictAndLoadExisting(msg *sessionv1.CreateSessionRequest) ([]session.InstanceData, error) {
+func (s *SessionService) checkTitleConflictAndLoadExisting(msg *sessionv1.CreateSessionRequest) ([]domain.InstanceData, error) {
 	existing, err := s.storage.ListInstanceData()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list instances: %w", err))

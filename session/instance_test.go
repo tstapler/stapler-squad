@@ -255,7 +255,7 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// Create instance data with potentially corrupted path
-			data := InstanceData{
+			data := domain.InstanceData{
 				Title:   "Test Session",
 				Path:    tt.corruptedPath,
 				Program: "claude",
@@ -640,7 +640,7 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 // skips it.
 func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testing.T) {
 	t.Parallel()
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:      "crashed-restore-test",
 		Path:       "/tmp/crashed-restore-test",
 		Status:     domain.Crashed,
@@ -677,7 +677,7 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *testing.T) {
 	t.Parallel()
 	archivedAt := time.Now()
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:      "archived-stopped-restore-test",
 		Path:       "/tmp/archived-stopped-restore-test",
 		Status:     domain.Stopped,
@@ -707,7 +707,7 @@ func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *te
 // AutoApprove through the same literal -- this pins both fields survive the round trip.
 func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 	t.Parallel()
-	data := InstanceData{
+	data := domain.InstanceData{
 		Title:       "auto-yes-approve-restore-test",
 		Path:        "/tmp/auto-yes-approve-restore-test",
 		Status:      domain.Stopped,
