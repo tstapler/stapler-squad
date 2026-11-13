@@ -46,7 +46,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
-		Status:    Ready,
+		Status:    domain.Ready,
 		Height:    100,
 		Width:     200,
 		CreatedAt: time.Now(),
@@ -80,7 +80,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
-		Status:    Ready,
+		Status:    domain.Ready,
 		Height:    100,
 		Width:     200,
 		CreatedAt: time.Now(),
@@ -107,7 +107,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		worktreePath := instance.GitManager.Worktree.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted, mark instance as paused
-			instance.ForceStatus(Paused)
+			instance.ForceStatus(domain.Paused)
 		}
 	}
 
@@ -128,15 +128,15 @@ func TestStatusEnumValues(t *testing.T) {
 	// Test that all status values match the new 5-state model:
 	// Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
 	tests := []struct {
-		status Status
+		status domain.Status
 		value  int
 		name   string
 	}{
-		{Creating, 0, "Creating"},
-		{Active, 1, "Active"},
-		{Paused, 2, "Paused"},
-		{Stopped, 3, "Stopped"},
-		{Hibernated, 4, "Hibernated"},
+		{domain.Creating, 0, "Creating"},
+		{domain.Active, 1, "Active"},
+		{domain.Paused, 2, "Paused"},
+		{domain.Stopped, 3, "Stopped"},
+		{domain.Hibernated, 4, "Hibernated"},
 	}
 
 	for _, test := range tests {
@@ -146,14 +146,14 @@ func TestStatusEnumValues(t *testing.T) {
 	}
 
 	// Verify deprecated aliases point to their canonical equivalents.
-	if Running != Active {
-		t.Errorf("Running alias should equal Active (1), got %d", int(Running))
+	if domain.Running != domain.Active {
+		t.Errorf("Running alias should equal Active (1), got %d", int(domain.Running))
 	}
-	if Ready != Active {
-		t.Errorf("Ready alias should equal Active (1), got %d", int(Ready))
+	if domain.Ready != domain.Active {
+		t.Errorf("Ready alias should equal Active (1), got %d", int(domain.Ready))
 	}
-	if Loading != Creating {
-		t.Errorf("Loading alias should equal Creating (0), got %d", int(Loading))
+	if domain.Loading != domain.Creating {
+		t.Errorf("Loading alias should equal Creating (0), got %d", int(domain.Loading))
 	}
 }
 
@@ -270,7 +270,7 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 				Title:   "Test Session",
 				Path:    tt.corruptedPath,
 				Program: "claude",
-				Status:  Paused, // Use paused to avoid starting actual session
+				Status:  domain.Paused, // Use paused to avoid starting actual session
 			}
 
 			instance, err := FromInstanceData(data)
@@ -492,7 +492,7 @@ func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCom
 		t.Fatalf("CommitChanges(): %v", err)
 	}
 
-	inst := &Instance{Title: "has-commits-ahead-test", UUID: "sess-has-commits-ahead", Status: Ready}
+	inst := &Instance{Title: "has-commits-ahead-test", UUID: "sess-has-commits-ahead", Status: domain.Ready}
 	inst.SetGitWorktree(wt) // also sets started=true
 
 	if err := inst.UpdateDiffStats(); err != nil {
@@ -511,7 +511,7 @@ func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCom
 // it must stay at its false zero value through a real UpdateDiffStats pass.
 func TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "dir-session-no-worktree-test", UUID: "sess-dir-no-worktree", Status: Ready, Path: t.TempDir()}
+	inst := &Instance{Title: "dir-session-no-worktree-test", UUID: "sess-dir-no-worktree", Status: domain.Ready, Path: t.TempDir()}
 	inst.started.Store(true)
 
 	if err := inst.UpdateDiffStats(); err != nil {
@@ -616,7 +616,7 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 		Title:     "note-round-trip-test",
 		UUID:      "sess-note-round-trip",
 		Path:      "/path/to/repo",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -654,7 +654,7 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 	data := InstanceData{
 		Title:      "crashed-restore-test",
 		Path:       "/tmp/crashed-restore-test",
-		Status:     Crashed,
+		Status:     domain.Crashed,
 		ExitReason: "signal SIGKILL (exit code 137)",
 		Program:    "claude",
 		CreatedAt:  time.Now(),
@@ -666,7 +666,7 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 		t.Fatalf("fromInstanceData returned error: %v", err)
 	}
 
-	if instance.Status != Crashed {
+	if instance.Status != domain.Crashed {
 		t.Fatalf("expected Status=Crashed, got %v", instance.Status)
 	}
 	if !instance.Started() {
@@ -691,7 +691,7 @@ func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *te
 	data := InstanceData{
 		Title:      "archived-stopped-restore-test",
 		Path:       "/tmp/archived-stopped-restore-test",
-		Status:     Stopped,
+		Status:     domain.Stopped,
 		Program:    "claude",
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
@@ -703,7 +703,7 @@ func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *te
 		t.Fatalf("fromInstanceData returned error: %v", err)
 	}
 
-	if instance.Status != Stopped {
+	if instance.Status != domain.Stopped {
 		t.Fatalf("expected Status=Stopped (archived sessions must never be revived to Active), got %v", instance.Status)
 	}
 	if !instance.Started() {
@@ -721,7 +721,7 @@ func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 	data := InstanceData{
 		Title:       "auto-yes-approve-restore-test",
 		Path:        "/tmp/auto-yes-approve-restore-test",
-		Status:      Stopped,
+		Status:      domain.Stopped,
 		Program:     "claude",
 		AutoYes:     true,
 		AutoApprove: true,
@@ -880,7 +880,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_NewWorktreeResolvesToRepoRoo
 	assert.ErrorIs(t, startErr, ErrWorktreeResolutionFailed)
 	assert.Contains(t, startErr.Error(), "resolved to no real worktree")
 	assert.False(t, inst.pm().IsAlive(), "no tmux/process should ever have been spawned")
-	assert.NotEqual(t, Active, inst.Status, "status must never reach Active")
+	assert.NotEqual(t, domain.Active, inst.Status, "status must never reach Active")
 }
 
 // TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly is
@@ -912,7 +912,7 @@ func TestInstance_Start_should_ProceedToSpawn_When_WorktreeResolvesCorrectly(t *
 
 	require.NoError(t, inst.Start(true))
 
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.True(t, inst.pm().IsAlive())
 	assert.NotEqual(t, repoDir, inst.GitManager.GetWorktreePath(), "a real, isolated worktree must have been created")
 }
@@ -958,7 +958,7 @@ func TestInstance_Start_should_FailBeforeSpawn_When_PreSpawnCollisionGuardReturn
 	require.Error(t, startErr, "Start(true) must fail when the collision guard refuses the worktree")
 	assert.Contains(t, startErr.Error(), "forced collision")
 	assert.False(t, inst.pm().IsAlive(), "no tmux/process should ever have been spawned")
-	assert.NotEqual(t, Active, inst.Status, "status must never reach Active")
+	assert.NotEqual(t, domain.Active, inst.Status, "status must never reach Active")
 }
 
 // TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected is Epic
@@ -990,6 +990,6 @@ func TestInstance_Start_should_ProceedToSpawn_When_NoCollisionDetected(t *testin
 
 	require.NoError(t, inst.Start(true))
 
-	assert.Equal(t, Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.True(t, inst.pm().IsAlive())
 }

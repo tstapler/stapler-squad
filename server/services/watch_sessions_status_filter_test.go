@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestWatchSessions_should_DeliverEvent_When_StatusFilterMatchesFailed is Epic
@@ -30,7 +31,7 @@ func TestWatchSessions_should_DeliverEvent_When_StatusFilterMatchesFailed(t *tes
 	inst := &session.Instance{
 		Title:   "watch-failed-status-filter",
 		UUID:    "eeeeeeee-0000-0000-0000-000000000001",
-		Status:  session.Failed,
+		Status:  domain.Failed,
 		Program: "claude",
 		Path:    "/tmp/test",
 	}

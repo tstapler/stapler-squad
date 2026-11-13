@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -301,7 +302,7 @@ func buildSyntheticRehearsalDB(t *testing.T, repo *EntRepository, size rehearsal
 func syntheticSession(repo *EntRepository, i, withPR int) *ent.SessionCreate {
 	b := repo.Client.Session.Create().
 		SetTitle(fmt.Sprintf("syn-%05d", i)).SetUUID(fmt.Sprintf("syn-uuid-%05d", i)).
-		SetPath(fmt.Sprintf("/nonexistent/syn/%05d", i)).SetProgram("claude").SetStatus(int(Paused))
+		SetPath(fmt.Sprintf("/nonexistent/syn/%05d", i)).SetProgram("claude").SetStatus(int(domain.Paused))
 	if i >= withPR {
 		return b
 	}

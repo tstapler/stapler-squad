@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
@@ -183,7 +184,7 @@ func TestInstanceRestart_MigratesBackendWhenOverrideDiffersFromCurrent(t *testin
 		Title:   "migrate-test",
 		Path:    t.TempDir(),
 		Program: "bash",
-		Status:  Active,
+		Status:  domain.Active,
 		Backend: BackendTmux,
 	}
 	inst.started.Store(true)
@@ -227,7 +228,7 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 		Title:            "no-migrate-test",
 		Path:             t.TempDir(),
 		Program:          "bash",
-		Status:           Active,
+		Status:           domain.Active,
 		Backend:          BackendTmux,
 		TmuxServerSocket: testTmuxSocket(t),
 	}
@@ -339,7 +340,7 @@ func TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCo
 		Title:   "already-tymux-test",
 		Path:    t.TempDir(),
 		Program: "bash",
-		Status:  Active,
+		Status:  domain.Active,
 		Backend: BackendTymux,
 	}
 	inst.started.Store(true)

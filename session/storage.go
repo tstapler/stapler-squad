@@ -28,20 +28,20 @@ import (
 
 // InstanceData represents the serializable data of an Instance
 type InstanceData struct {
-	Title         string    `json:"title"`
-	UUID          string    `json:"uuid,omitempty"`
-	Path          string    `json:"path"`
-	WorkingDir    string    `json:"working_dir"`
-	Branch        string    `json:"branch"`
-	Status        Status    `json:"status"`
-	Height        int       `json:"height"`
-	Width         int       `json:"width"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	AutoYes       bool      `json:"auto_yes"`
-	AutoApprove   bool      `json:"auto_approve"`
-	Prompt        string    `json:"prompt"`
-	InitialPrompt string    `json:"initial_prompt,omitempty"`
+	Title         string        `json:"title"`
+	UUID          string        `json:"uuid,omitempty"`
+	Path          string        `json:"path"`
+	WorkingDir    string        `json:"working_dir"`
+	Branch        string        `json:"branch"`
+	Status        domain.Status `json:"status"`
+	Height        int           `json:"height"`
+	Width         int           `json:"width"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
+	AutoYes       bool          `json:"auto_yes"`
+	AutoApprove   bool          `json:"auto_approve"`
+	Prompt        string        `json:"prompt"`
+	InitialPrompt string        `json:"initial_prompt,omitempty"`
 	// InitialPromptSentAt records when InitialPrompt was actually typed into the
 	// terminal, persisted so a service restart's fresh driver goroutine doesn't
 	// have to re-derive (and potentially get wrong) whether it was already sent.
@@ -648,7 +648,7 @@ func (s *Storage) ArchiveInstanceDataByID(id string, at time.Time) (bool, error)
 		return false, nil
 	}
 	data.ArchivedAt = &at
-	data.Status = Stopped
+	data.Status = domain.Stopped
 	// The row now differs from what the live instance last saved; the caller's
 	// re-save must not be skipped as "unchanged".
 	if err := s.writeRow(data.Title, func() error { return s.Repo.Update(context.Background(), *data) }); err != nil {
@@ -1033,7 +1033,7 @@ func (s *Storage) GetInstanceArtifacts(title string) (string, error) {
 // id is matched against both uuid and title, mirroring InstanceData.MatchesID's
 // stable-ID-with-title-fallback convention used elsewhere in this file (e.g.
 // FindInstanceDataByID).
-func (s *Storage) UpdateInstanceIfEpoch(ctx context.Context, id string, capturedEpoch uint64, status Status, failureReason string) (bool, error) {
+func (s *Storage) UpdateInstanceIfEpoch(ctx context.Context, id string, capturedEpoch uint64, status domain.Status, failureReason string) (bool, error) {
 	client := s.GetEntClient()
 	if client == nil {
 		return false, fmt.Errorf("UpdateInstanceIfEpoch not supported by this backend")

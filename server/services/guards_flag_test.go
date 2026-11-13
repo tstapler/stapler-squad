@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // guardsEnv is a steerEnv whose service has the guards flag wired to the flag
@@ -83,7 +84,7 @@ func TestUnaryGuards_ShouldAcceptHiddenTargetWhenReadonlyGuardsFlagOffAndRejectW
 
 func TestUnaryGuards_ShouldAcceptProgramAndAutoApproveChangesOnlyWhileTheFlagIsOff(t *testing.T) {
 	e := newGuardsEnv(t)
-	paused := e.addSession("flag-restart", true, "", func(i *session.Instance) { i.Status = session.Paused })
+	paused := e.addSession("flag-restart", true, "", func(i *session.Instance) { i.Status = domain.Paused })
 	yes := true
 	req := func() *connect.Request[sessionv1.UpdateSessionRequest] {
 		return connect.NewRequest(&sessionv1.UpdateSessionRequest{Id: "flag-restart", AutoApprove: &yes})

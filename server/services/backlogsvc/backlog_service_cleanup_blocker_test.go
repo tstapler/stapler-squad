@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -47,7 +48,7 @@ func newBlockerHarness(t *testing.T, status session.BacklogStatus) *blockerHarne
 	h.path = filepath.Join(t.TempDir(), "wt")
 	now := time.Now()
 	require.NoError(t, repo.Create(t.Context(), session.InstanceData{
-		Title: h.uuid, UUID: h.uuid, Path: h.path, Status: session.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
+		Title: h.uuid, UUID: h.uuid, Path: h.path, Status: domain.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
 		Worktree: session.GitWorktreeData{RepoPath: filepath.Dir(h.path), WorktreePath: h.path, SessionName: h.uuid, BranchName: "backlog/x", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
 	_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: h.uuid, SessionRole: session.SessionRoleWork})
@@ -226,7 +227,7 @@ func TestCleanupGate_ShouldRecheckBeforeEachRemoval_WhenPRAttachesMidCleanup(t *
 	now := time.Now()
 	path2 := filepath.Join(t.TempDir(), "wt2")
 	require.NoError(t, h.repo.Create(t.Context(), session.InstanceData{
-		Title: second, UUID: second, Path: path2, Status: session.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
+		Title: second, UUID: second, Path: path2, Status: domain.Paused, Program: "claude", CreatedAt: now, UpdatedAt: now,
 		Worktree: session.GitWorktreeData{RepoPath: filepath.Dir(path2), WorktreePath: path2, SessionName: second, BranchName: "backlog/y", BaseCommitSHA: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 	}))
 	_, err := h.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: h.itemID, SessionUUID: second, SessionRole: session.SessionRoleWork})

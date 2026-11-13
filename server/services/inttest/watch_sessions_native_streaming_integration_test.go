@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/reviewqueue"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/importer"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -371,12 +372,12 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 
 	inst1 := &session.Instance{
 		ID: "watch-native-stream-inst-1", Title: "watch-native-stream-inst-1",
-		Path: t.TempDir(), Status: session.Active, Program: "claude",
+		Path: t.TempDir(), Status: domain.Active, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	inst2 := &session.Instance{
 		ID: "watch-native-stream-inst-2", Title: "watch-native-stream-inst-2",
-		Path: t.TempDir(), Status: session.Active, Program: "claude",
+		Path: t.TempDir(), Status: domain.Active, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 

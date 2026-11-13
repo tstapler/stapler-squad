@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestAttentionReasonFromDetected verifies every DetectedStatus maps to the expected reason.
@@ -47,18 +48,18 @@ func TestStatusFromDetected(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		detected detection.DetectedStatus
-		want     Status
+		want     domain.Status
 	}{
-		{detection.StatusReady, Active},
-		{detection.StatusIdle, Active},
-		{detection.StatusSuccess, Active},
-		{detection.StatusProcessing, Active},
-		{detection.StatusExecuting, Active},
-		{detection.StatusNeedsApproval, Active},
-		{detection.StatusInputRequired, Active},
-		{detection.StatusError, Active},
-		{detection.StatusTestsFailing, Active},
-		{detection.StatusUnknown, Active},
+		{detection.StatusReady, domain.Active},
+		{detection.StatusIdle, domain.Active},
+		{detection.StatusSuccess, domain.Active},
+		{detection.StatusProcessing, domain.Active},
+		{detection.StatusExecuting, domain.Active},
+		{detection.StatusNeedsApproval, domain.Active},
+		{detection.StatusInputRequired, domain.Active},
+		{detection.StatusError, domain.Active},
+		{detection.StatusTestsFailing, domain.Active},
+		{detection.StatusUnknown, domain.Active},
 	}
 
 	for _, tt := range tests {

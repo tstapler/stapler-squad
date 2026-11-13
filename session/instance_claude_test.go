@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestInstance_SetHistoryInfo_FiresCallback_When_UUIDChanges guards the fix
@@ -76,19 +77,19 @@ func TestRecoverFromStaleResume_should_NotRestart_When_InstanceArchived(t *testi
 		t.Parallel()
 		archivedAt := time.Now()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "archived-stale-resume", Status: Stopped, ArchivedAt: &archivedAt}
+		inst := &Instance{Title: "archived-stale-resume", Status: domain.Stopped, ArchivedAt: &archivedAt}
 		inst.processManager = NewTmuxBackend(mock)
 
 		inst.recoverFromStaleResume()
 
 		assert.Equal(t, 0, mock.startCalls, "an archived session must not be restarted on a stale --resume exit")
-		assert.Equal(t, Stopped, inst.Snapshot().Status, "the archived session's status must be left alone")
+		assert.Equal(t, domain.Stopped, inst.Snapshot().Status, "the archived session's status must be left alone")
 	})
 
 	t.Run("not_archived_is_restarted_control", func(t *testing.T) {
 		t.Parallel()
 		mock := &mockTmuxManager{}
-		inst := &Instance{Title: "live-stale-resume", Status: Stopped}
+		inst := &Instance{Title: "live-stale-resume", Status: domain.Stopped}
 		inst.processManager = NewTmuxBackend(mock)
 
 		inst.recoverFromStaleResume()

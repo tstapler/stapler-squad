@@ -3,6 +3,7 @@ package session
 import (
 	"flag"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"os"
 	"path/filepath"
 	"sort"
@@ -49,7 +50,7 @@ func TestSessionLifecycleDiagram(t *testing.T) {
 
 func TestSessionLifecycleReference_DeterministicAndSensitiveToEdges(t *testing.T) {
 	t.Parallel()
-	forward := []TransitionDef{{From: Active, To: Stopped}, {From: Stopped, To: Active}}
+	forward := []TransitionDef{{From: domain.Active, To: domain.Stopped}, {From: domain.Stopped, To: domain.Active}}
 	reverse := []TransitionDef{forward[1], forward[0]}
 	if sessionLifecycleReference(forward) != sessionLifecycleReference(reverse) {
 		t.Fatal("diagram must not depend on transition declaration order")

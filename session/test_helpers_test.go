@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/domain"
 	"time"
 )
 
@@ -12,7 +13,7 @@ func createTestSession(title string) InstanceData {
 		Path:       "/home/user/project",
 		WorkingDir: "/home/user/project",
 		Branch:     "main",
-		Status:     Paused,
+		Status:     domain.Paused,
 		Height:     24,
 		Width:      80,
 		CreatedAt:  now,

@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
 	"github.com/tstapler/stapler-squad/session/resize"
 	"github.com/tstapler/stapler-squad/session/scrollback"
@@ -779,7 +780,7 @@ func waitForFullStateFrame(instance *session.Instance, deadline time.Time) (snap
 	return pollFullStateFrame(instanceStatus(instance), deadline, services.CapturePollEvery, instance.CapturePaneRedraw)
 }
 
-func pollFullStateFrame(status func() session.Status, deadline time.Time, every time.Duration,
+func pollFullStateFrame(status func() domain.Status, deadline time.Time, every time.Duration,
 	redraw func(context.Context) (streamhub.FullStateSnapshot, bool, error)) (snapshotFrame, bool) {
 	type capture struct {
 		frame snapshotFrame
@@ -798,21 +799,21 @@ func pollFullStateFrame(status func() session.Status, deadline time.Time, every 
 	return c.frame, c.ok
 }
 
-func instanceStatus(instance *session.Instance) func() session.Status {
-	return func() session.Status { return instance.Snapshot().Status }
+func instanceStatus(instance *session.Instance) func() domain.Status {
+	return func() domain.Status { return instance.Snapshot().Status }
 }
 
 // pollWhileResuming retries capture every interval until deadline while status reports a
 // transient state, giving up as soon as it reports one where capture will never succeed. It
 // always makes at least one attempt, even past deadline.
-func pollWhileResuming[T any](status func() session.Status, deadline time.Time, interval time.Duration, capture func() (T, error)) (T, error) {
+func pollWhileResuming[T any](status func() domain.Status, deadline time.Time, interval time.Duration, capture func() (T, error)) (T, error) {
 	for {
 		content, err := capture()
 		if err == nil {
 			return content, nil
 		}
 		switch status() {
-		case session.Paused, session.Stopped, session.Hibernated, session.Crashed:
+		case domain.Paused, domain.Stopped, domain.Hibernated, domain.Crashed:
 			return content, err
 		}
 		if time.Now().After(deadline) {
@@ -1246,7 +1247,7 @@ func (h *ConnectRPCWebSocketHandler) routeMainTerminalStream(stream *connectWebS
 func handleTmuxRestoreFailure(instance *session.Instance, restoreErr error) error {
 	if errors.Is(restoreErr, tmux.ErrWorkDirMissing) {
 		instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", restoreErr.Error()))
-		instance.ForceStatus(session.PermanentlyFailed)
+		instance.ForceStatus(domain.PermanentlyFailed)
 	}
 	return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
 }
@@ -2184,7 +2185,7 @@ func (h *ConnectRPCWebSocketHandler) ensureHubInstanceStarted(instance *session.
 	// flight) can still become started and are the only states MarkStartedIfTmuxAlive
 	// heals. Any other status (e.g. PermanentlyFailed with tmux alive) will never
 	// publish a Started event, so waiting just adds startupWaitTimeout to every connect.
-	if status := instance.GetLifecycleStatus(); status != session.Creating && status != session.Active {
+	if status := instance.GetLifecycleStatus(); status != domain.Creating && status != domain.Active {
 		log.Info("[streamViaHub] instance not started and not starting, attaching without waiting", "session", sessionID, "status", status.String())
 		return
 	}

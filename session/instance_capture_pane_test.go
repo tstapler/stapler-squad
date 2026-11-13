@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
@@ -18,7 +19,7 @@ func TestCapturePaneContent_PausedOrUnstartedReturnsNotStarted(t *testing.T) {
 		t.Errorf("unstarted: expected ErrSessionNotStarted, got %v", err)
 	}
 
-	paused := &Instance{Title: "paused", Status: Paused}
+	paused := &Instance{Title: "paused", Status: domain.Paused}
 	paused.started.Store(true)
 	if _, err := paused.CapturePaneContent(); !errors.Is(err, streamhub.ErrSessionNotStarted) {
 		t.Errorf("paused: expected ErrSessionNotStarted, got %v", err)

@@ -6,6 +6,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // workingStallMultiplier stretches the interactive stall budget while the
@@ -158,7 +159,7 @@ func interactiveDriverShouldEnd(inst *Instance) bool {
 		return true
 	}
 	switch inst.Snapshot().Status {
-	case Hibernated, Crashed:
+	case domain.Hibernated, domain.Crashed:
 		return true
 	default:
 		return false

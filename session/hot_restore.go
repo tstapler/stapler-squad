@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // HotRestoreOutcome is the per-session result of HotRestoreIfLive.
@@ -71,7 +72,7 @@ func HotRestoreIfLive(inst *Instance, isLive func() bool) (HotRestoreOutcome, er
 	if err := inst.startHotAttach(); err != nil {
 		// Leave the prior terminal status so a failed attach stays retryable
 		// instead of stranding the session in Creating for the stale sweeper.
-		if inst.GetLifecycleStatus() == Creating {
+		if inst.GetLifecycleStatus() == domain.Creating {
 			rollback()
 		}
 		return HotRestoreError, fmt.Errorf("hot attach: %w", err)

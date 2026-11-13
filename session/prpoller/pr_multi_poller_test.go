@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // recordingPRClient records the PR number of every GetPRInfoConditional call and
@@ -88,7 +89,7 @@ func TestPoller_MergedAThenOpenB_PollsAndActsOnB(t *testing.T) {
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 
 	inst := newTwoPRInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	p.SetInstances([]*session.Instance{inst})
 	owner := session.SessionPROwner(inst.UUID)
 	seedStateRow(t, storage.Repo, owner, mustPRRef(t, "", "acme", "app", 11), session.PRInitial{State: session.PRStateMerged, Terminal: true})
@@ -183,7 +184,7 @@ func TestPoller_ShouldFetchOnceAndRefreshBothSessions_WhenTwoSessionsShareOpenPR
 	for _, id := range []string{"u1", "u2"} {
 		inst := newPRTestInstance(t)
 		inst.UUID, inst.Title = id, id
-		inst.Status = session.Active
+		inst.Status = domain.Active
 		require.NoError(t, inst.AttachPR(prRefN(t, 12), session.AttachSourceBranchDiscovery, session.PRInitial{State: session.PRStateOpen}))
 		seedStateRow(t, storage.Repo, session.SessionPROwner(id), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen})
 		insts = append(insts, inst)
@@ -385,7 +386,7 @@ func discoverySession(t *testing.T, prs ...PRInitialRef) (*PRStatusPoller, *sess
 	p.multiPRScope = func(string) bool { return true }
 	p.refresherOn = func() bool { return true }
 	inst.SetPRPersister(storage)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	for _, pr := range prs {
 		require.NoError(t, inst.AttachPR(prRefN(t, pr.N), session.AttachSourceCreatedFromURL, pr.Initial))
 	}
@@ -486,7 +487,7 @@ func TestInvalidateAndRefresh_ShouldRefreshOnlyTheNamedRow_WhenSessionTracksTwoP
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open", ApprovedCount: 4}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newTwoPRInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	p.SetInstances([]*session.Instance{inst})
 	owner := session.SessionPROwner(inst.UUID)
 	seedStateRow(t, storage.Repo, owner, prRefN(t, 11), session.PRInitial{State: session.PRStateMerged, Terminal: true})

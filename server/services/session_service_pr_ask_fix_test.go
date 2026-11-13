@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type staticPRTokens map[string]string
@@ -31,7 +32,7 @@ type askFixFixture struct {
 
 // newAskFixFixture wires a running claude session holding acme/app#11 and #12,
 // a fetcher reporting one failing check, and a token for #12 only.
-func newAskFixFixture(t *testing.T, status session.Status) *askFixFixture {
+func newAskFixFixture(t *testing.T, status domain.Status) *askFixFixture {
 	t.Helper()
 	fix := setupForkTestFixture(t)
 	inst := &session.Instance{Title: "ask-fix", UUID: "uuid-ask-fix", Program: "claude", Status: status,
@@ -63,7 +64,7 @@ func (f *askFixFixture) ask(pr *sessionv1.PullRequestRef) (*sessionv1.AskSession
 
 func TestAskSessionToFixPullRequest_ShouldDeliverOnceToTargetPR_WhenIdleAndFailingCheck(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Active)
+	f := newAskFixFixture(t, domain.Active)
 
 	got, err := f.ask(protoRef(12))
 	require.NoError(t, err)
@@ -81,7 +82,7 @@ func TestAskSessionToFixPullRequest_ShouldDeliverOnceToTargetPR_WhenIdleAndFaili
 
 func TestAskSessionToFixPullRequest_ShouldFailPrecondition_WhenPRNotAttached(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Active)
+	f := newAskFixFixture(t, domain.Active)
 
 	_, err := f.ask(protoRef(99))
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
@@ -91,7 +92,7 @@ func TestAskSessionToFixPullRequest_ShouldFailPrecondition_WhenPRNotAttached(t *
 
 func TestAskSessionToFixPullRequest_ShouldReportPRNotFound_WhenNoAccountTokenForPR(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Active)
+	f := newAskFixFixture(t, domain.Active)
 
 	got, err := f.ask(protoRef(11)) // only #12 has a token
 	require.NoError(t, err)
@@ -103,7 +104,7 @@ func TestAskSessionToFixPullRequest_ShouldReportPRNotFound_WhenNoAccountTokenFor
 
 func TestAskSessionToFixPullRequest_ShouldReportNothingToFix_WhenPRClean(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Active)
+	f := newAskFixFixture(t, domain.Active)
 	f.fetcher.detail.FailingChecks = nil
 
 	got, err := f.ask(protoRef(12))
@@ -114,7 +115,7 @@ func TestAskSessionToFixPullRequest_ShouldReportNothingToFix_WhenPRClean(t *test
 
 func TestAskSessionToFixPullRequest_ShouldReportPausedWithoutFetching_WhenSessionSuspended(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Paused)
+	f := newAskFixFixture(t, domain.Paused)
 
 	got, err := f.ask(protoRef(12))
 	require.NoError(t, err)
@@ -125,7 +126,7 @@ func TestAskSessionToFixPullRequest_ShouldReportPausedWithoutFetching_WhenSessio
 
 func TestAskSessionToFixPullRequest_ShouldTargetActivePR_WhenSelectorUnset(t *testing.T) {
 	t.Parallel()
-	f := newAskFixFixture(t, session.Active)
+	f := newAskFixFixture(t, domain.Active)
 
 	got, err := f.ask(nil)
 	require.NoError(t, err)

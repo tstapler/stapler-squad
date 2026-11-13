@@ -41,6 +41,7 @@ go_test(
         "//server/events",
         "//session",
         "//session/detection",
+        "//session/domain",
         "//session/domain/backlogdto",
         "//testutil",
         "@com_github_go_git_go_git_v5//:go-git",

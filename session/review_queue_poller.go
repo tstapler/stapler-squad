@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -547,8 +548,8 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 			// Stopped.
 			archived := inst.IsArchived()
 
-			switch Status(inst.GetStatus()) {
-			case Active:
+			switch domain.Status(inst.GetStatus()) {
+			case domain.Active:
 				// Active but tmux session gone — mark Stopped.
 				if !liveSessions[sessionName] {
 					log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
@@ -566,10 +567,10 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						s.inst.mu.RLock()
 						status := s.inst.Status
 						s.inst.mu.RUnlock()
-						if status == Active {
-							if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+						if status == domain.Active {
+							if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 								log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
-								s.inst.loadStatus(Stopped)
+								s.inst.loadStatus(domain.Stopped)
 							}
 						}
 					})
@@ -577,7 +578,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					rqp.removeFromQueue(inst.Title)
 					inst.FireLifecycleEvent(EventExited, "reconcile-session-missing")
 				}
-			case Stopped:
+			case domain.Stopped:
 				// Stopped but tmux session is alive — revive to Active only if
 				// the wrapped program is genuinely still running. liveSessions
 				// only proves the tmux pane object exists; remain-on-exit keeps
@@ -604,8 +605,8 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						s.inst.mu.RLock()
 						status := s.inst.Status
 						s.inst.mu.RUnlock()
-						if status == Stopped {
-							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+						if status == domain.Stopped {
+							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
 								log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
 							}
 						}
@@ -613,7 +614,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					cancel()
 					inst.FireLifecycleEvent(EventStarted, "reconcile-session-revived")
 				}
-			case Hibernated:
+			case domain.Hibernated:
 				// Hibernated sessions intentionally have no tmux session (Hibernate()
 				// explicitly kills it) -- that's the expected steady state, so do
 				// nothing when the tmux session is also gone. But if one is found
@@ -635,8 +636,8 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						s.inst.mu.RLock()
 						status := s.inst.Status
 						s.inst.mu.RUnlock()
-						if status == Hibernated {
-							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+						if status == domain.Hibernated {
+							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
 								log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
 							}
 						}
@@ -644,7 +645,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					cancel()
 					inst.FireLifecycleEvent(EventStarted, "reconcile-session-hibernated-but-alive")
 				}
-			case Crashed:
+			case domain.Crashed:
 				// Crashed sessions intentionally have no tmux session (MarkCrashed
 				// kills it before setting this status, session/instance_crash.go) --
 				// that's the expected steady state until an explicit resume. But if
@@ -659,8 +660,8 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					log.Warn("reconcileSessions: crashed session found alive in tmux, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == Crashed {
-							if err := transitionToLocked(s, context.Background(), Active); err != nil {
+						if s.inst.Status == domain.Crashed {
+							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
 								log.Warn("reconcileSessions: revival from crashed failed", "session", inst.Title, "err", err)
 							}
 						}
@@ -668,7 +669,7 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					cancel()
 					inst.FireLifecycleEvent(EventStarted, "reconcile-session-crashed-but-alive")
 				}
-			case PermanentlyFailed:
+			case domain.PermanentlyFailed:
 				// Deliberately not auto-revived even if tmux is alive, unlike
 				// Stopped/Hibernated/Crashed above — PermanentlyFailed means the
 				// configurable retry policy already exhausted its attempt budget

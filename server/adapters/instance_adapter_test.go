@@ -219,7 +219,7 @@ func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
 // maps to SUB_STATUS_WAITING_FOR_AGENT in the toProtoSubStatusFromInfo switch.
 func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	// Verify the non-Active short-circuit: a non-Active instance always returns UNSPECIFIED.
-	got := toProtoSubStatusFromInfo(session.Paused, 0, session.InstanceStatusInfo{})
+	got := toProtoSubStatusFromInfo(domain.Paused, 0, session.InstanceStatusInfo{})
 	if got != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 		t.Errorf("toProtoSubStatusFromInfo(Paused) = %v, want SUB_STATUS_UNSPECIFIED", got)
 	}
@@ -232,7 +232,7 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	}
 
 	// An Active instance with no controller (IsControllerActive=false) returns UNSPECIFIED.
-	gotActive := toProtoSubStatusFromInfo(session.Active, 0, session.InstanceStatusInfo{IsControllerActive: false})
+	gotActive := toProtoSubStatusFromInfo(domain.Active, 0, session.InstanceStatusInfo{IsControllerActive: false})
 	if gotActive != sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 		t.Logf("toProtoSubStatusFromInfo(Active/no-controller) = %v (expected UNSPECIFIED)", gotActive)
 	}
@@ -265,7 +265,7 @@ func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
 	for _, status := range statuses {
 		t.Run(status.String(), func(t *testing.T) {
 			info := session.InstanceStatusInfo{IsControllerActive: true, ClaudeStatus: status}
-			gotInstance := toProtoSubStatusFromInfo(session.Active, 0, info)
+			gotInstance := toProtoSubStatusFromInfo(domain.Active, 0, info)
 			if gotInstance == sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED {
 				t.Errorf("toProtoSubStatusFromInfo(%s) = SUB_STATUS_UNSPECIFIED, want a defined mapping", status)
 			}
@@ -289,16 +289,16 @@ func TestToProtoSubStatus_CoversAllDetectedStatusValues(t *testing.T) {
 func TestStatusToProto_AllStates(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    session.Status
+		input    domain.Status
 		expected sessionv1.SessionStatus
 	}{
-		{"Active", session.Active, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE},
-		{"Creating", session.Creating, sessionv1.SessionStatus_SESSION_STATUS_CREATING},
-		{"Paused", session.Paused, sessionv1.SessionStatus_SESSION_STATUS_PAUSED},
-		{"Stopped", session.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
-		{"Hibernated", session.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
-		{"Restoring", session.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
-		{"Crashed", session.Crashed, sessionv1.SessionStatus_SESSION_STATUS_CRASHED},
+		{"Active", domain.Active, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE},
+		{"Creating", domain.Creating, sessionv1.SessionStatus_SESSION_STATUS_CREATING},
+		{"Paused", domain.Paused, sessionv1.SessionStatus_SESSION_STATUS_PAUSED},
+		{"Stopped", domain.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
+		{"Hibernated", domain.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
+		{"Restoring", domain.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
+		{"Crashed", domain.Crashed, sessionv1.SessionStatus_SESSION_STATUS_CRASHED},
 	}
 
 	for _, tc := range tests {
@@ -318,7 +318,7 @@ func TestStatusToProto_AllStates(t *testing.T) {
 // Story 1.1.3's Failed arm: session.Failed maps to SESSION_STATUS_FAILED, not
 // UNSPECIFIED.
 func TestStatusToProto_should_ReturnFailed_When_StatusIsFailed(t *testing.T) {
-	got, err := StatusToProto(session.Failed)
+	got, err := StatusToProto(domain.Failed)
 	if err != nil {
 		t.Fatalf("StatusToProto(Failed) returned unexpected error: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestStatusToProto_should_ReturnFailed_When_StatusIsFailed(t *testing.T) {
 // the next new status value added to the FSM but not to this switch is caught
 // instead of repeating the exact gap this story closes.
 func TestStatusToProto_should_ReturnExplicitError_When_StatusIsUnrecognized(t *testing.T) {
-	unrecognized := session.Status(99)
+	unrecognized := domain.Status(99)
 
 	got, err := StatusToProto(unrecognized)
 
@@ -349,15 +349,15 @@ func TestProtoToStatus_AllStates(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    sessionv1.SessionStatus
-		expected session.Status
+		expected domain.Status
 	}{
-		{"Active", sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, session.Active},
-		{"Creating", sessionv1.SessionStatus_SESSION_STATUS_CREATING, session.Creating},
-		{"Paused", sessionv1.SessionStatus_SESSION_STATUS_PAUSED, session.Paused},
-		{"Stopped", sessionv1.SessionStatus_SESSION_STATUS_STOPPED, session.Stopped},
-		{"Hibernated", sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, session.Hibernated},
-		{"Restoring", sessionv1.SessionStatus_SESSION_STATUS_RESTORING, session.Restoring},
-		{"Unknown defaults to Creating", sessionv1.SessionStatus(99), session.Creating},
+		{"Active", sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, domain.Active},
+		{"Creating", sessionv1.SessionStatus_SESSION_STATUS_CREATING, domain.Creating},
+		{"Paused", sessionv1.SessionStatus_SESSION_STATUS_PAUSED, domain.Paused},
+		{"Stopped", sessionv1.SessionStatus_SESSION_STATUS_STOPPED, domain.Stopped},
+		{"Hibernated", sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, domain.Hibernated},
+		{"Restoring", sessionv1.SessionStatus_SESSION_STATUS_RESTORING, domain.Restoring},
+		{"Unknown defaults to Creating", sessionv1.SessionStatus(99), domain.Creating},
 	}
 
 	for _, tc := range tests {
@@ -501,7 +501,7 @@ func TestInstanceToProto_should_PopulateRuleTagProvenance_When_TagsHaveRuleProve
 // removed while keeping the branch.
 func newWorktreeInstance(repoPath, worktreePath string) *session.Instance {
 	const title = "worktree-session"
-	inst := &session.Instance{Title: title, Path: repoPath, Status: session.Active}
+	inst := &session.Instance{Title: title, Path: repoPath, Status: domain.Active}
 	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(repoPath, worktreePath, title, "test-branch", "abc123"))
 	return inst
 }

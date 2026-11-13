@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ptyio"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -26,7 +27,7 @@ import (
 // ("current visible terminal content").
 func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "stale-preview-session", Status: Running}
+	inst := &Instance{Title: "stale-preview-session", Status: domain.Running}
 	inst.started.Store(true)
 
 	buf := ptyio.NewCircularBuffer(1024 * 1024)
@@ -70,7 +71,7 @@ func TestInstance_Preview_DoesNotReturnStaleUnboundedHistory(t *testing.T) {
 func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 	t.Parallel()
 	mock := &mockTmuxManager{capturePaneReturn: "tmux rendered screen"}
-	inst := &Instance{Title: "tmux-preview-session", Status: Running, processManager: NewTmuxBackend(mock)}
+	inst := &Instance{Title: "tmux-preview-session", Status: domain.Running, processManager: NewTmuxBackend(mock)}
 	inst.started.Store(true)
 
 	// Even if a stale claudectl.ClaudeController buffer exists, capture-pane must win.
@@ -98,7 +99,7 @@ func TestInstance_Preview_PrefersTmuxCapturePaneOverPTYBuffer(t *testing.T) {
 func TestInstance_Preview_FallsBackToPTYBufferWhenCapturePaneErrors(t *testing.T) {
 	t.Parallel()
 	mock := &mockTmuxManager{capturePaneErr: fmt.Errorf("no such tmux session")}
-	inst := &Instance{Title: "tmux-preview-fallback", Status: Running, processManager: NewTmuxBackend(mock)}
+	inst := &Instance{Title: "tmux-preview-fallback", Status: domain.Running, processManager: NewTmuxBackend(mock)}
 	inst.started.Store(true)
 
 	buf := ptyio.NewCircularBuffer(1024)
@@ -146,7 +147,7 @@ func newInstanceWithRealTmuxProcessManager(t *testing.T, outputFunc func(cmd *ex
 	tpm := &TmuxProcessManager{}
 	tpm.SetSession(ts)
 
-	inst := &Instance{Title: t.Name(), Status: Running, processManager: NewTmuxBackend(tpm)}
+	inst := &Instance{Title: t.Name(), Status: domain.Running, processManager: NewTmuxBackend(tpm)}
 	inst.started.Store(true)
 	return inst
 }

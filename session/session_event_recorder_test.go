@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestSessionEventKind_Should_NameEveryKindExhaustively_When_Enumerated(t *testing.T) {
@@ -34,7 +35,7 @@ func TestNoopSessionEventRecorder_Should_NotPanic_When_NilOrNoop(t *testing.T) {
 	r.RecordTurnEnded("demo", TurnEnded{})
 	r.RecordAttentionRaised("demo", ReasonTaskComplete)
 	r.RecordAttentionCleared("demo", ReasonTaskComplete)
-	r.RecordStatusChanged("demo", Running, Stopped)
+	r.RecordStatusChanged("demo", domain.Running, domain.Stopped)
 	r.RecordAcknowledged("demo", false)
 	r.RecordLifecycle("demo", EventStarted)
 	r.RecordNotificationSuppressed("demo", "x")

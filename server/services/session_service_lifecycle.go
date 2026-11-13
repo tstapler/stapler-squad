@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
 	"github.com/tstapler/stapler-squad/session/headless"
@@ -372,7 +373,7 @@ func (s *SessionService) DeleteSession(
 	// doesn't replace, the Snapshot()-based read fix.
 	if liveInst != nil {
 		liveInst.BumpCreationEpoch()
-		if status, _ := liveInst.StatusAndFailureReason(); status == session.Creating {
+		if status, _ := liveInst.StatusAndFailureReason(); status == domain.Creating {
 			if cancelFunc := liveInst.CreationCancelFunc(); cancelFunc != nil {
 				cancelFunc()
 			}
@@ -483,7 +484,7 @@ func (s *SessionService) CancelSessionCreation(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
-	if status, _ := inst.StatusAndFailureReason(); status != session.Creating {
+	if status, _ := inst.StatusAndFailureReason(); status != domain.Creating {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %s is not in Creating status (current status=%s)", req.Msg.Id, status))
 	}
@@ -500,7 +501,7 @@ func (s *SessionService) CancelSessionCreation(
 	// combining it with the read into one command) would reopen the race
 	// ADR-002 closes.
 	inst.BumpCreationEpoch()
-	if status, _ := inst.StatusAndFailureReason(); status != session.Creating {
+	if status, _ := inst.StatusAndFailureReason(); status != domain.Creating {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("session %s is no longer Creating (status=%s); the session finished creating before cancellation could apply", req.Msg.Id, status))
 	}

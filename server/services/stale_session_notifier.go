@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // staleSessionNotifierCheckInterval is how often the sweeper re-evaluates every live
@@ -101,7 +102,7 @@ func (n *StaleSessionNotifier) checkAll() {
 	for _, inst := range n.poller.GetInstances() {
 		stableID := inst.GetStableID()
 
-		if session.Status(inst.GetStatus()) != session.Active {
+		if domain.Status(inst.GetStatus()) != domain.Active {
 			// Clear the dedup entry on ANY active->non-active transition, not just
 			// idle-time recovery -- a session paused while still stale and later
 			// resumed while still past threshold must notify again (see doc comment

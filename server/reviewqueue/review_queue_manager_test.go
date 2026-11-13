@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/testutil"
 )
@@ -1721,7 +1722,7 @@ func TestReviewQueue_ShouldNeverEmitRoutineReasonsForHidden_WhenPollerSkipAndDet
 			bus.SetPublishFilter(gate.PublishFilter())
 			mgr := NewReactiveQueueManager(queue, poller, bus, statusMgr, storage)
 
-			hidden := &session.Instance{Title: "review:lg08", UUID: "lg08-uuid", Status: session.Active, Hidden: true}
+			hidden := &session.Instance{Title: "review:lg08", UUID: "lg08-uuid", Status: domain.Active, Hidden: true}
 			poller.SetInstances([]*session.Instance{hidden})
 			gate.SeedFromInstances([]*session.Instance{hidden})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

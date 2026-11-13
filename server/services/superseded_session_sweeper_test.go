@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -163,7 +164,7 @@ func TestSupersededSessionSweeper_should_SkipAlreadyArchived_WithoutPerSessionCh
 	_, uuids := seedItemWithRounds(t, storage, []time.Time{now.Add(-3 * time.Hour), now.Add(-2 * time.Hour), now.Add(-1 * time.Hour)})
 	archivedUUID, pendingUUID := uuids[0], uuids[1]
 	_, err := storage.GetEntClient().Session.Create().
-		SetTitle("already-archived").SetPath("/tmp/x").SetProgram("claude").SetStatus(int(session.Stopped)).
+		SetTitle("already-archived").SetPath("/tmp/x").SetProgram("claude").SetStatus(int(domain.Stopped)).
 		SetUUID(archivedUUID).SetArchivedAt(now).Save(t.Context())
 	require.NoError(t, err)
 

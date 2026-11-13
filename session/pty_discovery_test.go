@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -63,9 +64,9 @@ func TestPTYDiscovery_SetSessions(t *testing.T) {
 	pd := NewPTYDiscovery()
 
 	sessions := []*Instance{
-		{Title: "session1", Status: Running, Program: "claude"},
-		{Title: "session2", Status: Paused, Program: "claude"},
-		{Title: "session3", Status: Running, Program: "aider"},
+		{Title: "session1", Status: domain.Running, Program: "claude"},
+		{Title: "session2", Status: domain.Paused, Program: "claude"},
+		{Title: "session3", Status: domain.Running, Program: "aider"},
 	}
 
 	pd.SetSessions(sessions)

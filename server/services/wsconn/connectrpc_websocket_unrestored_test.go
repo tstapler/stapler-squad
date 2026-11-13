@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -63,7 +64,7 @@ func (retainedPaintManager) CapturePaneRedraw(context.Context) (string, bool, bo
 
 func TestStreamPaths_RetainedTymuxFirstPaintAndWriter(t *testing.T) {
 	t.Parallel()
-	for _, status := range []session.Status{session.Failed, session.PermanentlyFailed, session.Stopped, session.Crashed} {
+	for _, status := range []domain.Status{domain.Failed, domain.PermanentlyFailed, domain.Stopped, domain.Crashed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			inst := session.NewStartedInstanceForTest(t, "paint", session.NewTymuxBackend(retainedPaintManager{}))
@@ -82,7 +83,7 @@ func TestStreamPaths_RetainedTymuxFirstPaintAndWriter(t *testing.T) {
 
 func TestStreamPaths_RetainedTymuxNeverRestores(t *testing.T) {
 	t.Parallel()
-	for _, status := range []session.Status{session.Failed, session.PermanentlyFailed, session.Stopped, session.Crashed} {
+	for _, status := range []domain.Status{domain.Failed, domain.PermanentlyFailed, domain.Stopped, domain.Crashed} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			pm := &retainedTymuxPM{unrestoredTymuxPM: &unrestoredTymuxPM{}}

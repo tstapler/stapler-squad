@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestAttachSessionToItem_should_RejectViaConnectError_When_ItemStatusGuardFails confirms
@@ -138,7 +139,7 @@ func TestAttachSessionToItem_should_RegenerateSlashCommandsWithNewItemID_When_Re
 		// Paused (not Active) so LoadInstances doesn't attempt a real cold-restore
 		// tmux/claude process start, matching the precedent in
 		// TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions.
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

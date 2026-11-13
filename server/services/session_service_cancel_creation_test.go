@@ -13,6 +13,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Epic 3.2 (async-session-creation): CancelSessionCreation RPC. See
@@ -109,7 +110,7 @@ func TestCancelSessionCreation_should_ReturnFailedPrecondition_When_StatusIsActi
 	svc := newCreateTestService(t, storage)
 	inst := newCancelTestInstance(t, svc, storage, "cancel-already-active", false)
 	epoch := inst.CreationEpoch()
-	require.True(t, inst.TryForceStatusIfEpoch(epoch, session.Active, ""))
+	require.True(t, inst.TryForceStatusIfEpoch(epoch, domain.Active, ""))
 
 	_, err := svc.CancelSessionCreation(context.Background(), connect.NewRequest(&sessionv1.CancelSessionCreationRequest{
 		Id: "cancel-already-active",
@@ -122,7 +123,7 @@ func TestCancelSessionCreation_should_ReturnFailedPrecondition_When_StatusIsActi
 	// Instance must be untouched: still present, still Active.
 	require.NotNil(t, svc.ReviewQueuePoller.FindInstance("cancel-already-active"))
 	status, _ := inst.StatusAndFailureReason()
-	assert.Equal(t, session.Active, status)
+	assert.Equal(t, domain.Active, status)
 }
 
 // TestCancelSessionCreation_should_ResolveDeterministically_When_RacingPipelineSuccess
@@ -143,7 +144,7 @@ func TestCancelSessionCreation_should_ResolveDeterministically_When_RacingPipeli
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		inst.TryForceStatusIfEpoch(epoch, session.Active, "")
+		inst.TryForceStatusIfEpoch(epoch, domain.Active, "")
 	}()
 
 	resp, err := svc.CancelSessionCreation(context.Background(), connect.NewRequest(&sessionv1.CancelSessionCreationRequest{
@@ -176,7 +177,7 @@ func TestCancelSessionCreation_should_ResolveDeterministically_When_RacingPipeli
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 	assert.True(t, stillPresent, "pipeline won: instance must remain present, not deleted")
 	status, _ := inst.StatusAndFailureReason()
-	assert.Equal(t, session.Active, status, "pipeline won: status must be Active, not left mid-transition")
+	assert.Equal(t, domain.Active, status, "pipeline won: status must be Active, not left mid-transition")
 }
 
 // TestCancelSessionCreation_should_ReturnNotFound_When_SessionDoesNotExist
@@ -327,7 +328,7 @@ func TestDeleteSession_should_NotTouchCancelFunc_When_StatusIsNotCreating(t *tes
 	svc := newCreateTestService(t, storage)
 	t.Cleanup(func() { svc.Shutdown() })
 	inst := newCancelTestInstance(t, svc, storage, "delete-active-session", false)
-	require.True(t, inst.TryForceStatusIfEpoch(inst.CreationEpoch(), session.Active, ""))
+	require.True(t, inst.TryForceStatusIfEpoch(inst.CreationEpoch(), domain.Active, ""))
 	epochBefore := inst.CreationEpoch()
 
 	var mu sync.Mutex

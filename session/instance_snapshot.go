@@ -103,7 +103,7 @@ type InstanceSnapshot struct {
 	CreationWarning       string
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
-	Status                Status
+	Status                domain.Status
 	Program               string
 	AltScreenActive       bool
 	AltScreenBootstrapped bool

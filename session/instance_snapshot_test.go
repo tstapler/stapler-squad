@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/domain"
 	"os"
 	"sync"
 	"testing"
@@ -33,7 +34,7 @@ func TestSnapshotNonNilAfterSessionToInstance(t *testing.T) {
 	t.Parallel()
 	s := &Session{
 		Title:     "session-to-instance",
-		Status:    Creating,
+		Status:    domain.Creating,
 		Program:   "echo",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -88,8 +89,8 @@ func TestSnapshotReflectsSetLastMeaningfulOutput(t *testing.T) {
 func TestSnapshotReflectsForceStatus(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	inst.ForceStatus(Paused)
-	if inst.Snapshot().Status != Paused {
+	inst.ForceStatus(domain.Paused)
+	if inst.Snapshot().Status != domain.Paused {
 		t.Fatalf("Snapshot().Status = %v, want Paused", inst.Snapshot().Status)
 	}
 }
@@ -311,7 +312,7 @@ func minimalInstance(t *testing.T) *Instance {
 	t.Helper()
 	i := &Instance{
 		Title:       t.Name(),
-		Status:      Creating,
+		Status:      domain.Creating,
 		Program:     "echo",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),

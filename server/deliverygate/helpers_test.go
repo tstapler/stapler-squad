@@ -8,7 +8,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 const (
@@ -141,4 +141,4 @@ var (
 	visibleSess    = Entry{UUID: "u-v1", Title: "my-work", TmuxName: "ssq_my_work"}
 )
 
-var _ = session.Status(0)
+var _ = domain.Status(0)

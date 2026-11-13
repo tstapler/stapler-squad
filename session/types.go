@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"time"
 	"unicode"
 )
@@ -263,8 +264,8 @@ var (
 // ErrInvalidTransition is returned when a status transition is not allowed
 // by the state machine defined in state_machine.go.
 type ErrInvalidTransition struct {
-	From Status
-	To   Status
+	From domain.Status
+	To   domain.Status
 }
 
 func (e ErrInvalidTransition) Error() string {

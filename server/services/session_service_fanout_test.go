@@ -16,6 +16,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -54,16 +55,16 @@ func TestFanoutWinnerEligibility(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name   string
-		status session.Status
+		status domain.Status
 		claude detection.DetectedStatus
 		wantOK bool
 	}{
-		{"stopped", session.Stopped, detection.StatusUnknown, true},
-		{"paused", session.Paused, detection.StatusUnknown, true},
-		{"active idle", session.Active, detection.StatusIdle, true},
-		{"active ready", session.Active, detection.StatusReady, true},
-		{"active still working", session.Active, detection.StatusProcessing, false},
-		{"creating", session.Creating, detection.StatusUnknown, false},
+		{"stopped", domain.Stopped, detection.StatusUnknown, true},
+		{"paused", domain.Paused, detection.StatusUnknown, true},
+		{"active idle", domain.Active, detection.StatusIdle, true},
+		{"active ready", domain.Active, detection.StatusReady, true},
+		{"active still working", domain.Active, detection.StatusProcessing, false},
+		{"creating", domain.Creating, detection.StatusUnknown, false},
 	}
 	for _, c := range cases {
 		err := fanoutWinnerEligibility(c.status, c.claude)
@@ -120,9 +121,9 @@ func fanoutMember(t *testing.T, repo, groupID string, n int, file, content strin
 	t.Cleanup(func() { _ = wt.Cleanup() })
 	require.NoError(t, os.WriteFile(filepath.Join(wt.GetWorktreePath(), file), []byte(content), 0o644))
 
-	inst := &session.Instance{Title: title, UUID: uuid.NewString(), Path: repo, Status: session.Stopped, Program: "claude"}
+	inst := &session.Instance{Title: title, UUID: uuid.NewString(), Path: repo, Status: domain.Stopped, Program: "claude"}
 	inst.SetGitWorktree(wt)
-	inst.ForceStatus(session.Stopped) // Snapshot() is what GetStatus reads, not the struct literal
+	inst.ForceStatus(domain.Stopped) // Snapshot() is what GetStatus reads, not the struct literal
 	require.NoError(t, inst.SetTags([]string{fanoutGroupTagPrefix + groupID, fanoutBaseTagPrefix + "main"}))
 	return inst
 }
@@ -175,7 +176,7 @@ func TestPickFanoutWinner_RejectsStillRunningWinner(t *testing.T) {
 	repo := fanoutGitRepo(t)
 	const groupID = "g-running"
 	winner := fanoutMember(t, repo, groupID, 1, "w.txt", "w\n")
-	winner.ForceStatus(session.Creating)
+	winner.ForceStatus(domain.Creating)
 	fix.poller.SetInstances([]*session.Instance{winner})
 
 	_, err := fix.svc.PickFanoutWinner(context.Background(), connect.NewRequest(&sessionv1.PickFanoutWinnerRequest{
@@ -209,7 +210,7 @@ func TestPickFanoutWinner_PausedWinnerWithRemovedWorktreeMergesItsBranch(t *test
 	require.NoError(t, wt.CommitChanges("variant work"))
 	// pause_session deletes the worktree directory but keeps the branch.
 	fanoutGitRun(t, repo, "worktree", "remove", "--force", wt.GetWorktreePath())
-	winner.ForceStatus(session.Paused)
+	winner.ForceStatus(domain.Paused)
 	fix.poller.SetInstances([]*session.Instance{winner})
 
 	_, err = fix.svc.PickFanoutWinner(context.Background(), connect.NewRequest(&sessionv1.PickFanoutWinnerRequest{

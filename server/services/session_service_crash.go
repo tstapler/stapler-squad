@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Crash notifications (Story 2.10, decision O3): a session entering Crashed
@@ -108,7 +109,7 @@ func newCrashSummaryEvent(d crashDecision) *events.Event {
 // snapshot is not Crashed (another exit source). It takes a snapshot, never a
 // live Instance, so the status read is the same lock-free read everywhere.
 func (s *SessionService) publishCrash(snap *session.InstanceSnapshot) {
-	if snap.Status != session.Crashed {
+	if snap.Status != domain.Crashed {
 		log.Debug("session exited without being crashed; no crash notification",
 			"session", snap.Title, "status", snap.Status.String())
 		return

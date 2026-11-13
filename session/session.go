@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/domain"
 	"time"
 )
 
@@ -23,8 +24,8 @@ type Session struct {
 	UpdatedAt time.Time `json:"updated_at"`
 
 	// Process
-	Status  Status `json:"status"`
-	Program string `json:"program"`
+	Status  domain.Status `json:"status"`
+	Program string        `json:"program"`
 
 	// Configuration
 	AutoYes bool   `json:"auto_yes,omitempty"`
@@ -48,7 +49,7 @@ func NewSession(title, program string) *Session {
 		Title:     title,
 		CreatedAt: now,
 		UpdatedAt: now,
-		Status:    Creating,
+		Status:    domain.Creating,
 		Program:   program,
 		AutoYes:   false,
 		Prompt:    "",

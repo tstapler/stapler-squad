@@ -331,7 +331,7 @@ func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
 		Title:   "duplicate-name",
 		Path:    t.TempDir(),
 		Program: "claude",
-		Status:  session.Paused,
+		Status:  domain.Paused,
 	}))
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
@@ -693,7 +693,7 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	if !managerWired {
 		// When tmux is absent the goroutine sets Status=Stopped and returns early,
 		// never reaching SetStatusManager. By 30 s the goroutine is long finished.
-		if session.Status(inst.GetStatus()) == session.Stopped {
+		if domain.Status(inst.GetStatus()) == domain.Stopped {
 			t.Skip("tmux not available; skipping status-manager wiring assertion")
 		}
 		t.Error("status manager was never wired within 30 s — regression in CreateSession goroutine")
@@ -767,10 +767,10 @@ func TestCreateSession_CustomProgramEnvVars_ReachesTmuxSession(t *testing.T) {
 	// tmux is present (LookPath above), so Stopped is a real spawn failure, not a skip:
 	// skipping here would turn the very regression under test green.
 	wait.RequireEventually(t, func() bool {
-		switch session.Status(inst.GetStatus()) {
-		case session.Active:
+		switch domain.Status(inst.GetStatus()) {
+		case domain.Active:
 			return true
-		case session.Stopped:
+		case domain.Stopped:
 			t.Fatalf("session reached Stopped instead of Active: spawn failed")
 		}
 		return false
@@ -905,7 +905,7 @@ func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T)
 
 	logs := svctest.CaptureLogs(t)
 	require.NoError(t, inst.Start(true), "nil reviewQueuePoller must fall back to permissive, not block the spawn")
-	assert.Equal(t, session.Active, inst.Status)
+	assert.Equal(t, domain.Active, inst.Status)
 	assert.Contains(t, logs.String(), "reviewQueuePoller is nil", "the fallback must log a warning, not silently allow")
 }
 

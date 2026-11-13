@@ -12,6 +12,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 )
 
@@ -40,7 +41,7 @@ func newWorktreeGuardTarget(title, uuid, worktreePath string) *session.Instance 
 		Title:       title,
 		UUID:        uuid,
 		Path:        worktreePath,
-		Status:      session.Active,
+		Status:      domain.Active,
 		Program:     "claude",
 		Permissions: session.GetManagedPermissions(),
 	}
@@ -77,7 +78,7 @@ func TestUpdateSession_Pause_RefusesWhenWorktreeSharedWithOtherLiveSession(t *te
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 	assert.Contains(t, connectErr.Message(), sibling.UUID, "the error must name the blocking session so the operator knows what to stop first")
-	assert.Equal(t, session.Active, target.Status, "the target must not have been paused (and its worktree not removed) once the guard refused")
+	assert.Equal(t, domain.Active, target.Status, "the target must not have been paused (and its worktree not removed) once the guard refused")
 }
 
 func TestUpdateSession_Stop_RefusesWhenWorktreeSharedWithOtherLiveSession(t *testing.T) {
@@ -102,7 +103,7 @@ func TestUpdateSession_Stop_RefusesWhenWorktreeSharedWithOtherLiveSession(t *tes
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeFailedPrecondition, connectErr.Code())
 	assert.Contains(t, connectErr.Message(), sibling.UUID)
-	assert.Equal(t, session.Active, target.Status, "the target must not have been stopped (and its worktree not removed) once the guard refused")
+	assert.Equal(t, domain.Active, target.Status, "the target must not have been stopped (and its worktree not removed) once the guard refused")
 }
 
 // TestUpdateSession_Pause_AllowsWhenNoOtherLiveSessionInsideWorktree confirms

@@ -29,6 +29,7 @@ import (
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // spinnerTimeRe matches the time/token suffix of an active Claude Code spinner,
@@ -539,7 +540,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 		// Inactivity detection: only after initial prompt sent.
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
-		if st == Ready {
+		if st == domain.Ready {
 			cont, ret := handleInactivityTick(ctx, inst, allowedPath, policy, stop, &attempt, time.Now())
 			if ret {
 				return
@@ -570,7 +571,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 // terminal-content signals (Idle = readline prompt) — so callers don't
 // re-fetch it. exit reports whether runSessionDriverWithPrompt's loop should
 // return immediately without processing this tick further.
-func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, totalDeadline time.Time) (st Status, detectedSt detection.DetectedStatus, exit bool) {
+func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, totalDeadline time.Time) (st domain.Status, detectedSt detection.DetectedStatus, exit bool) {
 	select {
 	case <-stop:
 		return 0, 0, true
@@ -599,7 +600,7 @@ func driverTickGate(inst *Instance, stop <-chan struct{}, ticker *time.Ticker, t
 	st = inst.GetEffectiveStatus()
 	detectedSt = inst.GetDetectedStatus()
 
-	if st == Paused {
+	if st == domain.Paused {
 		return st, detectedSt, true
 	}
 	return st, detectedSt, false
@@ -665,8 +666,8 @@ func handleRetryPendingTick(inst *Instance, allowedPath string, policy RetryPoli
 // loop keep ticking so its own NextRetryAt gate can fire the actual restart
 // once the backoff delay elapses, rather than this function always being
 // terminal.
-func handleStoppedStatus(ctx context.Context, inst *Instance, st Status, allowedPath string, initialPrompt string, policy RetryPolicy, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) (shouldContinue, shouldReturn bool) {
-	if st != Stopped {
+func handleStoppedStatus(ctx context.Context, inst *Instance, st domain.Status, allowedPath string, initialPrompt string, policy RetryPolicy, stop <-chan struct{}, sentInitial bool, initialPromptSentAt time.Time) (shouldContinue, shouldReturn bool) {
+	if st != domain.Stopped {
 		return false, false
 	}
 	if !sentInitial {
@@ -1213,10 +1214,10 @@ func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy,
 // re-arms the one-shot by transitioning back to Active.
 func markSessionPermanentlyFailed(inst *Instance, reason string) {
 	inst.mu.Lock()
-	alreadyFailed := inst.Status == PermanentlyFailed
+	alreadyFailed := inst.Status == domain.PermanentlyFailed
 	var snap *InstanceSnapshot
 	if !alreadyFailed {
-		inst.Status = PermanentlyFailed
+		inst.Status = domain.PermanentlyFailed
 		// Publish the transition to inst.snapshot (the atomic pointer
 		// GetEffectiveStatus()/Snapshot() actually read) — this write, unlike
 		// transitionToLocked's, doesn't route through the state machine (there

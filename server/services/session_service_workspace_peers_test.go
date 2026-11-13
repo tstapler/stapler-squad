@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // addTestPeer creates a peer session sharing repoPath's workspace, with a goal set, for
@@ -18,7 +19,7 @@ func addTestPeer(t *testing.T, storage *session.Storage, repoPath string) {
 	t.Helper()
 	peer := &session.Instance{
 		Title: "peer-session", UUID: "peer-uuid", Path: repoPath, Branch: "main",
-		Status: session.Active, Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Status: domain.Active, Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	require.NoError(t, storage.AddInstance(peer))
 	_, err := storage.SetSessionGoal(t.Context(), "peer-uuid", "fix the widget loader", session.GoalStatusWorking, nil, "", "")

@@ -24,7 +24,7 @@ func rescanReq(id string) *connect.Request[sessionv1.RescanSessionArtifactsReque
 
 func TestRescanSessionArtifacts_ShouldResetPositionAndScan_WhenAnyState(t *testing.T) {
 	t.Parallel()
-	for _, status := range []session.Status{session.Active, session.Paused, session.Stopped} {
+	for _, status := range []domain.Status{domain.Active, domain.Paused, domain.Stopped} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "conv.jsonl")

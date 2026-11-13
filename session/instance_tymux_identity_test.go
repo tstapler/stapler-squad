@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -19,7 +20,7 @@ func TestTymuxSessionID_PersistedAndRestoredAcrossRenameAndRestart(t *testing.T)
 	defer func() { newTymuxSessionFn = orig }()
 
 	live := &fakeTymuxManagerForSetCommand{sessionID: "daemon-session-42"}
-	inst := &Instance{Title: "before-rename", Path: t.TempDir(), Program: "claude", Status: Paused, Backend: BackendTymux}
+	inst := &Instance{Title: "before-rename", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: BackendTymux}
 	inst.processManager = NewTymuxBackend(live)
 	require.NoError(t, inst.Rename("after-rename"))
 
@@ -44,7 +45,7 @@ func TestTymuxSessionID_OldRecordWithoutIDRestoresWithEmptyStoredID(t *testing.T
 	restored := &fakeTymuxManagerForSetCommand{}
 	newTymuxSessionFn = func() tymux.TymuxManager { return restored }
 
-	data := InstanceData{Title: "legacy", Path: t.TempDir(), Program: "claude", Status: Paused, Backend: BackendTymux}
+	data := InstanceData{Title: "legacy", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: BackendTymux}
 	_, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)
 	assert.Empty(t, restored.gotStoredID)
@@ -88,7 +89,7 @@ func TestEntRepository_ClearsTymuxSessionID(t *testing.T) {
 
 func TestToInstanceData_TmuxSwitchedInstanceDropsTymuxSessionID(t *testing.T) {
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
-	inst := &Instance{Title: "switched", Path: t.TempDir(), Program: "claude", Status: Paused, Backend: BackendTmux}
+	inst := &Instance{Title: "switched", Path: t.TempDir(), Program: "claude", Status: domain.Paused, Backend: BackendTmux}
 	inst.processManager = newTmuxBackendFromOpts(ProcessManagerOptions{})
 	assert.Empty(t, inst.ToInstanceData().TymuxSessionID)
 }
@@ -106,7 +107,7 @@ func TestFromInstanceDataDeferred_NeverTouchesDaemonSession(t *testing.T) {
 		fakes = append(fakes, f)
 		return f
 	}
-	data := InstanceData{Title: "twin", Path: t.TempDir(), Program: "claude", Status: Active, Backend: BackendTymux, TymuxSessionID: "daemon-7"}
+	data := InstanceData{Title: "twin", Path: t.TempDir(), Program: "claude", Status: domain.Active, Backend: BackendTymux, TymuxSessionID: "daemon-7"}
 
 	_, err := FromInstanceDataDeferred(data)
 	require.NoError(t, err)

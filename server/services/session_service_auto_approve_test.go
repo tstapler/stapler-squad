@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload is the AC9
@@ -25,7 +26,7 @@ func TestUpdateSession_AutoApprove_StoppedSession_PersistsAcrossReload(t *testin
 	inst := &session.Instance{
 		Title:     "stopped-auto-approve-session",
 		Path:      "/tmp/test",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -66,7 +67,7 @@ func TestUpdateSession_should_RejectAutoApprove_When_ProgramUnsupported(t *testi
 	inst := &session.Instance{
 		Title:     "unsupported-agent-session",
 		Path:      "/tmp/test",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		Program:   "codex",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

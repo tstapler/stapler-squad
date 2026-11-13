@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -497,10 +498,10 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			logger := log.ForSession(instance.Title)
 			warnOrDebug := func(msg string, args ...any) { logger.Log(context.Background(), level, msg, args...) }
 			warnOrDebug("worktree directory missing, marking as paused", "path", worktreePath)
-			if err := instance.transitionTo(context.Background(), Paused); err != nil {
+			if err := instance.transitionTo(context.Background(), domain.Paused); err != nil {
 				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
 				warnOrDebug("could not transition to paused via state machine, using loadStatus", "err", err)
-				instance.loadStatus(Paused)
+				instance.loadStatus(domain.Paused)
 			}
 		}
 	}
@@ -508,7 +509,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 	if instance.Paused() {
 		instance.started.Store(true)
 		instance.wireTmuxSession(shellLaunch(instance.Program))
-	} else if instance.Status == Stopped {
+	} else if instance.Status == domain.Stopped {
 		// Wire the tmux session object so IsAlive() can be called.
 		instance.wireTmuxSession(shellLaunch(instance.Program))
 		// If the underlying tmux session is still alive (e.g. server crashed mid-write
@@ -554,25 +555,25 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			}
 			if instance.processManager.IsAlive() && !paneExited {
 				log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
-				instance.loadStatus(Active)
+				instance.loadStatus(domain.Active)
 				if deferStart {
 					// Leave started=false: the async Step 6 loop will call Start(false)
 					// and hot-attach to this already-live session off the critical path.
 				} else if err := instance.Start(false); err != nil {
 					log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
-					instance.loadStatus(Stopped)
+					instance.loadStatus(domain.Stopped)
 					instance.started.Store(true)
 				}
 			} else {
 				instance.started.Store(true)
 			}
 		}
-	} else if instance.Status == Hibernated {
+	} else if instance.Status == domain.Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)
 		// but do NOT call Start — hibernated sessions resume only on explicit request.
 		instance.wireTmuxSession(shellLaunch(instance.Program))
 		instance.started.Store(true)
-	} else if instance.Status == Crashed {
+	} else if instance.Status == domain.Crashed {
 		// Wire the tmux session object (for IsAlive checks) but do NOT call Start --
 		// like Hibernated, a Crashed session resumes only on explicit request
 		// (Instance.ResumeFromCrash / the ResumeCrashedSession RPC). Without this
@@ -604,8 +605,8 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			// Active/Creating only — the other statuses in this bucket are
 			// written deliberately by archive writers that never touch status,
 			// and rewriting them would destroy the failure signal irreversibly.
-			if instance.Status == Active || instance.Status == Creating {
-				instance.loadStatus(Stopped)
+			if instance.Status == domain.Active || instance.Status == domain.Creating {
+				instance.loadStatus(domain.Stopped)
 			}
 			instance.started.Store(true)
 		} else if deferStart {

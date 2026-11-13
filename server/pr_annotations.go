@@ -165,13 +165,13 @@ func annotationWorktrees(scanner *unfinished.Scanner, enterpriseHosts []string) 
 // on a PR's linked-session list. LastActiveAt uses InstanceSnapshot.UpdatedAt:
 // last-meaningful-output time is not published in the snapshot, and reading
 // it would need a lock outside the lock-free path.
-func linkedStatusFor(st session.Status) githubpkg.LinkedSessionStatus {
+func linkedStatusFor(st domain.Status) githubpkg.LinkedSessionStatus {
 	switch st {
-	case session.Paused, session.Hibernated:
+	case domain.Paused, domain.Hibernated:
 		return githubpkg.LinkedSessionPaused
-	case session.Stopped, session.Crashed, session.PermanentlyFailed, session.Failed:
+	case domain.Stopped, domain.Crashed, domain.PermanentlyFailed, domain.Failed:
 		return githubpkg.LinkedSessionStopped
-	case session.Creating, session.Active, session.Restoring:
+	case domain.Creating, domain.Active, domain.Restoring:
 		return githubpkg.LinkedSessionRunning
 	default:
 		return githubpkg.LinkedSessionUnknown

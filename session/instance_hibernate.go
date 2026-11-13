@@ -9,6 +9,7 @@ import (
 	appconfig "github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/internal/syncutil"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/hibernation"
 )
 
@@ -22,7 +23,7 @@ func (i *Instance) SetHibernateReason(reason string) {
 // It transitions state and dispatches the heavy I/O to a goroutine.
 func (i *Instance) Hibernate(ctx context.Context) error {
 	return i.sendSyncErr(func(s *instanceState) error {
-		return transitionToLocked(s, ctx, Hibernated)
+		return transitionToLocked(s, ctx, domain.Hibernated)
 	})
 }
 
@@ -105,10 +106,10 @@ func (i *Instance) scrollbackPath() string {
 // The actual process re-launch happens asynchronously via resumeFromHibernationLocked.
 func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 	return i.sendSyncErr(func(s *instanceState) error {
-		if s.inst.ArchivedAt != nil || s.inst.Status != Hibernated {
+		if s.inst.ArchivedAt != nil || s.inst.Status != domain.Hibernated {
 			return fmt.Errorf("session is not an unarchived hibernated session")
 		}
-		return transitionToLocked(s, ctx, Active)
+		return transitionToLocked(s, ctx, domain.Active)
 	})
 }
 
@@ -124,7 +125,7 @@ func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 		defer i.hibernateWG.Done()
 		if err := i.resumeAfterTeardown(func() error {
 			return i.sendSyncErr(func(s *instanceState) error {
-				if s.inst.Status != Active || s.inst.ArchivedAt != nil {
+				if s.inst.Status != domain.Active || s.inst.ArchivedAt != nil {
 					return nil
 				}
 				return startLocked(s, false)
@@ -178,11 +179,11 @@ func (i *Instance) resumeAfterTeardown(start func() error) error {
 func rollbackFailedResume(s *instanceState) {
 	i := s.inst
 	i.mu.Lock()
-	if i.Status != Active {
+	if i.Status != domain.Active {
 		i.mu.Unlock()
 		return
 	}
-	i.loadStatus(Hibernated)
+	i.loadStatus(domain.Hibernated)
 	i.touchUpdatedAt()
 	snap := buildSnapshot(i)
 	i.mu.Unlock()

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -28,7 +29,7 @@ func NewUnstartedActiveInstanceForTest(tb testing.TB, title string, pm ProcessMa
 	tb.Helper()
 	inst := &Instance{Title: title}
 	inst.processManager = pm
-	SetStatusForTest(tb, inst, Active, nil)
+	SetStatusForTest(tb, inst, domain.Active, nil)
 	return inst
 }
 
@@ -55,7 +56,7 @@ func SetTymuxManagerFactoryForTest(tb testing.TB, fn func() tymux.TymuxManager) 
 // SetStatusForTest changes inst's Status and republishes its snapshot, bypassing the
 // state machine, so tests outside this package can model a status change (e.g. a
 // retry) on a zero-valued Instance. archivedAt, when non-nil, also marks it archived.
-func SetStatusForTest(tb testing.TB, inst *Instance, status Status, archivedAt *time.Time) {
+func SetStatusForTest(tb testing.TB, inst *Instance, status domain.Status, archivedAt *time.Time) {
 	tb.Helper()
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
@@ -92,7 +93,7 @@ func (hotRestorablePM) GetCurrentWorkingDirectory() (string, error) { return "/t
 // NewHotRestorableInstanceForTest returns an Instance in a terminal status whose
 // backing process is alive and attaches cleanly, so HotRestoreIfLive can reach
 // HotRestoreCleared from outside this package.
-func NewHotRestorableInstanceForTest(tb testing.TB, title string, status Status) *Instance {
+func NewHotRestorableInstanceForTest(tb testing.TB, title string, status domain.Status) *Instance {
 	tb.Helper()
 	inst := &Instance{Title: title, Status: status, Path: tb.TempDir()}
 	inst.processManager = hotRestorablePM{}

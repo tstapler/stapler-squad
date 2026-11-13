@@ -1,6 +1,7 @@
 package session
 
 import (
+	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 	"time"
 )
@@ -18,7 +19,7 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Height:    100,
 		Width:     200,
 		CreatedAt: now,
@@ -71,7 +72,7 @@ func TestLastAcknowledgedZeroValue(t *testing.T) {
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
-		Status:    Paused,
+		Status:    domain.Paused,
 		Height:    100,
 		Width:     200,
 		CreatedAt: now,
@@ -150,7 +151,7 @@ func TestLastAcknowledgedComparison(t *testing.T) {
 				Title:  "Test Instance",
 				Path:   "/path/to/repo",
 				Branch: "test-branch",
-				Status: Ready,
+				Status: domain.Ready,
 				ReviewState: ReviewState{
 					LastAcknowledged:     tc.lastAcknowledged,
 					LastMeaningfulOutput: tc.lastMeaningfulOutput,

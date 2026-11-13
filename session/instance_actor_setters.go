@@ -413,10 +413,10 @@ func (i *Instance) SetArchivedAtIfNilCtx(ctx context.Context, t time.Time) (bool
 // would return ErrInvalidTransition for an already-archived-and-stopped
 // session on a repeat sweep).
 func stopIfNotStoppedLocked(s *instanceState, ctx context.Context) error {
-	if s.inst.Status == Stopped {
+	if s.inst.Status == domain.Stopped {
 		return nil
 	}
-	return transitionToLocked(s, ctx, Stopped)
+	return transitionToLocked(s, ctx, domain.Stopped)
 }
 
 // ArchiveWithStop sets ArchivedAt and transitions the instance to Stopped, in a
@@ -729,7 +729,7 @@ func (i *Instance) SetAutoApprove(v bool, persist func() error) error {
 			return err
 		}
 	}
-	if i.Status == Active {
+	if i.Status == domain.Active {
 		return i.Restart(true, "")
 	}
 	return nil
@@ -831,7 +831,7 @@ func (i *Instance) CreationEpoch() uint64 {
 // comment's tie-break example above) still only matches when Status equals
 // *its own* target, so the exactly-one-winner property for two DIFFERENT
 // target statuses is unaffected.
-func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, failureReason string) bool {
+func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status domain.Status, failureReason string) bool {
 	applied, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
 		// creationEpoch and Status are both read/written under i.mu here (not
 		// just actor confinement): RecoverFromStopped/RetryNow mutate Status
@@ -845,7 +845,7 @@ func (i *Instance) TryForceStatusIfEpoch(capturedEpoch uint64, status Status, fa
 			s.inst.mu.Unlock()
 			return false, nil
 		}
-		if s.inst.Status != Creating && s.inst.Status != status {
+		if s.inst.Status != domain.Creating && s.inst.Status != status {
 			s.inst.mu.Unlock()
 			return false, nil
 		}
@@ -881,12 +881,12 @@ func (i *Instance) TryStartRetry() (newEpoch uint64, started bool) {
 		started bool
 	}
 	r, _ := sendSyncValue(i, func(s *instanceState) (retry, error) {
-		if s.inst.Status != Failed {
+		if s.inst.Status != domain.Failed {
 			return retry{}, nil
 		}
 		newEpoch := bumpCreationEpochLocked(s)
 		s.inst.mu.Lock()
-		s.inst.loadStatus(Creating)
+		s.inst.loadStatus(domain.Creating)
 		s.inst.touchUpdatedAt()
 		snap := buildSnapshot(s.inst)
 		s.inst.mu.Unlock()

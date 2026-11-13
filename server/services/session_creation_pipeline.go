@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/summaries"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
@@ -60,7 +61,7 @@ type creationPipelineParams struct {
 // runBackgroundResolutionPipeline for why this is a struct rather than a
 // same-typed (status, string, string) parameter pile.
 type pipelineOutcome struct {
-	status         session.Status
+	status         domain.Status
 	failureReason  string
 	metricsOutcome string
 }
@@ -145,7 +146,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 			log.Error("[session pipeline] panic recovered, writing terminal Failed",
 				"session", p.instanceTitle, "panic", r, "stack", string(debug.Stack()))
 			span.AddEvent("panic_recovered")
-			terminal(pipelineOutcome{session.Failed, "StartupError", SessionCreationOutcomeFailed})
+			terminal(pipelineOutcome{domain.Failed, "StartupError", SessionCreationOutcomeFailed})
 		}
 	}()
 
@@ -178,7 +179,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		if resolveErr != nil {
 			log.Error("[session pipeline] GitHub URL resolution failed", "session", p.instanceTitle, "url", p.deferredGitHubSourceURL, "err", resolveErr)
 			setPhase(fmt.Sprintf("Failed to resolve GitHub URL: %s", resolveErr.Error()))
-			terminal(pipelineOutcome{session.Failed, "GitHubResolutionError", SessionCreationOutcomeFailed})
+			terminal(pipelineOutcome{domain.Failed, "GitHubResolutionError", SessionCreationOutcomeFailed})
 			return
 		}
 
@@ -228,7 +229,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 	// exceeded, or a concurrent Cancel RPC fired its stored CancelFunc)
 	// must not proceed into worktree/tmux setup.
 	if ctx.Err() != nil {
-		terminal(pipelineOutcome{session.Failed, "StartupError", SessionCreationOutcomeFailed})
+		terminal(pipelineOutcome{domain.Failed, "StartupError", SessionCreationOutcomeFailed})
 		return
 	}
 
@@ -271,7 +272,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		case errors.Is(startErr, session.ErrDirectoryCollision):
 			failureReason = "DirectoryCollision"
 		}
-		terminal(pipelineOutcome{session.Failed, failureReason, SessionCreationOutcomeFailed})
+		terminal(pipelineOutcome{domain.Failed, failureReason, SessionCreationOutcomeFailed})
 		return
 	}
 
@@ -356,7 +357,7 @@ func (s *SessionService) runBackgroundResolutionPipeline(rpcCtx context.Context,
 		log.Warn("[session pipeline] autonomous_mode requested but headlessPool is nil", "session", p.instanceTitle)
 	}
 
-	terminal(pipelineOutcome{session.Active, "", SessionCreationOutcomeSuccess})
+	terminal(pipelineOutcome{domain.Active, "", SessionCreationOutcomeSuccess})
 	log.Info("[session pipeline] async start complete", "session", p.instanceTitle)
 	if p.instance.RestartedFromSessionID != "" {
 		log.Info("[HandoffSummary] restart session created", "source_session", p.instance.RestartedFromSessionID, "new_session", p.instance.UUID)

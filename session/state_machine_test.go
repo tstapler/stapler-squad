@@ -3,31 +3,32 @@ package session
 import (
 	"context"
 	"errors"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"testing"
 	"time"
 )
 
 // allStatuses lists every Status constant in the new 5-state model.
-var allStatuses = []Status{Creating, Active, Paused, Stopped, Hibernated}
+var allStatuses = []domain.Status{domain.Creating, domain.Active, domain.Paused, domain.Stopped, domain.Hibernated}
 
 // validTransitionSet is the ground truth for TestCanTransition_ExhaustiveMatrix.
 // Any pair not listed here must return false from CanTransition.
-var validTransitionSet = map[[2]Status]bool{
+var validTransitionSet = map[[2]domain.Status]bool{
 	// Creating
-	{Creating, Active}:  true,
-	{Creating, Stopped}: true,
+	{domain.Creating, domain.Active}:  true,
+	{domain.Creating, domain.Stopped}: true,
 	// Active
-	{Active, Paused}:     true,
-	{Active, Stopped}:    true,
-	{Active, Hibernated}: true,
+	{domain.Active, domain.Paused}:     true,
+	{domain.Active, domain.Stopped}:    true,
+	{domain.Active, domain.Hibernated}: true,
 	// Paused
-	{Paused, Active}:  true,
-	{Paused, Stopped}: true,
+	{domain.Paused, domain.Active}:  true,
+	{domain.Paused, domain.Stopped}: true,
 	// Stopped — recoverable: Stopped → Active is allowed for session revival
-	{Stopped, Active}: true,
+	{domain.Stopped, domain.Active}: true,
 	// Hibernated
-	{Hibernated, Active}:  true,
-	{Hibernated, Stopped}: true,
+	{domain.Hibernated, domain.Active}:  true,
+	{domain.Hibernated, domain.Stopped}: true,
 }
 
 // TestCanTransition_ExhaustiveMatrix verifies every pair of known statuses against
@@ -38,7 +39,7 @@ func TestCanTransition_ExhaustiveMatrix(t *testing.T) {
 	t.Parallel()
 	for _, from := range allStatuses {
 		for _, to := range allStatuses {
-			pair := [2]Status{from, to}
+			pair := [2]domain.Status{from, to}
 			wantValid := validTransitionSet[pair]
 			got := CanTransition(from, to)
 			if got != wantValid {
@@ -58,24 +59,24 @@ func TestCanTransition_ValidTransitions(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
-		from Status
-		to   Status
+		from domain.Status
+		to   domain.Status
 	}{
 		// Creating transitions
-		{"Creating -> Active", Creating, Active},
-		{"Creating -> Stopped", Creating, Stopped},
+		{"Creating -> Active", domain.Creating, domain.Active},
+		{"Creating -> Stopped", domain.Creating, domain.Stopped},
 		// Active transitions
-		{"Active -> Paused", Active, Paused},
-		{"Active -> Stopped", Active, Stopped},
-		{"Active -> Hibernated", Active, Hibernated},
+		{"Active -> Paused", domain.Active, domain.Paused},
+		{"Active -> Stopped", domain.Active, domain.Stopped},
+		{"Active -> Hibernated", domain.Active, domain.Hibernated},
 		// Paused transitions
-		{"Paused -> Active", Paused, Active},
-		{"Paused -> Stopped", Paused, Stopped},
+		{"Paused -> Active", domain.Paused, domain.Active},
+		{"Paused -> Stopped", domain.Paused, domain.Stopped},
 		// Stopped recovery
-		{"Stopped -> Active", Stopped, Active},
+		{"Stopped -> Active", domain.Stopped, domain.Active},
 		// Hibernated transitions
-		{"Hibernated -> Active", Hibernated, Active},
-		{"Hibernated -> Stopped", Hibernated, Stopped},
+		{"Hibernated -> Active", domain.Hibernated, domain.Active},
+		{"Hibernated -> Stopped", domain.Hibernated, domain.Stopped},
 	}
 
 	for _, tt := range tests {
@@ -95,26 +96,26 @@ func TestCanTransition_InvalidTransitions(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
-		from Status
-		to   Status
+		from domain.Status
+		to   domain.Status
 	}{
 		// Stopped allows only Active (recovery)
-		{"Stopped -> Paused", Stopped, Paused},
-		{"Stopped -> Hibernated", Stopped, Hibernated},
-		{"Stopped -> Creating", Stopped, Creating},
+		{"Stopped -> Paused", domain.Stopped, domain.Paused},
+		{"Stopped -> Hibernated", domain.Stopped, domain.Hibernated},
+		{"Stopped -> Creating", domain.Stopped, domain.Creating},
 		// Self-transitions are not allowed
-		{"Active -> Active", Active, Active},
-		{"Paused -> Paused", Paused, Paused},
-		{"Stopped -> Stopped", Stopped, Stopped},
-		{"Hibernated -> Hibernated", Hibernated, Hibernated},
-		{"Creating -> Creating", Creating, Creating},
+		{"Active -> Active", domain.Active, domain.Active},
+		{"Paused -> Paused", domain.Paused, domain.Paused},
+		{"Stopped -> Stopped", domain.Stopped, domain.Stopped},
+		{"Hibernated -> Hibernated", domain.Hibernated, domain.Hibernated},
+		{"Creating -> Creating", domain.Creating, domain.Creating},
 		// Creating cannot go to Paused or Hibernated
-		{"Creating -> Paused", Creating, Paused},
-		{"Creating -> Hibernated", Creating, Hibernated},
+		{"Creating -> Paused", domain.Creating, domain.Paused},
+		{"Creating -> Hibernated", domain.Creating, domain.Hibernated},
 		// Paused cannot hibernate directly (must go Active first)
-		{"Paused -> Hibernated", Paused, Hibernated},
+		{"Paused -> Hibernated", domain.Paused, domain.Hibernated},
 		// Hibernated cannot go back to Creating
-		{"Hibernated -> Creating", Hibernated, Creating},
+		{"Hibernated -> Creating", domain.Hibernated, domain.Creating},
 	}
 
 	for _, tt := range tests {
@@ -129,18 +130,18 @@ func TestCanTransition_InvalidTransitions(t *testing.T) {
 
 func TestCanTransition_UnknownStatus(t *testing.T) {
 	t.Parallel()
-	unknownStatus := Status(999)
-	if CanTransition(unknownStatus, Active) {
+	unknownStatus := domain.Status(999)
+	if CanTransition(unknownStatus, domain.Active) {
 		t.Error("CanTransition with unknown from status should return false")
 	}
-	if CanTransition(Active, unknownStatus) {
+	if CanTransition(domain.Active, unknownStatus) {
 		t.Error("CanTransition with unknown to status should return false")
 	}
 }
 
 func TestErrInvalidTransition(t *testing.T) {
 	t.Parallel()
-	err := ErrInvalidTransition{From: Paused, To: Hibernated}
+	err := ErrInvalidTransition{From: domain.Paused, To: domain.Hibernated}
 
 	expected := "invalid transition: Paused -> Hibernated"
 	if err.Error() != expected {
@@ -151,7 +152,7 @@ func TestErrInvalidTransition(t *testing.T) {
 	if !errors.As(err, &target) {
 		t.Error("errors.As should match ErrInvalidTransition")
 	}
-	if target.From != Paused || target.To != Hibernated {
+	if target.From != domain.Paused || target.To != domain.Hibernated {
 		t.Errorf("errors.As target = {%s, %s}, want {Paused, Hibernated}", target.From, target.To)
 	}
 }
@@ -159,7 +160,7 @@ func TestErrInvalidTransition(t *testing.T) {
 // TestTransitionDefs_StoppedRecovery verifies Stopped can reach Active.
 func TestTransitionDefs_StoppedRecovery(t *testing.T) {
 	t.Parallel()
-	if !CanTransition(Stopped, Active) {
+	if !CanTransition(domain.Stopped, domain.Active) {
 		t.Error("Stopped should be able to transition to Active (session revival)")
 	}
 }
@@ -168,7 +169,7 @@ func TestTransitionDefs_StoppedRecovery(t *testing.T) {
 func TestTransitionDefs_AllStatusesCovered(t *testing.T) {
 	t.Parallel()
 	for _, s := range allStatuses {
-		if s == Stopped {
+		if s == domain.Stopped {
 			continue // Stopped → Active is covered above
 		}
 		hasOut := false
@@ -189,10 +190,10 @@ func TestTransitionDefs_AllStatusesCovered(t *testing.T) {
 func TestTransitionDefs_StoppedReachableFromEveryState(t *testing.T) {
 	t.Parallel()
 	for _, s := range allStatuses {
-		if s == Stopped {
+		if s == domain.Stopped {
 			continue
 		}
-		if !CanTransition(s, Stopped) {
+		if !CanTransition(s, domain.Stopped) {
 			t.Errorf("State %s cannot transition directly to Stopped — all states must be stoppable", s)
 		}
 	}
@@ -204,10 +205,10 @@ func TestTransitionDefs_StoppedReachableFromEveryState(t *testing.T) {
 // - CanTransition(Active, Status(NeedsApprovalOldValue=4)) returns false (removed).
 func TestCanTransition_NewStates(t *testing.T) {
 	t.Parallel()
-	if !CanTransition(Active, Hibernated) {
+	if !CanTransition(domain.Active, domain.Hibernated) {
 		t.Error("CanTransition(Active, Hibernated) = false, want true")
 	}
-	if !CanTransition(Hibernated, Active) {
+	if !CanTransition(domain.Hibernated, domain.Active) {
 		t.Error("CanTransition(Hibernated, Active) = false, want true")
 	}
 	// Old NeedsApproval value was 4; Hibernated is now 4. Transitioning
@@ -215,7 +216,7 @@ func TestCanTransition_NewStates(t *testing.T) {
 	// semantics are gone. We verify via the named alias behavior.
 	// Running and Ready are aliases for Active (value=1), so
 	// CanTransition(Running, Ready) == CanTransition(Active, Active) == false.
-	if CanTransition(Running, Ready) {
+	if CanTransition(domain.Running, domain.Ready) {
 		t.Error("CanTransition(Running, Ready) = true (self-transition), want false")
 	}
 }
@@ -254,8 +255,8 @@ func TestTransitionTo_ValidTransitions(t *testing.T) {
 func TestTransitionTo_BumpsUpdatedAt(t *testing.T) {
 	ctx := context.Background()
 	before := time.Now().Add(-time.Hour)
-	inst := &Instance{Title: "test", Status: Active, Path: t.TempDir(), UpdatedAt: before}
-	if err := inst.transitionTo(ctx, Stopped); err != nil {
+	inst := &Instance{Title: "test", Status: domain.Active, Path: t.TempDir(), UpdatedAt: before}
+	if err := inst.transitionTo(ctx, domain.Stopped); err != nil {
 		t.Fatalf("transitionTo(Stopped): unexpected error %v", err)
 	}
 	if !inst.UpdatedAt.After(before) {
@@ -271,9 +272,9 @@ func TestTransitionTo_BumpsUpdatedAt(t *testing.T) {
 func TestTransitionToLocked_BumpsUpdatedAt(t *testing.T) {
 	ctx := context.Background()
 	before := time.Now().Add(-time.Hour)
-	inst := &Instance{Title: "test", Status: Active, Path: t.TempDir(), UpdatedAt: before}
+	inst := &Instance{Title: "test", Status: domain.Active, Path: t.TempDir(), UpdatedAt: before}
 	s := &instanceState{inst: inst}
-	if err := transitionToLocked(s, ctx, Stopped); err != nil {
+	if err := transitionToLocked(s, ctx, domain.Stopped); err != nil {
 		t.Fatalf("transitionToLocked(Stopped): unexpected error %v", err)
 	}
 	if !inst.UpdatedAt.After(before) {
@@ -286,8 +287,8 @@ func TestTransitionToLocked_BumpsUpdatedAt(t *testing.T) {
 // same touchUpdatedAt fix.
 func TestForceStatus_BumpsUpdatedAt(t *testing.T) {
 	before := time.Now().Add(-time.Hour)
-	inst := &Instance{Title: "test", Status: Active, UpdatedAt: before}
-	inst.ForceStatus(Stopped)
+	inst := &Instance{Title: "test", Status: domain.Active, UpdatedAt: before}
+	inst.ForceStatus(domain.Stopped)
 	if !inst.UpdatedAt.After(before) {
 		t.Errorf("UpdatedAt = %v, want a time after %v (ForceStatus must bump it)", inst.UpdatedAt, before)
 	}
@@ -297,7 +298,7 @@ func TestForceStatus_BumpsUpdatedAt(t *testing.T) {
 // bypass-the-state-machine path sharing the same touchUpdatedAt fix.
 func TestRecoverFromStopped_BumpsUpdatedAt(t *testing.T) {
 	before := time.Now().Add(-time.Hour)
-	inst := &Instance{Title: "test", Status: Stopped, UpdatedAt: before}
+	inst := &Instance{Title: "test", Status: domain.Stopped, UpdatedAt: before}
 	inst.RecoverFromStopped()
 	if !inst.UpdatedAt.After(before) {
 		t.Errorf("UpdatedAt = %v, want a time after %v (RecoverFromStopped must bump it)", inst.UpdatedAt, before)
@@ -311,7 +312,7 @@ func TestTransitionTo_InvalidTransitions(t *testing.T) {
 	ctx := context.Background()
 	for _, from := range allStatuses {
 		for _, to := range allStatuses {
-			if validTransitionSet[[2]Status{from, to}] {
+			if validTransitionSet[[2]domain.Status{from, to}] {
 				continue // skip valid pairs
 			}
 			from, to := from, to // capture
@@ -345,27 +346,27 @@ func TestTransitionTo_InvalidTransitions(t *testing.T) {
 func TestTransitionTo_ChainedTransitions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	type step struct{ to Status }
+	type step struct{ to domain.Status }
 
 	chains := []struct {
 		name  string
-		start Status
+		start domain.Status
 		steps []step
 	}{
 		{
 			name:  "new session lifecycle",
-			start: Creating,
-			steps: []step{{Active}, {Paused}, {Active}, {Stopped}},
+			start: domain.Creating,
+			steps: []step{{domain.Active}, {domain.Paused}, {domain.Active}, {domain.Stopped}},
 		},
 		{
 			name:  "hibernate and resume",
-			start: Active,
-			steps: []step{{Hibernated}, {Active}, {Stopped}},
+			start: domain.Active,
+			steps: []step{{domain.Hibernated}, {domain.Active}, {domain.Stopped}},
 		},
 		{
 			name:  "stop and revive",
-			start: Active,
-			steps: []step{{Stopped}, {Active}, {Paused}, {Stopped}},
+			start: domain.Active,
+			steps: []step{{domain.Stopped}, {domain.Active}, {domain.Paused}, {domain.Stopped}},
 		},
 	}
 

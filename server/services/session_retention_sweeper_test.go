@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
@@ -24,7 +25,7 @@ func addArchivedInstance(t *testing.T, fix *forkTestFixture, title string, archi
 	inst := &session.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -58,7 +59,7 @@ func addArchivedInstanceLive(t *testing.T, fix *forkTestFixture, title string, a
 	inst := &session.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
-		Status:    session.Stopped,
+		Status:    domain.Stopped,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -249,7 +250,7 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 		Title:     "new-round",
 		UUID:      newUUID,
 		Path:      repoDir,
-		Status:    session.Active,
+		Status:    domain.Active,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

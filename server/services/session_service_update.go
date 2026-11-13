@@ -11,6 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // classifyPauseResumeErr maps a Pause()/Resume() error to the appropriate connect
@@ -92,7 +93,7 @@ func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionReque
 	targetStatus := adapters.ProtoToStatus(*msg.Status)
 
 	switch {
-	case targetStatus == session.Stopped && instance.Status != session.Stopped:
+	case targetStatus == domain.Stopped && instance.Status != domain.Stopped:
 		if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
 			return false, err
 		}
@@ -104,7 +105,7 @@ func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionReque
 			return false, classifyStopErr(err, "stop")
 		}
 		return true, nil
-	case targetStatus == session.Paused && instance.Status != session.Paused:
+	case targetStatus == domain.Paused && instance.Status != domain.Paused:
 		if err := s.RefuseIfWorktreeSharedWithOtherLiveSession(instance); err != nil {
 			return false, err
 		}
@@ -120,7 +121,7 @@ func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionReque
 			instance.SetPauseReason(*msg.PauseReason)
 		}
 		return true, nil
-	case targetStatus != session.Paused && instance.Status == session.Paused:
+	case targetStatus != domain.Paused && instance.Status == domain.Paused:
 		// Resume from paused state
 		if err := instance.Resume(); err != nil {
 			return false, classifyPauseResumeErr(err, "resume")

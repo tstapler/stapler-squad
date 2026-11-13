@@ -1,6 +1,9 @@
 package session
 
-import "context"
+import (
+	"context"
+	"github.com/tstapler/stapler-squad/session/domain"
+)
 
 // State machine diagram (6-state model):
 //
@@ -27,13 +30,13 @@ import "context"
 //     their heavy I/O inline instead (see its doc comment).
 
 // transitionKey identifies a (from, to) state machine edge.
-type transitionKey struct{ from, to Status }
+type transitionKey struct{ from, to domain.Status }
 
 // TransitionDef describes a single valid state machine transition with optional
 // guard (pre-condition) and after (post-transition side-effect) hooks.
 type TransitionDef struct {
-	From Status
-	To   Status
+	From domain.Status
+	To   domain.Status
 	// Guard is called before the status is updated. Return non-nil to abort.
 	// nil means unconditionally allowed.
 	Guard func(ctx context.Context, i *Instance) error
@@ -45,24 +48,24 @@ type TransitionDef struct {
 
 // transitionDefs is the canonical list of valid state machine transitions.
 var transitionDefs = []TransitionDef{
-	{From: Creating, To: Active},
-	{From: Creating, To: Stopped},
-	{From: Creating, To: Failed},
-	{From: Failed, To: Creating},
-	{From: Active, To: Paused},
-	{From: Active, To: Stopped},
+	{From: domain.Creating, To: domain.Active},
+	{From: domain.Creating, To: domain.Stopped},
+	{From: domain.Creating, To: domain.Failed},
+	{From: domain.Failed, To: domain.Creating},
+	{From: domain.Active, To: domain.Paused},
+	{From: domain.Active, To: domain.Stopped},
 	// No After hook: a prior goroutine here ran untracked by hibernateWG and
 	// raced with transitionTo's "caller holds i.mu" contract. See the file's
 	// "Design notes" above.
-	{From: Active, To: Hibernated},
-	{From: Active, To: Crashed},
-	{From: Paused, To: Active},
-	{From: Paused, To: Stopped},
-	{From: Stopped, To: Active},
-	{From: Hibernated, To: Active},
-	{From: Hibernated, To: Stopped},
-	{From: Crashed, To: Active},
-	{From: Crashed, To: Stopped},
+	{From: domain.Active, To: domain.Hibernated},
+	{From: domain.Active, To: domain.Crashed},
+	{From: domain.Paused, To: domain.Active},
+	{From: domain.Paused, To: domain.Stopped},
+	{From: domain.Stopped, To: domain.Active},
+	{From: domain.Hibernated, To: domain.Active},
+	{From: domain.Hibernated, To: domain.Stopped},
+	{From: domain.Crashed, To: domain.Active},
+	{From: domain.Crashed, To: domain.Stopped},
 }
 
 // transitionIndex is an O(1) lookup index built from transitionDefs at init time.
@@ -79,13 +82,13 @@ func init() {
 // in transitionDefs. This is the single source of truth for edge legality —
 // CanTransition, canTransitionLocked, and transitionToLocked all resolve through
 // it so they cannot drift apart.
-func lookupTransition(from, to Status) (TransitionDef, bool) {
+func lookupTransition(from, to domain.Status) (TransitionDef, bool) {
 	def, ok := transitionIndex[transitionKey{from, to}]
 	return def, ok
 }
 
 // CanTransition returns true if transitioning from -> to is a valid state transition.
-func CanTransition(from, to Status) bool {
+func CanTransition(from, to domain.Status) bool {
 	_, ok := lookupTransition(from, to)
 	return ok
 }
@@ -94,7 +97,7 @@ func CanTransition(from, to Status) bool {
 // transition to `to`, without mutating any state. Must only be called from
 // within sendSyncErr/send/sendCtx closures (reads i.Status under i.mu.RLock,
 // matching transitionToLocked's read).
-func canTransitionLocked(s *instanceState, to Status) bool {
+func canTransitionLocked(s *instanceState, to domain.Status) bool {
 	i := s.inst
 	i.mu.RLock()
 	status := i.Status

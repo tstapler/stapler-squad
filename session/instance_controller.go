@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // StartController creates and starts a claudectl.ClaudeController for this instance,
@@ -85,8 +86,8 @@ func (i *Instance) StartController() error {
 		log.Info("pty eof received from response stream", "session", i.Title)
 		exitContent := controller.GetExitContent()
 		i.send(func(s *instanceState) {
-			if s.inst.Status == Active {
-				if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+			if s.inst.Status == domain.Active {
+				if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}
 			}

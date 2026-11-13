@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // Characterization tests of today's single-PR behavior (session-multi-pr-tracking
@@ -50,7 +51,7 @@ func TestLegacyPoller_TerminalSession_MakesNoGitHubCalls(t *testing.T) {
 			t.Parallel()
 			inst := &session.Instance{
 				Title:                  "legacy-terminal-" + tt.name,
-				Status:                 session.Active,
+				Status:                 domain.Active,
 				GitHubOwner:            "acme",
 				GitHubRepo:             "app",
 				GitHubPRNumber:         11,
@@ -80,7 +81,7 @@ func TestLegacyPoller_ActivePRMerged_KeepsTerminalThroughSnapshot(t *testing.T) 
 	p, _ := newRowPoller(t, client)
 	p.refresherOn = func() bool { return false }
 	inst := newTwoPRInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	p.SetInstances([]*session.Instance{inst})
 
 	p.checkAllSessions()
@@ -103,9 +104,9 @@ func TestRefresher_ShouldMarkRowsTerminal_WhenAllScopesOff(t *testing.T) {
 	p, storage := newRowPoller(t, client)
 
 	inst := newTwoPRInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	suspended := newPRTestInstance(t)
-	suspended.UUID, suspended.Title, suspended.Status = "u-suspended", "suspended", session.Paused
+	suspended.UUID, suspended.Title, suspended.Status = "u-suspended", "suspended", domain.Paused
 	require.NoError(t, suspended.AttachPR(prRefN(t, 50), session.AttachSourceCreatedFromURL, session.PRInitial{State: session.PRStateOpen}))
 	p.SetInstances([]*session.Instance{inst, suspended})
 
@@ -149,7 +150,7 @@ func TestRefresher_ShouldBoundFetchesToTwoPerPR_WhenLegacyLoopAlsoRuns(t *testin
 	client := &recordingPRClient{}
 	p, storage := newRowPoller(t, client)
 	inst := newPRTestInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	require.NoError(t, inst.AttachPR(prRefN(t, 12), session.AttachSourceBranchDiscovery, session.PRInitial{State: session.PRStateOpen}))
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen})
 	p.SetInstances([]*session.Instance{inst})

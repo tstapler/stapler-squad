@@ -48,7 +48,7 @@ func (i *Instance) RepoName() (string, error) {
 	if !i.started.Load() {
 		return "", fmt.Errorf("cannot get repo name for instance that has not been started")
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		return "", fmt.Errorf("cannot get repo name for paused instance")
 	}
 	if !i.GitManager.HasWorktree() {
@@ -642,7 +642,7 @@ func (i *Instance) UpdateDiffStats() error {
 		i.mu.RUnlock()
 		return nil
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		i.mu.RUnlock()
 		return nil
 	}
@@ -695,9 +695,9 @@ func (i *Instance) UpdateDiffStats() error {
 	var transitionErr error
 	var didTransitionToPaused bool
 	if needsPause {
-		if i.Status != Paused {
+		if i.Status != domain.Paused {
 			didTransitionToPaused = true
-			transitionErr = i.transitionTo(context.Background(), Paused)
+			transitionErr = i.transitionTo(context.Background(), domain.Paused)
 		}
 		i.GitManager.ClearDiffStats()
 		i.mu.Unlock()

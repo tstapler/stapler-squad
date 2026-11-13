@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // newCountingGateService is a SessionService whose delivery gate is attached
@@ -98,7 +99,7 @@ func TestHiddenSessionEvents_ShouldDeliverEverything_WhenGateOff(t *testing.T) {
 func TestAutonomous_ShouldDeliverStuckFailureAndDropCompleteInfo_WhenHiddenAndGateOn(t *testing.T) {
 	const title = "hidden-generic-gated"
 	inst := &session.Instance{
-		Title: title, UUID: title + "-uuid", Path: "/tmp/test", Status: session.Paused,
+		Title: title, UUID: title + "-uuid", Path: "/tmp/test", Status: domain.Paused,
 		Program: "claude", AutonomousMode: true, Hidden: true,
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}

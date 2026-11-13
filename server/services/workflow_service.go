@@ -718,7 +718,7 @@ func (ws *WorkflowService) ArchiveWorkflowSessions(
 		Where(
 			entsession.WorkflowID(req.Msg.WorkflowId),
 			entsession.ArchivedAtIsNil(),
-			entsession.StatusNotIn(int(session.Active), int(session.Creating), int(session.Paused)),
+			entsession.StatusNotIn(int(domain.Active), int(domain.Creating), int(domain.Paused)),
 		).
 		SetArchivedAt(now).
 		Save(ctx)
@@ -768,7 +768,7 @@ func (ws *WorkflowService) DeleteWorkflowFailedSessions(
 	updated, err := entClient.Session.Update().
 		Where(
 			entsession.WorkflowID(req.Msg.WorkflowId),
-			entsession.StatusIn(int(session.Stopped)),
+			entsession.StatusIn(int(domain.Stopped)),
 			entsession.ArchivedAtIsNil(),
 			entsession.LastMeaningfulOutputIsNil(),
 		).

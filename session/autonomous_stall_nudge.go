@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"time"
 )
 
@@ -59,7 +60,7 @@ func NudgeStalledAutonomousSession(ctx context.Context, inst *Instance, claim fu
 
 func nudgeStalledWith(ctx context.Context, inst *Instance, claim func() (bool, error), s nudgeSeams) error {
 	snap := inst.Snapshot()
-	if snap.Status != Active || snap.ArchivedAt != nil {
+	if snap.Status != domain.Active || snap.ArchivedAt != nil {
 		return fmt.Errorf("%w: %s (status %s)", ErrNudgeSessionNotActive, snap.UUID, snap.Status)
 	}
 	if err := CheckNudgeEligibleWithSettleWindowCtx(ctx, inst, s.settleWindow, s.poll); err != nil {
@@ -81,7 +82,7 @@ func nudgeStalledWith(ctx context.Context, inst *Instance, claim func() (bool, e
 		return fmt.Errorf("nudge cancelled before claiming a slot: %w", err)
 	}
 	// Status can change while waiting for the lease; the claim spends budget.
-	if snap := inst.Snapshot(); snap.Status != Active || snap.ArchivedAt != nil {
+	if snap := inst.Snapshot(); snap.Status != domain.Active || snap.ArchivedAt != nil {
 		lease.Release()
 		return fmt.Errorf("%w: %s (status %s)", ErrNudgeSessionNotActive, snap.UUID, snap.Status)
 	}

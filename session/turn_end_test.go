@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type lockCheckingFake struct {
@@ -37,7 +38,7 @@ func (f *fakeRecorder) RecordTurnEnded(string, TurnEnded) { f.observe() }
 
 func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceIsBareLiteral(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "bare", Status: Running}
+	inst := &Instance{Title: "bare", Status: domain.Running}
 
 	inst.RecordTurnEnd("finished", TurnEndSourceHook)
 
@@ -47,7 +48,7 @@ func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceIsBareLite
 
 func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceFromInstanceData(t *testing.T) {
 	t.Parallel()
-	inst, err := FromInstanceDataDeferred(InstanceData{Title: "restored", Path: t.TempDir(), Status: Paused, Program: "claude"})
+	inst, err := FromInstanceDataDeferred(InstanceData{Title: "restored", Path: t.TempDir(), Status: domain.Paused, Program: "claude"})
 	require.NoError(t, err)
 
 	inst.RecordTurnEnd("finished", TurnEndSourceScreen)
@@ -57,7 +58,7 @@ func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceFromInstan
 
 func TestRecordTurnEnd_Should_CallSinkAndRecorderOnceAfterReleasingLock_When_CollaboratorsSet(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "wired", Status: Running}
+	inst := &Instance{Title: "wired", Status: domain.Running}
 	sink := &lockCheckingFake{inst: inst}
 	rec := &fakeRecorder{lockCheckingFake: lockCheckingFake{inst: inst}}
 	inst.SetTurnEndSink(sink)
@@ -73,7 +74,7 @@ func TestRecordTurnEnd_Should_CallSinkAndRecorderOnceAfterReleasingLock_When_Col
 
 func TestRecordTurnEnd_Should_SkipSinkAndRecorder_When_ActorStopped(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "stopped", Status: Running}
+	inst := &Instance{Title: "stopped", Status: domain.Running}
 	sink := &lockCheckingFake{inst: inst}
 	rec := &fakeRecorder{lockCheckingFake: lockCheckingFake{inst: inst}}
 	inst.SetTurnEndSink(sink)
@@ -88,7 +89,7 @@ func TestRecordTurnEnd_Should_SkipSinkAndRecorder_When_ActorStopped(t *testing.T
 
 func TestSetTurnEndSink_Should_KeepNoopDefault_When_TypedNilPassed(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "typednil", Status: Running}
+	inst := &Instance{Title: "typednil", Status: domain.Running}
 	var sink *lockCheckingFake
 	inst.SetTurnEndSink(sink)
 

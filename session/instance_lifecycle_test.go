@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -72,15 +73,15 @@ func TestLifecycleCallbackConcurrency(t *testing.T) {
 func TestTransitionToErrorInCallback(t *testing.T) {
 	t.Parallel()
 	// Stopped is a terminal state — Stopped→Stopped must return an error.
-	inst := &Instance{Title: "transition-test", Status: Stopped}
+	inst := &Instance{Title: "transition-test", Status: domain.Stopped}
 
-	err := inst.transitionTo(context.Background(), Stopped)
+	err := inst.transitionTo(context.Background(), domain.Stopped)
 	if err == nil {
 		t.Error("expected ErrInvalidTransition for Stopped→Stopped, got nil")
 	}
 
 	// Confirm the instance is still in Stopped status after the failed self-transition.
-	if inst.Status != Stopped {
+	if inst.Status != domain.Stopped {
 		t.Errorf("test setup: instance should be Stopped, got %s", inst.Status)
 	}
 }

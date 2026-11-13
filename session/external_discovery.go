@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/mux"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -149,7 +150,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Title:        title,
 		Path:         discovered.Metadata.Cwd,
 		Program:      discovered.Metadata.Command,
-		Status:       Active,
+		Status:       domain.Active,
 		InstanceType: InstanceTypeExternal,
 		Backend:      BackendTmux, // wraps an existing tmux session; no global selection may re-route it
 		Category:     "External",

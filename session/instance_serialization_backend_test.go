@@ -6,13 +6,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 func restoredPausedData(t *testing.T, title string) InstanceData {
 	t.Helper()
-	return InstanceData{Title: title, Path: t.TempDir(), Program: "claude", Status: Paused}
+	return InstanceData{Title: title, Path: t.TempDir(), Program: "claude", Status: domain.Paused}
 }
 
 // A session persisted before its per-session tymux override existed has an empty
@@ -90,7 +91,7 @@ func (*deadTymuxManager) IsAlive() bool { return false }
 // Every persisted status takes its own branch in fromInstanceData; each must hand the
 // program to a tymux backend, or that branch regresses to a bare $SHELL (BUG-113).
 func TestFromInstanceData_EveryStatusBranch_WiresTymuxCommand(t *testing.T) {
-	for _, status := range []Status{Paused, Stopped, Hibernated, Crashed, Active} {
+	for _, status := range []domain.Status{domain.Paused, domain.Stopped, domain.Hibernated, domain.Crashed, domain.Active} {
 		t.Run(status.String(), func(t *testing.T) {
 			t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 			fake := &deadTymuxManager{}

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	ssent "github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/hook"
@@ -82,7 +83,7 @@ func TestEntRepository_Update(t *testing.T) {
 
 	// Modify session
 	session.Branch = "feature-branch"
-	session.Status = Paused
+	session.Status = domain.Paused
 	session.Category = "Updated"
 
 	// Update session
@@ -93,7 +94,7 @@ func TestEntRepository_Update(t *testing.T) {
 	retrieved, err := repo.Get(ctx, session.Title)
 	require.NoError(t, err)
 	assert.Equal(t, "feature-branch", retrieved.Branch)
-	assert.Equal(t, Paused, retrieved.Status)
+	assert.Equal(t, domain.Paused, retrieved.Status)
 	assert.Equal(t, "Updated", retrieved.Category)
 }
 
@@ -181,9 +182,9 @@ func TestEntRepository_ListByStatus(t *testing.T) {
 
 	// Create sessions with different statuses
 	running := createTestSession("running-session")
-	running.Status = Running
+	running.Status = domain.Running
 	paused := createTestSession("paused-session")
-	paused.Status = Paused
+	paused.Status = domain.Paused
 
 	err := repo.Create(ctx, running)
 	require.NoError(t, err)
@@ -191,13 +192,13 @@ func TestEntRepository_ListByStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Query running sessions
-	runningSessions, err := repo.ListByStatus(ctx, Running)
+	runningSessions, err := repo.ListByStatus(ctx, domain.Running)
 	require.NoError(t, err)
 	assert.Len(t, runningSessions, 1)
 	assert.Equal(t, "running-session", runningSessions[0].Title)
 
 	// Query paused sessions
-	pausedSessions, err := repo.ListByStatus(ctx, Paused)
+	pausedSessions, err := repo.ListByStatus(ctx, domain.Paused)
 	require.NoError(t, err)
 	assert.Len(t, pausedSessions, 1)
 	assert.Equal(t, "paused-session", pausedSessions[0].Title)

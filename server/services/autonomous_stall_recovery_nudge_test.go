@@ -74,7 +74,7 @@ type stallNudgeFixture struct {
 
 func newStallNudgeFixture(t *testing.T, title string, itemStatus session.BacklogStatus, diagnoseOn, stallOn bool) *stallNudgeFixture {
 	t.Helper()
-	base := newUnlinkedCharFixtureWithStatus(t, title, session.Active)
+	base := newUnlinkedCharFixtureWithStatus(t, title, domain.Active)
 	item, err := base.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
 	require.NoError(t, err)
 	is, err := base.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: base.inst.UUID, SessionRole: session.SessionRoleWork})

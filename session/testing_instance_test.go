@@ -1,11 +1,14 @@
 package session
 
-import "testing"
+import (
+	"github.com/tstapler/stapler-squad/session/domain"
+	"testing"
+)
 
 func TestNewPausedTestInstance_should_ReturnAStartedPausedInstance(t *testing.T) {
 	t.Parallel()
 	inst := NewPausedTestInstance("paused-helper")
-	if inst.Title != "paused-helper" || inst.Status != Paused || inst.Program != "claude" {
+	if inst.Title != "paused-helper" || inst.Status != domain.Paused || inst.Program != "claude" {
 		t.Fatalf("unexpected instance: %+v", inst)
 	}
 	if !inst.Started() {

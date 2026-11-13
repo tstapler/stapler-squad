@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -80,7 +81,7 @@ func makeInstanceWithCheckpoint(title string) (*session.Instance, string) {
 	inst := &session.Instance{
 		Title:   title,
 		Path:    "/tmp/test",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 		Checkpoints: session.CheckpointList{
 			{
@@ -280,7 +281,7 @@ func TestGetSessionDiff_FindsByUUID(t *testing.T) {
 		UUID:    testUUID,
 		Title:   "diff-session",
 		Path:    "/tmp/test-diff",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	})
 
@@ -304,7 +305,7 @@ func TestGetSessionDiff_FindsByTitle(t *testing.T) {
 	svctest.AddInstanceToPoller(fix.poller, &session.Instance{
 		Title:   "diff-by-title",
 		Path:    "/tmp/test-diff-title",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	})
 
@@ -358,7 +359,7 @@ func TestGetSessionDiff_CompletedDirectoryModeSessionReturnsRealDiff(t *testing.
 		UUID:    testUUID,
 		Title:   "directory-mode-diff-session",
 		Path:    repoPath,
-		Status:  session.Stopped,
+		Status:  domain.Stopped,
 		Program: "claude",
 	}))
 

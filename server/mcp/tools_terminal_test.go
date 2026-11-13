@@ -10,6 +10,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/sendkeysguard"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
@@ -565,7 +566,7 @@ func TestSteerSessionMCP_stripsNullBytes(t *testing.T) {
 func TestSteerSessionMCP_passesValidationAndReachesSendKeys(t *testing.T) {
 	inst := &session.Instance{
 		Title:   "active-session",
-		Status:  session.Active,
+		Status:  domain.Active,
 		Program: "claude",
 	}
 	store := &stubStore{instances: []*session.Instance{inst}}
@@ -689,8 +690,8 @@ func TestFindInstance_should_fallBackToStore_When_LiveFinderNil(t *testing.T) {
 // hidden and a visible session, and neither is a read-only refusal.
 func TestMCPWriteTools_ShouldBehaveAsBeforeForHidden_WhenWriteToSessionAndSendControlCalled(t *testing.T) {
 	store := &stubStore{instances: []*session.Instance{
-		{Title: "visible-s", Status: session.Active, Program: "claude"},
-		{Title: "hidden-s", Status: session.Active, Program: "claude", Hidden: true},
+		{Title: "visible-s", Status: domain.Active, Program: "claude"},
+		{Title: "hidden-s", Status: domain.Active, Program: "claude", Hidden: true},
 	}}
 	th := &terminalHandlers{
 		store:      store,

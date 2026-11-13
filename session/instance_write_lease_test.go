@@ -13,6 +13,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // leaseInstance returns an instance with its own flag, so tests never share
@@ -138,7 +139,7 @@ func TestWriteLease_ShouldHandTheLeaseToAWaiter_WhenTheHolderReleases(t *testing
 func TestWriteLease_ShouldNotDeadlockOrInvertLockOrder_WhenDriverSteerNudgeAndStatusPollerRunConcurrently(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: "idle"}
-	inst := &Instance{Title: "lock-order", Status: Ready, processManager: pm}
+	inst := &Instance{Title: "lock-order", Status: domain.Ready, processManager: pm}
 	inst.started.Store(true)
 	inst.SetLeaseFlag(&LeaseFlag{})
 
@@ -266,7 +267,7 @@ func TestWriteLease_ShouldRaiseTheHeldSecondsGaugeAndLogOneWedgeWarnPerMinuteAnd
 func TestAutomatedWriters_ShouldNotCountABusyLeaseAsADialogAttemptAndStillAnswerAfterThreeBusyTicks_WhenTheLeaseIsBusy(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: trustDialogText}
-	inst := &Instance{Title: "latch", Status: Ready, processManager: pm}
+	inst := &Instance{Title: "latch", Status: domain.Ready, processManager: pm}
 	inst.started.Store(true)
 	inst.SetLeaseFlag(&LeaseFlag{})
 
@@ -293,7 +294,7 @@ func TestAutomatedWriters_ShouldNotCountABusyLeaseAsADialogAttemptAndStillAnswer
 func TestAttemptBacklogNudge_ShouldSkipTheTickAndWriteNothing_WhenTheLeaseIsBusy(t *testing.T) {
 	t.Parallel()
 	pm := &stuckDialogProcessManager{dialogText: "idle"}
-	inst := &Instance{Title: "nudge-busy", Status: Ready, processManager: pm}
+	inst := &Instance{Title: "nudge-busy", Status: domain.Ready, processManager: pm}
 	inst.started.Store(true)
 	inst.SetLeaseFlag(&LeaseFlag{})
 
@@ -317,7 +318,7 @@ func TestInitialPrompt_ShouldNotCountALeaseApiErrorTowardTheAttemptLimitNorMarkS
 			t.Cleanup(func() { submitInitialPrompt = prev })
 
 			pm := &stuckDialogProcessManager{dialogText: "> "}
-			inst := &Instance{Title: "initial-lease-err", Status: Ready, processManager: pm}
+			inst := &Instance{Title: "initial-lease-err", Status: domain.Ready, processManager: pm}
 			inst.started.Store(true)
 			inst.SetLeaseFlag(&LeaseFlag{})
 
@@ -336,7 +337,7 @@ func TestInitialPrompt_ShouldNotCountALeaseApiErrorTowardTheAttemptLimitNorMarkS
 // T-WL-04 (initial prompt half): a busy lease consumes no attempt.
 func TestInitialPrompt_ShouldConsumeNoAttempt_WhenTheLeaseIsBusy(t *testing.T) {
 	pm := &stuckDialogProcessManager{dialogText: "> "}
-	inst := &Instance{Title: "initial-busy", Status: Ready, processManager: pm}
+	inst := &Instance{Title: "initial-busy", Status: domain.Ready, processManager: pm}
 	inst.started.Store(true)
 	inst.SetLeaseFlag(&LeaseFlag{})
 	held, _ := inst.TryTerminalWriteLease(LeaseWriterReply)

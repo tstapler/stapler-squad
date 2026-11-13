@@ -1240,7 +1240,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		for _, inst := range instances {
 			started := inst.Started()
 			paused := inst.Paused()
-			if started && !paused && inst.GetLifecycleStatus() != session.Stopped {
+			if started && !paused && inst.GetLifecycleStatus() != domain.Stopped {
 				if inst.GetController() == nil {
 					if err := inst.StartController(); err != nil {
 						log.Warn("failed to start controller", "session", inst.Title, "err", err)
@@ -1264,7 +1264,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 				continue
 			}
 			status := inst.GetLifecycleStatus()
-			if status == session.Paused || status == session.Stopped || status == session.Hibernated {
+			if status == domain.Paused || status == domain.Stopped || status == domain.Hibernated {
 				continue
 			}
 			session.StartSessionDriver(inst, inst.GetEffectiveRootDir())
@@ -2313,7 +2313,7 @@ func shouldBootStart(inst *session.Instance) bool {
 
 func deferToReconcile(inst *session.Instance) bool {
 	switch inst.GetLifecycleStatus() {
-	case session.PermanentlyFailed, session.Failed:
+	case domain.PermanentlyFailed, domain.Failed:
 		return true
 	default:
 		return false

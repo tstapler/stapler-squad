@@ -14,19 +14,20 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // loadStatus sets Status directly without state machine validation.
 // Call ONLY from FromInstanceData() deserialization or test setup.
 // Never call from operational code paths.
 // Must be called with i.mu held (or before the instance is shared).
-func (i *Instance) loadStatus(status Status) {
+func (i *Instance) loadStatus(status domain.Status) {
 	i.Status = status
 }
 
 // setStatus is a backward-compatibility alias for loadStatus.
 // Deprecated: use loadStatus for deserialization; use transitionTo for operational transitions.
-func (i *Instance) setStatus(status Status) {
+func (i *Instance) setStatus(status domain.Status) {
 	i.loadStatus(status)
 }
 
@@ -40,7 +41,7 @@ func (i *Instance) touchUpdatedAt() {
 
 // transitionTo validates and executes a state transition using the TransitionDef table.
 // Must be called with i.mu held.
-func (i *Instance) transitionTo(ctx context.Context, to Status) error {
+func (i *Instance) transitionTo(ctx context.Context, to domain.Status) error {
 	def, ok := lookupTransition(i.Status, to)
 	if !ok {
 		return ErrInvalidTransition{From: i.Status, To: to}
@@ -51,7 +52,7 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 		}
 	}
 	i.Status = to
-	if to == Creating {
+	if to == domain.Creating {
 		i.creationProgressUpdatedAt = time.Now() // see transitionToLocked
 	}
 	i.touchUpdatedAt()
@@ -72,7 +73,7 @@ func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 // inline by hibernateProcessLocked/resumeFromHibernationLocked so that heavy
 // I/O is dispatched to goroutines without blocking the actor.
 // Must only be called from within sendSyncErr/send/sendCtx closures.
-func transitionToLocked(s *instanceState, ctx context.Context, to Status) error {
+func transitionToLocked(s *instanceState, ctx context.Context, to domain.Status) error {
 	i := s.inst
 	// i.mu.RLock() around this initial read: RecoverFromStopped bypasses the
 	// actor entirely (a direct i.mu.Lock()-protected write, not routed through
@@ -105,7 +106,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	i.mu.Lock()
 	from := i.Status
 	i.Status = to
-	if to == Creating {
+	if to == domain.Creating {
 		// Re-entering Creating (e.g. a retry) starts a new episode: without this the stale-creation
 		// sweeper reads the previous attempt's old timestamp and fails the session within a minute.
 		i.creationProgressUpdatedAt = time.Now()
@@ -117,11 +118,11 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 	// Trigger side-effects inline instead of via def.After so the actor goroutine
 	// doesn't block waiting for the hook to complete.
 	switch (transitionKey{from, to}) {
-	case transitionKey{Active, Hibernated}:
+	case transitionKey{domain.Active, domain.Hibernated}:
 		hibernateProcessLocked(s, ctx)
-	case transitionKey{Hibernated, Active}:
+	case transitionKey{domain.Hibernated, domain.Active}:
 		resumeFromHibernationLocked(s, ctx)
-	case transitionKey{Crashed, Active}:
+	case transitionKey{domain.Crashed, domain.Active}:
 		resumeFromCrashLocked(s, ctx)
 	}
 	return nil
@@ -129,7 +130,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to Status) error 
 
 // approveLocked transitions the instance to Active from within an actor command.
 func approveLocked(s *instanceState) error {
-	if err := transitionToLocked(s, context.Background(), Active); err != nil {
+	if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
 		return fmt.Errorf("approve: %w", err)
 	}
 	return nil
@@ -137,7 +138,7 @@ func approveLocked(s *instanceState) error {
 
 // denyLocked transitions the instance to Paused from within an actor command.
 func denyLocked(s *instanceState) error {
-	if err := transitionToLocked(s, context.Background(), Paused); err != nil {
+	if err := transitionToLocked(s, context.Background(), domain.Paused); err != nil {
 		return fmt.Errorf("deny: %w", err)
 	}
 	return nil
@@ -148,31 +149,31 @@ func denyLocked(s *instanceState) error {
 // Reads via Snapshot(), not i.mu.RLock() — see GetStatus's doc comment for why
 // an RLock here doesn't actually synchronize with the actor's status writes.
 func (i *Instance) IsCreating() bool {
-	return i.Snapshot().Status == Creating
+	return i.Snapshot().Status == domain.Creating
 }
 
 // IsActive returns true if the instance has a live AI process.
 func (i *Instance) IsActive() bool {
-	return i.Snapshot().Status == Active
+	return i.Snapshot().Status == domain.Active
 }
 
 // IsPaused returns true if the instance is paused (worktree removed, branch preserved).
 func (i *Instance) IsPaused() bool {
-	return i.Snapshot().Status == Paused
+	return i.Snapshot().Status == domain.Paused
 }
 
 // IsStopped returns true if the instance is in the terminal Stopped state.
 func (i *Instance) IsStopped() bool {
-	return i.Snapshot().Status == Stopped
+	return i.Snapshot().Status == domain.Stopped
 }
 
 // IsHibernated returns true if the instance has been hibernated (checkpoint written, tmux killed).
 func (i *Instance) IsHibernated() bool {
-	return i.Snapshot().Status == Hibernated
+	return i.Snapshot().Status == domain.Hibernated
 }
 
 // GetLifecycleStatus returns the current lifecycle status as a typed Status value.
-func (i *Instance) GetLifecycleStatus() Status {
+func (i *Instance) GetLifecycleStatus() domain.Status {
 	return i.Snapshot().Status
 }
 
@@ -198,9 +199,9 @@ func (i *Instance) FailureReason() string {
 // failureReason in place until TryForceStatusIfEpoch's next closure clears
 // it). Used by AwaitCreationTerminal (server/services/session_creation_await.go)
 // to build its CreationOutcome snapshot atomically.
-func (i *Instance) StatusAndFailureReason() (status Status, failureReason string) {
+func (i *Instance) StatusAndFailureReason() (status domain.Status, failureReason string) {
 	type statusAndReason struct {
-		status Status
+		status domain.Status
 		reason string
 	}
 	pair, _ := sendSyncValue(i, func(s *instanceState) (statusAndReason, error) {
@@ -353,7 +354,7 @@ func (i *Instance) SetLastMeaningfulOutput(t time.Time) {
 // combining the lifecycle status with real-time terminal detection when available.
 // Unlike Status (which only reflects lifecycle transitions), this consults the
 // claudectl.ClaudeController's detected terminal state to surface NeedsApproval, Idle, etc.
-func (i *Instance) GetEffectiveStatus() Status {
+func (i *Instance) GetEffectiveStatus() domain.Status {
 	mgr := i.GetStatusManager()
 	if mgr == nil {
 		return i.Snapshot().Status
@@ -441,12 +442,12 @@ func (i *Instance) Deny() error {
 
 // Paused returns true if the instance is paused.
 func (i *Instance) Paused() bool {
-	return i.Snapshot().Status == Paused
+	return i.Snapshot().Status == domain.Paused
 }
 
 // Hibernated returns true if the instance is hibernated.
 func (i *Instance) Hibernated() bool {
-	return i.Snapshot().Status == Hibernated
+	return i.Snapshot().Status == domain.Hibernated
 }
 
 // Started returns true if the instance has been started.
@@ -540,8 +541,8 @@ func markStartedIfTmuxAliveLocked(s *instanceState) (marked bool) {
 		return false
 	}
 	switch i.Status {
-	case Creating:
-		if err := i.transitionTo(context.Background(), Active); err != nil {
+	case domain.Creating:
+		if err := i.transitionTo(context.Background(), domain.Active); err != nil {
 			// Shouldn't happen: Creating -> Active is always a valid edge
 			// (state_machine.go's transitionDefs). Bail without flipping
 			// started if it somehow fails anyway — setting started=true with
@@ -551,7 +552,7 @@ func markStartedIfTmuxAliveLocked(s *instanceState) (marked bool) {
 			log.Warn("MarkStartedIfTmuxAlive: Creating -> Active transition failed, not self-healing", "session", i.Title, "err", err)
 			return false
 		}
-	case Active:
+	case domain.Active:
 		// Already Active; only the started flag is missing.
 	default:
 		// Paused/Stopped/PermanentlyFailed/Hibernated/Crashed/Failed: leave
@@ -581,7 +582,7 @@ func markStartedIfTmuxAliveLocked(s *instanceState) (marked bool) {
 // silently drifted out of sync with RecoverFromStopped's actual behavior.
 func (i *Instance) IsHotRestoreRecoverable() bool {
 	switch i.GetLifecycleStatus() {
-	case Stopped, PermanentlyFailed, Failed:
+	case domain.Stopped, domain.PermanentlyFailed, domain.Failed:
 		return true
 	default:
 		return false
@@ -611,8 +612,8 @@ func (i *Instance) IsArchived() bool {
 func (i *Instance) RecoverFromStopped() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status == Stopped || i.Status == PermanentlyFailed || i.Status == Failed {
-		i.loadStatus(Creating)
+	if i.Status == domain.Stopped || i.Status == domain.PermanentlyFailed || i.Status == domain.Failed {
+		i.loadStatus(domain.Creating)
 		// A new Creating episode starts now; the stale-creation sweeper measures from this.
 		i.creationProgressUpdatedAt = time.Now()
 		i.touchUpdatedAt()
@@ -644,7 +645,7 @@ func (i *Instance) RecoverFromStopped() {
 // this unguarded read — caught by -race via a concurrent MarkViewed()/
 // ForceStatus() pairing during CreateSession. See runActor's doc comment in
 // actor.go for the matching fix on the read side.
-func (i *Instance) ForceStatus(s Status) {
+func (i *Instance) ForceStatus(s domain.Status) {
 	_ = i.sendCtx(context.Background(), func(_ *instanceState) {
 		i.mu.Lock()
 		i.loadStatus(s)

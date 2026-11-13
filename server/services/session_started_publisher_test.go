@@ -9,9 +9,10 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
-func newStartedInstanceWithStatus(t *testing.T, status session.Status) *session.Instance {
+func newStartedInstanceWithStatus(t *testing.T, status domain.Status) *session.Instance {
 	t.Helper()
 	inst := session.NewStartedInstanceForTest(t, "started-pub", namedPM{replyPM: &replyPM{}, name: "started-pub"})
 	session.SetStatusForTest(t, inst, status, nil)
@@ -39,7 +40,7 @@ func drainEvents(ch <-chan *events.Event) (n int) {
 func TestSessionStartedPublisher_should_PublishExactlyOncePerStart_When_InstanceIsActive(t *testing.T) {
 	t.Parallel()
 	svc := newPublisherServiceWithBus(t)
-	inst := newStartedInstanceWithStatus(t, session.Active)
+	inst := newStartedInstanceWithStatus(t, domain.Active)
 	ch, _ := svc.GetEventBus().Subscribe(context.Background())
 	l := &sessionStartedPublisher{svc: svc, inst: inst}
 
@@ -59,12 +60,12 @@ func TestSessionStartedPublisher_should_PublishNothing_When_TransitionFailedOrAr
 	svc := newPublisherServiceWithBus(t)
 	ch, _ := svc.GetEventBus().Subscribe(context.Background())
 
-	failed := newStartedInstanceWithStatus(t, session.Stopped) // reconcile fired EventStarted, transition failed
+	failed := newStartedInstanceWithStatus(t, domain.Stopped) // reconcile fired EventStarted, transition failed
 	require.False(t, (&sessionStartedPublisher{svc: svc, inst: failed}).publishIfActive())
 
 	archivedAt := time.Now()
-	archived := newStartedInstanceWithStatus(t, session.Active)
-	session.SetStatusForTest(t, archived, session.Active, &archivedAt)
+	archived := newStartedInstanceWithStatus(t, domain.Active)
+	session.SetStatusForTest(t, archived, domain.Active, &archivedAt)
 	require.False(t, (&sessionStartedPublisher{svc: svc, inst: archived}).publishIfActive())
 
 	require.Zero(t, drainEvents(ch))
@@ -73,7 +74,7 @@ func TestSessionStartedPublisher_should_PublishNothing_When_TransitionFailedOrAr
 func TestSessionStartedPublisher_should_PublishViaLifecycleListener_When_InstanceStarts(t *testing.T) {
 	t.Parallel()
 	svc := newPublisherServiceWithBus(t)
-	inst := newStartedInstanceWithStatus(t, session.Active)
+	inst := newStartedInstanceWithStatus(t, domain.Active)
 	ch, _ := svc.GetEventBus().Subscribe(context.Background())
 
 	(&sessionStartedPublisher{svc: svc, inst: inst}).OnLifecycleEvent(session.EventStarted, "")

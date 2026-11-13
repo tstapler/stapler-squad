@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type prSpec struct {
@@ -26,7 +27,7 @@ type prSpec struct {
 // reloaded (hydrated, persister-wired) instance with the live poller.
 func addLivePRSession(t *testing.T, fix *forkTestFixture, title, uuid string, prs ...prSpec) *session.Instance {
 	t.Helper()
-	inst := &session.Instance{Title: title, UUID: uuid, Path: "/tmp/test", Status: session.Stopped, Program: "claude",
+	inst := &session.Instance{Title: title, UUID: uuid, Path: "/tmp/test", Status: domain.Stopped, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(), GitHubOwner: "acme", GitHubRepo: "app"}
 	require.NoError(t, fix.storage.AddInstance(inst))
 	for _, p := range prs {

@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"connectrpc.com/connect"
@@ -54,7 +55,7 @@ func waitForTerminalResume(ctx context.Context, instance *session.Instance) erro
 	defer ticker.Stop()
 	for !instance.Started() {
 		switch instance.GetLifecycleStatus() {
-		case session.Paused, session.Stopped, session.Hibernated, session.Crashed:
+		case domain.Paused, domain.Stopped, domain.Hibernated, domain.Crashed:
 			return fmt.Errorf("session startup failed: %s", instance.GetLifecycleStatus())
 		}
 		select {

@@ -283,7 +283,7 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 
 	// Simulate an already-running session so SwitchWorkspace's guard passes.
 	instance.started.Store(true)
-	instance.Status = Active
+	instance.Status = domain.Active
 
 	done := make(chan struct{})
 	go func() {

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func viewOf(t *testing.T, inst *session.Instance, n int) session.PRView {
@@ -28,7 +29,7 @@ func TestPoller_ShouldPersistAndMirrorTitle_WhenFetchSucceeds(t *testing.T) {
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open", Title: "Add the thing"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newPRTestInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	require.NoError(t, inst.AttachPR(prRefN(t, 12), session.AttachSourceManual, session.PRInitial{State: session.PRStateOpen}))
 	p.SetInstances([]*session.Instance{inst})
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), session.PRInitial{State: session.PRStateOpen})
@@ -58,7 +59,7 @@ func TestPoller_ShouldMirrorVerifyAttemptsToLiveSession_WhenUnverifiedTerminalPo
 	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	p.clock = func() time.Time { return now }
 	inst := newPRTestInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	unverified := session.PRInitial{State: session.PRStateUnknown, Terminal: true}
 	require.NoError(t, inst.AttachPR(prRefN(t, 9), session.AttachSourceBackfill, unverified))
 	p.SetInstances([]*session.Instance{inst})
@@ -82,7 +83,7 @@ func TestPoller_ShouldClearMirroredVerifyAttempts_WhenLaterFetchResolvesTheRow(t
 	client := &recordingPRClient{info: map[int]*github.PRInfo{9: {Number: 9, State: "merged"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newPRTestInstance(t)
-	inst.Status = session.Active
+	inst.Status = domain.Active
 	unverified := session.PRInitial{State: session.PRStateUnknown, Terminal: true}
 	require.NoError(t, inst.AttachPR(prRefN(t, 9), session.AttachSourceBackfill, unverified))
 	inst.MirrorPRPollFacts(prRefN(t, 9), session.PRView{PollFailCount: 3, PollError: "not_found", FirstFailAt: time.Now()})

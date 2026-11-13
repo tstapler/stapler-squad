@@ -120,7 +120,7 @@ func (l *sessionStartedPublisher) OnLifecycleEvent(event session.LifecycleEvent,
 // emit a status update on every reconcile cycle.
 func (l *sessionStartedPublisher) publishIfActive() bool {
 	snap := l.inst.Snapshot()
-	if snap.Status != session.Active || snap.ArchivedAt != nil {
+	if snap.Status != domain.Active || snap.ArchivedAt != nil {
 		return false
 	}
 	l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))

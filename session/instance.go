@@ -56,95 +56,6 @@ var ErrWorktreeResolutionFailed = errors.New("resolved to no real worktree")
 // Pipeline-level error classification matches on this sentinel via errors.Is.
 var ErrDirectoryCollision = errors.New("worktree already in use by another live session")
 
-type Status int
-
-const (
-	// Creating is the status when the instance is being initialized.
-	Creating Status = 0
-	// Active is the status when the instance has a live AI process (running or ready).
-	Active Status = 1
-	// Paused is if the instance is paused (worktree removed but branch preserved).
-	Paused Status = 2
-	// Stopped is a terminal state: the instance has been shut down and cannot transition further.
-	Stopped Status = 3
-	// Hibernated is the status when the instance has been checkpointed and the tmux session killed.
-	Hibernated Status = 4
-	// Restoring is the transient startup state when a hibernated session is being restored.
-	// Never persisted to the database — transitions to Active or Creating on completion.
-	Restoring Status = 5
-	// Crashed is a terminal state distinct from Stopped: the wrapped program exited
-	// abnormally (non-zero exit code or signal) and tmux's remain-on-exit left a dead
-	// pane placeholder, detected by SessionHealthChecker's polling (see session/health.go).
-	// Unlike Stopped, a Crashed session is not auto-recovered by the health checker —
-	// it surfaces to the user/automation for an explicit resume (see ExitReason).
-	Crashed Status = 6
-	// PermanentlyFailed is a terminal state reached when the configurable retry
-	// policy's automated crash/stall recovery (session/retry_state.go) exhausts
-	// MaxAttempts, or a failure reason isn't in RetryOn at all. Unlike Stopped, it
-	// is not auto-revived by reconcileSessions even if tmux is alive — it's a
-	// deliberate terminal state pending human action via "Retry now"
-	// (Instance.RetryNow), not an incidental stop. See ADR-001.
-	PermanentlyFailed Status = 7
-	// Failed is a non-terminal state: the async creation pipeline (Background
-	// Resolution Pipeline, Epic 2.2) failed before the session ever reached
-	// Active. Distinct from Crashed (a previously-Active session whose process
-	// later exited abnormally): Failed→Creating is a legal transition, used by
-	// the retry path (Epic 1.2's TryStartRetry), while Crashed only recovers to
-	// Active. See ADR-001 and SESSION_STATUS_FAILED in
-	// proto/session/v1/types.proto.
-	Failed Status = 8
-
-	// Deprecated: use Active.
-	Running = Active
-	// Deprecated: use Active.
-	Ready = Active
-	// Deprecated: use Creating.
-	Loading = Creating
-)
-
-// String returns a human-readable name for the status.
-func (s Status) String() string {
-	switch s {
-	case Creating:
-		return "Creating"
-	case Active:
-		return "Active"
-	case Paused:
-		return "Paused"
-	case Stopped:
-		return "Stopped"
-	case Hibernated:
-		return "Hibernated"
-	case Restoring:
-		return "Restoring"
-	case Crashed:
-		return "Crashed"
-	case PermanentlyFailed:
-		return "PermanentlyFailed"
-	case Failed:
-		return "Failed"
-	default:
-		return fmt.Sprintf("Status(%d)", int(s))
-	}
-}
-
-// IsSuspended reports whether a session in this status is not actively running
-// and so must not be treated as a live target for background work that assumes
-// a running process or tmux session (health checks, PR/CI status polling, etc.):
-// Paused and Hibernated sessions have no tmux session at all; Stopped, Crashed,
-// and PermanentlyFailed are terminal states awaiting an explicit resume/retry,
-// not incidental gaps that background pollers should paper over. See
-// healthCheckSkipReason (session/health.go) for the health-checker's per-status
-// skip messages, and pr_status_poller.go's checkAllSessions for another consumer.
-func (s Status) IsSuspended() bool {
-	switch s {
-	case Paused, Hibernated, Stopped, Crashed, PermanentlyFailed:
-		return true
-	default:
-		return false
-	}
-}
-
 // LifecycleEvent is a notification type emitted by an Instance when key state
 // transitions occur (e.g., the session starts, or the program exits unexpectedly).
 type LifecycleEvent int
@@ -230,7 +141,7 @@ type Instance struct {
 	// requires for fields background goroutines can mutate later.
 	CreationWarning string
 	// Status is the status of the instance.
-	Status Status
+	Status domain.Status
 	// Program is the program to run in the instance.
 	Program string
 	// AltScreenActive reports whether the pane's PTY output stream is
@@ -1195,7 +1106,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	instance := &Instance{
 		Title:            opts.Title,
 		UUID:             uuid.New().String(),
-		Status:           Creating,
+		Status:           domain.Creating,
 		Path:             absPath,
 		Branch:           opts.Branch,
 		CreationWarning:  opts.CreationWarning,
@@ -1527,8 +1438,8 @@ func instanceOnExitCallback(i *Instance) func(string) {
 		// could publish the SessionUpdated event while the transition is still
 		// in-flight, racing GetStatus()/Snapshot() reads on the delivery path.
 		if err := i.sendSyncErr(func(s *instanceState) error {
-			if s.inst.Status == Active {
-				if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+			if s.inst.Status == domain.Active {
+				if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 				}
 			}
@@ -1843,8 +1754,8 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	}
 
 	// Transition to Active — no stateMutex needed inside actor command.
-	if i.Status != Active {
-		if err := transitionToLocked(actorState, context.Background(), Active); err != nil {
+	if i.Status != domain.Active {
+		if err := transitionToLocked(actorState, context.Background(), domain.Active); err != nil {
 			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
 			return setupErr
 		}
@@ -2095,8 +2006,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.mu.Lock()
 	// Only transition if not already Active (e.g., recovery/restart after KillSession
 	// preserves the Active status).
-	if i.Status != Active {
-		if err := i.transitionTo(context.Background(), Active); err != nil {
+	if i.Status != domain.Active {
+		if err := i.transitionTo(context.Background(), domain.Active); err != nil {
 			i.mu.Unlock()
 			i.claudeSessionMu.Unlock()
 			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
@@ -2373,7 +2284,7 @@ func pauseLocked(s *instanceState) error {
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
 	}
-	if i.Status == Paused {
+	if i.Status == domain.Paused {
 		return fmt.Errorf("instance is already paused")
 	}
 	if !i.started.Load() {
@@ -2382,7 +2293,7 @@ func pauseLocked(s *instanceState) error {
 		// tear down, so just perform the state transition — transitionToLocked
 		// still rejects transitions that aren't valid from the current status
 		// (e.g. Creating/Stopped/Hibernated -> Paused).
-		if err := transitionToLocked(s, context.Background(), Paused); err != nil {
+		if err := transitionToLocked(s, context.Background(), domain.Paused); err != nil {
 			return fmt.Errorf("failed to transition to Paused: %w", err)
 		}
 		i.started.Store(true)
@@ -2448,7 +2359,7 @@ func pauseLocked(s *instanceState) error {
 		return err
 	}
 
-	if err := transitionToLocked(s, context.Background(), Paused); err != nil {
+	if err := transitionToLocked(s, context.Background(), domain.Paused); err != nil {
 		return fmt.Errorf("failed to transition to Paused: %w", err)
 	}
 	i.GitManager.InvalidateDirtyCache()
@@ -2463,7 +2374,7 @@ func (i *Instance) Resume() error {
 		return ErrResumeNotPermitted
 	}
 	// Status is actor-managed; use Snapshot() to avoid racing with concurrent actor writes.
-	if i.Snapshot().Status != Paused {
+	if i.Snapshot().Status != domain.Paused {
 		return fmt.Errorf("can only resume paused instances")
 	}
 
@@ -2545,7 +2456,7 @@ func (i *Instance) Resume() error {
 	}
 
 	i.mu.Lock()
-	if err := i.transitionTo(context.Background(), Active); err != nil {
+	if err := i.transitionTo(context.Background(), domain.Active); err != nil {
 		i.mu.Unlock()
 		return fmt.Errorf("failed to transition to Active on resume: %w", err)
 	}
@@ -2598,14 +2509,14 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	if !i.Permissions.CanPause {
 		return ErrPauseNotPermitted
 	}
-	if i.Status == Stopped {
+	if i.Status == domain.Stopped {
 		return fmt.Errorf("instance is already stopped")
 	}
 	// Validate the transition before any destructive side effect (kill tmux, remove
 	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
 	// the tmux session and worktree untouched.
-	if !canTransitionLocked(s, Stopped) {
-		return ErrInvalidTransition{From: i.Status, To: Stopped}
+	if !canTransitionLocked(s, domain.Stopped) {
+		return ErrInvalidTransition{From: i.Status, To: domain.Stopped}
 	}
 
 	// Fail closed before any side effect — see pauseLocked.
@@ -2656,7 +2567,7 @@ func stopByUserLocked(s *instanceState, force bool) error {
 		return err
 	}
 
-	if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+	if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
 		// Should not happen — canTransitionLocked already validated this above — but
 		// keep the check as defense-in-depth against the two functions' logic diverging.
 		return fmt.Errorf("failed to transition to Stopped: %w", err)
@@ -2715,7 +2626,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	recovered := false
 	if !i.started.Load() {
 		prev := i.GetLifecycleStatus()
-		if prev != PermanentlyFailed && prev != Failed {
+		if prev != domain.PermanentlyFailed && prev != domain.Failed {
 			return ErrCannotRestart
 		}
 		i.RecoverFromStopped()
@@ -2740,7 +2651,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 		}
 	}
 
-	waspaused := i.Status == Paused
+	waspaused := i.Status == domain.Paused
 
 	// Capture terminal output if requested
 	var savedOutput string
@@ -2835,9 +2746,9 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 	// For already-active sessions, preserve the existing status.
 	i.mu.Lock()
 	if waspaused || recovered {
-		if err := i.transitionTo(context.Background(), Active); err != nil {
+		if err := i.transitionTo(context.Background(), domain.Active); err != nil {
 			log.Warn("restart: failed to transition to active", "session", i.Title, "err", err)
-			i.setStatus(Active)
+			i.setStatus(domain.Active)
 		}
 		i.started.Store(true)
 	}
@@ -2851,10 +2762,10 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride ProcessManagerBa
 
 // restoreTerminalStatus undoes RecoverFromStopped after a failed restart so the
 // session stays a restart/retry candidate instead of stranding in Creating.
-func (i *Instance) restoreTerminalStatus(prev Status) {
+func (i *Instance) restoreTerminalStatus(prev domain.Status) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.Status != Creating || i.started.Load() {
+	if i.Status != domain.Creating || i.started.Load() {
 		return // a concurrent restart/retry already moved it on; don't clobber
 	}
 	i.loadStatus(prev)

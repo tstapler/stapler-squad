@@ -18,7 +18,7 @@ func newApplyStopFixture(t *testing.T) (*AutonomousOrchestrationService, *sessio
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ch, _ := bus.Subscribe(ctx)
-	inst := &session.Instance{Title: "apply-stop", UUID: "apply-stop-uuid", Status: session.Paused, Program: "claude"}
+	inst := &session.Instance{Title: "apply-stop", UUID: "apply-stop-uuid", Status: domain.Paused, Program: "claude"}
 	li := session.NewLiveInstance(inst)
 	t.Cleanup(li.Stop)
 	inst.SetAutonomousMode(true, "")

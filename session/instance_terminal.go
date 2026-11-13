@@ -151,7 +151,7 @@ func (i *Instance) combineErrors(errs []error) error {
 // Preview() and PreviewFullHistory() share this check so the two can't drift.
 func (i *Instance) previewBlocked() bool {
 	status := i.Snapshot().Status
-	return !i.started.Load() || status == Paused || status == Stopped || status == Hibernated
+	return !i.started.Load() || status == domain.Paused || status == domain.Stopped || status == domain.Hibernated
 }
 
 // Preview returns the current visible terminal content.
@@ -334,13 +334,13 @@ func (i *Instance) GetStatusIconForType() string {
 
 	// Managed instance - use standard status icons
 	switch i.Status {
-	case Active:
+	case domain.Active:
 		return "●"
-	case Creating:
+	case domain.Creating:
 		return "⏳"
-	case Paused:
+	case domain.Paused:
 		return "⏸"
-	case Hibernated:
+	case domain.Hibernated:
 		return "❄"
 	default:
 		return "?"

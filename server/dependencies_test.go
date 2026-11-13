@@ -539,9 +539,9 @@ func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When
 
 	// A paused session (worktree removed, branch kept) still reports a status.
 	paused := *snap
-	paused.Status = session.Paused
+	paused.Status = domain.Paused
 	assert.Equal(t, githubpkg.LinkedSessionPaused, linkedStatusFor(paused.Status))
-	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(session.Crashed))
+	assert.Equal(t, githubpkg.LinkedSessionStopped, linkedStatusFor(domain.Crashed))
 }
 
 func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBranchButNoPR(t *testing.T) {

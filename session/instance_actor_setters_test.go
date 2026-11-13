@@ -22,7 +22,7 @@ import (
 func TestSetAutoApprove_should_NotRestart_When_StatusPaused(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	inst.Status = Paused
+	inst.Status = domain.Paused
 
 	persisted := false
 	err := inst.SetAutoApprove(true, func() error {
@@ -38,7 +38,7 @@ func TestSetAutoApprove_should_NotRestart_When_StatusPaused(t *testing.T) {
 func TestSetAutoApprove_should_ReturnErrorAndSkipRestart_When_PersistFails(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	inst.Status = Active
+	inst.Status = domain.Active
 	inst.started.Store(true)
 	persistErr := errors.New("disk full")
 
@@ -61,7 +61,7 @@ func TestSetAutoApprove_should_ReturnErrorAndSkipRestart_When_PersistFails(t *te
 func TestSetAutoApprove_RestartError_PersistAlreadyRan(t *testing.T) {
 	t.Parallel()
 	inst := minimalInstance(t)
-	inst.Status = Active
+	inst.Status = domain.Active
 	inst.started.Store(true)
 	inst.Path = "" // forces Restart() to fail deterministically, no real tmux involved
 
@@ -89,7 +89,7 @@ func TestSetAutoApprove_SerializesWithSwitchProgram_When_ConcurrentCalls(t *test
 	t.Parallel()
 	inst := minimalInstance(t)
 	inst.Program = "claude"
-	inst.Status = Active
+	inst.Status = domain.Active
 	inst.started.Store(true)
 	inst.Path = "" // forces Restart() to fail deterministically, no real tmux involved
 
@@ -413,7 +413,7 @@ func TestReclassifyTagsLocked_should_RecordTagFire_When_RuleMatchesRegardlessOfS
 // whole RPC on a single instance mid-Start.
 func TestSetArchivedAtIfNilCtx_should_ReturnCtxError_When_ActorIsBusy(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "archive-ctx-busy", Status: Stopped}
+	inst := &Instance{Title: "archive-ctx-busy", Status: domain.Stopped}
 	li := NewLiveInstance(inst)
 	t.Cleanup(li.cancel)
 
@@ -447,7 +447,7 @@ func TestSetArchivedAtIfNilCtx_should_ReturnCtxError_When_ActorIsBusy(t *testing
 // semantics on the normal (uncontended) path.
 func TestSetArchivedAtIfNilCtx_should_ApplyCASOnce_When_ActorIsIdle(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "archive-ctx-idle", Status: Stopped}
+	inst := &Instance{Title: "archive-ctx-idle", Status: domain.Stopped}
 	li := NewLiveInstance(inst)
 	t.Cleanup(li.cancel)
 

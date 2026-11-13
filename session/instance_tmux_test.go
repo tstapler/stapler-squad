@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -39,7 +40,7 @@ func TestIsBackendProcessAlive_UsesNoCacheCheck_UnlikeTmuxAlive(t *testing.T) {
 	mock := &mockTmuxManager{hasSessionReturn: true, isAliveReturn: false, existsNoCacheReturn: true}
 	inst := &Instance{
 		Title:          "t",
-		Status:         Creating,
+		Status:         domain.Creating,
 		processManager: NewTmuxBackend(mock),
 	}
 	// started deliberately left false: TmuxAlive() would report false here,
@@ -65,7 +66,7 @@ func TestIsBackendProcessAlive_ColdStart_HasSessionFalse(t *testing.T) {
 	mock := &mockTmuxManager{hasSessionReturn: false, existsNoCacheReturn: true}
 	inst := &Instance{
 		Title:          "t",
-		Status:         Creating,
+		Status:         domain.Creating,
 		processManager: NewTmuxBackend(mock),
 	}
 

@@ -5,7 +5,7 @@ package workspace
 import (
 	"time"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/vc"
 )
 
@@ -18,9 +18,9 @@ type TrackedWorkspace struct {
 	MainRepoPath   string // Main repo path if this is a worktree
 
 	// Session association
-	SessionTitle  string         // Title of associated session (empty if orphaned)
-	SessionStatus session.Status // Status of associated session
-	IsOrphaned    bool           // True if no active session owns this workspace
+	SessionTitle  string        // Title of associated session (empty if orphaned)
+	SessionStatus domain.Status // Status of associated session
+	IsOrphaned    bool          // True if no active session owns this workspace
 
 	// VCS information
 	VCSType vc.VCSType // Git or Jujutsu
@@ -40,11 +40,11 @@ type WorkspaceStatus struct {
 	VCSStatus *vc.VCSStatus
 
 	// Workspace context
-	WorkspacePath string         // Path to this workspace
-	SessionTitle  string         // Associated session (if any)
-	SessionStatus session.Status // Session state
-	IsOrphaned    bool           // No active session
-	IsWorktree    bool           // Is a git worktree
+	WorkspacePath string        // Path to this workspace
+	SessionTitle  string        // Associated session (if any)
+	SessionStatus domain.Status // Session state
+	IsOrphaned    bool          // No active session
+	IsWorktree    bool          // Is a git worktree
 
 	// Activity tracking
 	LastActivity time.Time // Last file modification
@@ -84,7 +84,7 @@ type WorkspaceFilter struct {
 	OnlyWithConflict bool // Only workspaces with conflicts
 
 	// Session filters
-	SessionStatus *session.Status // Filter by session status
+	SessionStatus *domain.Status // Filter by session status
 }
 
 // StatusRefreshOptions controls how status refresh behaves

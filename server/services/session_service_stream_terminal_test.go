@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -25,7 +26,7 @@ import (
 // supports unary and server-streaming RPCs.
 func TestWaitForTerminalResume_Cancelled(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Status: session.Active}
+	inst := &session.Instance{Status: domain.Active}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, waitForTerminalResume(ctx, inst), context.Canceled)
@@ -33,7 +34,7 @@ func TestWaitForTerminalResume_Cancelled(t *testing.T) {
 
 func TestWaitForTerminalResume_FailedStartup(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Status: session.Hibernated}
+	inst := &session.Instance{Status: domain.Hibernated}
 	require.ErrorContains(t, waitForTerminalResume(context.Background(), inst), "session startup failed")
 }
 
@@ -109,14 +110,14 @@ func TestStreamTerminal_SendsRawOutput(t *testing.T) {
 	// tmux is unavailable in this environment (mirrors
 	// TestCreateSession_StatusManagerWiredBeforeDriver's convention).
 	_ = wait.WaitForCondition(func() bool {
-		return inst.Started() || session.Status(inst.GetStatus()) == session.Stopped
+		return inst.Started() || domain.Status(inst.GetStatus()) == domain.Stopped
 	}, wait.WaitConfig{Timeout: 60 * time.Second, PollInterval: 100 * time.Millisecond, Description: "session started or stopped"})
 	started := inst.Started()
-	if !started && session.Status(inst.GetStatus()) == session.Stopped {
+	if !started && domain.Status(inst.GetStatus()) == domain.Stopped {
 		t.Skip("tmux not available; skipping StreamTerminal raw-output assertion")
 	}
 	require.True(t, started, "session never started within 60s")
-	if session.Status(inst.GetStatus()) == session.Stopped {
+	if domain.Status(inst.GetStatus()) == domain.Stopped {
 		t.Skip("session stopped immediately after start; skipping StreamTerminal raw-output assertion")
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // MarkCrashed kills the stale dead-pane tmux session and transitions the
@@ -42,13 +43,13 @@ func (i *Instance) MarkCrashed(exitReason string) error {
 		log.Warn("markCrashed: failed to kill stale dead-pane session", "session", i.Title, "err", err)
 	}
 	err := i.sendSyncErr(func(s *instanceState) error {
-		if s.inst.Status != Active {
-			return ErrInvalidTransition{From: s.inst.Status, To: Crashed}
+		if s.inst.Status != domain.Active {
+			return ErrInvalidTransition{From: s.inst.Status, To: domain.Crashed}
 		}
 		s.inst.mu.Lock()
 		s.inst.ExitReason = exitReason
 		s.inst.mu.Unlock()
-		return transitionToLocked(s, context.Background(), Crashed)
+		return transitionToLocked(s, context.Background(), domain.Crashed)
 	})
 	if err == nil {
 		i.FireLifecycleEvent(EventExited, "dead-pane-crashed: "+exitReason)
@@ -67,10 +68,10 @@ func (i *Instance) MarkExitedNormally() error {
 		log.Warn("markExitedNormally: failed to kill stale dead-pane session", "session", i.Title, "err", err)
 	}
 	err := i.sendSyncErr(func(s *instanceState) error {
-		if s.inst.Status != Active {
-			return ErrInvalidTransition{From: s.inst.Status, To: Stopped}
+		if s.inst.Status != domain.Active {
+			return ErrInvalidTransition{From: s.inst.Status, To: domain.Stopped}
 		}
-		return transitionToLocked(s, context.Background(), Stopped)
+		return transitionToLocked(s, context.Background(), domain.Stopped)
 	})
 	if err == nil {
 		i.FireLifecycleEvent(EventExited, "dead-pane-exited-normally")
@@ -84,7 +85,7 @@ func (i *Instance) MarkExitedNormally() error {
 // when a conversation UUID is known (see ClaudeCommandBuilder).
 func (i *Instance) ResumeFromCrash(ctx context.Context) error {
 	return i.sendSyncErr(func(s *instanceState) error {
-		return transitionToLocked(s, ctx, Active)
+		return transitionToLocked(s, ctx, domain.Active)
 	})
 }
 
@@ -102,7 +103,7 @@ func resumeFromCrashLocked(s *instanceState, _ context.Context) {
 				// Hold i.mu across the write and buildSnapshot — see runActor's doc
 				// comment in actor.go for why this must not be a bare unlocked write.
 				s.inst.mu.Lock()
-				s.inst.loadStatus(Crashed)
+				s.inst.loadStatus(domain.Crashed)
 				snap := buildSnapshot(s.inst)
 				s.inst.mu.Unlock()
 				s.inst.snapshot.Store(snap)

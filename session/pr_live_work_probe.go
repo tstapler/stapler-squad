@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
@@ -106,7 +107,7 @@ func (p *SnapshotLiveWorkProbe) clearErrorHold(sessionUUID string) {
 // meaningful changed after it: RecordTurnEnd touches LastMeaningfulChangeAt to the
 // same instant, so any later output, approval or status change makes it Working again.
 func LiveWorkFactsFromSnapshot(s *InstanceSnapshot) LiveWorkFacts {
-	unended := s.ArchivedAt == nil && (s.Status == Creating || s.Status == Active)
+	unended := s.ArchivedAt == nil && (s.Status == domain.Creating || s.Status == domain.Active)
 	lmca := s.LastMeaningfulChangeAt
 	if lmca.IsZero() {
 		lmca = s.CreatedAt
@@ -119,7 +120,7 @@ func LiveWorkFactsFromSnapshot(s *InstanceSnapshot) LiveWorkFacts {
 // in this process: not Working (nothing is running to be mid-turn), so only a
 // recent output keeps it live.
 func liveWorkFactsFromData(d *InstanceData) LiveWorkFacts {
-	unended := d.ArchivedAt == nil && (d.Status == Creating || d.Status == Active)
+	unended := d.ArchivedAt == nil && (d.Status == domain.Creating || d.Status == domain.Active)
 	return LiveWorkFacts{Unended: unended, LastMeaningfulChangeAt: d.LastMeaningfulOutput}
 }
 

@@ -38,7 +38,7 @@ func newNudgeWriterInstance(t *testing.T, paneContent string, pm nudgePane) *Ins
 	t.Helper()
 	cc, _ := claudectltest.NewController(paneContent)
 	inst := minimalInstance(t)
-	inst.ForceStatus(Active)
+	inst.ForceStatus(domain.Active)
 	inst.controllerManager.SetController(cc)
 	inst.processManager = pm
 	inst.started.Store(true)
@@ -179,9 +179,9 @@ func TestNudgeStalledAutonomousSession_RefusesNonActiveArchivedPaused(t *testing
 		name  string
 		setup func(*Instance)
 	}{
-		{"not active", func(i *Instance) { i.ForceStatus(Creating) }},
+		{"not active", func(i *Instance) { i.ForceStatus(domain.Creating) }},
 		{"archived", func(i *Instance) { i.SetArchivedAtIfNil(time.Now()) }},
-		{"paused", func(i *Instance) { i.ForceStatus(Paused) }},
+		{"paused", func(i *Instance) { i.ForceStatus(domain.Paused) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -314,7 +314,7 @@ func TestNudgeStalledAutonomousSession_StatusChangesWhileTakingLease_ClaimUntouc
 	seams := testNudgeSeams(inst)
 	seams.tryLease = func(w string) (*HeldLease, bool) {
 		lease, ok := inst.TryTerminalWriteLease(w)
-		inst.ForceStatus(Paused)
+		inst.ForceStatus(domain.Paused)
 		return lease, ok
 	}
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // newAwaitTestInstance builds a *session.Instance (no tmux/Start()), wraps it
@@ -70,7 +71,7 @@ func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitio
 	ctx := newPollEnteredCtx(context.Background())
 	go func() {
 		<-ctx.entered
-		applied := inst.TryForceStatusIfEpoch(epoch, session.Active, "")
+		applied := inst.TryForceStatusIfEpoch(epoch, domain.Active, "")
 		assert.True(t, applied)
 	}()
 
@@ -79,7 +80,7 @@ func TestAwaitCreationTerminal_should_ReturnActiveOutcome_When_InstanceTransitio
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
-	assert.Equal(t, session.Active, outcome.Status)
+	assert.Equal(t, domain.Active, outcome.Status)
 	assert.Empty(t, outcome.FailureReason)
 	assert.Equal(t, "await-active", outcome.InstanceID)
 	assert.Less(t, elapsed, 2*time.Second, "should return shortly after the transition, not wait out the full timeout")
@@ -93,12 +94,12 @@ func TestAwaitCreationTerminal_should_ReturnFailedOutcome_When_InstanceIsAlready
 	svc := newCreateTestService(t, storage)
 	inst := newAwaitTestInstance(t, svc, "await-failed")
 	epoch := inst.CreationEpoch()
-	require.True(t, inst.TryForceStatusIfEpoch(epoch, session.Failed, "GitHubResolutionError"))
+	require.True(t, inst.TryForceStatusIfEpoch(epoch, domain.Failed, "GitHubResolutionError"))
 
 	outcome, err := svc.awaitCreationTerminal(context.Background(), "await-failed", time.Second, 10*time.Millisecond)
 
 	require.NoError(t, err)
-	assert.Equal(t, session.Failed, outcome.Status)
+	assert.Equal(t, domain.Failed, outcome.Status)
 	assert.Equal(t, "GitHubResolutionError", outcome.FailureReason)
 	assert.Equal(t, "await-failed", outcome.InstanceID)
 }
@@ -185,7 +186,7 @@ func TestAwaitCreationTerminal_should_ReturnConsistentSnapshot_When_StatusAndFai
 	svc := newCreateTestService(t, storage)
 	inst := newAwaitTestInstance(t, svc, "await-consistent")
 	epoch := inst.CreationEpoch()
-	require.True(t, inst.TryForceStatusIfEpoch(epoch, session.Failed, "attempt-1"))
+	require.True(t, inst.TryForceStatusIfEpoch(epoch, domain.Failed, "attempt-1"))
 
 	done := make(chan struct{})
 	go func() {
@@ -201,9 +202,9 @@ func TestAwaitCreationTerminal_should_ReturnConsistentSnapshot_When_StatusAndFai
 	for i := 0; i < 200; i++ {
 		status, reason := inst.StatusAndFailureReason()
 		switch status {
-		case session.Failed:
+		case domain.Failed:
 			assert.Equal(t, "attempt-1", reason, "a Failed read must carry its own attempt's reason, never a torn value")
-		case session.Creating:
+		case domain.Creating:
 			// Legitimate post-retry state; FailureReason may still be the
 			// stale "attempt-1" until the next terminal write clears it —
 			// that's fine, since AwaitCreationTerminal never treats Creating

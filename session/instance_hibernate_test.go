@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 func TestResumeFromHibernation_WaitsForTeardown(t *testing.T) {
@@ -37,18 +38,18 @@ func TestResumeFromHibernation_WaitsForTeardown(t *testing.T) {
 // runs) -- see rollbackFailedResume's doc comment.
 func TestRollbackFailedResume_DoesNotClobberLaterTransition(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-rollback-race", Status: Active}
+	inst := &Instance{Title: "test-rollback-race", Status: domain.Active}
 	inst.snapshot.Store(buildSnapshot(inst))
 
 	// Simulate a legitimate transition landing before the rollback runs.
 	inst.mu.Lock()
-	inst.Status = Stopped
+	inst.Status = domain.Stopped
 	inst.snapshot.Store(buildSnapshot(inst))
 	inst.mu.Unlock()
 
 	rollbackFailedResume(&instanceState{inst: inst})
 
-	if got := inst.Snapshot().Status; got != Stopped {
+	if got := inst.Snapshot().Status; got != domain.Stopped {
 		t.Errorf("rollbackFailedResume clobbered later transition: got %s, want Stopped", got)
 	}
 }
@@ -58,12 +59,12 @@ func TestRollbackFailedResume_DoesNotClobberLaterTransition(t *testing.T) {
 // Status back to Hibernated.
 func TestRollbackFailedResume_RevertsWhenStillActive(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "test-rollback-normal", Status: Active}
+	inst := &Instance{Title: "test-rollback-normal", Status: domain.Active}
 	inst.snapshot.Store(buildSnapshot(inst))
 
 	rollbackFailedResume(&instanceState{inst: inst})
 
-	if got := inst.Snapshot().Status; got != Hibernated {
+	if got := inst.Snapshot().Status; got != domain.Hibernated {
 		t.Errorf("rollbackFailedResume did not revert: got %s, want Hibernated", got)
 	}
 }
@@ -76,7 +77,7 @@ func TestRollbackFailedResume_RevertsWhenStillActive(t *testing.T) {
 func TestRollbackFailedResume_BumpsUpdatedAt(t *testing.T) {
 	t.Parallel()
 	before := time.Now().Add(-time.Hour)
-	inst := &Instance{Title: "test-rollback-updatedat", Status: Active, UpdatedAt: before}
+	inst := &Instance{Title: "test-rollback-updatedat", Status: domain.Active, UpdatedAt: before}
 	inst.snapshot.Store(buildSnapshot(inst))
 
 	rollbackFailedResume(&instanceState{inst: inst})
@@ -108,7 +109,7 @@ func TestResumeFromHibernation_FailedRollback_DoesNotClobberConcurrentStop(t *te
 	t.Parallel()
 	inst := &Instance{
 		Title:       "test-resume-rollback-race",
-		Status:      Active,
+		Status:      domain.Active,
 		Permissions: GetManagedPermissions(),
 	}
 	inst.started.Store(true)
@@ -132,6 +133,6 @@ func TestResumeFromHibernation_FailedRollback_DoesNotClobberConcurrentStop(t *te
 	}()
 	wg.Wait()
 
-	require.Equal(t, Stopped, inst.Snapshot().Status,
+	require.Equal(t, domain.Stopped, inst.Snapshot().Status,
 		"a failed hibernation-resume rollback must not clobber a concurrent StopByUser transition")
 }

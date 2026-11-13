@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // makeStoppedShell returns a Shell in the Stopped state with closed channels so
@@ -90,7 +91,7 @@ func (f *shellsFixture) addStorageOnlySession(t *testing.T, title string) {
 	inst := &session.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
-		Status:    session.Paused,
+		Status:    domain.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
