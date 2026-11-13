@@ -30,9 +30,9 @@ func TestPoller_ShouldNotifyTerminalListener_WhenOpenPRMerges_AndNotForStillOpen
 	}))
 	owner := session.ItemPROwner("item-1")
 	for _, n := range []int{12, 13} {
-		seedStateRow(t, storage.Repo, owner, prRefN(t, n), session.PRInitial{State: domain.PRStateOpen})
+		seedStateRow(t, storage.Repo, owner, prRefN(t, n), domain.PRInitial{State: domain.PRStateOpen})
 	}
-	seedStateRow(t, storage.Repo, owner, prRefN(t, 14), session.PRInitial{State: domain.PRStateMerged, Terminal: true})
+	seedStateRow(t, storage.Repo, owner, prRefN(t, 14), domain.PRInitial{State: domain.PRStateMerged, Terminal: true})
 
 	p.pollPullRequestStates(context.Background(), false)
 

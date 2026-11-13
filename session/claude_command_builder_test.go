@@ -253,7 +253,7 @@ func TestIsValidUUID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := isValidUUID(tt.uuid)
+			result := domain.IsValidUUID(tt.uuid)
 
 			if result != tt.expected {
 				t.Errorf("%s\nUUID:     %s\nExpected: %v\nGot:      %v", tt.description, tt.uuid, tt.expected, result)

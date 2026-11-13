@@ -30,9 +30,9 @@ func TestPoller_ShouldPersistAndMirrorTitle_WhenFetchSucceeds(t *testing.T) {
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newPRTestInstance(t)
 	inst.Status = domain.Active
-	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceManual, session.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen}))
 	p.SetInstances([]*session.Instance{inst})
-	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), session.PRInitial{State: domain.PRStateOpen})
+	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
 
@@ -44,7 +44,7 @@ func TestPoller_ShouldKeepStoredTitle_WhenFetchCarriesNone(t *testing.T) {
 	t.Parallel()
 	client := &recordingPRClient{info: map[int]*github.PRInfo{12: {Number: 12, State: "open"}}}
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
-	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), session.PRInitial{State: domain.PRStateOpen, Title: "Seeded title"})
+	seedStateRow(t, storage.Repo, session.SessionPROwner("u1"), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen, Title: "Seeded title"})
 
 	p.checkAllSessions()
 
@@ -60,7 +60,7 @@ func TestPoller_ShouldMirrorVerifyAttemptsToLiveSession_WhenUnverifiedTerminalPo
 	p.clock = func() time.Time { return now }
 	inst := newPRTestInstance(t)
 	inst.Status = domain.Active
-	unverified := session.PRInitial{State: domain.PRStateUnknown, Terminal: true}
+	unverified := domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}
 	require.NoError(t, inst.AttachPR(prRefN(t, 9), domain.AttachSourceBackfill, unverified))
 	p.SetInstances([]*session.Instance{inst})
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
@@ -84,7 +84,7 @@ func TestPoller_ShouldClearMirroredVerifyAttempts_WhenLaterFetchResolvesTheRow(t
 	p, storage := newRowPoller(t, client, config.SessionMultiPRScopePoller)
 	inst := newPRTestInstance(t)
 	inst.Status = domain.Active
-	unverified := session.PRInitial{State: domain.PRStateUnknown, Terminal: true}
+	unverified := domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}
 	require.NoError(t, inst.AttachPR(prRefN(t, 9), domain.AttachSourceBackfill, unverified))
 	inst.MirrorPRPollFacts(prRefN(t, 9), domain.PRView{PollFailCount: 3, PollError: "not_found", FirstFailAt: time.Now()})
 	p.SetInstances([]*session.Instance{inst})

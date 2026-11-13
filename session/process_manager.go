@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -116,4 +117,37 @@ type ProcessManagerOptions struct {
 	Backend domain.ProcessManagerBackend
 	// TymuxSessionID is the persisted daemon session id for a restored tymux Instance.
 	TymuxSessionID string
+}
+
+// BackendKeyed is the optional capability naming the registry key a ProcessManager
+// was built for.
+type BackendKeyed interface {
+	BackendKey() domain.ProcessManagerBackend
+}
+
+// processManagerBackendKey returns the backend a ProcessManager actually is, or ""
+// when it declares none (nil or a test fake).
+func processManagerBackendKey(pm ProcessManager) domain.ProcessManagerBackend {
+	if k, ok := capabilityOf[BackendKeyed](pm); ok {
+		return k.BackendKey()
+	}
+	return ""
+}
+
+// ErrUnrecognizedBackend is returned by NewProcessManager when the resolved
+// ProcessManagerBackend value (from opts.Backend, the process-wide global, or
+// defaultBackend) matches none of the known backend constants
+// (BackendTmux/BackendNative/BackendTymux). Story 2.1.3's acceptance
+// criteria (UX-9.2) require this to fail loudly at construction, not
+// silently fall back to BackendTmux and not panic — an unrecognized value is
+// most likely a typo'd constant or corrupted persisted data, and a silent
+// tmux fallback would mask that.
+var ErrUnrecognizedBackend = fmt.Errorf("session: unrecognized ProcessManagerBackend")
+
+// launchCommand returns opts.Command, or opts.Program parsed from shell text; nil when neither is set.
+func (o ProcessManagerOptions) launchCommand() launchcmd.LaunchCommand {
+	if o.Command != nil {
+		return o.Command
+	}
+	return shellLaunch(o.Program)
 }

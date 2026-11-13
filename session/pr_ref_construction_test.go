@@ -21,11 +21,11 @@ func TestRepositoryEntryPoints_ShouldResolveOnePullRequestState_WhenCaseDiffers(
 
 	for i, sp := range spellings {
 		ref := mustPRRef(t, "", sp[0], sp[1], 12)
-		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), ref, PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual})
+		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), ref, domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual})
 		require.NoError(t, err, "spelling %d", i)
-		_, err = repo.EnsureState(ctx, ref, PRInitial{})
+		_, err = repo.EnsureState(ctx, ref, domain.PRInitial{})
 		require.NoError(t, err)
-		_, err = repo.UpsertSessionPR(ctx, ItemPROwner("item-1"), ref, PRLink{Source: domain.AttachSourceReportPRCreated})
+		_, err = repo.UpsertSessionPR(ctx, ItemPROwner("item-1"), ref, domain.PRLink{Source: domain.AttachSourceReportPRCreated})
 		require.NoError(t, err)
 	}
 	assert.Equal(t, 1, countStates(t, repo))
@@ -39,7 +39,7 @@ func TestRepositoryEntryPoints_ShouldResolveOnePullRequestState_WhenCaseDiffers(
 		tombstoned, err := repo.IsTombstoned(ctx, SessionPROwner("u1"), ref)
 		require.NoError(t, err)
 		assert.True(t, tombstoned, "spelling %v", sp)
-		res, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), ref, PRLink{Source: domain.AttachSourceBranchDiscovery})
+		res, err := repo.UpsertSessionPR(ctx, SessionPROwner("u1"), ref, domain.PRLink{Source: domain.AttachSourceBranchDiscovery})
 		require.NoError(t, err)
 		assert.True(t, res.Tombstoned, "spelling %v", sp)
 	}
@@ -54,9 +54,9 @@ func TestRepositoryEntryPoints_ShouldReturnErrZeroPRRefAndWriteNothing_WhenRefIs
 	session := SessionPROwner("u1")
 
 	calls := map[string]func() error{
-		"EnsureState": func() error { _, err := repo.EnsureState(ctx, zero, PRInitial{}); return err },
+		"EnsureState": func() error { _, err := repo.EnsureState(ctx, zero, domain.PRInitial{}); return err },
 		"UpsertSessionPR": func() error {
-			_, err := repo.UpsertSessionPR(ctx, session, zero, PRLink{Source: domain.AttachSourceManual})
+			_, err := repo.UpsertSessionPR(ctx, session, zero, domain.PRLink{Source: domain.AttachSourceManual})
 			return err
 		},
 		"IsTombstoned":    func() error { _, err := repo.IsTombstoned(ctx, session, zero); return err },

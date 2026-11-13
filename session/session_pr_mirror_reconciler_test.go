@@ -14,7 +14,7 @@ import (
 func linkPR(t *testing.T, s *Storage, uuid string, n int, role domain.PRRole, at time.Time) {
 	t.Helper()
 	_, err := s.Repo.UpsertSessionPR(context.Background(), SessionPROwner(uuid), mustPRRef(t, "", "acme", "app", n),
-		PRLink{Role: role, Source: domain.AttachSourceManual, AttachedAt: at, Initial: PRInitial{State: domain.PRStateOpen}})
+		domain.PRLink{Role: role, Source: domain.AttachSourceManual, AttachedAt: at, Initial: domain.PRInitial{State: domain.PRStateOpen}})
 	require.NoError(t, err)
 }
 
@@ -113,7 +113,7 @@ func TestMirrorReconciler_ShouldEndWithMirrorEqualToActivePR_WhenAttachApplyAndR
 		ref := mustPRRef(t, "", "acme", "app", n)
 		go func() {
 			defer wg.Done()
-			_ = inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, PRInitial{State: domain.PRStateOpen})
+			_ = inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen})
 		}()
 		go func() { defer wg.Done(); inst.ApplyPRUpdate(ref, PRStatusUpdate{State: "merged", Terminal: true}) }()
 		go func() { defer wg.Done(); rec.RunOnce(ctx) }()

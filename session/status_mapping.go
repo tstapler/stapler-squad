@@ -48,3 +48,7 @@ func StatusFromDetected(detected detection.DetectedStatus) domain.Status {
 	// All detected states indicate an active process.
 	return domain.Active
 }
+
+func isIdleStatus(s detection.DetectedStatus) bool {
+	return s == detection.StatusIdle || s == detection.StatusReady || s == detection.StatusSuccess
+}

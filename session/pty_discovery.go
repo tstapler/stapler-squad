@@ -22,13 +22,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// stopJoinTimeout bounds how long Stop() waits for monitorLoop to exit.
-// refreshRate defaults to 5s and a single Refresh() cycle should complete
-// well within it, so a multiple of the default is a generous margin without
-// risking an indefinite hang if a poller is genuinely stuck (e.g. blocked on
-// a contended tmux exec-gate slot).
-const stopJoinTimeout = 10 * time.Second
-
 // paneEntry holds the result of one row from `tmux list-panes -a`.
 type paneEntry struct {
 	pty string

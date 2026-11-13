@@ -202,7 +202,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		// Defer Start() to the async Step 6 loop in BuildRuntimeDeps so a bulk
 		// load (server startup) doesn't block on cold-restoring every dead
 		// session before the HTTP server can bind.
-		inst, err := fromInstanceData(data, true)
+		inst, err := FromInstanceDataDeferred(data)
 		if err != nil {
 			log.Warn("skipping instance from repository", "session", data.Title, "err", err)
 			continue
@@ -644,7 +644,7 @@ func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
 // AttachSessionPR writes one PR link, its state row (insert-if-absent) and the
 // session's legacy mirror columns in a single transaction, keyed by session uuid.
 // See EntRepository.AttachSessionPR for the error contract.
-func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
+func (s *Storage) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror PRMirror) (domain.PRLinkResult, error) {
 	res, err := s.Repo.AttachSessionPR(ctx, sessionUUID, ref, link, mirror)
 	if err == nil {
 		s.saved.reset() // the row changed behind the save fingerprints
@@ -665,7 +665,7 @@ func (s *Storage) PersistPRMirror(sessionUUID, url string, number int, terminal 
 // one transaction (the user's "Not mine").
 func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef) error {
 	if sessionUUID == "" {
-		return ErrNoSessionUUID
+		return domain.ErrNoSessionUUID
 	}
 	_, err := s.Repo.DeleteSessionPR(ctx, SessionPROwner(sessionUUID), ref)
 	if err == nil {
@@ -676,9 +676,9 @@ func (s *Storage) DetachSessionPR(ctx context.Context, sessionUUID string, ref d
 
 // AttachItemPR writes an item-direct PR link (agent-reported, Jules, manual). A
 // tombstoned PR is not attached (PRLinkResult.Tombstoned).
-func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref domain.PRRef, link PRLink) (PRLinkResult, error) {
+func (s *Storage) AttachItemPR(ctx context.Context, itemID string, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
 	if itemID == "" {
-		return PRLinkResult{}, ErrInvalidPROwner
+		return domain.PRLinkResult{}, ErrInvalidPROwner
 	}
 	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, link)
 	if err == nil {
@@ -704,7 +704,7 @@ func (s *Storage) DetachItemPR(ctx context.Context, itemID string, ref domain.PR
 // SetSessionPRPinned pins or unpins one of the session's PRs; pinning clears the others.
 func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, ref domain.PRRef, pinned bool) error {
 	if sessionUUID == "" {
-		return ErrNoSessionUUID
+		return domain.ErrNoSessionUUID
 	}
 	err := s.Repo.SetPinned(ctx, SessionPROwner(sessionUUID), ref, pinned)
 	if err == nil {
@@ -716,7 +716,7 @@ func (s *Storage) SetSessionPRPinned(ctx context.Context, sessionUUID string, re
 // ClearSessionPRTombstone removes the session's tombstone for ref, if any.
 func (s *Storage) ClearSessionPRTombstone(ctx context.Context, sessionUUID string, ref domain.PRRef) error {
 	if sessionUUID == "" {
-		return ErrNoSessionUUID
+		return domain.ErrNoSessionUUID
 	}
 	return s.Repo.ClearTombstone(ctx, SessionPROwner(sessionUUID), ref)
 }
@@ -1269,8 +1269,8 @@ func (s *Storage) attachAdditivePR(ctx context.Context, observed *backlogdto.Bac
 	if src == "" {
 		src = domain.AttachSourceReportPRCreated
 	}
-	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(observed.ID), ref, PRLink{
-		Role: domain.PRRoleFollowup, Source: src, Initial: PRInitial{State: domain.PRStateOpen, URL: pr.URL},
+	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(observed.ID), ref, domain.PRLink{
+		Role: domain.PRRoleFollowup, Source: src, Initial: domain.PRInitial{State: domain.PRStateOpen, URL: pr.URL},
 	})
 	if err != nil {
 		return fmt.Errorf("additive PR: record link: %w", err)
@@ -1453,9 +1453,9 @@ func (s *Storage) AttachItemPRLink(ctx context.Context, itemID, prURL string, so
 	if err != nil {
 		return false, fmt.Errorf("attach item pr link: list links: %w", err)
 	}
-	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, PRLink{
+	res, err := s.Repo.UpsertSessionPR(ctx, ItemPROwner(itemID), ref, domain.PRLink{
 		Role: domain.AssignRole(existing, ""), Source: source,
-		Initial: PRInitial{State: domain.PRStateOpen, URL: strings.TrimSpace(prURL)},
+		Initial: domain.PRInitial{State: domain.PRStateOpen, URL: strings.TrimSpace(prURL)},
 	})
 	if err != nil {
 		return false, fmt.Errorf("attach item pr link %s: %w", ref, err)

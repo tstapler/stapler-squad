@@ -98,8 +98,8 @@ func seedItemPRs(t *testing.T, storage *session.Storage, itemID string, merged, 
 		n++
 		ref, err := domain.NewPRRef("", "acme", "app", n)
 		require.NoError(t, err)
-		_, err = storage.AttachItemPR(ctx, itemID, ref, session.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual,
-			Initial: session.PRInitial{State: state, Terminal: state.Terminal()}})
+		_, err = storage.AttachItemPR(ctx, itemID, ref, domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual,
+			Initial: domain.PRInitial{State: state, Terminal: state.Terminal()}})
 		require.NoError(t, err)
 	}
 	for range merged {
