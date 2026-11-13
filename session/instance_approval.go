@@ -7,27 +7,36 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/queue"
 )
 
 // GetReviewQueue returns the review queue for this instance.
-func (i *Instance) GetReviewQueue() *ReviewQueue {
+func (i *Instance) GetReviewQueue() *queue.ReviewQueue {
 	return i.reviewQueue
 }
 
 // SetReviewQueue sets the review queue for this instance.
-func (i *Instance) SetReviewQueue(queue *ReviewQueue) {
-	i.reviewQueue = queue
+func (i *Instance) SetReviewQueue(q *queue.ReviewQueue) {
+	i.reviewQueue = q
+}
+
+// InstanceNotifier is the notification port Instance consumes. Its method set
+// equals Notifier's (backlog_shared.go), so any Notifier satisfies it; it is
+// declared here so Instance code does not depend on the backlog-owned type.
+type InstanceNotifier interface {
+	Notify(itemID, title, message string, notificationType int32, urgent, important bool)
+	NotifySession(sessionID, title, message string, notificationType int32, urgent, important bool)
 }
 
 // GetNotifier returns the notifier for this instance, or nil if unset.
-func (i *Instance) GetNotifier() Notifier {
+func (i *Instance) GetNotifier() InstanceNotifier {
 	return i.notifier
 }
 
 // SetNotifier sets the notifier for this instance, used by
 // markSessionPermanentlyFailed to push a proactive notification when the
 // retry policy exhausts its attempt budget.
-func (i *Instance) SetNotifier(notifier Notifier) {
+func (i *Instance) SetNotifier(notifier InstanceNotifier) {
 	i.notifier = notifier
 }
 
@@ -40,7 +49,7 @@ func (i *Instance) NeedsReview() bool {
 }
 
 // GetReviewItem returns the review item for this instance if it exists.
-func (i *Instance) GetReviewItem() (*ReviewItem, bool) {
+func (i *Instance) GetReviewItem() (*queue.ReviewItem, bool) {
 	if i.reviewQueue == nil {
 		return nil, false
 	}

@@ -130,7 +130,7 @@ func TestEntRepository_Delete_WithShells(t *testing.T) {
 	err := repo.Create(ctx, session)
 	require.NoError(t, err)
 
-	_, err = repo.CreateShell(ctx, session.Title, ShellData{
+	err = repo.CreateShell(ctx, session.Title, ShellData{
 		ID:              uuid.NewString(),
 		Name:            "shell-1",
 		Command:         "bash",

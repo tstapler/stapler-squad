@@ -26,7 +26,6 @@ import (
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -161,7 +160,7 @@ func (i *Instance) SpawnShell(ctx context.Context, req SpawnShellRequest) (*Shel
 			TmuxSessionName: sessionName,
 			OrderIndex:      orderIndex,
 		}
-		if _, err := i.shellRepo.CreateShell(ctx, i.Title, data); err != nil {
+		if err := i.shellRepo.CreateShell(ctx, i.Title, data); err != nil {
 			log.Warn("SpawnShell: failed to persist shell", "session", i.Title, "shell", shellID, "err", err)
 		}
 	}
@@ -418,7 +417,7 @@ func (i *Instance) ReconcileShells(ctx context.Context) {
 
 	// preparedShell holds all pre-computed state for one reconcile entry.
 	type preparedShell struct {
-		dbShell     *ent.Shell
+		dbShell     ShellData
 		handle      *tmux.ShellTmuxHandle
 		alive       bool // DoesSessionExist result; only meaningful when status=Running
 		exitCh      chan struct{}
