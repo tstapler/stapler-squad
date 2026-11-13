@@ -135,7 +135,7 @@ type InstanceSnapshot struct {
 	GitHub GitHubIntegration
 
 	// Checkpoints
-	Checkpoints      CheckpointList // defensive deep copy — see buildSnapshot
+	Checkpoints      domain.CheckpointList // defensive deep copy — see buildSnapshot
 	ActiveCheckpoint string
 	ForkedFromID     string
 	// RestartedFromSessionID — see Instance.RestartedFromSessionID's doc comment.
@@ -148,7 +148,7 @@ type InstanceSnapshot struct {
 	ProjectID                  string
 	HistoryFilePath            string
 	EverHadConversationHistory bool
-	LastReviveOutcome          ReviveOutcome
+	LastReviveOutcome          domain.ReviveOutcome
 	MCPServerURL               string
 	AppendSystemPrompt         string
 	AllowedTools               string
@@ -167,16 +167,16 @@ type InstanceSnapshot struct {
 
 	// LastMeaningfulChangeAt and TurnEnded mirror the Instance fields of the same name.
 	LastMeaningfulChangeAt time.Time
-	TurnEnded              TurnEnded
+	TurnEnded              domain.TurnEnded
 
 	// Review queue / activity state (embedded value — copied by value)
 	ReviewState
 
 	// Instance type and management metadata
-	InstanceType     InstanceType
+	InstanceType     domain.InstanceType
 	IsManaged        bool
-	ExternalMetadata *ExternalInstanceMetadata // copy of pointee — see buildSnapshot
-	Permissions      InstancePermissions       // RequiresConfirmation map deep-copied
+	ExternalMetadata *domain.ExternalInstanceMetadata // copy of pointee — see buildSnapshot
+	Permissions      domain.InstancePermissions       // RequiresConfirmation map deep-copied
 	Artifacts        *domain.SessionArtifactsBlob
 	ContextHealth    domain.ContextHealthVerdict // flat value; no deep copy needed
 }
@@ -249,7 +249,7 @@ func buildSnapshot(i *Instance) *InstanceSnapshot {
 			LegacyPRUnrepresented:  i.LegacyPRUnrepresented,
 			HasPRLinks:             i.HasPRLinks,
 		},
-		Checkpoints:                append(CheckpointList(nil), i.Checkpoints...),
+		Checkpoints:                append(domain.CheckpointList(nil), i.Checkpoints...),
 		ActiveCheckpoint:           i.ActiveCheckpoint,
 		ForkedFromID:               i.ForkedFromID,
 		RestartedFromSessionID:     i.RestartedFromSessionID,

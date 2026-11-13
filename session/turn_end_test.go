@@ -27,23 +27,23 @@ func (f *lockCheckingFake) observe() {
 	}
 }
 
-func (f *lockCheckingFake) PersistTurnEnded(string, TurnEnded) error { f.observe(); return nil }
+func (f *lockCheckingFake) PersistTurnEnded(string, domain.TurnEnded) error { f.observe(); return nil }
 
 type fakeRecorder struct {
 	noopSessionEventRecorder
 	lockCheckingFake
 }
 
-func (f *fakeRecorder) RecordTurnEnded(string, TurnEnded) { f.observe() }
+func (f *fakeRecorder) RecordTurnEnded(string, domain.TurnEnded) { f.observe() }
 
 func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceIsBareLiteral(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{Title: "bare", Status: domain.Running}
 
-	inst.RecordTurnEnd("finished", TurnEndSourceHook)
+	inst.RecordTurnEnd("finished", domain.TurnEndSourceHook)
 
 	assert.Equal(t, "finished", inst.Snapshot().TurnEnded.Excerpt)
-	assert.Equal(t, TurnEndSourceHook, inst.Snapshot().TurnEnded.Source)
+	assert.Equal(t, domain.TurnEndSourceHook, inst.Snapshot().TurnEnded.Source)
 }
 
 func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceFromInstanceData(t *testing.T) {
@@ -51,7 +51,7 @@ func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceFromInstan
 	inst, err := FromInstanceDataDeferred(InstanceData{Title: "restored", Path: t.TempDir(), Status: domain.Paused, Program: "claude"})
 	require.NoError(t, err)
 
-	inst.RecordTurnEnd("finished", TurnEndSourceScreen)
+	inst.RecordTurnEnd("finished", domain.TurnEndSourceScreen)
 
 	assert.Equal(t, "finished", inst.Snapshot().TurnEnded.Excerpt)
 }
@@ -64,7 +64,7 @@ func TestRecordTurnEnd_Should_CallSinkAndRecorderOnceAfterReleasingLock_When_Col
 	inst.SetTurnEndSink(sink)
 	inst.SetEventRecorder(rec)
 
-	inst.RecordTurnEnd("done", TurnEndSourceHook)
+	inst.RecordTurnEnd("done", domain.TurnEndSourceHook)
 
 	assert.Equal(t, 1, sink.calls)
 	assert.True(t, sink.lockFree, "sink ran under i.mu")
@@ -81,7 +81,7 @@ func TestRecordTurnEnd_Should_SkipSinkAndRecorder_When_ActorStopped(t *testing.T
 	inst.SetEventRecorder(rec)
 	NewLiveInstance(inst).Stop()
 
-	inst.RecordTurnEnd("late", TurnEndSourceHook)
+	inst.RecordTurnEnd("late", domain.TurnEndSourceHook)
 
 	assert.Equal(t, 0, sink.calls)
 	assert.Equal(t, 0, rec.calls)
@@ -93,7 +93,7 @@ func TestSetTurnEndSink_Should_KeepNoopDefault_When_TypedNilPassed(t *testing.T)
 	var sink *lockCheckingFake
 	inst.SetTurnEndSink(sink)
 
-	inst.RecordTurnEnd("done", TurnEndSourceHook)
+	inst.RecordTurnEnd("done", domain.TurnEndSourceHook)
 
 	assert.Equal(t, "done", inst.Snapshot().TurnEnded.Excerpt)
 }

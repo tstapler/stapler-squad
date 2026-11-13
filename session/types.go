@@ -8,94 +8,9 @@ import (
 	"unicode"
 )
 
-// InstanceType represents the type of session instance
-type InstanceType int
-
-const (
-	// InstanceTypeManaged represents a session fully managed by stapler-squad
-	// with complete lifecycle control, git worktrees, and all features
-	InstanceTypeManaged InstanceType = iota
-
-	// InstanceTypeExternal represents a Claude instance discovered externally
-	// (not created by stapler-squad) with limited interaction capabilities
-	InstanceTypeExternal
-)
-
-func (it InstanceType) String() string {
-	switch it {
-	case InstanceTypeManaged:
-		return "Managed"
-	case InstanceTypeExternal:
-		return "External"
-	default:
-		return "Unknown"
-	}
-}
-
-// ExternalInstanceMetadata contains metadata for externally discovered Claude instances
-type ExternalInstanceMetadata struct {
-	// TmuxSocket is the tmux server socket this instance belongs to
-	// Empty string means the default tmux server
-	TmuxSocket string
-
-	// TmuxSessionName is the full tmux session name
-	TmuxSessionName string
-
-	// DiscoveredAt is when this external instance was first discovered
-	DiscoveredAt time.Time
-
-	// LastSeen is when this instance was last seen during discovery
-	LastSeen time.Time
-
-	// OriginalPID is the process ID when first discovered
-	OriginalPID int
-
-	// MuxSocketPath is the path to an ssq-mux Unix domain socket
-	// If set, this instance was discovered via ssq-mux and supports
-	// full bidirectional terminal access
-	MuxSocketPath string
-
-	// MuxEnabled indicates whether this instance supports mux protocol
-	MuxEnabled bool
-
-	// SourceTerminal identifies the source (e.g., "IntelliJ", "Terminal", "tmux")
-	SourceTerminal string
-}
-
-// InstancePermissions defines what operations are allowed on an instance
-type InstancePermissions struct {
-	// View operations
-	CanView bool
-
-	// Attach to the terminal session
-	CanAttach bool
-
-	// Send commands to the terminal
-	CanSendCommand bool
-
-	// Pause the session (stop tmux, keep worktree)
-	CanPause bool
-
-	// Resume a paused session
-	CanResume bool
-
-	// Destroy the session completely
-	CanDestroy bool
-
-	// Perform git operations (commit, push, worktree management)
-	CanModifyGit bool
-
-	// Add to review queue
-	CanAddToQueue bool
-
-	// RequiresConfirmation maps operation names to whether they need confirmation
-	// Used for high-risk operations on external instances
-	RequiresConfirmation map[string]bool
-}
-
 // GetManagedPermissions returns full permissions for squad-managed instances
-func GetManagedPermissions() InstancePermissions {
-	return InstancePermissions{
+func GetManagedPermissions() domain.InstancePermissions {
+	return domain.InstancePermissions{
 		CanView:              true,
 		CanAttach:            true,
 		CanSendCommand:       true,
@@ -110,8 +25,8 @@ func GetManagedPermissions() InstancePermissions {
 
 // GetExternalPermissions returns limited permissions for external instances
 // allowAttach controls whether attach operations are permitted (power user mode)
-func GetExternalPermissions(allowAttach bool) InstancePermissions {
-	perms := InstancePermissions{
+func GetExternalPermissions(allowAttach bool) domain.InstancePermissions {
+	perms := domain.InstancePermissions{
 		CanView:              true,
 		CanAttach:            allowAttach,
 		CanSendCommand:       allowAttach,
@@ -135,8 +50,8 @@ func GetExternalPermissions(allowAttach bool) InstancePermissions {
 // GetMuxExternalPermissions returns permissions for mux-enabled external instances.
 // Mux instances support full bidirectional terminal access and can be destroyed
 // since they're explicitly opted-in by launching through ssq-mux with tmux session.
-func GetMuxExternalPermissions() InstancePermissions {
-	return InstancePermissions{
+func GetMuxExternalPermissions() domain.InstancePermissions {
+	return domain.InstancePermissions{
 		CanView:        true,
 		CanAttach:      true,
 		CanSendCommand: true,
@@ -260,17 +175,6 @@ var (
 	// changes. Only ForceDestroy discards them.
 	ErrWorktreeDirty = errors.New("worktree has uncommitted changes; keeping it (force to discard)")
 )
-
-// ErrInvalidTransition is returned when a status transition is not allowed
-// by the state machine defined in state_machine.go.
-type ErrInvalidTransition struct {
-	From domain.Status
-	To   domain.Status
-}
-
-func (e ErrInvalidTransition) Error() string {
-	return fmt.Sprintf("invalid transition: %s -> %s", e.From, e.To)
-}
 
 // ErrDuplicateTag is returned when adding a tag that already exists.
 type ErrDuplicateTag struct {

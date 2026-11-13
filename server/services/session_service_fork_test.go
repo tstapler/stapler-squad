@@ -83,7 +83,7 @@ func makeInstanceWithCheckpoint(title string) (*session.Instance, string) {
 		Path:    "/tmp/test",
 		Status:  domain.Active,
 		Program: "claude",
-		Checkpoints: session.CheckpointList{
+		Checkpoints: domain.CheckpointList{
 			{
 				ID:        cpID,
 				Label:     "baseline",

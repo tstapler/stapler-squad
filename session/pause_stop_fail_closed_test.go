@@ -170,7 +170,7 @@ func TestForceStopByUser_should_StillRefuse_When_TransitionIllegal(t *testing.T)
 
 	err := inst.ForceStopByUser()
 
-	var transErr ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	require.ErrorAs(t, err, &transErr)
 	assert.False(t, pm.closeCalled)
 	assert.FileExists(t, precious)

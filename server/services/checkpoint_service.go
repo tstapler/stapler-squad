@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -201,7 +202,7 @@ func (cs *CheckpointService) ClearConversationState(
 // checkpointToProto converts a session.Checkpoint to its proto representation.
 // Defined here as a package-level helper so it can be shared by CheckpointService
 // and other callers (e.g. ForkSession) that still live in session_service.go.
-func checkpointToProto(cp *session.Checkpoint) *sessionv1.CheckpointProto {
+func checkpointToProto(cp *domain.Checkpoint) *sessionv1.CheckpointProto {
 	if cp == nil {
 		return nil
 	}

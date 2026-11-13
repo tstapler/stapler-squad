@@ -512,15 +512,15 @@ func sessionTypeToProto(sessionType domain.SessionType) sessionv1.SessionType {
 }
 
 // reviveOutcomeToProto converts session.ReviveOutcome to the proto ReviveOutcome enum.
-func reviveOutcomeToProto(outcome session.ReviveOutcome) sessionv1.ReviveOutcome {
+func reviveOutcomeToProto(outcome domain.ReviveOutcome) sessionv1.ReviveOutcome {
 	switch outcome {
-	case session.ReviveOutcomeResumeLive:
+	case domain.ReviveOutcomeResumeLive:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE
-	case session.ReviveOutcomeResumeRecovered:
+	case domain.ReviveOutcomeResumeRecovered:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED
-	case session.ReviveOutcomeFreshExpected:
+	case domain.ReviveOutcomeFreshExpected:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED
-	case session.ReviveOutcomeFreshLostHistory:
+	case domain.ReviveOutcomeFreshLostHistory:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY
 	default:
 		return sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED
@@ -564,11 +564,11 @@ func ProtoToStatus(status sessionv1.SessionStatus) domain.Status {
 }
 
 // instanceTypeToProto converts session.InstanceType to proto InstanceType enum.
-func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceType {
+func instanceTypeToProto(instanceType domain.InstanceType) sessionv1.InstanceType {
 	switch instanceType {
-	case session.InstanceTypeManaged:
+	case domain.InstanceTypeManaged:
 		return sessionv1.InstanceType_INSTANCE_TYPE_MANAGED
-	case session.InstanceTypeExternal:
+	case domain.InstanceTypeExternal:
 		return sessionv1.InstanceType_INSTANCE_TYPE_EXTERNAL
 	default:
 		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
@@ -594,7 +594,7 @@ func reviewFeedbackToProto(reviews []domain.GitHubReviewItem) []*sessionv1.Githu
 }
 
 // externalMetadataToProto converts session.ExternalInstanceMetadata to proto ExternalInstanceMetadata.
-func externalMetadataToProto(metadata *session.ExternalInstanceMetadata) *sessionv1.ExternalInstanceMetadata {
+func externalMetadataToProto(metadata *domain.ExternalInstanceMetadata) *sessionv1.ExternalInstanceMetadata {
 	if metadata == nil {
 		return nil
 	}

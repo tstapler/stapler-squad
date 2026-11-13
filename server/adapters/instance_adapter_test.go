@@ -45,15 +45,15 @@ func TestRateLimitStateToProto_AllStates(t *testing.T) {
 func TestReviveOutcomeToProto_AllOutcomes(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    session.ReviveOutcome
+		input    domain.ReviveOutcome
 		expected sessionv1.ReviveOutcome
 	}{
-		{"ResumeLive", session.ReviveOutcomeResumeLive, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE},
-		{"ResumeRecovered", session.ReviveOutcomeResumeRecovered, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED},
-		{"FreshExpected", session.ReviveOutcomeFreshExpected, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED},
-		{"FreshLostHistory", session.ReviveOutcomeFreshLostHistory, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY},
-		{"Unspecified", session.ReviveOutcomeUnspecified, sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
-		{"Unknown value defaults to Unspecified", session.ReviveOutcome("bogus"), sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+		{"ResumeLive", domain.ReviveOutcomeResumeLive, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_LIVE},
+		{"ResumeRecovered", domain.ReviveOutcomeResumeRecovered, sessionv1.ReviveOutcome_REVIVE_OUTCOME_RESUME_RECOVERED},
+		{"FreshExpected", domain.ReviveOutcomeFreshExpected, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_EXPECTED},
+		{"FreshLostHistory", domain.ReviveOutcomeFreshLostHistory, sessionv1.ReviveOutcome_REVIVE_OUTCOME_FRESH_LOST_HISTORY},
+		{"Unspecified", domain.ReviveOutcomeUnspecified, sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
+		{"Unknown value defaults to Unspecified", domain.ReviveOutcome("bogus"), sessionv1.ReviveOutcome_REVIVE_OUTCOME_UNSPECIFIED},
 	}
 
 	for _, tc := range tests {
@@ -71,7 +71,7 @@ func TestReviveOutcomeToProto_AllOutcomes(t *testing.T) {
 // wire-format boundary a swapped reviveOutcomeToProto case would silently
 // corrupt without failing any other test.
 func TestInstanceToProto_ReviveOutcome(t *testing.T) {
-	inst := &session.Instance{LastReviveOutcome: session.ReviveOutcomeFreshLostHistory}
+	inst := &session.Instance{LastReviveOutcome: domain.ReviveOutcomeFreshLostHistory}
 	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")

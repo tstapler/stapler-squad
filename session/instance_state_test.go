@@ -43,7 +43,7 @@ func TestTransitionTo_should_RejectStoppedToFailed_When_StoppedIsTerminal(t *tes
 	err := inst.transitionTo(context.Background(), domain.Failed)
 
 	require.Error(t, err, "Stopped -> Failed must be rejected: Stopped stays terminal")
-	assert.Equal(t, ErrInvalidTransition{From: domain.Stopped, To: domain.Failed}, err)
+	assert.Equal(t, domain.ErrInvalidTransition{From: domain.Stopped, To: domain.Failed}, err)
 	assert.Equal(t, domain.Stopped, inst.Status, "status must not change on a rejected transition")
 }
 
@@ -76,7 +76,7 @@ func TestTransitionTo_should_RejectFailedToActive_When_MustGoThroughCreatingFirs
 	err := inst.transitionTo(context.Background(), domain.Active)
 
 	require.Error(t, err, "Failed -> Active must be rejected: retry must go through Creating first")
-	assert.Equal(t, ErrInvalidTransition{From: domain.Failed, To: domain.Active}, err)
+	assert.Equal(t, domain.ErrInvalidTransition{From: domain.Failed, To: domain.Active}, err)
 }
 
 // TestFailureReason_should_RoundTrip_When_SetViaLockedHelper verifies the
@@ -310,7 +310,7 @@ func TestRecordTurnEnd_Should_AdvanceLastMeaningfulChange_When_TurnEnded(t *test
 	inst := &Instance{Title: "touch-turn", Status: domain.Running}
 	before := inst.Snapshot().LastMeaningfulChangeAt
 
-	inst.RecordTurnEnd("done", TurnEndSourceHook)
+	inst.RecordTurnEnd("done", domain.TurnEndSourceHook)
 
 	snap := inst.Snapshot()
 	assert.True(t, snap.LastMeaningfulChangeAt.After(before))

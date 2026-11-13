@@ -18,7 +18,7 @@ import (
 
 func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
 	t.Parallel()
-	cp := Checkpoint{
+	cp := domain.Checkpoint{
 		ID:             "550e8400-e29b-41d4-a716-446655440000",
 		SessionID:      "test-session-id",
 		Label:          "before-refactor",
@@ -32,7 +32,7 @@ func TestCheckpoint_SerializationRoundtrip(t *testing.T) {
 	data, err := json.Marshal(cp)
 	require.NoError(t, err)
 
-	var restored Checkpoint
+	var restored domain.Checkpoint
 	err = json.Unmarshal(data, &restored)
 	require.NoError(t, err)
 
@@ -58,7 +58,7 @@ func TestInstanceData_BackwardCompatNilCheckpoints(t *testing.T) {
 
 func TestCheckpointList_FindByID(t *testing.T) {
 	t.Parallel()
-	cl := CheckpointList{
+	cl := domain.CheckpointList{
 		{ID: "id-1", Label: "first"},
 		{ID: "id-2", Label: "second"},
 		{ID: "id-3", Label: "third"},
@@ -74,7 +74,7 @@ func TestCheckpointList_FindByID(t *testing.T) {
 
 func TestCheckpointList_FindByLabel(t *testing.T) {
 	t.Parallel()
-	cl := CheckpointList{
+	cl := domain.CheckpointList{
 		{ID: "id-1", Label: "first"},
 		{ID: "id-2", Label: "second"},
 		{ID: "id-3", Label: "first"}, // duplicate label
@@ -91,7 +91,7 @@ func TestCheckpointList_FindByLabel(t *testing.T) {
 func TestCheckpointList_Latest(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	cl := CheckpointList{
+	cl := domain.CheckpointList{
 		{ID: "id-1", Timestamp: now.Add(-2 * time.Hour)},
 		{ID: "id-2", Timestamp: now.Add(-1 * time.Hour)},
 		{ID: "id-3", Timestamp: now.Add(-3 * time.Hour)},
@@ -104,7 +104,7 @@ func TestCheckpointList_Latest(t *testing.T) {
 
 func TestCheckpointList_Latest_Empty(t *testing.T) {
 	t.Parallel()
-	var cl CheckpointList
+	var cl domain.CheckpointList
 	latest := cl.Latest()
 	assert.Nil(t, latest)
 }

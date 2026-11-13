@@ -315,7 +315,7 @@ func (i *Instance) CaptureCurrentState() error {
 }
 
 // GetPermissions returns the permissions for this instance based on its type.
-func (i *Instance) GetPermissions() InstancePermissions {
+func (i *Instance) GetPermissions() domain.InstancePermissions {
 	if i.IsManaged {
 		return GetManagedPermissions()
 	}

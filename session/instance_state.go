@@ -44,7 +44,7 @@ func (i *Instance) touchUpdatedAt() {
 func (i *Instance) transitionTo(ctx context.Context, to domain.Status) error {
 	def, ok := lookupTransition(i.Status, to)
 	if !ok {
-		return ErrInvalidTransition{From: i.Status, To: to}
+		return domain.ErrInvalidTransition{From: i.Status, To: to}
 	}
 	if def.Guard != nil {
 		if err := def.Guard(ctx, i); err != nil {
@@ -86,7 +86,7 @@ func transitionToLocked(s *instanceState, ctx context.Context, to domain.Status)
 	i.mu.RUnlock()
 	def, ok := lookupTransition(status, to)
 	if !ok {
-		return ErrInvalidTransition{From: status, To: to}
+		return domain.ErrInvalidTransition{From: status, To: to}
 	}
 	if def.Guard != nil {
 		if err := def.Guard(ctx, i); err != nil {

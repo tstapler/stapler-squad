@@ -341,7 +341,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 			LastUserResponse:     data.LastUserResponse,
 			ProcessingGraceUntil: data.ProcessingGraceUntil,
 		},
-		InstanceType:     InstanceTypeManaged, // Restored instances are always managed
+		InstanceType:     domain.InstanceTypeManaged, // Restored instances are always managed
 		IsManaged:        true,
 		ExternalMetadata: nil,                     // External instances are not persisted
 		Permissions:      GetManagedPermissions(), // Full permissions for managed instances
@@ -379,7 +379,7 @@ func fromInstanceData(data InstanceData, deferStart bool) (*Instance, error) {
 		// History file linkage
 		HistoryFilePath:            data.HistoryFilePath,
 		EverHadConversationHistory: data.EverHadConversationHistory,
-		LastReviveOutcome:          ReviveOutcome(data.LastReviveOutcome),
+		LastReviveOutcome:          domain.ReviveOutcome(data.LastReviveOutcome),
 		// One-shot mode
 		OneShot: data.OneShot,
 		// Hidden (system/background) flag

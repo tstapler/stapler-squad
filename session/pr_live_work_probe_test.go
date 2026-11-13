@@ -57,9 +57,9 @@ func TestLiveWorkProbe_ShouldMapSnapshotToLiveEndedIdle_AndHeldByLiveWorkShouldH
 		{"stopped is ended", mk(domain.Stopped, now, nil), false},
 		{"hibernated is ended", mk(domain.Hibernated, now, nil), false},
 		{"archived is ended", mk(domain.Active, now, func(s *InstanceSnapshot) { s.ArchivedAt = &archived }), false},
-		{"turn ended and idle past the window", mk(domain.Active, turnEndedAt, func(s *InstanceSnapshot) { s.TurnEnded = TurnEnded{At: turnEndedAt} }), false},
-		{"turn ended recently is still live inside the window", mk(domain.Active, now.Add(-time.Minute), func(s *InstanceSnapshot) { s.TurnEnded = TurnEnded{At: now.Add(-time.Minute)} }), true},
-		{"turn ended, then new activity: working again", mk(domain.Active, now.Add(-5*time.Minute), func(s *InstanceSnapshot) { s.TurnEnded = TurnEnded{At: now.Add(-20 * time.Minute)} }), true},
+		{"turn ended and idle past the window", mk(domain.Active, turnEndedAt, func(s *InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: turnEndedAt} }), false},
+		{"turn ended recently is still live inside the window", mk(domain.Active, now.Add(-time.Minute), func(s *InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: now.Add(-time.Minute)} }), true},
+		{"turn ended, then new activity: working again", mk(domain.Active, now.Add(-5*time.Minute), func(s *InstanceSnapshot) { s.TurnEnded = domain.TurnEnded{At: now.Add(-20 * time.Minute)} }), true},
 		{"working with no change for over 1h is capped, not live", mk(domain.Active, now.Add(-61*time.Minute), nil), false},
 		{"zero LMCA falls back to creation time (over 1h ago: capped)", mk(domain.Active, time.Time{}, nil), false},
 	}

@@ -5,11 +5,12 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // TurnEndSink persists a turn-end fact; it never writes the acked episode.
 type TurnEndSink interface {
-	PersistTurnEnded(title string, turn TurnEnded) error
+	PersistTurnEnded(title string, turn domain.TurnEnded) error
 }
 
 // SetTurnEndSink sets the turn-end persister at registration; nil (including a typed-nil
@@ -50,8 +51,8 @@ func (i *Instance) collaborators() (TurnEndSink, SessionEventRecorder) {
 
 // RecordTurnEnd stores the turn-end fact and touches activity under i.mu, then, after
 // releasing it, persists via the sink and records the event once each.
-func (i *Instance) RecordTurnEnd(text string, source TurnEndSource) {
-	turn := TurnEnded{Excerpt: text, Source: source, At: time.Now()}
+func (i *Instance) RecordTurnEnd(text string, source domain.TurnEndSource) {
+	turn := domain.TurnEnded{Excerpt: text, Source: source, At: time.Now()}
 	title, err := sendSyncValue(i, func(s *instanceState) (string, error) {
 		s.inst.mu.Lock()
 		s.inst.TurnEnded = turn

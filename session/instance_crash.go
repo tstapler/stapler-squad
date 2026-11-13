@@ -44,7 +44,7 @@ func (i *Instance) MarkCrashed(exitReason string) error {
 	}
 	err := i.sendSyncErr(func(s *instanceState) error {
 		if s.inst.Status != domain.Active {
-			return ErrInvalidTransition{From: s.inst.Status, To: domain.Crashed}
+			return domain.ErrInvalidTransition{From: s.inst.Status, To: domain.Crashed}
 		}
 		s.inst.mu.Lock()
 		s.inst.ExitReason = exitReason
@@ -69,7 +69,7 @@ func (i *Instance) MarkExitedNormally() error {
 	}
 	err := i.sendSyncErr(func(s *instanceState) error {
 		if s.inst.Status != domain.Active {
-			return ErrInvalidTransition{From: s.inst.Status, To: domain.Stopped}
+			return domain.ErrInvalidTransition{From: s.inst.Status, To: domain.Stopped}
 		}
 		return transitionToLocked(s, context.Background(), domain.Stopped)
 	})

@@ -141,14 +141,14 @@ func TestCanTransition_UnknownStatus(t *testing.T) {
 
 func TestErrInvalidTransition(t *testing.T) {
 	t.Parallel()
-	err := ErrInvalidTransition{From: domain.Paused, To: domain.Hibernated}
+	err := domain.ErrInvalidTransition{From: domain.Paused, To: domain.Hibernated}
 
 	expected := "invalid transition: Paused -> Hibernated"
 	if err.Error() != expected {
 		t.Errorf("ErrInvalidTransition.Error() = %q, want %q", err.Error(), expected)
 	}
 
-	var target ErrInvalidTransition
+	var target domain.ErrInvalidTransition
 	if !errors.As(err, &target) {
 		t.Error("errors.As should match ErrInvalidTransition")
 	}
@@ -324,7 +324,7 @@ func TestTransitionTo_InvalidTransitions(t *testing.T) {
 					t.Errorf("transitionTo(%s) from %s: expected error, got nil", to, from)
 					return
 				}
-				var te ErrInvalidTransition
+				var te domain.ErrInvalidTransition
 				if !errors.As(err, &te) {
 					t.Errorf("transitionTo(%s) from %s: error is %T, want ErrInvalidTransition", to, from, err)
 				}

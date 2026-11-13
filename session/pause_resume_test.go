@@ -131,7 +131,7 @@ func TestPause_should_ReturnInvalidTransition_When_NeverStartedFromNonPauseableS
 
 			err := inst.Pause()
 
-			var transErr ErrInvalidTransition
+			var transErr domain.ErrInvalidTransition
 			require.ErrorAs(t, err, &transErr)
 			assert.Equal(t, status, transErr.From)
 			assert.Equal(t, domain.Paused, transErr.To)

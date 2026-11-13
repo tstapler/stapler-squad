@@ -19,7 +19,7 @@ import (
 // (FailedPrecondition, not a 500); anything else is an unexpected operational
 // failure (git/tmux errors) and stays CodeInternal.
 func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
-	var transErr session.ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	if errors.As(err, &transErr) ||
 		errors.Is(err, session.ErrPauseNotPermitted) ||
 		errors.Is(err, session.ErrResumeNotPermitted) ||
@@ -33,7 +33,7 @@ func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 // using the same permission/state-machine-rejection-vs-operational-failure split as
 // classifyPauseResumeErr.
 func classifyStopErr(err error, opDesc string) *connect.Error {
-	var transErr session.ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	if errors.As(err, &transErr) || errors.Is(err, session.ErrPauseNotPermitted) ||
 		errors.Is(err, session.ErrDirtyStateUnknown) {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))

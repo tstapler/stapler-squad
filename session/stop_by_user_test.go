@@ -81,7 +81,7 @@ func TestStopByUser_should_RejectTransition_When_SessionIsRestoring(t *testing.T
 
 	err := inst.StopByUser()
 
-	var transErr ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	require.True(t, errors.As(err, &transErr), "expected ErrInvalidTransition, got %T: %v", err, err)
 	assert.Equal(t, domain.Restoring, transErr.From)
 	assert.Equal(t, domain.Stopped, transErr.To)

@@ -20,7 +20,7 @@ func TestApprove_FromActive_Fails(t *testing.T) {
 		t.Fatal("Approve from Active should return error (Active->Active is not allowed)")
 	}
 
-	var transErr ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	if !errors.As(err, &transErr) {
 		t.Fatalf("expected ErrInvalidTransition, got %T: %v", err, err)
 	}
@@ -81,7 +81,7 @@ func TestDeny_FromPaused_Fails(t *testing.T) {
 		t.Fatal("Deny from Paused should return error (Paused->Paused is not allowed)")
 	}
 
-	var transErr ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	if !errors.As(err, &transErr) {
 		t.Fatalf("expected ErrInvalidTransition, got %T: %v", err, err)
 	}
@@ -119,7 +119,7 @@ func TestDeny_FromStopped_Fails(t *testing.T) {
 		t.Fatal("Deny from Stopped should return error (Stopped->Paused is not allowed)")
 	}
 
-	var transErr ErrInvalidTransition
+	var transErr domain.ErrInvalidTransition
 	if !errors.As(err, &transErr) {
 		t.Fatalf("expected ErrInvalidTransition, got %T: %v", err, err)
 	}

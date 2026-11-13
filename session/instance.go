@@ -321,7 +321,7 @@ type Instance struct {
 	// LastPRStatusCheck is when the PR status was last successfully fetched
 	LastPRStatusCheck time.Time `json:"last_pr_status_check,omitempty"`
 
-	Checkpoints      CheckpointList
+	Checkpoints      domain.CheckpointList
 	ActiveCheckpoint string
 	ForkedFromID     string
 	// RestartedFromSessionID is the ID of the source session this session was
@@ -358,7 +358,7 @@ type Instance struct {
 
 	// LastReviveOutcome records the outcome of the most recent start/cold-restore
 	// decision. Guarded by claudeSessionMu, same lock order as HistoryFilePath.
-	LastReviveOutcome ReviveOutcome
+	LastReviveOutcome domain.ReviveOutcome
 
 	// MCPServerURL is the URL of the stapler-squad HTTP MCP endpoint, passed
 	// as --mcp-config to claude on session start. A one-shot value resolved
@@ -534,13 +534,13 @@ type Instance struct {
 
 	// Instance type and management metadata
 	// InstanceType indicates whether this is a squad-managed or external instance
-	InstanceType InstanceType
+	InstanceType domain.InstanceType
 	// IsManaged is true if this is a squad-managed session (backward compatible helper)
 	IsManaged bool
 	// ExternalMetadata contains additional information for externally discovered instances
-	ExternalMetadata *ExternalInstanceMetadata
+	ExternalMetadata *domain.ExternalInstanceMetadata
 	// Permissions defines what operations are allowed on this instance
-	Permissions InstancePermissions
+	Permissions domain.InstancePermissions
 
 	// The below fields are initialized upon calling Start().
 
@@ -629,7 +629,7 @@ type Instance struct {
 	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
 	LastMeaningfulChangeAt time.Time
 	// TurnEnded is the latest agent turn-end fact (zero until one is recorded).
-	TurnEnded TurnEnded
+	TurnEnded domain.TurnEnded
 
 	// collabMu guards the registration-time collaborators below; nil means no-op.
 	collabMu      sync.RWMutex
@@ -1128,7 +1128,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		TmuxServerSocket: opts.TmuxServerSocket,
 		Backend:          opts.Backend,
 		IsExpanded:       true, // Default to expanded for newly created instances
-		InstanceType:     InstanceTypeManaged,
+		InstanceType:     domain.InstanceTypeManaged,
 		IsManaged:        true,
 		ExternalMetadata: nil,                     // Only set for external instances
 		Permissions:      GetManagedPermissions(), // Full permissions for managed instances
@@ -1492,8 +1492,8 @@ func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 // reason for outcome — non-empty only for ReviveOutcomeFreshLostHistory, so
 // the notification listener in server/services/session_service.go can filter
 // on the reason string alone (session-revive-uuid-loss AC3).
-func reasonForReviveOutcome(outcome ReviveOutcome) string {
-	if outcome == ReviveOutcomeFreshLostHistory {
+func reasonForReviveOutcome(outcome domain.ReviveOutcome) string {
+	if outcome == domain.ReviveOutcomeFreshLostHistory {
 		return ReasonColdRestoreLostHistory
 	}
 	return ""
@@ -1503,17 +1503,17 @@ func reasonForReviveOutcome(outcome ReviveOutcome) string {
 // (session-revive-uuid-loss AC3) from its three decision inputs. Pure and
 // side-effect-free so startLocked/start share one definition instead of
 // duplicating the branch logic.
-func reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory bool) ReviveOutcome {
+func reviveOutcomeForColdRestore(hadUUIDBeforeRecovery, hasClaudeSession, everHadHistory bool) domain.ReviveOutcome {
 	if hasClaudeSession {
 		if hadUUIDBeforeRecovery {
-			return ReviveOutcomeResumeLive
+			return domain.ReviveOutcomeResumeLive
 		}
-		return ReviveOutcomeResumeRecovered
+		return domain.ReviveOutcomeResumeRecovered
 	}
 	if everHadHistory {
-		return ReviveOutcomeFreshLostHistory
+		return domain.ReviveOutcomeFreshLostHistory
 	}
-	return ReviveOutcomeFreshExpected
+	return domain.ReviveOutcomeFreshExpected
 }
 
 // startLocked is the actor-safe body of Start(). Called only from within
@@ -1563,7 +1563,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// LastReviveOutcome never goes stale across a later cycle that doesn't
 	// enter the ColdRestore branch — session-revive-uuid-loss AC3. Written
 	// once, under lock, at this function's existing final buildSnapshot call.
-	var reviveOutcome ReviveOutcome
+	var reviveOutcome domain.ReviveOutcome
 
 	i.pm().ResetExitOnce()
 	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
@@ -1633,7 +1633,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			i.tryExtractConversationUUID()
 		} else {
 			// HotRestore: tmux never died, so nothing was ever at risk of loss.
-			reviveOutcome = ReviveOutcomeResumeLive
+			reviveOutcome = domain.ReviveOutcomeResumeLive
 			i.startVNCDisplay(context.Background())
 			i.allocateCDPPort()
 			workDir := i.Path
@@ -1649,7 +1649,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 		}
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
-		reviveOutcome = ReviveOutcomeFreshExpected
+		reviveOutcome = domain.ReviveOutcomeFreshExpected
 		basePath := i.Path
 		if i.GitManager.HasWorktree() {
 			// ExistingWorktree sessions have a pre-created worktree; Setup() would tear it down.
@@ -1829,7 +1829,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	// LastReviveOutcome never goes stale across a later cycle that doesn't
 	// enter the ColdRestore branch — session-revive-uuid-loss AC3. Written
 	// once, under lock, at this function's existing final buildSnapshot call.
-	var reviveOutcome ReviveOutcome
+	var reviveOutcome domain.ReviveOutcome
 
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
@@ -1919,7 +1919,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		} else {
 			// Hot restore: tmux session is alive — attach to it. Never died, so
 			// nothing was ever at risk of loss.
-			reviveOutcome = ReviveOutcomeResumeLive
+			reviveOutcome = domain.ReviveOutcomeResumeLive
 			// Phase 1 (display) runs here too so VNC is available for the browser tab.
 			// DISPLAY injection via ExtraEnv is not possible for an already-running
 			// session, but x11vnc still needs to start so the browser passthrough works.
@@ -1942,7 +1942,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		}
 	} else {
 		// firstTimeSetup: a brand new instance can never have prior history to lose.
-		reviveOutcome = ReviveOutcomeFreshExpected
+		reviveOutcome = domain.ReviveOutcomeFreshExpected
 		// KNOWN GAP: this legacy path skips the worktree-resolution, collision, and
 		// spawn-reservation guards startLocked's firstTimeSetup branch runs. Currently
 		// inert in production — every StartWithCleanup caller is in a _test.go file
@@ -2516,7 +2516,7 @@ func stopByUserLocked(s *instanceState, force bool) error {
 	// worktree) — canTransitionLocked is side-effect-free, so a rejected call leaves
 	// the tmux session and worktree untouched.
 	if !canTransitionLocked(s, domain.Stopped) {
-		return ErrInvalidTransition{From: i.Status, To: domain.Stopped}
+		return domain.ErrInvalidTransition{From: i.Status, To: domain.Stopped}
 	}
 
 	// Fail closed before any side effect — see pauseLocked.

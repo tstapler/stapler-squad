@@ -151,7 +151,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		Path:         discovered.Metadata.Cwd,
 		Program:      discovered.Metadata.Command,
 		Status:       domain.Active,
-		InstanceType: InstanceTypeExternal,
+		InstanceType: domain.InstanceTypeExternal,
 		Backend:      domain.BackendTmux, // wraps an existing tmux session; no global selection may re-route it
 		Category:     "External",
 		Tags:         []string{"external", "mux"},
@@ -161,7 +161,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 			LastTerminalUpdate:   now,
 			LastMeaningfulOutput: now, // Initialize to now - external sessions have output when discovered
 		},
-		ExternalMetadata: &ExternalInstanceMetadata{
+		ExternalMetadata: &domain.ExternalInstanceMetadata{
 			MuxSocketPath:   discovered.SocketPath,
 			MuxEnabled:      true,
 			SourceTerminal:  guessSourceTerminal(discovered.Metadata),

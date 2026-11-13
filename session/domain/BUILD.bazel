@@ -14,6 +14,7 @@ go_library(
         "github_pr_items.go",
         "guidance_cancel_reason.go",
         "guidance_request_source.go",
+        "instance_types.go",
         "process_manager_backend.go",
         "session_type.go",
         "status.go",

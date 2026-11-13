@@ -2,7 +2,6 @@ package session
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain"
-	"time"
 )
 
 // SessionEventKind enumerates the kinds of session events (plan Glossary: SessionEventKind).
@@ -46,25 +45,10 @@ func (k SessionEventKind) String() string {
 	return sessionEventKindNames[k]
 }
 
-// TurnEndSource says which path observed the end of an agent turn.
-type TurnEndSource string
-
-const (
-	TurnEndSourceHook   TurnEndSource = "hook"
-	TurnEndSourceScreen TurnEndSource = "screen"
-)
-
-// TurnEnded is the minimal turn-end fact; Episode/Kind arrive with Story 3.1 constructors.
-type TurnEnded struct {
-	Excerpt string
-	Source  TurnEndSource
-	At      time.Time
-}
-
 // SessionEventRecorder is the flag-gated, synchronous event-log writer.
 // Each method has exactly one caller (plan "Event Ownership"); none may be called under Instance.mu.
 type SessionEventRecorder interface {
-	RecordTurnEnded(title string, turn TurnEnded)
+	RecordTurnEnded(title string, turn domain.TurnEnded)
 	RecordAttentionRaised(title string, reason AttentionReason)
 	RecordAttentionCleared(title string, reason AttentionReason)
 	RecordStatusChanged(title string, from, to domain.Status)
@@ -78,7 +62,7 @@ type SessionEventRecorder interface {
 // noopSessionEventRecorder is the recorder used when session_event_log is off.
 type noopSessionEventRecorder struct{}
 
-func (noopSessionEventRecorder) RecordTurnEnded(string, TurnEnded)                        {}
+func (noopSessionEventRecorder) RecordTurnEnded(string, domain.TurnEnded)                 {}
 func (noopSessionEventRecorder) RecordAttentionRaised(string, AttentionReason)            {}
 func (noopSessionEventRecorder) RecordAttentionCleared(string, AttentionReason)           {}
 func (noopSessionEventRecorder) RecordStatusChanged(string, domain.Status, domain.Status) {}

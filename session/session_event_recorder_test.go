@@ -32,7 +32,7 @@ func TestSessionEventKind_Should_NameEveryKindExhaustively_When_Enumerated(t *te
 func TestNoopSessionEventRecorder_Should_NotPanic_When_NilOrNoop(t *testing.T) {
 	t.Parallel()
 	r := orNoopRecorder(nil)
-	r.RecordTurnEnded("demo", TurnEnded{})
+	r.RecordTurnEnded("demo", domain.TurnEnded{})
 	r.RecordAttentionRaised("demo", ReasonTaskComplete)
 	r.RecordAttentionCleared("demo", ReasonTaskComplete)
 	r.RecordStatusChanged("demo", domain.Running, domain.Stopped)
