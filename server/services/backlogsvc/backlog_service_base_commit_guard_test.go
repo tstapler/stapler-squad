@@ -4,7 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
 	"strings"
 	"testing"
 
@@ -16,17 +16,19 @@ import (
 // function and method names it calls.
 func callsByFunc(t *testing.T) map[string]map[string]bool {
 	t.Helper()
-	pkgs, err := parser.ParseDir(token.NewFileSet(), ".", func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(".")
 	require.NoError(t, err)
+	fset := token.NewFileSet()
 	out := map[string]map[string]bool{}
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, decl := range f.Decls {
-				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil {
-					out[fn.Name.Name] = calledNames(fn.Body)
-				}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, e.Name(), nil, 0)
+		require.NoError(t, err)
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil {
+				out[fn.Name.Name] = calledNames(fn.Body)
 			}
 		}
 	}
