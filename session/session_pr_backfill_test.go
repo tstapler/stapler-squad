@@ -261,8 +261,8 @@ func TestBackfill_ShouldCountPoisonedRowsAndStillImportHealthyOnes(t *testing.T)
 	addLegacySession(t, repo, legacySession{title: "healthy", uuid: "u-ok", owner: "acme", repo: "app", number: 1})
 	addLegacySession(t, repo, legacySession{title: "blank-owner", uuid: "u-bad", owner: "acme", repo: "   ", number: 2})
 	addLegacySession(t, repo, legacySession{title: "over-cap", uuid: "u-cap", owner: "acme", repo: "app", number: 900})
-	for n := 100; n < 100+maxSessionPRLinks; n++ {
-		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u-cap"), mustPRRef(t, "", "acme", "app", n), PRLink{Role: domain.PRRoleFollowup, Source: domain.AttachSourceManual})
+	for n := 100; n < 100+domain.MaxSessionPRLinks; n++ {
+		_, err := repo.UpsertSessionPR(ctx, SessionPROwner("u-cap"), mustPRRef(t, "", "acme", "app", n), domain.PRLink{Role: domain.PRRoleFollowup, Source: domain.AttachSourceManual})
 		require.NoError(t, err)
 	}
 	addLegacyItem(t, repo, "no-url", "done", 5, "")

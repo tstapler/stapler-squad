@@ -1,6 +1,8 @@
 package session
 
-import "slices"
+import (
+	"slices"
+)
 
 // instance_tags.go contains tag management delegation methods for Instance.
 // All methods delegate to TagManager with stateMutex protection.
@@ -192,4 +194,12 @@ func (i *Instance) ApplyLLMTagResult(tags []string, ruleID string) {
 	dropUnclassifiedIfOtherTagsPresentLocked(&instanceState{inst: i})
 
 	i.snapshot.Store(buildSnapshot(i))
+}
+
+// IsOneShot returns true for sessions that should NOT be auto-retried.
+// Triage, review and diagnose sessions run exactly once; retrying them could corrupt
+// backlog state by re-triggering lifecycle transitions, and a revived diagnose
+// session re-runs its prompt (and re-bills it) every health tick.
+func IsOneShot(inst *Instance) bool {
+	return inst.HasTag("backlog:triage") || inst.HasTag("backlog:review") || inst.HasTag("backlog:diagnose")
 }

@@ -574,7 +574,7 @@ func TestHealthCheckerRecovery_PermanentlyFailedInstance_SkippedNotAutoRestarted
 // TestHealthCheckerRecovery_TymuxBackend_SkipsPollBasedLivenessCheck pins the
 // fix for a real incident (tymux-validation-test, 2026-09-07): a tymux-backed
 // instance's throwaway LoadInstances() copy always reports HasSession()==false
-// (fromInstanceData never wires tymux session/pane IDs the way it wires a
+// (instanceFromData never wires tymux session/pane IDs the way it wires a
 // TmuxSession by name for the tmux backend — that would need a real
 // ListSessions RPC, which deferStart's "don't block LoadInstances()" contract
 // rules out). Without the Backend != BackendTymux guard, checkTmuxHealth

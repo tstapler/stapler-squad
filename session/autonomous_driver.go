@@ -567,42 +567,6 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	d.finish(sessionName, exit.StopReason, exit)
 }
 
-// paneSettleChecker is the narrow interface waitForPaneSettle needs — satisfied
-// by *Instance's existing HasUpdated method.
-type paneSettleChecker interface {
-	HasUpdated() (updated bool, hasPrompt bool)
-}
-
-// waitForPaneSettle polls inst until its pane content stops changing for two
-// consecutive polls, or maxWait elapses — whichever first. Used between
-// writing a turn's content and sending the submit keystroke (BUG-031): a
-// large paste can still be landing/rendering in the TUI's paste-detection
-// window when a follow-up "\r" arrives, so giving the pane a chance to settle
-// first shrinks the race that folds the submit keystroke into the paste block
-// instead of ending it. Best-effort: a pane that never settles (e.g. a
-// permanently busy session) is left alone once the deadline passes — the
-// caller still sends "\r" either way.
-func waitForPaneSettle(ctx context.Context, inst paneSettleChecker, pollInterval, maxWait time.Duration) {
-	deadline := time.Now().Add(maxWait)
-	stableCount := 0
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(pollInterval):
-		}
-		updated, _ := inst.HasUpdated()
-		if updated {
-			stableCount = 0
-			continue
-		}
-		stableCount++
-		if stableCount >= 2 {
-			return
-		}
-	}
-}
-
 // maxRateLimitWait caps how long waitForRateLimitClear will block in total.
 const maxRateLimitWait = 4 * time.Hour
 
@@ -724,10 +688,6 @@ func waitForIdle(ctx context.Context, statusCh <-chan detection.DetectedStatus, 
 			// Loop back around to re-check the settle window above.
 		}
 	}
-}
-
-func isIdleStatus(s detection.DetectedStatus) bool {
-	return s == detection.StatusIdle || s == detection.StatusReady || s == detection.StatusSuccess
 }
 
 // isImmediateStatus reports whether s already represents an explicit signal

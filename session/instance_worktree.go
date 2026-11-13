@@ -832,7 +832,7 @@ func (i *Instance) applyWorktreeInfo(info *WorktreeInfo) error {
 }
 
 // populateWorktreeInfoOnLoad fills worktree/GitHub info while the instance is
-// still goroutine-local (inside fromInstanceData). Without a registered
+// still goroutine-local (inside instanceFromData). Without a registered
 // WorktreeEnricher it detects synchronously, as before; with one it applies a
 // cached result if ready and otherwise leaves the fields empty for the next load.
 func (i *Instance) populateWorktreeInfoOnLoad() {

@@ -2,11 +2,9 @@ package session
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -76,20 +74,6 @@ func NewClaudeSessionHistoryFromClaudeDir() (*ClaudeSessionHistory, error) {
 
 	historyPath := filepath.Join(home, ".claude", "history.jsonl")
 	return NewClaudeSessionHistory(historyPath)
-}
-
-// conversationMessage represents a single message in a Claude conversation file (per-session JSONL).
-type conversationMessage struct {
-	Type      string `json:"type"`
-	UUID      string `json:"uuid"`
-	SessionID string `json:"sessionId"`
-	Timestamp string `json:"timestamp"`
-	CWD       string `json:"cwd"`
-	Message   struct {
-		Role    string      `json:"role"`
-		Model   string      `json:"model,omitempty"`
-		Content interface{} `json:"content"`
-	} `json:"message"`
 }
 
 // historyJSONLEntry represents a single line in ~/.claude/history.jsonl.
@@ -324,14 +308,6 @@ func (sh *ClaudeSessionHistory) LastLoadTime() time.Time {
 	return sh.lastLoad
 }
 
-// ClaudeConversationMessage represents a message in a conversation
-type ClaudeConversationMessage struct {
-	Role      string
-	Content   string
-	Timestamp time.Time
-	Model     string
-}
-
 // conversationScanBufPool pools the 1MB scanner buffer used by
 // findConversationFilePath so a filepath.WalkDir over thousands of conversation
 // files doesn't allocate a fresh buffer per file.
@@ -412,173 +388,6 @@ func FindConversationFilePath(ctx context.Context, sessionID string) (string, er
 	return findConversationFilePath(ctx, "", sessionID)
 }
 
-// extractMsgContent converts a raw conversationMessage into a ClaudeConversationMessage.
-// Returns (msg, true) when the raw entry represents a user or assistant turn;
-// (zero, false) for tool-use, metadata, and other entry types.
-func extractMsgContent(raw conversationMessage) (ClaudeConversationMessage, bool) {
-	if raw.Type != "user" && raw.Type != "assistant" {
-		return ClaudeConversationMessage{}, false
-	}
-
-	var content string
-	switch v := raw.Message.Content.(type) {
-	case string:
-		content = v
-	case []interface{}:
-		for _, item := range v {
-			if itemMap, ok := item.(map[string]interface{}); ok {
-				if itemType, ok := itemMap["type"].(string); ok && itemType == "text" {
-					if text, ok := itemMap["text"].(string); ok {
-						content += text + "\n"
-					}
-				}
-			}
-		}
-	default:
-		contentJSON, _ := json.Marshal(raw.Message)
-		content = string(contentJSON)
-	}
-
-	ts, _ := time.Parse(time.RFC3339, raw.Timestamp)
-	return ClaudeConversationMessage{
-		Role:      raw.Message.Role,
-		Content:   content,
-		Timestamp: ts,
-		Model:     raw.Message.Model,
-	}, true
-}
-
-// readAllMessagesFromFile reads every user/assistant message from the JSONL file
-// at path in chronological order (oldest first).
-func readAllMessagesFromFile(path string) ([]ClaudeConversationMessage, error) {
-	file, err := os.Open(path) // #nosec G304 -- callers only ever pass a conversationFile resolved by findConversationFilePath's safe directory walk, or an internal HistoryFilePath, never external input
-	if err != nil {
-		return nil, fmt.Errorf("failed to open conversation file: %w", err)
-	}
-	defer file.Close() //nolint:errcheck
-
-	var messages []ClaudeConversationMessage
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var raw conversationMessage
-		if err := json.Unmarshal(line, &raw); err != nil {
-			continue
-		}
-		if msg, ok := extractMsgContent(raw); ok {
-			messages = append(messages, msg)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading conversation file: %w", err)
-	}
-	return messages, nil
-}
-
-// readLastNMessagesFromFile returns the last n user/assistant messages from the
-// JSONL file at path without loading the whole file into memory. It reads the file
-// in 64 KiB chunks from the end, parses lines as it goes, and stops as soon as it
-// has collected n messages. Results are returned in chronological order (oldest first).
-//
-// If the file has fewer than n qualifying messages, all of them are returned.
-func readLastNMessagesFromFile(path string, n int) ([]ClaudeConversationMessage, error) {
-	if n <= 0 {
-		return readAllMessagesFromFile(path)
-	}
-
-	f, err := os.Open(path) // #nosec G304 -- callers only ever pass a conversationFile resolved by findConversationFilePath's safe directory walk, or an internal HistoryFilePath, never external input
-	if err != nil {
-		return nil, fmt.Errorf("failed to open conversation file: %w", err)
-	}
-	defer f.Close() //nolint:errcheck
-
-	stat, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat conversation file: %w", err)
-	}
-	fileSize := stat.Size()
-
-	const chunkSize = int64(64 * 1024) // 64 KiB
-
-	// messages accumulates entries newest-first; we reverse before returning.
-	messages := make([]ClaudeConversationMessage, 0, n)
-
-	pos := fileSize
-	var tail []byte // partial line bytes from the right edge of the previous chunk
-
-	for pos > 0 && len(messages) < n {
-		readLen := chunkSize
-		if pos < readLen {
-			readLen = pos
-		}
-		pos -= readLen
-
-		buf := make([]byte, readLen)
-		nr, err := f.ReadAt(buf, pos)
-		if err != nil && !isEOFErr(err) {
-			return nil, fmt.Errorf("error reading conversation file: %w", err)
-		}
-		buf = buf[:nr]
-
-		// combined = current chunk (left/older) + tail (right/newer)
-		combined := append(buf, tail...) //nolint:gocritic
-
-		// Walk from the right of combined, extracting complete lines.
-		for len(messages) < n {
-			idx := bytes.LastIndexByte(combined, '\n')
-			if idx < 0 {
-				// No newline in combined — the entire thing is a partial line.
-				tail = combined
-				combined = nil
-				break
-			}
-			line := bytes.TrimSpace(combined[idx+1:])
-			combined = combined[:idx]
-
-			if len(line) == 0 {
-				continue
-			}
-			var raw conversationMessage
-			if err := json.Unmarshal(line, &raw); err != nil {
-				continue
-			}
-			if msg, ok := extractMsgContent(raw); ok {
-				messages = append(messages, msg)
-			}
-		}
-		if combined != nil {
-			// whatever remains is the partial left edge — save for next iteration
-			tail = combined
-		}
-	}
-
-	// Process any remaining tail (the very first line of the file)
-	if len(messages) < n && len(bytes.TrimSpace(tail)) > 0 {
-		var raw conversationMessage
-		if err := json.Unmarshal(bytes.TrimSpace(tail), &raw); err == nil {
-			if msg, ok := extractMsgContent(raw); ok {
-				messages = append(messages, msg)
-			}
-		}
-	}
-
-	// messages is newest-first; reverse to chronological order.
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
-	}
-	return messages, nil
-}
-
-// isEOFErr reports whether err represents an end-of-file condition.
-func isEOFErr(err error) bool {
-	return err == io.EOF || err == io.ErrUnexpectedEOF
-}
-
 // GetMessagesFromConversationFile reads messages from the conversation file for
 // the given sessionID. When limit > 0 only the last limit messages are returned
 // (using an efficient reverse-read that avoids loading the full file). When
@@ -596,32 +405,3 @@ func (sh *ClaudeSessionHistory) GetMessagesFromConversationFile(sessionID string
 	}
 	return readAllMessagesFromFile(conversationFile)
 }
-
-// jsonlStartTime returns the first timestamp in a Claude JSONL file. ok=false means
-// undatable (unreadable, none found, or past the read cap), so callers fail open.
-func JsonlStartTime(path string) (t time.Time, ok bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return time.Time{}, false
-	}
-	defer f.Close()
-
-	dec := json.NewDecoder(io.LimitReader(f, JsonlStartScanBytes))
-	for range JsonlStartScanEntries {
-		var entry struct {
-			Timestamp string `json:"timestamp"`
-		}
-		if err := dec.Decode(&entry); err != nil {
-			return time.Time{}, false
-		}
-		if ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp); err == nil {
-			return ts, true
-		}
-	}
-	return time.Time{}, false
-}
-
-const (
-	JsonlStartScanEntries = 20      // entries to scan for a timestamp
-	JsonlStartScanBytes   = 1 << 20 // read cap; entries can embed multi-MB pasted content
-)

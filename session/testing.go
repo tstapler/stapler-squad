@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/internal/sqlitedsn"
-	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
@@ -98,25 +97,6 @@ func NewTestEntRepository(t testing.TB) *EntRepository {
 	})
 	return repo
 }
-
-// NewPausedTestInstance returns a minimal Paused, started Instance ready for Storage.AddInstance, for tests of
-// packages that sit above session (and cannot set the unexported started flag themselves).
-func NewPausedTestInstance(title string) *Instance {
-	inst := &Instance{
-		Title:     title,
-		Path:      "/tmp/test",
-		Status:    domain.Paused,
-		Program:   "claude",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	inst.started.Store(true)
-	return inst
-}
-
-// FinishInstanceForTest publishes the initial snapshot of an Instance built from a struct literal,
-// so tests of packages above session (e.g. session/prpoller) can call Snapshot()/AttachPR on it.
-func FinishInstanceForTest(i *Instance) { finishInstanceConstruction(i) }
 
 // TestBackdateCreationProgress rewrites a persisted instance's
 // creation_progress_updated_at column directly to `when`, simulating elapsed
@@ -253,7 +233,3 @@ func TestSetAutonomousDriverRunID(t *testing.T, d *AutonomousDriver, id uint64) 
 	t.Helper()
 	d.runID.Store(id)
 }
-
-// SetProcessManagerForTest swaps the instance's pane backend so tests in packages that import session can
-// stand in a fake without reaching the unexported field.
-func (i *Instance) SetProcessManagerForTest(pm ProcessManager) { i.processManager = pm }

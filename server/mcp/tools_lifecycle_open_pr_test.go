@@ -15,7 +15,7 @@ func attachMCPPR(t *testing.T, inst *session.Instance, n int, state domain.PRSta
 	t.Helper()
 	ref, err := domain.NewPRRef("github.com", "acme", "app", n)
 	require.NoError(t, err)
-	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, session.PRInitial{State: state, Terminal: state.Terminal()}))
+	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, domain.PRInitial{State: state, Terminal: state.Terminal()}))
 }
 
 // pause_session and stop_session stay ungated but name any open or unknown PR of

@@ -91,10 +91,10 @@ func TestStartController_RefusesAfterDestroy(t *testing.T) {
 // TestStopController_StopsLivePiStatusSourceRegardlessOfProgramOrFlag is the
 // regression guard for Bug 2 (architecture + idiom review, BLOCKER): routing
 // in StopController/stopControllerLocked used to re-evaluate
-// piStatusSupported() -- isPi(i.Program) && the live pi-support feature
+// piStatusSupported() -- IsPi(i.Program) && the live pi-support feature
 // flag -- instead of checking whether a PiStatusSource was actually
 // registered. That meant a mid-flight flag disable (or, as exercised here, a
-// program value that no longer resolves via isPi) could route to the
+// program value that no longer resolves via IsPi) could route to the
 // Claude-controller branch and skip stopPiStatusSource entirely, leaking the
 // still-running PiStatusSource's subprocess/goroutines and breaking
 // SetPiSessionID's documented invariant that Restart's i.piSession access is
@@ -102,7 +102,7 @@ func TestStartController_RefusesAfterDestroy(t *testing.T) {
 //
 // This test registers a real, running PiStatusSource directly on
 // i.piStatusSrc (bypassing StartController/piStatusSupported entirely, so
-// the test result cannot depend on the current value of isPi(i.Program) or
+// the test result cannot depend on the current value of IsPi(i.Program) or
 // the feature flag) and asserts StopController() still calls Stop() on it --
 // observed via the subprocess actually being killed and the reader/wait
 // goroutines joining (src.Stop() returning, which blocks on p.wg.Wait()).
@@ -117,7 +117,7 @@ func TestStopController_StopsLivePiStatusSourceRegardlessOfProgramOrFlag(t *test
 	inst.piStatusSrc.Store(src)
 
 	// Sanity check: piStatusSupported() is false here (Program doesn't
-	// resolve via isPi), which is exactly the condition that used to make
+	// resolve via IsPi), which is exactly the condition that used to make
 	// StopController skip stopPiStatusSource.
 	require.False(t, inst.piStatusSupported(), "test setup: piStatusSupported() must be false to exercise the Bug 2 routing gap")
 
@@ -142,7 +142,7 @@ func TestStopController_StopsLivePiStatusSourceRegardlessOfProgramOrFlag(t *test
 }
 
 // writeFakePiBinary writes an executable script named exactly "pi" (so
-// isPi(i.Program) resolves true) that records its own PID to pidLogFile
+// IsPi(i.Program) resolves true) that records its own PID to pidLogFile
 // (via the inherited PID_LOG_FILE env var, set by the caller) before
 // sleeping, so a test can count how many real OS subprocesses a
 // StartController race actually spawned.

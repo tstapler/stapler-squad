@@ -143,7 +143,7 @@ func TestSessionPRLinkGC_ShouldKeepStateRow_WhenEnsureStateAndLinkInterleaveWith
 	ref := mustPRRef(t, "", "acme", "app", 21)
 
 	// An attach has run EnsureState (young row, no link yet) when the GC fires.
-	_, err := repo.EnsureState(ctx, ref, PRInitial{})
+	_, err := repo.EnsureState(ctx, ref, domain.PRInitial{})
 	require.NoError(t, err)
 	res, err := repo.RunSessionPRLinkGC(ctx, now)
 	require.NoError(t, err)

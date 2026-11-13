@@ -58,8 +58,8 @@ func (f *itemPRFixture) session(role string) string {
 
 func (f *itemPRFixture) link(owner session.PROwner, n int, state domain.PRState) {
 	f.t.Helper()
-	res, err := f.repo.UpsertSessionPR(context.Background(), owner, testRef(n), session.PRLink{
-		Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: session.PRInitial{State: state, Terminal: state.Terminal()},
+	res, err := f.repo.UpsertSessionPR(context.Background(), owner, testRef(n), domain.PRLink{
+		Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: state, Terminal: state.Terminal()},
 	})
 	require.NoError(f.t, err)
 	require.False(f.t, res.Tombstoned)

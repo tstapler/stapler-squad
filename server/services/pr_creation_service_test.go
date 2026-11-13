@@ -79,7 +79,7 @@ func TestCreatePullRequest_ShouldCreateAndAttach_WhenPriorPRMerged(t *testing.T)
 	r11, err := domain.NewPRRef("", "tstapler", "stapler-squad", 11)
 	require.NoError(t, err)
 	require.NoError(t, inst.AttachPR(r11, domain.AttachSourceBranchDiscovery,
-		session.PRInitial{State: domain.PRStateMerged, Terminal: true, HeadBranch: "feat-a"}))
+		domain.PRInitial{State: domain.PRStateMerged, Terminal: true, HeadBranch: "feat-a"}))
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-after-merge", inst))
 
 	resp, err := svc.CreatePullRequest(context.Background(), connect.NewRequest(&sessionv1.CreatePullRequestRequest{
@@ -102,7 +102,7 @@ func TestCreatePullRequest_ShouldReturnExistingPR_WhenOpenPROnCurrentBranch(t *t
 	r12, err := domain.NewPRRef("", "tstapler", "stapler-squad", 12)
 	require.NoError(t, err)
 	require.NoError(t, inst.AttachPR(r12, domain.AttachSourceBranchDiscovery,
-		session.PRInitial{State: domain.PRStateOpen, HeadBranch: "feat-b"}))
+		domain.PRInitial{State: domain.PRStateOpen, HeadBranch: "feat-b"}))
 	svc := NewPRCreationService(&fakePRInstanceStore{}, events.NewEventBus(1), nil, nil, findInstanceFunc("sess-open-here", inst))
 
 	resp, err := svc.CreatePullRequest(context.Background(), connect.NewRequest(&sessionv1.CreatePullRequestRequest{

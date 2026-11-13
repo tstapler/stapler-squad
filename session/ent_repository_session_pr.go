@@ -30,17 +30,9 @@ import (
 var (
 	// ErrInvalidPROwner means an owner did not name exactly one of a session and an item.
 	ErrInvalidPROwner = errors.New("session: PR owner must set exactly one of session uuid and backlog item id")
-	// ErrSessionPRLinkCap means a session or item already holds maxSessionPRLinks links.
-	ErrSessionPRLinkCap = errors.New("session: session already has the maximum number of PR links")
-	// ErrNoSessionUUID means the session has no uuid, so no link row can reference it.
-	ErrNoSessionUUID = errors.New("session: session has no uuid")
-	// ErrSessionNotPersisted means the session row does not exist yet; the first
-	// full save writes the PR set instead.
-	ErrSessionNotPersisted = errors.New("session: session row not persisted yet")
 )
 
 const (
-	maxSessionPRLinks = 50
 	// prStateIDChunk bounds `id IN (...)` state reads. State ids are integers and
 	// one link query can reference many distinct PRs, so this is larger than
 	// itemSessionBatchChunk to keep the documented statement budget (links then
@@ -80,46 +72,10 @@ func checkPRIdentity(owner PROwner, ref domain.PRRef) error {
 	return owner.validate()
 }
 
-// PRInitial is the state a caller actually observed when inserting a state row;
-// the zero value inserts `unknown`, non-terminal (it observed nothing).
-type PRInitial struct {
-	State      domain.PRState
-	Terminal   bool
-	URL        string
-	Title      string
-	HeadBranch string
-	BaseBranch string
-	IsDraft    bool
-}
-
-func (i PRInitial) state() domain.PRState {
-	if i.State == "" {
-		return domain.PRStateUnknown
-	}
-	return i.State
-}
-
-// PRLink describes the link UpsertSessionPR should create.
-type PRLink struct {
-	Role    domain.PRRole // requested role; primary is downgraded to followup when the session already has one
-	Source  domain.AttachSource
-	Initial PRInitial
-	// AttachedAt, when set, is stored as the link's attached_at instead of now.
-	AttachedAt time.Time
-}
-
-// PRLinkResult reports what UpsertSessionPR did.
-type PRLinkResult struct {
-	StateID    int
-	Created    bool // a new link row was inserted
-	Tombstoned bool // the owner detached this PR earlier; nothing was written
-	Role       domain.PRRole
-}
-
-func clientEnsureState(ctx context.Context, c *ent.PullRequestStateClient, ref domain.PRRef, initial PRInitial) (int, error) {
+func clientEnsureState(ctx context.Context, c *ent.PullRequestStateClient, ref domain.PRRef, initial domain.PRInitial) (int, error) {
 	create := c.Create().
 		SetHost(ref.Host()).SetOwner(ref.Owner()).SetRepo(ref.Repo()).SetNumber(ref.Number()).
-		SetState(string(initial.state())).SetTerminal(initial.Terminal).
+		SetState(string(initial.StateOrUnknown())).SetTerminal(initial.Terminal).
 		SetURL(initial.URL).SetTitle(initial.Title).SetHeadBranch(initial.HeadBranch).SetBaseBranch(initial.BaseBranch).
 		SetIsDraft(initial.IsDraft)
 	err := create.OnConflictColumns(pullrequeststate.FieldHost, pullrequeststate.FieldOwner, pullrequeststate.FieldRepo, pullrequeststate.FieldNumber).
@@ -148,7 +104,7 @@ func refPredicate(ref domain.PRRef) predicate.PullRequestState {
 
 // EnsureState inserts the state row for ref if absent and returns its id. It
 // never modifies an existing row.
-func (r *EntRepository) EnsureState(ctx context.Context, ref domain.PRRef, initial PRInitial) (int, error) {
+func (r *EntRepository) EnsureState(ctx context.Context, ref domain.PRRef, initial domain.PRInitial) (int, error) {
 	if ref.IsZero() {
 		return 0, ErrZeroPRRef
 	}
@@ -179,11 +135,11 @@ func (r *EntRepository) IsTombstoned(ctx context.Context, owner PROwner, ref dom
 // A tombstoned (owner, ref) writes nothing and reports Tombstoned; a user attach
 // calls ClearTombstone first. An existing link is left untouched (attached_at,
 // role and pin survive a repeat call).
-func (r *EntRepository) UpsertSessionPR(ctx context.Context, owner PROwner, ref domain.PRRef, link PRLink) (PRLinkResult, error) {
+func (r *EntRepository) UpsertSessionPR(ctx context.Context, owner PROwner, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
 	if err := checkPRIdentity(owner, ref); err != nil {
-		return PRLinkResult{}, err
+		return domain.PRLinkResult{}, err
 	}
-	var res PRLinkResult
+	var res domain.PRLinkResult
 	err := r.withPRTx(ctx, "upsert session pr", func(tx *ent.Tx) error {
 		var err error
 		res, err = upsertSessionPRTx(ctx, tx, owner, ref, link)
@@ -192,29 +148,29 @@ func (r *EntRepository) UpsertSessionPR(ctx context.Context, owner PROwner, ref 
 	return res, err
 }
 
-func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref domain.PRRef, link PRLink) (PRLinkResult, error) {
+func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref domain.PRRef, link domain.PRLink) (domain.PRLinkResult, error) {
 	tombstoned, err := tx.SessionPRTombstone.Query().Where(tombstonePredicate(owner, ref)...).Exist(ctx)
 	if err != nil {
-		return PRLinkResult{}, fmt.Errorf("check tombstone: %w", err)
+		return domain.PRLinkResult{}, fmt.Errorf("check tombstone: %w", err)
 	}
 	if tombstoned {
-		return PRLinkResult{Tombstoned: true}, nil
+		return domain.PRLinkResult{Tombstoned: true}, nil
 	}
 	stateID, err := clientEnsureState(ctx, tx.PullRequestState, ref, link.Initial)
 	if err != nil {
-		return PRLinkResult{}, err
+		return domain.PRLinkResult{}, err
 	}
 	existing, err := tx.SessionPR.Query().
 		Where(append(linkOwnerPredicates(owner), sessionpr.PullRequestStateID(stateID))...).Only(ctx)
 	switch {
 	case err == nil:
-		return PRLinkResult{StateID: stateID, Role: domain.PRRole(existing.Role)}, nil
+		return domain.PRLinkResult{StateID: stateID, Role: domain.PRRole(existing.Role)}, nil
 	case !ent.IsNotFound(err):
-		return PRLinkResult{}, fmt.Errorf("look up existing link: %w", err)
+		return domain.PRLinkResult{}, fmt.Errorf("look up existing link: %w", err)
 	}
 	role, err := resolveNewLinkRole(ctx, tx, owner, link.Role)
 	if err != nil {
-		return PRLinkResult{}, err
+		return domain.PRLinkResult{}, err
 	}
 	create := tx.SessionPR.Create().
 		SetPullRequestStateID(stateID).SetSessionUUID(owner.SessionUUID).SetBacklogItemID(owner.BacklogItemID).
@@ -223,9 +179,9 @@ func upsertSessionPRTx(ctx context.Context, tx *ent.Tx, owner PROwner, ref domai
 		create.SetAttachedAt(link.AttachedAt)
 	}
 	if err := create.Exec(ctx); err != nil {
-		return PRLinkResult{}, fmt.Errorf("create session pr link: %w", err)
+		return domain.PRLinkResult{}, fmt.Errorf("create session pr link: %w", err)
 	}
-	return PRLinkResult{StateID: stateID, Created: true, Role: role}, nil
+	return domain.PRLinkResult{StateID: stateID, Created: true, Role: role}, nil
 }
 
 // resolveNewLinkRole enforces the link cap for sessions and items, and the
@@ -238,8 +194,8 @@ func resolveNewLinkRole(ctx context.Context, tx *ent.Tx, owner PROwner, want dom
 	if err != nil {
 		return "", fmt.Errorf("count owner links: %w", err)
 	}
-	if count >= maxSessionPRLinks {
-		return "", ErrSessionPRLinkCap
+	if count >= domain.MaxSessionPRLinks {
+		return "", domain.ErrSessionPRLinkCap
 	}
 	if !owner.isSession() {
 		return want, nil
@@ -279,18 +235,18 @@ func (r *EntRepository) withPRTx(ctx context.Context, op string, fn func(*ent.Tx
 // for an empty uuid and ErrSessionNotPersisted when the session row does not exist
 // yet (the first full save then writes the set). A tombstoned PR writes nothing
 // and reports Tombstoned. Failure at any step rolls everything back.
-func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error) {
+func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror PRMirror) (domain.PRLinkResult, error) {
 	if sessionUUID == "" {
-		return PRLinkResult{}, ErrNoSessionUUID
+		return domain.PRLinkResult{}, domain.ErrNoSessionUUID
 	}
 	if ref.IsZero() {
-		return PRLinkResult{}, ErrZeroPRRef
+		return domain.PRLinkResult{}, ErrZeroPRRef
 	}
-	var res PRLinkResult
+	var res domain.PRLinkResult
 	err := r.withPRTx(ctx, "attach session pr", func(tx *ent.Tx) error {
 		rowID, err := tx.Session.Query().Where(entsession.UUID(sessionUUID)).OnlyID(ctx)
 		if ent.IsNotFound(err) {
-			return ErrSessionNotPersisted
+			return domain.ErrSessionNotPersisted
 		} else if err != nil {
 			return fmt.Errorf("look up session: %w", err)
 		}
@@ -312,12 +268,12 @@ func (r *EntRepository) AttachSessionPR(ctx context.Context, sessionUUID string,
 // full-save set-only path cannot. It returns ErrSessionNotPersisted when no row matches.
 func (r *EntRepository) PersistPRMirror(ctx context.Context, sessionUUID string, mirror PRMirror) error {
 	if sessionUUID == "" {
-		return ErrNoSessionUUID
+		return domain.ErrNoSessionUUID
 	}
 	return r.withPRTx(ctx, "persist pr mirror", func(tx *ent.Tx) error {
 		rowID, err := tx.Session.Query().Where(entsession.UUID(sessionUUID)).OnlyID(ctx)
 		if ent.IsNotFound(err) {
-			return ErrSessionNotPersisted
+			return domain.ErrSessionNotPersisted
 		} else if err != nil {
 			return fmt.Errorf("look up session: %w", err)
 		}
@@ -343,7 +299,7 @@ func upsertSessionPRSetTx(ctx context.Context, tx *ent.Tx, data domain.InstanceD
 	}
 	owner := SessionPROwner(data.UUID)
 	for _, v := range data.PRs {
-		link := PRLink{Role: v.Role, Source: v.AttachSource, Initial: prInitialOf(v), AttachedAt: v.AttachedAt}
+		link := domain.PRLink{Role: v.Role, Source: v.AttachSource, Initial: prInitialOf(v), AttachedAt: v.AttachedAt}
 		if _, err := upsertSessionPRTx(ctx, tx, owner, v.Ref, link); err != nil {
 			if isDeterministicPRImportError(err) {
 				// A bad link must not roll back the rest of the session save.

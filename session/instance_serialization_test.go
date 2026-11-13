@@ -80,7 +80,7 @@ func TestFromInstanceData_OldJSONWithoutBackendFieldDefaultsEmpty(t *testing.T) 
 }
 
 // TestWorktreeMissingLevel_WarnsOnFirstDebugsOnRepeat guards the dedup
-// decision fromInstanceData uses when it detects a missing worktree
+// decision instanceFromData uses when it detects a missing worktree
 // directory: Warn the first time a session title has been seen
 // (alreadyLogged=false), Debug on any repeat (alreadyLogged=true).
 func TestWorktreeMissingLevel_WarnsOnFirstDebugsOnRepeat(t *testing.T) {

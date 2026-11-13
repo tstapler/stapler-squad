@@ -329,7 +329,7 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 // session, already archived at the item level but with its own ArchivedAt
 // left nil (an orphaned pre-item_sessions-linkage row), was recreated roughly
 // every 60s for hours. The Stopped-branch "secretly still alive" probe in
-// fromInstanceData (session/instance_serialization.go) saw the tmux pane
+// instanceFromData (session/instance_serialization.go) saw the tmux pane
 // still running (remain-on-exit keeps a dead pane around, see that probe's
 // doc comment) and flipped Stopped -> Active -> Start(false), contradicting
 // session_driver.go's handleStoppedStatus, which already treats a one-shot
@@ -356,7 +356,7 @@ func TestFromInstanceData_should_NotReviveStoppedToActive_When_OneShotSessionHas
 
 // assertStoppedReloadOutcome starts a real, long-running tmux session, then
 // reloads it from a Stopped/unarchived InstanceData carrying the given tags
-// — the same shape LoadInstances feeds fromInstanceData's "secretly still
+// — the same shape LoadInstances feeds instanceFromData's "secretly still
 // alive" probe — and asserts the resulting status/started flags. A live pane
 // (not a mock) so the assertion exercises the actual IsAlive()/
 // PaneExitStatus() probe the production respawn loop hit.

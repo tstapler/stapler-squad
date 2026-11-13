@@ -1802,7 +1802,7 @@ func TestAutoCreate_ShouldShortCircuitOnlyOnOpenPROnCurrentBranch(t *testing.T) 
 			ref, err := domain.NewPRRef("", "acme", "widgets", 11)
 			require.NoError(t, err)
 			require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery,
-				session.PRInitial{State: tc.state, Terminal: tc.state.Terminal(), HeadBranch: tc.head}))
+				domain.PRInitial{State: tc.state, Terminal: tc.state.Terminal(), HeadBranch: tc.head}))
 			poller.SetInstances([]*session.Instance{inst})
 
 			mgr.OnItemAdded(&queuepkg.ReviewItem{

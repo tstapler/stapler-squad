@@ -232,9 +232,9 @@ func (r *EntRepository) importPRCandidates(ctx context.Context, group []prBackfi
 				return err
 			}
 		}
-		res, err := r.UpsertSessionPR(ctx, c.owner, c.ref, PRLink{
+		res, err := r.UpsertSessionPR(ctx, c.owner, c.ref, domain.PRLink{
 			Role: domain.PRRolePrimary, Source: domain.AttachSourceBackfill,
-			Initial: PRInitial{State: domain.PRStateUnknown, Terminal: seeds[c.ref], URL: c.url},
+			Initial: domain.PRInitial{State: domain.PRStateUnknown, Terminal: seeds[c.ref], URL: c.url},
 		})
 		switch {
 		case err == nil && res.Tombstoned:
@@ -256,7 +256,7 @@ func (r *EntRepository) importPRCandidates(ctx context.Context, group []prBackfi
 	return nil
 }
 
-func recordImported(rep *PRBackfillReport, c prBackfillCandidate, res PRLinkResult) {
+func recordImported(rep *PRBackfillReport, c prBackfillCandidate, res domain.PRLinkResult) {
 	if !res.Created {
 		return
 	}
@@ -273,7 +273,7 @@ func recordImported(rep *PRBackfillReport, c prBackfillCandidate, res PRLinkResu
 // isDeterministicPRImportError reports failures that would repeat identically on
 // every boot. Anything unrecognized is treated as transient.
 func isDeterministicPRImportError(err error) bool {
-	return errors.Is(err, ErrZeroPRRef) || errors.Is(err, ErrInvalidPROwner) || errors.Is(err, ErrSessionPRLinkCap) ||
+	return errors.Is(err, ErrZeroPRRef) || errors.Is(err, ErrInvalidPROwner) || errors.Is(err, domain.ErrSessionPRLinkCap) ||
 		ent.IsValidationError(err) || ent.IsConstraintError(err)
 }
 

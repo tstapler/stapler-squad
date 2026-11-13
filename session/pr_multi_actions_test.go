@@ -17,9 +17,9 @@ func newTwoPRInstance(t *testing.T) *Instance {
 	t.Helper()
 	inst := newPRTestInstance(t)
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceCreatedFromURL,
-		PRInitial{State: domain.PRStateMerged, Terminal: true}))
+		domain.PRInitial{State: domain.PRStateMerged, Terminal: true}))
 	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery,
-		PRInitial{State: domain.PRStateOpen}))
+		domain.PRInitial{State: domain.PRStateOpen}))
 	return inst
 }
 

@@ -2069,10 +2069,10 @@ func (i *Instance) destroy(force bool) error {
 
 	// Evict this session's entry from PiExtensionHealthTracker (pi-support
 	// Epic 4.2 MAJOR 1 fix) so the tracker's map doesn't grow unboundedly for
-	// the life of the process. Gated on isPi to avoid a no-op resolver call on
+	// the life of the process. Gated on IsPi to avoid a no-op resolver call on
 	// every single non-pi session's destroy; nil-checked since not every
 	// deployment wires SetPiExtensionHealthForgetter (e.g. tests).
-	if isPi(i.Program) {
+	if IsPi(i.Program) {
 		if forgetter := getPiExtensionHealthForgetter(); forgetter != nil {
 			forgetter(i.GetStableID())
 		}
@@ -2626,7 +2626,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessMa
 
 	// Suppress pi's --session resume injection (buildLaunchCommand reads
 	// i.piSession directly for piProgram, unlike claude's explicit
-	// claudeSessionID param) unless both isPi(i.Program) and the pi-support
+	// claudeSessionID param) unless both IsPi(i.Program) and the pi-support
 	// feature flag are true — mirroring the claudeSessionID capture above's
 	// gating intent. The field itself is restored afterward rather than
 	// cleared outright, so a stale piSession isn't lost if the flag is later
@@ -2639,7 +2639,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessMa
 	// that goroutine alive). The lock makes this safe structurally instead.
 	i.piSessionMu.Lock()
 	restorePiSession := i.piSession
-	if !isPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
+	if !IsPi(i.Program) || !config.LoadConfig().GetFeatureFlag(config.FeaturePiSupport) {
 		i.piSession = nil
 	}
 	i.piSessionMu.Unlock()

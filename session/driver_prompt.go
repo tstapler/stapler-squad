@@ -21,12 +21,6 @@ var ErrPromptUndeliverable = errors.New("prompt cannot be delivered to the pane 
 // constraint: Keys is written in chunks (sendKeysChunked), never truncated.
 type DriverPrompt struct{ keys string }
 
-// cleanDriverPromptText drops NUL bytes (tmux drops them unpredictably) and
-// surrounding whitespace. Empty means "fall back to driverInitialPrompt".
-func cleanDriverPromptText(s string) string {
-	return strings.TrimSpace(strings.ReplaceAll(s, "\x00", ""))
-}
-
 // ParseDriverPrompt turns prompt text into keystrokes. Text with a control byte
 // (newline, tab, ESC, ...) goes in a bracketed paste so it arrives as text, not
 // as Enter or a key chord; plain printable text is typed as is. Text containing

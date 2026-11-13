@@ -627,7 +627,7 @@ func TestInstance_Note_RoundTripsThroughSerialization(t *testing.T) {
 }
 
 // TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume is the
-// regression test for a production bug caught during review: fromInstanceData
+// regression test for a production bug caught during review: instanceFromData
 // special-cases Paused/Stopped/Hibernated but, before this fix, fell through to
 // the generic branch for Crashed -- leaving Started()==false with deferStart.
 // server/dependencies.go's Step 6 startup loop unconditionally calls Start(false)
@@ -650,9 +650,9 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 		UpdatedAt:  time.Now(),
 	}
 
-	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	instance, err := instanceFromData(data, true /* deferStart, matches LoadInstances() */)
 	if err != nil {
-		t.Fatalf("fromInstanceData returned error: %v", err)
+		t.Fatalf("instanceFromData returned error: %v", err)
 	}
 
 	if instance.Status != domain.Crashed {
@@ -668,11 +668,11 @@ func TestFromInstanceData_CrashedSession_StaysStartedTrue_NoAutoResume(t *testin
 // TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe is a
 // regression guard for the fork-pressure fix: an archived session's tmux pane
 // is already deliberately killed at archive time (archiveItemWorkSessions),
-// so fromInstanceData must not attempt to "recover" it back to Active via the
+// so instanceFromData must not attempt to "recover" it back to Active via the
 // IsAlive()/PaneExitStatus() tmux subprocess probe every restored Stopped
 // session used to pay on every single LoadInstances() call. This pins the
 // observable postcondition (stays Stopped, Started()=true); the underlying
-// subprocess-avoidance isn't directly assertable here since fromInstanceData
+// subprocess-avoidance isn't directly assertable here since instanceFromData
 // always wires a real TmuxBackend with no injection point for a fake.
 func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *testing.T) {
 	t.Parallel()
@@ -687,9 +687,9 @@ func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *te
 		ArchivedAt: &archivedAt,
 	}
 
-	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	instance, err := instanceFromData(data, true /* deferStart, matches LoadInstances() */)
 	if err != nil {
-		t.Fatalf("fromInstanceData returned error: %v", err)
+		t.Fatalf("instanceFromData returned error: %v", err)
 	}
 
 	if instance.Status != domain.Stopped {
@@ -701,9 +701,9 @@ func TestFromInstanceData_ArchivedStoppedSession_StaysStopped_NoAliveProbe(t *te
 }
 
 // TestFromInstanceData_RestoresAutoYesAndAutoApprove is a regression guard for a bug
-// found while adding AutoApprove: fromInstanceData's Instance{} literal never copied
+// found while adding AutoApprove: instanceFromData's Instance{} literal never copied
 // AutoYes from the persisted InstanceData at all, silently losing it on every server
-// restart (LoadInstances always calls fromInstanceData). Fixed alongside wiring
+// restart (LoadInstances always calls instanceFromData). Fixed alongside wiring
 // AutoApprove through the same literal -- this pins both fields survive the round trip.
 func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 	t.Parallel()
@@ -718,9 +718,9 @@ func TestFromInstanceData_RestoresAutoYesAndAutoApprove(t *testing.T) {
 		UpdatedAt:   time.Now(),
 	}
 
-	instance, err := fromInstanceData(data, true /* deferStart, matches LoadInstances() */)
+	instance, err := instanceFromData(data, true /* deferStart, matches LoadInstances() */)
 	if err != nil {
-		t.Fatalf("fromInstanceData returned error: %v", err)
+		t.Fatalf("instanceFromData returned error: %v", err)
 	}
 
 	if !instance.AutoYes {
