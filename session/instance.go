@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitwt"
 	"github.com/tstapler/stapler-squad/session/ptyio"
+	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/tokens"
@@ -595,7 +596,7 @@ type Instance struct {
 	piExtension
 
 	// Review queue integration for tracking sessions needing attention
-	reviewQueue *ReviewQueue
+	reviewQueue *queue.ReviewQueue
 
 	// ReviewState holds all review queue and terminal activity timestamps.
 	// Fields are embedded (promoted) so external code can still access inst.LastViewed etc.
@@ -618,7 +619,7 @@ type Instance struct {
 	// notifier delivers proactive notifications (e.g. a session giving up after
 	// exhausting its retry budget) independent of the passive ReviewQueue.
 	// Set via SetNotifier, mirroring reviewQueue/SetReviewQueue.
-	notifier Notifier
+	notifier InstanceNotifier
 
 	// controllerManager owns the claudectl.ClaudeController and InstanceStatusManager references.
 	controllerManager ControllerManager

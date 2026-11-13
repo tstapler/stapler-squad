@@ -2376,12 +2376,12 @@ func (r *EntRepository) AssignSessionsToProject(ctx context.Context, projectName
 // ---- Shell repository methods ----
 
 // CreateShell persists a new Shell entity for the given session title.
-func (r *EntRepository) CreateShell(ctx context.Context, sessionTitle string, data ShellData) (*ent.Shell, error) {
+func (r *EntRepository) CreateShell(ctx context.Context, sessionTitle string, data ShellData) error {
 	sess, err := r.Client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("CreateShell: session '%s' not found: %w", sessionTitle, err)
+		return fmt.Errorf("CreateShell: session '%s' not found: %w", sessionTitle, err)
 	}
-	sh, err := r.Client.Shell.Create().
+	_, err = r.Client.Shell.Create().
 		SetID(data.ID).
 		SetName(data.Name).
 		SetCommand(data.Command).
@@ -2392,13 +2392,13 @@ func (r *EntRepository) CreateShell(ctx context.Context, sessionTitle string, da
 		SetSessionID(sess.ID).
 		Save(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("CreateShell: %w", err)
+		return fmt.Errorf("CreateShell: %w", err)
 	}
-	return sh, nil
+	return nil
 }
 
 // ListShells returns all shells for the given session title, ordered by order_index.
-func (r *EntRepository) ListShells(ctx context.Context, sessionTitle string) ([]*ent.Shell, error) {
+func (r *EntRepository) ListShells(ctx context.Context, sessionTitle string) ([]ShellData, error) {
 	sess, err := r.Client.Session.Query().Where(session.Title(sessionTitle)).Only(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ListShells: session '%s' not found: %w", sessionTitle, err)
@@ -2410,7 +2410,21 @@ func (r *EntRepository) ListShells(ctx context.Context, sessionTitle string) ([]
 	if err != nil {
 		return nil, fmt.Errorf("ListShells: %w", err)
 	}
-	return shells, nil
+	out := make([]ShellData, len(shells))
+	for idx, sh := range shells {
+		out[idx] = ShellData{
+			ID:              sh.ID,
+			Name:            sh.Name,
+			Command:         sh.Command,
+			WorkingDir:      sh.WorkingDir,
+			TmuxSessionName: sh.TmuxSessionName,
+			OrderIndex:      sh.OrderIndex,
+			Status:          sh.Status,
+			ExitCode:        sh.ExitCode,
+			StartedAt:       sh.StartedAt,
+		}
+	}
+	return out, nil
 }
 
 // UpdateShellStatus updates the status (and optionally exit code + stopped_at) for a shell.
