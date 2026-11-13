@@ -463,7 +463,7 @@ func aliasConfigToProto(a config.AliasConfig) *sessionv1.AliasProto {
 	}
 }
 
-// aliasSessionTypeToProto converts a config.SessionType to the proto enum.
+// aliasSessionTypeToProto converts a domain.SessionType to the proto enum.
 func aliasSessionTypeToProto(st domain.SessionType) sessionv1.SessionType {
 	switch st {
 	case domain.SessionTypeDirectory:
@@ -481,7 +481,7 @@ func aliasSessionTypeToProto(st domain.SessionType) sessionv1.SessionType {
 	}
 }
 
-// protoToAliasSessionType converts a proto SessionType enum to config.SessionType.
+// protoToAliasSessionType converts a proto SessionType enum to domain.SessionType.
 // UNSPECIFIED maps to SessionTypeDefault (empty, uses default behavior).
 func protoToAliasSessionType(st sessionv1.SessionType) domain.SessionType {
 	switch st {

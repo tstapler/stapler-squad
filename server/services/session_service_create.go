@@ -186,7 +186,7 @@ func (s *SessionService) dispatchForkSource(ctx context.Context, msg *sessionv1.
 // explicit-field merge and custom-program step still run. Returns the
 // possibly-alias-resolved path (unchanged when msg.AliasName's Path is empty
 // or resolvedPath was already set) alongside the resolved program/autoYes/
-// env/CLI-flags and the alias's own session-type override (config.SessionTypeDefault
+// env/CLI-flags and the alias's own session-type override (domain.SessionTypeDefault
 // when none applies).
 func (s *SessionService) resolveAliasSessionDefaults(
 	cfg *config.Config,
