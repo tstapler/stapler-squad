@@ -311,6 +311,7 @@ go_test(
         "//server/services/wsconn",
         "//server/wakes",
         "//session",
+        "//session/artifacts",
         "//session/backlog",
         "//session/backlog/pipeline",
         "//session/backlog/shadowledger",
