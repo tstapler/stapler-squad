@@ -302,10 +302,15 @@ func (d ReplayDecision) failure() (string, bool) {
 	return fmt.Sprintf("%s (%s) %s->%s is %s by the stored configuration with no gate involved", d.Caller, d.Class, d.Edge.From, d.Edge.To, d.Live), true
 }
 
+// StageRepoFactory builds the stage-configuration repository the replay reads
+// from a database client; the composition owner supplies the concrete one so
+// the engine never names the ent constructor.
+type StageRepoFactory func(client *ent.Client) StageConfigRepository
+
 // BuildWorkflowEngineReplay evaluates the registry against the stage
 // configuration and items in client. It only reads.
-func BuildWorkflowEngineReplay(ctx context.Context, client *ent.Client) (*ReplayReport, error) {
-	repo := NewEntStageConfigRepository(client)
+func BuildWorkflowEngineReplay(ctx context.Context, client *ent.Client, newRepo StageRepoFactory) (*ReplayReport, error) {
+	repo := newRepo(client)
 	live, err := newReplaySelector(repo)
 	if err != nil {
 		return nil, fmt.Errorf("replay: %w", err)
@@ -392,7 +397,7 @@ func (r *ReplayReport) Render() string {
 // RunWorkflowEngineReplay is the entry point of `make workflow-engine-replay`:
 // it opens the copy at path and returns the rendered report and whether it
 // failed.
-func RunWorkflowEngineReplay(ctx context.Context, path string, liveDirs []string) (string, bool, error) {
+func RunWorkflowEngineReplay(ctx context.Context, path string, liveDirs []string, newRepo StageRepoFactory) (string, bool, error) {
 	client, closeFn, err := OpenReplayCopy(path, liveDirs)
 	if err != nil {
 		return "", false, err
@@ -400,7 +405,7 @@ func RunWorkflowEngineReplay(ctx context.Context, path string, liveDirs []string
 	defer closeFn()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	report, err := BuildWorkflowEngineReplay(ctx, client)
+	report, err := BuildWorkflowEngineReplay(ctx, client, newRepo)
 	if err != nil {
 		return "", false, err
 	}

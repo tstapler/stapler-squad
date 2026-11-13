@@ -67,12 +67,18 @@ func dirNames(t *testing.T, dir string) []string {
 	return names
 }
 
+// entStageRepoFactory is the production wiring, supplied by tests because the
+// engine itself no longer names the ent constructor.
+func entStageRepoFactory(client *ent.Client) StageConfigRepository {
+	return NewEntStageConfigRepository(client)
+}
+
 func replayReport(t *testing.T, path string) *ReplayReport {
 	t.Helper()
 	client, closeFn, err := OpenReplayCopy(path, nil)
 	require.NoError(t, err)
 	defer closeFn()
-	report, err := BuildWorkflowEngineReplay(context.Background(), client)
+	report, err := BuildWorkflowEngineReplay(context.Background(), client, entStageRepoFactory)
 	require.NoError(t, err)
 	return report
 }
@@ -134,7 +140,7 @@ func TestRunWorkflowEngineReplay_RefusesAPathInsideALiveDirectoryBeforeOpeningIt
 	inside := filepath.Join(live, "copy.db")
 	require.NoError(t, os.Rename(path, inside))
 
-	_, _, err := RunWorkflowEngineReplay(context.Background(), inside, []string{live})
+	_, _, err := RunWorkflowEngineReplay(context.Background(), inside, []string{live}, entStageRepoFactory)
 
 	require.ErrorIs(t, err, ErrReplayLiveDatabase)
 }
@@ -145,7 +151,7 @@ func TestReplay_OpensTheCopyReadOnlyAndLeavesItByteIdentical(t *testing.T) {
 	require.NoError(t, err)
 	namesBefore := dirNames(t, filepath.Dir(path))
 
-	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, nil)
+	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, nil, entStageRepoFactory)
 	require.NoError(t, err)
 	require.False(t, failed)
 	require.NotEmpty(t, out)
@@ -269,7 +275,7 @@ func TestWorkflowEngineReplayCommand(t *testing.T) {
 	if path == "" {
 		t.Skip("set WORKFLOW_ENGINE_REPLAY_DB to a COPY of the database (make workflow-engine-replay DB=<copy>)")
 	}
-	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, LiveStateDirs())
+	out, failed, err := RunWorkflowEngineReplay(context.Background(), path, LiveStateDirs(), entStageRepoFactory)
 	require.NoError(t, err)
 	_, _ = os.Stdout.WriteString(out)
 	if failed {
