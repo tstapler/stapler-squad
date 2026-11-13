@@ -159,7 +159,7 @@ func (l *BacklogLifecycleListener) reconcileCustomGateChecks(ctx context.Context
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileCustomGateChecks FindOpenStuckStates item=%s: %v", item.ID, findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonGateTimeout)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonGateTimeout)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}

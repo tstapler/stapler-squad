@@ -59,7 +59,7 @@ func testLivenessCharacterizationShapeA(t *testing.T) {
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	beforeRow, ok := session.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonOrphanedTriage)
+	beforeRow, ok := backlogdto.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonOrphanedTriage)
 	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
 	// After: the identical sweep, now wired to liveness.DefaultLivenessEngine (Epic 1.4 landed —
@@ -73,7 +73,7 @@ func testLivenessCharacterizationShapeA(t *testing.T) {
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	afterRow, ok := session.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonOrphanedTriage)
+	afterRow, ok := backlogdto.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonOrphanedTriage)
 	require.True(t, ok, "liveness.DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 
 	// Both rows' reasonDetail embed a different (per-fixture) session UUID but must
@@ -103,7 +103,7 @@ func testLivenessCharacterizationShapeB(t *testing.T) {
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonStaleWork)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonStaleWork)
 	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
 	// After: the identical sweep, now wired to liveness.DefaultLivenessEngine (Epic 1.4 landed).
@@ -116,7 +116,7 @@ func testLivenessCharacterizationShapeB(t *testing.T) {
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok = session.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonStaleWork)
+	_, ok = backlogdto.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonStaleWork)
 	require.True(t, ok, "liveness.DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 }
 
@@ -154,7 +154,7 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	beforeRow, ok := session.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonBouncing)
+	beforeRow, ok := backlogdto.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonBouncing)
 	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
 	// After: the identical sweep, now wired to liveness.DefaultLivenessEngine (Epic 1.4 landed,
@@ -172,7 +172,7 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	afterRow, ok := session.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonBouncing)
+	afterRow, ok := backlogdto.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonBouncing)
 	require.True(t, ok, "liveness.DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 
 	assert.Equal(t, beforeRow.Context, afterRow.Context, "reasonDetail must be byte-identical between the unwired and liveness.DefaultLivenessEngine-wired sweep")

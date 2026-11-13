@@ -8,6 +8,7 @@ go_library(
         "backlog_item_id.go",
         "errors.go",
         "history.go",
+        "open_stuck_state.go",
         "pipeline_mode.go",
         "review.go",
         "source_dependency.go",

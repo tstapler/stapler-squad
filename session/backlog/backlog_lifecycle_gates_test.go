@@ -109,7 +109,7 @@ func TestReconcileCustomGateChecks_should_MarkStuckViaLivenessEngine_When_Custom
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	row, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonGateTimeout)
+	row, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonGateTimeout)
 	require.True(t, ok, "a 16m-old invocation must be marked StuckReasonGateTimeout under the 15m (10m+5m) threshold")
 	assert.Contains(t, row.Context, gateID.String())
 }
@@ -134,7 +134,7 @@ func TestReconcileCustomGateChecks_should_NotMarkStuck_When_CustomCheckWithinBud
 
 	open, err := er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, ok := session.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonGateTimeout)
+	_, ok := backlogdto.FindOpenStuckStateFor(open, item.ID, domain.StuckReasonGateTimeout)
 	assert.False(t, ok, "a 2m-old invocation under a 15m threshold must not be flagged")
 }
 

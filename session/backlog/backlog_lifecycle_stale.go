@@ -123,7 +123,7 @@ func (l *BacklogLifecycleListener) reconcileStaleWorkSessions(ctx context.Contex
 			log.WarningLog().Printf("[BacklogLifecycle] reconcileStaleWorkSessions FindOpenStuckStates item=%s: %v", item.ID, findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonStaleWork)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonStaleWork)
 		if !ok {
 			continue
 		}

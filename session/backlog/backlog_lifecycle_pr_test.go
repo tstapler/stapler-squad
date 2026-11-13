@@ -522,7 +522,7 @@ func TestRecordOrphanedAgentPR_GatedReviewToPRPending_DeniedByGateWritesNothing(
 
 	err := listener.recordOrphanedAgentPR(ctx, item.ID, pr, "found")
 	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
-	require.True(t, session.IsGateDenial(err))
+	require.True(t, domain.IsGateDenial(err))
 	got, err := h.storage.GetBacklogItem(ctx, item.ID)
 	require.NoError(t, err)
 	assert.Equal(t, string(session.BacklogStatusReview), got.Status)

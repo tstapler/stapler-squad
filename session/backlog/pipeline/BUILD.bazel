@@ -61,6 +61,7 @@ go_test(
         "//executor/safeexec",
         "//session",
         "//session/backlog/internal/blktest",
+        "//session/domain",
         "//session/domain/backlogdto",
         "//session/git/backend",
         "//session/headless",

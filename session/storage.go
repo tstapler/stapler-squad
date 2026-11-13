@@ -1605,7 +1605,7 @@ func (s *Storage) HasOpenStuckReason(ctx context.Context, itemID string, reason 
 	if err != nil {
 		return false, err
 	}
-	_, ok := FindOpenStuckStateFor(rows, itemID, reason)
+	_, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	return ok, nil
 }
 

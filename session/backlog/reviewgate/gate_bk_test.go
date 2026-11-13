@@ -52,7 +52,7 @@ func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, nil)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() domain.Notifier { return nil }, getSessionCreator, nil)
 
 	runner.Run(context.Background(), GateContext{RequiresDiff: true}, item, is, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
 		onPassCalled.Store(true)
@@ -100,7 +100,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, nil)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() domain.Notifier { return nil }, getSessionCreator, nil)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
@@ -177,7 +177,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, engine)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() domain.Notifier { return nil }, getSessionCreator, engine)
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
 	require.Equal(t, 1, spawner.CallCount(), "SpawnReviewSession must be called exactly once")
@@ -220,7 +220,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, nil)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() domain.Notifier { return nil }, getSessionCreator, nil)
 
 	require.NotPanics(t, func() {
 		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
@@ -266,7 +266,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return nil }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, nil)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() domain.Notifier { return nil }, getSessionCreator, nil)
 
 	require.NotPanics(t, func() {
 		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
@@ -324,7 +324,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, nil)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() domain.Notifier { return nil }, getSessionCreator, nil)
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
 	require.Equal(t, 1, spawner.CallCount(), "SpawnReviewSession must be called exactly once")
@@ -383,7 +383,7 @@ func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPred
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, nil)
+	runner := NewReviewGateRunner(storage, getAutoReopener, func() domain.Notifier { return nil }, getSessionCreator, nil)
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
 	require.Equal(t, 1, spawner.CallCount(), "SpawnReviewSession must be called exactly once")
@@ -489,7 +489,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -569,7 +569,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -654,7 +654,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -735,7 +735,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *t
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -772,7 +772,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims(t *te
 	workIS.VerificationNotes = "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372 reason=already merged in #372"
 
 	getAutoReopener := func() AutoReopenSpawner { return nil }
-	getNotifier := func() session.Notifier { return nil }
+	getNotifier := func() domain.Notifier { return nil }
 
 	for i := 0; i < 2; i++ {
 		spawner := &blktest.MockReviewGateSpawner{Instance: &session.Instance{UUID: uuid.New().String()}}
@@ -914,7 +914,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1001,7 +1001,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1092,7 +1092,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1182,7 +1182,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1238,7 +1238,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 	require.NoError(t, err)
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
@@ -1336,7 +1336,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1420,7 +1420,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1559,7 +1559,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
-	getNotifier := func() session.Notifier { return notifier }
+	getNotifier := func() domain.Notifier { return notifier }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1644,7 +1644,7 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
-	getNotifier := func() session.Notifier { return nil }
+	getNotifier := func() domain.Notifier { return nil }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1707,7 +1707,7 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
-	getNotifier := func() session.Notifier { return nil }
+	getNotifier := func() domain.Notifier { return nil }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1768,7 +1768,7 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 
 	repo := session.NewEntGateSatisfactionRepository(client)
 	spawner := &blktest.MockReviewGateSpawner{}
-	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() session.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
+	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() domain.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
 	runner.SetGateSatisfactionRepository(repo)
 
 	gateContext := GateContext{GateID: gate.ID.String(), TargetTransition: session.BacklogStatus(toStage.Slug), RequiresDiff: true}
@@ -1809,7 +1809,7 @@ func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateConte
 
 	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
 	spawner := &blktest.MockReviewGateSpawner{}
-	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() session.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
+	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() domain.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
 	runner.SetGateSatisfactionRepository(repo)
 
 	runner.Run(ctx, GateContext{TargetTransition: session.BacklogStatusReview, RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})

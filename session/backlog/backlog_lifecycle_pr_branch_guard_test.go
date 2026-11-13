@@ -621,7 +621,7 @@ func TestReconcilePRPending_should_MarkStuckAndNotifyOnce_When_MergedPRCannotBeV
 	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "an unverifiable merged PR must not auto-complete the item")
 	rows, err := storage.Repo.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	_, found := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonMergedPRUnverified)
+	_, found := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonMergedPRUnverified)
 	assert.True(t, found, "the refusal must be recorded as an open merged_pr_unverified stuck row")
 	assert.Len(t, notifier.Calls, 1, "the operator must be notified exactly once across ticks")
 }
@@ -679,7 +679,7 @@ func assertNotStuckAsMergedPRUnverified(t *testing.T, storage *session.Storage, 
 	assert.Equal(t, string(session.BacklogStatusPRPending), fetched.Status, "a transient rejection must not block the item from later completing")
 	rows, err := storage.Repo.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	_, found := session.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMergedPRUnverified)
+	_, found := backlogdto.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMergedPRUnverified)
 	assert.False(t, found, "a transient admission-control rejection must never be recorded as a merged_pr_unverified stuck row")
 	assert.Empty(t, notifier.Calls, "a retryable error must not trigger the never-auto-resolving operator notification")
 }

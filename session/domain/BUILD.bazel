@@ -10,6 +10,7 @@ go_library(
         "autonomous_stop.go",
         "backlog.go",
         "backlog_crypto.go",
+        "backlog_shared.go",
         "context_health.go",
         "errors.go",
         "gate_config.go",

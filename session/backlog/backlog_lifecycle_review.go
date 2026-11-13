@@ -123,7 +123,7 @@ func (l *BacklogLifecycleListener) handleReviewSessionExited(ctx context.Context
 
 	verdict := reviewEntry.ReviewVerdict
 	overall := session.ReviewOutcome(verdict.OverallOutcome)
-	perCriterion, parseErr := session.ParsePerCriterionVerdicts(verdict.PerCriterion)
+	perCriterion, parseErr := domain.ParsePerCriterionVerdicts(verdict.PerCriterion)
 	if parseErr != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] handleReviewSessionExited parsePerCriterionVerdicts item=%s: %v", item.ID, parseErr)
 	}
@@ -644,7 +644,7 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 		log.WarningLog().Printf("[BacklogLifecycle] markAbandonedReview FindOpenStuckStates item=%s: %v", itemID, findErr)
 		return
 	}
-	row, ok := session.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonAbandonedReview)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonAbandonedReview)
 	if !ok {
 		return
 	}

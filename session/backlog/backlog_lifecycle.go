@@ -198,7 +198,7 @@ type BacklogLifecycleListener struct {
 
 	// notifierMu guards notifier for concurrent Set/get access.
 	notifierMu sync.RWMutex
-	notifier   session.Notifier
+	notifier   domain.Notifier
 
 	// sessionArchiverMu guards sessionArchiver for concurrent Set/get access.
 	sessionArchiverMu sync.RWMutex
@@ -677,14 +677,14 @@ func (l *BacklogLifecycleListener) getBranchReconciler() func(worktreePath, bran
 // SetNotifier wires in the notifier used to publish operator-facing notifications
 // (PR creation failures, security blocks, stale work sessions, rework-cap hits).
 // Optional — nil means notifications are disabled.
-func (l *BacklogLifecycleListener) SetNotifier(n session.Notifier) {
+func (l *BacklogLifecycleListener) SetNotifier(n domain.Notifier) {
 	l.notifierMu.Lock()
 	defer l.notifierMu.Unlock()
 	l.notifier = n
 }
 
 // getNotifier returns the current notifier under a read lock.
-func (l *BacklogLifecycleListener) getNotifier() session.Notifier {
+func (l *BacklogLifecycleListener) getNotifier() domain.Notifier {
 	l.notifierMu.RLock()
 	defer l.notifierMu.RUnlock()
 	return l.notifier
@@ -731,7 +731,7 @@ func (l *BacklogLifecycleListener) notifyAutoRemediating(itemID, title, message 
 // (BUG-030, BUG-040, BUG-041, BUG-046, BUG-048, and this fix's sibling call
 // sites in reconcileBouncingItems/ReconcilePRPending).
 func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, failureContext string, writeErr error) {
-	if session.IsGateDenial(writeErr) {
+	if domain.IsGateDenial(writeErr) {
 		// The gate's reporter already raised the one comment and notification.
 		log.Debug("[BacklogLifecycle] transition denied by the workflow gate; not re-notifying", "item", itemID, "error", writeErr)
 		return
@@ -748,7 +748,7 @@ func (l *BacklogLifecycleListener) notifyTransitionFailed(itemID, itemTitle, fai
 // lost compare-and-swap is expected and retried on the next tick (Debug); any
 // other failure is an Error.
 func logSystemTransitionFailure(where, itemID string, to session.BacklogStatus, err error) {
-	if session.IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed) {
+	if domain.IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed) {
 		log.Debug("[BacklogLifecycle] "+where+": transition skipped", "item", itemID, "to", to, "error", err)
 		return
 	}
@@ -1636,7 +1636,7 @@ func (l *BacklogLifecycleListener) reconcilePlanNotApprovedItems(ctx context.Con
 			log.Warn("[BacklogLifecycle] reconcilePlanNotApprovedItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonPlanNotApproved)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}
@@ -1872,14 +1872,14 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			// checked, never an arbitrary one, so an unrelated commit merged to
 			// main elsewhere can't produce a false positive.
 			if sha, shipped := l.mostRecentWorkCommitShippedToMain(ctx, item.ID, item.RepoPath); shipped {
-				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, session.BounceMainBranch)
+				summary := fmt.Sprintf("Auto-verified by reconcileBouncingItems: this item's most recent work-session commit (%s) is confirmed shipped to %s without ever going through a PR, so the item's rework cycle is treated as converged rather than bouncing.", sha, domain.BounceMainBranch)
 				if transErr := l.transitionBouncingItemToDone(ctx, item, summary); transErr != nil {
 					log.Warn("[BacklogLifecycle] reconcileBouncingItems done transition (shipped without PR) failed", "item", item.ID, "error", transErr)
 					// The commit is already confirmed shipped to main — same
 					// silent-stranding risk as the merged-PR branch above.
-					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, session.BounceMainBranch), transErr)
+					l.notifyTransitionFailed(item.ID, item.Title, fmt.Sprintf("commit %s was confirmed shipped to %s but the item's transition to done failed", sha, domain.BounceMainBranch), transErr)
 				} else {
-					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", session.BounceMainBranch)
+					log.Info("[BacklogLifecycle] reconcileBouncingItems: item → done (commit shipped without a PR)", "item", item.ID, "commit", sha, "branch", domain.BounceMainBranch)
 					// Best-effort: clear any bouncing (+ bounce_cap_exhausted,
 					// Signal 2) row from a prior tick — see the identical
 					// comment at the merged-PR branch above.
@@ -1925,7 +1925,7 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			// sanitizeField at 500 matches the existing convention for
 			// rendering a ReviewVerdict.Summary into operator/agent-facing
 			// text (see backlog_context.go, backlog_review.go).
-			reasonDetail = fmt.Sprintf("%s (most recent verdict: %s — %s)", reasonDetail, latestOutcome, session.SanitizeField(latestSummary, 500))
+			reasonDetail = fmt.Sprintf("%s (most recent verdict: %s — %s)", reasonDetail, latestOutcome, domain.SanitizeField(latestSummary, 500))
 		}
 
 		applied, markErr := er.MarkStuck(ctx, item.ID, domain.StuckReasonBouncing, session.BacklogStatus(item.Status), reasonDetail)
@@ -1941,14 +1941,14 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 			log.Warn("[BacklogLifecycle] reconcileBouncingItems FindOpenStuckStates failed", "item", item.ID, "error", findErr)
 			continue
 		}
-		row, ok := session.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonBouncing)
+		row, ok := backlogdto.FindOpenStuckStateFor(rows, item.ID, domain.StuckReasonBouncing)
 		if !ok || row.NotifiedAt != nil {
 			continue
 		}
 		log.Warn("[BacklogLifecycle] item bouncing, no PASS", "item", item.ID, "cycles", count, "lookback", cycleLookback)
 		notifyBody := fmt.Sprintf("%s — bounced between in_progress and review %d times in the last %s with no PASS verdict. It may be stuck in a non-converging rework loop.", item.Title, count, cycleLookback)
 		if latestOutcome != "" {
-			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, session.SanitizeField(latestSummary, 500))
+			notifyBody = fmt.Sprintf("%s Most recent verdict: %s — %s", notifyBody, latestOutcome, domain.SanitizeField(latestSummary, 500))
 		}
 		l.notify(item.ID,
 			"Item is thrashing between work and review",
@@ -2323,7 +2323,7 @@ func (l *BacklogLifecycleListener) reconcileMultiReasonEscalationForItem(ctx con
 	set := categorizeOpenStuckRows(rows)
 	nonEscalation := excludeStructurallyCoupledAbandonedReview(set)
 
-	existingRow, hasExistingRow := session.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMultipleReasons)
+	existingRow, hasExistingRow := backlogdto.FindOpenStuckStateFor(rows, itemID, domain.StuckReasonMultipleReasons)
 
 	if l.deescalateMultiReasonIfNeeded(ctx, er, itemID, hasExistingRow, len(nonEscalation)) {
 		return

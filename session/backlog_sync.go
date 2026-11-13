@@ -319,7 +319,7 @@ func (sl *SyncLoop) transitionBackward(ctx context.Context, itemID string, from,
 	switch {
 	case err == nil:
 		return backwardSyncOutcome{updated: 1}
-	case IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed):
+	case domain.IsGateDenial(err) || errors.Is(err, domain.ErrPreconditionFailed):
 		log.Debug("[SyncLoop] backward-sync transition skipped, retried next tick", "item", itemID, "error", err)
 		return backwardSyncOutcome{skipped: 1}
 	default:

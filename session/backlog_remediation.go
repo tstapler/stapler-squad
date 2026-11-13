@@ -243,7 +243,7 @@ func (s *Storage) findOpenStuckStateForReason(ctx context.Context, itemID string
 	if err != nil {
 		return backlogdto.OpenStuckStateData{}, false, err
 	}
-	row, ok := FindOpenStuckStateFor(rows, itemID, reason)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	return row, ok, nil
 }
 

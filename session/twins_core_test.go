@@ -115,7 +115,7 @@ func currentAttempts(t *testing.T, repo *EntRepository, itemID string, reason do
 	t.Helper()
 	rows, err := repo.FindOpenStuckStates(context.Background())
 	require.NoError(t, err)
-	row, ok := FindOpenStuckStateFor(rows, itemID, reason)
+	row, ok := backlogdto.FindOpenStuckStateFor(rows, itemID, reason)
 	require.True(t, ok)
 	return row.RemediationAttempts
 }

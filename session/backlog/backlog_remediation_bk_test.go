@@ -61,7 +61,7 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 	// prove nothing about the parked-row recovery path specifically.
 	rowsBefore, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	rowBefore, ok := session.FindOpenStuckStateFor(rowsBefore, itemID, domain.StuckReasonOrphanedTriage)
+	rowBefore, ok := backlogdto.FindOpenStuckStateFor(rowsBefore, itemID, domain.StuckReasonOrphanedTriage)
 	require.True(t, ok)
 	require.Equal(t, session.MaxRemediationAttempts, rowBefore.RemediationAttempts)
 
@@ -104,7 +104,7 @@ func TestRemediationDue_should_ReturnTrue_When_ParkedOrphanedTriageRowGetsLivene
 
 	rowsAfter, err := storage.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
-	rowAfter, ok := session.FindOpenStuckStateFor(rowsAfter, itemID, domain.StuckReasonOrphanedTriage)
+	rowAfter, ok := backlogdto.FindOpenStuckStateFor(rowsAfter, itemID, domain.StuckReasonOrphanedTriage)
 	require.True(t, ok)
 	assert.Equal(t, session.MaxRemediationAttempts+1, rowAfter.RemediationAttempts, "cold retry must count against MaxRemediationColdRetries")
 	require.NotNil(t, rowAfter.NextRemediationAt)

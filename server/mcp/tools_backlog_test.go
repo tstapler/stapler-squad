@@ -748,7 +748,7 @@ func TestGetBacklogItem_WorkRoleGuidance_InstructsShipOnPassAndAfterAttemptCap(t
 
 	require.Contains(t, text, "Your Role: Work")
 	require.Contains(t, text, "/backlog/ship")
-	require.Contains(t, text, fmt.Sprintf("%d cycles", session.MaxSameSessionReviewAttempts))
+	require.Contains(t, text, fmt.Sprintf("%d cycles", domain.MaxSameSessionReviewAttempts))
 	require.NotContains(t, text, "you're finished", "a PASS verdict must no longer read as the end of the task")
 }
 
