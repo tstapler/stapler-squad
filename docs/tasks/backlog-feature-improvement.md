@@ -2585,3 +2585,19 @@ durable `merged_pr_unverified` stuck row + one notification instead of a per-tic
 durable surface — **plus** a new sub-shape: two writers of the same logical value (a branch name) in different
 forms, compared by literal equality. `4fa8c5b8b` fixed the "row is gone" instance without a test that the stamp
 equals the real branch; `TestSpawnSessionFromItem_should_StampRealGitBranchOnItemSession` now pins that.
+
+## Update — 2026-11-13: `report_blocked` escalated to review with no notification (R6)
+
+**Root cause:** `reportBlocked` (`server/mcp/tools_backlog.go`) moved the item to `review` at `blockedCycleThreshold` and
+wrote only a note line and a log line, so no human learned a decision was needed (item `1e3771db` sat in review from
+2026-11-05). `notifyWaitCapReached` and triage-complete were the only sibling paths that published.
+
+**Fix:** `notifyBlockedEscalation` publishes one `INPUT_REQUIRED`/`HIGH` notification (proto enum constants, not ints) when
+the call actually transitions into review or first crosses the threshold while already in review; repeat blocks on an item
+already waiting in review stay silent. There is no dedupe store, so "once per escalation" is enforced at the call site.
+
+**Recurring shape:** "swallowed status-transition" (2026-07-27, 2026-08-03, 2026-10-09). Earlier fixes patched the one
+call site each time because nothing forced a caller to decide how a human learns of an entry into review. Now
+`TransitionCallerSpec.Surface` is mandatory for every agent/system caller with an edge into review, and a source-level test
+requires every `SurfaceNotifies` site to call a notifier. Other callers are declared `SurfaceReviewFlow` (the review
+pipeline picks the item up); that is a judgement, not a per-caller verification of their notification behaviour.

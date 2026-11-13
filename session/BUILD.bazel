@@ -695,6 +695,7 @@ go_test(
         "tmux_backend_test.go",
         "tmux_process_manager_test.go",
         "tmux_socket_querier_test.go",
+        "transition_callers_surface_test.go",
         "transition_callers_test.go",
         "transition_gate_bench_test.go",
         "transition_gate_test.go",

@@ -101,6 +101,7 @@ go_test(
         "server_test.go",
         "spawn_path_matrix_test.go",
         "testhelpers_test.go",
+        "tools_backlog_blocked_notify_test.go",
         "tools_backlog_dependencies_test.go",
         "tools_backlog_flow_fixture_test.go",
         "tools_backlog_flow_helpers_test.go",
