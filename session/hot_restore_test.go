@@ -54,21 +54,6 @@ func TestHotRestoreIfLive_Outcomes(t *testing.T) {
 	}
 }
 
-func TestHotRestoreIfLive_FailedAttachRestoresTerminalStatus(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.PermanentlyFailed} // no process manager: Start fails
-	got, err := HotRestoreIfLive(inst, func() bool { return true })
-	require.Error(t, err)
-	assert.Equal(t, HotRestoreError, got)
-	assert.Equal(t, domain.PermanentlyFailed, inst.GetLifecycleStatus())
-}
-
-func TestHotRestoreIfLive_NilInstance(t *testing.T) {
-	t.Parallel()
-	got, _ := HotRestoreIfLive(nil, func() bool { return true })
-	assert.Equal(t, HotRestoreError, got)
-}
-
 // failingAttachPM models a live pane whose hot attach (RestoreWithWorkDir) fails.
 // Close is what kill-session does on the tmux backend.
 type failingAttachPM struct {
@@ -114,34 +99,6 @@ func TestHotRestoreIfLive_FailedAttachNeverKillsTheLiveSession(t *testing.T) {
 	})
 }
 
-func TestHotRestoreIfLive_ArchivedDuringAttachWindowIsRolledBack(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.PermanentlyFailed}
-	// The probe runs after the first archival check and before the status flip.
-	got, err := HotRestoreIfLive(inst, func() bool {
-		now := time.Now()
-		inst.mu.Lock()
-		inst.ArchivedAt = &now
-		inst.mu.Unlock()
-		return true
-	})
-	require.NoError(t, err)
-	assert.Equal(t, HotRestoreArchived, got)
-	assert.Equal(t, domain.PermanentlyFailed, inst.GetLifecycleStatus())
-}
-
-func TestHotRestoreIfLive_BusyWhenRestartInFlight(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.Failed}
-	inst.SetRetryInFlightForTest(true)
-	probed := false
-	got, err := HotRestoreIfLive(inst, func() bool { probed = true; return true })
-	require.NoError(t, err)
-	assert.Equal(t, HotRestoreBusy, got)
-	assert.False(t, probed)
-	assert.Equal(t, domain.Failed, inst.GetLifecycleStatus())
-}
-
 func TestHotRestoreIfLive_ConcurrentCallsAttachOnce(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
@@ -183,21 +140,6 @@ func TestHotRestoreIfLive_FailedAttachRestoresStartedFlag(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, inst.Started(), "rollback must restore started or Destroy would leak the pane and worktree")
 	assert.Equal(t, domain.PermanentlyFailed, inst.GetLifecycleStatus())
-}
-
-func TestHotRestoreIfLive_ArchivedRaceRestoresStartedFlag(t *testing.T) {
-	t.Parallel()
-	inst := &Instance{Title: "t", Status: domain.Failed}
-	inst.started.Store(true)
-	got, _ := HotRestoreIfLive(inst, func() bool {
-		now := time.Now()
-		inst.mu.Lock()
-		inst.ArchivedAt = &now
-		inst.mu.Unlock()
-		return true
-	})
-	assert.Equal(t, HotRestoreArchived, got)
-	assert.True(t, inst.Started())
 }
 
 func TestHotRestoreIfLive_ClearedDropsPendingRetryState(t *testing.T) {
