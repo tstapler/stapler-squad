@@ -556,10 +556,10 @@ func TestMergeUserModifiedFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			merged, err := MergeUserModifiedFields(tt.raw, tt.newFields...)
+			merged, err := domain.MergeUserModifiedFields(tt.raw, tt.newFields...)
 			require.NoError(t, err)
 
-			got := ParseUserModifiedFields(merged)
+			got := domain.ParseUserModifiedFields(merged)
 			require.ElementsMatch(t, tt.want, got)
 			require.Len(t, got, len(tt.want), "must not contain duplicates")
 		})
@@ -601,7 +601,7 @@ func TestSyncOne_UserEditedTitleSurvivesSubsequentBackwardSync(t *testing.T) {
 	// Simulate the UpdateBacklogItem RPC handler's value-diff + merge flow:
 	// the user edits Title, so touchedFields = ["title"], merged into the
 	// item's (currently empty) UserModifiedFields via the production helper.
-	merged, err := MergeUserModifiedFields(created.UserModifiedFields, "title")
+	merged, err := domain.MergeUserModifiedFields(created.UserModifiedFields, "title")
 	require.NoError(t, err)
 	newTitle := "User Edited Title"
 	_, err = storage.UpdateBacklogItem(ctx, created.ID, backlogdto.BacklogItemUpdate{
@@ -645,7 +645,7 @@ func TestDetermineBackwardSyncTarget_ReturnsArchivedForPreWorkStatuses_And_NoTar
 	for _, tt := range tests {
 		t.Run(string(tt.current), func(t *testing.T) {
 			t.Parallel()
-			target, ok := determineBackwardSyncTarget(tt.current)
+			target, ok := domain.DetermineBackwardSyncTarget(tt.current)
 			require.Equal(t, tt.wantOK, ok)
 			require.Equal(t, tt.wantTarget, target)
 		})

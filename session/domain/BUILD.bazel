@@ -11,6 +11,7 @@ go_library(
         "backlog.go",
         "backlog_crypto.go",
         "backlog_shared.go",
+        "backlog_sync_fields.go",
         "context_health.go",
         "errors.go",
         "gate_config.go",

@@ -335,7 +335,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		touchedFields = append(touchedFields, "priority")
 	}
 	if len(touchedFields) > 0 {
-		merged, mergeErr := session.MergeUserModifiedFields(existing.UserModifiedFields, touchedFields...)
+		merged, mergeErr := domain.MergeUserModifiedFields(existing.UserModifiedFields, touchedFields...)
 		if mergeErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to merge user modified fields: %w", mergeErr))
 		}
