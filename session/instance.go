@@ -410,7 +410,7 @@ type Instance struct {
 	// server restarts. Defaults to true (enabled) when zero value.
 	RateLimitAutoResume *bool `json:"rate_limit_auto_resume,omitempty"`
 
-	// historyDetector is used by tryExtractConversationUUID. When nil the
+	// historyDetector is used by TryExtractConversationUUID. When nil the
 	// production inspector is used. Set in tests to inject a fake home dir.
 	historyDetector *HistoryFileDetector
 
@@ -578,7 +578,7 @@ type Instance struct {
 	// spawn already claimed the path.
 	worktreeSpawnReservation func(worktreePath string) (release func(), err error)
 
-	// conversationOwnershipGuard is called by tryExtractConversationUUID's DetectByPath
+	// conversationOwnershipGuard is called by TryExtractConversationUUID's DetectByPath
 	// fallback with a detected (conversationUUID, effectivePath) pair, before adopting
 	// that UUID for this instance. A true ownedByOther return means some OTHER live
 	// instance already owns this conversation, so the fallback must not attribute it
@@ -1182,7 +1182,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	// Initialize the CDP manager (noop when Chrome is absent on any platform).
 	instance.initCDPManager(cfg)
 
-	finishInstanceConstruction(instance)
+	FinishInstanceConstruction(instance)
 	if opts.GitHubPRNumber > 0 {
 		// Created from a PR URL: the PR joins the set (its write is deferred to the
 		// first full save, see persistPRAttach).
@@ -1195,7 +1195,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 // mutable fields. The returned pointer is never nil. Callers must not mutate
 // the returned struct.
 //
-// On the first call for an Instance that bypassed finishInstanceConstruction
+// On the first call for an Instance that bypassed FinishInstanceConstruction
 // (e.g. struct literals in tests), the snapshot is built lazily under stateMutex
 // and stored via CAS so concurrent first-callers converge on one value.
 func (i *Instance) Snapshot() *domain.InstanceSnapshot {
@@ -1210,13 +1210,13 @@ func (i *Instance) Snapshot() *domain.InstanceSnapshot {
 	return i.snapshot.Load()
 }
 
-// finishInstanceConstruction publishes the initial snapshot so that Load() is
+// FinishInstanceConstruction publishes the initial snapshot so that Load() is
 // guaranteed non-nil by the time the *Instance is visible to any other goroutine.
 // This is the single choke-point called by every construction site — Epic 3
 // will extend this helper to also spawn the actor goroutine, and it's also
 // where scrollForwardVersionMismatchCheck kicks off (Story 1.5.3), so it runs
 // at construction time rather than being deferred until a user scrolls.
-func finishInstanceConstruction(i *Instance) {
+func FinishInstanceConstruction(i *Instance) {
 	i.snapshot.Store(buildSnapshot(i))
 	i.kickOffClaudeVersionMismatchCheck()
 }
@@ -1267,7 +1267,7 @@ func (i *Instance) SetWorktreeSpawnReservation(claim func(worktreePath string) (
 }
 
 // SetConversationOwnershipGuard injects the cross-session conversation-ownership check
-// that tryExtractConversationUUID's DetectByPath fallback calls before adopting a
+// that TryExtractConversationUUID's DetectByPath fallback calls before adopting a
 // detected conversation UUID (worktree-envvars-hijack Story 1.4.2). Pass nil to
 // disable (the default). Not actor-routed — construction-time wiring, same lifecycle
 // as SetTaggingEngine above.
@@ -1441,7 +1441,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 // recoverConversationBeforeLaunch tries to recover a persisted conversation UUID
 // from disk BEFORE initTmuxSession() reads it to decide whether to embed --resume.
 // Shared by startLocked() and legacy start() so the two call sites can't drift
-// (pre-mortem failure mode #4). Falls through to tryExtractConversationUUID's
+// (pre-mortem failure mode #4). Falls through to TryExtractConversationUUID's
 // DetectByPath fallback, guarded by conversationClearedAt.
 //
 // No-op whenever the underlying tmux session is still alive (i.pm().IsAlive()):
@@ -1453,7 +1453,7 @@ func (i *Instance) recoverConversationBeforeLaunch(firstTimeSetup bool) {
 	if firstTimeSetup || i.pm().IsAlive() || i.HasClaudeSession() {
 		return
 	}
-	i.tryExtractConversationUUID()
+	i.TryExtractConversationUUID()
 }
 
 // startLocked is the actor-safe body of Start(). Called only from within
@@ -1570,7 +1570,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			// conversation UUID, starting fresh" branch above and lose the conversation
 			// entirely — even though the resumed process (or its jsonl history file) is
 			// right there to detect from.
-			i.tryExtractConversationUUID()
+			i.TryExtractConversationUUID()
 		} else {
 			// HotRestore: tmux never died, so nothing was ever at risk of loss.
 			reviveOutcome = domain.ReviveOutcomeResumeLive
@@ -1707,7 +1707,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 	// i.mu.Lock() from outside the actor — see runActor's doc comment in
 	// actor.go for the full explanation. claudeSessionMu nests outside i.mu
 	// around the LastReviveOutcome write too, matching SetHistoryInfo/
-	// ClearConversationState/tryExtractConversationUUID's lock order.
+	// ClearConversationState/TryExtractConversationUUID's lock order.
 	i.claudeSessionMu.Lock()
 	i.mu.Lock()
 	i.LastReviveOutcome = reviveOutcome
@@ -1855,7 +1855,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// caller triggers detection — otherwise a second crash before that happens
 			// loses conversation resumability entirely, even though the resumed
 			// process/jsonl file is right there to detect from right now.
-			i.tryExtractConversationUUID()
+			i.TryExtractConversationUUID()
 		} else {
 			// Hot restore: tmux session is alive — attach to it. Never died, so
 			// nothing was ever at risk of loss.
@@ -1940,7 +1940,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	}
 
 	// claudeSessionMu nests outside i.mu around the LastReviveOutcome write too,
-	// matching SetHistoryInfo/ClearConversationState/tryExtractConversationUUID's
+	// matching SetHistoryInfo/ClearConversationState/TryExtractConversationUUID's
 	// lock order.
 	i.claudeSessionMu.Lock()
 	i.mu.Lock()
@@ -2576,7 +2576,7 @@ func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessMa
 				i.restoreTerminalStatus(prev)
 			}
 		}()
-		if err := i.recreateWorktreeIfMissing(); err != nil {
+		if err := i.RecreateWorktreeIfMissing(); err != nil {
 			return err
 		}
 	}
@@ -2712,10 +2712,10 @@ func (i *Instance) restoreTerminalStatus(prev domain.Status) {
 	i.snapshot.Store(buildSnapshot(i))
 }
 
-// recreateWorktreeIfMissing re-creates the session's worktree when its directory
+// RecreateWorktreeIfMissing re-creates the session's worktree when its directory
 // vanished from disk (see tmux.ErrWorkDirMissing); Start/Restart never do this on
 // their own, so a retry would otherwise fail identically forever.
-func (i *Instance) recreateWorktreeIfMissing() error {
+func (i *Instance) RecreateWorktreeIfMissing() error {
 	if !i.gitManager.HasWorktree() {
 		return nil
 	}

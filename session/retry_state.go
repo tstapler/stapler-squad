@@ -247,12 +247,12 @@ func (i *Instance) RetrySnapshot() domain.RetryState {
 	return rs
 }
 
-// retryPendingElapsed reports whether a retry is currently pending
+// RetryPendingElapsed reports whether a retry is currently pending
 // (NextRetryAt non-zero) and, if so, whether it has already elapsed as of
 // now. Locked separately from any caller-side re-evaluation so the driver
 // poll loop's gate can check this without racing a concurrent RetryNow()
 // call mutating RetryState from another goroutine.
-func (i *Instance) retryPendingElapsed(now time.Time) (pending, elapsed bool) {
+func (i *Instance) RetryPendingElapsed(now time.Time) (pending, elapsed bool) {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	if i.NextRetryAt.IsZero() {
@@ -261,19 +261,29 @@ func (i *Instance) retryPendingElapsed(now time.Time) (pending, elapsed bool) {
 	return true, !now.Before(i.NextRetryAt)
 }
 
-// clearNextRetryAt clears a pending retry timestamp, called after a
+// ClearNextRetryAt clears a pending retry timestamp, called after a
 // successful automated restart consumes it.
-func (i *Instance) clearNextRetryAt() {
+func (i *Instance) ClearNextRetryAt() {
 	i.SetRetryProgress(func(rs *domain.RetryState) { rs.NextRetryAt = time.Time{} })
 }
 
-// lastRetryFailureReason returns the most recently recorded failure reason,
+// LastRetryFailureReason returns the most recently recorded failure reason,
 // used to build the continuation prompt at the moment a scheduled retry's
 // backoff delay elapses.
-func (i *Instance) lastRetryFailureReason() string {
+func (i *Instance) LastRetryFailureReason() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.LastFailureReason
+}
+
+// TryBeginRetry claims the single retry-in-flight slot for restartForRetry
+// (session_driver.go) and returns the release func; ok is false while another
+// restart holds it.
+func (i *Instance) TryBeginRetry() (release func(), ok bool) {
+	if !i.retryInFlight.CompareAndSwap(false, true) {
+		return nil, false
+	}
+	return func() { i.retryInFlight.Store(false) }, true
 }
 
 // SetRetryInFlightForTest sets retryInFlight directly, for tests outside this
