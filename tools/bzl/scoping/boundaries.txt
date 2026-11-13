@@ -3,6 +3,7 @@
 session/prpoller !server
 session/backlog !server
 session/backlog/stuck !server
+session/backlog/liveness !server
 session/internal/sessiontest !server
 server/services/sessionbundle !server/web
 server/services/devtools !server/web

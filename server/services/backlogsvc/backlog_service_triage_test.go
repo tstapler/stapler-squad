@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
@@ -3317,7 +3318,7 @@ func TestSpawnSessionFromItem_should_SnapshotResolvedModeSlugAndContentHash_When
 	require.NoError(t, err)
 	svc.pipelineEngine = engine
 
-	wantHash, ok := engine.ContentHashFor(backlog.PipelineMode("quick"))
+	wantHash, ok := engine.ContentHashFor(backlogdto.PipelineMode("quick"))
 	require.True(t, ok, "setup: 'quick' must resolve to a content hash")
 	require.NotEmpty(t, wantHash)
 
@@ -4257,10 +4258,10 @@ func TestTriggerTriage_should_PersistFailureCapture_When_HeadlessCallItselfError
 // below (Epic 1.4, Story 1.4.2) — always returns the same definition
 // regardless of stage/mode, sufficient for these narrow single-item tests.
 type fakeTriageLivenessEngine struct {
-	def backlog.LivenessDefinition
+	def liveness.LivenessDefinition
 }
 
-func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ backlog.PipelineMode) (backlog.LivenessDefinition, error) {
+func (f *fakeTriageLivenessEngine) LivenessFor(_ session.BacklogStatus, _ backlogdto.PipelineMode) (liveness.LivenessDefinition, error) {
 	return f.def, nil
 }
 
@@ -4313,8 +4314,8 @@ func TestTriggerTriage_should_UseResolvedFortyFiveMinuteTimeout_When_SddModeOver
 	pool := &fakeHeadlessPool{response: validTriageJSON()}
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
-	svc.livenessEngine = &fakeTriageLivenessEngine{def: backlog.LivenessDefinition{
-		Kind:             backlog.LivenessKindDurationBudget,
+	svc.livenessEngine = &fakeTriageLivenessEngine{def: liveness.LivenessDefinition{
+		Kind:             liveness.LivenessKindDurationBudget,
 		ExpectedDuration: 45 * time.Minute,
 		StalenessMargin:  10 * time.Minute,
 	}}

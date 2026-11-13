@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -768,13 +769,13 @@ func (l *BacklogLifecycleListener) markAbandonedReview(ctx context.Context, er *
 
 // reviewVerdictIdleThreshold bounds how long reconcileUnprocessedReviewVerdicts
 // trusts SessionLivenessChecker's "alive" verdict once a review session has
-// actually saved a verdict. Set to maxWorkSessionStaleness's value rather than
+// actually saved a verdict. Set to liveness.MaxWorkSessionStaleness's value rather than
 // stuck.AbandonedReview's much shorter 15-minute grace: a reviewer doing legitimately
 // slow verification (large diff, running a full test suite) must not be reaped
 // mid-review, so this errs conservative — same order of magnitude as the other
 // "is this session still doing real work" threshold in this file, not the much
 // tighter "did anything ever start" grace period stuck.AbandonedReview enforces.
-const reviewVerdictIdleThreshold = maxWorkSessionStaleness
+const reviewVerdictIdleThreshold = liveness.MaxWorkSessionStaleness
 
 // reconcileRespawnBlockedActiveResolution is the resolve-only counterpart to
 // notifyRespawnBlockedByActiveSession (server/services/backlog_service_triage.go),

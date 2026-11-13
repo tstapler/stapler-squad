@@ -1248,7 +1248,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// into the constructor; item.PipelineMode itself is always recorded regardless).
 	var pipelineModeSnapshotHash string
 	if s.pipelineEngine != nil {
-		pipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlog.PipelineMode(item.PipelineMode))
+		pipelineModeSnapshotHash, _ = s.pipelineEngine.ContentHashFor(backlogdto.PipelineMode(item.PipelineMode))
 	}
 	// Stamp the full branch, not the bare slug: the slug never equals a PR's head ref, so
 	// stamping it broke the merge-verification guard.

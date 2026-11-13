@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -383,8 +384,8 @@ func TestUpdateItemSessionGitActivity_should_RecordProgressAtObservationTime_Whe
 	require.NotNil(t, sessions[0].LastProgressAt)
 	assert.False(t, sessions[0].LastProgressAt.Before(before.Add(-time.Second)),
 		"last_progress_at must be observation time, not the backdated author time — otherwise a rebase instantly marks a healthy session stale")
-	assert.True(t, stuck.StaleWork(authoredAt, time.Now(), maxWorkSessionStaleness),
+	assert.True(t, stuck.StaleWork(authoredAt, time.Now(), liveness.MaxWorkSessionStaleness),
 		"precondition: the author date really is old enough to trip the staleness threshold, so this test would fail if the author date leaked through")
-	assert.False(t, stuck.StaleWork(*sessions[0].LastProgressAt, time.Now(), maxWorkSessionStaleness),
+	assert.False(t, stuck.StaleWork(*sessions[0].LastProgressAt, time.Now(), liveness.MaxWorkSessionStaleness),
 		"the session must not be considered stale after just reporting a commit")
 }

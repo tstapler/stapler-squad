@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
@@ -338,14 +339,14 @@ type BacklogService struct {
 	// Epic 1.4 may fold this into the constructor once its own
 	// livenessEngine-in-sweeps wiring needs to. May be nil; handlers nil-check
 	// and return CodeUnavailable.
-	livenessRepo backlog.LivenessRepository
+	livenessRepo liveness.LivenessRepository
 	// livenessEngine is the LivenessEngine (session.CachingLivenessEngine in
 	// production) whose in-process cache the CRUD RPC write handlers
 	// invalidate on Create/Update/Delete. Wired post-construction via
 	// SetLivenessEngine, same rationale as livenessRepo above. May be nil;
 	// cache invalidation is then a no-op (matching invalidatePipelineCache's
 	// duck-typed no-op-if-unwired shape for pipelineEngine).
-	livenessEngine backlog.LivenessEngine
+	livenessEngine liveness.LivenessEngine
 
 	// stageCRUDRepo backs the Stage/StageTransition/TransitionGate CRUD RPCs
 	// (Epic 2.7 of backlog-custom-workflow-stages):
@@ -425,14 +426,14 @@ func (s *BacklogService) SetRepoSettingsNonBlockingLookup(l RepoSettingsLookup) 
 // SetLivenessRepository wires the repository backing the LivenessDefinition
 // CRUD RPCs. nil (the default) makes those RPCs return CodeUnavailable,
 // mirroring pipelineModeRepo's nil-guard shape.
-func (s *BacklogService) SetLivenessRepository(repo backlog.LivenessRepository) {
+func (s *BacklogService) SetLivenessRepository(repo liveness.LivenessRepository) {
 	s.livenessRepo = repo
 }
 
 // SetLivenessEngine wires the LivenessEngine whose cache the LivenessDefinition
 // CRUD RPC write handlers invalidate on success. nil (the default) makes
 // cache invalidation a no-op.
-func (s *BacklogService) SetLivenessEngine(engine backlog.LivenessEngine) {
+func (s *BacklogService) SetLivenessEngine(engine liveness.LivenessEngine) {
 	s.livenessEngine = engine
 }
 

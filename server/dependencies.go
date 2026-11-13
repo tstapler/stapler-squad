@@ -30,6 +30,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/dbpool"
@@ -915,11 +916,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// NewBacklogService constructor parameter, to avoid touching every
 	// existing NewBacklogService test call site for a dependency this epic
 	// introduces.
-	var livenessRepo backlog.LivenessRepository
-	var livenessEngine backlog.LivenessEngine
+	var livenessRepo liveness.LivenessRepository
+	var livenessEngine liveness.LivenessEngine
 	if entClient := storage.GetEntClient(); entClient != nil {
-		livenessRepo = backlog.NewEntLivenessRepository(entClient)
-		if cachingLivenessEngine, err := backlog.NewCachingLivenessEngine(livenessRepo); err != nil {
+		livenessRepo = liveness.NewEntLivenessRepository(entClient)
+		if cachingLivenessEngine, err := liveness.NewCachingLivenessEngine(livenessRepo); err != nil {
 			log.Warn("livenessEngine construction failed; continuing with DefaultLivenessEngine's built-in thresholds", "err", err)
 		} else {
 			livenessEngine = cachingLivenessEngine

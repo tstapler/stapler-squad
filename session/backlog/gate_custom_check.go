@@ -9,13 +9,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 )
 
 // gate_custom_check.go — Story 2.4.4's custom/pluggable check gate
 // (ADR-003-custom-gate-check-execution-bound.md): InvokeCustomGateCheck runs a
-// pre-registered skill/slash-command bounded by a LivenessDefinition, never
+// pre-registered skill/slash-command bounded by a liveness.LivenessDefinition, never
 // arbitrary code. It reuses headless.Pool's existing bounded-call primitive
 // (the same one TriggerTriage/review's headless paths use) rather than
 // inventing a new execution mechanism.
@@ -80,7 +81,7 @@ var _ CustomCheckCaller = (*headless.Pool)(nil)
 // InvokeCustomGateCheck runs the custom check named by cfg.SkillID for item,
 // bounded by livenessDef (Epic 2.4.4, ADR-003). targetStage/mode identify the
 // (stage, pipeline mode) pair reconcileCustomGateChecks (Task 2.4.4c) later
-// re-resolves against the live LivenessEngine to detect an overdue
+// re-resolves against the live liveness.LivenessEngine to detect an overdue
 // invocation — captured here, at bind time, rather than re-derived from
 // (item, gate) later, since neither the GateSatisfactionRecord schema nor
 // TransitionGate carries a direct item/pipeline-mode join.
@@ -119,9 +120,9 @@ func InvokeCustomGateCheck(
 	item *backlogdto.BacklogItemData,
 	gateID uuid.UUID,
 	cfg session.CustomCheckConfig,
-	livenessDef LivenessDefinition,
+	livenessDef liveness.LivenessDefinition,
 	targetStage session.BacklogStatus,
-	mode PipelineMode,
+	mode backlogdto.PipelineMode,
 ) (CustomCheckOutcome, error) {
 	if !session.RegisteredCustomCheckSkills[cfg.SkillID] {
 		return CustomCheckOutcome{}, fmt.Errorf("gate_custom_check: skill %q is not in the pre-registered allowlist", cfg.SkillID)
@@ -158,7 +159,7 @@ func InvokeCustomGateCheck(
 	}
 
 	callCtx := ctx
-	if livenessDef.Kind == LivenessKindDurationBudget && livenessDef.ExpectedDuration > 0 {
+	if livenessDef.Kind == liveness.LivenessKindDurationBudget && livenessDef.ExpectedDuration > 0 {
 		var cancel context.CancelFunc
 		callCtx, cancel = context.WithTimeout(ctx, livenessDef.ExpectedDuration)
 		defer cancel()

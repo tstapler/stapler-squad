@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
@@ -18,7 +19,7 @@ import (
 const maxConcurrentCustomGateChecks = 8
 
 // defaultCustomCheckExpectedDuration/defaultCustomCheckStalenessMargin bound a
-// custom-check invocation when no LivenessEngine is wired, or it has no
+// custom-check invocation when no liveness.LivenessEngine is wired, or it has no
 // override for the target stage — sized for a single headless
 // feasibility-style call (session/gate_custom_check.go's
 // customCheckReviewFeasibilitySystemPrompt), not a full triage session.
@@ -52,28 +53,28 @@ func (l *BacklogLifecycleListener) runCustomGateCheck(ctx context.Context, gateI
 // extraction below, done for the same reason: l.headlessPool is a concrete
 // *headless.Pool, not an interface, so it can't be substituted in tests).
 func (l *BacklogLifecycleListener) runCustomGateCheckWithCaller(ctx context.Context, caller CustomCheckCaller, gateID uuid.UUID, cfg session.CustomCheckConfig, targetStage session.BacklogStatus, item *backlogdto.BacklogItemData) {
-	mode := PipelineMode(item.PipelineMode)
+	mode := backlogdto.PipelineMode(item.PipelineMode)
 	livenessDef := l.resolveCustomCheckLivenessDef(targetStage, mode)
 	if _, err := InvokeCustomGateCheck(ctx, caller, l.getGateSatisfactionRepo(), item, gateID, cfg, livenessDef, targetStage, mode); err != nil {
 		log.WarningLog().Printf("[BacklogLifecycle] runCustomGateCheck item=%s gate=%s: %v", item.ID, gateID, err)
 	}
 }
 
-// resolveCustomCheckLivenessDef resolves the LivenessDefinition bound to a
+// resolveCustomCheckLivenessDef resolves the liveness.LivenessDefinition bound to a
 // custom-check invocation at spawn time (Task 2.4.4b2), preferring a live
 // l.livenessEngine.LivenessFor(targetStage, mode) resolution and falling back
 // to the package defaults above when no engine is wired or it reports
 // IsNoTimeout — same fallback shape as
 // resolveCustomCheckStalenessThresholdWithEngine's read-side counterpart
 // below.
-func (l *BacklogLifecycleListener) resolveCustomCheckLivenessDef(targetStage session.BacklogStatus, mode PipelineMode) LivenessDefinition {
+func (l *BacklogLifecycleListener) resolveCustomCheckLivenessDef(targetStage session.BacklogStatus, mode backlogdto.PipelineMode) liveness.LivenessDefinition {
 	if l.livenessEngine != nil {
 		if def, err := l.livenessEngine.LivenessFor(targetStage, mode); err == nil && !def.IsNoTimeout() {
 			return def
 		}
 	}
-	return LivenessDefinition{
-		Kind:             LivenessKindDurationBudget,
+	return liveness.LivenessDefinition{
+		Kind:             liveness.LivenessKindDurationBudget,
 		ExpectedDuration: defaultCustomCheckExpectedDuration,
 		StalenessMargin:  defaultCustomCheckStalenessMargin,
 	}
@@ -87,7 +88,7 @@ func (l *BacklogLifecycleListener) resolveCustomCheckLivenessDef(targetStage ses
 // identical precedent already set for reconcileOrphanedTriageItems living in
 // backlog_lifecycle_triage.go.
 //
-// Mirrors reconcileOrphanedTriageItems' LivenessEngine-consulting pattern
+// Mirrors reconcileOrphanedTriageItems' liveness.LivenessEngine-consulting pattern
 // (Epic 1.4, session/backlog_lifecycle_triage.go) exactly, applied to
 // GateSatisfactionRecord rows instead of ItemSession rows: every unsatisfied
 // (Satisfied: false) row IS an in-flight custom-check invocation — a
@@ -98,7 +99,7 @@ func (l *BacklogLifecycleListener) resolveCustomCheckLivenessDef(targetStage ses
 
 // reconcileCustomGateChecks marks StuckReasonGateTimeout (the Decision this
 // Epic's plan.md section resolved) for any in-flight custom-check invocation
-// whose age exceeds its bound LivenessDefinition's StalenessThreshold. The
+// whose age exceeds its bound liveness.LivenessDefinition's StalenessThreshold. The
 // (ExpectedDuration, StalenessMargin, target stage, pipeline mode) bound at
 // invocation time (InvokeCustomGateCheck's OutcomeDetail, Task 2.4.4b2) are
 // used to re-resolve the definition live against l.livenessEngine — honoring
@@ -192,11 +193,11 @@ func (l *BacklogLifecycleListener) resolveCustomCheckStalenessThreshold(record *
 // resolveCustomCheckStalenessThreshold's logic as a free function so
 // gate_custom_check_test.go can exercise it directly without constructing a
 // full BacklogLifecycleListener.
-func resolveCustomCheckStalenessThresholdWithEngine(engine LivenessEngine, record *session.GateSatisfactionData) (time.Duration, bool) {
+func resolveCustomCheckStalenessThresholdWithEngine(engine liveness.LivenessEngine, record *session.GateSatisfactionData) (time.Duration, bool) {
 	targetStage, hasStage := record.OutcomeDetail["target_stage"].(string)
 	mode, _ := record.OutcomeDetail["pipeline_mode"].(string)
 	if engine != nil && hasStage {
-		if def, err := engine.LivenessFor(session.BacklogStatus(targetStage), PipelineMode(mode)); err == nil && !def.IsNoTimeout() {
+		if def, err := engine.LivenessFor(session.BacklogStatus(targetStage), backlogdto.PipelineMode(mode)); err == nil && !def.IsNoTimeout() {
 			return def.StalenessThreshold(), true
 		}
 	}

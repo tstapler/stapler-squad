@@ -1,4 +1,4 @@
-package backlog
+package liveness
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	tslog "github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
 // TestLivenessCache_should_ReturnLockFreeMiss_When_NoRowMatchesStageAndMode
@@ -20,7 +21,7 @@ import (
 func TestLivenessCache_should_ReturnLockFreeMiss_When_NoRowMatchesStageAndMode(t *testing.T) {
 	c := &livenessCache{}
 
-	rd, ok := c.Get("idea", PipelineMode("sdd"))
+	rd, ok := c.Get("idea", backlogdto.PipelineMode("sdd"))
 
 	assert.False(t, ok)
 	assert.Equal(t, resolvedLivenessDefinition{}, rd)
@@ -41,7 +42,7 @@ func TestCachingLivenessEngine_should_FallBackToModeLessRowWithoutWarnLog_When_S
 
 	cache := &livenessCache{}
 	seeded := map[string]resolvedLivenessDefinition{
-		livenessCacheKey("idea", PipelineModeDefault): {LivenessDefinition: *def},
+		livenessCacheKey("idea", backlogdto.PipelineModeDefault): {LivenessDefinition: *def},
 	}
 	cache.ptr.Store(&seeded)
 
@@ -54,7 +55,7 @@ func TestCachingLivenessEngine_should_FallBackToModeLessRowWithoutWarnLog_When_S
 	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
 	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
-	got, err := engine.LivenessFor(session.BacklogStatusIdea, PipelineMode("sdd"))
+	got, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 
 	require.NoError(t, err)
 	assert.Equal(t, LivenessKindDurationBudget, got.Kind)
@@ -81,10 +82,10 @@ func TestCachingLivenessEngine_should_FallBackToDefaultEngineWithWarnLog_When_Ne
 	// Not t.Parallel(): shares WarningLog() with sibling tests via RedirectLogger.
 	buf := tslog.RedirectLogger(t, tslog.WarningLog(), "WARNING: ")
 
-	got, err := engine.LivenessFor(session.BacklogStatusIdea, PipelineMode("sdd"))
+	got, err := engine.LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 
 	require.NoError(t, err)
-	want, wantErr := NewDefaultLivenessEngine().LivenessFor(session.BacklogStatusIdea, PipelineMode("sdd"))
+	want, wantErr := NewDefaultLivenessEngine().LivenessFor(session.BacklogStatusIdea, backlogdto.PipelineMode("sdd"))
 	require.NoError(t, wantErr)
 	assert.Equal(t, want, got, "expected the identical DefaultLivenessEngine built-in definition")
 

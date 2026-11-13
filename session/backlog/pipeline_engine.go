@@ -33,31 +33,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 )
 
-// PipelineMode identifies which PipelineMode definition (by slug) drives a
-// backlog item's triage/work/review content.
-type PipelineMode string
-
-// PipelineModeDefault is the sentinel PipelineMode value meaning "no mode
-// chosen — use the pre-existing hardcoded pipeline." Resolving this value is
-// guaranteed, by construction, to never touch pipelineModeCache or
-// PipelineModeRepository — this is the concrete mechanism that keeps "no
-// uncached DB read on the hot path for the common case" true without needing
-// runtime feature-flagging.
-const PipelineModeDefault PipelineMode = ""
-
-// ResolvedModeLabel renders a raw BacklogItemData.PipelineMode string for
-// [PipelineEngine]-prefixed log lines: the empty string (PipelineModeDefault)
-// becomes "default" for log readability, any other slug is passed through
-// unchanged. Exported so both server/services (TriggerTriage) and
-// session (ReviewGateRunner.Run) call sites use one shared rendering — see
-// Story 1.7.2's observability acceptance criteria.
-func ResolvedModeLabel(mode string) string {
-	if mode == "" {
-		return "default"
-	}
-	return mode
-}
-
 // PipelineEngine is the narrow (5-method) seam described in the package doc
 // comment above. CachingPipelineEngine is its single concrete implementation.
 //
@@ -81,7 +56,7 @@ type PipelineEngine interface {
 	// ReviewGateRunner.Run) — the review path most items actually go through.
 	// Unlike ReviewPromptFor (JSON-output style, for headless callers with no
 	// tool access), this asks the reviewer to call submit_review_verdict.
-	// PipelineModeDefault renders BuildReviewPrompt; a resolved custom mode
+	// backlogdto.PipelineModeDefault renders BuildReviewPrompt; a resolved custom mode
 	// renders the same ReviewPromptTemplate field ReviewPromptFor uses — mode
 	// authors must include verdict-tool-call instructions in that template if
 	// they want it to drive the real review gate too.
@@ -90,13 +65,13 @@ type PipelineEngine interface {
 	// prompt (inst.Prompt).
 	InitialPromptFor(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary) string
 	// ContentHashFor returns the content hash of a resolved mode's 9 raw
-	// content-template fields. ok is false for PipelineModeDefault (code-
+	// content-template fields. ok is false for backlogdto.PipelineModeDefault (code-
 	// backed content can't drift without a redeploy — nothing to hash) or an
 	// unresolved slug.
-	ContentHashFor(mode PipelineMode) (hash string, ok bool)
+	ContentHashFor(mode backlogdto.PipelineMode) (hash string, ok bool)
 	// ExecutorFor resolves item's configured program/model override for role,
 	// following the identical 3-branch fallback shape as the other 5 methods:
-	// PipelineModeDefault -> ("", ""); unresolved slug -> Warn log + ("", "");
+	// backlogdto.PipelineModeDefault -> ("", ""); unresolved slug -> Warn log + ("", "");
 	// resolved mode with no override configured for role -> ("", ""). An
 	// empty return value from either half means "inherit the pool/session
 	// default" for that half, not "run with an empty program/model".
@@ -302,7 +277,7 @@ func attachedImagesSuffix(description string) string {
 }
 
 // CachingPipelineEngine is the single concrete implementation of
-// PipelineEngine. PipelineModeDefault resolves for free (no cache/DB touch);
+// PipelineEngine. backlogdto.PipelineModeDefault resolves for free (no cache/DB touch);
 // any other slug resolves via pipelineModeCache; any unresolvable/malformed
 // slug falls back to the default behavior and emits exactly one
 // [PipelineEngine]-prefixed Warn log line naming the item and the unresolved
@@ -349,8 +324,8 @@ func (e *CachingPipelineEngine) InvalidateCache(ctx context.Context) error {
 
 // SlashCommandSet implements PipelineEngine.
 func (e *CachingPipelineEngine) SlashCommandSet(item *backlogdto.BacklogItemData) (map[string]string, error) {
-	mode := PipelineMode(item.PipelineMode)
-	if mode == PipelineModeDefault {
+	mode := backlogdto.PipelineMode(item.PipelineMode)
+	if mode == backlogdto.PipelineModeDefault {
 		return buildDefaultSlashCommandSet(item)
 	}
 
@@ -391,8 +366,8 @@ func (e *CachingPipelineEngine) SlashCommandSet(item *backlogdto.BacklogItemData
 
 // TriagePromptFor implements PipelineEngine.
 func (e *CachingPipelineEngine) TriagePromptFor(item *backlogdto.BacklogItemData, artifactAbsPath string) string {
-	mode := PipelineMode(item.PipelineMode)
-	if mode == PipelineModeDefault {
+	mode := backlogdto.PipelineMode(item.PipelineMode)
+	if mode == backlogdto.PipelineModeDefault {
 		return BuildHeadlessTriagePrompt(item, artifactAbsPath)
 	}
 
@@ -415,8 +390,8 @@ func (e *CachingPipelineEngine) TriagePromptFor(item *backlogdto.BacklogItemData
 // a real behavior regression on the default path, not just an interface
 // nicety. Epic 1.5's call sites should pass their real extras value here.
 func (e *CachingPipelineEngine) ReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, verificationNotes string, extras ReviewContextExtras) string {
-	mode := PipelineMode(item.PipelineMode)
-	if mode == PipelineModeDefault {
+	mode := backlogdto.PipelineMode(item.PipelineMode)
+	if mode == backlogdto.PipelineModeDefault {
 		return BuildHeadlessReviewPrompt(item, acSnapshot, diff, diffTruncated, verificationNotes, extras)
 	}
 
@@ -443,8 +418,8 @@ func (e *CachingPipelineEngine) ReviewPromptFor(item *backlogdto.BacklogItemData
 // the real review gate (this method) must include submit_review_verdict
 // call instructions themselves — see the interface doc comment.
 func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *backlogdto.BacklogItemData, acSnapshot []session.AcCriterion, diff string, diffTruncated bool, itemSessionID string, verificationNotes string) string {
-	mode := PipelineMode(item.PipelineMode)
-	if mode == PipelineModeDefault {
+	mode := backlogdto.PipelineMode(item.PipelineMode)
+	if mode == backlogdto.PipelineModeDefault {
 		return BuildReviewPrompt(item, acSnapshot, diff, diffTruncated, itemSessionID, verificationNotes)
 	}
 
@@ -461,8 +436,8 @@ func (e *CachingPipelineEngine) InteractiveReviewPromptFor(item *backlogdto.Back
 
 // InitialPromptFor implements PipelineEngine.
 func (e *CachingPipelineEngine) InitialPromptFor(item *backlogdto.BacklogItemData, priorSessions []backlogdto.ItemSessionSummary) string {
-	mode := PipelineMode(item.PipelineMode)
-	if mode == PipelineModeDefault {
+	mode := backlogdto.PipelineMode(item.PipelineMode)
+	if mode == backlogdto.PipelineModeDefault {
 		return BuildTokenBudgetedPrompt(item, priorSessions)
 	}
 
@@ -489,8 +464,8 @@ func (e *CachingPipelineEngine) InitialPromptFor(item *backlogdto.BacklogItemDat
 // via one of the 4 methods above; a caller invoking ContentHashFor for an
 // already-unresolved slug independently of that flow would be a pre-existing
 // bug elsewhere, not a new failure mode worth logging again here.
-func (e *CachingPipelineEngine) ContentHashFor(mode PipelineMode) (string, bool) {
-	if mode == PipelineModeDefault {
+func (e *CachingPipelineEngine) ContentHashFor(mode backlogdto.PipelineMode) (string, bool) {
+	if mode == backlogdto.PipelineModeDefault {
 		return "", false
 	}
 	rm, ok := e.cache.Get(string(mode))
@@ -502,8 +477,8 @@ func (e *CachingPipelineEngine) ContentHashFor(mode PipelineMode) (string, bool)
 
 // ExecutorFor implements PipelineEngine.
 func (e *CachingPipelineEngine) ExecutorFor(item *backlogdto.BacklogItemData, role session.StageRole) (program, model string) {
-	mode := PipelineMode(item.PipelineMode)
-	if mode == PipelineModeDefault {
+	mode := backlogdto.PipelineMode(item.PipelineMode)
+	if mode == backlogdto.PipelineModeDefault {
 		return "", ""
 	}
 

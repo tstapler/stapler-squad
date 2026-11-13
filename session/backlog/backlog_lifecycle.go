@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -241,13 +242,13 @@ type BacklogLifecycleListener struct {
 	pipelineEngine PipelineEngine
 
 	// livenessEngine resolves per-stage/per-pipeline-mode stuck-detection thresholds (Epic 1.4 of
-	// backlog-custom-workflow-stages), replacing the flat maxHeadlessTriageSessionStaleness/
-	// maxWorkSessionStaleness/stuck.BounceThreshold/stuck.BounceLookback constants at their reconcile* call
+	// backlog-custom-workflow-stages), replacing the flat liveness.MaxHeadlessTriageSessionStaleness/
+	// liveness.MaxWorkSessionStaleness/stuck.BounceThreshold/stuck.BounceLookback constants at their reconcile* call
 	// sites. Optional — nil (the default for every constructor except
 	// NewBacklogLifecycleListenerWithPool, production's only caller) falls back to each call
 	// site's literal constant, unchanged from pre-Epic-1.4 behavior. Set once at construction,
 	// same pattern as pipelineEngine above — never mutated afterward.
-	livenessEngine LivenessEngine
+	livenessEngine liveness.LivenessEngine
 
 	// chainReconcilerMu guards chainReconciler for concurrent Set/get access.
 	chainReconcilerMu sync.RWMutex
@@ -881,7 +882,7 @@ func (l *BacklogLifecycleListener) Shutdown() {
 // newListenerBase initialises fields common to all BacklogLifecycleListener constructors.
 // pipelineEngine and livenessEngine may both be nil — see their field doc comments for the
 // fallback behavior.
-func newListenerBase(storage *session.Storage, pipelineEngine PipelineEngine, livenessEngine LivenessEngine) *BacklogLifecycleListener {
+func newListenerBase(storage *session.Storage, pipelineEngine PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &BacklogLifecycleListener{
 		storage:                 storage,
@@ -923,9 +924,9 @@ func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner Re
 // for review gate calls instead of spawning a tmux session. pipelineEngine is the
 // shared PipelineEngine instance (Epic 1.5, Story 1.5.1) — pass nil to fall back to
 // the built-in default pipeline for every item. livenessEngine is the shared
-// LivenessEngine instance (Epic 1.4) — pass nil to fall back to each stuck-detection
+// liveness.LivenessEngine instance (Epic 1.4) — pass nil to fall back to each stuck-detection
 // sweep's literal constant for every item.
-func NewBacklogLifecycleListenerWithPool(storage *session.Storage, pool *headless.Pool, pipelineEngine PipelineEngine, livenessEngine LivenessEngine) *BacklogLifecycleListener {
+func NewBacklogLifecycleListenerWithPool(storage *session.Storage, pool *headless.Pool, pipelineEngine PipelineEngine, livenessEngine liveness.LivenessEngine) *BacklogLifecycleListener {
 	l := newListenerBase(storage, pipelineEngine, livenessEngine)
 	l.headlessPool = pool
 	return l
@@ -1203,7 +1204,7 @@ func (l *BacklogLifecycleListener) resolveCustomCheckGateContext(from, to sessio
 // Scope note: only the two DB-derivable reasons that already have a queryable
 // detection surface as of this Epic are seeded — abandoned_review (via the
 // existing FindStuckReviewItems query) and stale_work (mirroring
-// reconcileStaleWorkSessions' maxWorkSessionStaleness check, without
+// reconcileStaleWorkSessions' liveness.MaxWorkSessionStaleness check, without
 // modifying that function). rework_cap, bouncing, and push_failed are
 // deliberately NOT seeded here: their detection logic is introduced by Phase
 // 2 (Stories 2.1.2, 2.1.4, 2.1.6 respectively) and does not exist yet in this
@@ -1238,7 +1239,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 	}
 
 	// stale_work: in_progress items whose active work session has gone quiet
-	// past maxWorkSessionStaleness.
+	// past liveness.MaxWorkSessionStaleness.
 	inProgressItems, err := l.storage.ListBacklogItems(ctx, backlogdto.BacklogItemFilter{
 		Statuses: []string{string(session.BacklogStatusInProgress)},
 	})
@@ -1265,7 +1266,7 @@ func (l *BacklogLifecycleListener) BackfillStuckStates(ctx context.Context) {
 			if active.LastProgressAt != nil {
 				lastProgress = *active.LastProgressAt
 			}
-			if time.Since(lastProgress) < maxWorkSessionStaleness {
+			if time.Since(lastProgress) < liveness.MaxWorkSessionStaleness {
 				continue
 			}
 			if l.backfillMarkAndNotify(ctx, er, item.ID, domain.StuckReasonStaleWork, session.BacklogStatusInProgress,
@@ -1453,7 +1454,7 @@ func (l *BacklogLifecycleListener) resolveBouncingAndCapExhausted(ctx context.Co
 }
 
 // reconcileStaleWorkSessions notifies once per item when an in_progress backlog item's
-// active work session has gone longer than maxWorkSessionStaleness without progress,
+// active work session has gone longer than liveness.MaxWorkSessionStaleness without progress,
 // then (docs/tasks/backlog-stuck-item-auto-remediation.md Phase B) drives the
 // "stale_work" reason's automated remediation for every subsequent tick the
 // condition still holds. Notify-once dedup and "since when" are DB-backed
@@ -1789,15 +1790,15 @@ func (l *BacklogLifecycleListener) reconcileBouncingItems(ctx context.Context, e
 		// Resolve this item's Shape-C liveness definition (CycleThreshold/CycleLookback)
 		// per item, inside the loop — a per-mode override means these can legitimately
 		// differ between items in the same tick (Epic 1.4, Story 1.4.3). Keyed to
-		// BacklogStatusReview, NOT BacklogStatusInProgress: DefaultLivenessEngine's table
+		// BacklogStatusReview, NOT BacklogStatusInProgress: liveness.DefaultLivenessEngine's table
 		// (Epic 1.2) already occupies BacklogStatusInProgress with the Shape-B stale-work
-		// definition, and a LivenessDefinition is a tagged union with exactly one Kind per
+		// definition, and a liveness.LivenessDefinition is a tagged union with exactly one Kind per
 		// stage — see this file's Epic 1.4 plan-correction note in
 		// project_plans/backlog-custom-workflow-stages/implementation/plan.md's Story 1.4.3.
 		cycleThreshold := stuck.BounceThreshold
 		cycleLookback := stuck.BounceLookback
 		if l.livenessEngine != nil {
-			if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusReview, PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
+			if def, defErr := l.livenessEngine.LivenessFor(session.BacklogStatusReview, backlogdto.PipelineMode(item.PipelineMode)); defErr == nil && !def.IsNoTimeout() {
 				cycleThreshold = def.CycleThreshold
 				cycleLookback = def.CycleLookback
 			}

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -22,11 +23,11 @@ import (
 // hardcoded-constant reconcile* sweep to capture the "before" stuck/not-stuck
 // decision and reasonDetail string, then independently recomputes the "after"
 // decision by running the SAME reconcile* method again — now wired to a
-// DefaultLivenessEngine (Epic 1.4 landed: every reconcile* sweep this test
-// covers resolves its threshold via LivenessEngine when one is wired) — on a
+// liveness.DefaultLivenessEngine (Epic 1.4 landed: every reconcile* sweep this test
+// covers resolves its threshold via liveness.LivenessEngine when one is wired) — on a
 // second, identical fixture, and asserts the two are byte-identical.
 //
-// "Zero rows configured" (Task 1.4.1c/1.4.3d) means DefaultLivenessEngine
+// "Zero rows configured" (Task 1.4.1c/1.4.3d) means liveness.DefaultLivenessEngine
 // itself: it has no DB-backed override table of its own (see its doc comment),
 // so wiring it in reproduces every pre-Epic-1.4 hardcoded threshold exactly —
 // this test is the proof.
@@ -38,7 +39,7 @@ func TestLivenessCharacterization_should_ProduceIdenticalStuckDecisionAndReasonD
 
 // testLivenessCharacterizationShapeA covers Shape A (duration-budget-plus-
 // margin): an idea-status item with a headless triage session open past
-// maxHeadlessTriageSessionStaleness (session/backlog_lifecycle_triage.go).
+// liveness.MaxHeadlessTriageSessionStaleness (session/backlog_lifecycle_triage.go).
 func testLivenessCharacterizationShapeA(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -48,9 +49,9 @@ func testLivenessCharacterizationShapeA(t *testing.T) {
 	// Past the 35m hardcoded threshold, matching
 	// TestReconcileOrphanedTriageItems_should_flagHeadlessSession_After30Min's
 	// own fixture shape.
-	ageAgo := maxHeadlessTriageSessionStaleness + time.Minute
+	ageAgo := liveness.MaxHeadlessTriageSessionStaleness + time.Minute
 
-	// Before: the real, unmodified sweep with no LivenessEngine wired (nil — matching
+	// Before: the real, unmodified sweep with no liveness.LivenessEngine wired (nil — matching
 	// every pre-Epic-1.4 call site).
 	beforeItem := newOrphanedTriageTestItem(t, storage, er, ageAgo)
 	beforeListener := NewBacklogLifecycleListener(storage)
@@ -61,31 +62,31 @@ func testLivenessCharacterizationShapeA(t *testing.T) {
 	beforeRow, ok := session.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonOrphanedTriage)
 	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
-	// After: the identical sweep, now wired to DefaultLivenessEngine (Epic 1.4 landed —
+	// After: the identical sweep, now wired to liveness.DefaultLivenessEngine (Epic 1.4 landed —
 	// this IS the real reconcileOrphanedTriageItems code path, not a manual mirror). Zero
-	// rows configured (DefaultLivenessEngine has no DB-backed override table of its own),
+	// rows configured (liveness.DefaultLivenessEngine has no DB-backed override table of its own),
 	// so this must reproduce the "before" decision and threshold exactly.
 	afterItem := newOrphanedTriageTestItem(t, storage, er, ageAgo)
 	afterListener := NewBacklogLifecycleListener(storage)
-	afterListener.livenessEngine = NewDefaultLivenessEngine()
+	afterListener.livenessEngine = liveness.NewDefaultLivenessEngine()
 	afterListener.reconcileOrphanedTriageItems(ctx, er)
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	afterRow, ok := session.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonOrphanedTriage)
-	require.True(t, ok, "DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
+	require.True(t, ok, "liveness.DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 
 	// Both rows' reasonDetail embed a different (per-fixture) session UUID but must
 	// share the identical "... still open after <threshold>" suffix — the resolved
-	// threshold DefaultLivenessEngine produces (35m) must equal the literal constant.
-	wantSuffix := fmt.Sprintf(" still open after %s", maxHeadlessTriageSessionStaleness)
+	// threshold liveness.DefaultLivenessEngine produces (35m) must equal the literal constant.
+	wantSuffix := fmt.Sprintf(" still open after %s", liveness.MaxHeadlessTriageSessionStaleness)
 	assert.True(t, strings.HasSuffix(beforeRow.Context, wantSuffix), "before reasonDetail = %q, want suffix %q", beforeRow.Context, wantSuffix)
-	assert.True(t, strings.HasSuffix(afterRow.Context, wantSuffix), "after (DefaultLivenessEngine-wired) reasonDetail = %q, want suffix %q", afterRow.Context, wantSuffix)
+	assert.True(t, strings.HasSuffix(afterRow.Context, wantSuffix), "after (liveness.DefaultLivenessEngine-wired) reasonDetail = %q, want suffix %q", afterRow.Context, wantSuffix)
 }
 
 // testLivenessCharacterizationShapeB covers Shape B (heartbeat staleness): an
 // in_progress item with an active work session whose last-progress timestamp
-// is beyond maxWorkSessionStaleness (session/backlog_lifecycle_stale.go).
+// is beyond liveness.MaxWorkSessionStaleness (session/backlog_lifecycle_stale.go).
 func testLivenessCharacterizationShapeB(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
@@ -93,9 +94,9 @@ func testLivenessCharacterizationShapeB(t *testing.T) {
 	er := storage.Repo
 
 	// newStaleWorkTestItem backdates last_progress_at by 3h, beyond
-	// maxWorkSessionStaleness (2h).
+	// liveness.MaxWorkSessionStaleness (2h).
 
-	// Before: the real, unmodified sweep with no LivenessEngine wired.
+	// Before: the real, unmodified sweep with no liveness.LivenessEngine wired.
 	beforeItem := newStaleWorkTestItem(t, storage, er)
 	beforeListener := NewBacklogLifecycleListener(storage)
 	beforeListener.reconcileStaleWorkSessions(ctx, er)
@@ -105,18 +106,18 @@ func testLivenessCharacterizationShapeB(t *testing.T) {
 	_, ok := session.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonStaleWork)
 	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
-	// After: the identical sweep, now wired to DefaultLivenessEngine (Epic 1.4 landed).
+	// After: the identical sweep, now wired to liveness.DefaultLivenessEngine (Epic 1.4 landed).
 	// Zero rows configured, so the resolved 2h MaxNoProgressDuration must reproduce the
 	// "before" decision exactly.
 	afterItem := newStaleWorkTestItem(t, storage, er)
 	afterListener := NewBacklogLifecycleListener(storage)
-	afterListener.livenessEngine = NewDefaultLivenessEngine()
+	afterListener.livenessEngine = liveness.NewDefaultLivenessEngine()
 	afterListener.reconcileStaleWorkSessions(ctx, er)
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	_, ok = session.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonStaleWork)
-	require.True(t, ok, "DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
+	require.True(t, ok, "liveness.DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 }
 
 // testLivenessCharacterizationShapeC covers Shape C (cycle frequency): an
@@ -146,7 +147,7 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 		return item
 	}
 
-	// Before: the real, unmodified sweep with no LivenessEngine wired.
+	// Before: the real, unmodified sweep with no liveness.LivenessEngine wired.
 	beforeItem := newBouncingFixture("Liveness characterization bouncing item (before)")
 	beforeListener := NewBacklogLifecycleListener(storage)
 	beforeListener.reconcileBouncingItems(ctx, er)
@@ -156,7 +157,7 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 	beforeRow, ok := session.FindOpenStuckStateFor(open, beforeItem.ID, domain.StuckReasonBouncing)
 	require.True(t, ok, "unwired sweep must mark this fixture stuck")
 
-	// After: the identical sweep, now wired to DefaultLivenessEngine (Epic 1.4 landed,
+	// After: the identical sweep, now wired to liveness.DefaultLivenessEngine (Epic 1.4 landed,
 	// keyed BacklogStatusReview — see this package's Epic 1.4 plan-correction note in
 	// project_plans/backlog-custom-workflow-stages/implementation/plan.md's Story 1.4.3).
 	// Zero rows configured, so the resolved stuck.BounceThreshold/stuck.BounceLookback must reproduce
@@ -166,13 +167,13 @@ func testLivenessCharacterizationShapeC(t *testing.T) {
 	// rows' Context must be byte-identical.
 	afterItem := newBouncingFixture("Liveness characterization bouncing item (after)")
 	afterListener := NewBacklogLifecycleListener(storage)
-	afterListener.livenessEngine = NewDefaultLivenessEngine()
+	afterListener.livenessEngine = liveness.NewDefaultLivenessEngine()
 	afterListener.reconcileBouncingItems(ctx, er)
 
 	open, err = er.FindOpenStuckStates(ctx)
 	require.NoError(t, err)
 	afterRow, ok := session.FindOpenStuckStateFor(open, afterItem.ID, domain.StuckReasonBouncing)
-	require.True(t, ok, "DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
+	require.True(t, ok, "liveness.DefaultLivenessEngine-wired sweep must still mark this fixture stuck")
 
-	assert.Equal(t, beforeRow.Context, afterRow.Context, "reasonDetail must be byte-identical between the unwired and DefaultLivenessEngine-wired sweep")
+	assert.Equal(t, beforeRow.Context, afterRow.Context, "reasonDetail must be byte-identical between the unwired and liveness.DefaultLivenessEngine-wired sweep")
 }

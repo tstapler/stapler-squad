@@ -356,7 +356,7 @@ func TestCachingPipelineEngine_ContentHashFor_should_ReturnEmptyAndFalse_When_Mo
 	t.Parallel()
 	engine := &CachingPipelineEngine{cache: &pipelineModeCache{}}
 
-	hash, ok := engine.ContentHashFor(PipelineModeDefault)
+	hash, ok := engine.ContentHashFor(backlogdto.PipelineModeDefault)
 	if hash != "" || ok {
 		t.Fatalf("default mode: got (%q, %v), want (\"\", false)", hash, ok)
 	}
@@ -629,7 +629,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
 	}
 	if strings.Contains(buf.String(), item.ID) {
-		t.Fatalf("expected no Warn log for PipelineModeDefault, got: %q", buf.String())
+		t.Fatalf("expected no Warn log for backlogdto.PipelineModeDefault, got: %q", buf.String())
 	}
 }
 
