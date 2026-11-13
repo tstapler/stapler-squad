@@ -1,10 +1,9 @@
-package backlog
+package reviewgate
 
 import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
@@ -199,11 +198,4 @@ func recordCustomCheckTerminalOutcome(repo session.GateSatisfactionRepository, i
 	}); err != nil {
 		log.ErrorLog().Printf("[GateCustomCheck] item=%s gate=%s: failed to record terminal outcome: %v", itemID, gateID, err)
 	}
-}
-
-// customCheckInvocationAge is a small time.Since wrapper (test seam only in
-// spirit — no override hook exists here since reconcileCustomGateChecks tests
-// use real, deliberately-old CreatedAt fixture rows instead of mocking time).
-func customCheckInvocationAge(createdAt time.Time) time.Duration {
-	return time.Since(createdAt)
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/envtest"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
@@ -1085,9 +1086,9 @@ func TestRecoverBaseCommitSHA_UsesExplicitBranchRef_NotAmbientHEAD(t *testing.T)
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "README.md", "base\n", "initial")
-	mainSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
+	blktest.InitConfiguredRepo(t, repoDir, "main")
+	blktest.CommitFile(t, repoDir, "README.md", "base\n", "initial")
+	mainSHA := strings.TrimSpace(blktest.RunGitCapture(t, repoDir, "rev-parse", "main"))
 
 	// The session's own dedicated worktree, branched from main, with real committed work.
 	worktreeDir := t.TempDir()

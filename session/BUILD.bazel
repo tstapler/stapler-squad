@@ -749,6 +749,7 @@ go_test(
         "//server/services/debugseed:go_sources",
         "//session/backlog:go_sources",
         "//session/backlog/pipeline:go_sources",
+        "//session/backlog/reviewgate:go_sources",
         "//session/detection:testdata",
         "//session/domain:go_sources",
         "//session/domain/backlogdto:go_sources",

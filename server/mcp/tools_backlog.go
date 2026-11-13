@@ -24,8 +24,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/itemsources"
@@ -358,7 +358,7 @@ type backlogHandlers struct {
 	// the pre-existing session-exit/sweep paths. The same
 	// session.AutoReopenSpawner *services.BacklogService already implements
 	// for BacklogLifecycleListener.SetAutoReopener (server/dependencies.go).
-	autoReopener backlog.AutoReopenSpawner
+	autoReopener reviewgate.AutoReopenSpawner
 
 	// verifyGitHubRef backs report_duplicate's GitHub existence check for
 	// duplicate_ref (PR/issue/commit). Defaults to h.verifyGitHubRefExists

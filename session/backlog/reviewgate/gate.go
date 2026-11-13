@@ -1,4 +1,4 @@
-package backlog
+package reviewgate
 
 import (
 	"context"
@@ -16,6 +16,23 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
 )
+
+// ReviewGateSpawner can create a short-lived review session for a backlog item.
+// Deprecated: use headless.Pool via NewBacklogLifecycleListenerWithSpawner instead.
+// Retained for backward compatibility with existing tests and callers.
+type ReviewGateSpawner interface {
+	// SpawnReviewSession creates a one-shot review session for item using prompt.
+	// itemSessionID is the UUID of the work ItemSession being reviewed.
+	SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error)
+}
+
+// AutoReopenSpawner can automatically reopen a backlog item for rework after a
+// failed review verdict (FAIL or PARTIAL). It transitions the item back to
+// in_progress and spawns a new work session so the review→rework cycle is
+// fully automated.
+type AutoReopenSpawner interface {
+	AutoReopenAfterFailedReview(ctx context.Context, itemID string) error
+}
 
 // ReviewGateRunner encapsulates the spawnReviewGate logic into a testable value type.
 // BacklogLifecycleListener holds one as a field and delegates to it.

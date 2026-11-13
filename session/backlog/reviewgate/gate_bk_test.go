@@ -1,4 +1,4 @@
-package backlog
+package reviewgate
 
 import (
 	"context"
@@ -17,7 +17,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
@@ -33,7 +32,7 @@ import (
 // item.SkipReviewGate is true.
 func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 
 	item := &backlogdto.BacklogItemData{
@@ -48,7 +47,7 @@ func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 
 	var onPassCalled atomic.Bool
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
@@ -58,7 +57,7 @@ func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when SkipReviewGate is true")
+	assert.Equal(t, 0, spawner.CallCount(), "session creator must not be consulted when SkipReviewGate is true")
 	assert.False(t, onPassCalled.Load(), "onPass must not be called when SkipReviewGate is true")
 }
 
@@ -67,7 +66,7 @@ func TestReviewGateRunner_SkipReviewGate(t *testing.T) {
 // linking the review role to the real Instance UUID returned by the spawner.
 func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -77,7 +76,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
 		Status:             string(session.BacklogStatusInProgress),
-		RepoPath:           newNonEmptyDiffGitRepo(t),
+		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -96,7 +95,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 	}
 
 	reviewInstance := &session.Instance{UUID: uuid.New().String()}
-	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
@@ -107,7 +106,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 		onPassCalled.Store(true)
 	})
 
-	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
+	require.Equal(t, 1, spawner.CallCount(), "SpawnReviewSession must be called exactly once")
 	assert.False(t, onPassCalled.Load(), "onPass must never be called directly by Run anymore — the verdict is only known once the spawned session exits")
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
@@ -132,7 +131,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 // hardcoded BuildReviewPrompt content.
 func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPipelineMode(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -153,7 +152,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
 		Status:             string(session.BacklogStatusInProgress),
-		RepoPath:           newNonEmptyDiffGitRepo(t),
+		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 		PipelineMode:       "quick",
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
@@ -173,15 +172,15 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 		PipelineMode: "quick",
 	}
 
-	spawner := &mockReviewGateSpawner{instance: &session.Instance{UUID: uuid.New().String()}}
+	spawner := &blktest.MockReviewGateSpawner{Instance: &session.Instance{UUID: uuid.New().String()}}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, engine)
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
-	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
-	prompt := spawner.getLastPrompt()
+	require.Equal(t, 1, spawner.CallCount(), "SpawnReviewSession must be called exactly once")
+	prompt := spawner.LastPrompt()
 	assert.Contains(t, prompt, "CUSTOM REVIEW MARKER for "+item.ID,
 		"a custom PipelineMode's ReviewPromptTemplate must drive the real review gate's prompt")
 	assert.NotContains(t, prompt, "Call submit_review_verdict ONCE",
@@ -192,7 +191,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 // error is logged and Run returns cleanly without persisting a review ItemSession.
 func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -201,7 +200,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
 		Status:             string(session.BacklogStatusInProgress),
-		RepoPath:           newNonEmptyDiffGitRepo(t),
+		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -216,7 +215,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: createdItemData.RepoPath}
 
-	spawner := &mockReviewGateSpawner{err: errors.New("boom: could not create tmux session")}
+	spawner := &blktest.MockReviewGateSpawner{Err: errors.New("boom: could not create tmux session")}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
@@ -226,7 +225,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 	})
 
-	assert.Equal(t, 1, spawner.getCallCount())
+	assert.Equal(t, 1, spawner.CallCount())
 
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
@@ -239,7 +238,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 // returns cleanly (does not panic) when no review mechanism is configured at all.
 func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -248,7 +247,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
 		Status:             string(session.BacklogStatusInProgress),
-		RepoPath:           newNonEmptyDiffGitRepo(t),
+		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -288,7 +287,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 // threaded-through text.
 func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -299,7 +298,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
 		Status:             string(session.BacklogStatusInProgress),
-		RepoPath:           newNonEmptyDiffGitRepo(t),
+		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -320,16 +319,16 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 		RepoPath: createdItemData.RepoPath,
 	}
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, nil)
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
-	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
+	require.Equal(t, 1, spawner.CallCount(), "SpawnReviewSession must be called exactly once")
 
-	prompt := spawner.getLastPrompt()
+	prompt := spawner.LastPrompt()
 	assert.True(t,
 		strings.Contains(prompt, "Verification Evidence") && strings.Contains(prompt, "Category=Backlog"),
 		"reviewer prompt must contain the labeled Verification Evidence section with the work session's reported notes; got prompt: %s", prompt)
@@ -344,7 +343,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 // passed to SpawnReviewSession.
 func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPredatesIt(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -359,7 +358,7 @@ func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPred
 		AcceptanceCriteria: session.AcCriteriaJSON(liveAC),
 		Priority:           1,
 		Status:             string(session.BacklogStatusInProgress),
-		RepoPath:           newNonEmptyDiffGitRepo(t),
+		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	}
 	createdItemData, err := storage.CreateBacklogItem(ctx, itemData)
 	require.NoError(t, err)
@@ -379,34 +378,18 @@ func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPred
 		AcceptanceCriteria: session.AcCriteriaJSON(liveAC),
 	}
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, func() session.Notifier { return nil }, getSessionCreator, nil)
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
-	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must be called exactly once")
+	require.Equal(t, 1, spawner.CallCount(), "SpawnReviewSession must be called exactly once")
 
-	prompt := spawner.getLastPrompt()
+	prompt := spawner.LastPrompt()
 	assert.Contains(t, prompt, liveNote,
 		"reviewer prompt must contain the live Note merged from item.AcceptanceCriteria even though it postdates the ItemSession's AcSnapshot")
-}
-
-// fakeAutoReopenSpawner is a test double implementing AutoReopenSpawner, recording
-// every call and signaling on a channel so async callers (spawnReviewGate invokes
-// it in a goroutine) can be synchronized with in tests.
-type fakeAutoReopenSpawner struct {
-	called chan string // item IDs, one per call
-}
-
-func newFakeAutoReopenSpawner() *fakeAutoReopenSpawner {
-	return &fakeAutoReopenSpawner{called: make(chan string, 8)}
-}
-
-func (f *fakeAutoReopenSpawner) AutoReopenAfterFailedReview(ctx context.Context, itemID string) error {
-	f.called <- itemID
-	return nil
 }
 
 // forceEmptyBranchNameViaRawSQL forces the branch_name column of the worktrees row
@@ -433,18 +416,6 @@ func forceEmptyBranchNameViaRawSQL(t *testing.T, storage *session.Storage, sessi
 	require.Equal(t, int64(1), rowsAffected, "expected exactly one worktrees row for session_name=%q", sessionName)
 }
 
-// newNonEmptyDiffGitRepo creates a small real git repo with two commits (an initial
-// commit plus a second one adding change.txt), so GetGitDiff's implicit HEAD~1..HEAD
-// range produces a real, non-empty diff.
-func newNonEmptyDiffGitRepo(t *testing.T) string {
-	t.Helper()
-	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "README.md", "base\n", "initial")
-	commitFile(t, repoDir, "change.txt", "change\n", "add change")
-	return repoDir
-}
-
 // TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnverifiable
 // is a regression test for a live-data bug: when a session's worktree exists but its
 // recorded base_commit_sha points at a git object that no longer exists (e.g. pruned,
@@ -461,8 +432,8 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	// RecoverBaseCommitSHA fails here and hits review_gate.go's WarningLog.Printf
 	// directly; redirect it so this write serializes against every other test's
 	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
-	quietWarningLog(t)
-	storage, cleanup := createTestStorage(t)
+	blktest.QuietWarningLog(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -478,7 +449,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	// TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBlocks's
 	// "repair resolves but the recovered diff is empty" sub-branch below.
 	repoDir := t.TempDir()
-	initialCommitRepo(t, repoDir, "feature")
+	blktest.InitialCommitRepo(t, repoDir, "feature")
 
 	itemData := backlogdto.BacklogItemData{
 		Title:              "Diff compute failure test",
@@ -500,7 +471,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 
 	// Record a worktree for the work session whose base_commit_sha is a well-formed but
 	// nonexistent SHA — this is what a pruned/corrupted commit looks like in practice.
-	inst := newTestInstance("diff-error-test")
+	inst := blktest.NewTestInstance("diff-error-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-error-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
@@ -510,10 +481,10 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 
 	// The session creator must never be consulted — the review should be blocked
 	// before reaching it.
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
@@ -526,7 +497,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the diff could not be computed")
+	assert.Equal(t, 0, spawner.CallCount(), "session creator must not be consulted when the diff could not be computed")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
@@ -536,7 +507,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	assert.Contains(t, notifier.Titles(), "Review blocked — diff computation failed")
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the cap/notify machinery eventually engages")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
@@ -560,12 +531,12 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 // straight through to the same block-and-notify path as the worktree-present case.
 func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initialCommitRepo(t, repoDir, "main")
+	blktest.InitialCommitRepo(t, repoDir, "main")
 
 	itemData := backlogdto.BacklogItemData{
 		Title:              "No worktree recorded, diff compute failure test",
@@ -590,10 +561,10 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
@@ -606,7 +577,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the diff could not be computed")
+	assert.Equal(t, 0, spawner.CallCount(), "session creator must not be consulted when the diff could not be computed")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
@@ -616,7 +587,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	assert.Contains(t, notifier.Titles(), "Review blocked — diff computation failed")
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the cap/notify machinery eventually engages")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
@@ -642,14 +613,14 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	// Empty committed diff hits review_gate.go's WarningLog.Printf directly; redirect
 	// it so this write serializes against every other test's concurrent
 	// swapWarningLog redirection instead of landing in one of their buffers.
-	quietWarningLog(t)
-	storage, cleanup := createTestStorage(t)
+	blktest.QuietWarningLog(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initialCommitRepo(t, repoDir, "main")
-	headSHA := headCommitSHA(t, repoDir)
+	blktest.InitialCommitRepo(t, repoDir, "main")
+	headSHA := blktest.HeadCommitSHA(t, repoDir)
 
 	itemData := backlogdto.BacklogItemData{
 		Title:              "Empty committed diff test",
@@ -675,10 +646,10 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
@@ -691,7 +662,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the committed diff is empty")
+	assert.Equal(t, 0, spawner.CallCount(), "session creator must not be consulted when the committed diff is empty")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
@@ -701,7 +672,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	assert.Contains(t, notifier.Titles(), "Review blocked — no changes to review")
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the item returns to in_progress for real rework")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
@@ -715,8 +686,8 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 func newEmptyDiffFixture(t *testing.T, ctx context.Context, storage *session.Storage, title string) (*backlogdto.BacklogItemData, backlogdto.ItemSessionSummary) {
 	t.Helper()
 	repoDir := t.TempDir()
-	initialCommitRepo(t, repoDir, "main")
-	headSHA := headCommitSHA(t, repoDir)
+	blktest.InitialCommitRepo(t, repoDir, "main")
+	headSHA := blktest.HeadCommitSHA(t, repoDir)
 
 	itemData := backlogdto.BacklogItemData{
 		Title:              title,
@@ -752,14 +723,14 @@ func newEmptyDiffFixture(t *testing.T, ctx context.Context, storage *session.Sto
 // instead of the hardcoded FAIL, so a human/reviewer can actually confirm the claim.
 func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Duplicate claim, empty diff test")
 	workIS.VerificationNotes = "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372 reason=already merged in #372"
 
-	spawner := &mockReviewGateSpawner{instance: &session.Instance{UUID: uuid.New().String()}}
+	spawner := &blktest.MockReviewGateSpawner{Instance: &session.Instance{UUID: uuid.New().String()}}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	notifier := &sessiontest.FakeNotifier{}
@@ -772,9 +743,9 @@ func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *t
 		onPassCalled.Store(true)
 	})
 
-	require.Equal(t, 1, spawner.getCallCount(), "a duplicate_ref marker must route to a real review session, not the hardcoded empty-diff FAIL")
+	require.Equal(t, 1, spawner.CallCount(), "a duplicate_ref marker must route to a real review session, not the hardcoded empty-diff FAIL")
 	assert.False(t, onPassCalled.Load(), "onPass must never be called directly by Run — the verdict is only known once the spawned session exits")
-	assert.Contains(t, spawner.lastPrompt, "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372", "the reviewer prompt must carry the duplicate_ref evidence")
+	assert.Contains(t, spawner.LastPrompt(), "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372", "the reviewer prompt must carry the duplicate_ref evidence")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 	require.NoError(t, err)
@@ -792,7 +763,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *t
 // produces that FAIL, so the breaker never even sees two comparable verdicts.
 func TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -803,13 +774,13 @@ func TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims(t *te
 	getNotifier := func() session.Notifier { return nil }
 
 	for i := 0; i < 2; i++ {
-		spawner := &mockReviewGateSpawner{instance: &session.Instance{UUID: uuid.New().String()}}
+		spawner := &blktest.MockReviewGateSpawner{Instance: &session.Instance{UUID: uuid.New().String()}}
 		getSessionCreator := func() ReviewGateSpawner { return spawner }
 		runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
 		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
-		require.Equal(t, 1, spawner.getCallCount(), "call %d: duplicate claim must spawn a real review session", i+1)
+		require.Equal(t, 1, spawner.CallCount(), "call %d: duplicate claim must spawn a real review session", i+1)
 
 		outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
 		require.NoError(t, err)
@@ -891,13 +862,13 @@ func TestParseDuplicateRef(t *testing.T) {
 // diff in its prompt.
 func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "README.md", "base\n", "initial")
+	blktest.InitConfiguredRepo(t, repoDir, "main")
+	blktest.CommitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// Real feature branch with real committed work, checked out in its own dedicated
 	// worktree directory — the same shape as ae1e2070's stelekit worktree, which had a
@@ -929,7 +900,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	// Same corruption as the blocking test: a well-formed but nonexistent base SHA.
 	// GetGitDiff(worktree) fails the same way GetGitDiffRef(repo fallback) does,
 	// exactly as observed for ae1e2070.
-	inst := newTestInstance("diff-repair-test")
+	inst := blktest.NewTestInstance("diff-repair-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "diff-repair-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
@@ -937,7 +908,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 
@@ -951,10 +922,10 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 		onPassCalled.Store(true)
 	})
 
-	require.Equal(t, 1, spawner.getCallCount(), "SpawnReviewSession must actually be called with the recovered diff instead of the review being blocked")
+	require.Equal(t, 1, spawner.CallCount(), "SpawnReviewSession must actually be called with the recovered diff instead of the review being blocked")
 	assert.False(t, onPassCalled.Load(), "onPass is never called directly by Run anymore")
 
-	prompt := spawner.getLastPrompt()
+	prompt := spawner.LastPrompt()
 	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via merge-base, not an empty one")
 
 	assert.NotContains(t, notifier.Titles(), "Review blocked — diff computation failed", "the review must not be reported as blocked when auto-repair succeeded")
@@ -979,14 +950,14 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	// The recovered-but-empty diff path hits review_gate.go's WarningLog.Printf
 	// directly; redirect it so this write serializes against every other test's
 	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
-	quietWarningLog(t)
-	storage, cleanup := createTestStorage(t)
+	blktest.QuietWarningLog(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "README.md", "base\n", "initial")
+	blktest.InitConfiguredRepo(t, repoDir, "main")
+	blktest.CommitFile(t, repoDir, "README.md", "base\n", "initial")
 	// Deliberately no divergent branch: "main" is the only branch and repoPath's own
 	// checked-out HEAD already sits on it, so merge-base(HEAD, "main") collapses to
 	// HEAD itself and the "recovered" diff against it is empty.
@@ -1012,7 +983,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	// Same corruption shape as the other diff-computation-failure tests: a well-formed
 	// but nonexistent base SHA, forcing GetGitDiff/GetGitDiffRef to fail and trigger
 	// the auto-repair attempt below.
-	inst := newTestInstance("diff-repair-empty-test")
+	inst := blktest.NewTestInstance("diff-repair-empty-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-repair-empty-test", "main", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
@@ -1022,10 +993,10 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 
 	// The session creator must never be consulted — a recovered-but-empty diff must
 	// still block before ever reaching the reviewer.
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
@@ -1038,7 +1009,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must never be consulted when the recovered diff is still empty")
+	assert.Equal(t, 0, spawner.CallCount(), "session creator must never be consulted when the recovered diff is still empty")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
@@ -1049,7 +1020,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	assert.NotContains(t, notifier.Titles(), "Review auto-repaired a broken diff", "an untrusted (empty) recovery must never be reported to the operator as a successful repair")
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the cap/notify machinery eventually engages")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
@@ -1066,12 +1037,12 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 // ref — itself an error, but for the wrong, less specific reason) is ever reached.
 func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirely(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initialCommitRepo(t, repoDir, "main")
+	blktest.InitialCommitRepo(t, repoDir, "main")
 
 	itemData := backlogdto.BacklogItemData{
 		Title:              "No branch name, diff compute failure test",
@@ -1106,7 +1077,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	// raw SQL UPDATE against the same on-disk DB file, bypassing the Go-level validator
 	// entirely to reproduce data that predates it (or was written by a path other than
 	// the ent ORM) — exactly the shape this guard exists to defend against.
-	inst := newTestInstance("diff-error-no-branch-test")
+	inst := blktest.NewTestInstance("diff-error-no-branch-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-error-no-branch-test", "placeholder-branch", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
@@ -1115,7 +1086,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 
@@ -1124,15 +1095,15 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
-	redirectInfoLog(t)
-	warnBuf := captureWarningLog(t)
+	blktest.RedirectInfoLog(t)
+	warnBuf := blktest.CaptureWarningLog(t)
 
 	var onPassCalled atomic.Bool
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the worktree identity could not be verified")
+	assert.Equal(t, 0, spawner.CallCount(), "session creator must not be consulted when the worktree identity could not be verified")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
 	assert.NotContains(t, warnBuf.String(), "RecoverBaseCommitSHA item="+item.ID, "repair must never be attempted when the identity guard has already blocked the review")
 
@@ -1157,13 +1128,13 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 // before ever computing a diff.
 func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "README.md", "base\n", "initial")
+	blktest.InitConfiguredRepo(t, repoDir, "main")
+	blktest.CommitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// The path this session's worktree row will claim — but it's checked out on
 	// "other-item-branch" (a later, unrelated item's work), not this session's own
@@ -1193,7 +1164,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	})
 	require.NoError(t, err)
 
-	inst := newTestInstance("worktree-mismatch-test")
+	inst := blktest.NewTestInstance("worktree-mismatch-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, recycledPath, "worktree-mismatch-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
@@ -1203,10 +1174,10 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 
 	// The session creator must never be consulted — the review should be blocked
 	// before any diff/branch-sync operation ever touches the mismatched worktree.
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
@@ -1219,7 +1190,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must never be consulted for a worktree identity mismatch")
+	assert.Equal(t, 0, spawner.CallCount(), "session creator must never be consulted for a worktree identity mismatch")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
@@ -1229,7 +1200,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	assert.Contains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so the cap/notify machinery eventually engages")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
@@ -1244,13 +1215,13 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 // new verdict's message text varying between attempts.
 func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaIsRepeatedFailure(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "README.md", "base\n", "initial")
+	blktest.InitConfiguredRepo(t, repoDir, "main")
+	blktest.CommitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	recycledPath := t.TempDir()
 	sessiontest.RunGitOrFail(t, repoDir, "worktree", "add", "-b", "other-item-branch", recycledPath, "main")
@@ -1268,7 +1239,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 	notifier := &sessiontest.FakeNotifier{}
 	getNotifier := func() session.Notifier { return notifier }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -1283,7 +1254,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 		require.NoError(t, err)
 
 		sessionName := fmt.Sprintf("worktree-mismatch-repeat-test-%d", i)
-		inst := newTestInstance(sessionName)
+		inst := blktest.NewTestInstance(sessionName)
 		inst.UUID = workSessionUUID
 		inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 			repoDir, recycledPath, sessionName, "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
@@ -1314,14 +1285,14 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 // diff recovered via that fallback.
 func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardBlock(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "README.md", "base\n", "initial")
-	baseSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "main"))
+	blktest.InitConfiguredRepo(t, repoDir, "main")
+	blktest.CommitFile(t, repoDir, "README.md", "base\n", "initial")
+	baseSHA := strings.TrimSpace(blktest.RunGitCapture(t, repoDir, "rev-parse", "main"))
 
 	// A real worktree, with real committed work, that is then fully torn down —
 	// `git worktree remove` deletes the directory but leaves the branch (and its
@@ -1352,7 +1323,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	})
 	require.NoError(t, err)
 
-	inst := newTestInstance("worktree-gone-test")
+	inst := blktest.NewTestInstance("worktree-gone-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "worktree-gone-test", "feature", baseSHA)
@@ -1360,7 +1331,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	notifier := &sessiontest.FakeNotifier{}
@@ -1373,11 +1344,11 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 		onPassCalled.Store(true)
 	})
 
-	require.Equal(t, 1, spawner.getCallCount(), "a gone worktree with an intact branch must fall back to repoPath and proceed, not hard-block as an identity mismatch")
+	require.Equal(t, 1, spawner.CallCount(), "a gone worktree with an intact branch must fall back to repoPath and proceed, not hard-block as an identity mismatch")
 	assert.False(t, onPassCalled.Load())
 	assert.NotContains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 
-	prompt := spawner.getLastPrompt()
+	prompt := spawner.LastPrompt()
 	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via the repoPath fallback")
 }
 
@@ -1397,13 +1368,13 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 // item.RepoPath here too and let the review proceed on the recovered diff.
 func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "README.md", "base\n", "initial")
+	blktest.InitConfiguredRepo(t, repoDir, "main")
+	blktest.CommitFile(t, repoDir, "README.md", "base\n", "initial")
 
 	// A real worktree, with real committed work, then fully torn down — same as the
 	// test above, except the recorded base_commit_sha below is corrupted/unreachable
@@ -1436,7 +1407,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 	})
 	require.NoError(t, err)
 
-	inst := newTestInstance("worktree-gone-basesha-corrupted-test")
+	inst := blktest.NewTestInstance("worktree-gone-basesha-corrupted-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "worktree-gone-basesha-corrupted-test", "feature", corruptedBaseSHA)
@@ -1444,7 +1415,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	notifier := &sessiontest.FakeNotifier{}
@@ -1457,11 +1428,11 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 		onPassCalled.Store(true)
 	})
 
-	require.Equal(t, 1, spawner.getCallCount(), "a gone worktree with a corrupted base SHA must recover via item.RepoPath and proceed, not hard-block")
+	require.Equal(t, 1, spawner.CallCount(), "a gone worktree with a corrupted base SHA must recover via item.RepoPath and proceed, not hard-block")
 	assert.False(t, onPassCalled.Load())
 	assert.NotContains(t, notifier.Titles(), "Review blocked — worktree identity mismatch")
 
-	prompt := spawner.getLastPrompt()
+	prompt := spawner.LastPrompt()
 	assert.Contains(t, prompt, "feature.txt", "the reviewer prompt must contain the real diff recovered via item.RepoPath after base-SHA repair")
 }
 
@@ -1475,9 +1446,9 @@ func TestWorktreeIdentityMismatch(t *testing.T) {
 	t.Parallel()
 
 	repoDir := t.TempDir()
-	initConfiguredRepo(t, repoDir, "main")
-	commitFile(t, repoDir, "f.txt", "x", "initial")
-	detachedSHA := strings.TrimSpace(runGitCapture(t, repoDir, "rev-parse", "HEAD"))
+	blktest.InitConfiguredRepo(t, repoDir, "main")
+	blktest.CommitFile(t, repoDir, "f.txt", "x", "initial")
+	detachedSHA := strings.TrimSpace(blktest.RunGitCapture(t, repoDir, "rev-parse", "HEAD"))
 	sessiontest.RunGitOrFail(t, repoDir, "checkout", detachedSHA)
 
 	notADir := filepath.Join(t.TempDir(), "not-a-dir")
@@ -1533,24 +1504,24 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	// The unresolvable branch-drift conflict hits review_gate.go's WarningLog.Printf
 	// directly; redirect it so this write serializes against every other test's
 	// concurrent swapWarningLog redirection instead of landing in one of their buffers.
-	quietWarningLog(t)
-	storage, cleanup := createTestStorage(t)
+	blktest.QuietWarningLog(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	origin := t.TempDir()
-	initConfiguredRepo(t, origin, "main")
-	commitFile(t, origin, "README.md", "# base\n", "initial commit")
+	blktest.InitConfiguredRepo(t, origin, "main")
+	blktest.CommitFile(t, origin, "README.md", "# base\n", "initial commit")
 
 	work := sessiontest.CloneWithOrigin(t, origin)
 	sessiontest.RunGitOrFail(t, work, "checkout", "-b", "feature")
-	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
+	baseSHA := strings.TrimSpace(blktest.RunGitCapture(t, work, "rev-parse", "HEAD"))
 
 	// The feature branch makes its own real edit to README.md.
-	commitFile(t, work, "README.md", "# Feature Edit\n", "feature: edit README")
+	blktest.CommitFile(t, work, "README.md", "# Feature Edit\n", "feature: edit README")
 
 	// Main diverges on the same line AND drifts well past the default threshold (50).
-	commitFile(t, origin, "README.md", "# Main Edit\n", "main: edit README")
+	blktest.CommitFile(t, origin, "README.md", "# Main Edit\n", "main: edit README")
 	commitOnRepo(t, origin, 55, "upstream")
 
 	itemData := backlogdto.BacklogItemData{
@@ -1571,7 +1542,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	})
 	require.NoError(t, err)
 
-	inst := newTestInstance("branch-drift-conflict-test")
+	inst := blktest.NewTestInstance("branch-drift-conflict-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-conflict-test", "feature", baseSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
@@ -1580,10 +1551,10 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 
 	// The session creator must never be consulted — review must be blocked before
 	// ever reaching it, so no reviewer is ever handed the (would-be) drift-inflated diff.
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	getAutoReopener := func() AutoReopenSpawner { return reopener }
 
 	notifier := &sessiontest.FakeNotifier{}
@@ -1596,7 +1567,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 		onPassCalled.Store(true)
 	})
 
-	assert.Equal(t, 0, spawner.getCallCount(), "session creator must not be consulted when the branch could not be auto-synced")
+	assert.Equal(t, 0, spawner.CallCount(), "session creator must not be consulted when the branch could not be auto-synced")
 	assert.False(t, onPassCalled.Load(), "onPass must not fire for a blocked review")
 
 	outcome, err := storage.GetMostRecentReviewVerdictForItem(ctx, item.ID)
@@ -1606,7 +1577,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	assert.Contains(t, notifier.Titles(), "Review blocked — branch drifted too far behind main")
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID, "auto-reopen must still be invoked so a fix session can resolve the conflict")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
@@ -1614,7 +1585,7 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 
 	// The worktree must have been left clean — the aborted merge must not strand a
 	// half-merged tree for whatever touches this worktree next.
-	status := runGitCapture(t, work, "status", "--porcelain")
+	status := blktest.RunGitCapture(t, work, "status", "--porcelain")
 	assert.Empty(t, strings.TrimSpace(status))
 }
 
@@ -1625,20 +1596,20 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 // just been fixed transparently.
 func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConflict(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	origin := t.TempDir()
-	initConfiguredRepo(t, origin, "main")
-	commitFile(t, origin, "README.md", "# base\n", "initial commit")
+	blktest.InitConfiguredRepo(t, origin, "main")
+	blktest.CommitFile(t, origin, "README.md", "# base\n", "initial commit")
 
 	work := sessiontest.CloneWithOrigin(t, origin)
 	sessiontest.RunGitOrFail(t, work, "checkout", "-b", "feature")
-	baseSHA := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "HEAD"))
+	baseSHA := strings.TrimSpace(blktest.RunGitCapture(t, work, "rev-parse", "HEAD"))
 
 	// The feature branch's own unrelated change.
-	commitFile(t, work, "feature.txt", "feature work\n", "feature work")
+	blktest.CommitFile(t, work, "feature.txt", "feature work\n", "feature work")
 
 	// Main drifts well past the threshold, but on unrelated files.
 	commitOnRepo(t, origin, 55, "upstream")
@@ -1661,7 +1632,7 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 	})
 	require.NoError(t, err)
 
-	inst := newTestInstance("branch-drift-clean-sync-test")
+	inst := blktest.NewTestInstance("branch-drift-clean-sync-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager.Worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-clean-sync-test", "feature", baseSHA)
 	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
@@ -1669,7 +1640,7 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: origin}
 
 	reviewInstance := &session.Instance{UUID: uuid.New().String()}
-	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getNotifier := func() session.Notifier { return nil }
@@ -1678,25 +1649,13 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 
 	runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
-	assert.Equal(t, 1, spawner.getCallCount(), "a cleanly-synced branch must proceed to a real review, not stay blocked")
+	assert.Equal(t, 1, spawner.CallCount(), "a cleanly-synced branch must proceed to a real review, not stay blocked")
 
 	// The sync must have actually landed on origin — otherwise the next reconciliation
 	// tick (or a human inspecting the PR) sees the drift reappear.
-	originTip := strings.TrimSpace(runGitCapture(t, origin, "rev-parse", "feature"))
-	workTip := strings.TrimSpace(runGitCapture(t, work, "rev-parse", "feature"))
+	originTip := strings.TrimSpace(blktest.RunGitCapture(t, origin, "rev-parse", "feature"))
+	workTip := strings.TrimSpace(blktest.RunGitCapture(t, work, "rev-parse", "feature"))
 	assert.Equal(t, workTip, originTip, "the merge commit must be pushed to origin, not left local-only")
-}
-
-// runGitCapture runs a git command in dir and returns its combined output, failing
-// the test on error. Distinct from runGitOrFail (which discards output) — used where
-// the test needs the command's stdout (rev-parse, status --porcelain).
-func runGitCapture(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := safeexec.CommandContext(context.Background(), "git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	require.NoErrorf(t, err, "git %v failed: %s", args, out)
-	return string(out)
 }
 
 // TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateContextRequiresDiffIsFalse
@@ -1715,7 +1674,7 @@ func runGitCapture(t *testing.T, dir string, args ...string) string {
 // called at all, not merely that it happened to succeed.
 func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateContextRequiresDiffIsFalse(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -1744,7 +1703,7 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: createdItemData.RepoPath}
 
 	reviewInstance := &session.Instance{UUID: uuid.New().String()}
-	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getNotifier := func() session.Notifier { return nil }
@@ -1758,9 +1717,9 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 	}
 	runner.Run(ctx, gateContext, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
-	require.Equal(t, 1, spawner.getCallCount(), "a RequiresDiff:false gate must proceed straight to the review-prompt call, never blocked by a diff-computation failure against the (deliberately invalid) RepoPath")
+	require.Equal(t, 1, spawner.CallCount(), "a RequiresDiff:false gate must proceed straight to the review-prompt call, never blocked by a diff-computation failure against the (deliberately invalid) RepoPath")
 
-	prompt := spawner.getLastPrompt()
+	prompt := spawner.LastPrompt()
 	assert.Contains(t, prompt, noDiffExpectedSection, "prompt must explain no diff was expected for this gate")
 	assert.NotContains(t, prompt, "no committed code changes were found for this session", "must not render the review->pr_pending-flavored empty-diff message for a gate that never expected a diff")
 
@@ -1784,8 +1743,8 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 // implicit in the synthetic ItemSession+ReviewVerdict pair.
 func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFailsClosed(t *testing.T) {
 	t.Parallel()
-	quietWarningLog(t)
-	storage, cleanup := createTestStorage(t)
+	blktest.QuietWarningLog(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 	client := storage.GetEntClient()
@@ -1807,14 +1766,14 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Configured automated-review gate FAIL test")
 
 	repo := session.NewEntGateSatisfactionRepository(client)
-	spawner := &mockReviewGateSpawner{}
-	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return newFakeAutoReopenSpawner() }, func() session.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
+	spawner := &blktest.MockReviewGateSpawner{}
+	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() session.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
 	runner.SetGateSatisfactionRepository(repo)
 
 	gateContext := GateContext{GateID: gate.ID.String(), TargetTransition: session.BacklogStatus(toStage.Slug), RequiresDiff: true}
 	runner.Run(ctx, gateContext, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
-	require.Equal(t, 0, spawner.getCallCount(), "the empty-diff guard must block before ever spawning a review session")
+	require.Equal(t, 0, spawner.CallCount(), "the empty-diff guard must block before ever spawning a review session")
 
 	record, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), gate.ID)
 	require.NoError(t, getErr, "recordGateSatisfaction must have written a row for this (item, gate) pair")
@@ -1840,19 +1799,19 @@ func TestReviewGateRunner_should_RecordGateSatisfaction_When_ConfiguredGateFails
 // persisted TransitionGate row to key one on.
 func TestReviewGateRunner_should_NotRecordGateSatisfaction_When_BuiltInGateContext(t *testing.T) {
 	t.Parallel()
-	quietWarningLog(t)
-	storage, cleanup := createTestStorage(t)
+	blktest.QuietWarningLog(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 	ctx := context.Background()
 
 	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Built-in gate context must not record satisfaction")
 
 	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	spawner := &mockReviewGateSpawner{}
-	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return newFakeAutoReopenSpawner() }, func() session.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
+	spawner := &blktest.MockReviewGateSpawner{}
+	runner := NewReviewGateRunner(storage, func() AutoReopenSpawner { return blktest.NewFakeAutoReopenSpawner() }, func() session.Notifier { return nil }, func() ReviewGateSpawner { return spawner }, nil)
 	runner.SetGateSatisfactionRepository(repo)
 
-	runner.Run(ctx, builtInReviewGateContext, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
+	runner.Run(ctx, GateContext{TargetTransition: session.BacklogStatusReview, RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
 
 	_, getErr := repo.GetByItemAndGate(ctx, uuid.MustParse(item.ID), uuid.New())
 	require.Error(t, getErr, "no row exists for any gate id since GateID==\"\" must never call Create/Update")
@@ -1870,7 +1829,7 @@ func TestDiffFromMergeBaseWhenResumed(t *testing.T) {
 	item := &backlogdto.BacklogItemData{RepoPath: dir}
 
 	// Zero commits ahead of main: still empty, so the no-changes gate holds.
-	tip := headCommitSHA(t, dir)
+	tip := blktest.HeadCommitSHA(t, dir)
 	diff, _ := r.diffFromMergeBaseWhenResumed(context.Background(), item, dir, "work", tip, "", false)
 	require.Empty(t, strings.TrimSpace(diff))
 

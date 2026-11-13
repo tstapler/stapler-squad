@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -3839,7 +3840,7 @@ func (s *BacklogService) resolveCodebaseWorkDir(ctx context.Context, repoPath st
 	// present-but-wrong-branch directory must not be handed to the reviewer as this
 	// session's own codebase; a missing directory is not itself a mismatch (mirrors
 	// the review-gate fallback), so it still reaches the exists-check below.
-	if mismatchReason := backlog.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+	if mismatchReason := reviewgate.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
 		log.Warn("[TriggerReReview] resolveCodebaseWorkDir worktree identity mismatch", "session", workSession.SessionUUID, "worktree", wt.WorktreePath, "reason", mismatchReason)
 		return wt.WorktreePath, false
 	}
@@ -3873,7 +3874,7 @@ func (s *BacklogService) getWorkSessionDiffTruncated(ctx context.Context, repoPa
 	// gone directory (set base/head from the row, skip straight to the repoPath
 	// fallback below) rather than trusting GetGitDiff to diff the wrong checkout.
 	if haveWorktree {
-		if mismatchReason := backlog.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
+		if mismatchReason := reviewgate.WorktreeIdentityMismatch(wt.WorktreePath, wt.BranchName); mismatchReason != "" {
 			log.Warn("[TriggerReReview] getWorkSessionDiff worktree identity mismatch", "session", workSession.SessionUUID, "worktree", wt.WorktreePath, "reason", mismatchReason)
 			haveWorktree = false
 			diffBaseSHA = wt.BaseCommitSHA

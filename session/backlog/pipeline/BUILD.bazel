@@ -46,7 +46,6 @@ go_test(
         "context_bk_test.go",
         "engine_bk_test.go",
         "engine_characterization_test.go",
-        "helpers_test.go",
         "mode_validation_bk_test.go",
         "post_review_prompt_test.go",
         "prompt_sections_bk_test.go",
@@ -60,7 +59,6 @@ go_test(
     deps = [
         "//envtest",
         "//executor/safeexec",
-        "//log",
         "//session",
         "//session/backlog/internal/blktest",
         "//session/domain/backlogdto",

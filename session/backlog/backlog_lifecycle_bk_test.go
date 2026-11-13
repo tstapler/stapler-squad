@@ -19,6 +19,8 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
@@ -648,64 +650,12 @@ func TestBacklogLifecycleListener_NewBacklogLifecycleListenerWithSpawner(t *test
 	defer cleanup()
 
 	// Create a mock spawner.
-	mockSpawner := &mockReviewGateSpawner{}
+	mockSpawner := &blktest.MockReviewGateSpawner{}
 
 	listener := NewBacklogLifecycleListenerWithSpawner(storage, mockSpawner)
 	require.NotNil(t, listener)
 	require.Equal(t, storage, listener.storage)
 	require.Equal(t, mockSpawner, listener.sessionCreator)
-}
-
-// mockReviewGateSpawner is a mock implementation of ReviewGateSpawner for testing.
-// Guarded by mu since SpawnReviewSession can be invoked from a goroutine (e.g. via
-// onSessionExited's bounded-semaphore fan-out).
-type mockReviewGateSpawner struct {
-	mu              sync.Mutex
-	spawnCalled     bool
-	callCount       int
-	lastItem        *backlogdto.BacklogItemData
-	lastItemSession string
-	lastPrompt      string
-
-	// err, when non-nil, is returned by SpawnReviewSession instead of a synthesized
-	// Instance — used to test the spawner-error path.
-	err error
-	// instance, when non-nil, is returned by SpawnReviewSession on success instead of
-	// a synthesized one with a random UUID — used to assert the returned Instance's
-	// UUID is exactly what gets linked into the resulting ItemSession.
-	instance *session.Instance
-}
-
-func (m *mockReviewGateSpawner) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*session.Instance, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.spawnCalled = true
-	m.callCount++
-	m.lastItem = item
-	m.lastItemSession = itemSessionID
-	m.lastPrompt = prompt
-	if m.err != nil {
-		return nil, m.err
-	}
-	if m.instance != nil {
-		return m.instance, nil
-	}
-	return &session.Instance{UUID: uuid.New().String()}, nil
-}
-
-// getCallCount returns the number of times SpawnReviewSession has been called, under
-// the mock's own lock — safe to read concurrently with in-flight calls.
-func (m *mockReviewGateSpawner) getCallCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.callCount
-}
-
-// getLastPrompt returns the prompt passed to the most recent SpawnReviewSession call.
-func (m *mockReviewGateSpawner) getLastPrompt() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastPrompt
 }
 
 // fakePRPendingChecker is a test double implementing prPendingChecker, used to
@@ -752,7 +702,7 @@ func (f *fakePRPendingChecker) ClosePR(ctx context.Context, prNumber int, commen
 }
 
 // fakePRFixSpawner is a test double implementing PRFixSpawner, recording
-// whether/how AutoReopenForPRFix was called. Same shape as mockReviewGateSpawner.
+// whether/how AutoReopenForPRFix was called. Same shape as blktest.MockReviewGateSpawner.
 //
 // err and onCall let a test simulate AutoReopenForPRFix's three real outcomes
 // (BUG-040 regression coverage for ReconcilePRPending's closed-PR branch,
@@ -2810,7 +2760,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
-	repoDir := newNonEmptyDiffGitRepo(t)
+	repoDir := blktest.NewNonEmptyDiffGitRepo(t)
 
 	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
 		Title:              "Drafted PR body gets a backlog link",
@@ -3778,7 +3728,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 	})
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	fakeCreator := &fakePRCreator{}
 	listener.SetPRCreatorFactory(func(repoPath, worktreePath, sessionName, branchName, baseCommitSHA string) prCreator {
@@ -3788,7 +3738,7 @@ func TestHandleReviewSessionExited_Fail_InvokesAutoReopener(t *testing.T) {
 	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, item.ID, gotItemID)
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
@@ -3809,7 +3759,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, nil)
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -3817,7 +3767,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesAndInvokesAutoReopener(t *t
 	listener.handleReviewSessionExited(ctx, reviewIS, false)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
@@ -3858,7 +3808,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 	_, reviewIS, _, _ := newHandleReviewSessionExitedFixture(t, storage, nil)
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -3872,7 +3822,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 	listener.handleReviewSessionExited(ctx, reviewIS, true)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview on tick 1 (ungated — no bouncing row yet)")
 	}
@@ -3896,7 +3846,7 @@ func TestHandleReviewSessionExited_NoVerdict_NotifiesOnlyOnce_AcrossRepeatedSwee
 	listener.handleReviewSessionExited(ctx, reviewIS, true)
 
 	select {
-	case id := <-reopener.called:
+	case id := <-reopener.Called:
 		t.Fatalf("bouncing gate is mid-backoff on tick 2 — AutoReopenAfterFailedReview must not be invoked, got call for item=%s", id)
 	case <-time.After(300 * time.Millisecond):
 	}
@@ -3936,7 +3886,7 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 	require.False(t, hasCapRowYet, "must not have a bounce_cap_exhausted row before the cap is actually crossed")
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -3944,7 +3894,7 @@ func TestAutoReopenWithBackoffGate_should_MarkBounceCapExhausted_When_JustParked
 	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, session.BacklogStatusInProgress)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
@@ -3987,7 +3937,7 @@ func TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetP
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -3995,7 +3945,7 @@ func TestAutoReopenWithBackoffGate_should_NotMarkBounceCapExhausted_When_NotYetP
 	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, session.BacklogStatusInProgress)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
@@ -4036,7 +3986,7 @@ func TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounc
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 	notifier := &sessiontest.FakeNotifier{}
 	listener.SetNotifier(notifier)
@@ -4047,7 +3997,7 @@ func TestAutoReopenWithBackoffGate_should_PassActualItemStatus_When_MarkingBounc
 	listener.autoReopenWithBackoffGate(ctx, item.ID, item.Title, session.BacklogStatusReview)
 
 	select {
-	case <-reopener.called:
+	case <-reopener.Called:
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called")
 	}
@@ -4076,7 +4026,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleRe
 	})
 
 	listener := NewBacklogLifecycleListener(storage)
-	reopener := newFakeAutoReopenSpawner()
+	reopener := blktest.NewFakeAutoReopenSpawner()
 	listener.SetAutoReopener(reopener)
 
 	done := make(chan struct{})
@@ -4087,7 +4037,7 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_RoutesToHandleRe
 	waitWithTimeout(t, done)
 
 	select {
-	case gotItemID := <-reopener.called:
+	case gotItemID := <-reopener.Called:
 		assert.Equal(t, reviewIS.BacklogItemID, gotItemID)
 	case <-time.After(wait.ScaleTimeout(30 * time.Second)):
 		t.Fatal("timeout waiting for AutoReopenAfterFailedReview to be called via onSessionExited routing")
@@ -4107,9 +4057,9 @@ func TestBacklogLifecycleListener_SetSessionCreator_WiresPostConstruction(t *tes
 	listener := NewBacklogLifecycleListener(storage)
 	require.Nil(t, listener.getSessionCreator())
 
-	spawner := &mockReviewGateSpawner{}
+	spawner := &blktest.MockReviewGateSpawner{}
 	listener.SetSessionCreator(spawner)
-	assert.Equal(t, ReviewGateSpawner(spawner), listener.getSessionCreator())
+	assert.Equal(t, reviewgate.ReviewGateSpawner(spawner), listener.getSessionCreator())
 }
 
 // TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSpawn
@@ -4188,7 +4138,7 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 		AcceptanceCriteria: `[]`,
 		Priority:           1,
 		Status:             string(session.BacklogStatusInProgress),
-		RepoPath:           newNonEmptyDiffGitRepo(t),
+		RepoPath:           blktest.NewNonEmptyDiffGitRepo(t),
 	})
 	require.NoError(t, err)
 
@@ -4201,7 +4151,7 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 	require.NoError(t, err)
 
 	reviewInstance := &session.Instance{UUID: uuid.New().String()}
-	spawner := &mockReviewGateSpawner{instance: reviewInstance}
+	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	listener := NewBacklogLifecycleListenerWithSpawner(storage, spawner)
 	// Explicitly confirm the nil-workflowEngine default this test relies on —
 	// transitionHasAutomatedReviewGate's literal `to == BacklogStatusReview`
@@ -4232,7 +4182,7 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 		}
 		return reviewEntry != nil
 	}, 10*time.Second, 20*time.Millisecond, "the built-in review->pr_pending gate must still spawn a review session and record its ItemSession")
-	require.Equal(t, 1, spawner.getCallCount())
+	require.Equal(t, 1, spawner.CallCount())
 
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
 	require.NoError(t, err)

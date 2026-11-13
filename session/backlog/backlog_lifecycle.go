@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/backlog/pipeline"
+	"github.com/tstapler/stapler-squad/session/backlog/reviewgate"
 	"github.com/tstapler/stapler-squad/session/backlog/stuck"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -52,7 +53,7 @@ type BacklogLifecycleListener struct {
 	// SessionService exists, so the spawner is wired post-construction via
 	// SetSessionCreator.
 	sessionCreatorMu sync.RWMutex
-	sessionCreator   ReviewGateSpawner
+	sessionCreator   reviewgate.ReviewGateSpawner
 
 	// poolMu guards headlessPool for concurrent Set/get access.
 	poolMu       sync.RWMutex
@@ -63,7 +64,7 @@ type BacklogLifecycleListener struct {
 
 	// autoReopenMu guards autoReopener for concurrent Set/get access.
 	autoReopenMu sync.RWMutex
-	autoReopener AutoReopenSpawner
+	autoReopener reviewgate.AutoReopenSpawner
 
 	// prFixMu guards prFixSpawner for concurrent Set/get access.
 	prFixMu      sync.RWMutex
@@ -234,7 +235,7 @@ type BacklogLifecycleListener struct {
 	shutdownCancel context.CancelFunc
 
 	// runner encapsulates the spawnReviewGate logic so it can be tested independently.
-	runner *ReviewGateRunner
+	runner *reviewgate.ReviewGateRunner
 
 	// pipelineEngine resolves mode-specific slash-command sets and prompts (Epic 1.5).
 	// Optional — nil (the default for every constructor except NewBacklogLifecycleListenerWithPool,
@@ -403,7 +404,7 @@ func (l *BacklogLifecycleListener) SetRepoSettingsSeam(s RepoSettingsSeam) {
 
 // SetAutoReopener wires in the spawner used to automatically reopen items for
 // rework when a review verdict is FAIL or PARTIAL.
-func (l *BacklogLifecycleListener) SetAutoReopener(r AutoReopenSpawner) {
+func (l *BacklogLifecycleListener) SetAutoReopener(r reviewgate.AutoReopenSpawner) {
 	l.autoReopenMu.Lock()
 	defer l.autoReopenMu.Unlock()
 	l.autoReopener = r
@@ -413,21 +414,21 @@ func (l *BacklogLifecycleListener) SetAutoReopener(r AutoReopenSpawner) {
 // after construction. Needed because production wiring
 // (server/dependencies.go) constructs this listener before SessionService
 // exists.
-func (l *BacklogLifecycleListener) SetSessionCreator(s ReviewGateSpawner) {
+func (l *BacklogLifecycleListener) SetSessionCreator(s reviewgate.ReviewGateSpawner) {
 	l.sessionCreatorMu.Lock()
 	defer l.sessionCreatorMu.Unlock()
 	l.sessionCreator = s
 }
 
 // getSessionCreator returns the current review-gate session spawner under a read lock.
-func (l *BacklogLifecycleListener) getSessionCreator() ReviewGateSpawner {
+func (l *BacklogLifecycleListener) getSessionCreator() reviewgate.ReviewGateSpawner {
 	l.sessionCreatorMu.RLock()
 	defer l.sessionCreatorMu.RUnlock()
 	return l.sessionCreator
 }
 
 // getAutoReopener returns the current auto-reopener under a read lock.
-func (l *BacklogLifecycleListener) getAutoReopener() AutoReopenSpawner {
+func (l *BacklogLifecycleListener) getAutoReopener() reviewgate.AutoReopenSpawner {
 	l.autoReopenMu.RLock()
 	defer l.autoReopenMu.RUnlock()
 	return l.autoReopener
@@ -902,7 +903,7 @@ func newListenerBase(storage *session.Storage, pipelineEngine pipeline.PipelineE
 		prByNumberFinder:        defaultPRByNumberFinder,
 		dashboardBaseURLFn:      func() string { return "" },
 	}
-	l.runner = NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
+	l.runner = reviewgate.NewReviewGateRunner(storage, l.getAutoReopener, l.getNotifier, l.getSessionCreator, pipelineEngine)
 	return l
 }
 
@@ -915,7 +916,7 @@ func NewBacklogLifecycleListener(storage *session.Storage) *BacklogLifecycleList
 
 // NewBacklogLifecycleListenerWithSpawner creates a listener that will spawn a
 // review gate session when a work session exits and SkipReviewGate is false.
-func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner ReviewGateSpawner) *BacklogLifecycleListener {
+func NewBacklogLifecycleListenerWithSpawner(storage *session.Storage, spawner reviewgate.ReviewGateSpawner) *BacklogLifecycleListener {
 	l := newListenerBase(storage, nil, nil)
 	l.SetSessionCreator(spawner)
 	return l
@@ -1130,7 +1131,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 // no persisted TransitionGate backs it (GateID ""), and it always reviews a
 // code diff (RequiresDiff: true) — the same behavior review_gate.go's Run had
 // unconditionally before Story 2.4.3 generalized it to accept a GateContext.
-var builtInReviewGateContext = GateContext{
+var builtInReviewGateContext = reviewgate.GateContext{
 	GateID:           "",
 	TargetTransition: session.BacklogStatusReview,
 	RequiresDiff:     true,
@@ -1158,19 +1159,19 @@ var builtInReviewGateContext = GateContext{
 // review gate in that case. server/dependencies.go wires the concrete engine
 // via SetWorkflowEngine; with none (or a non-concrete one) this degrades to
 // the `to == BacklogStatusReview` case only.
-func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to session.BacklogStatus) (GateContext, bool) {
+func (l *BacklogLifecycleListener) resolveReviewGateContext(from, to session.BacklogStatus) (reviewgate.GateContext, bool) {
 	if to == session.BacklogStatusReview {
 		return builtInReviewGateContext, true
 	}
 	cwe, ok := l.configuredWorkflowEngine()
 	if !ok {
-		return GateContext{}, false
+		return reviewgate.GateContext{}, false
 	}
 	gateID, cfg, found := cwe.ResolveAutomatedReviewGateContext(from, to)
 	if !found {
-		return GateContext{}, false
+		return reviewgate.GateContext{}, false
 	}
-	return GateContext{
+	return reviewgate.GateContext{
 		GateID:           gateID,
 		TargetTransition: to,
 		RequiresDiff:     cfg.RequiresDiff,

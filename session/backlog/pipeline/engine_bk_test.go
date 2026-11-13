@@ -292,7 +292,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	// another's buffer (or arrive after it's already been read), leaving the
 	// read-back empty.
 	t.Run("SlashCommandSet", func(t *testing.T) {
-		buf := captureWarningLog(t)
+		buf := blktest.CaptureWarningLog(t)
 
 		got, err := engine.SlashCommandSet(item)
 		if err != nil {
@@ -309,7 +309,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("TriagePromptFor", func(t *testing.T) {
-		buf := captureWarningLog(t)
+		buf := blktest.CaptureWarningLog(t)
 
 		got := engine.TriagePromptFor(item, "/tmp/plan.md")
 		want := BuildHeadlessTriagePrompt(item, "/tmp/plan.md")
@@ -320,7 +320,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("ReviewPromptFor", func(t *testing.T) {
-		buf := captureWarningLog(t)
+		buf := blktest.CaptureWarningLog(t)
 
 		got := engine.ReviewPromptFor(item, nil, "diff content", false, "notes", ReviewContextExtras{})
 		want := BuildHeadlessReviewPrompt(item, nil, "diff content", false, "notes", ReviewContextExtras{})
@@ -331,7 +331,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InteractiveReviewPromptFor", func(t *testing.T) {
-		buf := captureWarningLog(t)
+		buf := blktest.CaptureWarningLog(t)
 
 		got := engine.InteractiveReviewPromptFor(item, nil, "diff content", false, "review-session-id", "notes")
 		want := BuildReviewPrompt(item, nil, "diff content", false, "review-session-id", "notes")
@@ -342,7 +342,7 @@ func TestCachingPipelineEngine_SlashCommandSet_should_FallBackToDefaultAndEmitWa
 	})
 
 	t.Run("InitialPromptFor", func(t *testing.T) {
-		buf := captureWarningLog(t)
+		buf := blktest.CaptureWarningLog(t)
 
 		got := engine.InitialPromptFor(item, nil)
 		want := BuildTokenBudgetedPrompt(item, nil)
@@ -362,7 +362,7 @@ func TestCachingPipelineEngine_ContentHashFor_should_ReturnEmptyAndFalse_When_Mo
 		t.Fatalf("default mode: got (%q, %v), want (\"\", false)", hash, ok)
 	}
 
-	buf := captureWarningLog(t)
+	buf := blktest.CaptureWarningLog(t)
 
 	const missingSlug = "missing-slug-contenthash-exemption"
 	hash, ok = engine.ContentHashFor(missingSlug)
@@ -376,7 +376,7 @@ func TestCachingPipelineEngine_ContentHashFor_should_ReturnEmptyAndFalse_When_Mo
 
 func TestNewPipelineEngine_should_ReturnUsableEngineWithEmptyCacheAndWarnLog_When_InitialCacheLoadFails(t *testing.T) {
 	t.Parallel()
-	buf := captureWarningLog(t)
+	buf := blktest.CaptureWarningLog(t)
 
 	repo := &blktest.FakePipelineModeRepository{
 		ListEnabledFn: func(context.Context) ([]*ent.PipelineMode, error) {
@@ -562,7 +562,7 @@ func TestCachingPipelineEngine_InteractiveReviewPromptFor_should_RenderCustomTem
 // crash."
 func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugInjectedDirectlyViaSQL(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 
 	entClient := storage.GetEntClient()
@@ -594,7 +594,7 @@ func TestPipelineEngine_should_FallBackToDefaultNotCrash_When_UnresolvableSlugIn
 		t.Fatalf("NewPipelineEngine: %v", err)
 	}
 
-	buf := captureWarningLog(t)
+	buf := blktest.CaptureWarningLog(t)
 
 	// Must not panic/crash and must fall back to default-mode output.
 	gotFiles, err := engine.SlashCommandSet(created)
@@ -624,7 +624,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmpty_When_ModeIsDefault
 	engine := &CachingPipelineEngine{cache: &pipelineModeCache{}}
 	item := &backlogdto.BacklogItemData{ID: "item-default-no-warn", PipelineMode: ""}
 
-	buf := captureWarningLog(t)
+	buf := blktest.CaptureWarningLog(t)
 	program, model := engine.ExecutorFor(item, session.StageRoleWork)
 	if program != "" || model != "" {
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)
@@ -648,7 +648,7 @@ func TestCachingPipelineEngine_ExecutorFor_should_ReturnEmptyAndWarnLog_When_Pip
 	engine := &CachingPipelineEngine{repo: repo, cache: cache}
 	item := &backlogdto.BacklogItemData{ID: "item-unresolved", PipelineMode: "does-not-exist"}
 
-	buf := captureWarningLog(t)
+	buf := blktest.CaptureWarningLog(t)
 	program, model := engine.ExecutorFor(item, session.StageRoleTriage)
 	if program != "" || model != "" {
 		t.Fatalf("got (%q, %q), want (\"\", \"\")", program, model)

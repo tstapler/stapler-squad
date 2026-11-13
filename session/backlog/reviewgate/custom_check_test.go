@@ -1,4 +1,4 @@
-package backlog
+package reviewgate
 
 import (
 	"context"
@@ -9,73 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/backlog/internal/blktest"
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
-	"github.com/tstapler/stapler-squad/session/headless"
 )
-
-// fakeCustomCheckCaller is a test double for CustomCheckCaller: it returns a
-// canned (output, err) pair and records the args it was called with, without
-// spawning any real subprocess.
-type fakeCustomCheckCaller struct {
-	output string
-	err    error
-
-	called       bool
-	lastKey      headless.FeatureKey
-	lastSystem   string
-	lastUserText string
-}
-
-func (f *fakeCustomCheckCaller) CallBlocking(_ context.Context, key headless.FeatureKey, systemPrompt, userPrompt string, _ headless.CallOptions, _ headless.CostSink) (string, error) {
-	f.called = true
-	f.lastKey = key
-	f.lastSystem = systemPrompt
-	f.lastUserText = userPrompt
-	return f.output, f.err
-}
-
-// newCustomCheckTestItem creates a minimal BacklogItemData for
-// InvokeCustomGateCheck tests — no repo path/worktree needed since this gate
-// kind never computes a diff.
-func newCustomCheckTestItem(t *testing.T, storage *session.Storage, title string) *backlogdto.BacklogItemData {
-	t.Helper()
-	item, err := storage.CreateBacklogItem(context.Background(), backlogdto.BacklogItemData{
-		Title:              title,
-		AcceptanceCriteria: `[]`,
-		Priority:           1,
-		Status:             string(session.BacklogStatusIdea),
-	})
-	require.NoError(t, err)
-	return item
-}
-
-// newCustomCheckTestGate creates a real TransitionGate row (idea -> ready,
-// kind=custom) and returns its ID — GateSatisfactionRecord.gate_id is a
-// required ent edge to TransitionGate, so a bare uuid.New() with no backing
-// row fails the FK constraint on Create.
-func newCustomCheckTestGate(t *testing.T, storage *session.Storage) uuid.UUID {
-	t.Helper()
-	ctx := context.Background()
-	client := storage.GetEntClient()
-
-	fromStage, err := client.BacklogStage.Create().SetSlug("gcc-from-" + uuid.NewString()).SetName("From").Save(ctx)
-	require.NoError(t, err)
-	toStage, err := client.BacklogStage.Create().SetSlug("gcc-to-" + uuid.NewString()).SetName("To").Save(ctx)
-	require.NoError(t, err)
-	transition, err := client.StageTransition.Create().
-		SetFromStageID(fromStage.ID).
-		SetToStageID(toStage.ID).
-		Save(ctx)
-	require.NoError(t, err)
-	gate, err := client.TransitionGate.Create().
-		SetTransitionID(transition.ID).
-		SetKind(string(session.GateKindCustom)).
-		SetStateful(true).
-		Save(ctx)
-	require.NoError(t, err)
-	return gate.ID
-}
 
 // TestInvokeCustomGateCheck_should_BlockTransitionFailClosed_When_SkillNotInPreRegisteredAllowlist
 // covers Story 2.4.4's Task 2.4.4d: a GateKindCustom config naming a skill
@@ -83,13 +20,13 @@ func newCustomCheckTestGate(t *testing.T, storage *session.Storage) uuid.UUID {
 // call — fail-closed for gates, per ADR-003.
 func TestInvokeCustomGateCheck_should_BlockTransitionFailClosed_When_SkillNotInPreRegisteredAllowlist(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 
-	item := newCustomCheckTestItem(t, storage, "Unregistered skill test item")
-	caller := &fakeCustomCheckCaller{output: "VERDICT: PASS"}
+	item := blktest.NewCustomCheckTestItem(t, storage, "Unregistered skill test item")
+	caller := &blktest.FakeCustomCheckCaller{Output: "VERDICT: PASS"}
 	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	gateID := newCustomCheckTestGate(t, storage)
+	gateID := blktest.NewCustomCheckTestGate(t, storage)
 
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
@@ -97,7 +34,7 @@ func TestInvokeCustomGateCheck_should_BlockTransitionFailClosed_When_SkillNotInP
 		session.CustomCheckConfig{SkillID: "not-a-real-skill"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
 
 	require.Error(t, err, "an unregistered skill must be rejected")
-	assert.False(t, caller.called, "the headless call must never be attempted for an unregistered skill")
+	assert.False(t, caller.Called, "the headless call must never be attempted for an unregistered skill")
 
 	_, getErr := repo.GetByItemAndGate(context.Background(), uuid.MustParse(item.ID), gateID)
 	assert.Error(t, getErr, "no GateSatisfactionRecord should be created for a rejected invocation")
@@ -113,14 +50,14 @@ func TestInvokeCustomGateCheck_should_BlockTransitionFailClosed_When_SkillNotInP
 // backlog_lifecycle_stuck_test.go.
 func TestInvokeCustomGateCheck_should_BlockAndLogWarn_When_SpawnFailsSynchronously(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 
-	item := newCustomCheckTestItem(t, storage, "Synchronous spawn failure test item")
+	item := blktest.NewCustomCheckTestItem(t, storage, "Synchronous spawn failure test item")
 	spawnErr := errors.New("exit status 127: claude: command not found")
-	caller := &fakeCustomCheckCaller{err: spawnErr}
+	caller := &blktest.FakeCustomCheckCaller{Err: spawnErr}
 	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	gateID := newCustomCheckTestGate(t, storage)
+	gateID := blktest.NewCustomCheckTestGate(t, storage)
 
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
@@ -128,7 +65,7 @@ func TestInvokeCustomGateCheck_should_BlockAndLogWarn_When_SpawnFailsSynchronous
 		session.CustomCheckConfig{SkillID: "review-feasibility"}, livenessDef, session.BacklogStatusReady, backlogdto.PipelineModeDefault)
 
 	require.Error(t, err, "a synchronous spawn failure must block the transition immediately")
-	assert.True(t, caller.called)
+	assert.True(t, caller.Called)
 
 	record, getErr := repo.GetByItemAndGate(context.Background(), uuid.MustParse(item.ID), gateID)
 	require.NoError(t, getErr, "the in-flight row must still exist, now recording the failure")
@@ -141,13 +78,13 @@ func TestInvokeCustomGateCheck_should_BlockAndLogWarn_When_SpawnFailsSynchronous
 // recognizable "VERDICT: PASS" line records a satisfied GateSatisfactionRecord.
 func TestInvokeCustomGateCheck_should_RecordPassVerdict_When_SkillReportsPass(t *testing.T) {
 	t.Parallel()
-	storage, cleanup := createTestStorage(t)
+	storage, cleanup := blktest.CreateTestStorage(t)
 	defer cleanup()
 
-	item := newCustomCheckTestItem(t, storage, "Pass verdict test item")
-	caller := &fakeCustomCheckCaller{output: "Looks buildable.\n\nVERDICT: PASS"}
+	item := blktest.NewCustomCheckTestItem(t, storage, "Pass verdict test item")
+	caller := &blktest.FakeCustomCheckCaller{Output: "Looks buildable.\n\nVERDICT: PASS"}
 	repo := session.NewEntGateSatisfactionRepository(storage.GetEntClient())
-	gateID := newCustomCheckTestGate(t, storage)
+	gateID := blktest.NewCustomCheckTestGate(t, storage)
 
 	livenessDef := liveness.LivenessDefinition{Kind: liveness.LivenessKindDurationBudget, ExpectedDuration: 0, StalenessMargin: 0}
 
@@ -156,7 +93,7 @@ func TestInvokeCustomGateCheck_should_RecordPassVerdict_When_SkillReportsPass(t 
 
 	require.NoError(t, err)
 	assert.Equal(t, session.ReviewOutcomePass, outcome.Outcome)
-	assert.True(t, caller.called)
+	assert.True(t, caller.Called)
 
 	record, getErr := repo.GetByItemAndGate(context.Background(), uuid.MustParse(item.ID), gateID)
 	require.NoError(t, getErr)

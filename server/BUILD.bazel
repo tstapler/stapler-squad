@@ -110,6 +110,7 @@ go_library(
         "//session/backlog",
         "//session/backlog/liveness",
         "//session/backlog/pipeline",
+        "//session/backlog/reviewgate",
         "//session/backlog/shadowledger",
         "//session/cdp",
         "//session/contexthistory",
