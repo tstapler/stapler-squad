@@ -105,7 +105,7 @@ func TestReviewQueueIntegrationWithInstance(t *testing.T) {
 	// Create a session instance
 	inst := &Instance{
 		Title:  "test-session",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 
 	// Wire up the review queue

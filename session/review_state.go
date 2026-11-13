@@ -10,7 +10,6 @@ import (
 
 	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -29,14 +28,6 @@ func computeContentSignature(content string) string {
 	var buf [8]byte
 	binary.BigEndian.PutUint64(buf[:], hash)
 	return hex.EncodeToString(buf[:])
-}
-
-// truncateString truncates s to maxLen characters. Used for log messages.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen]
 }
 
 // ---- ReviewState methods --------------------------------------------------
@@ -76,48 +67,4 @@ func updateReviewTimestamps(rs *domain.ReviewState, rawContent, filteredContent 
 		log.ForSession(sessionTitle).Debug("NOT updating LastMeaningfulOutput - content classified as non-meaningful (banners only)")
 	}
 	return changed
-}
-
-// computePromptSignature computes a hash of the prompt content using the last 10 lines.
-// Returns "" if content is empty.
-// Caller may call this without holding any lock.
-func computePromptSignature(content string) string {
-	if content == "" {
-		return ""
-	}
-	lines := strings.Split(content, "\n")
-	const contextLines = 10
-	startIdx := len(lines) - contextLines
-	if startIdx < 0 {
-		startIdx = 0
-	}
-	promptContext := strings.Join(lines[startIdx:], "\n")
-	var b []byte
-	if len(promptContext) > 0 {
-		b = unsafe.Slice(unsafe.StringData(promptContext), len(promptContext))
-	}
-	hash := murmur3.Sum64(b)
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], hash)
-	return hex.EncodeToString(buf[:])
-}
-
-// detectAndTrackPrompt detects whether the current status represents a new user-facing prompt
-// and records it. Returns true only when a NEW prompt is detected (signature changed or first).
-// Caller must hold Instance.mu when writing prompt fields.
-func detectAndTrackPrompt(rs *domain.ReviewState, content string, statusInfo InstanceStatusInfo, sessionTitle string) bool {
-	isPromptState := statusInfo.ClaudeStatus == detection.StatusNeedsApproval ||
-		statusInfo.ClaudeStatus == detection.StatusInputRequired
-	if !isPromptState {
-		return false
-	}
-
-	promptSignature := computePromptSignature(content)
-	isNewPrompt := promptSignature != rs.LastPromptSignature || rs.LastPromptSignature == ""
-	if isNewPrompt {
-		rs.LastPromptDetected = time.Now()
-		rs.LastPromptSignature = promptSignature
-		log.Info("new prompt detected", "session", sessionTitle, "signature", truncateString(promptSignature, 8))
-	}
-	return isNewPrompt
 }

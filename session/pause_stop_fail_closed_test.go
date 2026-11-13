@@ -24,7 +24,7 @@ func brokenWorktreeInstance(t *testing.T) (*Instance, string) {
 
 	inst := &Instance{
 		Title:       "dirty-check-fails",
-		Status:      domain.Running,
+		Status:      domain.Active,
 		IsWorktree:  true,
 		Permissions: domain.GetManagedPermissions(),
 		GitManager: gitwt.Manager{
@@ -43,7 +43,7 @@ func TestPause_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *testing
 
 	require.ErrorIs(t, err, ErrDirtyStateUnknown)
 	assert.FileExists(t, precious)
-	assert.Equal(t, domain.Running, inst.Status, "status must not advance when pause was refused")
+	assert.Equal(t, domain.Active, inst.Status, "status must not advance when pause was refused")
 }
 
 func TestStopByUser_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *testing.T) {
@@ -54,7 +54,7 @@ func TestStopByUser_should_FailClosedAndKeepWorktree_When_DirtyCheckErrors(t *te
 
 	require.ErrorIs(t, err, ErrDirtyStateUnknown)
 	assert.FileExists(t, precious)
-	assert.Equal(t, domain.Running, inst.Status, "status must not advance when stop was refused")
+	assert.Equal(t, domain.Active, inst.Status, "status must not advance when stop was refused")
 }
 
 // An untracked file must be reported as work to commit and must survive
@@ -187,7 +187,7 @@ func TestForceStopByUser_should_CommitDirtyTree_When_DirtyStateIsKnown(t *testin
 	require.NoError(t, wt.Setup())
 	t.Cleanup(func() { _ = wt.Cleanup() })
 	inst := &Instance{
-		Title: "force-known-dirty", Status: domain.Running, IsWorktree: true,
+		Title: "force-known-dirty", Status: domain.Active, IsWorktree: true,
 		Permissions: domain.GetManagedPermissions(),
 		GitManager:  gitwt.Manager{Worktree: wt},
 	}

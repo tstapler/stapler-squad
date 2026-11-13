@@ -32,7 +32,7 @@ func startLoopDriverWith(t *testing.T, title string, status detection.DetectedSt
 	t.Cleanup(func() { testDriverTiming.Store(nil) })
 
 	pm := &stuckDialogProcessManager{dialogText: pane}
-	inst := &Instance{Title: title, Status: domain.Ready, Tags: tags, processManager: pm}
+	inst := &Instance{Title: title, Status: domain.Active, Tags: tags, processManager: pm}
 	inst.started.Store(true)
 	source := NewPiStatusSource(inst.Title, nil)
 	source.status.Store(int32(status))

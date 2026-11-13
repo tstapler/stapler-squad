@@ -36,7 +36,7 @@ func TestSelectiveLoading(t *testing.T) {
 		Path:       "/tmp/test",
 		WorkingDir: "/tmp/test",
 		Branch:     "main",
-		Status:     domain.Ready,
+		Status:     domain.Active,
 		Program:    "claude",
 		Worktree: GitWorktreeData{
 			RepoPath:      "/tmp/repo",
@@ -79,7 +79,7 @@ func TestSelectiveLoading(t *testing.T) {
 			// Core fields are always populated regardless of LoadOptions.
 			assert.Equal(t, "test-session", session.Title)
 			assert.Equal(t, "/tmp/test", session.Path)
-			assert.Equal(t, domain.Ready, session.Status)
+			assert.Equal(t, domain.Active, session.Status)
 
 			// Child-relation fields are only populated when their gating
 			// LoadOptions flag is set — see applyLoadOptions.
@@ -162,7 +162,7 @@ func BenchmarkSelectiveLoading(b *testing.B) {
 		Path:       "/tmp/test",
 		WorkingDir: "/tmp/test",
 		Branch:     "main",
-		Status:     domain.Ready,
+		Status:     domain.Active,
 		Program:    "claude",
 		DiffStats: DiffStatsData{
 			Added:   5000,

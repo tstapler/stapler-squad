@@ -182,7 +182,7 @@ func TestEntRepository_ListByStatus(t *testing.T) {
 
 	// Create sessions with different statuses
 	running := createTestSession("running-session")
-	running.Status = domain.Running
+	running.Status = domain.Active
 	paused := createTestSession("paused-session")
 	paused.Status = domain.Paused
 
@@ -192,7 +192,7 @@ func TestEntRepository_ListByStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	// Query running sessions
-	runningSessions, err := repo.ListByStatus(ctx, domain.Running)
+	runningSessions, err := repo.ListByStatus(ctx, domain.Active)
 	require.NoError(t, err)
 	assert.Len(t, runningSessions, 1)
 	assert.Equal(t, "running-session", runningSessions[0].Title)

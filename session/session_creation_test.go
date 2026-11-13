@@ -63,7 +63,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 		}()
 
 		// Verify the session is running
-		assert.Equal(t, domain.Running, instance.Status)
+		assert.Equal(t, domain.Active, instance.Status)
 		t.Logf("✓ Session created successfully in %v", elapsed)
 	})
 
@@ -101,7 +101,7 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 			}
 		}()
 
-		assert.Equal(t, domain.Running, instance.Status)
+		assert.Equal(t, domain.Active, instance.Status)
 		t.Logf("✓ Claude session created successfully in %v", elapsed)
 	})
 }
@@ -178,7 +178,7 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 				}
 			}()
 
-			assert.Equal(t, domain.Running, instance.Status)
+			assert.Equal(t, domain.Active, instance.Status)
 			t.Logf("✓ %s session created successfully in %v", tc.name, elapsed)
 		})
 	}
@@ -223,7 +223,7 @@ func TestSessionCreationWithWorktree(t *testing.T) {
 		}
 	}()
 
-	assert.Equal(t, domain.Running, instance.Status)
+	assert.Equal(t, domain.Active, instance.Status)
 
 	// Verify worktree was created
 	gitWorktree, err := instance.GetGitWorktree()

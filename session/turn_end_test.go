@@ -38,7 +38,7 @@ func (f *fakeRecorder) RecordTurnEnded(string, domain.TurnEnded) { f.observe() }
 
 func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceIsBareLiteral(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "bare", Status: domain.Running}
+	inst := &Instance{Title: "bare", Status: domain.Active}
 
 	inst.RecordTurnEnd("finished", domain.TurnEndSourceHook)
 
@@ -58,7 +58,7 @@ func TestRecordTurnEnd_Should_SetSnapshotFactAndNotPanic_When_InstanceFromInstan
 
 func TestRecordTurnEnd_Should_CallSinkAndRecorderOnceAfterReleasingLock_When_CollaboratorsSet(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "wired", Status: domain.Running}
+	inst := &Instance{Title: "wired", Status: domain.Active}
 	sink := &lockCheckingFake{inst: inst}
 	rec := &fakeRecorder{lockCheckingFake: lockCheckingFake{inst: inst}}
 	inst.SetTurnEndSink(sink)
@@ -74,7 +74,7 @@ func TestRecordTurnEnd_Should_CallSinkAndRecorderOnceAfterReleasingLock_When_Col
 
 func TestRecordTurnEnd_Should_SkipSinkAndRecorder_When_ActorStopped(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "stopped", Status: domain.Running}
+	inst := &Instance{Title: "stopped", Status: domain.Active}
 	sink := &lockCheckingFake{inst: inst}
 	rec := &fakeRecorder{lockCheckingFake: lockCheckingFake{inst: inst}}
 	inst.SetTurnEndSink(sink)
@@ -89,7 +89,7 @@ func TestRecordTurnEnd_Should_SkipSinkAndRecorder_When_ActorStopped(t *testing.T
 
 func TestSetTurnEndSink_Should_KeepNoopDefault_When_TypedNilPassed(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "typednil", Status: domain.Running}
+	inst := &Instance{Title: "typednil", Status: domain.Active}
 	var sink *lockCheckingFake
 	inst.SetTurnEndSink(sink)
 

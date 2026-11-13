@@ -216,7 +216,7 @@ func TestCanTransition_NewStates(t *testing.T) {
 	// semantics are gone. We verify via the named alias behavior.
 	// Running and Ready are aliases for Active (value=1), so
 	// CanTransition(Running, Ready) == CanTransition(Active, Active) == false.
-	if CanTransition(domain.Running, domain.Ready) {
+	if CanTransition(domain.Active, domain.Active) {
 		t.Error("CanTransition(Running, Ready) = true (self-transition), want false")
 	}
 }

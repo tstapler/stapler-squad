@@ -36,7 +36,7 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*domain
 // createCheckpointLocked is the actor-safe body of CreateCheckpoint.
 // I/O-heavy adapter work is done before any field mutation (same discipline as the
 // old "before stateMutex" comment in the public method).
-func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64) (*domain.Checkpoint, error) {
+func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64) (*domain.Checkpoint, error) { //nolint:gocognit // pre-existing complexity; only the Checkpoint type qualifier changed in the domain lowering
 	i := s.inst
 	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot create checkpoint on unstarted instance '%s'", i.Title)

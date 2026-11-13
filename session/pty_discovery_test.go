@@ -64,9 +64,9 @@ func TestPTYDiscovery_SetSessions(t *testing.T) {
 	pd := NewPTYDiscovery()
 
 	sessions := []*Instance{
-		{Title: "session1", Status: domain.Running, Program: "claude"},
+		{Title: "session1", Status: domain.Active, Program: "claude"},
 		{Title: "session2", Status: domain.Paused, Program: "claude"},
-		{Title: "session3", Status: domain.Running, Program: "aider"},
+		{Title: "session3", Status: domain.Active, Program: "aider"},
 	}
 
 	pd.SetSessions(sessions)

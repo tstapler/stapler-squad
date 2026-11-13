@@ -46,7 +46,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
-		Status:    domain.Ready,
+		Status:    domain.Active,
 		Height:    100,
 		Width:     200,
 		CreatedAt: time.Now(),
@@ -80,7 +80,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 		Title:     "Test Instance",
 		Path:      "/path/to/repo",
 		Branch:    "test-branch",
-		Status:    domain.Ready,
+		Status:    domain.Active,
 		Height:    100,
 		Width:     200,
 		CreatedAt: time.Now(),
@@ -143,17 +143,6 @@ func TestStatusEnumValues(t *testing.T) {
 		if int(test.status) != test.value {
 			t.Errorf("Expected %s status to have value %d, got %d", test.name, test.value, int(test.status))
 		}
-	}
-
-	// Verify deprecated aliases point to their canonical equivalents.
-	if domain.Running != domain.Active {
-		t.Errorf("Running alias should equal Active (1), got %d", int(domain.Running))
-	}
-	if domain.Ready != domain.Active {
-		t.Errorf("Ready alias should equal Active (1), got %d", int(domain.Ready))
-	}
-	if domain.Loading != domain.Creating {
-		t.Errorf("Loading alias should equal Creating (0), got %d", int(domain.Loading))
 	}
 }
 
@@ -492,7 +481,7 @@ func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCom
 		t.Fatalf("CommitChanges(): %v", err)
 	}
 
-	inst := &Instance{Title: "has-commits-ahead-test", UUID: "sess-has-commits-ahead", Status: domain.Ready}
+	inst := &Instance{Title: "has-commits-ahead-test", UUID: "sess-has-commits-ahead", Status: domain.Active}
 	inst.SetGitWorktree(wt) // also sets started=true
 
 	if err := inst.UpdateDiffStats(); err != nil {
@@ -511,7 +500,7 @@ func TestInstance_UpdateDiffStats_should_SetHasCommitsAhead_When_BranchHasNewCom
 // it must stay at its false zero value through a real UpdateDiffStats pass.
 func TestInstance_GetHasCommitsAhead_should_ReturnFalse_When_NoWorktree(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "dir-session-no-worktree-test", UUID: "sess-dir-no-worktree", Status: domain.Ready, Path: t.TempDir()}
+	inst := &Instance{Title: "dir-session-no-worktree-test", UUID: "sess-dir-no-worktree", Status: domain.Active, Path: t.TempDir()}
 	inst.started.Store(true)
 
 	if err := inst.UpdateDiffStats(); err != nil {

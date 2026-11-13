@@ -18,7 +18,7 @@ func TestSessionJSONSerialization(t *testing.T) {
 		Title:     "Test Session",
 		CreatedAt: now,
 		UpdatedAt: now,
-		Status:    domain.Running,
+		Status:    domain.Active,
 		Program:   "claude",
 		AutoYes:   true,
 		Prompt:    "help me code",
@@ -170,7 +170,7 @@ func TestSessionMinimalSerialization(t *testing.T) {
 		Title:     "Minimal Session",
 		CreatedAt: now,
 		UpdatedAt: now,
-		Status:    domain.Loading,
+		Status:    domain.Creating,
 		Program:   "aider",
 		// All contexts are nil
 	}
@@ -216,7 +216,7 @@ func TestInstanceToSessionConversion(t *testing.T) {
 		Path:             "/home/user/project",
 		WorkingDir:       "/home/user/project/src",
 		Branch:           "main",
-		Status:           domain.Running,
+		Status:           domain.Active,
 		Program:          "claude",
 		Height:           24,
 		Width:            80,
@@ -321,7 +321,7 @@ func TestSessionToInstanceConversion(t *testing.T) {
 		Title:     "Test Session",
 		CreatedAt: now,
 		UpdatedAt: now,
-		Status:    domain.Ready,
+		Status:    domain.Active,
 		Program:   "aider",
 		AutoYes:   false,
 		Prompt:    "help",
@@ -497,7 +497,7 @@ func TestContextHelperMethods(t *testing.T) {
 	empty := &Session{
 		ID:      "empty",
 		Title:   "Empty",
-		Status:  domain.Loading,
+		Status:  domain.Creating,
 		Program: "test",
 	}
 
@@ -521,7 +521,7 @@ func TestContextHelperMethods(t *testing.T) {
 	full := &Session{
 		ID:      "full",
 		Title:   "Full",
-		Status:  domain.Running,
+		Status:  domain.Active,
 		Program: "claude",
 		Git: &GitContext{
 			Branch: "main",

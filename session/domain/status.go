@@ -42,13 +42,6 @@ const (
 	// Active. See ADR-001 and SESSION_STATUS_FAILED in
 	// proto/session/v1/types.proto.
 	Failed Status = 8
-
-	// Deprecated: use Active.
-	Running = Active
-	// Deprecated: use Active.
-	Ready = Active
-	// Deprecated: use Creating.
-	Loading = Creating
 )
 
 // String returns a human-readable name for the status.

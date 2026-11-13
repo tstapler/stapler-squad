@@ -26,7 +26,7 @@ func startedWorktreeInstance(t *testing.T, name string) *Instance {
 
 	inst := &Instance{
 		Title:       name,
-		Status:      domain.Running,
+		Status:      domain.Active,
 		IsWorktree:  true,
 		Permissions: domain.GetManagedPermissions(),
 		GitManager:  gitwt.Manager{Worktree: wt},

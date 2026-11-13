@@ -20,7 +20,7 @@ import (
 func makeAcknowledgedInstance(title string) *Instance {
 	inst := &Instance{
 		Title:  title,
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
@@ -626,7 +626,7 @@ func TestReviewQueuePoller_SkipIdleSession_StaysSuppressedAcrossPolls(t *testing
 	inst := &Instance{
 		Title:  "skip-idle-session",
 		UUID:   "uuid-skip-idle",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 
@@ -693,7 +693,7 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 	inst := &Instance{
 		Title:  "controller-session",
 		UUID:   "uuid-ctrl",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 
@@ -736,7 +736,7 @@ func TestReviewQueuePoller_ArchivedSession_ExcludedFromQueue(t *testing.T) {
 	inst := &Instance{
 		Title:  "archived-session",
 		UUID:   "uuid-archived",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	archivedAt := time.Now().Add(-1 * time.Hour)
@@ -778,7 +778,7 @@ func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t
 	inst := &Instance{
 		Title:  "active-controller-session",
 		UUID:   "uuid-active",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	ctrl.SetSessionNameForTest(inst.Title)
@@ -867,7 +867,7 @@ func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 func makeStaleInstance(rqp *ReviewQueuePoller, title string) *Instance {
 	inst := &Instance{
 		Title:  title,
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	// CreatedAt well in the past → GetTimeSinceLastMeaningfulOutput() > StalenessThreshold
@@ -1264,7 +1264,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByUUID(t *testing.T) {
 	inst := &Instance{
 		Title:  "session-title-not-used-as-key",
 		UUID:   "session-uuid-1234",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	ctrl.SetSessionNameForTest(inst.Title)
@@ -1318,7 +1318,7 @@ func TestReviewQueuePoller_should_SetRiskLevelMetadataKey_When_ApprovalMetadataH
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
 	ctrl, _ := claudectltest.NewController(approvalContent)
 
-	inst := &Instance{Title: "session-risk-set", UUID: "session-risk-set-uuid", Status: domain.Running}
+	inst := &Instance{Title: "session-risk-set", UUID: "session-risk-set-uuid", Status: domain.Active}
 	inst.started.Store(true)
 	ctrl.SetSessionNameForTest(inst.Title)
 	ctrl.MarkRunningForTest(t.Context())
@@ -1350,7 +1350,7 @@ func TestReviewQueuePoller_should_OmitRiskLevelMetadataKey_When_ApprovalMetadata
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
 	ctrl, _ := claudectltest.NewController(approvalContent)
 
-	inst := &Instance{Title: "session-risk-empty", UUID: "session-risk-empty-uuid", Status: domain.Running}
+	inst := &Instance{Title: "session-risk-empty", UUID: "session-risk-empty-uuid", Status: domain.Active}
 	inst.started.Store(true)
 	ctrl.SetSessionNameForTest(inst.Title)
 	ctrl.MarkRunningForTest(t.Context())
@@ -1472,7 +1472,7 @@ func TestReviewQueuePoller_EnrichesApprovalMetadata_ByTitleFallback(t *testing.T
 	inst := &Instance{
 		Title:  "session-with-no-uuid",
 		UUID:   "", // no stable UUID — resolveSessionID would have fallen back to Title too
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	ctrl.SetSessionNameForTest(inst.Title)
@@ -1633,7 +1633,7 @@ func TestShouldSkipSession_Should_LogOncePerSessionAndIncrementSkipCounter_When_
 		mu.Unlock()
 	}
 
-	hidden := makeSocketTestInstance("sys-1", "uuid-sys-1", "", domain.Running)
+	hidden := makeSocketTestInstance("sys-1", "uuid-sys-1", "", domain.Active)
 	hidden.started.Store(true)
 	hidden.Hidden = true
 	hidden.SyncAtomicTimestamps()

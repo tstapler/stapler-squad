@@ -67,7 +67,7 @@ func TestFindConversationFilePath_CancelledContextAborts(t *testing.T) {
 func makeTestInstance(title string) *Instance {
 	return &Instance{
 		Title:  title,
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 }
 

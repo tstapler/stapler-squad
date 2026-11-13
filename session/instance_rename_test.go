@@ -90,7 +90,7 @@ func TestInstanceRestart(t *testing.T) {
 		{
 			name:           "restart unstarted instance",
 			started:        false,
-			status:         domain.Ready,
+			status:         domain.Active,
 			preserveOutput: false,
 			wantErr:        true,
 			errType:        ErrCannotRestart,

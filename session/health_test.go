@@ -98,7 +98,7 @@ func TestHealthCheckerDebounce(t *testing.T) {
 	// TmuxAlive() returns false because tmuxManager.HasSession() is false.
 	inst := &Instance{
 		Title:  "debounce-test",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 
@@ -193,7 +193,7 @@ func TestHealthCheckerRecovery_PaneDeadButSessionAlive_KillsStaleSessionBeforeRe
 	mock := &deadPaneMock{mockTmuxManager: inner}
 	inst := &Instance{
 		Title:  "pane-dead-test",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
@@ -244,7 +244,7 @@ func TestHealthCheckerRecovery_BatchMapMiss_DoesNotDoubleCallIsAlive(t *testing.
 	}
 	inst := &Instance{
 		Title:  "batch-miss-test",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
@@ -278,7 +278,7 @@ func TestHealthCheckerRecovery_BatchMapHit_UsesBatchDataInsteadOfPerInstanceFall
 	}
 	inst := &Instance{
 		Title:  "batch-hit-test",
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	inst.processManager = NewTmuxBackend(mock)
@@ -628,9 +628,9 @@ func TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances(
 	checker.tmuxSocket = querier
 	querier.setDown("custom", true) // "" (default) stays up
 
-	instHealthy := &Instance{Title: "healthy-default-socket", Status: domain.Running, TmuxServerSocket: ""}
+	instHealthy := &Instance{Title: "healthy-default-socket", Status: domain.Active, TmuxServerSocket: ""}
 	instHealthy.started.Store(true)
-	instDown := &Instance{Title: "down-custom-socket", Status: domain.Running, TmuxServerSocket: "custom"}
+	instDown := &Instance{Title: "down-custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
 	instDown.started.Store(true)
 
 	results := checker.checkInstances([]*Instance{instHealthy, instDown})
@@ -659,9 +659,9 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 	checker.tmuxSocket = querier
 	// Neither socket is marked down -- both should be checked.
 
-	instDefault := &Instance{Title: "default-socket", Status: domain.Running, TmuxServerSocket: ""}
+	instDefault := &Instance{Title: "default-socket", Status: domain.Active, TmuxServerSocket: ""}
 	instDefault.started.Store(true)
-	instCustom := &Instance{Title: "custom-socket", Status: domain.Running, TmuxServerSocket: "custom"}
+	instCustom := &Instance{Title: "custom-socket", Status: domain.Active, TmuxServerSocket: "custom"}
 	instCustom.started.Store(true)
 
 	results := checker.checkInstances([]*Instance{instDefault, instCustom})

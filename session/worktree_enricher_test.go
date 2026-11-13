@@ -75,7 +75,7 @@ func TestLoad_PausesMissingWorktreeOnAllPaths(t *testing.T) {
 		if withEnricher {
 			startEnricher(t, WorktreeEnricherConfig{Probe: func(string) (*WorktreeInfo, error) { select {} }}, true)
 		}
-		data := loadData("gone", "/repo", domain.Ready, "/gone/worktree")
+		data := loadData("gone", "/repo", domain.Active, "/gone/worktree")
 
 		inst, err := FromInstanceData(data)
 		require.NoError(t, err)

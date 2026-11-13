@@ -83,7 +83,7 @@ func TestTymuxBackend_CapturePaneRedraw_should_PassThroughEveryResult(t *testing
 func TestInstance_CapturePaneRedraw_should_ReturnFrameAndRecordAltScreen(t *testing.T) {
 	t.Parallel()
 	mgr := &redrawManager{data: "\x1b[?1049hredraw", altScreen: true, ok: true}
-	inst := redrawInstance(mgr, domain.Running)
+	inst := redrawInstance(mgr, domain.Active)
 
 	snap, ok, err := inst.CapturePaneRedraw(context.Background())
 
@@ -97,7 +97,7 @@ func TestInstance_CapturePaneRedraw_should_ReturnFrameAndRecordAltScreen(t *test
 func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingAltScreen_When_BackendHasNoState(t *testing.T) {
 	t.Parallel()
 	mgr := &redrawManager{altScreen: true, ok: false} // older daemon: no Modes
-	inst := redrawInstance(mgr, domain.Running)
+	inst := redrawInstance(mgr, domain.Active)
 
 	snap, ok, err := inst.CapturePaneRedraw(context.Background())
 
@@ -109,7 +109,7 @@ func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingAltScreen_When_
 
 func TestInstance_CapturePaneRedraw_should_PropagateCaptureError(t *testing.T) {
 	t.Parallel()
-	inst := redrawInstance(&redrawManager{ok: true, err: errors.New("daemon gone")}, domain.Running)
+	inst := redrawInstance(&redrawManager{ok: true, err: errors.New("daemon gone")}, domain.Active)
 
 	_, ok, err := inst.CapturePaneRedraw(context.Background())
 
@@ -120,7 +120,7 @@ func TestInstance_CapturePaneRedraw_should_PropagateCaptureError(t *testing.T) {
 
 func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(t *testing.T) {
 	t.Parallel()
-	notStarted := redrawInstance(&redrawManager{ok: true, noPane: true}, domain.Running)
+	notStarted := redrawInstance(&redrawManager{ok: true, noPane: true}, domain.Active)
 	notStarted.started.Store(false)
 	cases := map[string]*Instance{
 		"not started": notStarted,
@@ -140,7 +140,7 @@ func TestInstance_CapturePaneRedraw_should_NotTouchPane_When_NotStartedOrPaused(
 
 func TestInstance_CapturePaneRedraw_should_DeclineWithoutTouchingPane_When_BackendHasNoCapability(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "tmuxish", UUID: "uuid-tmuxish", Status: domain.Running}
+	inst := &Instance{Title: "tmuxish", UUID: "uuid-tmuxish", Status: domain.Active}
 	inst.processManager = &fakeSendKeysProcessManager{}
 	inst.started.Store(true)
 

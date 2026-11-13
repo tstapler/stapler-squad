@@ -877,7 +877,7 @@ func TestDriverGoroutineExited_should_KeepDriverRunning_When_ContinuationStillRu
 // A real StartSessionDriver followed by a continuation must count both goroutines, so the first
 // one to exit cannot clear driverRunning under the other.
 func TestStartSessionDriver_should_CountInitialDriver_When_ContinuationRegistered(t *testing.T) {
-	inst := &Instance{Title: "count", Status: domain.Ready, processManager: &stuckDialogProcessManager{}}
+	inst := &Instance{Title: "count", Status: domain.Active, processManager: &stuckDialogProcessManager{}}
 	inst.started.Store(true)
 	shrinkDriverTiming(t)
 

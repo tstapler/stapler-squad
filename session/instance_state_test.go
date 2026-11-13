@@ -274,7 +274,7 @@ func TestTransitionTo_Touch_Should_AdvanceLastMeaningfulChangeBeforeSnapshot_Whe
 
 func TestUpdateTimestamps_Should_NotAdvanceLastMeaningfulChange_When_RenameOrPin(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "touch-rename", Status: domain.Running}
+	inst := &Instance{Title: "touch-rename", Status: domain.Active}
 	before := inst.Snapshot().LastMeaningfulChangeAt
 
 	require.NoError(t, inst.SetPinned(true))
@@ -307,7 +307,7 @@ func TestUpdateTimestamps_Should_RebuildSnapshotOncePerMeaningfulFrameAndZeroOth
 
 func TestRecordTurnEnd_Should_AdvanceLastMeaningfulChange_When_TurnEnded(t *testing.T) {
 	t.Parallel()
-	inst := &Instance{Title: "touch-turn", Status: domain.Running}
+	inst := &Instance{Title: "touch-turn", Status: domain.Active}
 	before := inst.Snapshot().LastMeaningfulChangeAt
 
 	inst.RecordTurnEnd("done", domain.TurnEndSourceHook)

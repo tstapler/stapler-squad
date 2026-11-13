@@ -2552,7 +2552,7 @@ func (i *Instance) resolveRestartWorktreePath(waspaused bool, claudeSessionID *s
 // that backend instead of respawning in place: there's no live hand-off
 // between daemons, so this kills, rebuilds under the new backend, and
 // resumes -- same mechanism as an in-place restart.
-func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessManagerBackend) (retErr error) {
+func (i *Instance) Restart(preserveOutput bool, backendOverride domain.ProcessManagerBackend) (retErr error) { //nolint:gocognit,gocyclo // pre-existing complexity; only the Backend type qualifier changed in the domain lowering
 	if err := validateBackendOverride(backendOverride); err != nil {
 		return err
 	}

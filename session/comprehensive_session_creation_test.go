@@ -523,7 +523,7 @@ func testSessionCreationStates(t *testing.T) {
 		}()
 
 		// Initial state should be appropriate
-		assert.NotEqual(t, domain.Running, instance.Status, "Instance should not be running before start")
+		assert.NotEqual(t, domain.Active, instance.Status, "Instance should not be running before start")
 
 		// Start the session
 		startCleanup, err := instance.StartWithCleanup(true)
@@ -537,7 +537,7 @@ func testSessionCreationStates(t *testing.T) {
 		}()
 
 		// Should be running after successful start
-		assert.Equal(t, domain.Running, instance.Status, "Instance should be running after start")
+		assert.Equal(t, domain.Active, instance.Status, "Instance should be running after start")
 
 		// Test Started() method
 		assert.True(t, instance.Started(), "Started() should return true for running instance")
@@ -576,7 +576,7 @@ func testSessionCreationStates(t *testing.T) {
 		assert.False(t, beforeStart, "Should not be started initially")
 		assert.True(t, afterStart, "Should be started after StartWithCleanup")
 		assert.NotEqual(t, statusBeforeStart, statusAfterStart, "Status should change after starting")
-		assert.Equal(t, domain.Running, statusAfterStart, "Status should be Running after start")
+		assert.Equal(t, domain.Active, statusAfterStart, "Status should be Running after start")
 	})
 }
 

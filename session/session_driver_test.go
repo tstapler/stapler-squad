@@ -480,7 +480,7 @@ func TestAttemptBacklogNudge_FailedSend_StillReturnsNonZeroTime(t *testing.T) {
 	// the same shape of permanent, non-retryable failure as a dead tmux pane.
 	inst := &Instance{
 		Title:  "test-nudge-failed-send",
-		Status: domain.Ready,
+		Status: domain.Active,
 	}
 
 	before := time.Now()
@@ -503,7 +503,7 @@ func TestAttemptBacklogNudge_FailedSend_RateLimitsRetry(t *testing.T) {
 	t.Parallel()
 	inst := &Instance{
 		Title:  "test-nudge-rate-limit",
-		Status: domain.Ready,
+		Status: domain.Active,
 	}
 
 	var nudgeSentAt time.Time
@@ -963,7 +963,7 @@ func runBoundedDialogAnswerScenario(t *testing.T, title string, fakePM *stuckDia
 	t.Helper()
 	inst := &Instance{
 		Title:          title,
-		Status:         domain.Ready,
+		Status:         domain.Active,
 		processManager: fakePM,
 		InitialPrompt:  driverInitialPrompt,
 	}
@@ -1318,7 +1318,7 @@ func newDialogGiveUpEscalationInstance(fakePM *stuckDialogProcessManager) (*Inst
 	inst := &Instance{
 		Title:          "dialog-give-up-escalation",
 		UUID:           "test-uuid-give-up-escalation",
-		Status:         domain.Ready,
+		Status:         domain.Active,
 		processManager: fakePM,
 		reviewQueue:    NewReviewQueue(),
 	}
@@ -1415,7 +1415,7 @@ func TestStopSessionDriver_ConcurrentWithInFlightPoll_ReturnsBoundedNoGoroutineL
 	inst := &Instance{
 		Title:          "concurrent-stop-test",
 		UUID:           "test-uuid-concurrent-stop",
-		Status:         domain.Running,
+		Status:         domain.Active,
 		processManager: fakePM,
 		reviewQueue:    NewReviewQueue(),
 	}

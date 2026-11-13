@@ -51,7 +51,7 @@ func makeStartedInstance(title string) *Instance {
 	inst := &Instance{
 		Title:  title,
 		UUID:   "uuid-" + title,
-		Status: domain.Running,
+		Status: domain.Active,
 	}
 	inst.started.Store(true)
 	return inst

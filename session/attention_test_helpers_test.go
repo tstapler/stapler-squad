@@ -12,7 +12,7 @@ type instanceOption func(inst *Instance, now time.Time)
 // wall clock directly, so timestamps are taken at construction, immediately before use.
 func startedInstance(title string, opts ...instanceOption) *Instance {
 	now := time.Now()
-	inst := &Instance{Title: title, UUID: "uuid-" + title, Status: domain.Running}
+	inst := &Instance{Title: title, UUID: "uuid-" + title, Status: domain.Active}
 	inst.started.Store(true)
 	inst.UpdatedAt = now
 	for _, o := range opts {

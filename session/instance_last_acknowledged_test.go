@@ -151,7 +151,7 @@ func TestLastAcknowledgedComparison(t *testing.T) {
 				Title:  "Test Instance",
 				Path:   "/path/to/repo",
 				Branch: "test-branch",
-				Status: domain.Ready,
+				Status: domain.Active,
 				ReviewState: domain.ReviewState{
 					LastAcknowledged:     tc.lastAcknowledged,
 					LastMeaningfulOutput: tc.lastMeaningfulOutput,

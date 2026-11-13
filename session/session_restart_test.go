@@ -90,7 +90,7 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 
 	// Verify the restart also used the --resume flag
 	assert.True(t, instance.Started(), "Instance should be started after restart")
-	assert.Equal(t, domain.Running, instance.Status, "Instance should be running after restart")
+	assert.Equal(t, domain.Active, instance.Status, "Instance should be running after restart")
 
 	t.Logf("✓ Session restarted successfully with conversation continuity")
 }
@@ -268,7 +268,7 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 
 	// Verify session is restored
 	assert.True(t, instance.Started(), "Instance should be started after restart")
-	assert.Equal(t, domain.Running, instance.Status, "Instance should be running after restart")
+	assert.Equal(t, domain.Active, instance.Status, "Instance should be running after restart")
 
 	t.Logf("✓ Health checker automatic restart succeeded with conversation continuity")
 }
