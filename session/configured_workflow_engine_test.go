@@ -556,7 +556,7 @@ func TestValidateGates_should_SeeRecordedGateSatisfaction_When_InputBuiltViaShar
 	})
 	require.NoError(t, err)
 
-	guardInput := NewBacklogItemTransitionInput(item, BacklogStatus(item.Status))
+	guardInput := backlogdto.NewBacklogItemTransitionInput(item, BacklogStatus(item.Status))
 	require.Equal(t, item.ID, guardInput.ItemID, "the shared constructor must populate ItemID")
 
 	require.NoError(t, engine.ValidateGates(guardInput, to, nil),
@@ -667,7 +667,7 @@ func TestConfiguredWorkflowEngine_should_HonorCapturedSnapshot_When_ItemsStageIs
 	t.Parallel()
 	engine, from, to, reloaded := newDeletedStageItemFixture(t)
 
-	fallback := BuildStageConfigSnapshotFallback(reloaded)
+	fallback := backlogdto.BuildStageConfigSnapshotFallback(reloaded)
 	require.NotNil(t, fallback, "expected a reconstructed snapshot from the item's own status-event history")
 	require.Equal(t, "E2E From", fallback.StageName)
 	require.Equal(t, []BacklogStatus{to}, fallback.AllowedTransitions)

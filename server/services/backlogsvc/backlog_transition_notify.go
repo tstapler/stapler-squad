@@ -84,7 +84,7 @@ type transitionDeniedReporter struct{ svc *BacklogService }
 // TransitionDeniedReporter returns the reporter to inject into
 // session.Storage.SetTransitionGate. Idempotence per (item, caller, from, to,
 // reason) is notifyTransitionDenied's.
-func (s *BacklogService) TransitionDeniedReporter() session.TransitionDeniedReporter {
+func (s *BacklogService) TransitionDeniedReporter() backlogdto.TransitionDeniedReporter {
 	return transitionDeniedReporter{svc: s}
 }
 

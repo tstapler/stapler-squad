@@ -64,7 +64,7 @@ func (c *clsGateHarness) status(t *testing.T, itemID string) string {
 
 // move drives the gate as caller from the item's current status to `to`.
 func (c *clsGateHarness) move(ctx context.Context, caller domain.TransitionCaller, itemID string, to session.BacklogStatus) error {
-	req := session.TransitionRequest{Caller: caller, ItemID: itemID, To: to, TriggeredBy: session.TriggeredBySystem}
+	req := backlogdto.TransitionRequest{Caller: caller, ItemID: itemID, To: to, TriggeredBy: session.TriggeredBySystem}
 	if to == session.BacklogStatusArchived {
 		_, err := c.svc.storage.GatedArchive(ctx, req)
 		return err
@@ -81,7 +81,7 @@ func clsDeniedRow(t *testing.T, c *clsGateHarness, itemID string, caller domain.
 	assert.Equal(t, string(caller), rows[0].DeniedCaller)
 	assert.Equal(t, string(edge.From), rows[0].DeniedFrom)
 	assert.Equal(t, string(edge.To), rows[0].DeniedTo)
-	assert.Equal(t, session.DeniedOperatorGate, rows[0].DeniedReason)
+	assert.Equal(t, backlogdto.DeniedOperatorGate, rows[0].DeniedReason)
 }
 
 func TestClassProof_Agent_GateOnInProgressToReviewDeniesRequestReviewAndApprovalFreesIt(t *testing.T) {
@@ -126,7 +126,7 @@ func TestClassProof_Agent_GenericDelegateIsDeniedWhenAnOperatorDisablesTheEdge(t
 	rows := transitionDeniedRows(t, svc, item.ID)
 	require.Len(t, rows, 1, "the agent's denial is reported, not only returned")
 	assert.Equal(t, string(domain.CallerMCPTransitionDelegate), rows[0].DeniedCaller)
-	assert.Equal(t, session.DeniedConfigGraph, rows[0].DeniedReason)
+	assert.Equal(t, backlogdto.DeniedConfigGraph, rows[0].DeniedReason)
 
 	require.NoError(t, enfSetEdge(t, svc, edge, true))
 	require.NoError(t, enfTransition(agentCtx, svc, item.ID, refining, ""))

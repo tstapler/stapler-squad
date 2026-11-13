@@ -91,7 +91,7 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	archived := 0
 	for _, item := range items {
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusDone)}
-		if _, transErr := l.storage.GatedTransition(ctx, session.TransitionRequest{
+		if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerArchiveStaleDone, ItemID: item.ID, To: session.BacklogStatusArchived, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {
 			// A denial is reported once by the gate; the item stays done and is retried next tick.

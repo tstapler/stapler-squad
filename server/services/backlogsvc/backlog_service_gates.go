@@ -125,7 +125,7 @@ func (s *BacklogService) GetPendingGates(
 
 	to := session.BacklogStatus(req.Msg.ToStatus)
 	guardInput := s.buildPendingGatesGuardInput(ctx, item, to)
-	fallback := session.BuildStageConfigSnapshotFallback(item)
+	fallback := backlogdto.BuildStageConfigSnapshotFallback(item)
 
 	gates, err := s.engine.PendingGates(guardInput, to, fallback)
 	if err != nil {
@@ -184,7 +184,7 @@ func (s *BacklogService) buildGuardInput(
 		log.WarningLog().Printf("[%s] failed to load review verdict for item %s: %v", caller, item.ID, err)
 	}
 
-	guardInput := session.NewBacklogItemTransitionInput(item, session.BacklogStatus(item.Status))
+	guardInput := backlogdto.NewBacklogItemTransitionInput(item, session.BacklogStatus(item.Status))
 	guardInput.OverallOutcome = overallOutcome
 	guardInput.HasUnshippedCode = hasUnshippedCode
 	guardInput.HasUnresolvedBlockers = hasUnresolvedBlockers && blockersErr == nil

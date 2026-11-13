@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,78 +24,16 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 )
 
-// Labels of the exempt entry points on workflow_engine_bypass_total{caller}.
-// They are not registry entries: a registry entry names a path the engine decides.
-const (
-	CallerRollback domain.TransitionCaller = "rollback"
-	CallerDebug    domain.TransitionCaller = "debug"
-	// CallerDebugCreate labels Storage.CreateBacklogItemForDebug: creation has no
-	// "from" status, so it is exempt but counted.
-	CallerDebugCreate domain.TransitionCaller = "debug_create"
-)
-
-// Denial reasons recorded on a transition_denied row (denied_reason).
-const (
-	DeniedConfigGraph        = "config_graph"
-	DeniedDefaultGuard       = "default_guard"
-	DeniedOperatorGate       = "operator_gate"
-	DeniedTargetStageRemoved = "target_stage_removed"
-)
-
-var (
-	// ErrUnregisteredTransitionCaller is returned for a Caller absent from the registry.
-	ErrUnregisteredTransitionCaller = errors.New("transition caller is not registered")
-	// ErrInvalidTransitionRequest is returned for a malformed request (a programmer error).
-	ErrInvalidTransitionRequest = errors.New("invalid transition request")
-)
-
-// TransitionDeniedReporter makes an agent or system denial visible (stuck row,
-// comment, notification). Implementations must be idempotent per
-// (item, caller, from, to, reason): the gate calls it once per denial and the
-// implementation, not the gate, suppresses repeats while a row stays open.
-type TransitionDeniedReporter interface {
-	Report(ctx context.Context, item *backlogdto.BacklogItemData, caller domain.TransitionCaller, from, to BacklogStatus, reason string, denyErr error)
-}
-
-// TransitionRequest is one status change asked of GatedTransition.
-type TransitionRequest struct {
-	// Caller must be a registry entry.
-	Caller domain.TransitionCaller
-	// ItemID names the item; Observed may replace it.
-	ItemID string
-	// Observed is the caller's own read of the item, which saves the gate a
-	// re-read. Its Status is the decided "from" and must carry StatusEvents when
-	// stage-snapshot fallback matters (GetBacklogItem loads them).
-	Observed *backlogdto.BacklogItemData
-	To       BacklogStatus
-	// Precondition's three fields reach the raw writer unchanged; ExpectedStatus
-	// defaults to the observed status.
-	Precondition *backlogdto.BacklogItemPrecondition
-	TriggeredBy  string
-	// OverrideReason is forwarded in the guard input; the class policy decides
-	// what it frees (enforceAnswer).
-	OverrideReason string
-	// Guard is guard input the caller already assembled (verdict, unshipped
-	// code, blockers); the gate fills ItemID and Status when empty.
-	Guard *BacklogItemTransitionInput
-	// Unconditional re-reads and re-decides once if the write loses its CAS
-	// (at most two attempts). It cannot carry ExpectedUpdatedAt.
-	Unconditional bool
-	// BeforeCommit runs after the engine allows and before the CAS; its error
-	// aborts the write.
-	BeforeCommit func(ctx context.Context) error
-}
-
 type transitionGate struct {
 	engine   *SwitchableWorkflowEngine
-	reporter TransitionDeniedReporter
+	reporter backlogdto.TransitionDeniedReporter
 }
 
 // SetTransitionGate injects the selector and the denial reporter together, so
 // the gate can never exist without its reporter (ADR-007 D8).
-func (s *Storage) SetTransitionGate(engine *SwitchableWorkflowEngine, reporter TransitionDeniedReporter) error {
+func (s *Storage) SetTransitionGate(engine *SwitchableWorkflowEngine, reporter backlogdto.TransitionDeniedReporter) error {
 	if engine == nil || reporter == nil {
-		return fmt.Errorf("%w: the transition gate needs an engine and a reporter", ErrInvalidTransitionRequest)
+		return fmt.Errorf("%w: the transition gate needs an engine and a reporter", backlogdto.ErrInvalidTransitionRequest)
 	}
 	s.gate.Store(&transitionGate{engine: engine, reporter: reporter})
 	return nil
@@ -117,126 +54,12 @@ func (s *Storage) TransitionGateWired() bool { return s.gate.Load() != nil }
 // is injected.
 var unwiredEngine = NewSwitchableWorkflowEngine(NewDefaultWorkflowEngine(), nil, nil)
 
-// gateVerdict is the pure outcome of the engine decision.
-type gateVerdict struct {
-	Err    error
-	Reason string
-}
-
-// decideTransition asks the engine whether spec may move item to req.To. It does
-// no I/O beyond what a Configured operator gate itself reads.
-func decideTransition(view domain.WorkflowEngine, item *backlogdto.BacklogItemData, req TransitionRequest) gateVerdict {
-	from := BacklogStatus(item.Status)
-	snap := BuildStageConfigSnapshotFallback(item)
-	in := guardInputFor(req, item, from)
-	if !graphAllows(view, from, req.To, snap, in.OverrideReason) {
-		return gateVerdict{
-			Err:    fmt.Errorf("invalid transition from %q to %q: %w", from, req.To, ErrTransitionNotAllowed),
-			Reason: DeniedConfigGraph,
-		}
-	}
-	if err := view.ValidateGates(in, req.To, snap); err != nil {
-		return gateVerdict{Err: err, Reason: classifyGateDenial(err)}
-	}
-	return gateVerdict{}
-}
-
-// graphAllows is the graph check. It evaluates quietly and counts a denial only
-// when no operator override frees it, so an overridden transition is not
-// recorded as a denied one.
-func graphAllows(view domain.WorkflowEngine, from, to BacklogStatus, snap *domain.StageConfigSnapshot, overrideReason string) bool {
-	q, quietable := view.(interface{ Quiet() domain.WorkflowEngine })
-	if !quietable {
-		return view.CanTransition(from, to, snap) || operatorGraphOverride(view, overrideReason, to)
-	}
-	if q.Quiet().CanTransition(from, to, snap) || operatorGraphOverride(view, overrideReason, to) {
-		return true
-	}
-	if n, ok := view.(interface{ NoteGraphDenied(from, to BacklogStatus) }); ok {
-		n.NoteGraphDenied(from, to)
-	}
-	return false
-}
-
-// graphOverrider is implemented by a class-aware view that lets an operator's
-// override_reason bypass the graph (ADR-001, ADR-007 D3).
-type graphOverrider interface {
-	OverridesGraph(overrideReason string, to BacklogStatus) bool
-}
-
-func operatorGraphOverride(view domain.WorkflowEngine, overrideReason string, to BacklogStatus) bool {
-	o, ok := view.(graphOverrider)
-	return ok && o.OverridesGraph(overrideReason, to)
-}
-
-func guardInputFor(req TransitionRequest, item *backlogdto.BacklogItemData, from BacklogStatus) BacklogItemTransitionInput {
-	var in BacklogItemTransitionInput
-	if req.Guard != nil {
-		in = *req.Guard
-		if in.ItemID == "" {
-			in.ItemID = item.ID
-		}
-		if in.Status == "" {
-			in.Status = from
-		}
-	} else {
-		in = NewBacklogItemTransitionInput(item, from)
-	}
-	if req.OverrideReason != "" {
-		in.OverrideReason = req.OverrideReason
-	}
-	return in
-}
-
-// classifyGateDenial names the layer behind a ValidateGates error. The
-// stage-removed gate is matched by its id because it is a synthetic
-// operator-gate status, not a distinct error type.
-func classifyGateDenial(err error) string {
-	switch {
-	case errors.Is(err, domain.ErrGateNotSatisfied):
-		if strings.Contains(err.Error(), `"`+domain.StageConfigUnresolvableGateID+`"`) {
-			return DeniedTargetStageRemoved
-		}
-		return DeniedOperatorGate
-	default:
-		return DeniedDefaultGuard
-	}
-}
-
 // GatedTransition decides req with the engine and, when allowed, writes the new
 // status with a compare-and-swap derived from the observed "from". A denial for
 // an agent or system caller reaches the reporter before the error returns; an
 // operator denial returns the error only.
-func (s *Storage) GatedTransition(ctx context.Context, req TransitionRequest) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) GatedTransition(ctx context.Context, req backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
 	return s.gated(ctx, req, s.writeGated)
-}
-
-// PRAssociation is the PR a GatedSetPRAndTransition call records on the item.
-type PRAssociation struct {
-	URL     string
-	Number  int
-	Summary string
-	// Guard is required to reassign an item already in pr_pending; see
-	// RawSetBacklogItemPRAndTransition.
-	Guard *backlogdto.PRReassignmentGuard
-	// Source says which writer recorded the PR (the item-direct link's attach source);
-	// empty means manual.
-	Source domain.AttachSource
-	// Additive adds URL as a follow-up PR of an item already in pr_pending instead of
-	// reassigning its tracked PR: no guard, status unchanged, the item mirror follows the
-	// derived active PR. Only the report_pr_created handler sets it, and only with the
-	// multi-PR backlog scope on.
-	Additive bool
-}
-
-// pinTarget sets the target status a Gated* entry point owns, rejecting a
-// request that names a different one.
-func pinTarget(req *TransitionRequest, to BacklogStatus) error {
-	if req.To != "" && req.To != to {
-		return fmt.Errorf("%w: this entry point only moves to %q, not %q", ErrInvalidTransitionRequest, to, req.To)
-	}
-	req.To = to
-	return nil
 }
 
 // GatedArchive decides an archive (to=archived, from any status) with the same
@@ -245,33 +68,33 @@ func pinTarget(req *TransitionRequest, to BacklogStatus) error {
 // as before. BeforeCommit runs after the allow and before the write; worktree
 // cleanup and link-session ending stay with the caller, after a successful
 // return.
-func (s *Storage) GatedArchive(ctx context.Context, req TransitionRequest) (*backlogdto.BacklogItemData, error) {
-	if err := pinTarget(&req, BacklogStatusArchived); err != nil {
+func (s *Storage) GatedArchive(ctx context.Context, req backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
+	if err := backlogdto.PinTarget(&req, BacklogStatusArchived); err != nil {
 		return nil, err
 	}
 	return s.gated(ctx, req, s.writeGatedArchive)
 }
 
-func (s *Storage) writeGatedArchive(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
-	pre := gatePrecondition(req, spec, item)
+func (s *Storage) writeGatedArchive(ctx context.Context, req backlogdto.TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+	pre := backlogdto.GatePrecondition(req, spec, item)
 	return s.Repo.rawArchiveBacklogItem(ctx, req.ItemID, &pre, req.TriggeredBy, pre.Note)
 }
 
 // GatedUnarchive decides archived->idea. The write is a compare-and-swap on
 // status only (default: the observed status, which must be archived), so the
 // request cannot carry ExpectedUpdatedAt or a Note.
-func (s *Storage) GatedUnarchive(ctx context.Context, req TransitionRequest) (*backlogdto.BacklogItemData, error) {
-	if err := pinTarget(&req, BacklogStatusIdea); err != nil {
+func (s *Storage) GatedUnarchive(ctx context.Context, req backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
+	if err := backlogdto.PinTarget(&req, BacklogStatusIdea); err != nil {
 		return nil, err
 	}
 	if p := req.Precondition; p != nil && (p.ExpectedUpdatedAt != nil || p.Note != "") {
-		return nil, fmt.Errorf("%w: unarchive carries only an ExpectedStatus", ErrInvalidTransitionRequest)
+		return nil, fmt.Errorf("%w: unarchive carries only an ExpectedStatus", backlogdto.ErrInvalidTransitionRequest)
 	}
 	return s.gated(ctx, req, s.writeGatedUnarchive)
 }
 
-func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
-	pre := gatePrecondition(req, spec, item)
+func (s *Storage) writeGatedUnarchive(ctx context.Context, req backlogdto.TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+	pre := backlogdto.GatePrecondition(req, spec, item)
 	if pre.ExpectedStatus != string(BacklogStatusArchived) {
 		return nil, fmt.Errorf("%w: item is %q, not archived", domain.ErrPreconditionFailed, pre.ExpectedStatus)
 	}
@@ -284,21 +107,21 @@ func (s *Storage) writeGatedUnarchive(ctx context.Context, req TransitionRequest
 // write derives its own. A repeat of the recorded PR is a no-op, and a
 // reassignment (observed pr_pending) is a status-preserving field write that
 // PRReassignmentGuard, not the engine, decides (ADR-007 Decision 7).
-func (s *Storage) GatedSetPRAndTransition(ctx context.Context, req TransitionRequest, pr PRAssociation) error {
+func (s *Storage) GatedSetPRAndTransition(ctx context.Context, req backlogdto.TransitionRequest, pr backlogdto.PRAssociation) error {
 	if _, ok := domain.LookupTransitionCaller(req.Caller); !ok {
-		return fmt.Errorf("%w: %q", ErrUnregisteredTransitionCaller, req.Caller)
+		return fmt.Errorf("%w: %q", backlogdto.ErrUnregisteredTransitionCaller, req.Caller)
 	}
-	if err := pinTarget(&req, BacklogStatusPRPending); err != nil {
+	if err := backlogdto.PinTarget(&req, BacklogStatusPRPending); err != nil {
 		return err
 	}
 	observed := req.Observed
 	if observed == nil || req.Precondition != nil {
-		return fmt.Errorf("%w: a PR transition needs Observed and no Precondition", ErrInvalidTransitionRequest)
+		return fmt.Errorf("%w: a PR transition needs Observed and no Precondition", backlogdto.ErrInvalidTransitionRequest)
 	}
 	if observed.Status == string(BacklogStatusPRPending) {
 		return s.setPRAndTransition(ctx, observed, pr)
 	}
-	_, err := s.gated(ctx, req, func(ctx context.Context, _ TransitionRequest, _ domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+	_, err := s.gated(ctx, req, func(ctx context.Context, _ backlogdto.TransitionRequest, _ domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
 		return nil, s.setPRAndTransition(ctx, item, pr)
 	})
 	return err
@@ -318,7 +141,7 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 	}
 	moved := 0
 	for _, c := range candidates {
-		_, err := s.gated(ctx, TransitionRequest{
+		_, err := s.gated(ctx, backlogdto.TransitionRequest{
 			Caller:       domain.CallerReconcileStuck,
 			ItemID:       c.ID,
 			To:           BacklogStatusReview,
@@ -337,22 +160,22 @@ func (s *Storage) GatedReconcileStuck(ctx context.Context) (int, error) {
 	return moved, nil
 }
 
-func (s *Storage) writeGatedReconcile(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
-	pre := gatePrecondition(req, spec, item)
+func (s *Storage) writeGatedReconcile(ctx context.Context, req backlogdto.TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+	pre := backlogdto.GatePrecondition(req, spec, item)
 	return s.Repo.rawTransitionBacklogItemStatusWithNote(ctx, req.ItemID, req.To, &pre, req.TriggeredBy, reconcileStuckNote)
 }
 
 // gateWriter performs the raw write once the engine allowed req.
-type gateWriter func(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error)
+type gateWriter func(ctx context.Context, req backlogdto.TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error)
 
 // gated is the one decision function behind every Gated* entry point: they
 // differ only in the target status they pin and the raw writer they call.
-func (s *Storage) gated(ctx context.Context, req TransitionRequest, write gateWriter) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) gated(ctx context.Context, req backlogdto.TransitionRequest, write gateWriter) (*backlogdto.BacklogItemData, error) {
 	spec, ok := domain.LookupTransitionCaller(req.Caller)
 	if !ok {
-		return nil, fmt.Errorf("%w: %q", ErrUnregisteredTransitionCaller, req.Caller)
+		return nil, fmt.Errorf("%w: %q", backlogdto.ErrUnregisteredTransitionCaller, req.Caller)
 	}
-	if err := normalizeRequest(&req); err != nil {
+	if err := backlogdto.NormalizeRequest(&req); err != nil {
 		return nil, err
 	}
 	call := &gateCall{spec: spec, engine: unwiredEngine, write: write}
@@ -379,31 +202,14 @@ func (s *Storage) gated(ctx context.Context, req TransitionRequest, write gateWr
 
 // gateCall is what one GatedTransition invocation decides with.
 type gateCall struct {
-	req      TransitionRequest
+	req      backlogdto.TransitionRequest
 	spec     domain.TransitionCallerSpec
 	engine   *SwitchableWorkflowEngine
-	reporter TransitionDeniedReporter
+	reporter backlogdto.TransitionDeniedReporter
 	write    gateWriter
 }
 
-func normalizeRequest(req *TransitionRequest) error {
-	if req.ItemID == "" && req.Observed != nil {
-		req.ItemID = req.Observed.ID
-	}
-	switch {
-	case req.ItemID == "":
-		return fmt.Errorf("%w: no item id", ErrInvalidTransitionRequest)
-	case req.Observed != nil && req.Observed.ID != req.ItemID:
-		return fmt.Errorf("%w: observed item %s is not %s", ErrInvalidTransitionRequest, req.Observed.ID, req.ItemID)
-	case req.To == "":
-		return fmt.Errorf("%w: no target status", ErrInvalidTransitionRequest)
-	case req.Unconditional && req.Precondition != nil && req.Precondition.ExpectedUpdatedAt != nil:
-		return fmt.Errorf("%w: an unconditional request cannot carry ExpectedUpdatedAt", ErrInvalidTransitionRequest)
-	}
-	return nil
-}
-
-func (s *Storage) observeForGate(ctx context.Context, req TransitionRequest) (*backlogdto.BacklogItemData, error) {
+func (s *Storage) observeForGate(ctx context.Context, req backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
 	if req.Observed != nil {
 		return req.Observed, nil
 	}
@@ -420,7 +226,7 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *backlogdt
 
 	noteGateCall(c.spec.Class, c.spec.Name, c.engine.ModeFor(c.spec.Class))
 	view := c.engine.ForCaller(c.spec)
-	if v := decideTransition(view, item, req); v.Err != nil {
+	if v := backlogdto.DecideTransition(view, item, req); v.Err != nil {
 		c.reportDenial(ctx, item, v)
 		return nil, false, v.Err
 	}
@@ -431,12 +237,12 @@ func (s *Storage) gatedAttempt(ctx context.Context, c *gateCall, item *backlogdt
 	}
 	updated, err = c.write(ctx, req, c.spec, item)
 	if err == nil {
-		notifyTransitionCommitted(view, guardInputFor(req, item, BacklogStatus(item.Status)), req.To)
+		notifyTransitionCommitted(view, backlogdto.GuardInputFor(req, item, BacklogStatus(item.Status)), req.To)
 	}
 	return updated, errors.Is(err, domain.ErrPreconditionFailed), err
 }
 
-func (c *gateCall) reportDenial(ctx context.Context, item *backlogdto.BacklogItemData, v gateVerdict) {
+func (c *gateCall) reportDenial(ctx context.Context, item *backlogdto.BacklogItemData, v backlogdto.GateVerdict) {
 	if c.reporter == nil || c.spec.Class == domain.ClassOperator {
 		return
 	}
@@ -449,29 +255,9 @@ func (c *gateCall) reportDenial(ctx context.Context, item *backlogdto.BacklogIte
 }
 
 // writeGated derives the CAS from the decided "from" and calls the raw writer.
-func (s *Storage) writeGated(ctx context.Context, req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
-	pre := gatePrecondition(req, spec, item)
+func (s *Storage) writeGated(ctx context.Context, req backlogdto.TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) (*backlogdto.BacklogItemData, error) {
+	pre := backlogdto.GatePrecondition(req, spec, item)
 	return s.Repo.RawTransitionBacklogItemStatus(ctx, req.ItemID, req.To, &pre, req.TriggeredBy)
-}
-
-// gatePrecondition derives the raw writer's compare-and-swap from the request
-// and the decided "from".
-func gatePrecondition(req TransitionRequest, spec domain.TransitionCallerSpec, item *backlogdto.BacklogItemData) backlogdto.BacklogItemPrecondition {
-	pre := backlogdto.BacklogItemPrecondition{}
-	if req.Precondition != nil {
-		pre = *req.Precondition
-	}
-	if pre.ExpectedStatus == "" {
-		pre.ExpectedStatus = item.Status
-	}
-	// Guard input read from item fields goes stale if an unrelated field is
-	// edited between read and write; pin updated_at only then, so GuardsNone
-	// callers keep a status-only CAS.
-	if pre.ExpectedUpdatedAt == nil && req.Guard != nil && req.Observed != nil && spec.Guards == domain.GuardsBuiltIn {
-		observedAt := item.UpdatedAt
-		pre.ExpectedUpdatedAt = &observedAt
-	}
-	return pre
 }
 
 // Rollback restores the status a failed multi-step operation moved the item
@@ -481,11 +267,11 @@ func gatePrecondition(req TransitionRequest, spec domain.TransitionCallerSpec, i
 // transition that latched them did not stick.
 func (s *Storage) Rollback(ctx context.Context, itemID string, to BacklogStatus, precondition *backlogdto.BacklogItemPrecondition, triggeredBy string) (*backlogdto.BacklogItemData, error) {
 	if precondition == nil || precondition.ExpectedStatus == "" {
-		return nil, fmt.Errorf("%w: a rollback requires an ExpectedStatus", ErrInvalidTransitionRequest)
+		return nil, fmt.Errorf("%w: a rollback requires an ExpectedStatus", backlogdto.ErrInvalidTransitionRequest)
 	}
 	updated, err := s.Repo.RawTransitionBacklogItemStatus(ctx, itemID, to, precondition, triggeredBy)
 	if err == nil {
-		RecordEngineBypass(CallerRollback)
+		RecordEngineBypass(backlogdto.CallerRollback)
 		if g := s.gate.Load(); g != nil {
 			g.engine.ClearLatches(itemID, to, BacklogStatus(precondition.ExpectedStatus))
 		}
@@ -506,7 +292,7 @@ func (s *Storage) DebugForce(ctx context.Context, itemID string, to BacklogStatu
 		updated, err = s.Repo.RawTransitionBacklogItemStatus(ctx, itemID, to, nil, triggeredBy)
 	}
 	if err == nil {
-		RecordEngineBypass(CallerDebug)
+		RecordEngineBypass(backlogdto.CallerDebug)
 	}
 	return updated, err
 }

@@ -500,7 +500,7 @@ func TestReconcilePRPending_Enforce_OperatorGateHoldsMergedPRThenMovesToDoneWhen
 	require.Len(t, reports, 2)
 	for _, r := range reports {
 		assert.Equal(t, domain.CallerReconcilePRPendingMerge, r.caller)
-		assert.Equal(t, session.DeniedOperatorGate, r.reason)
+		assert.Equal(t, backlogdto.DeniedOperatorGate, r.reason)
 	}
 	for _, c := range notifier.Calls {
 		assert.NotEqual(t, "Status update failed after work completed", c.Title, "the gate's report is the only notification")

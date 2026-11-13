@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -35,7 +36,7 @@ func TestArchiveStaleDoneItems_Enforce_OperatorGateHoldsItemThenArchivesWhenSati
 	require.Len(t, reports, 3, "the gate reports each denied attempt; the reporter implementation dedupes")
 	for _, r := range reports {
 		assert.Equal(t, domain.CallerArchiveStaleDone, r.caller)
-		assert.Equal(t, session.DeniedOperatorGate, r.reason)
+		assert.Equal(t, backlogdto.DeniedOperatorGate, r.reason)
 		assert.Equal(t, session.BacklogStatusArchived, r.to)
 	}
 	assert.Empty(t, notifier.Calls, "the sweep does not notify on top of the gate's report")

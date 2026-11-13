@@ -183,24 +183,24 @@ func TestRollbackFailedReopen_should_RestoreReviewEvenWhenAGateBlocksInProgressT
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	h := wireEnforcedGate(t, svc)
 	item := systemItemAt(t, svc, session.BacklogStatusReview)
-	inProgress, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
+	inProgress, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
 		Caller: domain.CallerAutoReopenFailedReview, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
 	})
 	require.NoError(t, err)
 	h.blockWithGate(t, session.BacklogStatusInProgress, session.BacklogStatusReview)
-	before := session.EngineBypassCount(session.CallerRollback)
+	before := session.EngineBypassCount(backlogdto.CallerRollback)
 
 	svc.rollbackFailedReopen(context.Background(), item, inProgress, errors.New("spawn failed"))
 
 	assert.Equal(t, "review", itemStatus(t, svc, item.ID), "a rollback is never engine-denied")
-	assert.Equal(t, before+1, session.EngineBypassCount(session.CallerRollback))
+	assert.Equal(t, before+1, session.EngineBypassCount(backlogdto.CallerRollback))
 }
 
 func TestRollbackFailedPRFixReopen_should_RestorePRPendingAndNotOverwriteAConcurrentMover(t *testing.T) {
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
 	item := systemItemAt(t, svc, session.BacklogStatusPRPending)
-	_, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
+	_, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
 		Caller: domain.CallerAutoReopenForPRFix, ItemID: item.ID, To: session.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
 	})
 	require.NoError(t, err)
@@ -219,7 +219,7 @@ func TestDebugMutateHandler_should_WriteAnyStatusAndCountDebug_When_EnforceAndGr
 	wireEnforcedGate(t, svc)
 	handler := services.NewBacklogDebugMutateHandler(svc.storage)
 	item := systemItemAt(t, svc, session.BacklogStatusIdea)
-	before := session.EngineBypassCount(session.CallerDebug)
+	before := session.EngineBypassCount(backlogdto.CallerDebug)
 
 	post := func(fn http.HandlerFunc, body string) int {
 		rec := httptest.NewRecorder()
@@ -230,6 +230,6 @@ func TestDebugMutateHandler_should_WriteAnyStatusAndCountDebug_When_EnforceAndGr
 	assert.Equal(t, "done", itemStatus(t, svc, item.ID))
 	assert.Equal(t, http.StatusNoContent, post(handler.HandleArchive, `{"itemId":"`+item.ID+`"}`))
 	assert.Equal(t, "archived", itemStatus(t, svc, item.ID))
-	assert.Equal(t, before+2, session.EngineBypassCount(session.CallerDebug))
+	assert.Equal(t, before+2, session.EngineBypassCount(backlogdto.CallerDebug))
 	assert.Empty(t, transitionDeniedRows(t, svc, item.ID))
 }

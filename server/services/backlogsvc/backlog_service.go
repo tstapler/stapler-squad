@@ -1136,7 +1136,7 @@ func backlogItemToProto(item *backlogdto.BacklogItemData, engine domain.Workflow
 		PrNumber:           int32(item.PrNumber),
 		CreatedAt:          timestamppb.New(item.CreatedAt),
 		UpdatedAt:          timestamppb.New(item.UpdatedAt),
-		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), session.BuildStageConfigSnapshotFallback(item)),
+		AllowedTransitions: allowedTransitionStrings(engine, session.BacklogStatus(item.Status), backlogdto.BuildStageConfigSnapshotFallback(item)),
 		DuplicateRef:       duplicateRefPending(item),
 		DuplicatePending:   duplicateRefPending(item) != "",
 		PublicId:           item.PublicIDRaw,

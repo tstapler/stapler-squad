@@ -186,11 +186,11 @@ func TestReplay_SeededCopy_AllowsEveryAgentAndSystemEdgeAndGatesEachSystemRequir
 	merge, ok := report.find(domain.CallerReconcilePRPendingMerge, BacklogStatusPRPending, BacklogStatusDone)
 	require.True(t, ok)
 	assert.Equal(t, "allowed", merge.Live)
-	assert.Equal(t, "denied:"+DeniedOperatorGate, merge.Synthetic, "the edited path: an unsatisfied operator gate denies the merge advance")
+	assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, merge.Synthetic, "the edited path: an unsatisfied operator gate denies the merge advance")
 
 	for _, d := range report.Decisions {
 		if d.Synthetic != "-" && d.Synthetic != replayNoStoredTransition {
-			assert.Equal(t, "denied:"+DeniedOperatorGate, d.Synthetic, "%s %s->%s", d.Caller, d.Edge.From, d.Edge.To)
+			assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, d.Synthetic, "%s %s->%s", d.Caller, d.Edge.From, d.Edge.To)
 		}
 	}
 	assert.Positive(t, report.SyntheticRan)
@@ -201,15 +201,15 @@ func TestReplayDecision_Failure_FlagsOnlyAgentAndSystemGraphDenials(t *testing.T
 		return ReplayDecision{Caller: "c", Class: class, Edge: domain.SystemEdge{From: BacklogStatusIdea, To: BacklogStatusReady}, Live: replayDeniedPrefix + reason}
 	}
 	for _, class := range []domain.CallerClass{domain.ClassAgent, domain.ClassSystem} {
-		msg, failed := denied(class, DeniedConfigGraph).failure()
+		msg, failed := denied(class, backlogdto.DeniedConfigGraph).failure()
 		assert.True(t, failed, class)
 		assert.Contains(t, msg, "no gate involved")
-		_, failed = denied(class, DeniedTargetStageRemoved).failure()
+		_, failed = denied(class, backlogdto.DeniedTargetStageRemoved).failure()
 		assert.True(t, failed, class)
-		_, failed = denied(class, DeniedOperatorGate).failure()
+		_, failed = denied(class, backlogdto.DeniedOperatorGate).failure()
 		assert.False(t, failed, "a denial by a real operator gate is the configuration working")
 	}
-	_, failed := denied(domain.ClassOperator, DeniedConfigGraph).failure()
+	_, failed := denied(domain.ClassOperator, backlogdto.DeniedConfigGraph).failure()
 	assert.False(t, failed, "operators choose their edge, so a disabled edge denies them by design")
 	_, failed = (ReplayDecision{Class: domain.ClassSystem, Live: "allowed"}).failure()
 	assert.False(t, failed)
@@ -232,7 +232,7 @@ func TestReplay_ARealGateOnAFixedEdgeIsReportedDeniedButIsNotAFailure(t *testing
 	assert.Equal(t, "edited", report.Config)
 	merge, ok := report.find(domain.CallerReconcilePRPendingMerge, BacklogStatusPRPending, BacklogStatusDone)
 	require.True(t, ok)
-	assert.Equal(t, "denied:"+DeniedOperatorGate, merge.Live)
+	assert.Equal(t, "denied:"+backlogdto.DeniedOperatorGate, merge.Live)
 	assert.False(t, report.Failed(), strings.Join(report.Failures, "\n"))
 }
 

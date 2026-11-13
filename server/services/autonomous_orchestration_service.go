@@ -921,7 +921,7 @@ func (a *AutonomousOrchestrationService) resolveAutonomousStuck(ctx context.Cont
 // including an engine denial, is surfaced by the caller as the "status update
 // failed" notification.
 func (a *AutonomousOrchestrationService) advanceItemOnDriverComplete(ctx context.Context, storage *session.Storage, item *backlogdto.BacklogItemData, toStatus session.BacklogStatus, expectedStatus string, done bool) error {
-	_, err := storage.GatedTransition(ctx, session.TransitionRequest{
+	_, err := storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller:       domain.CallerAutonomousComplete,
 		ItemID:       item.ID,
 		To:           toStatus,

@@ -189,7 +189,7 @@ func (f *fakeJulesPollerStorage) AppendProgressNote(_ context.Context, itemID st
 	return nil
 }
 
-func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, req session.TransitionRequest, pr session.PRAssociation) error {
+func (f *fakeJulesPollerStorage) GatedSetPRAndTransition(_ context.Context, req backlogdto.TransitionRequest, pr backlogdto.PRAssociation) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prRecorded = append(f.prRecorded, fakePRRecord{req.Observed.ID, pr.URL, pr.Number})
@@ -207,7 +207,7 @@ func (f *fakeJulesPollerStorage) AttachItemPRLink(_ context.Context, itemID, prU
 	return true, nil
 }
 
-func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, req session.TransitionRequest) (*backlogdto.BacklogItemData, error) {
+func (f *fakeJulesPollerStorage) GatedTransition(_ context.Context, req backlogdto.TransitionRequest) (*backlogdto.BacklogItemData, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	expected := ""

@@ -197,7 +197,7 @@ func denSpawnCases() []denSpawnCase {
 // be at from when called.
 func denOpenRowFrom(t *testing.T, svc *BacklogService, itemID string, caller domain.TransitionCaller, from, to session.BacklogStatus) {
 	t.Helper()
-	d := domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: session.DeniedOperatorGate}
+	d := domain.TransitionDenial{Caller: string(caller), From: string(from), To: string(to), Reason: backlogdto.DeniedOperatorGate}
 	applied, err := svc.storage.MarkStuck(context.Background(), itemID, domain.StuckReasonTransitionDenied, from, domain.FormatTransitionDeniedContext(d, "test"))
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -402,7 +402,7 @@ func TestWriterCallersDenied_should_ReportOnceAcrossManyTicks(t *testing.T) {
 			item := systemItemAt(t, svc, tc.from)
 
 			for range 5 {
-				_, err := svc.storage.GatedTransition(context.Background(), session.TransitionRequest{
+				_, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
 					Caller: tc.caller, ItemID: item.ID, To: tc.to, TriggeredBy: session.TriggeredBySystem,
 				})
 				require.ErrorIs(t, err, domain.ErrGateNotSatisfied)

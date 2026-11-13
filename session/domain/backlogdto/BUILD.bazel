@@ -12,6 +12,7 @@ go_library(
         "review.go",
         "source_dependency.go",
         "stuck.go",
+        "transition_request.go",
     ],
     importpath = "github.com/tstapler/stapler-squad/session/domain/backlogdto",
     visibility = ["//visibility:public"],

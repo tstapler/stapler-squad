@@ -503,11 +503,11 @@ func (s *BacklogService) UpdateBacklogItem(
 		// it can no longer silently swap an already-tracked PR (including a
 		// merged one) with zero verification.
 		note := fmt.Sprintf("Manually associated with PR #%d by operator", prNumber)
-		setErr := s.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
+		setErr := s.storage.GatedSetPRAndTransition(ctx, backlogdto.TransitionRequest{
 			Caller:      domain.CallerOperatorPRAssociation,
 			Observed:    updated,
 			TriggeredBy: session.TriggeredByUser,
-		}, session.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: domain.AttachSourceManual})
+		}, backlogdto.PRAssociation{URL: prURL, Number: prNumber, Summary: note, Source: domain.AttachSourceManual})
 		if setErr != nil {
 			if isTransitionDenial(setErr) {
 				return nil, transitionConnectError(setErr, req.Msg.ItemId, "associate PR")
@@ -567,7 +567,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 
 	// The gate decides first; work branches are then pushed before the write so
 	// changes are durable. A denied archive pushes nothing and cleans up nothing.
-	archived, err := s.storage.GatedArchive(ctx, session.TransitionRequest{
+	archived, err := s.storage.GatedArchive(ctx, backlogdto.TransitionRequest{
 		Caller:      domain.CallerOperatorArchiveRPC,
 		ItemID:      req.Msg.ItemId,
 		TriggeredBy: session.TriggeredByUser,
@@ -605,7 +605,7 @@ func (s *BacklogService) UnarchiveBacklogItem(
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
 	}
 
-	unarchived, err := s.storage.GatedUnarchive(ctx, session.TransitionRequest{
+	unarchived, err := s.storage.GatedUnarchive(ctx, backlogdto.TransitionRequest{
 		Caller:      domain.CallerOperatorUnarchiveRPC,
 		ItemID:      req.Msg.ItemId,
 		TriggeredBy: session.TriggeredByUser,
@@ -1050,7 +1050,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// operator gate, then writes. For done, work branches are pushed after the
 	// decision and before the write so changes are durable before the status
 	// changes and the worktree is removed.
-	gateReq := session.TransitionRequest{
+	gateReq := backlogdto.TransitionRequest{
 		Caller:         services.ResolveTransitionCaller(ctx),
 		ItemID:         req.Msg.ItemId,
 		Observed:       item,
@@ -1434,7 +1434,7 @@ func (s *BacklogService) OverrideVerdict(
 		// happened concurrently between the GetBacklogItem read above and
 		// this write.
 		updatedAt := currentItem.UpdatedAt
-		updated, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{ //nolint:silenttransition a denial is returned below; any other write failure is shown by the fallback reload, which returns the item's true post-transition state in the RPC response
+		updated, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{ //nolint:silenttransition a denial is returned below; any other write failure is shown by the fallback reload, which returns the item's true post-transition state in the RPC response
 			Caller:   domain.CallerOperatorOverrideVerdict,
 			ItemID:   itemID,
 			Observed: currentItem,
@@ -1570,9 +1570,9 @@ func (s *BacklogService) SubmitManualReview(
 				// Observed is left unset so the gate re-reads the item: the
 				// verdict was just saved, and the guard input below already says
 				// PASS on main. That keeps the write's CAS on status alone.
-				guard := session.NewBacklogItemTransitionInput(item, session.BacklogStatusReview)
+				guard := backlogdto.NewBacklogItemTransitionInput(item, session.BacklogStatusReview)
 				guard.OverallOutcome = overall
-				if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+				if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 					Caller:       domain.CallerOperatorManualReview,
 					ItemID:       req.Msg.ItemId,
 					To:           session.BacklogStatusDone,

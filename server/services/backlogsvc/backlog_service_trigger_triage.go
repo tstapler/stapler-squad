@@ -381,7 +381,7 @@ func (s *BacklogService) TriggerTriage(
 	// races with this re-triage doesn't drag the item backwards to idea.
 	if item.Status == string(session.BacklogStatusReady) {
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReady)}
-		if _, transErr := s.storage.GatedTransition(ctx, session.TransitionRequest{
+		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerOperatorTriggerTriage, ItemID: req.Msg.ItemId, Observed: item, To: session.BacklogStatusIdea,
 			Precondition: precondition, TriggeredBy: session.TriggeredByUser,
 		}); transErr != nil {
@@ -882,7 +882,7 @@ func (s *BacklogService) TriggerTriage(
 
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
 		statusAdvanced := true
-		if _, transErr := s.storage.GatedTransition(persistCtx, session.TransitionRequest{
+		if _, transErr := s.storage.GatedTransition(persistCtx, backlogdto.TransitionRequest{
 			Caller: domain.CallerTriageComplete, ItemID: itemID, To: session.BacklogStatusReady,
 			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
 		}); transErr != nil {

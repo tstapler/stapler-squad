@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog/shadowledger"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -79,7 +80,7 @@ func newWorkflowEngineWiring(def *session.DefaultWorkflowEngine, cfgEngine *sess
 // InjectTransitionGate wires the selector and the denial reporter into storage
 // in one call, so the gate can never be live without its reporter, and logs the
 // startup line that says so.
-func (w *WorkflowEngineWiring) InjectTransitionGate(storage *session.Storage, reporter session.TransitionDeniedReporter) error {
+func (w *WorkflowEngineWiring) InjectTransitionGate(storage *session.Storage, reporter backlogdto.TransitionDeniedReporter) error {
 	if err := storage.SetTransitionGate(w.Engine, reporter); err != nil {
 		return fmt.Errorf("inject transition gate: %w", err)
 	}

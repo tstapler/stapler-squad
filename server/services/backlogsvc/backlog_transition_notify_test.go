@@ -34,7 +34,7 @@ func TestTransitionDeniedReporter_should_RecordOnceAndReportDistinctCallersSepar
 	require.NoError(t, err)
 	denied := func(caller domain.TransitionCaller) {
 		t.Helper()
-		_, gateErr := svc.storage.GatedTransition(ctx, session.TransitionRequest{Caller: caller, ItemID: item.ID, To: session.BacklogStatusReview}) // ready->review has no edge
+		_, gateErr := svc.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: caller, ItemID: item.ID, To: session.BacklogStatusReview}) // ready->review has no edge
 		require.ErrorIs(t, gateErr, session.ErrTransitionNotAllowed)
 	}
 	note := func(caller domain.TransitionCaller) string {
@@ -59,7 +59,7 @@ func TestTransitionDeniedReporter_should_RecordOnceAndReportDistinctCallersSepar
 	assert.Equal(t, 1, countDeniedNotes(t, svc, item.ID, note(domain.CallerAttachSessionToItem)), "another caller on the same edge reports separately")
 	assert.Equal(t, 1, countDeniedNotifications(ch))
 
-	_, err = svc.storage.GatedTransition(ctx, session.TransitionRequest{Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: session.BacklogStatusReview})
+	_, err = svc.storage.GatedTransition(ctx, backlogdto.TransitionRequest{Caller: domain.CallerOperatorTransitionRPC, ItemID: item.ID, To: session.BacklogStatusReview})
 	require.ErrorIs(t, err, session.ErrTransitionNotAllowed)
 	assert.Equal(t, 0, countDeniedNotes(t, svc, item.ID, note(domain.CallerOperatorTransitionRPC)), "an operator denial returns the error only")
 	assert.Equal(t, 0, countDeniedNotifications(ch))

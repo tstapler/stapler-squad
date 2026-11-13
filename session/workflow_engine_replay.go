@@ -224,7 +224,7 @@ func replayEdges(spec domain.TransitionCallerSpec) []domain.SystemEdge {
 // (the recorded reasons are the graph and Configured gates).
 func replayAnswer(sel *SwitchableWorkflowEngine, spec domain.TransitionCallerSpec, edge domain.SystemEdge) string {
 	item := &backlogdto.BacklogItemData{ID: "replay-item", Status: string(edge.From)}
-	v := decideTransition(sel.ForClass(spec.Class, domain.GuardsNone), item, TransitionRequest{Caller: spec.Name, To: edge.To})
+	v := backlogdto.DecideTransition(sel.ForClass(spec.Class, domain.GuardsNone), item, backlogdto.TransitionRequest{Caller: spec.Name, To: edge.To})
 	if v.Err == nil {
 		return "allowed"
 	}
@@ -297,7 +297,7 @@ func (r *replayRun) decide(spec domain.TransitionCallerSpec, edge domain.SystemE
 // with no gate involved; operator callers choose their edge, so a denial there
 // is the configuration working.
 func (d ReplayDecision) failure() (string, bool) {
-	if d.Class == domain.ClassOperator || (d.Live != replayDeniedPrefix+DeniedConfigGraph && d.Live != replayDeniedPrefix+DeniedTargetStageRemoved) {
+	if d.Class == domain.ClassOperator || (d.Live != replayDeniedPrefix+backlogdto.DeniedConfigGraph && d.Live != replayDeniedPrefix+backlogdto.DeniedTargetStageRemoved) {
 		return "", false
 	}
 	return fmt.Sprintf("%s (%s) %s->%s is %s by the stored configuration with no gate involved", d.Caller, d.Class, d.Edge.From, d.Edge.To, d.Live), true

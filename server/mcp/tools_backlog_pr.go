@@ -433,9 +433,9 @@ func (h *backlogHandlers) reportPRCreated(ctx context.Context, callerUUID string
 		}
 	}
 
-	if setErr := h.storage.GatedSetPRAndTransition(ctx, session.TransitionRequest{
+	if setErr := h.storage.GatedSetPRAndTransition(ctx, backlogdto.TransitionRequest{
 		Caller: domain.CallerMCPReportPRCreated, Observed: item, TriggeredBy: session.TriggeredByAgent,
-	}, session.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: domain.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
+	}, backlogdto.PRAssociation{URL: canonicalPRURL, Number: prNumber, Summary: summary, Guard: guard, Source: domain.AttachSourceReportPRCreated, Additive: additive}); setErr != nil {
 		if isTransitionDenied(setErr) {
 			return transitionDeniedResult(setErr, session.BacklogStatus(item.Status), session.BacklogStatusPRPending), nil
 		}
