@@ -7,6 +7,7 @@ go_library(
         "autonomous_stop.go",
         "backlog.go",
         "errors.go",
+        "github_host.go",
         "guidance_cancel_reason.go",
         "guidance_request_source.go",
         "wake_trigger.go",
@@ -26,6 +27,7 @@ go_test(
     srcs = [
         "autonomous_stop_test.go",
         "backlog_test.go",
+        "github_host_test.go",
         "guidance_request_source_test.go",
         "purity_test.go",
         "wake_trigger_test.go",

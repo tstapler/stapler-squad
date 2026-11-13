@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -1149,8 +1151,8 @@ func (s *SessionService) enterpriseHosts(cfg *config.Config) []string {
 	seenHosts := make(map[string]bool, len(configuredHosts)+len(cachedAccounts))
 	hosts := make([]string, 0, len(configuredHosts)+len(cachedAccounts))
 	addHost := func(host string) {
-		host = githubpkg.NormalizeHost(host)
-		if host == "" || githubpkg.IsGitHubCom(host) || seenHosts[host] {
+		host = domain.NormalizeHost(host)
+		if host == "" || domain.IsGitHubCom(host) || seenHosts[host] {
 			return
 		}
 		seenHosts[host] = true

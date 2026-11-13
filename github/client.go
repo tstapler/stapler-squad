@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessiongit "github.com/tstapler/stapler-squad/session/git"
@@ -645,7 +647,7 @@ func setGHHostEnv(cmd *exec.Cmd, host string) {
 	if host == "" {
 		return
 	}
-	cmd.Env = append(os.Environ(), "GH_HOST="+NormalizeHost(host))
+	cmd.Env = append(os.Environ(), "GH_HOST="+domain.NormalizeHost(host))
 }
 
 // GetPRComments fetches all comments on a pull request.

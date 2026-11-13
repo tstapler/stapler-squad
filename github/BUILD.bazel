@@ -44,6 +44,7 @@ go_library(
         "//config",
         "//executor/safeexec",
         "//log",
+        "//session/domain",
         "//session/git",
         "//telemetry",
         "@com_github_zalando_go_keyring//:go-keyring",

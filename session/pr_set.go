@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ErrZeroPRRef is returned by every PR repository entry point handed a PRRef{}.
@@ -36,7 +36,7 @@ func NewPRRef(host, owner, repo string, number int) (PRRef, error) {
 	if number <= 0 {
 		return PRRef{}, fmt.Errorf("pr ref: number must be positive, got %d", number)
 	}
-	return PRRef{host: github.NormalizeHost(host), owner: owner, repo: repo, number: number}, nil
+	return PRRef{host: domain.NormalizeHost(host), owner: owner, repo: repo, number: number}, nil
 }
 
 func (r PRRef) Host() string  { return r.host }

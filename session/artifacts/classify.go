@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // URLClass is the coarse purpose of an external URL found in a transcript.
@@ -65,5 +65,5 @@ func parseIssueURL(raw string) (IssueRecord, bool) {
 	}
 	n, _ := strconv.Atoi(m[1])
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	return IssueRecord{Host: github.NormalizeHost(u.Host), Owner: parts[0], Repo: parts[1], Number: n, Relation: "mentioned"}, true
+	return IssueRecord{Host: domain.NormalizeHost(u.Host), Owner: parts[0], Repo: parts[1], Number: n, Relation: "mentioned"}, true
 }

@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/singleflight"
 
@@ -276,7 +278,7 @@ func newGHRequestForHost(ctx context.Context, host, path string) (*http.Request,
 // when no host/username is specified; a non-github.com host without a
 // username resolves to any token configured for that host.
 func getGHTokenForAccount(ctx context.Context, account AccountRef) string {
-	if account.Host == "" || IsGitHubCom(account.Host) {
+	if account.Host == "" || domain.IsGitHubCom(account.Host) {
 		if account.Username != "" {
 			if tok := GetKeychainTokenForAccount(account.Host, account.Username); tok != "" {
 				return tok

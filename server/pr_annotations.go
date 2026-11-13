@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/config"
 	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
@@ -56,7 +58,7 @@ func annotationsForPRs(title string, snap *session.InstanceSnapshot) []githubpkg
 	out := make([]githubpkg.PRAnnotationSession, 0, len(snap.GitHub.PRs))
 	for _, v := range snap.GitHub.PRs {
 		host := v.Ref.Host()
-		if githubpkg.IsGitHubCom(host) {
+		if domain.IsGitHubCom(host) {
 			host = ""
 		}
 		repoRef, err := githubpkg.NewRepoRefWithHost(v.Ref.Owner(), v.Ref.Repo(), host)

@@ -21,8 +21,8 @@ go_library(
     importpath = "github.com/tstapler/stapler-squad/session/artifacts",
     visibility = ["//visibility:public"],
     deps = [
-        "//github",
         "//log",
+        "//session/domain",
         "//session/scanqueue",
         "//session/scanstate",
         "//telemetry",

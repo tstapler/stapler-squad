@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tstapler/stapler-squad/session/domain"
+
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -105,7 +107,7 @@ func (i *Instance) legacyPRRef() (PRRef, error) {
 // the empty host there, matching what the legacy scalars carried.
 func (r PRRef) RepoRef() (github.RepoRef, error) {
 	host := r.host
-	if github.IsGitHubCom(host) {
+	if domain.IsGitHubCom(host) {
 		host = ""
 	}
 	return github.NewRepoRefWithHost(r.owner, r.repo, host)

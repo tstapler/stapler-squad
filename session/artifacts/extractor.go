@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 var (
@@ -103,5 +103,5 @@ func parsePRURL(raw string) (PRRecord, bool) {
 	if err != nil {
 		return PRRecord{}, false
 	}
-	return PRRecord{Host: github.NormalizeHost(u.Host), Owner: parts[0], Repo: parts[1], Number: n}, true
+	return PRRecord{Host: domain.NormalizeHost(u.Host), Owner: parts[0], Repo: parts[1], Number: n}, true
 }
