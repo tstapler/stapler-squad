@@ -47,6 +47,20 @@ func publishNotification(bus *events.EventBus, sessionID string, notifType int32
 	})
 }
 
+// flushOnCancel starts the subscriber with an interval that never fires during a
+// test, so the only flush is the deterministic final one on context cancellation.
+// Publish is synchronous into the subscriber's channel, so everything published
+// before the returned func is called lands in a single coalescing window no
+// matter how slow the host is. The returned func cancels and waits for that flush.
+func flushOnCancel(bus *events.EventBus, appender Appender) (stop func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := StartSubscriberWithInterval(ctx, bus, appender, time.Hour)
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
 // TestCoalescing_SameKeyWithinWindow verifies that 10 events for the same
 // (sessionID, notificationType) within the coalescing window result in
 // exactly 1 Append() call.
@@ -55,28 +69,14 @@ func TestCoalescing_SameKeyWithinWindow(t *testing.T) {
 	defer bus.Close()
 	appender := &mockAppender{}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Use a short coalescing interval for testing
-	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
+	stop := flushOnCancel(bus, appender)
 
 	// Publish 10 events for the same key rapidly
 	for i := 0; i < 10; i++ {
 		publishNotification(bus, "session-A", 1, "notif-"+string(rune('a'+i)))
 	}
 
-	// Wait for flush (coalescing interval + buffer)
-	if err := testutil.WaitForCondition(func() bool {
-		return len(appender.getRecords()) >= 1
-	}, testutil.FastWaitConfig()); err != nil {
-		// Cancel to trigger final flush and wait again
-		cancel()
-		_ = testutil.WaitForCondition(func() bool {
-			return len(appender.getRecords()) >= 1
-		}, testutil.FastWaitConfig())
-	} else {
-		cancel()
-	}
+	stop() // single deterministic flush of everything published above
 
 	records := appender.getRecords()
 	if len(records) != 1 {
@@ -94,9 +94,7 @@ func TestCoalescing_DifferentKeysFlushIndependently(t *testing.T) {
 	defer bus.Close()
 	appender := &mockAppender{}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
+	stop := flushOnCancel(bus, appender)
 
 	// Publish events for 3 different keys
 	publishNotification(bus, "session-A", 1, "notif-a1")
@@ -104,17 +102,7 @@ func TestCoalescing_DifferentKeysFlushIndependently(t *testing.T) {
 	publishNotification(bus, "session-B", 1, "notif-b1")
 	publishNotification(bus, "session-A", 2, "notif-a3") // different type
 
-	// Wait for flush (all 3 distinct keys)
-	if err := testutil.WaitForCondition(func() bool {
-		return len(appender.getRecords()) >= 3
-	}, testutil.FastWaitConfig()); err != nil {
-		cancel()
-		_ = testutil.WaitForCondition(func() bool {
-			return len(appender.getRecords()) >= 3
-		}, testutil.FastWaitConfig())
-	} else {
-		cancel()
-	}
+	stop() // single deterministic flush of everything published above
 
 	records := appender.getRecords()
 	if len(records) != 3 {
@@ -167,10 +155,7 @@ func TestCoalescing_LatestEventWins(t *testing.T) {
 	defer bus.Close()
 	appender := &mockAppender{}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Use a long flush interval so both events land before any flush fires.
-	StartSubscriberWithInterval(ctx, bus, appender, 100*time.Millisecond)
+	stop := flushOnCancel(bus, appender)
 
 	// Publish both events back-to-back before the first flush window closes.
 	bus.Publish(&events.Event{
@@ -199,17 +184,7 @@ func TestCoalescing_LatestEventWins(t *testing.T) {
 		NotificationMetadata: map[string]string{"approval_id": "new"},
 	})
 
-	// Wait for the flush window to fire.
-	if err := testutil.WaitForCondition(func() bool {
-		return len(appender.getRecords()) >= 1
-	}, testutil.FastWaitConfig()); err != nil {
-		cancel()
-		_ = testutil.WaitForCondition(func() bool {
-			return len(appender.getRecords()) >= 1
-		}, testutil.FastWaitConfig())
-	} else {
-		cancel()
-	}
+	stop() // single deterministic flush of everything published above
 
 	records := appender.getRecords()
 	if len(records) != 1 {
@@ -249,9 +224,7 @@ func TestCoalescing_DifferentBacklogItemsSurviveWithinWindow(t *testing.T) {
 	defer bus.Close()
 	appender := &mockAppender{}
 
-	ctx, cancel := context.WithCancel(context.Background())
-
-	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
+	stop := flushOnCancel(bus, appender)
 
 	const warningType = int32(8) // NOTIFICATION_TYPE_WARNING
 
@@ -282,16 +255,7 @@ func TestCoalescing_DifferentBacklogItemsSurviveWithinWindow(t *testing.T) {
 		NotificationMetadata: map[string]string{"item_id": "item-bbbb-2222"},
 	})
 
-	if err := testutil.WaitForCondition(func() bool {
-		return len(appender.getRecords()) >= 2
-	}, testutil.FastWaitConfig()); err != nil {
-		cancel()
-		_ = testutil.WaitForCondition(func() bool {
-			return len(appender.getRecords()) >= 2
-		}, testutil.FastWaitConfig())
-	} else {
-		cancel()
-	}
+	stop() // single deterministic flush of everything published above
 
 	records := appender.getRecords()
 	if len(records) != 2 {
