@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 // ReleaseFunc is the refcount-gated teardown closure returned by Acquire and Register.
@@ -317,3 +318,20 @@ type RegistryInspector interface {
 // Compile-time assertions: *Registry satisfies both interfaces.
 var _ InstanceAcquirer = (*Registry)(nil)
 var _ RegistryInspector = (*Registry)(nil)
+
+// newLiveInstance is the internal construction path used by Registry.Acquire.
+// It calls FromInstanceData to reconstruct the *Instance from storage data
+// (including Start() for Active sessions), then wraps it in a LiveInstance.
+func newLiveInstance(data domain.InstanceData, storage *Storage) (*LiveInstance, error) {
+	rows := []domain.InstanceData{data}
+	storage.hydrateSessionPRs(context.Background(), rows) // single-session read; LoadInstances does the bulk one
+	inst, err := FromInstanceData(rows[0])
+	if err != nil {
+		return nil, err
+	}
+	// Inject shell repository so shell operations can persist to the DB.
+	inst.SetShellRepository(storage.Repo)
+	inst.SetInitialPromptRepository(storage.Repo)
+	inst.SetPRPersister(storage)
+	return NewLiveInstance(inst), nil
+}

@@ -297,7 +297,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// deferStart=true so a bulk load at server startup doesn't block HTTP bind
 	// on cold-restoring every session -- but that leaves Started() false on
 	// every freshly-deserialized Active instance, even though its tmux backend
-	// is already wired (fromInstanceData's SetSession call runs regardless of
+	// is already wired (instanceFromData's SetSession call runs regardless of
 	// deferStart). Every CheckAllSessions() tick goes through LoadInstances(),
 	// so without this, checkTmuxHealth -- and therefore all dead-pane
 	// detection -- was skipped entirely for every Active session, on every
@@ -313,7 +313,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// Check if instance thinks it's started but tmux session doesn't exist.
 	// Skipped for push-liveness backends (ProcessManagerBackend.SkipsPollBasedLiveness) --
 	// their throwaway LoadInstances() copy can never populate real session
-	// state without an RPC round-trip fromInstanceData deliberately skips,
+	// state without an RPC round-trip instanceFromData deliberately skips,
 	// so this probe would only ever misreport them as missing.
 	if instance.Started() && !instance.Snapshot().Backend.SkipsPollBasedLiveness() {
 		h.checkTmuxHealth(instance, paneStatus, &result)

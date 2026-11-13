@@ -31,7 +31,7 @@ func prMirrorOf(g domain.GitHubIntegration) PRMirror {
 // prSetPersister is the storage seam AttachPR persists through; *Storage is the
 // only implementation.
 type prSetPersister interface {
-	AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link PRLink, mirror PRMirror) (PRLinkResult, error)
+	AttachSessionPR(ctx context.Context, sessionUUID string, ref domain.PRRef, link domain.PRLink, mirror PRMirror) (domain.PRLinkResult, error)
 	UpdateGitHubPRStatusTerminal(title string, terminal bool) error
 	PersistPRMirror(sessionUUID, url string, number int, terminal bool) error
 }
@@ -54,7 +54,7 @@ func (i *Instance) clearPRPersistPending() { i.prPersistPending.Store(false) }
 // session without a uuid so the caller can use the legacy scalar path. The
 // database write follows the actor call; a failure or a not-yet-persisted session
 // row only marks the set pending for the next full save.
-func (i *Instance) AttachPR(ref domain.PRRef, source domain.AttachSource, initial PRInitial) error {
+func (i *Instance) AttachPR(ref domain.PRRef, source domain.AttachSource, initial domain.PRInitial) error {
 	if ref.IsZero() {
 		return ErrZeroPRRef
 	}
@@ -75,24 +75,24 @@ type attachOutcome struct {
 	added bool
 }
 
-func attachPRLocked(inst *Instance, ref domain.PRRef, source domain.AttachSource, initial PRInitial) (domain.PRView, bool, error) {
+func attachPRLocked(inst *Instance, ref domain.PRRef, source domain.AttachSource, initial domain.PRInitial) (domain.PRView, bool, error) {
 	inst.mu.Lock()
 	now := time.Now() // taken under the lock so AttachedAt order matches slice order
 	if inst.UUID == "" {
 		inst.mu.Unlock()
-		return domain.PRView{}, false, ErrNoSessionUUID
+		return domain.PRView{}, false, domain.ErrNoSessionUUID
 	}
 	if existing, ok := FindPR(inst.PRs, ref); ok {
 		inst.mu.Unlock()
 		return existing, false, nil
 	}
-	if len(inst.PRs) >= maxSessionPRLinks {
+	if len(inst.PRs) >= domain.MaxSessionPRLinks {
 		inst.mu.Unlock()
-		return domain.PRView{}, false, ErrSessionPRLinkCap
+		return domain.PRView{}, false, domain.ErrSessionPRLinkCap
 	}
 	before := activePRNumber(inst)
 	view := domain.PRView{
-		Ref: ref, State: initial.state(), StoredTerminal: initial.Terminal, URL: initial.URL, Title: initial.Title,
+		Ref: ref, State: initial.StateOrUnknown(), StoredTerminal: initial.Terminal, URL: initial.URL, Title: initial.Title,
 		HeadBranch: initial.HeadBranch, BaseBranch: initial.BaseBranch, IsDraft: initial.IsDraft,
 		SessionUUID: inst.UUID, Role: domain.AssignRole(inst.PRs, initial.BaseBranch),
 		AttachSource: source, AttachedAt: now,
@@ -275,7 +275,7 @@ func (i *Instance) persistPRAttach(view domain.PRView) {
 		return
 	}
 	snap := i.Snapshot()
-	link := PRLink{Role: view.Role, Source: view.AttachSource, AttachedAt: view.AttachedAt, Initial: prInitialOf(view)}
+	link := domain.PRLink{Role: view.Role, Source: view.AttachSource, AttachedAt: view.AttachedAt, Initial: prInitialOf(view)}
 	res, err := i.prPersister.AttachSessionPR(context.Background(), snap.UUID, view.Ref, link, prMirrorOf(snap.GitHub))
 	switch {
 	case err == nil && res.Tombstoned:
@@ -289,7 +289,7 @@ func (i *Instance) persistPRAttach(view domain.PRView) {
 			log.Warn("persist mirror after tombstoned attach failed", "session", snap.Title, "err", perr)
 		}
 	case err == nil:
-	case errors.Is(err, ErrSessionNotPersisted):
+	case errors.Is(err, domain.ErrSessionNotPersisted):
 		i.prPersistPending.Store(true)
 	default:
 		i.prPersistPending.Store(true)
@@ -297,8 +297,8 @@ func (i *Instance) persistPRAttach(view domain.PRView) {
 	}
 }
 
-func prInitialOf(v domain.PRView) PRInitial {
-	return PRInitial{
+func prInitialOf(v domain.PRView) domain.PRInitial {
+	return domain.PRInitial{
 		State: v.State, Terminal: v.StoredTerminal, URL: v.URL, Title: v.Title,
 		HeadBranch: v.HeadBranch, BaseBranch: v.BaseBranch, IsDraft: v.IsDraft,
 	}
@@ -307,7 +307,7 @@ func prInitialOf(v domain.PRView) PRInitial {
 // attachLegacyPR routes a legacy scalar write through AttachPR and reports
 // whether it did. It declines (false) when there is no number, no resolved
 // owner/repo, or no uuid, so the caller writes the scalar alone.
-func (i *Instance) attachLegacyPR(number int, source domain.AttachSource, initial PRInitial) bool {
+func (i *Instance) attachLegacyPR(number int, source domain.AttachSource, initial domain.PRInitial) bool {
 	if number <= 0 {
 		return false
 	}
@@ -319,7 +319,7 @@ func (i *Instance) attachLegacyPR(number int, source domain.AttachSource, initia
 	switch err := i.AttachPR(ref, source, initial); {
 	case err == nil:
 		return true
-	case errors.Is(err, ErrNoSessionUUID):
+	case errors.Is(err, domain.ErrNoSessionUUID):
 		if i.prLegacyPathLogged.CompareAndSwap(false, true) {
 			log.Info("session has no uuid; writing the legacy PR scalar only", "session", i.Snapshot().Title)
 		}
@@ -336,7 +336,7 @@ func (i *Instance) attachLegacyPR(number int, source domain.AttachSource, initia
 // write instead, clearing the stored terminal flag when the number changes so a
 // merged PR's true does not ride onto the new one.
 func (i *Instance) AttachScannedPR(prURL string, number int) {
-	if i.attachLegacyPR(number, domain.AttachSourcePushScan, PRInitial{URL: prURL}) {
+	if i.attachLegacyPR(number, domain.AttachSourcePushScan, domain.PRInitial{URL: prURL}) {
 		return
 	}
 	changed, _ := sendSyncValue(i, func(s *instanceState) (bool, error) {
@@ -450,7 +450,7 @@ func (i *Instance) persistPRMirrorFromSnapshot(p prMirrorPersister) {
 	}
 	g := snap.GitHub
 	err := p.PersistPRMirror(snap.UUID, g.GitHubPRURL, g.GitHubPRNumber, g.GitHubPRStatusTerminal)
-	if err != nil && !errors.Is(err, ErrSessionNotPersisted) {
+	if err != nil && !errors.Is(err, domain.ErrSessionNotPersisted) {
 		log.Warn("persist reconciled PR mirror failed; the next pass retries", "session", snap.Title, "err", err)
 	}
 }

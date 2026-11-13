@@ -25,7 +25,7 @@ import (
 
 // loggedMissingWorktree suppresses repeat "worktree directory missing"
 // warnings for a session whose on-disk status is never persisted back as
-// Paused (see fromInstanceData) — every health-check LoadInstances() tick
+// Paused (see instanceFromData) — every health-check LoadInstances() tick
 // (session/health.go, ~15s) constructs a brand-new, throwaway Instance from
 // disk (see health.go's checkSingleSession comment) and re-detects the same
 // missing worktree, so an Instance-scoped flag can't dedupe across ticks the
@@ -237,14 +237,14 @@ func (i *Instance) ToInstanceData() domain.InstanceData {
 // one) before returning. Use for on-demand single-instance loads (e.g.
 // Registry.Acquire) where the caller needs a ready instance immediately.
 //
-// Bulk startup loads should use fromInstanceData(data, true) via LoadInstances
+// Bulk startup loads should use instanceFromData(data, true) via LoadInstances
 // instead — starting every instance synchronously here is what made server
 // startup block on restoring all sessions (including cold-relaunching every
 // dead one) before the HTTP server could bind. See server/dependencies.go's
 // "Step 6" background goroutine, which already exists to start un-started
 // instances asynchronously once the deferred path skips Start() here.
 func FromInstanceData(data domain.InstanceData) (*Instance, error) {
-	return fromInstanceData(data, false)
+	return instanceFromData(data, false)
 }
 
 // FromInstanceDataDeferred reconstructs an *Instance without starting it (no
@@ -255,7 +255,7 @@ func FromInstanceData(data domain.InstanceData) (*Instance, error) {
 // (KillSession()) for a sessionUUID the live in-memory registry doesn't have
 // tracked — see SessionService.findConfirmedLiveInstance.
 func FromInstanceDataDeferred(data domain.InstanceData) (*Instance, error) {
-	return fromInstanceData(data, true)
+	return instanceFromData(data, true)
 }
 
 // migrateCorruptedPath fixes paths from before defensive tilde expansion was added,
@@ -411,12 +411,12 @@ func restoreWorktreeAndDiffStats(instance *Instance, data domain.InstanceData) {
 	})
 }
 
-// fromInstanceData is the shared implementation. When deferStart is true, the
+// instanceFromData is the shared implementation. When deferStart is true, the
 // Active-branch (and Stopped-but-tmux-alive recovery) code paths still wire the
 // tmux session object (so HasSession()/TmuxAlive() report correctly) but skip
 // the synchronous Start() call, leaving Instance.Started() false so the async
 // Step 6 loop in BuildRuntimeDeps picks it up off the startup critical path.
-func fromInstanceData(data domain.InstanceData, deferStart bool) (*Instance, error) {
+func instanceFromData(data domain.InstanceData, deferStart bool) (*Instance, error) {
 	migratedPath := migrateCorruptedPath(data)
 	tags := migrateCategoryToTags(data)
 

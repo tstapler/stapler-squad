@@ -78,7 +78,7 @@ func newInstanceWithPRs(t *testing.T, title string, numbers ...int) *session.Ins
 		if i < len(numbers)-1 {
 			state = domain.PRStateMerged
 		}
-		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, session.PRInitial{
+		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceManual, domain.PRInitial{
 			State: state, Terminal: state.Terminal(), URL: "https://github.com/acme/app/pull/" + fmt.Sprint(n), HeadBranch: "backlog/feature-" + fmt.Sprint(n),
 		}))
 	}

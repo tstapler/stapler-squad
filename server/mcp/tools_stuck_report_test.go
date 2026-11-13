@@ -225,9 +225,9 @@ func TestStuckReport_ShouldNameBlockingPRAndBothDetaches_WhenUnknownHoldsItem(t 
 		return r
 	}
 	link := func(owner session.PROwner, n int, st domain.PRState, at time.Time) {
-		_, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), session.PRLink{
+		_, lerr := repo.UpsertSessionPR(ctx, owner, ref(n), domain.PRLink{
 			Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, AttachedAt: at,
-			Initial: session.PRInitial{State: st, Terminal: st.Terminal()},
+			Initial: domain.PRInitial{State: st, Terminal: st.Terminal()},
 		})
 		require.NoError(t, lerr)
 	}

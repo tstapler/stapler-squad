@@ -88,7 +88,7 @@ type deadTymuxManager struct{ fakeTymuxManagerForSetCommand }
 
 func (*deadTymuxManager) IsAlive() bool { return false }
 
-// Every persisted status takes its own branch in fromInstanceData; each must hand the
+// Every persisted status takes its own branch in instanceFromData; each must hand the
 // program to a tymux backend, or that branch regresses to a bare $SHELL (BUG-113).
 func TestFromInstanceData_EveryStatusBranch_WiresTymuxCommand(t *testing.T) {
 	for _, status := range []domain.Status{domain.Paused, domain.Stopped, domain.Hibernated, domain.Crashed, domain.Active} {

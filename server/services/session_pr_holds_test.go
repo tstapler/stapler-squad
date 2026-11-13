@@ -19,7 +19,7 @@ func TestWithSessionPRHolds_should_FillHoldsForNonTerminalPRs_OnlyWhenScopeOn(t 
 	}{{11, domain.PRStateMerged}, {12, domain.PRStateOpen}, {13, domain.PRStateUnknown}} {
 		ref, err := domain.NewPRRef("", "acme", "app", p.n)
 		require.NoError(t, err)
-		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, session.PRInitial{State: p.state, Terminal: p.state == domain.PRStateMerged}))
+		require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: p.state, Terminal: p.state == domain.PRStateMerged}))
 	}
 
 	off := withSessionPRHoldsScoped(&sessionv1.Session{}, inst, false)

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
 // NewStartedInstanceForTest returns an Instance that reports itself started and
@@ -41,16 +40,6 @@ func HoldHibernationTeardownForTest(tb testing.TB, inst *Instance) func() {
 	release := func() { once.Do(inst.hibernateTeardownWG.Done) }
 	tb.Cleanup(release)
 	return release
-}
-
-// SetTymuxManagerFactoryForTest makes every tymux-backed Instance built until tb ends use
-// the manager fn returns, so tests outside this package need no live tymuxd. Not safe
-// alongside parallel tests that build tymux Instances.
-func SetTymuxManagerFactoryForTest(tb testing.TB, fn func() tymux.TymuxManager) {
-	tb.Helper()
-	orig := newTymuxSessionFn
-	newTymuxSessionFn = fn
-	tb.Cleanup(func() { newTymuxSessionFn = orig })
 }
 
 // SetStatusForTest changes inst's Status and republishes its snapshot, bypassing the
@@ -99,3 +88,26 @@ func NewHotRestorableInstanceForTest(tb testing.TB, title string, status domain.
 	inst.processManager = hotRestorablePM{}
 	return inst
 }
+
+// NewPausedTestInstance returns a minimal Paused, started Instance ready for Storage.AddInstance, for tests of
+// packages that sit above session (and cannot set the unexported started flag themselves).
+func NewPausedTestInstance(title string) *Instance {
+	inst := &Instance{
+		Title:     title,
+		Path:      "/tmp/test",
+		Status:    domain.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	inst.started.Store(true)
+	return inst
+}
+
+// FinishInstanceForTest publishes the initial snapshot of an Instance built from a struct literal,
+// so tests of packages above session (e.g. session/prpoller) can call Snapshot()/AttachPR on it.
+func FinishInstanceForTest(i *Instance) { finishInstanceConstruction(i) }
+
+// SetProcessManagerForTest swaps the instance's pane backend so tests in packages that import session can
+// stand in a fake without reaching the unexported field.
+func (i *Instance) SetProcessManagerForTest(pm ProcessManager) { i.processManager = pm }

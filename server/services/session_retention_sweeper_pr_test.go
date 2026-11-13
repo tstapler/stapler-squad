@@ -79,7 +79,7 @@ func linkPRKeepingMirror(t *testing.T, fix *forkTestFixture, uuid string, number
 	ref, err := domain.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
 	_, err = fix.storage.AttachSessionPR(context.Background(), uuid, ref,
-		session.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: session.PRInitial{State: state, Terminal: terminal}},
+		domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: state, Terminal: terminal}},
 		mirror)
 	require.NoError(t, err)
 }

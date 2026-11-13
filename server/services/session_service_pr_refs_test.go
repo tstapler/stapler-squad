@@ -34,8 +34,8 @@ func addLivePRSession(t *testing.T, fix *forkTestFixture, title, uuid string, pr
 		ref, err := domain.NewPRRef("", "acme", "app", p.number)
 		require.NoError(t, err)
 		_, err = fix.storage.AttachSessionPR(context.Background(), uuid, ref,
-			session.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBranchDiscovery,
-				Initial: session.PRInitial{State: p.state, Terminal: p.terminal}}, session.PRMirror{})
+			domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBranchDiscovery,
+				Initial: domain.PRInitial{State: p.state, Terminal: p.terminal}}, session.PRMirror{})
 		require.NoError(t, err)
 	}
 	loaded, err := fix.storage.LoadInstances()
@@ -79,7 +79,7 @@ func TestDetachSessionPullRequest_ShouldDeleteOneLinkAndTombstoneInOneTxn(t *tes
 
 	// Branch discovery attaching #12 again is blocked by the tombstone.
 	ref12, _ := domain.NewPRRef("", "acme", "app", 12)
-	require.NoError(t, inst.AttachPR(ref12, domain.AttachSourceBranchDiscovery, session.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(ref12, domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	views, err = fix.storage.ListSessionPRViewsByUUIDs(context.Background(), []string{"uuid-u1"})
 	require.NoError(t, err)
 	assert.Len(t, views["uuid-u1"], 1, "no recreated link")

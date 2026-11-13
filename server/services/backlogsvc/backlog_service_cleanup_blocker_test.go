@@ -67,8 +67,8 @@ func (h *blockerHarness) link(owner session.PROwner, n int, state domain.PRState
 	h.t.Helper()
 	ref, err := domain.NewPRRef("github.com", "acme", "app", n)
 	require.NoError(h.t, err)
-	_, err = h.repo.UpsertSessionPR(h.t.Context(), owner, ref, session.PRLink{
-		Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: session.PRInitial{State: state, Terminal: state.Terminal()},
+	_, err = h.repo.UpsertSessionPR(h.t.Context(), owner, ref, domain.PRLink{
+		Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: state, Terminal: state.Terminal()},
 	})
 	require.NoError(h.t, err)
 }

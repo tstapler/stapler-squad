@@ -56,8 +56,8 @@ func editorInstance(t *testing.T) (*Instance, *fakePRSetEditor) {
 	inst := newPRTestInstance(t)
 	ed := &fakePRSetEditor{}
 	inst.SetPRPersister(ed)
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, PRInitial{State: domain.PRStateOpen}))
-	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), domain.AttachSourceManual, PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 13), domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen}))
 	return inst, ed
 }
 
@@ -131,7 +131,7 @@ func TestAttachPRManual_ShouldClearTombstoneBeforeAttaching(t *testing.T) {
 	inst.SetPRPersister(ed)
 	r30 := mustPRRef(t, "", "acme", "app", 30)
 
-	require.NoError(t, inst.AttachPRManual(context.Background(), r30, PRInitial{State: domain.PRStateOpen}))
+	require.NoError(t, inst.AttachPRManual(context.Background(), r30, domain.PRInitial{State: domain.PRStateOpen}))
 
 	require.NotEmpty(t, ed.events)
 	assert.Equal(t, "untombstone "+r30.String(), ed.events[0])

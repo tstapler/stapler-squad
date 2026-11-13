@@ -21,7 +21,7 @@ func seedItemDirectPR(t *testing.T, fix *forkTestFixture, status domain.BacklogS
 	ref, err := domain.NewPRRef("", "acme", "app", number)
 	require.NoError(t, err)
 	_, err = fix.storage.AttachItemPR(context.Background(), item.ID, ref,
-		session.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: session.PRInitial{State: domain.PRStateUnknown}})
+		domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceManual, Initial: domain.PRInitial{State: domain.PRStateUnknown}})
 	require.NoError(t, err)
 	return item.ID, ref
 }
@@ -44,7 +44,7 @@ func TestDetachItemPullRequest_ShouldDeleteLinkAndTombstone_ForItemInAnyStatus(t
 			assert.Empty(t, guards[itemID].Direct, "link gone, so the verdict and the sweeper stop counting it")
 
 			res, err := fix.storage.AttachItemPR(context.Background(), itemID, ref,
-				session.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBranchDiscovery})
+				domain.PRLink{Role: domain.PRRolePrimary, Source: domain.AttachSourceBranchDiscovery})
 			require.NoError(t, err)
 			assert.True(t, res.Tombstoned, "an automatic re-attach is blocked by the item tombstone")
 		})
