@@ -232,7 +232,7 @@ func (p *PRStatusPoller) dispatchRowRefresh(ref domain.PRRef, src session.PRObse
 }
 
 // legacyScalarsName reports whether a session's legacy scalars name ref.
-func legacyScalarsName(g session.GitHubIntegration, ref domain.PRRef) bool {
+func legacyScalarsName(g domain.GitHubIntegration, ref domain.PRRef) bool {
 	return strings.EqualFold(g.GitHubOwner, ref.Owner()) && strings.EqualFold(g.GitHubRepo, ref.Repo()) &&
 		g.GitHubPRNumber == ref.Number()
 }
@@ -416,7 +416,7 @@ func withoutPRLinks(instances []*session.Instance) []*session.Instance {
 
 // pollKey keys a session's discovery backoff: its uuid, else its title (legacy
 // rows without a uuid).
-func pollKey(snap *session.InstanceSnapshot) string {
+func pollKey(snap *domain.InstanceSnapshot) string {
 	if snap.UUID != "" {
 		return snap.UUID
 	}

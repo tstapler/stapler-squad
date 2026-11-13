@@ -391,7 +391,7 @@ func (m *CapacityMonitor) firstTime(key string) bool {
 // stopForGuardrail publishes one high-priority notification and, when a
 // terminator is wired, stops the session so the orchestrator takes it back.
 // One-shot per (kind, session): it never re-arms.
-func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot, kind, title, msg string) {
+func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, kind, title, msg string) {
 	if !m.firstTime("stopped:" + kind + ":" + snap.UUID) {
 		return
 	}
@@ -423,7 +423,7 @@ func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.In
 // checkSpendRate notifies when a live session's rolling spend rate exceeds the
 // configured USD/hour line, at most once per window per session. Sessions with
 // no priced turns in the window never alert.
-func (m *CapacityMonitor) checkSpendRate(snap *session.InstanceSnapshot, parseRes *tokens.ParseResult) {
+func (m *CapacityMonitor) checkSpendRate(snap *domain.InstanceSnapshot, parseRes *tokens.ParseResult) {
 	threshold, enabled := m.config.SpendRateThreshold()
 	if !enabled {
 		return
@@ -646,7 +646,7 @@ func (m *CapacityMonitor) idleWaitExceeded(timeline []tokens.TurnStats, since ti
 // never act again for that loop (the tracker stays until real work clears it).
 // Keyed by session UUID (not conversation UUID, which can rotate across
 // resume/history-transfer, and not Title, which a user can rename).
-func (m *CapacityMonitor) checkIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot, parseRes *tokens.ParseResult, role string) {
+func (m *CapacityMonitor) checkIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, parseRes *tokens.ParseResult, role string) {
 	ceiling := m.config.IdleWaitCeilingFor(role)
 	if ceiling <= 0 {
 		return
@@ -675,7 +675,7 @@ func (m *CapacityMonitor) checkIdleWaitLoop(ctx context.Context, inst *session.I
 // already fired: take the terminal action if the idle run tripped again
 // strictly after that compact, or clear the tracker if a real turn happened
 // since — the loop broke on its own, so a future run is fresh.
-func (m *CapacityMonitor) checkIdleWaitLoopPostIntervention(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot, parseRes *tokens.ParseResult, tracker idleWaitTracker, ceiling int, role string) {
+func (m *CapacityMonitor) checkIdleWaitLoopPostIntervention(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, parseRes *tokens.ParseResult, tracker idleWaitTracker, ceiling int, role string) {
 	if realWorkSince(parseRes.TurnTimeline, tracker.lastInterventionAt) {
 		m.mu.Lock()
 		delete(m.idleWaitState, snap.UUID)
@@ -714,7 +714,7 @@ func realWorkSince(timeline []tokens.TurnStats, since time.Time) bool {
 // next poll cycle (the tracker still records the attempt, so a repeat
 // trip after this point still escalates rather than retrying /compact
 // forever against a session that won't accept input).
-func (m *CapacityMonitor) compactIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot, idleTurns int) {
+func (m *CapacityMonitor) compactIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, idleTurns int) {
 	log.Info("CapacityMonitor: idle-wait loop detected, sending /compact",
 		"session", snap.Title, "idle_turns", idleTurns, "ceiling", m.config.IdleWaitTurnCeiling)
 
@@ -739,7 +739,7 @@ func (m *CapacityMonitor) compactIdleWaitLoop(ctx context.Context, inst *session
 
 // escalateIdleWaitLoop is the one-shot terminal action for a loop that
 // survived /compact. A nil inst means notify-only (no session to stop).
-func (m *CapacityMonitor) escalateIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot, idleTurns int) {
+func (m *CapacityMonitor) escalateIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, idleTurns int) {
 	const kind = "idle_wait_loop_escalation"
 	msg := fmt.Sprintf("%s is still looping on idle-wait turns after an auto-compact (%d more consecutive turns) — likely stuck waiting on the same background task.", snap.Title, idleTurns)
 	if inst == nil {

@@ -85,7 +85,7 @@ func (i *Instance) tymuxSessionID() string {
 }
 
 func (i *Instance) ToInstanceData() InstanceData {
-	snap, err := sendSyncValue(i, func(s *instanceState) (*InstanceSnapshot, error) {
+	snap, err := sendSyncValue(i, func(s *instanceState) (*domain.InstanceSnapshot, error) {
 		// i.mu guards buildSnapshot here too: legacy setters (MarkViewed & co.)
 		// mutate fields directly under i.mu.Lock() from outside the actor — see
 		// runActor's doc comment in actor.go.

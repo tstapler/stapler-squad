@@ -590,7 +590,7 @@ type Instance struct {
 	terminalViewers      atomic.Int64
 	terminalViewClosedAt atomic.Int64
 
-	snapshot atomic.Pointer[InstanceSnapshot]
+	snapshot atomic.Pointer[domain.InstanceSnapshot]
 
 	// LastMeaningfulChangeAt advances only via touchLocked (see session_activity.go).
 	LastMeaningfulChangeAt time.Time
@@ -1196,7 +1196,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 // On the first call for an Instance that bypassed finishInstanceConstruction
 // (e.g. struct literals in tests), the snapshot is built lazily under stateMutex
 // and stored via CAS so concurrent first-callers converge on one value.
-func (i *Instance) Snapshot() *InstanceSnapshot {
+func (i *Instance) Snapshot() *domain.InstanceSnapshot {
 	if snap := i.snapshot.Load(); snap != nil {
 		return snap
 	}

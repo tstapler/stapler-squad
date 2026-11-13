@@ -24,7 +24,7 @@ type PRMirror struct {
 	Terminal bool
 }
 
-func prMirrorOf(g GitHubIntegration) PRMirror {
+func prMirrorOf(g domain.GitHubIntegration) PRMirror {
 	return PRMirror{URL: g.GitHubPRURL, Number: g.GitHubPRNumber, Terminal: g.GitHubPRStatusTerminal}
 }
 

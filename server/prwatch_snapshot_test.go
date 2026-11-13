@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 )
 
@@ -18,8 +17,8 @@ func TestPRSnapshotAdapter_should_MapCheckConclusionAndChangesRequested_When_Ses
 	sn.GitHub.GitHubChangesReqCount = 2
 	sn.GitHub.GitHubPRStatusTerminal = true
 	sn.GitHub.LastPRStatusCheck = checked
-	a := newPRWatchSnapshots(func() []*session.InstanceSnapshot {
-		return []*session.InstanceSnapshot{prSnap("b", domain.Active), sn}
+	a := newPRWatchSnapshots(func() []*domain.InstanceSnapshot {
+		return []*domain.InstanceSnapshot{prSnap("b", domain.Active), sn}
 	})
 
 	got, err := a.Snapshot("a")
@@ -31,7 +30,7 @@ func TestPRSnapshotAdapter_should_MapCheckConclusionAndChangesRequested_When_Ses
 }
 
 func TestPRSnapshotAdapter_should_ReturnError_When_SessionUnknown(t *testing.T) {
-	a := newPRWatchSnapshots(func() []*session.InstanceSnapshot { return nil })
+	a := newPRWatchSnapshots(func() []*domain.InstanceSnapshot { return nil })
 	_, err := a.Snapshot("missing")
 	assert.Error(t, err)
 }
@@ -42,7 +41,7 @@ func TestPRSnapshotAdapter_should_UseActivePRCheckConclusion_When_SessionHoldsSe
 	merged := domain.PRView{State: domain.PRStateMerged, StoredTerminal: true, CheckConclusion: "success", AttachedAt: time.Unix(1, 0)}
 	open := domain.PRView{State: domain.PRStateOpen, CheckConclusion: "failure", AttachedAt: time.Unix(2, 0)}
 	sn.GitHub.PRs = []domain.PRView{merged, open}
-	a := newPRWatchSnapshots(func() []*session.InstanceSnapshot { return []*session.InstanceSnapshot{sn} })
+	a := newPRWatchSnapshots(func() []*domain.InstanceSnapshot { return []*domain.InstanceSnapshot{sn} })
 
 	got, err := a.Snapshot("a")
 	require.NoError(t, err)

@@ -508,7 +508,7 @@ func TestAssignRole_ShouldFollowTable_WhenAttachSourceAndOrderVary(t *testing.T)
 
 func TestInstanceSnapshot_ActiveCheckConclusion(t *testing.T) {
 	t.Parallel()
-	snap := &InstanceSnapshot{GitHub: GitHubIntegration{GitHubCheckConclusion: "success"}}
+	snap := &domain.InstanceSnapshot{GitHub: domain.GitHubIntegration{GitHubCheckConclusion: "success"}}
 	if got := snap.ActiveCheckConclusion(); got != "success" {
 		t.Fatalf("no links: want scalar, got %q", got)
 	}

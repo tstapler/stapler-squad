@@ -76,7 +76,7 @@ func (i *Instance) resolvePR(ref *domain.PRRef) (domain.PRRef, error) {
 	return i.legacyPRRef()
 }
 
-func (i *Instance) resolveExplicitPR(snap *InstanceSnapshot, ref domain.PRRef) (domain.PRRef, error) {
+func (i *Instance) resolveExplicitPR(snap *domain.InstanceSnapshot, ref domain.PRRef) (domain.PRRef, error) {
 	if ref.IsZero() {
 		return domain.PRRef{}, ErrZeroPRRef
 	}

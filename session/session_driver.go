@@ -1215,7 +1215,7 @@ func handleDriverFailure(inst *Instance, allowedPath string, policy RetryPolicy,
 func markSessionPermanentlyFailed(inst *Instance, reason string) {
 	inst.mu.Lock()
 	alreadyFailed := inst.Status == domain.PermanentlyFailed
-	var snap *InstanceSnapshot
+	var snap *domain.InstanceSnapshot
 	if !alreadyFailed {
 		inst.Status = domain.PermanentlyFailed
 		// Publish the transition to inst.snapshot (the atomic pointer

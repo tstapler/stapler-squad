@@ -9,11 +9,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/backlogsvc"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/backlog"
+	"github.com/tstapler/stapler-squad/session/domain"
 )
 
 type noLiveSessions struct{}
 
-func (noLiveSessions) LiveSnapshot(string) (*session.InstanceSnapshot, bool) { return nil, false }
+func (noLiveSessions) LiveSnapshot(string) (*domain.InstanceSnapshot, bool) { return nil, false }
 
 func newWiringFixtures(t *testing.T) (*backlog.BacklogLifecycleListener, *backlogsvc.BacklogService, *session.Storage) {
 	t.Helper()

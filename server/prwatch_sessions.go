@@ -61,7 +61,7 @@ func detectRemote(path string) (owner, repo, host string, resolved bool) {
 
 // prwatchSessions implements prwatch.Sessions over live session snapshots.
 type prwatchSessions struct {
-	snapshots   func() []*session.InstanceSnapshot
+	snapshots   func() []*domain.InstanceSnapshot
 	view        prwatchSessionView
 	store       prwatchBacklogStore
 	ignoreRepos []string
@@ -78,7 +78,7 @@ type prwatchSessions struct {
 
 var _ prwatch.Sessions = (*prwatchSessions)(nil)
 
-func newPRWatchSessions(snapshots func() []*session.InstanceSnapshot, view prwatchSessionView, store prwatchBacklogStore, ignoreRepos []string) *prwatchSessions {
+func newPRWatchSessions(snapshots func() []*domain.InstanceSnapshot, view prwatchSessionView, store prwatchBacklogStore, ignoreRepos []string) *prwatchSessions {
 	return &prwatchSessions{
 		snapshots: snapshots, view: view, store: store, ignoreRepos: ignoreRepos,
 		resolve: detectRemote, clock: time.Now,
@@ -103,7 +103,7 @@ func (s *prwatchSessions) List(ctx context.Context) ([]prwatch.SessionRef, error
 // factsFor returns the session's watch facts: one per open PR when perPR is on
 // and the session has any, else the single legacy-scalar fact (an all-terminal
 // session stays one entry so its skip reason still reads PR-terminal).
-func (s *prwatchSessions) factsFor(sn *session.InstanceSnapshot, perPR bool) []prwatch.SessionFacts {
+func (s *prwatchSessions) factsFor(sn *domain.InstanceSnapshot, perPR bool) []prwatch.SessionFacts {
 	base := s.factsOf(sn)
 	if !perPR {
 		return []prwatch.SessionFacts{base}
@@ -124,7 +124,7 @@ func (s *prwatchSessions) factsFor(sn *session.InstanceSnapshot, perPR bool) []p
 	return out
 }
 
-func (s *prwatchSessions) factsOf(sn *session.InstanceSnapshot) prwatch.SessionFacts {
+func (s *prwatchSessions) factsOf(sn *domain.InstanceSnapshot) prwatch.SessionFacts {
 	gh := sn.GitHub
 	f := prwatch.SessionFacts{
 		UUID: sn.UUID, Title: sn.Title, Lifecycle: lifecycleOf(sn.Status), Hidden: sn.Hidden,
@@ -139,7 +139,7 @@ func (s *prwatchSessions) factsOf(sn *session.InstanceSnapshot) prwatch.SessionF
 
 // remoteOf holds s.mu only for map access, never across the resolver, so one
 // slow path cannot stall List or any other session's resolution.
-func (s *prwatchSessions) remoteOf(sn *session.InstanceSnapshot) (owner, repo, host string) {
+func (s *prwatchSessions) remoteOf(sn *domain.InstanceSnapshot) (owner, repo, host string) {
 	s.mu.Lock()
 	r, ok := s.resolved[sn.UUID]
 	s.mu.Unlock()

@@ -83,8 +83,8 @@ func notificationsOf(evs []*events.Event, typ int32) []*events.Event {
 	return out
 }
 
-func crashedSnap(uuid, title, reason string, at time.Time) *session.InstanceSnapshot {
-	return &session.InstanceSnapshot{UUID: uuid, Title: title, ExitReason: reason, Status: domain.Crashed, UpdatedAt: at}
+func crashedSnap(uuid, title, reason string, at time.Time) *domain.InstanceSnapshot {
+	return &domain.InstanceSnapshot{UUID: uuid, Title: title, ExitReason: reason, Status: domain.Crashed, UpdatedAt: at}
 }
 
 func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_WhenCrashedAndNoneWhenStopped(t *testing.T) {
@@ -131,7 +131,7 @@ func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_When
 	assert.Equal(t, 1, updated, "the existing session.updated publish still happens once")
 
 	// A Stopped exit publishes no crash notification.
-	e.svc.publishCrash(&session.InstanceSnapshot{UUID: "u2", Title: "stopped", Status: domain.Stopped})
+	e.svc.publishCrash(&domain.InstanceSnapshot{UUID: "u2", Title: "stopped", Status: domain.Stopped})
 	assert.Empty(t, notificationsOf(e.collect(t), failureType))
 }
 
@@ -231,7 +231,7 @@ func TestCrashCoalescing_ShouldCountHiddenAndVisibleInOneLimiter_WhenMixedCrashe
 	e := newCrashEnv(t, false)
 	clk := newGateTestClock()
 	e.svc.crashes.now = clk.Now
-	snaps := []*session.InstanceSnapshot{
+	snaps := []*domain.InstanceSnapshot{
 		crashedSnap("h1", "hidden-1", "x", clk.Now()), crashedSnap("v1", "visible-1", "x", clk.Now()),
 		crashedSnap("h2", "hidden-2", "x", clk.Now()), crashedSnap("v2", "visible-2", "x", clk.Now()),
 	}

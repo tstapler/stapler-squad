@@ -3658,7 +3658,7 @@ type capturePaneTarget struct {
 // directly (never the parent's) and, since it has its own live PTY, is
 // treated like a managed session for capture/resize/redraw purposes even when
 // the parent Instance isn't managed.
-func resolveCapturePaneTarget(instance *session.Instance, snap *session.InstanceSnapshot, shellTmuxSessionName string, writer services.TerminalWriter) capturePaneTarget {
+func resolveCapturePaneTarget(instance *session.Instance, snap *domain.InstanceSnapshot, shellTmuxSessionName string, writer services.TerminalWriter) capturePaneTarget {
 	isShellStream := shellTmuxSessionName != ""
 
 	var tmuxSessionName string
@@ -3815,7 +3815,7 @@ type capturePaneStreamParams struct {
 	writer              services.TerminalWriter
 	stream              *connectWebSocketStream
 	instance            *session.Instance
-	snap                *session.InstanceSnapshot
+	snap                *domain.InstanceSnapshot
 	cpt                 capturePaneTarget
 	streamer            *session.ExternalTmuxStreamer
 	doneChan            chan struct{}

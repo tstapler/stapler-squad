@@ -445,7 +445,7 @@ func (p *PRStatusPoller) armTerminalDiscovery(key string, now time.Time) {
 
 // discoveryEligible: a live, unarchived session whose links are all terminal. It
 // polls nothing else, so a new PR on its branch is the only thing that can resume it.
-func discoveryEligible(snap *session.InstanceSnapshot) bool {
+func discoveryEligible(snap *domain.InstanceSnapshot) bool {
 	gh := snap.GitHub
 	if snap.Status.IsSuspended() || snap.ArchivedAt != nil || gh.GitHubIsFork ||
 		gh.GitHubOwner == "" || gh.GitHubRepo == "" || len(gh.PRs) == 0 {
@@ -483,7 +483,7 @@ func (p *PRStatusPoller) discoverForResolvedSessions(ctx context.Context) {
 // discoverBranchPR attaches the open PR on the session's current branch when it
 // is not linked yet. AttachPR honors tombstones and the 50-link cap, and a new
 // open PR makes the mirror's terminal flag false again, resuming the session.
-func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Instance, snap *session.InstanceSnapshot) {
+func (p *PRStatusPoller) discoverBranchPR(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot) {
 	branch := inst.CurrentBranch()
 	if branch == "" {
 		return
