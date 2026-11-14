@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/instance"
+	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
@@ -167,7 +167,7 @@ func (s *SessionService) dispatchForkSource(ctx context.Context, msg *sessionv1.
 			errors.New("fork_at_message must not be negative"))
 	}
 	lineCount := uint64(msg.ForkAtMessage) //#nosec G115 -- validated non-negative above
-	newUUID, forkErr := instance.ForkClaudeConversation(srcPath, lineCount, filepath.Dir(srcPath))
+	newUUID, forkErr := instancepkg.ForkClaudeConversation(srcPath, lineCount, filepath.Dir(srcPath))
 	if forkErr != nil {
 		return connect.NewError(connect.CodeInternal,
 			fmt.Errorf("fork conversation failed: %w", forkErr))
@@ -348,7 +348,7 @@ func (s *SessionService) createRemoteNewWorktree(
 	ctx context.Context,
 	msg *sessionv1.CreateSessionRequest,
 	cfg *config.Config,
-	resolvedRemote *instance.RemoteTarget,
+	resolvedRemote *instancepkg.RemoteTarget,
 	runner tmux.CommandRunner,
 	resolvedPath string,
 	branch string,
@@ -441,14 +441,14 @@ func (s *SessionService) setupRemoteSessionTarget(
 	ctx context.Context,
 	msg *sessionv1.CreateSessionRequest,
 	cfg *config.Config,
-	resolvedRemote *instance.RemoteTarget,
+	resolvedRemote *instancepkg.RemoteTarget,
 	remoteRequested bool,
 	sessionType domain.SessionType,
 	resolvedPath string,
 	branch string,
 	program string,
-) (executionTarget instance.ExecutionTarget, existingWorktreeOverride string, remoteCreationWarning string, outSessionType domain.SessionType, outBranch string, err error) {
-	executionTarget = instance.LocalTarget{}
+) (executionTarget instancepkg.ExecutionTarget, existingWorktreeOverride string, remoteCreationWarning string, outSessionType domain.SessionType, outBranch string, err error) {
+	executionTarget = instancepkg.LocalTarget{}
 	existingWorktreeOverride = msg.ExistingWorktree
 	if !remoteRequested {
 		return executionTarget, existingWorktreeOverride, "", sessionType, branch, nil
@@ -576,7 +576,7 @@ func (s *SessionService) setupRemoteSessionTarget(
 			resolvedRemote.Name, ensureErr, remoteWorkingPath))
 	}
 
-	executionTarget = instance.NewRemoteExecutionTarget(*resolvedRemote, runner)
+	executionTarget = instancepkg.NewRemoteExecutionTarget(*resolvedRemote, runner)
 	// Only NewWorktree/ExistingWorktree originated in a real git worktree on the
 	// remote host -- remap those to ExistingWorktree so setupFirstTimeWorktree
 	// attaches to remoteWorkingPath instead of re-running worktree creation
@@ -695,7 +695,7 @@ func (s *SessionService) CreateSession(
 		resolvedPath = restartSourcePath
 	}
 	branch := req.Msg.Branch
-	var gitHubRef *instance.GitHubRef
+	var gitHubRef *instancepkg.GitHubRef
 	var clonedRepoPath string
 
 	// Union statically-configured hosts with hosts from dynamically-added
@@ -715,7 +715,7 @@ func (s *SessionService) CreateSession(
 	// background goroutine patches them in via Instance.SetGitHubResolution
 	// once the clone completes, before Start() runs. Epic 2.2 will fold this
 	// into the full named Background Resolution Pipeline.
-	deferredGitHubURL := instance.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts)
+	deferredGitHubURL := instancepkg.IsGitHubURLWithHosts(req.Msg.Path, enterpriseHosts)
 	if deferredGitHubURL {
 		log.Info("[CreateSession] detected GitHub URL, deferring resolution to background", "path", req.Msg.Path)
 	}
@@ -774,7 +774,7 @@ func (s *SessionService) CreateSession(
 	// bypass flag for -- the Omnibar UI disables the checkbox client-side, but that's not
 	// a guarantee for other RPC callers (MCP tools, scripts, curl), so the invariant is
 	// enforced here too rather than left purely client-enforced.
-	if req.Msg.AutoApprove && !instance.AutoApproveSupported(program) {
+	if req.Msg.AutoApprove && !instancepkg.AutoApproveSupported(program) {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("auto_approve is not supported for program %q", program))
 	}
@@ -830,7 +830,7 @@ func (s *SessionService) CreateSession(
 	}
 
 	// Build instance options
-	instanceOpts := instance.InstanceOptions{
+	instanceOpts := instancepkg.InstanceOptions{
 		Title:                req.Msg.Title,
 		Path:                 resolvedPath,
 		WorkingDir:           req.Msg.WorkingDir,
@@ -879,7 +879,7 @@ func (s *SessionService) CreateSession(
 		// req.Msg.Title — since that's what TymuxSessionOverrides/StreamHubSessionOverrides are
 		// keyed by (see config.Config.TymuxSessionOverrides's doc comment and
 		// tmuxSessionNameForStreamPath's identical derivation in connectrpc_websocket.go).
-		Backend: instance.ResolveSessionBackendForTitle(cfg, req.Msg.Title, domain.ProcessManagerBackend(req.Msg.GetBackendOverride())),
+		Backend: instancepkg.ResolveSessionBackendForTitle(cfg, req.Msg.Title, domain.ProcessManagerBackend(req.Msg.GetBackendOverride())),
 		// Tags is a direct passthrough of req.Msg.Tags (Task 2.3.1c) -- set once, synchronously,
 		// at construction time, like Title/Path. This exists so MCP's create_session/
 		// create_session_for_pr can apply "source:mcp"/PR-derived tags before the async
@@ -1012,11 +1012,11 @@ func (s *SessionService) CreateSession(
 // exactly like the local InjectHookConfig call site it replaces for remote
 // sessions (the session is fully functional without approval-hook config,
 // it just falls back to no hook at all for PermissionRequest events).
-func (s *SessionService) setupRemoteApprovalHooks(instance *instance.Instance, rootDir, title string) error {
+func (s *SessionService) setupRemoteApprovalHooks(instance *instancepkg.Instance, rootDir, title string) error {
 	if s.permissionRequestHandler == nil {
 		return errors.New("remote approval relay: no PermissionRequestHandler wired (SetPermissionRequestHandler was never called)")
 	}
-	remoteTarget, ok := instance.GetExecutionTarget().(instance.RemoteExecutionTarget)
+	remoteTarget, ok := instance.GetExecutionTarget().(instancepkg.RemoteExecutionTarget)
 	if !ok {
 		return fmt.Errorf("instance.IsRemote() true but ExecutionTarget is %T, not session.RemoteExecutionTarget", instance.GetExecutionTarget())
 	}
@@ -1086,7 +1086,7 @@ func (s *SessionService) setupRemoteApprovalHooks(instance *instance.Instance, r
 // prune-stale-backend.sh deletes any committed backend file whose id it can't re-derive from
 // the proto+markers scan on every run (silently deleted the hand-authored file the first time
 // `make registry-generate` ran after adding it).
-func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config) (target *instance.RemoteTarget, ok bool, err error) {
+func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config) (target *instancepkg.RemoteTarget, ok bool, err error) {
 	if msg.GetRemote() == nil || msg.GetRemote().GetRemoteName() == "" {
 		return nil, false, nil
 	}
@@ -1095,7 +1095,7 @@ func resolveRemoteTarget(msg *sessionv1.CreateSessionRequest, cfg *config.Config
 	if !found {
 		return nil, false, fmt.Errorf("no remote configured named %q", remoteName)
 	}
-	return &instance.RemoteTarget{
+	return &instancepkg.RemoteTarget{
 		Name:        remoteCfg.Name,
 		Host:        remoteCfg.Host,
 		User:        remoteCfg.User,
@@ -1180,13 +1180,13 @@ func (s *SessionService) PreviewDestinationPath(
 
 	switch req.Msg.Mode {
 	case "github_url":
-		ref, err := instance.ParseGitHubURLWithHosts(req.Msg.Input, s.enterpriseHosts(cfg))
+		ref, err := instancepkg.ParseGitHubURLWithHosts(req.Msg.Input, s.enterpriseHosts(cfg))
 		if err != nil {
 			return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
 				UnresolvedReason: "not a recognized GitHub URL",
 			}), nil
 		}
-		path := instance.DefaultRepoPathManager.GetRepoPath(ref)
+		path := instancepkg.DefaultRepoPathManager.GetRepoPath(ref)
 		return connect.NewResponse(&sessionv1.PreviewDestinationPathResponse{
 			Path:    path,
 			IsExact: true,

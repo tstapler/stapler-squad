@@ -9,7 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
-	"github.com/tstapler/stapler-squad/session/instance"
+	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -31,7 +31,7 @@ type CheckpointService struct {
 	// loadInstances provides the fallback instance-load path used in
 	// ClearConversationState when the target session is not in the live poller.
 	// Wired to SessionService.loadInstancesWithWiring after construction.
-	loadInstances func() ([]*instance.Instance, error)
+	loadInstances func() ([]*instancepkg.Instance, error)
 }
 
 // NewCheckpointService creates a CheckpointService with the given storage and event bus.
@@ -61,12 +61,12 @@ func (cs *CheckpointService) SetExternalDiscovery(d *session.ExternalSessionDisc
 
 // SetLoadInstancesFn wires the fallback function used when the target session is
 // not found in the live poller. Should close over SessionService.loadInstancesWithWiring.
-func (cs *CheckpointService) SetLoadInstancesFn(fn func() ([]*instance.Instance, error)) {
+func (cs *CheckpointService) SetLoadInstancesFn(fn func() ([]*instancepkg.Instance, error)) {
 	cs.loadInstances = fn
 }
 
 // findInstance finds an instance by id using the live poller, then external discovery.
-func (cs *CheckpointService) findInstance(id string) *instance.Instance {
+func (cs *CheckpointService) findInstance(id string) *instancepkg.Instance {
 	if cs.poller != nil {
 		if inst := cs.poller.FindInstance(id); inst != nil {
 			return inst
@@ -81,7 +81,7 @@ func (cs *CheckpointService) findInstance(id string) *instance.Instance {
 }
 
 // findLiveInstance returns the live in-memory instance held by the poller, or nil.
-func (cs *CheckpointService) findLiveInstance(id string) *instance.Instance {
+func (cs *CheckpointService) findLiveInstance(id string) *instancepkg.Instance {
 	if cs.poller == nil {
 		return nil
 	}
@@ -89,7 +89,7 @@ func (cs *CheckpointService) findLiveInstance(id string) *instance.Instance {
 }
 
 // allInstances returns all poller-tracked instances (external-discovery sessions excluded).
-func (cs *CheckpointService) allInstances() []*instance.Instance {
+func (cs *CheckpointService) allInstances() []*instancepkg.Instance {
 	if cs.poller != nil {
 		return cs.poller.GetInstances()
 	}
@@ -187,7 +187,7 @@ func (cs *CheckpointService) ClearConversationState(
 
 	instance.ClearConversationState()
 
-	if err := cs.storage.SaveInstances([]*instance.Instance{instance}); err != nil {
+	if err := cs.storage.SaveInstances([]*instancepkg.Instance{instance}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist cleared state: %w", err))
 	}
 

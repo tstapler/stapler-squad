@@ -49,7 +49,7 @@ func TestScrollForwardKeybindingCanary_should_NotFire_When_OutcomeIsNotDelivered
 
 // TestScrollForwardKeybindingCanary_should_NotFire_When_RedrawMatchesGoldenScrollFixture
 // is the regression guard plan.md calls for: the Story 1.2.1 spike's own
-// before/after golden capture (session/testdata/scroll_forward_claude_
+// before/after golden capture (session/instance/testdata/scroll_forward_claude_
 // before.txt, ..._after.txt) is a genuine scroll -- most content lines
 // differ, not just a spinner/timestamp -- so the canary must not fire on it.
 func TestScrollForwardKeybindingCanary_should_NotFire_When_RedrawMatchesGoldenScrollFixture(t *testing.T) {

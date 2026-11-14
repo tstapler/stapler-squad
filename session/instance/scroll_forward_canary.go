@@ -12,7 +12,7 @@ import (
 // scrollForwardFalseRedrawNormalizeRegex strips known false-redraw
 // signatures -- content that changes on every pane redraw regardless of
 // whether a scroll actually happened -- confirmed by the Story 1.2.1 spike's
-// own golden fixture (session/testdata/scroll_forward_claude_before.txt's
+// own golden fixture (session/instance/testdata/scroll_forward_claude_before.txt's
 // footer, "Cogitated for 29s ... 11:49 AM"): an elapsed-time/status line, a
 // clock timestamp, and common spinner glyphs.
 var scrollForwardFalseRedrawNormalizeRegex = regexp.MustCompile(`Cogitated for \d+s|\d{1,2}:\d{2}\s*[AP]M|[✻✽✢⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏·]`)

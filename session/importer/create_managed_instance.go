@@ -145,7 +145,7 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 		}
 	}
 
-	instance, err := instance.NewInstance(opts)
+	inst, err := instance.NewInstance(opts)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInstanceConstructionFailed, err)
 	}
@@ -158,19 +158,19 @@ func CreateManagedInstance(ctx context.Context, params CreateManagedInstancePara
 	// refcount to 2, making plain release() decrement 2->1 and leave a
 	// phantom entry alive.
 	if params.Registry != nil {
-		live := instance.NewLiveInstance(instance)
+		live := instance.NewLiveInstance(inst)
 		if _, regErr := params.Registry.Register(live); regErr != nil {
 			live.Stop()
 			return nil, fmt.Errorf("%w: %w", ErrInstanceRegistrationFailed, regErr)
 		}
 	}
 
-	if err := params.Storage.AddInstance(instance); err != nil {
+	if err := params.Storage.AddInstance(inst); err != nil {
 		if params.Registry != nil {
-			params.Registry.ForceRelease(instance.GetStableID())
+			params.Registry.ForceRelease(inst.GetStableID())
 		}
 		return nil, fmt.Errorf("%w: %w", ErrInstanceSaveFailed, err)
 	}
 
-	return instance, nil
+	return inst, nil
 }

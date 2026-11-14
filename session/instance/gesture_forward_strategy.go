@@ -1,7 +1,7 @@
 package instance
 
 // pageUpBytes is the xterm PageUp escape sequence (ESC [ 5 ~). Story 1.2.1's
-// live spike (session/testdata/scroll_forward_claude_before.txt,
+// live spike (session/instance/testdata/scroll_forward_claude_before.txt,
 // ..._after.txt) confirmed it scrolls Claude Code's fullscreen conversation
 // view: sent against a session whose transcript overflowed the pane, it
 // revealed earlier content and a "Jump to bottom" indicator, and repeated
