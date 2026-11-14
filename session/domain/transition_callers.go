@@ -33,6 +33,19 @@ const (
 	GuardsNone    GuardPolicy = "none"
 )
 
+// SurfacePolicy says how a caller that moves an item into review makes that
+// visible to a human. The zero value is invalid: every such caller must choose.
+type SurfacePolicy string
+
+const (
+	// SurfaceReviewFlow is the normal work-finished hand-off: the review
+	// pipeline picks the item up, so entering review is itself the signal.
+	SurfaceReviewFlow SurfacePolicy = "review_flow"
+	// SurfaceNotifies is an escalation that publishes an operator
+	// notification from the registered call site's function.
+	SurfaceNotifies SurfacePolicy = "notifies"
+)
+
 // AnyStatus as an edge's From is the wildcard used by archive callers.
 const AnyStatus BacklogStatus = "*"
 
@@ -62,6 +75,13 @@ type TransitionCallerSpec struct {
 	// Origins are functions that reach the primitive through a shared helper
 	// (transitionWithGuard), so they hold no primitive call themselves.
 	Origins []CallSite
+	// Surface is required when an Edge enters review; see SurfacePolicy.
+	Surface SurfacePolicy
+}
+
+func withSurface(s TransitionCallerSpec, p SurfacePolicy) TransitionCallerSpec {
+	s.Surface = p
+	return s
 }
 
 // ExemptKind classifies a status write the engine deliberately never checks.
@@ -228,10 +248,10 @@ var transitionCallers = []TransitionCallerSpec{
 
 	// Agent. request_review's skip-stReview-gate path writes ->stDone from
 	// in_progress, an edge validTransitions lacks (system-required recovery group).
-	specAgent(CallerMCPRequestReview, []SystemEdge{
+	withSurface(specAgent(CallerMCPRequestReview, []SystemEdge{
 		edge(stInProg, stReview), edge(stPrPend, stReview), edge(stInProg, stDone), edge(stPrPend, stDone), edge(stReview, stInProg),
-	}, site(fileMCPBacklog, "backlogHandlers.requestReview", 2)),
-	specAgent(CallerMCPReportBlocked, []SystemEdge{edge(stInProg, stReady), edge(stInProg, stReview), edge(stReview, stReady)}, site(fileMCPBacklog, "backlogHandlers.reportBlocked", 1)),
+	}, site(fileMCPBacklog, "backlogHandlers.requestReview", 2)), SurfaceReviewFlow),
+	withSurface(specAgent(CallerMCPReportBlocked, []SystemEdge{edge(stInProg, stReady), edge(stInProg, stReview), edge(stReview, stReady)}, site(fileMCPBacklog, "backlogHandlers.reportBlocked", 1)), SurfaceNotifies),
 	specAgent(CallerMCPResumeWork, []SystemEdge{edge(stReady, stInProg)}, site(fileMCPBacklog, "backlogHandlers.resumeWork", 1)),
 	specAgent(CallerMCPReportDuplicate, archiveFromAny, site(fileMCPBacklog, "backlogHandlers.reportDuplicate", 1)),
 	specAgent(CallerMCPReportPRCreated, []SystemEdge{edge(stReview, stPrPend)}, site(fileMCPBacklogPR, "backlogHandlers.reportPRCreated", 1)),
@@ -258,9 +278,9 @@ var transitionCallers = []TransitionCallerSpec{
 	specUnchecked(CallerMaybeTriggerTriage, []SystemEdge{edge(stIdea, stReady)}, site(fileTriage, "BacklogService.skipTriageForNewItem", 1)),
 	specUnchecked(CallerTriggerReReview, []SystemEdge{edge(stReview, stDone)}, site(fileTriage, "BacklogService.TriggerReReview", 1)),
 	specUnchecked(CallerTriageComplete, []SystemEdge{edge(stIdea, stReady)}, site(fileTriggerTri, "BacklogService.TriggerTriage", 1)),
-	specUnchecked(CallerSessionExited, []SystemEdge{edge(stInProg, stReview), edge(stInProg, stDone)}, site(fileSessLife, "BacklogLifecycleListener.onSessionExited", 1)),
-	specUnchecked(CallerBouncingToDone, []SystemEdge{edge(stInProg, stReview), edge(stReview, stDone)}, site(fileSessLife, "BacklogLifecycleListener.transitionBouncingItemToDone", 2)),
-	specUnchecked(CallerReconcileStuck, []SystemEdge{edge(stInProg, stReview)}, site(fileSessLife, "BacklogLifecycleListener.ReconcileStuck", 1)),
+	withSurface(specUnchecked(CallerSessionExited, []SystemEdge{edge(stInProg, stReview), edge(stInProg, stDone)}, site(fileSessLife, "BacklogLifecycleListener.onSessionExited", 1)), SurfaceReviewFlow),
+	withSurface(specUnchecked(CallerBouncingToDone, []SystemEdge{edge(stInProg, stReview), edge(stReview, stDone)}, site(fileSessLife, "BacklogLifecycleListener.transitionBouncingItemToDone", 2)), SurfaceReviewFlow),
+	withSurface(specUnchecked(CallerReconcileStuck, []SystemEdge{edge(stInProg, stReview)}, site(fileSessLife, "BacklogLifecycleListener.ReconcileStuck", 1)), SurfaceReviewFlow),
 	specUnchecked(CallerArchiveStaleDone, []SystemEdge{edge(stDone, stArchived)}, site(fileSessLifeArch, "BacklogLifecycleListener.archiveStaleDoneItems", 1)),
 	specUnchecked(CallerCloseSupersededPR, []SystemEdge{edge(stPrPend, stDone)}, site(fileSessLifePR, "BacklogLifecycleListener.closeIfSupersededByMain", 1)),
 	specUnchecked(CallerPushCreatePRFallback, []SystemEdge{edge(stReview, stDone), edge(stReady, stDone)}, site(fileSessLifePR, "BacklogLifecycleListener.pushAndCreatePR", 1)),
@@ -272,7 +292,7 @@ var transitionCallers = []TransitionCallerSpec{
 	}, site(fileSessLifePR, "BacklogLifecycleListener.recoverDriftedPRItem", 1)),
 	specUnchecked(CallerResolveToPRPending, []SystemEdge{edge(stReview, stPrPend)}, site(fileSessLifePR, "BacklogLifecycleListener.resolveToPRPending", 1)),
 	specUnchecked(CallerJulesFailSession, []SystemEdge{edge(stInProg, stReady)}, site(fileJulesPoller, "JulesSessionPoller.failJulesSession", 1)),
-	specUnchecked(CallerJulesApplyCompleted, []SystemEdge{edge(stInProg, stReview), edge(stReview, stPrPend)}, site(fileJulesPoller, "JulesSessionPoller.applyCompletedState", 3)),
+	withSurface(specUnchecked(CallerJulesApplyCompleted, []SystemEdge{edge(stInProg, stReview), edge(stReview, stPrPend)}, site(fileJulesPoller, "JulesSessionPoller.applyCompletedState", 3)), SurfaceReviewFlow),
 }
 
 // exemptTransitionSites are the 3 rollbacks and 2 debug writes (ADR-007 D1).
