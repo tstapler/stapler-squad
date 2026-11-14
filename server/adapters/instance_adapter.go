@@ -152,51 +152,11 @@ func InstanceToProto(inst *instance.Instance, workflowNames map[string]string) *
 		RestartedFromSessionId: snap.RestartedFromSessionID,
 	}
 
-	// Retry state (session-retry-backoff), fields 76-80. Read directly from
-	// the instance (not the InstanceSnapshot atomic pointer, which predates
-	// this feature) via RetrySnapshot's race-free copy.
-	rs := inst.RetrySnapshot()
-	protoSession.RetryAttempt = int32(rs.RetryAttempt)         //#nosec G115 -- retry attempt count, capped by policy
-	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts) //#nosec G115 -- retry attempt cap, always small
-	protoSession.LastFailureReason = rs.LastFailureReason
-	if !rs.NextRetryAt.IsZero() {
-		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
-	}
-	if len(rs.RetryHistory) > 0 {
-		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
-		for i, rec := range rs.RetryHistory {
-			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
-				Attempt:   int32(rec.Attempt), //#nosec G115 -- retry attempt count, capped by policy
-				Reason:    rec.Reason,
-				Timestamp: timestamppb.New(rec.Timestamp),
-			}
-		}
-	}
+	applyRetryState(protoSession, inst)
 
 	protoSession.Artifacts = artifactsToProto(snap.Artifacts, snap.HistoryFilePath != "", inst.SupportsTranscript)
 
-	// Convert git worktree data if available
-	wt, err := inst.GetGitWorktree()
-	if err == nil && wt != nil {
-		protoSession.GitWorktree = &sessionv1.GitWorktree{
-			RepoPath:      wt.GetRepoPath(),
-			WorktreePath:  wt.GetWorktreePath(),
-			BranchName:    wt.GetBranchName(),
-			BaseCommitSha: wt.GetBaseCommitSHA(),
-		}
-	}
-
-	// Convert diff stats if available
-	if inst.GetDiffStats() != nil {
-		stats := inst.GetDiffStats()
-		protoSession.DiffStats = &sessionv1.DiffStats{
-			Added:   int32(stats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
-			Removed: int32(stats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
-		}
-	}
-
-	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
-	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+	applyWorktreeAndDiff(protoSession, inst)
 
 	// Convert Claude session data if available
 	if inst.GetClaudeSession() != nil {
@@ -240,55 +200,9 @@ func InstanceToProto(inst *instance.Instance, workflowNames map[string]string) *
 	// Exit reason — only meaningful when status == SESSION_STATUS_CRASHED.
 	protoSession.ExitReason = snap.ExitReason
 
-	// VNC / browser-passthrough state.
-	if vncMgr := inst.VNCManager(); vncMgr != nil {
-		vncState := vncMgr.State()
-		protoSession.VncState = &sessionv1.VNCState{
-			Status:                mapVNCStatus(vncState.Status),
-			DisplayNumber:         int32(vncState.DisplayNumber), //#nosec G115 -- X11 display number, always small
-			BrowserWindowDetected: vncState.BrowserWindowDetected,
-			// VncPassword intentionally omitted in list/watch paths — only exposed by GetSession.
-		}
-	}
+	applyBrowserStreamStates(protoSession, inst)
 
-	// CDP / browser-streaming state.
-	if cdpMgr := inst.CDPManager(); cdpMgr != nil {
-		cdpState := cdpMgr.State()
-		protoSession.CdpState = &sessionv1.CDPState{
-			Status: mapCDPStatus(cdpState.Status),
-		}
-	}
-
-	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
-	var statusInfo instance.InstanceStatusInfo
-	if snap.Status == domain.Active {
-		if mgr := inst.GetStatusManager(); mgr != nil {
-			statusInfo = mgr.GetStatus(inst)
-		}
-	}
-
-	// SubStatus: fine-grained activity state derived from terminal detection.
-	// Only meaningful for Active sessions; non-Active sessions always return UNSPECIFIED.
-	protoSession.SubStatus = toProtoSubStatusFromInfo(snap.Status, inst.GetRateLimitState(), statusInfo)
-
-	// DetectedStatus / DetectedContext: typed detection fields (fields 68–69).
-	if statusInfo.IsControllerActive && statusInfo.ClaudeStatus != detection.StatusUnknown {
-		protoSession.DetectedStatus = detection.DetectedStatusToProto(statusInfo.ClaudeStatus)
-		protoSession.DetectedContext = statusInfo.StatusContext
-	}
-
-	// ContextHealth / ContextHealthReason (fields 97–98): left UNSPECIFIED until a
-	// verdict with enough samples exists (e.g. never for non-Claude sessions).
-	if snap.ContextHealth.Level != domain.HealthUnknown {
-		protoSession.ContextHealth = tokens.ContextHealthLevelToProto(snap.ContextHealth.Level)
-		protoSession.ContextHealthReason = snap.ContextHealth.Reason
-	}
-
-	// SubagentCount (field 75): count of background agents/shells/monitors from the
-	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
-	// already 0 by construction when the controller is inactive or status isn't
-	// WaitingForAgent, so a guard here would be a no-op.
-	protoSession.SubagentCount = int32(statusInfo.SubagentCount) //#nosec G115 -- detector-derived count of a handful of shells/monitors, always small
+	applyStatusDetection(protoSession, inst, snap)
 
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = snap.Hidden
@@ -320,6 +234,119 @@ func InstanceToProto(inst *instance.Instance, workflowNames map[string]string) *
 		protoSession.PiExtensionHealth = resolver(protoSession.Id, snap.Program)
 	}
 
+	applySessionGoal(protoSession, inst)
+
+	return protoSession
+}
+
+// applyRetryState copies the session-retry-backoff fields (76-80).
+func applyRetryState(protoSession *sessionv1.Session, inst *instance.Instance) {
+	// Retry state (session-retry-backoff), fields 76-80. Read directly from
+	// the instance (not the InstanceSnapshot atomic pointer, which predates
+	// this feature) via RetrySnapshot's race-free copy.
+	rs := inst.RetrySnapshot()
+	protoSession.RetryAttempt = int32(rs.RetryAttempt)         //#nosec G115 -- retry attempt count, capped by policy
+	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts) //#nosec G115 -- retry attempt cap, always small
+	protoSession.LastFailureReason = rs.LastFailureReason
+	if !rs.NextRetryAt.IsZero() {
+		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
+	}
+	if len(rs.RetryHistory) > 0 {
+		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
+		for i, rec := range rs.RetryHistory {
+			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
+				Attempt:   int32(rec.Attempt), //#nosec G115 -- retry attempt count, capped by policy
+				Reason:    rec.Reason,
+				Timestamp: timestamppb.New(rec.Timestamp),
+			}
+		}
+	}
+}
+
+// applyWorktreeAndDiff copies git worktree, diff stats and the commits-ahead signal.
+func applyWorktreeAndDiff(protoSession *sessionv1.Session, inst *instance.Instance) {
+	// Convert git worktree data if available
+	wt, err := inst.GetGitWorktree()
+	if err == nil && wt != nil {
+		protoSession.GitWorktree = &sessionv1.GitWorktree{
+			RepoPath:      wt.GetRepoPath(),
+			WorktreePath:  wt.GetWorktreePath(),
+			BranchName:    wt.GetBranchName(),
+			BaseCommitSha: wt.GetBaseCommitSHA(),
+		}
+	}
+
+	// Convert diff stats if available
+	if inst.GetDiffStats() != nil {
+		stats := inst.GetDiffStats()
+		protoSession.DiffStats = &sessionv1.DiffStats{
+			Added:   int32(stats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
+			Removed: int32(stats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
+		}
+	}
+
+	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
+	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+}
+
+// applyBrowserStreamStates copies the VNC and CDP browser-streaming state.
+func applyBrowserStreamStates(protoSession *sessionv1.Session, inst *instance.Instance) {
+	// VNC / browser-passthrough state.
+	if vncMgr := inst.VNCManager(); vncMgr != nil {
+		vncState := vncMgr.State()
+		protoSession.VncState = &sessionv1.VNCState{
+			Status:                mapVNCStatus(vncState.Status),
+			DisplayNumber:         int32(vncState.DisplayNumber), //#nosec G115 -- X11 display number, always small
+			BrowserWindowDetected: vncState.BrowserWindowDetected,
+			// VncPassword intentionally omitted in list/watch paths — only exposed by GetSession.
+		}
+	}
+
+	// CDP / browser-streaming state.
+	if cdpMgr := inst.CDPManager(); cdpMgr != nil {
+		cdpState := cdpMgr.State()
+		protoSession.CdpState = &sessionv1.CDPState{
+			Status: mapCDPStatus(cdpState.Status),
+		}
+	}
+}
+
+// applyStatusDetection copies SubStatus, DetectedStatus/Context, ContextHealth and SubagentCount.
+func applyStatusDetection(protoSession *sessionv1.Session, inst *instance.Instance, snap *domain.InstanceSnapshot) {
+	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
+	var statusInfo instance.InstanceStatusInfo
+	if snap.Status == domain.Active {
+		if mgr := inst.GetStatusManager(); mgr != nil {
+			statusInfo = mgr.GetStatus(inst)
+		}
+	}
+
+	// SubStatus: fine-grained activity state derived from terminal detection.
+	// Only meaningful for Active sessions; non-Active sessions always return UNSPECIFIED.
+	protoSession.SubStatus = toProtoSubStatusFromInfo(snap.Status, inst.GetRateLimitState(), statusInfo)
+
+	// DetectedStatus / DetectedContext: typed detection fields (fields 68–69).
+	if statusInfo.IsControllerActive && statusInfo.ClaudeStatus != detection.StatusUnknown {
+		protoSession.DetectedStatus = detection.DetectedStatusToProto(statusInfo.ClaudeStatus)
+		protoSession.DetectedContext = statusInfo.StatusContext
+	}
+
+	// ContextHealth / ContextHealthReason (fields 97–98): left UNSPECIFIED until a
+	// verdict with enough samples exists (e.g. never for non-Claude sessions).
+	if snap.ContextHealth.Level != domain.HealthUnknown {
+		protoSession.ContextHealth = tokens.ContextHealthLevelToProto(snap.ContextHealth.Level)
+		protoSession.ContextHealthReason = snap.ContextHealth.Reason
+	}
+
+	// SubagentCount (field 75): count of background agents/shells/monitors from the
+	// WaitingForAgent detector. Set unconditionally — InstanceStatusInfo.SubagentCount is
+	// already 0 by construction when the controller is inactive or status isn't
+	// WaitingForAgent, so a guard here would be a no-op.
+	protoSession.SubagentCount = int32(statusInfo.SubagentCount) //#nosec G115 -- detector-derived count of a handful of shells/monitors, always small
+}
+
+// applySessionGoal copies the goal summary set via the set_session_goal MCP tool.
+func applySessionGoal(protoSession *sessionv1.Session, inst *instance.Instance) {
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
 	if g := inst.GetSessionGoal(); g != nil {
 		tasksJSON, _ := instance.EncodeTasks(g.Tasks) // empty string on error is safe
@@ -332,8 +359,6 @@ func InstanceToProto(inst *instance.Instance, workflowNames map[string]string) *
 			UpdatedAt:  timestamppb.New(g.UpdatedAt),
 		}
 	}
-
-	return protoSession
 }
 
 // mapVNCStatus converts a vnc.VNCStatus to the proto VNCStatus enum.

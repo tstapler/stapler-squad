@@ -62,7 +62,7 @@ func resolveOpencodeUUID(ctx context.Context, inst *instance.Instance, dbPath st
 			if err == nil {
 				var foundID string
 				query := `SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC LIMIT 1;`
-				if scanErr := db.QueryRowContext(ctx, query, inst.GetWorkingDirectory()).Scan(&foundID); scanErr == nil && foundID != "" {
+				if scanErr := db.QueryRowContext(ctx, query, inst.ActiveDir()).Scan(&foundID); scanErr == nil && foundID != "" {
 					uuidStr = foundID
 				}
 				_ = db.Close()
@@ -371,7 +371,7 @@ func (a *OpencodeAdapter) Export(ctx context.Context, turns []instance.Canonical
 	}()
 
 	now := time.Now().UnixMilli()
-	workDir := inst.GetWorkingDirectory()
+	workDir := inst.ActiveDir()
 	projID := "proj_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:16]
 
 	var existingProjID string

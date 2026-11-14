@@ -131,7 +131,7 @@ func (a *PiAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn, 
 		Version:   3,
 		ID:        sessionID,
 		Timestamp: time.Now().Format(time.RFC3339),
-		CWD:       inst.GetWorkingDirectory(),
+		CWD:       inst.ActiveDir(),
 	}
 	if b, err := json.Marshal(sessEv); err == nil {
 		_, _ = file.Write(b)

@@ -70,7 +70,7 @@ func (a *ClaudeAdapter) Import(ctx context.Context, inst *instance.Instance) ([]
 		return nil, err
 	}
 
-	workspace := inst.GetWorkingDirectory()
+	workspace := inst.ActiveDir()
 	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
 	claudeLogPath := filepath.Join(claudeProjectsDir, instance.ClaudeProjectDirName(workspace), uuidStr+".jsonl")
 
@@ -224,7 +224,7 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []instance.CanonicalTu
 		return err
 	}
 
-	workspace := inst.GetWorkingDirectory()
+	workspace := inst.ActiveDir()
 	projectDir := instance.ClaudeProjectDirName(workspace)
 	claudeProjectDir := filepath.Join(home, ".claude", "projects", projectDir)
 	if err := os.MkdirAll(claudeProjectDir, 0700); err != nil {

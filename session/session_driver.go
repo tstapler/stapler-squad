@@ -306,22 +306,7 @@ func runSessionDriverWithPrompt(inst *instance.Instance, allowedPath string, ini
 	scannedURLs := scannedPRURLs{}
 
 	attempt := newDriverAttempt(inst, initialPrompt, time.Now())
-	if !attempt.sentInitial {
-		// Check if the prompt was already delivered in a previous service run.
-		// Use live terminal output first (no disk latency), then fall back to JSONL file.
-		// Persist the result via SetInitialPromptSentAt either way, so this
-		// session (predating the persisted field, or hit by an earlier failed
-		// persist call) doesn't have to re-run these heuristics again next restart.
-		if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
-			attempt.sentInitial = true
-			attempt.initialPromptSentAt = time.Now()
-			inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
-		} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
-			attempt.sentInitial = true
-			attempt.initialPromptSentAt = time.Now()
-			inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
-		}
-	}
+	markInitialPromptIfAlreadySent(ctx, inst, &attempt)
 	var sendAttempts int
 
 	// DialogAnswerLatch state (ADR-001), one per SendKeys("1\n") call site.
@@ -418,6 +403,27 @@ func runSessionDriverWithPrompt(inst *instance.Instance, allowedPath string, ini
 
 		// Scan terminal output for a GitHub PR URL printed by git push.
 		scanAndLinkPRURL(inst, attempt.sentInitial, scannedURLs, previewErr, output)
+	}
+}
+
+// markInitialPromptIfAlreadySent checks whether the initial prompt was already
+// delivered in a previous service run: live terminal output first (no disk
+// latency), then the JSONL file. It persists the result via
+// SetInitialPromptSentAt either way, so a session that predates the persisted
+// field (or hit an earlier failed persist) does not re-run these heuristics
+// next restart.
+func markInitialPromptIfAlreadySent(ctx context.Context, inst *instance.Instance, attempt *driverAttempt) {
+	if attempt.sentInitial {
+		return
+	}
+	if startOutput, err := inst.PreviewContext(ctx); err == nil && outputShowsConversationStarted(startOutput) {
+		attempt.sentInitial = true
+		attempt.initialPromptSentAt = time.Now()
+		inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
+	} else if _, err := FindConversationFilePath(ctx, inst.GetStableID()); err == nil {
+		attempt.sentInitial = true
+		attempt.initialPromptSentAt = time.Now()
+		inst.SetInitialPromptSentAt(attempt.initialPromptSentAt)
 	}
 }
 

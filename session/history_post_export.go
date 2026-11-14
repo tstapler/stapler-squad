@@ -61,7 +61,7 @@ func (a *AgyAdapter) AfterExport(_ context.Context, inst *instance.Instance) err
 	return appendHistoryJSONL(filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl"), "agy", map[string]interface{}{
 		"display":        fmt.Sprintf("Ported from Claude: %s", inst.Title),
 		"timestamp":      time.Now().UnixMilli(),
-		"workspace":      inst.GetWorkingDirectory(),
+		"workspace":      inst.ActiveDir(),
 		"conversationId": inst.GetClaudeConversationUUID(),
 	})
 }
@@ -73,7 +73,7 @@ func (a *ClaudeAdapter) AfterExport(_ context.Context, inst *instance.Instance) 
 		return err
 	}
 	uuidStr := inst.GetClaudeConversationUUID()
-	workspace := inst.GetWorkingDirectory()
+	workspace := inst.ActiveDir()
 	if err := appendHistoryJSONL(filepath.Join(home, ".claude", "history.jsonl"), "claude", map[string]interface{}{
 		"display":        fmt.Sprintf("Ported from Antigravity: %s", inst.Title),
 		"pastedContents": map[string]interface{}{},
@@ -89,6 +89,6 @@ func (a *ClaudeAdapter) AfterExport(_ context.Context, inst *instance.Instance) 
 
 // AfterExport records the ported session data (opencode has no history.jsonl).
 func (a *OpencodeAdapter) AfterExport(_ context.Context, inst *instance.Instance) error {
-	inst.RecordPortedClaudeSession(inst.GetClaudeConversationUUID(), inst.GetWorkingDirectory())
+	inst.RecordPortedClaudeSession(inst.GetClaudeConversationUUID(), inst.ActiveDir())
 	return nil
 }

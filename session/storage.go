@@ -214,69 +214,81 @@ func (s *Storage) LoadInstances() ([]*instance.Instance, error) {
 		instances = append(instances, inst)
 	}
 
-	// Bulk-load all session goals in one query (N+1 → 1) and apply to instances.
-	if client := s.GetEntClient(); client != nil && len(instances) > 0 {
-		uuids := make([]string, 0, len(instances))
-		for _, inst := range instances {
-			if inst.UUID != "" {
-				uuids = append(uuids, inst.UUID)
-			}
-		}
-		if len(uuids) > 0 {
-			goals, goalErr := client.SessionGoal.Query().
-				Where(sessiongoal.SessionUUIDIn(uuids...)).
-				All(ctx)
-			if goalErr != nil {
-				log.Warn("LoadInstances: failed to bulk-load session goals", "err", goalErr)
-			} else {
-				goalMap := make(map[string]*instance.SessionGoalData, len(goals))
-				for _, g := range goals {
-					tasks, decodeErr := instance.DecodeTasks(g.Tasks)
-					if decodeErr != nil {
-						log.Warn("LoadInstances: failed to decode tasks JSON", "session_uuid", g.SessionUUID, "err", decodeErr)
-						tasks = []instance.TaskNode{}
-					}
-					goalMap[g.SessionUUID] = &instance.SessionGoalData{
-						UUID:        g.ID.String(),
-						SessionUUID: g.SessionUUID,
-						Goal:        g.Goal,
-						Status:      g.Status,
-						Tasks:       tasks,
-						SetBy:       g.SetBy,
-						UpdatedAt:   g.UpdatedAt,
-					}
-				}
-				for _, inst := range instances {
-					if goal, ok := goalMap[inst.UUID]; ok {
-						inst.SetSessionGoalCached(goal)
-					}
-				}
-			}
-		}
-	}
-
-	// Bulk-load stored artifact blobs so the first render shows cached artifacts
-	// without waiting for ArtifactExtractor's startup walk to complete.
-	// Single bulk query replaces N per-session queries (M-4 fix).
-	if s.GetEntClient() != nil && len(instances) > 0 {
-		allArtifacts, artifErr := s.GetAllInstanceArtifacts()
-		if artifErr != nil {
-			log.Warn("LoadInstances: failed to bulk-load artifacts", "err", artifErr)
-		} else {
-			for _, inst := range instances {
-				raw := allArtifacts[inst.Title]
-				if raw == "" {
-					continue
-				}
-				var blob domain.SessionArtifactsBlob
-				if err := json.Unmarshal([]byte(raw), &blob); err == nil {
-					inst.Artifacts = &blob
-				}
-			}
-		}
-	}
+	s.applyBulkSessionGoals(ctx, instances)
+	s.applyBulkArtifacts(instances)
 
 	return instances, nil
+}
+
+// applyBulkSessionGoals bulk-loads all session goals in one query (N+1 -> 1)
+// and applies them to instances.
+func (s *Storage) applyBulkSessionGoals(ctx context.Context, instances []*instance.Instance) {
+	client := s.GetEntClient()
+	if client == nil || len(instances) == 0 {
+		return
+	}
+	uuids := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		if inst.UUID != "" {
+			uuids = append(uuids, inst.UUID)
+		}
+	}
+	if len(uuids) == 0 {
+		return
+	}
+	goals, goalErr := client.SessionGoal.Query().
+		Where(sessiongoal.SessionUUIDIn(uuids...)).
+		All(ctx)
+	if goalErr != nil {
+		log.Warn("LoadInstances: failed to bulk-load session goals", "err", goalErr)
+		return
+	}
+	goalMap := make(map[string]*instance.SessionGoalData, len(goals))
+	for _, g := range goals {
+		tasks, decodeErr := instance.DecodeTasks(g.Tasks)
+		if decodeErr != nil {
+			log.Warn("LoadInstances: failed to decode tasks JSON", "session_uuid", g.SessionUUID, "err", decodeErr)
+			tasks = []instance.TaskNode{}
+		}
+		goalMap[g.SessionUUID] = &instance.SessionGoalData{
+			UUID:        g.ID.String(),
+			SessionUUID: g.SessionUUID,
+			Goal:        g.Goal,
+			Status:      g.Status,
+			Tasks:       tasks,
+			SetBy:       g.SetBy,
+			UpdatedAt:   g.UpdatedAt,
+		}
+	}
+	for _, inst := range instances {
+		if goal, ok := goalMap[inst.UUID]; ok {
+			inst.SetSessionGoalCached(goal)
+		}
+	}
+}
+
+// applyBulkArtifacts bulk-loads stored artifact blobs so the first render shows
+// cached artifacts without waiting for ArtifactExtractor's startup walk.
+// Single bulk query replaces N per-session queries (M-4 fix).
+func (s *Storage) applyBulkArtifacts(instances []*instance.Instance) {
+	if s.GetEntClient() == nil || len(instances) == 0 {
+		return
+	}
+	allArtifacts, artifErr := s.GetAllInstanceArtifacts()
+	if artifErr != nil {
+		log.Warn("LoadInstances: failed to bulk-load artifacts", "err", artifErr)
+		return
+	}
+	for _, inst := range instances {
+		raw := allArtifacts[inst.Title]
+		if raw == "" {
+			continue
+		}
+		var blob domain.SessionArtifactsBlob
+		if err := json.Unmarshal([]byte(raw), &blob); err == nil {
+			inst.Artifacts = &blob
+		}
+	}
 }
 
 // hydrateSessionPRs attaches each session's PR links to its InstanceData before

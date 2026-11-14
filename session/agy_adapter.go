@@ -64,22 +64,7 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *instance.Instance) ([]ins
 
 	if uuidStr == "" {
 		// Look up in history.jsonl
-		agyHistoryPath := filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl")
-		if f, err := os.Open(agyHistoryPath); err == nil { // #nosec G304 -- agyHistoryPath is home dir + hardcoded constant components, no variable path segment
-			defer f.Close()
-			scanner := bufio.NewScanner(f)
-			for scanner.Scan() {
-				var entry struct {
-					Workspace      string `json:"workspace"`
-					ConversationID string `json:"conversationId"`
-				}
-				if json.Unmarshal(scanner.Bytes(), &entry) == nil {
-					if filepath.Clean(entry.Workspace) == filepath.Clean(inst.GetWorkingDirectory()) {
-						uuidStr = entry.ConversationID
-					}
-				}
-			}
-		}
+		uuidStr = agyConversationFromHistory(filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl"), inst.ActiveDir())
 
 		if uuidStr != "" {
 			inst.WithClaudeSession(func(d *domain.ClaudeSessionData) { d.ConversationUUID = uuidStr })
@@ -118,61 +103,11 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *instance.Instance) ([]ins
 		if lineStr != "" {
 			var raw rawAgyStep
 			if err := json.Unmarshal([]byte(lineStr), &raw); err == nil {
-				tTime, parseErr := time.Parse(time.RFC3339, raw.CreatedAt)
-				if parseErr != nil {
-					tTime = time.Now()
+				turn, ok, turnErr := agyStepToTurn(raw, turnIdx)
+				if turnErr != nil {
+					return nil, turnErr
 				}
-
-				if raw.Type == "USER_INPUT" {
-					turn := instance.CanonicalTurn{
-						Role: instance.RoleUser,
-						Blocks: []instance.CanonicalBlock{
-							instance.NewTextBlock(raw.Content),
-						},
-						Timestamp: tTime,
-						TurnIndex: turnIdx,
-					}
-					if err := turn.Validate(); err != nil {
-						return nil, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
-					}
-					turns = append(turns, turn)
-					turnIdx++
-				} else if raw.Type == "PLANNER_RESPONSE" {
-					var blocks []instance.CanonicalBlock
-					if raw.Content != "" {
-						blocks = append(blocks, instance.NewTextBlock(raw.Content))
-					}
-					for _, tc := range raw.ToolCalls {
-						blocks = append(blocks, instance.NewToolUseBlock(tc.ID, tc.Name, tc.Args))
-					}
-					if len(blocks) == 0 {
-						// Skip empty planner responses that have no text and no tool calls.
-						continue
-					}
-					turn := instance.CanonicalTurn{
-						Role:      instance.RoleAssistant,
-						Blocks:    blocks,
-						Timestamp: tTime,
-						TurnIndex: turnIdx,
-					}
-					if err := turn.Validate(); err != nil {
-						return nil, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
-					}
-					turns = append(turns, turn)
-					turnIdx++
-				} else if raw.Source == "MODEL" && raw.Type != "" {
-					// Tool result or other model execution output
-					turn := instance.CanonicalTurn{
-						Role: instance.RoleUser,
-						Blocks: []instance.CanonicalBlock{
-							instance.NewToolResultBlock("", raw.Type, raw.Content, false),
-						},
-						Timestamp: tTime,
-						TurnIndex: turnIdx,
-					}
-					if err := turn.Validate(); err != nil {
-						return nil, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
-					}
+				if ok {
 					turns = append(turns, turn)
 					turnIdx++
 				}
@@ -185,6 +120,85 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *instance.Instance) ([]ins
 	}
 
 	return turns, nil
+}
+
+// agyConversationFromHistory returns the conversation ID of the last
+// history.jsonl entry whose workspace matches workspace, or "" if none.
+func agyConversationFromHistory(historyPath, workspace string) string {
+	f, err := os.Open(historyPath) // #nosec G304 -- historyPath is home dir + hardcoded constant components, no variable path segment
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	var found string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var entry struct {
+			Workspace      string `json:"workspace"`
+			ConversationID string `json:"conversationId"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) == nil {
+			if filepath.Clean(entry.Workspace) == filepath.Clean(workspace) {
+				found = entry.ConversationID
+			}
+		}
+	}
+	return found
+}
+
+// agyStepToTurn converts one transcript step to a canonical turn. ok is false
+// for steps that produce no turn (unrecognised types, empty planner responses).
+func agyStepToTurn(raw rawAgyStep, turnIdx int) (turn instance.CanonicalTurn, ok bool, err error) {
+	tTime, parseErr := time.Parse(time.RFC3339, raw.CreatedAt)
+	if parseErr != nil {
+		tTime = time.Now()
+	}
+
+	switch {
+	case raw.Type == "USER_INPUT":
+		turn = instance.CanonicalTurn{
+			Role: instance.RoleUser,
+			Blocks: []instance.CanonicalBlock{
+				instance.NewTextBlock(raw.Content),
+			},
+			Timestamp: tTime,
+			TurnIndex: turnIdx,
+		}
+	case raw.Type == "PLANNER_RESPONSE":
+		var blocks []instance.CanonicalBlock
+		if raw.Content != "" {
+			blocks = append(blocks, instance.NewTextBlock(raw.Content))
+		}
+		for _, tc := range raw.ToolCalls {
+			blocks = append(blocks, instance.NewToolUseBlock(tc.ID, tc.Name, tc.Args))
+		}
+		if len(blocks) == 0 {
+			// Skip empty planner responses that have no text and no tool calls.
+			return turn, false, nil
+		}
+		turn = instance.CanonicalTurn{
+			Role:      instance.RoleAssistant,
+			Blocks:    blocks,
+			Timestamp: tTime,
+			TurnIndex: turnIdx,
+		}
+	case raw.Source == "MODEL" && raw.Type != "":
+		// Tool result or other model execution output
+		turn = instance.CanonicalTurn{
+			Role: instance.RoleUser,
+			Blocks: []instance.CanonicalBlock{
+				instance.NewToolResultBlock("", raw.Type, raw.Content, false),
+			},
+			Timestamp: tTime,
+			TurnIndex: turnIdx,
+		}
+	default:
+		return turn, false, nil
+	}
+	if err := turn.Validate(); err != nil {
+		return turn, false, fmt.Errorf("invalid turn parsed at index %d: %w", turnIdx, err)
+	}
+	return turn, true, nil
 }
 
 func (a *AgyAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn, inst *instance.Instance) error {
@@ -207,83 +221,8 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn,
 	transcriptFullPath := filepath.Join(agyBrainDir, "transcript_full.jsonl")
 
 	for _, p := range []string{transcriptPath, transcriptFullPath} {
-		f, err := os.Create(p) // #nosec G304 -- p is one of two fixed filenames joined onto agyBrainDir (home + constants + internal uuidStr), not externally controlled
-		if err != nil {
+		if err := writeAgyTranscript(p, turns); err != nil {
 			return err
-		}
-		for _, turn := range turns {
-			var step rawAgyStep
-			step.StepIndex = turn.TurnIndex
-			step.CreatedAt = turn.Timestamp.Format(time.RFC3339)
-			step.Status = "DONE"
-
-			if turn.Role == instance.RoleUser {
-				isToolResult := false
-				for _, block := range turn.Blocks {
-					if block.Kind == instance.BlockKindToolResult {
-						step.Source = "MODEL"
-						step.Type = strings.ToUpper(block.ToolName)
-						if step.Type == "" {
-							step.Type = "RUN_COMMAND" // default
-						}
-						step.Content = block.ToolResultContent
-						isToolResult = true
-						break
-					}
-				}
-				if !isToolResult {
-					step.Source = "USER_EXPLICIT"
-					step.Type = "USER_INPUT"
-					var textBlocks []string
-					for _, block := range turn.Blocks {
-						if block.Kind == instance.BlockKindText {
-							textBlocks = append(textBlocks, block.Text)
-						}
-					}
-					step.Content = strings.Join(textBlocks, "\n")
-				}
-			} else {
-				step.Source = "MODEL"
-				step.Type = "PLANNER_RESPONSE"
-				var textBlocks []string
-				for _, block := range turn.Blocks {
-					switch block.Kind {
-					case instance.BlockKindText:
-						textBlocks = append(textBlocks, block.Text)
-					case instance.BlockKindToolUse:
-						step.ToolCalls = append(step.ToolCalls, struct {
-							Name string          `json:"name"`
-							Args json.RawMessage `json:"args"`
-							ID   string          `json:"id,omitempty"`
-						}{
-							Name: block.ToolName,
-							Args: block.ToolArgs,
-							ID:   block.ToolID,
-						})
-					}
-				}
-				step.Content = strings.Join(textBlocks, "\n")
-			}
-
-			data, err := json.Marshal(step)
-			if err != nil {
-				_ = f.Close()
-				return err
-			}
-			if _, werr := f.Write(data); werr != nil {
-				_ = f.Close()
-				return fmt.Errorf("failed to write step to %s: %w", p, werr)
-			}
-			if _, werr := f.Write([]byte("\n")); werr != nil {
-				_ = f.Close()
-				return fmt.Errorf("failed to write newline to %s: %w", p, werr)
-			}
-		}
-		// A failed Close here can mean the last buffered writes never made
-		// it to disk, so the transcript file would silently be incomplete —
-		// surface it instead of discarding.
-		if err := f.Close(); err != nil {
-			return fmt.Errorf("failed to close transcript file %s: %w", p, err)
 		}
 	}
 
@@ -292,21 +231,107 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn,
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
 		return err
 	}
+	return writeAgyConversationDB(dbPath, uuidStr, turns)
+}
 
-	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build()) //nolint:norawdb writes to the agy-owned database
+// writeAgyTranscript writes turns to p as one JSON step per line.
+func writeAgyTranscript(p string, turns []instance.CanonicalTurn) error {
+	f, err := os.Create(p) // #nosec G304 -- p is one of two fixed filenames joined onto agyBrainDir (home + constants + internal uuidStr), not externally controlled
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	for _, turn := range turns {
+		data, err := json.Marshal(agyStepFromTurn(turn))
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		if _, werr := f.Write(data); werr != nil {
+			_ = f.Close()
+			return fmt.Errorf("failed to write step to %s: %w", p, werr)
+		}
+		if _, werr := f.Write([]byte("\n")); werr != nil {
+			_ = f.Close()
+			return fmt.Errorf("failed to write newline to %s: %w", p, werr)
+		}
+	}
+	// A failed Close here can mean the last buffered writes never made
+	// it to disk, so the transcript file would silently be incomplete —
+	// surface it instead of discarding.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close transcript file %s: %w", p, err)
+	}
+	return nil
+}
 
-	queries := []string{
-		`CREATE TABLE IF NOT EXISTS trajectory_meta (
+// agyStepFromTurn converts a canonical turn to a transcript step.
+func agyStepFromTurn(turn instance.CanonicalTurn) rawAgyStep {
+	var step rawAgyStep
+	step.StepIndex = turn.TurnIndex
+	step.CreatedAt = turn.Timestamp.Format(time.RFC3339)
+	step.Status = "DONE"
+
+	if turn.Role == instance.RoleUser {
+		fillAgyUserStep(&step, turn)
+		return step
+	}
+	step.Source = "MODEL"
+	step.Type = "PLANNER_RESPONSE"
+	var textBlocks []string
+	for _, block := range turn.Blocks {
+		switch block.Kind {
+		case instance.BlockKindText:
+			textBlocks = append(textBlocks, block.Text)
+		case instance.BlockKindToolUse:
+			step.ToolCalls = append(step.ToolCalls, struct {
+				Name string          `json:"name"`
+				Args json.RawMessage `json:"args"`
+				ID   string          `json:"id,omitempty"`
+			}{
+				Name: block.ToolName,
+				Args: block.ToolArgs,
+				ID:   block.ToolID,
+			})
+		}
+	}
+	step.Content = strings.Join(textBlocks, "\n")
+	return step
+}
+
+// fillAgyUserStep fills step for a user-role turn: a tool result when one of the
+// blocks is a tool result, otherwise the joined text blocks as user input.
+func fillAgyUserStep(step *rawAgyStep, turn instance.CanonicalTurn) {
+	for _, block := range turn.Blocks {
+		if block.Kind == instance.BlockKindToolResult {
+			step.Source = "MODEL"
+			step.Type = strings.ToUpper(block.ToolName)
+			if step.Type == "" {
+				step.Type = "RUN_COMMAND" // default
+			}
+			step.Content = block.ToolResultContent
+			return
+		}
+	}
+	step.Source = "USER_EXPLICIT"
+	step.Type = "USER_INPUT"
+	var textBlocks []string
+	for _, block := range turn.Blocks {
+		if block.Kind == instance.BlockKindText {
+			textBlocks = append(textBlocks, block.Text)
+		}
+	}
+	step.Content = strings.Join(textBlocks, "\n")
+}
+
+// agySchemaQueries creates the Antigravity conversation tables.
+var agySchemaQueries = []string{
+	`CREATE TABLE IF NOT EXISTS trajectory_meta (
 			trajectory_id TEXT PRIMARY KEY,
 			cascade_id TEXT,
 			trajectory_type INTEGER,
 			source INTEGER
 		);`,
-		`CREATE TABLE IF NOT EXISTS steps (
+	`CREATE TABLE IF NOT EXISTS steps (
 			idx INTEGER PRIMARY KEY,
 			step_type INTEGER NOT NULL DEFAULT 0,
 			status INTEGER NOT NULL DEFAULT 0,
@@ -319,32 +344,42 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn,
 			step_payload BLOB,
 			step_format INTEGER NOT NULL DEFAULT 0
 		);`,
-		`CREATE INDEX IF NOT EXISTS idx_steps_status    ON steps(status);`,
-		`CREATE INDEX IF NOT EXISTS idx_steps_step_type ON steps(step_type);`,
-		`CREATE TABLE IF NOT EXISTS gen_metadata (
+	`CREATE INDEX IF NOT EXISTS idx_steps_status    ON steps(status);`,
+	`CREATE INDEX IF NOT EXISTS idx_steps_step_type ON steps(step_type);`,
+	`CREATE TABLE IF NOT EXISTS gen_metadata (
 			idx  INTEGER PRIMARY KEY,
 			data BLOB,
 			size INTEGER NOT NULL DEFAULT 0
 		);`,
-		`CREATE TABLE IF NOT EXISTS executor_metadata (
+	`CREATE TABLE IF NOT EXISTS executor_metadata (
 			idx  INTEGER PRIMARY KEY,
 			data BLOB
 		);`,
-		`CREATE TABLE IF NOT EXISTS parent_references (
+	`CREATE TABLE IF NOT EXISTS parent_references (
 			idx  INTEGER PRIMARY KEY,
 			data BLOB
 		);`,
-		`CREATE TABLE IF NOT EXISTS trajectory_metadata_blob (
+	`CREATE TABLE IF NOT EXISTS trajectory_metadata_blob (
 			id   TEXT DEFAULT "main",
 			data BLOB,
 			PRIMARY KEY (id)
 		);`,
-		`CREATE TABLE IF NOT EXISTS battle_mode_infos (
+	`CREATE TABLE IF NOT EXISTS battle_mode_infos (
 			idx  INTEGER PRIMARY KEY,
 			data BLOB
 		);`,
+}
+
+// writeAgyConversationDB creates the conversation SQLite DB at dbPath and
+// inserts one steps/gen_metadata row per turn.
+func writeAgyConversationDB(dbPath, uuidStr string, turns []instance.CanonicalTurn) error {
+	db, err := sql.Open("sqlite", sqlitedsn.New(dbPath).Build()) //nolint:norawdb writes to the agy-owned database
+	if err != nil {
+		return err
 	}
-	for _, q := range queries {
+	defer db.Close()
+
+	for _, q := range agySchemaQueries {
 		if _, err := db.Exec(q); err != nil {
 			return err
 		}
@@ -361,22 +396,7 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn,
 	}
 
 	for _, turn := range turns {
-		stepType := 15 // PLANNER_RESPONSE
-		contentLen := 0
-		if turn.Role == instance.RoleUser {
-			stepType = 14
-			for _, b := range turn.Blocks {
-				if b.Kind == instance.BlockKindToolResult {
-					contentLen += len(b.ToolResultContent)
-				} else {
-					contentLen += len(b.Text)
-				}
-			}
-		} else {
-			for _, b := range turn.Blocks {
-				contentLen += len(b.Text) + len(b.ToolArgs)
-			}
-		}
+		stepType, contentLen := agyTurnSize(turn)
 
 		if _, err := tx.Exec(`INSERT OR REPLACE INTO steps (idx, step_type, status, has_subtrajectory) VALUES (?, ?, 3, 0);`, turn.TurnIndex, stepType); err != nil {
 			return err
@@ -389,4 +409,23 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []instance.CanonicalTurn,
 	}
 
 	return tx.Commit()
+}
+
+// agyTurnSize returns the step type (14 user, 15 planner response) and the
+// approximate content length of turn.
+func agyTurnSize(turn instance.CanonicalTurn) (stepType, contentLen int) {
+	if turn.Role == instance.RoleUser {
+		for _, b := range turn.Blocks {
+			if b.Kind == instance.BlockKindToolResult {
+				contentLen += len(b.ToolResultContent)
+			} else {
+				contentLen += len(b.Text)
+			}
+		}
+		return 14, contentLen
+	}
+	for _, b := range turn.Blocks {
+		contentLen += len(b.Text) + len(b.ToolArgs)
+	}
+	return 15, contentLen
 }

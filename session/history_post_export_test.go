@@ -49,7 +49,7 @@ func TestAgyAdapter_AfterExport_AppendsHistoryEntry(t *testing.T) {
 	require.Len(t, lines, 1)
 	require.Equal(t, "Ported from Claude: ported", lines[0]["display"])
 	require.Equal(t, "uuid-1", lines[0]["conversationId"])
-	require.Equal(t, inst.GetWorkingDirectory(), lines[0]["workspace"])
+	require.Equal(t, inst.ActiveDir(), lines[0]["workspace"])
 }
 
 func TestClaudeAdapter_AfterExport_AppendsHistoryAndRecordsSession(t *testing.T) {
@@ -60,10 +60,10 @@ func TestClaudeAdapter_AfterExport_AppendsHistoryAndRecordsSession(t *testing.T)
 	require.Len(t, lines, 1)
 	require.Equal(t, "Ported from Antigravity: ported", lines[0]["display"])
 	require.Equal(t, "uuid-1", lines[0]["sessionId"])
-	require.Equal(t, inst.GetWorkingDirectory(), lines[0]["project"])
+	require.Equal(t, inst.ActiveDir(), lines[0]["project"])
 	require.Equal(t, 1, *calls)
 	require.Equal(t, "ported", inst.GetClaudeSession().ProjectName)
-	require.Equal(t, inst.GetWorkingDirectory(), inst.GetClaudeSession().Metadata["working_dir"])
+	require.Equal(t, inst.ActiveDir(), inst.GetClaudeSession().Metadata["working_dir"])
 }
 
 func TestOpencodeAdapter_AfterExport_RecordsSessionOnly(t *testing.T) {

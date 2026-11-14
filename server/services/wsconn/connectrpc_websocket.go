@@ -2509,20 +2509,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	var resizes latestResize
 	// Resizes run on the slow lane, so a keystroke typed after one must be ordered behind the
 	// pane resize (not behind its repaint capture) by the gate.
-	inputGate := newInputOrderGate(func(data []byte) {
-		writer := upWriter.Writer()
-		if writer == nil {
-			return
-		}
-		keystrokeDelivery{
-			instance:    instance,
-			latency:     &stream.latency,
-			bookkeeper:  bookkeeper,
-			logPrefix:   "[streamViaHub]",
-			tmuxSession: tmuxSessionName,
-			tmuxSocket:  snap.TmuxServerSocket,
-		}.deliver(writer, data)
-	})
+	inputGate := newHubInputGate(stream, instance, upWriter, bookkeeper, tmuxSessionName, snap.TmuxServerSocket)
 	runInputReadLoop(inputReadLoopParams{
 		slowLane:        slowLane,
 		currentWriter:   upWriter.Writer,
@@ -2588,6 +2575,25 @@ func (h *ConnectRPCWebSocketHandler) streamViaHub(stream *connectWebSocketStream
 	default:
 		return nil
 	}
+}
+
+// newHubInputGate returns the gate that delivers keystrokes through the hub's
+// current up-writer, dropping them once the writer has been closed.
+func newHubInputGate(stream *connectWebSocketStream, inst *instance.Instance, upWriter *upgradableWriter, bookkeeper *inputBookkeeper, tmuxSessionName, tmuxSocket string) *inputOrderGate {
+	return newInputOrderGate(func(data []byte) {
+		writer := upWriter.Writer()
+		if writer == nil {
+			return
+		}
+		keystrokeDelivery{
+			instance:    inst,
+			latency:     &stream.latency,
+			bookkeeper:  bookkeeper,
+			logPrefix:   "[streamViaHub]",
+			tmuxSession: tmuxSessionName,
+			tmuxSocket:  tmuxSocket,
+		}.deliver(writer, data)
+	})
 }
 
 // parseInputFrameOrStop parses one raw WebSocket message into a TerminalData
