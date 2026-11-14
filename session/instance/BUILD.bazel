@@ -266,3 +266,13 @@ go_test(
         "@org_uber_go_goleak//:goleak",
     ],
 )
+
+# Read by guards in session and server/services that scan Go sources (the Instance files moved here from session).
+filegroup(
+    name = "go_sources",
+    srcs = glob(["*.go"]),
+    visibility = [
+        "//server/services:__pkg__",
+        "//session:__pkg__",
+    ],
+)

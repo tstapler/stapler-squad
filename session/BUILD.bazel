@@ -638,6 +638,7 @@ go_test(
         "//session/detection:testdata",
         "//session/domain:go_sources",
         "//session/domain/backlogdto:go_sources",
+        "//session/instance:go_sources",
         "//session/jules:go_sources",
         "//session/prpoller:pr_status_poller.go",
         "//session/testdata:all",
