@@ -7,6 +7,8 @@ import (
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
+func init() { instance.InstallHermeticHooksForTest() }
+
 func newHiddenInstance(t *testing.T, title string, tags ...string) *instance.Instance {
 	t.Helper()
 	inst, err := instance.NewInstance(instance.InstanceOptions{

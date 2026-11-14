@@ -11,7 +11,7 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/push"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // RogueNotifier is a new push.Notifier no allowlist entry covers.
@@ -38,6 +38,6 @@ func WriteHistoryDirectly(store *notifications.NotificationHistoryStore) {
 }
 
 // PeekHidden reads the raw field instead of going through the gate.
-func PeekHidden(inst *session.Instance) bool {
+func PeekHidden(inst *instance.Instance) bool {
 	return inst.Hidden
 }

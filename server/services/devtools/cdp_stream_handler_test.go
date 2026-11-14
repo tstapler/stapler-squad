@@ -18,7 +18,9 @@ func (f *fakeInstanceFinder) FindInstance(_ string) *instance.Instance {
 	return f.inst
 }
 
-// newTestInstance creates a minimal *session.Instance using the session package.
+func init() { instance.InstallHermeticHooksForTest() }
+
+// newTestInstance creates a minimal *instance.Instance (hermetic port hooks; no session package).
 // It does NOT start tmux or any background processes; it only initialises
 // the in-memory managers (noop when deps are absent).
 func newTestInstance(t *testing.T) *instance.Instance {
