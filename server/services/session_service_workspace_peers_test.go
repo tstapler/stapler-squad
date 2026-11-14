@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -34,7 +35,7 @@ func addTestPeer(t *testing.T, storage *session.Storage, repoPath string) {
 // is opt-in via the workspacePeersNudgeFlagName feature flag.
 func TestSessionServiceWorkspacePeersBlockFor_should_IncludePeerNudge_When_FlagEnabledAndPeerExists(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(WorkspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
@@ -72,7 +73,7 @@ func TestSessionServiceWorkspacePeersBlockFor_should_OmitPeerNudge_When_FlagDisa
 
 func TestSessionServiceWorkspacePeersBlockFor_should_ReturnEmpty_When_NoPeersExist(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(WorkspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)

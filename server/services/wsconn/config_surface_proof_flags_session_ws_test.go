@@ -10,7 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/protocol"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -18,9 +18,9 @@ import (
 func TestConfigSurfaceProof_TerminalResyncFlags_ChangeResyncOptions(t *testing.T) {
 	set := bkfFlagWriter(t)
 	for name, field := range map[string]func(ResyncOptions) bool{
-		services.TerminalResyncSkipStaleDimensionSlowpathFlagName: func(o ResyncOptions) bool { return o.SkipStaleDimensionSlowPath },
-		services.TerminalResyncExecGateFastLaneFlagName:           func(o ResyncOptions) bool { return o.UseFastLane },
-		services.TerminalResyncCorrelationIDFlagName:              func(o ResyncOptions) bool { return o.EchoResyncID },
+		featureflags.TerminalResyncSkipStaleDimensionSlowpathFlagName: func(o ResyncOptions) bool { return o.SkipStaleDimensionSlowPath },
+		featureflags.TerminalResyncExecGateFastLaneFlagName:           func(o ResyncOptions) bool { return o.UseFastLane },
+		featureflags.TerminalResyncCorrelationIDFlagName:              func(o ResyncOptions) bool { return o.EchoResyncID },
 	} {
 		t.Run(name, func(t *testing.T) {
 			svctest.AssertConfigChangesBehavior(t, func(setting any) any {
@@ -36,7 +36,7 @@ func TestConfigSurfaceProof_TerminalResyncCompression_ChangesEnvelopeFlag(t *tes
 	largeContent := bytes.Repeat([]byte("resync-payload-filler-"), 100)
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(services.TerminalResyncCompressionFlagName, setting.(bool))
+		set(featureflags.TerminalResyncCompressionFlagName, setting.(bool))
 		stream, clientConn, cleanup := createTestWebSocketPair(t)
 		defer cleanup()
 		target := &fakePanePTY{captureContent: string(largeContent), cols: 80, rows: 24}

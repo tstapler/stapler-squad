@@ -11,7 +11,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 
 /** Pre-load constants: the value before the first GetFeatureFlags returns and no persisted value exists. */
 export const REQUEST_COALESCING_PRELOAD = true;
-/** Matches `defaultValue` in `knownFeatureFlags`; Story 4.1.6 flips both together. */
+/** Matches `Default` of its Spec in server/services/feature_flag_specs.go; Story 4.1.6 flips both together. */
 export const WINDOW_KEEP_ALIVE_DEFAULT = false;
 
 const PERSIST_PREFIX = "ssq:flag:";
@@ -21,7 +21,7 @@ const KEEP_ALIVE_FLAG = "window_keep_alive";
 export const GHOSTTY_RENDERER_FLAG = "ghostty_renderer";
 /** Phone input layer kill switch; pre-loaded because the renderer choice needs it synchronously. */
 export const MOBILE_INPUT_LAYER_FLAG = "mobile_input_layer";
-/** Must equal `defaultValue` of `mobile_input_layer` in server/services/feature_flag_service.go (a test asserts it). */
+/** Must equal `Default` of `mobile_input_layer` in server/services/feature_flag_specs.go (a test asserts it). */
 export const MOBILE_INPUT_LAYER_DEFAULT = true;
 /**
  * Per-origin local override written by `?mobile_input=0|1`. It lives under its own key because `persistFlags`

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -18,7 +19,7 @@ const terminalWriteLeaseFlagName = "terminal_write_lease"
 // with only the fallback log record when the audit sink is down, never refused
 // with Internal, so a sink outage cannot block reversing a lease regression.
 // The on flip is a tightening flip (queued line).
-var terminalWriteLeaseAuditPolicy = FlagAuditPolicy{
+var terminalWriteLeaseAuditPolicy = featureflags.FlagAuditPolicy{
 	Loosening:   func(enabled bool) bool { return !enabled },
 	EscapeHatch: true,
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -194,7 +195,7 @@ func TestReadOnlyAttach_ShouldInvokeNoResizeClosure_WhenControlModeShellPTYOrHub
 // T-RO-41: scroll forwarding types PageUp into the pane, so a read-only attach never reaches it.
 func TestReadOnlyAttach_ShouldNotInvokeForwardScrollAndShouldTakeTheTmuxNativeScrollbackPath_WhenAHiddenSessionStreamRequestsAppScroll(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalAppScrollForwardingClaudeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalAppScrollForwardingClaudeFlagName, true))
 
 	fallbackCalled := false
 	// A nil instance panics as soon as the gate or ForwardScroll is reached, which is

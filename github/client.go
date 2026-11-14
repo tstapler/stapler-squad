@@ -45,7 +45,7 @@ const ghAuthTTL = 5 * time.Minute
 
 // githubGraphQLMigrationFlagName gates GetPRInfoCtx's dispatch to
 // GetPRInfoGraphQL below. server/services/feature_flag_service.go's
-// knownFeatureFlags registers this same literal under its own
+// the flag Specs registers this same literal under its own
 // githubGraphQLMigrationFlagName constant — github cannot import
 // server/services (that would be a cycle; server/services already imports
 // github), so the name is duplicated here rather than shared, mirroring

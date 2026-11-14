@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -49,7 +50,7 @@ func newAuditEnv(t *testing.T) *auditEnv {
 		WithAuditAfter(func(time.Duration) <-chan time.Time { return e.timeout }),
 		WithAuditDegradedCounter(func(m string) { e.mu.Lock(); e.degraded[m]++; e.mu.Unlock() }))
 	e.svc = NewFeatureFlagService()
-	e.svc.SetAudit(e.sink, map[string]FlagAuditPolicy{
+	e.svc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{
 		flagTightening: {},
 		flagLoosening:  {Loosening: func(enabled bool) bool { return !enabled }},
 		flagHatch:      {Loosening: func(enabled bool) bool { return !enabled }, EscapeHatch: true},

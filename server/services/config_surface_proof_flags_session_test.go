@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
@@ -29,7 +30,7 @@ func TestConfigSurfaceProof_HiddenSessionReadonlyGuards_ChangesWriteToHiddenSess
 
 func TestConfigSurfaceProof_HiddenSessionReply_ChangesReplyOutcome(t *testing.T) {
 	e := newReplyEnv(t)
-	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]FlagAuditPolicy{hiddenSessionReplyFlagName: replyFlagAuditPolicy})
+	e.fix.svc.featureFlagSvc.SetAudit(e.sink, map[string]featureflags.FlagAuditPolicy{hiddenSessionReplyFlagName: replyFlagAuditPolicy})
 	e.fix.svc.wireReplyFlag()
 	replies := 0
 

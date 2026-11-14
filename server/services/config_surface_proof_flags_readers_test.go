@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/gitwt"
@@ -99,7 +100,7 @@ func TestConfigSurfaceProof_WorkspacePeersNudge_ChangesPromptBlock(t *testing.T)
 	addTestPeer(t, storage, repoPath)
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
-		set(WorkspacePeersNudgeFlagName, setting.(bool))
+		set(featureflags.WorkspacePeersNudgeFlagName, setting.(bool))
 		return WorkspacePeersBlockFor(t.Context(), storage, repoPath) != ""
 	}, false, true)
 }

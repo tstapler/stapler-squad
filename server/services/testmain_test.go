@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -35,5 +36,5 @@ import (
 // own per-PID test isolation and fails session creation with an unrelated
 // "Session.program" validator error.
 func TestMain(m *testing.M) {
-	os.Exit(svctest.Main(m, func() { lookupIPAddr = svctest.HermeticLookupIPAddr }))
+	os.Exit(svctest.Main(m, func() { lookupIPAddr = svctest.HermeticLookupIPAddr; featureflags.SetCurrent(FlagRegistry()) }))
 }

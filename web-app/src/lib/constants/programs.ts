@@ -8,7 +8,7 @@ export interface ProgramOption {
   cliFlags?: string;
 }
 
-// pi-support's flag name (mirrors config.FeaturePiSupport / feature_flag_service.go's
+// pi-support's flag name (mirrors config.FeaturePiSupport / feature_flag_specs.go's
 // piSupportFlagName — kept as a plain string constant here since the frontend has no
 // shared import path to those Go constants). Single source of truth for the frontend;
 // import this everywhere instead of redeclaring the literal.

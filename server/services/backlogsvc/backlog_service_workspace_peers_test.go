@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
@@ -20,7 +20,7 @@ import (
 // to build inst.Prompt.
 func TestInitialPromptFor_should_IncludeWorkspacePeersNudge_When_FlagEnabledAndPeerExists(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.WorkspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
@@ -94,7 +94,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_FlagDisabledByDefa
 
 func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_NoPeersExist(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.WorkspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName, true))
 
 	repoPath := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoPath)
@@ -117,7 +117,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_NoPeersExist(t *te
 
 func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_RepoPathIsEmpty(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.WorkspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName, true))
 
 	storage := svctest.CreateTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil, nil, nil)
@@ -140,7 +140,7 @@ func TestInitialPromptFor_should_OmitWorkspacePeersNudge_When_RepoPathIsEmpty(t 
 // as "peers" (AC1).
 func TestWorkspacePeersBlockFor_should_ExcludeSessionsOnDifferentRepos(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.WorkspacePeersNudgeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.WorkspacePeersNudgeFlagName, true))
 
 	repoA := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoA)

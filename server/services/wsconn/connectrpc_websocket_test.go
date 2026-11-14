@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -2225,7 +2226,7 @@ func (f *fakePanePTY) GetPaneCursorPosition() (int, int, error) {
 // all three integration points at once.
 func TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_RequestCarriesResyncId(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalResyncCorrelationIDFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName, true))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
@@ -2247,7 +2248,7 @@ func TestStreamViaTmuxCapturePane_should_EchoResyncIdOnTerminalOutput_When_Reque
 // must produce a TerminalOutput with an empty ResyncId, not a generated one.
 func TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalResyncCorrelationIDFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName, true))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{}
@@ -2267,7 +2268,7 @@ func TestHandleCurrentPaneRequest_should_LeaveResyncIdEmpty_When_RequestOmitsIt(
 // resync_id must still get back an empty ResyncId, matching pre-project behavior exactly.
 func TestHandleCurrentPaneRequest_should_NotEchoResyncId_When_CorrelationIdFlagIsOff(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalResyncCorrelationIDFlagName, false))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName, false))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
@@ -2289,7 +2290,7 @@ func TestHandleCurrentPaneRequest_should_NotEchoResyncId_When_CorrelationIdFlagI
 // place that specific gap is observable, so it must be logged here.
 func TestHandleCurrentPaneRequest_should_LogDebugWhenResyncIdNotEchoed_When_CorrelationIdFlagIsOff(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalResyncCorrelationIDFlagName, false))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName, false))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{ResyncId: "abc-123"}
@@ -2926,7 +2927,7 @@ func TestAllSnapshotSendsUseCursorSync(t *testing.T) {
 // or merge the individual responses.
 func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedResponses_When_BatchingFlagOn(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalResyncCorrelationIDFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName, true))
 
 	target := &fakePanePTY{captureContent: "hello", cols: 80, rows: 24}
 	batch := &sessionv1.BatchedCurrentPaneRequest{
@@ -2963,7 +2964,7 @@ func TestHandleBatchedCurrentPaneRequest_should_DispatchNIndividuallyTaggedRespo
 // or misattribute another sibling's resync_id.
 func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_When_ThreeCoalescedRequestsHaveDistinctResyncIds(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalResyncCorrelationIDFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName, true))
 
 	batch := &sessionv1.BatchedCurrentPaneRequest{
 		Requests: []*sessionv1.CurrentPaneRequest{
@@ -3004,15 +3005,15 @@ func TestHandleBatchedCurrentPaneRequest_should_PreserveCorrelationPerRequest_Wh
 // (terminalResyncVisibilityScopeFlagName, terminalResyncStaggerFlagName,
 // terminalResyncBatchingFlagName) are pure client-side concerns with no Go production call
 // site to share the constant with, but are still named for consistency and so this list and
-// knownFeatureFlags can't drift on the string value.
+// the flag registry can't drift on the string value.
 var allTerminalResyncFlagNames = []string{
-	services.TerminalResyncVisibilityScopeFlagName,
-	services.TerminalResyncCorrelationIDFlagName,
-	services.TerminalResyncSkipStaleDimensionSlowpathFlagName,
-	services.TerminalResyncExecGateFastLaneFlagName,
-	services.TerminalResyncStaggerFlagName,
-	services.TerminalResyncCompressionFlagName,
-	services.TerminalResyncBatchingFlagName,
+	featureflags.TerminalResyncVisibilityScopeFlagName,
+	featureflags.TerminalResyncCorrelationIDFlagName,
+	featureflags.TerminalResyncSkipStaleDimensionSlowpathFlagName,
+	featureflags.TerminalResyncExecGateFastLaneFlagName,
+	featureflags.TerminalResyncStaggerFlagName,
+	featureflags.TerminalResyncCompressionFlagName,
+	featureflags.TerminalResyncBatchingFlagName,
 }
 
 // setAllTerminalResyncFlags sets every flag in allTerminalResyncFlagNames to on, restoring
@@ -3210,14 +3211,14 @@ func TestFullResyncRoundTrip_should_ExhibitAllSevenBehaviors_When_AllSevenFlagsO
 // the exact same ResyncId/Data the pre-compression TerminalOutput had.
 func TestHandleCurrentPaneRequest_should_RoundTripCompressedTerminalOutput_When_PayloadExceedsSizeThresholdAndCompressionFlagOn(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	setOnlyResyncFlag(t, services.TerminalResyncCompressionFlagName)
+	setOnlyResyncFlag(t, featureflags.TerminalResyncCompressionFlagName)
 	// ResyncId is only echoed back when terminal:resync-correlation-id is on (see
 	// handleCurrentPaneRequest's doc comment) — enable it alongside compression so this
 	// test can assert the full TerminalOutput (ResyncId and Data) round-trips through
 	// compression, not just Data.
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalResyncCorrelationIDFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName, true))
 	t.Cleanup(func() {
-		_ = config.LoadConfig().SetFeatureFlag(services.TerminalResyncCorrelationIDFlagName, false)
+		_ = config.LoadConfig().SetFeatureFlag(featureflags.TerminalResyncCorrelationIDFlagName, false)
 	})
 
 	// Large enough that the marshaled TerminalData exceeds terminalResyncCompressionThresholdBytes.
@@ -3300,7 +3301,7 @@ func TestHandleCurrentPaneRequest_should_LogSkippedSlowPathWithSessionIdAndElaps
 // checks terminal:resync-exec-gate-fast-lane in isolation.
 func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFastLaneFlagOn(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	setOnlyResyncFlag(t, services.TerminalResyncExecGateFastLaneFlagName)
+	setOnlyResyncFlag(t, featureflags.TerminalResyncExecGateFastLaneFlagName)
 
 	target := &fakePanePTY{captureContent: "fast-lane-content", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{
@@ -3350,7 +3351,7 @@ func TestHandleCurrentPaneRequest_should_OnlyRouteFastLane_When_OnlyExecGateFast
 // independent ones.
 func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_When_ResizeNeeded(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	setOnlyResyncFlag(t, services.TerminalResyncExecGateFastLaneFlagName)
+	setOnlyResyncFlag(t, featureflags.TerminalResyncExecGateFastLaneFlagName)
 
 	target := &fakePanePTY{captureContent: "fast-lane-content", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{
@@ -3388,7 +3389,7 @@ func TestHandleCurrentPaneRequest_should_ShareOneDeadlineAcrossAllFastLaneCalls_
 // checks terminal:resync-correlation-id in isolation.
 func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationIdFlagOn(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	setOnlyResyncFlag(t, services.TerminalResyncCorrelationIDFlagName)
+	setOnlyResyncFlag(t, featureflags.TerminalResyncCorrelationIDFlagName)
 
 	target := &fakePanePTY{captureContent: "correlation-content", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{
@@ -3424,7 +3425,7 @@ func TestHandleCurrentPaneRequest_should_OnlyEchoResyncId_When_OnlyCorrelationId
 // checks terminal:resync-skip-stale-dimension-slowpath in isolation.
 func TestHandleCurrentPaneRequest_should_OnlySkipSlowPath_When_OnlySkipStaleDimensionFlagOn(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	setOnlyResyncFlag(t, services.TerminalResyncSkipStaleDimensionSlowpathFlagName)
+	setOnlyResyncFlag(t, featureflags.TerminalResyncSkipStaleDimensionSlowpathFlagName)
 
 	target := &fakePanePTY{captureContent: "skip-content", cols: 80, rows: 24}
 	req := &sessionv1.CurrentPaneRequest{
@@ -3637,7 +3638,7 @@ func TestScrollbackResultForRequest_should_SkipAppScrollGate_When_FlagIsOff(t *t
 // if the flag check were deleted entirely.
 func TestScrollbackResultForRequest_should_AttemptAppScrollGate_When_FlagIsOn(t *testing.T) {
 	svctest.WithIsolatedStateDir(t)
-	require.NoError(t, config.LoadConfig().SetFeatureFlag(services.TerminalAppScrollForwardingClaudeFlagName, true))
+	require.NoError(t, config.LoadConfig().SetFeatureFlag(featureflags.TerminalAppScrollForwardingClaudeFlagName, true))
 
 	reachedGate := false
 	func() {

@@ -48,7 +48,7 @@ const PIPELINE_MODE_UNKNOWN_HINT =
   "This item references a pipeline mode that no longer exists or is disabled. Choosing a different mode below will replace it when you save.";
 
 // Slug of the seeded SDD pipeline mode (session.DefaultSDDPipelineModeSlug on
-// the backend) and the feature flag name (server/services/feature_flag_service.go's
+// the backend) and the feature flag name (server/services/feature_flag_specs.go's
 // sddDefaultPipelineFlagName) gating whether a brand-new item pre-selects it.
 // See project_plans/backlog-sdd-default-pipeline — this pre-selection is a
 // default, not a lock: the user can still pick any other mode before saving.

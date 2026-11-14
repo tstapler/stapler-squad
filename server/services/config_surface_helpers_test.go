@@ -15,6 +15,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 )
 
@@ -50,9 +51,9 @@ func quotaSurfaces() []surfaceID {
 }
 
 func featureFlagSurfaces() []surfaceID {
-	out := make([]surfaceID, 0, len(knownFeatureFlags))
-	for _, f := range knownFeatureFlags {
-		out = append(out, surfaceID("flag:"+f.name))
+	out := make([]surfaceID, 0, len(featureflags.Current().Specs()))
+	for _, f := range featureflags.Current().Specs() {
+		out = append(out, surfaceID("flag:"+f.Name))
 	}
 	return out
 }

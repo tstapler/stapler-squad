@@ -9,6 +9,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/services/featureflags"
 	"github.com/tstapler/stapler-squad/session/instance"
 )
 
@@ -22,7 +23,7 @@ const hiddenSessionReadonlyGuardsFlagName = "hidden_session_readonly_guards"
 // guardsFlagAuditPolicy: off loosens, so it is audited durably before it is
 // persisted; it is also the hatch for a faulty sink, so it is never refused
 // when the sink is down (fallback record only). On is a tightening flip.
-var guardsFlagAuditPolicy = FlagAuditPolicy{
+var guardsFlagAuditPolicy = featureflags.FlagAuditPolicy{
 	Loosening:   func(enabled bool) bool { return !enabled },
 	EscapeHatch: true,
 }

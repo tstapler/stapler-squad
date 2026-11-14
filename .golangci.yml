@@ -154,6 +154,15 @@ linters:
             - github.com/tstapler/stapler-squad/session/domain
             - github.com/oklog/ulid/v2
             - github.com/google/uuid
+        # server/services/featureflags is the flag-registry leaf (Spec, Registry, FeatureController): stdlib and config only.
+        isolate_featureflags:
+          list-mode: strict
+          files:
+            - "**/services/featureflags/*.go"
+            - "!**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/tstapler/stapler-squad/config
         # session/dialogpresence is a stdlib-only leaf so wakes and guidance code classify panes without session.
         isolate_dialogpresence:
           list-mode: strict

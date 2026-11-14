@@ -176,6 +176,7 @@ go_test(
         "//server/interceptors",
         "//server/middleware",
         "//server/services",
+        "//server/services/featureflags",
         "//server/services/internal/svctest",
         "//server/workflows",
         "//session",
