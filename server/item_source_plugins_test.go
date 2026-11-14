@@ -1,6 +1,8 @@
 package server
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +28,42 @@ func TestNewItemSourceRegistry_should_IncludeAllBuiltInPlugins(t *testing.T) {
 		require.True(t, ok, id)
 		require.IsType(t, typ, p, id)
 	}
+}
+
+// session/itemsources is a leaf: only the composition root imports it in
+// non-test code. Consumers (server/mcp, services) take ports by injection.
+func TestItemSourcesLeaf_should_OnlyBeImportedByCompositionRoot(t *testing.T) {
+	t.Parallel()
+	const leaf = "github.com/tstapler/stapler-squad/session/itemsources"
+	var offenders []string
+	err := filepath.WalkDir("..", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "node_modules", ".git", "gen", "web-app", ".claude", "worktrees", "itemsources":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") ||
+			filepath.ToSlash(path) == "../server/item_source_plugins.go" {
+			return nil
+		}
+		f, perr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if perr != nil {
+			return perr
+		}
+		for _, imp := range f.Imports {
+			if strings.Trim(imp.Path.Value, `"`) == leaf {
+				offenders = append(offenders, path)
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Empty(t, offenders, "only server/item_source_plugins.go may import session/itemsources")
 }
 
 // Concrete plugin constructors belong to the composition root only; everyone

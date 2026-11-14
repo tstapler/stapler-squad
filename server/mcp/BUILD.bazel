@@ -67,7 +67,6 @@ go_library(
         "//session/flow",
         "//session/git",
         "//session/instance",
-        "//session/itemsources",
         "//session/scrollback",
         "@com_connectrpc_connect//:connect",
         "@com_github_google_uuid//:uuid",

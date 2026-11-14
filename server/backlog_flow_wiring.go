@@ -15,6 +15,6 @@ func flowMCPOptions(deps *ServerDependencies) []servermcp.CoreOption {
 	if deps.BacklogService != nil {
 		registry = deps.BacklogService.Registry()
 	}
-	opts = append(opts, servermcp.WithPluginRegistry(registry))
+	opts = append(opts, servermcp.WithPluginRegistry(registry), servermcp.WithTrackerRefParser(NewTrackerRefParser()))
 	return opts
 }

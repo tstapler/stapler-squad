@@ -22,8 +22,9 @@ import (
 // coreConfig holds the optional dependencies injected through CoreOption, so
 // adding one never grows the positional parameter lists below.
 type coreConfig struct {
-	flowSvc *backlogflow.BacklogFlowService
-	plugins *session.PluginRegistry
+	flowSvc   *backlogflow.BacklogFlowService
+	plugins   *session.PluginRegistry
+	refParser TrackerRefParser
 	// extraModules register after the built-in set (see WithToolModules).
 	extraModules []ToolModule
 }
@@ -42,6 +43,12 @@ func WithFlowService(svc *backlogflow.BacklogFlowService) CoreOption {
 // resolve by ID. Without it import_linear_issue / import_jira_issue return a fetch error.
 func WithPluginRegistry(r *session.PluginRegistry) CoreOption {
 	return func(c *coreConfig) { c.plugins = r }
+}
+
+// WithTrackerRefParser supplies the issue-reference parser behind
+// import_linear_issue / import_jira_issue. Without it those tools return a fetch error.
+func WithTrackerRefParser(p TrackerRefParser) CoreOption {
+	return func(c *coreConfig) { c.refParser = p }
 }
 
 // FlowServiceFromOptions returns the flow service the options carry, or nil.

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,13 +15,26 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
-	"github.com/tstapler/stapler-squad/session/itemsources"
 )
 
 // IssueFetcher is the optional plugin capability behind the one-off tracker
 // imports: fetch a single issue by identifier. Linear and JIRA plugins implement it.
 type IssueFetcher interface {
 	FetchIssue(ctx context.Context, config session.PluginConfig, id string) (session.ExternalItem, error)
+}
+
+// JiraIssueRef is a parsed JIRA issue reference; BaseURL is empty for a bare key.
+type JiraIssueRef struct {
+	BaseURL string
+	Key     string
+}
+
+// TrackerRefParser turns a user-supplied URL or key into the identifier the
+// tracker plugin fetches. It is injected at the composition root (WithTrackerRefParser)
+// so this package never imports the plugin leaf.
+type TrackerRefParser interface {
+	ParseLinearRef(ref string) (identifier string, err error)
+	ParseJiraRef(ref string) (JiraIssueRef, error)
 }
 
 // fetchTrackerIssue resolves pluginID from the injected registry and fetches one issue.
@@ -95,7 +109,10 @@ func (h *backlogHandlers) importLinearIssue(ctx context.Context, req mcpgo.CallT
 	if strings.TrimSpace(ref) == "" {
 		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
 	}
-	identifier, err := itemsources.ParseLinearIssueRef(ref)
+	if h.refParser == nil {
+		return trackerFetchError("Linear", errors.New("tracker ref parser is not wired")), nil
+	}
+	identifier, err := h.refParser.ParseLinearRef(ref)
 	if err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), "Pass a Linear URL like https://linear.app/org/issue/ENG-123 or an identifier like ENG-123."), nil
 	}
@@ -123,7 +140,10 @@ func (h *backlogHandlers) importJiraIssue(ctx context.Context, req mcpgo.CallToo
 	if strings.TrimSpace(ref) == "" {
 		return errResult(ErrInvalidArgument, "issue_url is required", ""), nil
 	}
-	jref, err := itemsources.ParseJiraIssueRef(ref)
+	if h.refParser == nil {
+		return trackerFetchError("JIRA", errors.New("tracker ref parser is not wired")), nil
+	}
+	jref, err := h.refParser.ParseJiraRef(ref)
 	if err != nil {
 		return errResult(ErrInvalidArgument, err.Error(), "Pass a JIRA URL like https://org.atlassian.net/browse/ENG-123, or a bare key plus base_url."), nil
 	}
@@ -135,7 +155,7 @@ func (h *backlogHandlers) importJiraIssue(ctx context.Context, req mcpgo.CallToo
 	}
 	fetch := h.fetchJiraIssue
 	if fetch == nil {
-		fetch = func(ctx context.Context, r itemsources.JiraIssueRef) (session.ExternalItem, error) {
+		fetch = func(ctx context.Context, r JiraIssueRef) (session.ExternalItem, error) {
 			raw, _ := json.Marshal(map[string]string{"base_url": r.BaseURL})
 			return h.fetchTrackerIssue(ctx, "jira", session.PluginConfig{Raw: string(raw)}, r.Key)
 		}

@@ -158,7 +158,7 @@ func newBacklogModules(d coreDeps, liveFinder liveInstanceFinder) []ToolModule {
 	if d.storage == nil || (d.backlogEnabled != nil && !d.backlogEnabled()) {
 		return nil
 	}
-	h := &backlogHandlers{storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins}
+	h := &backlogHandlers{storage: d.storage, store: d.store, eventBus: d.eventBus, reviewStopper: d.svc, reviewTrigger: d.svc, enabledCheck: d.backlogEnabled, autoReopener: d.autoReopener, backlogSvc: d.backlogSvc, liveCheck: d.liveCheck, plugins: d.cfg.plugins, refParser: d.cfg.refParser}
 	return []ToolModule{
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerBacklogTools(s, h) }),
 		toolModuleFunc(func(s *mcpserver.MCPServer) { registerStuckReportTools(s, h) }),
