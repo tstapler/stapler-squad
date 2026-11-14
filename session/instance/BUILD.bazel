@@ -229,7 +229,7 @@ go_test(
         "worktree_enricher_internal_test.go",
         "worktree_type_mismatch_metrics_test.go",
     ],
-    data = ["//session/instance/testdata:all"],
+    data = glob(["*.go"]) + ["//session/instance/testdata:all"],
     embed = [":instance"],
     deps = [
         "//config",
