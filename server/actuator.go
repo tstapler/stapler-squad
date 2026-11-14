@@ -31,18 +31,34 @@ import (
 // tmux.ForkPressureSnapshot) — there is one source of truth per metric, this
 // just gives it a second, always-on export shape for curl/uptime checks.
 func (s *Server) registerActuatorRoutes() {
-	s.mux.HandleFunc("/actuator/health", handleActuatorHealth)
-	s.mux.HandleFunc("/actuator/metrics", handleActuatorMetrics)
-	s.mux.HandleFunc("/actuator/db", handleActuatorDB)
-	s.mux.HandleFunc("/actuator/git-backend", handleActuatorGitBackend)
-	s.mux.HandleFunc("/actuator/workflow-engine", s.handleActuatorWorkflowEngine)
-	s.mux.HandleFunc("/actuator/nudge-outcomes", handleActuatorNudgeOutcomes)
-	s.mux.HandleFunc("/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner))
-	s.mux.HandleFunc("/actuator/inbox-pr-watch", handleActuatorInboxPRWatch)
-	s.mux.HandleFunc("/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load))
-	s.mux.HandleFunc("/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load))
-	s.mux.HandleFunc("/actuator/terminal-input", handleActuatorTerminalInput(services.TerminalInputReport))
-	s.mux.HandleFunc("/actuator/terminal-latency", handleActuatorTerminalLatency(termlat.Default))
+	for _, e := range s.actuatorEndpoints() {
+		s.mux.HandleFunc(e.Path, e.Handler)
+	}
+}
+
+// actuatorEndpoint is one row of the actuator route table.
+type actuatorEndpoint struct {
+	Path    string
+	Handler http.HandlerFunc
+}
+
+// actuatorEndpoints is the single list of actuator routes: a new endpoint is a
+// handler file plus one row here. Row order is registration order.
+func (s *Server) actuatorEndpoints() []actuatorEndpoint {
+	return []actuatorEndpoint{
+		{"/actuator/health", handleActuatorHealth},
+		{"/actuator/metrics", handleActuatorMetrics},
+		{"/actuator/db", handleActuatorDB},
+		{"/actuator/git-backend", handleActuatorGitBackend},
+		{"/actuator/workflow-engine", s.handleActuatorWorkflowEngine},
+		{"/actuator/nudge-outcomes", handleActuatorNudgeOutcomes},
+		{"/actuator/unfinished-scanner", handleActuatorUnfinishedScanner(s.unfinishedScanner)},
+		{"/actuator/inbox-pr-watch", handleActuatorInboxPRWatch},
+		{"/actuator/ws-unary", handleActuatorWsUnary(s.wsUnaryBridge.Load)},
+		{"/actuator/terminal-mux", handleActuatorTerminalMux(s.terminalMuxBridge.Load)},
+		{"/actuator/terminal-input", handleActuatorTerminalInput(services.TerminalInputReport)},
+		{"/actuator/terminal-latency", handleActuatorTerminalLatency(termlat.Default)},
+	}
 }
 
 // handleActuatorTerminalInput serves the bounded per-session terminal input tally (frames,
