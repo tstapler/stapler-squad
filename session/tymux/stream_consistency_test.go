@@ -3,6 +3,7 @@ package tymux
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -450,10 +451,14 @@ func TestStreamConsistency_RecentCaptureIsReusedForDropRepairUntilAGap(t *testin
 }
 
 // Randomized fault schedules, reproducible by seed. Every schedule must end identical.
+// The resync retry budget is lifted: injected capture failures accumulate across gaps while the
+// resync goroutine lags, and flooding evicts the replay tail, so a schedule can legitimately burn
+// the default 8 attempts; giving up is covered by the GivesUpAfterMaxAttempts test.
 func TestStreamConsistency_RandomFaultSchedules(t *testing.T) {
 	for seed := int64(100); seed < 130; seed++ {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			h := newHarness(t, true)
+			h.s.resync.maxAttempts = math.MaxInt
 			rng := rand.New(rand.NewSource(seed))
 			n := 0
 			next := func(k int) [][]byte { n += k; return frames(rng, k, n) }
