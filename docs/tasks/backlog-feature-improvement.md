@@ -2586,6 +2586,24 @@ durable surface — **plus** a new sub-shape: two writers of the same logical va
 forms, compared by literal equality. `4fa8c5b8b` fixed the "row is gone" instance without a test that the stamp
 equals the real branch; `TestSpawnSessionFromItem_should_StampRealGitBranchOnItemSession` now pins that.
 
+## Update — 2026-11-13: `report_blocked` escalated to review with no notification (R6)
+
+**Root cause:** `reportBlocked` (`server/mcp/tools_backlog.go`) moved the item to `review` at `blockedCycleThreshold` and
+wrote only a note line and a log line, so no human learned a decision was needed (item `1e3771db` sat in review from
+2026-11-05). `notifyWaitCapReached` and triage-complete were the only sibling paths that published.
+
+**Fix:** `notifyBlockedEscalation` publishes one `INPUT_REQUIRED`/`HIGH` notification (proto enum constants, not ints) when
+the call actually transitions into review or first crosses the threshold while already in review; repeat blocks on an item
+already waiting in review stay silent. There is no dedupe store, so "once per escalation" is enforced at the call site.
+
+**Recurring shape:** "swallowed status-transition" (2026-07-27, 2026-08-03, 2026-10-09). Earlier fixes patched the one
+call site each time because nothing forced a caller to decide how a human learns of an entry into review. Now
+`TransitionCallerSpec.Surface` is mandatory for every agent/system caller with an edge into review, and a source-level test
+requires every `SurfaceNotifies` site to call a notifier. Other callers are declared `SurfaceReviewFlow` (the review
+pipeline picks the item up); that is a judgement, not a per-caller verification of their notification behaviour.
+||||||| 8d903f6ea
+
+
 ## 2026-11-13 update 2: review session spawned in the shared checkout (BUG R1)
 
 **Root cause:** `SpawnReviewSession` created the reviewer with `CreateDirectorySession(ctx, item.RepoPath, ...)` and the prompt never named the work branch, so a reviewer that ran `git diff master...HEAD` judged whatever branch the shared checkout had checked out (item `853746a0`: `sdd/test-effectiveness-critique`, verdict rows 4, 6-8 FAIL). The gate computed the diff against the right worktree and inlined it, but a tool-using reviewer re-derived its own and got the wrong one. `diff_token_count` is 0 on every row because no production code writes it (`DiffTokenCount` is only copied through), not because the diff was empty.

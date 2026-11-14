@@ -1763,9 +1763,31 @@ func (h *backlogHandlers) reportBlocked(ctx context.Context, req mcpgo.CallToolR
 	log.InfoLog().Printf("[mcp:report_blocked] session=%s item=%s transitioned to %s rationale=%q escalated=%v", callerUUID, itemID, targetStatus, rationale, escalated)
 
 	if escalated {
+		// An item already in review was announced when it first crossed the
+		// threshold; only a real transition or that first crossing notifies.
+		if targetStatus != currentStatus || priorBlockedCycles+1 == blockedCycleThreshold {
+			h.notifyBlockedEscalation(callerUUID, item, rationale, priorBlockedCycles+1)
+		}
 		return mcpgo.NewToolResultText(fmt.Sprintf("Item %s has been blocked %d times — escalated to review for a human/reviewer to look at instead of returning to ready.", itemID, priorBlockedCycles+1)), nil
 	}
 	return mcpgo.NewToolResultText(fmt.Sprintf("Item %s reported blocked and returned to ready status.", itemID)), nil
+}
+
+// notifyBlockedEscalation tells the operator a decision is needed: the item
+// was parked in review because it hit blockedCycleThreshold, and nothing else
+// surfaces that. INPUT_REQUIRED/HIGH because a human must pick the way forward.
+func (h *backlogHandlers) notifyBlockedEscalation(sessionUUID string, item *backlogdto.BacklogItemData, rationale string, cycles int) {
+	if h.eventBus == nil {
+		return
+	}
+	h.eventBus.Publish(events.NewNotificationEvent(
+		sessionUUID, "", uuid.New().String(),
+		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
+		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+		"Backlog item needs a decision",
+		fmt.Sprintf("%q was blocked %d times and escalated to review. Latest blocker: %s", item.Title, cycles, rationale),
+		map[string]string{"item_id": item.ID, "reason": "blocked_cycle_escalation"},
+	))
 }
 
 // rejectedNoteMarker prefixes the note request_review appends to
