@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -53,13 +54,69 @@ type SessionSpawnOptions struct {
 	AllowedTools string
 }
 
+// reviewTarget is where a review session runs and the branch scoping it must be told.
+type reviewTarget struct {
+	Dir      string
+	Preamble string
+}
+
+// resolveReviewTarget points a review at the work session's branch rather than
+// whatever the shared checkout at repoPath has checked out. It prefers the work
+// worktree as the working directory; when that is gone it falls back to repoPath
+// but tells the reviewer to diff the named branch explicitly. With no recorded
+// branch (directory-mode work) it returns repoPath and an empty preamble.
+func resolveReviewTarget(repoPath string, wt domain.GitWorktreeData) reviewTarget {
+	if wt.BranchName == "" {
+		return reviewTarget{Dir: repoPath}
+	}
+	base := wt.BaseCommitSHA
+	if base == "" {
+		base = "the default branch"
+	}
+	if info, err := os.Stat(wt.WorktreePath); wt.WorktreePath != "" && err == nil && info.IsDir() {
+		return reviewTarget{
+			Dir: wt.WorktreePath,
+			Preamble: fmt.Sprintf("## Work Branch (authoritative)\nThe change under review is on branch `%s`, checked out in your working directory (%s). "+
+				"Review that branch only: `git diff %s..%s`. Do not review any other branch.\n\n", wt.BranchName, wt.WorktreePath, base, wt.BranchName),
+		}
+	}
+	return reviewTarget{
+		Dir: repoPath,
+		Preamble: fmt.Sprintf("## Work Branch (authoritative)\nThe change under review is on branch `%s`. Your working directory is the shared repository checkout "+
+			"and its HEAD is NOT that branch: never use HEAD or `<default>...HEAD`. Use `git diff %s..%s` (and `git show %s:<path>`) to read it.\n\n",
+			wt.BranchName, base, wt.BranchName, wt.BranchName),
+	}
+}
+
+// reviewTargetFor looks up the reviewed work session's worktree. Lookup failure
+// degrades to the repo path with no preamble, as before.
+func (s *SessionService) reviewTargetFor(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string) reviewTarget {
+	if s.concStorage == nil || itemSessionID == "" {
+		return reviewTarget{Dir: item.RepoPath}
+	}
+	is, err := s.concStorage.GetItemSession(ctx, itemSessionID)
+	if err != nil {
+		log.Warn("[SpawnReviewSession] item session lookup failed; reviewing in repo path", "item", item.ID, "err", err)
+		return reviewTarget{Dir: item.RepoPath}
+	}
+	wt, err := s.concStorage.GetWorktreeDataBySessionUUID(ctx, is.SessionUUID)
+	if err != nil {
+		log.Warn("[SpawnReviewSession] worktree lookup failed; reviewing in repo path", "item", item.ID, "err", err)
+		return reviewTarget{Dir: item.RepoPath}
+	}
+	return resolveReviewTarget(item.RepoPath, wt)
+}
+
 // SpawnReviewSession satisfies the session.ReviewGateSpawner interface so that
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
-// a work session exits. The session is tagged "backlog:review" and runs one-shot.
+// a work session exits. The session is tagged "backlog:review", runs one-shot, and
+// runs in the work session's worktree (itemSessionID is the work ItemSession), not
+// the shared checkout, whose HEAD is arbitrary.
 func (s *SessionService) SpawnReviewSession(ctx context.Context, item *backlogdto.BacklogItemData, itemSessionID string, prompt string) (*instance.Instance, error) {
-	inst, err := s.CreateDirectorySession(ctx, item.RepoPath, SessionSpawnOptions{
+	target := s.reviewTargetFor(ctx, item, itemSessionID)
+	inst, err := s.CreateDirectorySession(ctx, target.Dir, SessionSpawnOptions{
 		Title:   uniqueDispatchTitle("review", item.ID),
-		Prompt:  prompt,
+		Prompt:  target.Preamble + prompt,
 		Tags:    []string{"backlog:review"},
 		OneShot: true,
 		Hidden:  true,
