@@ -12,17 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // addArchivedInstance persists a session directly into fixture storage with the given
 // ArchivedAt timestamp, applying any additional field mutations via opts.
-func addArchivedInstance(t *testing.T, fix *forkTestFixture, title string, archivedAt time.Time, opts ...func(*session.Instance)) {
+func addArchivedInstance(t *testing.T, fix *forkTestFixture, title string, archivedAt time.Time, opts ...func(*instance.Instance)) {
 	t.Helper()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
 		Status:    domain.Stopped,
@@ -54,9 +54,9 @@ func hasStoredTitle(t *testing.T, fix *forkTestFixture, title string) bool {
 // it with the live review-queue poller (reloading first, mirroring addPausedSession in
 // session_service_test.go), so DeleteSession's live-instance branch runs and actually
 // calls Destroy() -> CleanupWorktree() instead of just killing tmux by name.
-func addArchivedInstanceLive(t *testing.T, fix *forkTestFixture, title string, archivedAt time.Time, opts ...func(*session.Instance)) {
+func addArchivedInstanceLive(t *testing.T, fix *forkTestFixture, title string, archivedAt time.Time, opts ...func(*instance.Instance)) {
 	t.Helper()
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     title,
 		Path:      "/tmp/test",
 		Status:    domain.Stopped,
@@ -114,7 +114,7 @@ func TestSessionRetentionSweeper_SkipsOpenPR(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
-	addArchivedInstance(t, fix, "open-pr-archived", time.Now().AddDate(0, 0, -20), func(inst *session.Instance) {
+	addArchivedInstance(t, fix, "open-pr-archived", time.Now().AddDate(0, 0, -20), func(inst *instance.Instance) {
 		inst.GitHubPRNumber = 42
 		inst.GitHubPRStatusTerminal = false
 	})
@@ -137,7 +137,7 @@ func TestSessionRetentionSweeper_DeletesTerminalPRAfterRestart(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	defer fix.cleanup()
 
-	addArchivedInstance(t, fix, "terminal-pr-archived", time.Now().AddDate(0, 0, -20), func(inst *session.Instance) {
+	addArchivedInstance(t, fix, "terminal-pr-archived", time.Now().AddDate(0, 0, -20), func(inst *instance.Instance) {
 		inst.GitHubPRNumber = 42
 		inst.GitHubPRStatusTerminal = true
 	})
@@ -162,7 +162,7 @@ func TestSessionRetentionSweeper_SkipsDirtyWorktree(t *testing.T) {
 	// Leave an uncommitted change so IsDirty() reports true.
 	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "dirty.txt"), []byte("uncommitted"), 0o644))
 
-	addArchivedInstance(t, fix, "dirty-worktree-archived", time.Now().AddDate(0, 0, -20), func(inst *session.Instance) {
+	addArchivedInstance(t, fix, "dirty-worktree-archived", time.Now().AddDate(0, 0, -20), func(inst *instance.Instance) {
 		wt := git.NewGitWorktreeFromStorage(repoDir, repoDir, "dirty-worktree-archived", "test-branch", "0000000000000000000000000000000000000000")
 		inst.SetGitWorktree(wt)
 	})
@@ -185,7 +185,7 @@ func TestSessionRetentionSweeper_DeletesCleanWorktreeSession(t *testing.T) {
 	svctest.RunGit(t, repoDir, "add", ".")
 	svctest.RunGit(t, repoDir, "commit", "-q", "-m", "initial")
 
-	addArchivedInstance(t, fix, "clean-worktree-archived", time.Now().AddDate(0, 0, -20), func(inst *session.Instance) {
+	addArchivedInstance(t, fix, "clean-worktree-archived", time.Now().AddDate(0, 0, -20), func(inst *instance.Instance) {
 		wt := git.NewGitWorktreeFromStorage(repoDir, repoDir, "clean-worktree-archived", "test-branch", "0000000000000000000000000000000000000000")
 		inst.SetGitWorktree(wt)
 	})
@@ -228,10 +228,10 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 	_, err = fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: oldUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	addArchivedInstance(t, fix, "old-round", time.Now().AddDate(0, 0, -20), func(inst *session.Instance) {
+	addArchivedInstance(t, fix, "old-round", time.Now().AddDate(0, 0, -20), func(inst *instance.Instance) {
 		inst.UUID = oldUUID
 		wt := git.NewGitWorktreeFromStorage(repoDir, repoDir, "old-round", "test-branch", sha)
 		inst.SetGitWorktree(wt)
@@ -243,10 +243,10 @@ func TestSessionRetentionSweeper_SkipsWorktreeSharedWithSiblingRound(t *testing.
 	_, err = fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: newUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
-	newInst := &session.Instance{
+	newInst := &instance.Instance{
 		Title:     "new-round",
 		UUID:      newUUID,
 		Path:      repoDir,
@@ -312,14 +312,14 @@ func TestSessionRetentionSweeper_ConvergesWhenAllSiblingsBecomeEligible(t *testi
 		_, err := fix.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: roundUUIDs[i],
-			SessionRole: session.SessionRoleWork,
+			SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 
 		// Stagger ArchivedAt so they're independently, not just coincidentally, past
 		// retention -- all well past the 14-day default.
 		archivedAt := time.Now().AddDate(0, 0, -(20 + i))
-		addArchivedInstanceLive(t, fix, title, archivedAt, func(inst *session.Instance) {
+		addArchivedInstanceLive(t, fix, title, archivedAt, func(inst *instance.Instance) {
 			inst.UUID = roundUUIDs[i]
 			wt := git.NewGitWorktreeFromStorage(mainRepoDir, worktreeDir, title, "shared-branch", headSHA)
 			inst.SetGitWorktree(wt)

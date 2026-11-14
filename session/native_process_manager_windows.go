@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // NativeProcessManager is not supported on Windows.
@@ -13,17 +15,17 @@ import (
 type NativeProcessManager struct{}
 
 // NewNativeProcessManager returns an unsupported-platform NativeProcessManager on Windows.
-func NewNativeProcessManager(_ ProcessManagerOptions) *NativeProcessManager {
+func NewNativeProcessManager(_ instance.ProcessManagerOptions) *NativeProcessManager {
 	return &NativeProcessManager{}
 }
 
-var _ ProcessManager = (*NativeProcessManager)(nil)
+var _ instance.ProcessManager = (*NativeProcessManager)(nil)
 
 func (n *NativeProcessManager) Start(_ string) error {
 	return fmt.Errorf("NativeProcessManager: not supported on Windows")
 }
 func (n *NativeProcessManager) AppendLaunchEnv(...string)         {}
-func (n *NativeProcessManager) WireLaunch(_ LaunchSpec)           {}
+func (n *NativeProcessManager) WireLaunch(_ instance.LaunchSpec)  {}
 func (n *NativeProcessManager) RestoreWithWorkDir(_ string) error { return nil }
 func (n *NativeProcessManager) Close() error                      { return nil }
 func (n *NativeProcessManager) IsAlive() bool                     { return false }

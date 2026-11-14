@@ -14,7 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // hidden_question_reply.go is the Reply path (ADR-010): one audited, rate-limited
@@ -211,7 +211,7 @@ func (s *SessionService) validateReplyRequest(m *sessionv1.ReplyToPendingQuestio
 
 // controllerActiveFor reports whether a status controller runs for inst. The
 // status value is never consulted: only that the pane is being watched.
-func (s *SessionService) controllerActiveFor(inst *session.Instance) bool {
+func (s *SessionService) controllerActiveFor(inst *instance.Instance) bool {
 	if s.replyControllerActive != nil {
 		return s.replyControllerActive(inst)
 	}

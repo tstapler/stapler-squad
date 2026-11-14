@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ─── CreateCheckpoint ─────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ func TestCreateCheckpoint_SessionNotStarted(t *testing.T) {
 	// creation via CreateCheckpoint on the instance. An unstarted instance (Status=Paused,
 	// but started=false) will return FailedPrecondition.
 	// Using a minimal instance where Started() returns false (no tmux, no Start call).
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:   "not-started-session",
 		Path:    "/tmp/test",
 		Status:  domain.Stopped,
@@ -141,7 +141,7 @@ func TestListCheckpoints_EmptyWhenNoCheckpoints(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
 
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:   "no-checkpoints-session",
 		Path:    "/tmp/test",
 		Status:  domain.Active,

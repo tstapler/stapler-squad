@@ -16,9 +16,9 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/jules"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeJulesTransitionCall records one transitionWithGuard invocation for
@@ -77,7 +77,7 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 		sessions, err := storage.ListItemSessions(ctx, item.ID)
 		require.NoError(t, err)
 		require.Len(t, sessions, 1, "reservation row must exist before the billed CreateSession call")
-		assert.Equal(t, session.SessionRoleJulesWork, sessions[0].Role)
+		assert.Equal(t, instance.SessionRoleJulesWork, sessions[0].Role)
 		assert.True(t, strings.HasPrefix(sessions[0].SessionUUID, julesPendingUUIDPrefix),
 			"reservation SessionUUID must carry the pending prefix before CreateSession returns, got %q", sessions[0].SessionUUID)
 	}
@@ -94,14 +94,14 @@ func TestJulesDispatchService_DispatchToJules_should_ReserveCreateConfirmAndTran
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
-	assert.Equal(t, session.SessionRoleJulesWork, sessions[0].Role)
+	assert.Equal(t, instance.SessionRoleJulesWork, sessions[0].Role)
 	assert.Equal(t, "jules-sessions/xyz", sessions[0].SessionUUID)
 
 	require.Equal(t, 1, guard.callCount())
 	call := guard.transitionCalls[0]
 	assert.Equal(t, item.ID, call.itemID)
 	assert.Equal(t, domain.BacklogStatusInProgress, call.to)
-	assert.Equal(t, session.TriggeredByUser, call.triggeredBy)
+	assert.Equal(t, instance.TriggeredByUser, call.triggeredBy)
 	assert.False(t, call.hasUnresolvedBlockers, "must be sourced from the real hasUnresolvedBlockers check, not a hardcoded literal")
 }
 
@@ -247,7 +247,7 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithConcurrencyCapMes
 		_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      other.ID,
 			SessionUUID: "jules-sessions/other-" + other.ID,
-			SessionRole: session.SessionRoleJulesWork,
+			SessionRole: instance.SessionRoleJulesWork,
 		})
 		require.NoError(t, err)
 	}
@@ -345,7 +345,7 @@ func TestJulesDispatchService_DispatchToJules_should_RejectWithDailyCapMessage_W
 		is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      other.ID,
 			SessionUUID: "jules-sessions/done-" + other.ID,
-			SessionRole: session.SessionRoleJulesWork,
+			SessionRole: instance.SessionRoleJulesWork,
 		})
 		require.NoError(t, err)
 		require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))

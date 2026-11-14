@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Characterization tests of today's single-PR behavior (session-multi-pr-tracking
@@ -49,7 +50,7 @@ func TestLegacyPoller_TerminalSession_MakesNoGitHubCalls(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			inst := &session.Instance{
+			inst := &instance.Instance{
 				Title:                  "legacy-terminal-" + tt.name,
 				Status:                 domain.Active,
 				GitHubOwner:            "acme",
@@ -82,7 +83,7 @@ func TestLegacyPoller_ActivePRMerged_KeepsTerminalThroughSnapshot(t *testing.T) 
 	p.refresherOn = func() bool { return false }
 	inst := newTwoPRInstance(t)
 	inst.Status = domain.Active
-	p.SetInstances([]*session.Instance{inst})
+	p.SetInstances([]*instance.Instance{inst})
 
 	p.checkAllSessions()
 
@@ -108,7 +109,7 @@ func TestRefresher_ShouldMarkRowsTerminal_WhenAllScopesOff(t *testing.T) {
 	suspended := newPRTestInstance(t)
 	suspended.UUID, suspended.Title, suspended.Status = "u-suspended", "suspended", domain.Paused
 	require.NoError(t, suspended.AttachPR(prRefN(t, 50), domain.AttachSourceCreatedFromURL, domain.PRInitial{State: domain.PRStateOpen}))
-	p.SetInstances([]*session.Instance{inst, suspended})
+	p.SetInstances([]*instance.Instance{inst, suspended})
 
 	// #11 is a non-active PR of inst (seeded open here), #40 is item-only, #50 belongs to a suspended session.
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 11), domain.PRInitial{State: domain.PRStateOpen})
@@ -153,7 +154,7 @@ func TestRefresher_ShouldBoundFetchesToTwoPerPR_WhenLegacyLoopAlsoRuns(t *testin
 	inst.Status = domain.Active
 	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceBranchDiscovery, domain.PRInitial{State: domain.PRStateOpen}))
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
-	p.SetInstances([]*session.Instance{inst})
+	p.SetInstances([]*instance.Instance{inst})
 
 	p.checkAllSessions()
 

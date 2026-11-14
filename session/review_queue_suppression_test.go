@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"reflect"
 	"strings"
@@ -176,9 +177,9 @@ func TestReaddLimit_Should_NotSuppress_When_NewEpisodeWithin2Minutes(t *testing.
 }
 
 // pollerFor builds a poller whose determiner returns result for a started "demo" session.
-func pollerFor(result DetectionResult, mutate func(*Instance)) (*ReviewQueuePoller, *Instance) {
-	inst := startedInstance("demo", func(inst *Instance, _ time.Time) { mutate(inst) })
-	poller := NewReviewQueuePoller(queue.NewReviewQueue(), newFakeStatusProvider(map[string]InstanceStatusInfo{
+func pollerFor(result DetectionResult, mutate func(*instance.Instance)) (*ReviewQueuePoller, *instance.Instance) {
+	inst := startedInstance("demo", func(inst *instance.Instance, _ time.Time) { mutate(inst) })
+	poller := NewReviewQueuePoller(queue.NewReviewQueue(), newFakeStatusProvider(map[string]instance.InstanceStatusInfo{
 		"demo": {IsControllerActive: true},
 	}), nil)
 	poller.statusDeterminer = stubDeterminer{result: result}
@@ -210,7 +211,7 @@ func logLine(msg string, kv []any) string {
 func TestSuppressionLogging_Should_EmitOneDebugLine_When_GraceSuppressesThreeConsecutivePolls(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	poller, inst := pollerFor(chainAdd(queue.PriorityLow, queue.ReasonIdle), func(i *Instance) {
+	poller, inst := pollerFor(chainAdd(queue.PriorityLow, queue.ReasonIdle), func(i *instance.Instance) {
 		i.LastMeaningfulOutput, i.LastAcknowledged = now.Add(-10*time.Second), now.Add(-time.Minute)
 	})
 	rec := &lineRecorder{}
@@ -299,7 +300,7 @@ func TestNeedsHumanReasons_Should_ListBlockingReasons_When_Queried(t *testing.T)
 
 func TestRemoveInstance_Should_ForgetExplainerState_When_SessionWasSkippedAndSuppressed(t *testing.T) {
 	t.Parallel()
-	poller, inst := pollerFor(chainAdd(queue.PriorityLow, queue.ReasonIdle), func(*Instance) {})
+	poller, inst := pollerFor(chainAdd(queue.PriorityLow, queue.ReasonIdle), func(*instance.Instance) {})
 	poller.explain.noteSkip("demo", SkipHidden)
 	poller.explain.noteDecision("demo", suppressDecision("grace"))
 	poller.AddInstance(inst)

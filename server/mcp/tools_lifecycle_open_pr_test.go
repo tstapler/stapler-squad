@@ -7,11 +7,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/envtest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func attachMCPPR(t *testing.T, inst *session.Instance, n int, state domain.PRState) {
+func attachMCPPR(t *testing.T, inst *instance.Instance, n int, state domain.PRState) {
 	t.Helper()
 	ref, err := domain.NewPRRef("github.com", "acme", "app", n)
 	require.NoError(t, err)
@@ -22,8 +22,8 @@ func attachMCPPR(t *testing.T, inst *session.Instance, n int, state domain.PRSta
 // the target session in their result.
 func TestOpenPRWarnings_ShouldNameOpenAndUnknownPRs_AndStaySilentWhenAllTerminal(t *testing.T) {
 	envtest.NewIsolatedStateDir(t)
-	newInst := func(title string) *session.Instance {
-		inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: t.TempDir()})
+	newInst := func(title string) *instance.Instance {
+		inst, err := instance.NewInstance(instance.InstanceOptions{Title: title, Path: t.TempDir()})
 		require.NoError(t, err)
 		inst.UUID = "uuid-" + title
 		return inst

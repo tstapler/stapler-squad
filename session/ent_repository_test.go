@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	ssent "github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/hook"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TestEntRepository_CreateAndGet tests basic create and get operations
@@ -916,7 +917,7 @@ func TestEntRepository_Delete_StampsConversationUUIDOnItemSessions(t *testing.T)
 	require.NoError(t, repo.Create(ctx, data))
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "stamp item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	_, err = repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "sess-uuid-1", SessionRole: SessionRoleWork})
+	_, err = repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "sess-uuid-1", SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 
 	require.NoError(t, repo.Delete(ctx, data.Title))
@@ -942,7 +943,7 @@ func TestEntRepository_DeleteBacklogItem_PreservesCostInLedger(t *testing.T) {
 	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:           item.ID,
 		SessionUUID:      "headless-review-1",
-		SessionRole:      SessionRoleReview,
+		SessionRole:      instance.SessionRoleReview,
 		ConversationUUID: "conv-ledger-1",
 		EstimatedCostUsd: 1.23,
 	})
@@ -959,7 +960,7 @@ func TestEntRepository_DeleteBacklogItem_PreservesCostInLedger(t *testing.T) {
 	require.Len(t, ledger, 1)
 	assert.Equal(t, "conv-ledger-1", ledger[0].ConversationUUID)
 	assert.Equal(t, "headless-review-1", ledger[0].SessionUUID)
-	assert.Equal(t, SessionRoleReview, ledger[0].SessionRole)
+	assert.Equal(t, instance.SessionRoleReview, ledger[0].SessionRole)
 	assert.Equal(t, item.ID, ledger[0].ItemID)
 	assert.Equal(t, "ledger item", ledger[0].ItemTitle)
 	assert.InDelta(t, 1.23, ledger[0].EstimatedCostUsd, 0.001)
@@ -982,7 +983,7 @@ func TestEntRepository_DeleteBacklogItem_RollsBackOnMidSequenceFailure(t *testin
 	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:           item.ID,
 		SessionUUID:      "headless-review-rollback",
-		SessionRole:      SessionRoleReview,
+		SessionRole:      instance.SessionRoleReview,
 		ConversationUUID: "conv-rollback-1",
 		EstimatedCostUsd: 4.56,
 	})
@@ -1028,7 +1029,7 @@ func TestEntRepository_DeletedItemSessionCost_SessionUUIDIsUnique(t *testing.T) 
 	create := func() error {
 		return repo.Client.DeletedItemSessionCost.Create().
 			SetSessionUUID("dup-session-uuid").
-			SetSessionRole(SessionRoleReview).
+			SetSessionRole(instance.SessionRoleReview).
 			SetItemID("some-item-id").
 			SetItemTitle("some item").
 			SetEstimatedCostUsd(1).
@@ -1050,7 +1051,7 @@ func TestEntRepository_UpdateItemSessionConversationUUID_RoundTrips(t *testing.T
 
 	item, err := repo.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "conv item", Status: string(domain.BacklogStatusInProgress)})
 	require.NoError(t, err)
-	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-x", SessionRole: SessionRoleTriage})
+	is, err := repo.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "headless-triage-x", SessionRole: instance.SessionRoleTriage})
 	require.NoError(t, err)
 
 	require.NoError(t, repo.UpdateItemSessionConversationUUID(ctx, is.ID, "conv-triage-1"))

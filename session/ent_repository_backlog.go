@@ -29,6 +29,7 @@ import (
 	entSession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SetItemChangePublisher wires an ItemChangePublisher into this repository so
@@ -520,7 +521,7 @@ func (r *EntRepository) GetRepoPathAndLatestCompletedWorkSessionCommits(ctx cont
 	ws, err := r.Client.ItemSession.Query().
 		Where(
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedID)),
-			itemsession.SessionRoleEQ(SessionRoleWork),
+			itemsession.SessionRoleEQ(instance.SessionRoleWork),
 			itemsession.EndedAtNotNil(),
 		).
 		Order(ent.Desc(itemsession.FieldCreatedAt)).
@@ -1651,7 +1652,7 @@ func (r *EntRepository) rawUnarchiveBacklogItem(ctx context.Context, id, expecte
 		itemID:                     parsedID,
 		fromStatus:                 current.Status,
 		toStatus:                   string(domain.BacklogStatusIdea),
-		triggeredBy:                TriggeredByUser,
+		triggeredBy:                instance.TriggeredByUser,
 		stageNameSnapshot:          stageNameSnapshot,
 		allowedTransitionsSnapshot: allowedTransitionsSnapshot,
 	})

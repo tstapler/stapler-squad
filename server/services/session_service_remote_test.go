@@ -43,8 +43,8 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/launchcmd"
 	"github.com/tstapler/stapler-squad/session/sshremote"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -358,7 +358,7 @@ func TestCreateSession_RemoteTarget_CreatesRemoteWorktreeAndTmuxSession(t *testi
 	// ExecutionTarget is in-memory-only (json:"-": a live SSH connection can't
 	// be serialized), so this reads the live instance CreateSession registered
 	// with the poller rather than storage.
-	var found *session.Instance
+	var found *instance.Instance
 	for _, inst := range fix.poller.GetInstances() {
 		if inst.Title == "remote-create-worktree" {
 			found = inst
@@ -426,7 +426,7 @@ func TestCreateSession_RemoteTarget_NewWorktree_BranchesFromDefaultBranch_NotAmb
 	require.Equal(t, defaultBranchSHA.String(), strings.TrimSpace(string(out)),
 		"new worktree must branch from the default branch's tip, not the ambient checked-out divergent branch")
 
-	var found *session.Instance
+	var found *instance.Instance
 	for _, inst := range fix.poller.GetInstances() {
 		if inst.Title == "remote-diverge-check" {
 			found = inst
@@ -555,7 +555,7 @@ func TestCreateSession_RemoteTarget_ExistingWorktree_AttachesWithoutCreatingNewO
 	require.Len(t, entries, 1, "CreateSession must not create a new worktree for session_type=existing_worktree")
 	require.Equal(t, "already-there", entries[0].Name())
 
-	var found *session.Instance
+	var found *instance.Instance
 	for _, inst := range fix.poller.GetInstances() {
 		if inst.Title == "remote-existing-worktree" {
 			found = inst

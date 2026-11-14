@@ -5,7 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -19,10 +19,10 @@ type contextHealthSource interface {
 // stores it. publish is called only when the Level changes; a Reason-only change
 // (e.g. repeat count 3→4) is stored silently so the tooltip stays current.
 func applyContextHealth(
-	instances []*session.Instance,
+	instances []*instance.Instance,
 	lookup func(uuid string) *tokens.ParseResult,
 	cfg config.ContextHealthConfig,
-	publish func(*session.Instance),
+	publish func(*instance.Instance),
 ) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -63,9 +63,9 @@ func applyContextHealth(
 func publishContextHealth(
 	ctx context.Context,
 	src contextHealthSource,
-	instances func() []*session.Instance,
+	instances func() []*instance.Instance,
 	cfg func() config.ContextHealthConfig,
-	publish func(*session.Instance),
+	publish func(*instance.Instance),
 ) {
 	ch := src.Subscribe()
 	for {

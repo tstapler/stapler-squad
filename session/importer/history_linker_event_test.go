@@ -7,14 +7,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // panePIDCountingPM counts GetPanePID calls; the embedded nil ProcessManager
 // is never touched because correlateSession only reaches GetPanePID here.
 type panePIDCountingPM struct {
-	session.ProcessManager
+	instance.ProcessManager
 	calls *atomic.Int64
 }
 
@@ -23,12 +23,12 @@ func (p panePIDCountingPM) GetPanePID() (int32, error) {
 	return 0, assert.AnError // no live pane: Detect is skipped, path fallback finds nothing
 }
 
-func newLinkedInstances(t *testing.T, n int, calls *atomic.Int64) []*session.Instance {
+func newLinkedInstances(t *testing.T, n int, calls *atomic.Int64) []*instance.Instance {
 	t.Helper()
-	insts := make([]*session.Instance, 0, n)
+	insts := make([]*instance.Instance, 0, n)
 	for i := 0; i < n; i++ {
 		title := "linked-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		inst := &session.Instance{Title: title, Path: t.TempDir(), Status: domain.Active}
+		inst := &instance.Instance{Title: title, Path: t.TempDir(), Status: domain.Active}
 		inst.SetProcessManagerForTest(panePIDCountingPM{calls: calls})
 		inst.SetHistoryInfo("uuid-"+title, "/projects/p/uuid-"+title+".jsonl")
 		insts = append(insts, inst)
@@ -43,7 +43,7 @@ func TestHistoryLinker_FileEvent_should_SkipRescan_When_FileBelongsToLinkedSessi
 	t.Parallel()
 	const n = 50
 	var calls atomic.Int64
-	linker := NewHistoryLinker(session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
+	linker := NewHistoryLinker(instance.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
 	insts := newLinkedInstances(t, n, &calls)
 	linker.SetInstances(insts)
 
@@ -58,7 +58,7 @@ func TestHistoryLinker_FileEvent_should_Rescan_When_FileIsUnclaimed(t *testing.T
 	t.Parallel()
 	const n = 5
 	var calls atomic.Int64
-	linker := NewHistoryLinker(session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
+	linker := NewHistoryLinker(instance.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
 	linker.SetInstances(newLinkedInstances(t, n, &calls))
 
 	linker.handleHistoryFileEvent("/projects/p/brand-new-conversation.jsonl")
@@ -69,7 +69,7 @@ func TestHistoryLinker_FileEvent_should_Rescan_When_FileIsUnclaimed(t *testing.T
 func TestHistoryLinker_FileEvent_should_RunExtraCallbacks_When_RescanSkipped(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int64
-	linker := NewHistoryLinker(session.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
+	linker := NewHistoryLinker(instance.NewHistoryFileDetectorWithHomeDir(&mockProcessInspector{}, t.TempDir()), nil)
 	insts := newLinkedInstances(t, 1, &calls)
 	linker.SetInstances(insts)
 	var got atomic.Value

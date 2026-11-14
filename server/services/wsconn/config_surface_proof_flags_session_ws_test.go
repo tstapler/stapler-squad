@@ -12,7 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestConfigSurfaceProof_TerminalResyncFlags_ChangeResyncOptions(t *testing.T) {
@@ -51,7 +51,7 @@ func TestConfigSurfaceProof_TerminalResyncCompression_ChangesEnvelopeFlag(t *tes
 
 func TestConfigSurfaceProof_TerminalAppScrollbackForwardingClaude_ChangesScrollbackPath(t *testing.T) {
 	set := bkfFlagWriter(t)
-	inst := session.NewStartedInstanceForTest(t, "bkf-scroll", &replyPM{})
+	inst := instance.NewStartedInstanceForTest(t, "bkf-scroll", &replyPM{})
 	inst.Program = "claude"
 
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {

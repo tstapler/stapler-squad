@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/backlog/liveness"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // TriageRespawner can automatically re-trigger triage for a backlog item whose
@@ -75,7 +76,7 @@ const headlessTriageSessionUUIDPrefix = "headless-triage-"
 func latestTriageSession(sessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
 	var latest *backlogdto.ItemSessionSummary
 	for i := range sessions {
-		if sessions[i].Role != session.SessionRoleTriage {
+		if sessions[i].Role != instance.SessionRoleTriage {
 			continue
 		}
 		if latest == nil || sessions[i].CreatedAt.After(latest.CreatedAt) {

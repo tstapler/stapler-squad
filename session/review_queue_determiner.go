@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -60,9 +61,9 @@ func (r DetectionResult) IsHighPriority() bool {
 // or left unchanged in the review queue. It is a pure function — no queue operations.
 type StatusDeterminer interface {
 	Determine(
-		inst *Instance,
+		inst *instance.Instance,
 		content string,
-		statusInfo InstanceStatusInfo,
+		statusInfo instance.InstanceStatusInfo,
 		detector detection.TerminalDetector,
 		opts DeterminerOptions,
 	) DetectionResult
@@ -90,14 +91,14 @@ func effectiveCtx(provided, fallback string) string {
 // "skip" action) more recently than its last meaningful output — meaning nothing new has
 // happened since the user dismissed it. Both Idle detection sites and the Stale check
 // share this single helper so the suppression rule lives in exactly one place.
-func (d *DefaultStatusDeterminer) suppressedByAck(inst *Instance) bool {
+func (d *DefaultStatusDeterminer) suppressedByAck(inst *instance.Instance) bool {
 	return inst.IsAcknowledgedAfterOutput()
 }
 
 // applyWorktreeCheck inspects the git worktree of inst and potentially overrides the
 // current add/priority state with an UncommittedChanges reason, or sets CleanWorktree.
 // Only called when the session has a git worktree attached.
-func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *Instance, shouldAdd bool, priority queue.Priority) (newShouldAdd bool, newPriority queue.Priority, newReason queue.AttentionReason, newCtx string, cleanWorktree bool) {
+func (d *DefaultStatusDeterminer) applyWorktreeCheck(inst *instance.Instance, shouldAdd bool, priority queue.Priority) (newShouldAdd bool, newPriority queue.Priority, newReason queue.AttentionReason, newCtx string, cleanWorktree bool) {
 	worktree, err := inst.GetGitWorktree()
 	if err != nil {
 		log.Warn("failed to get git worktree", "session", inst.Snapshot().Title, "err", err)
@@ -141,7 +142,7 @@ func (v *verdict) markIdle() {
 
 // checkUncommitted flags a dirty worktree when nothing more urgent is queued
 // (informational - user may want to review and commit).
-func (d *DefaultStatusDeterminer) checkUncommitted(inst *Instance, v *verdict) {
+func (d *DefaultStatusDeterminer) checkUncommitted(inst *instance.Instance, v *verdict) {
 	if (v.shouldAdd && v.priority != queue.PriorityLow) || !inst.HasGitWorktree() {
 		return
 	}
@@ -155,9 +156,9 @@ func (d *DefaultStatusDeterminer) checkUncommitted(inst *Instance, v *verdict) {
 // Determine evaluates a session's state and returns a DetectionResult.
 // It is pure: no queue mutations, no storage calls, no side effects.
 func (d *DefaultStatusDeterminer) Determine(
-	inst *Instance,
+	inst *instance.Instance,
 	content string,
-	statusInfo InstanceStatusInfo,
+	statusInfo instance.InstanceStatusInfo,
 	detector detection.TerminalDetector,
 	opts DeterminerOptions,
 ) DetectionResult {
@@ -211,7 +212,7 @@ func (d *DefaultStatusDeterminer) Determine(
 
 // determineFromController handles sessions with an active controller. It reports true when
 // the session should be removed from the queue.
-func (d *DefaultStatusDeterminer) determineFromController(inst *Instance, statusInfo InstanceStatusInfo, opts DeterminerOptions, v *verdict) (remove bool) {
+func (d *DefaultStatusDeterminer) determineFromController(inst *instance.Instance, statusInfo instance.InstanceStatusInfo, opts DeterminerOptions, v *verdict) (remove bool) {
 	// Status-based conditions (approval, input required, error) take priority over idle
 	// state: they are explicit user prompts, even if terminal activity looks "active".
 	// PendingApprovals counts alongside StatusNeedsApproval because the controller may
@@ -251,7 +252,7 @@ func (d *DefaultStatusDeterminer) determineFromController(inst *Instance, status
 
 // determineFromContent handles sessions with no active controller by detecting status from
 // terminal content. It returns the detected status and whether to remove the session.
-func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content string, claudeStatus detection.DetectedStatus, detector detection.TerminalDetector, opts DeterminerOptions, v *verdict) (detection.DetectedStatus, bool) {
+func (d *DefaultStatusDeterminer) determineFromContent(inst *instance.Instance, content string, claudeStatus detection.DetectedStatus, detector detection.TerminalDetector, opts DeterminerOptions, v *verdict) (detection.DetectedStatus, bool) {
 	if content != "" {
 		// Line-by-line detection (bottom-up scan) so recent terminal state wins over stale
 		// scrollback. DetectWithContext (full-block) fires error patterns on old
@@ -286,7 +287,7 @@ func (d *DefaultStatusDeterminer) determineFromContent(inst *Instance, content s
 
 // idleClockAge is the age the idle and WaitingForAgent thresholds compare against: time
 // since the last meaningful output when IdleClockOutput is on, else since the last update.
-func idleClockAge(inst *Instance, opts DeterminerOptions) time.Duration {
+func idleClockAge(inst *instance.Instance, opts DeterminerOptions) time.Duration {
 	if opts.IdleClockOutput {
 		return inst.GetTimeSinceLastMeaningfulOutput()
 	}
@@ -299,7 +300,7 @@ func isActiveStatus(s detection.DetectedStatus) bool {
 
 // applyStaleness flags sessions with no meaningful output for the configured threshold.
 // An acknowledged session is never flagged, and a Medium-or-higher reason is not overridden.
-func (d *DefaultStatusDeterminer) applyStaleness(inst *Instance, v *verdict) {
+func (d *DefaultStatusDeterminer) applyStaleness(inst *instance.Instance, v *verdict) {
 	timeSinceOutput := inst.GetTimeSinceLastMeaningfulOutput()
 	if timeSinceOutput <= d.config.StalenessThreshold || d.suppressedByAck(inst) {
 		return

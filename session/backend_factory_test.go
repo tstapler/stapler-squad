@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tymux"
 )
 
@@ -24,7 +25,7 @@ import (
 // even while the process-wide global default remains BackendTmux.
 func TestNewProcessManager_ShouldReturnBackendTymux_WhenOptsBackendIsTymux(t *testing.T) {
 
-	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: domain.BackendTymux})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: domain.BackendTymux})
 	require.NoError(t, err)
 	_, ok := pm.(*TymuxBackend)
 	assert.True(t, ok, "expected *TymuxBackend when opts.Backend is BackendTymux, got %T", pm)
@@ -36,7 +37,7 @@ func TestNewProcessManager_ShouldReturnBackendTymux_WhenOptsBackendIsTymux(t *te
 // falling back to defaultBackend/BackendTmux.
 func TestNewProcessManager_ShouldReturnBackendTmux_WhenOptsBackendIsUnset_MatchingTodaysDefault(t *testing.T) {
 
-	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{})
 	require.NoError(t, err)
 	_, ok := pm.(*TmuxBackend)
 	assert.True(t, ok, "expected *TmuxBackend when opts.Backend is unset and global is BackendTmux, got %T", pm)
@@ -55,7 +56,7 @@ func TestNewProcessManager_ShouldNotLeakTymuxOverride_IntoConcurrentBackendTmuxC
 	for i := 0; i < iterations; i++ {
 		go func() {
 			defer wg.Done()
-			pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: domain.BackendTymux})
+			pm, err := NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: domain.BackendTymux})
 			if err != nil {
 				t.Errorf("unexpected error for opts.Backend=BackendTymux: %v", err)
 				return
@@ -66,7 +67,7 @@ func TestNewProcessManager_ShouldNotLeakTymuxOverride_IntoConcurrentBackendTmuxC
 		}()
 		go func() {
 			defer wg.Done()
-			pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{})
+			pm, err := NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{})
 			if err != nil {
 				t.Errorf("unexpected error for unset opts.Backend: %v", err)
 				return
@@ -89,10 +90,10 @@ func TestNewProcessManager_ShouldReturnConstructionError_WhenBackendConstantUnre
 
 	garbage := domain.ProcessManagerBackend("not-a-real-backend")
 
-	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: garbage})
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: garbage})
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnrecognizedBackend)
+	assert.ErrorIs(t, err, instance.ErrUnrecognizedBackend)
 	assert.Nil(t, pm)
 }
 
@@ -117,10 +118,10 @@ func TestNewProcessManager_should_ReturnImmediately_When_BackendIsTymuxRegardles
 	defer restore()
 
 	done := make(chan struct{})
-	var pm ProcessManager
+	var pm instance.ProcessManager
 	var err error
 	go func() {
-		pm, err = NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: domain.BackendTymux})
+		pm, err = NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: domain.BackendTymux})
 		close(done)
 	}()
 

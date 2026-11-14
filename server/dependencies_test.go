@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -529,7 +530,7 @@ func TestWireDepsIntoServer_should_StartPollerExactlyOnce_When_HeadlessPoolPrese
 }
 
 func TestAnnotateUserPRCache_should_PopulateStatusAndLastActiveFromSnapshot_When_RunningAndPausedInstances(t *testing.T) {
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: "s-run", Path: t.TempDir(), Program: "true", SessionType: domain.SessionTypeDirectory,
 	})
 	require.NoError(t, err)
@@ -556,9 +557,9 @@ func TestAnnotateUserPRCache_should_LogUnmatchedSessionCount_When_SessionsHaveBr
 
 	poller := prpoller.NewPRStatusPoller(nil)
 	titles := []string{"no-pr-one", "no-pr-two"}
-	instances := make([]*session.Instance, 0, len(titles))
+	instances := make([]*instance.Instance, 0, len(titles))
 	for _, title := range titles {
-		inst, err := session.NewInstance(session.InstanceOptions{
+		inst, err := instance.NewInstance(instance.InstanceOptions{
 			Title:       title,
 			Path:        t.TempDir(),
 			Program:     "echo",
@@ -685,11 +686,11 @@ func TestBuildDependencies_should_NotStartPollerAndWarn_When_ConfiguredInboxURLI
 func TestOnScanComplete_ShouldNotSeedSessionPR_WhenFlagOn(t *testing.T) {
 	for name, held := range map[string]int{"session with no PR": 0, "session holding #11": 11} {
 		t.Run(name, func(t *testing.T) {
-			inst := &session.Instance{Title: "scan-no-seed", UUID: "uuid-scan-no-seed", GitHubOwner: "acme", GitHubRepo: "app"}
+			inst := &instance.Instance{Title: "scan-no-seed", UUID: "uuid-scan-no-seed", GitHubOwner: "acme", GitHubRepo: "app"}
 			if held > 0 {
 				inst.GitHubPRNumber = held
 			}
-			handler := artifactScanCompleteHandler(func() []*session.Instance { return []*session.Instance{inst} }, serverevents.NewEventBus(4))
+			handler := artifactScanCompleteHandler(func() []*instance.Instance { return []*instance.Instance{inst} }, serverevents.NewEventBus(4))
 
 			handler("scan-no-seed", &domain.SessionArtifactsBlob{PRURLs: []string{"https://github.com/acme/app/pull/99"}})
 
@@ -704,9 +705,9 @@ func TestOnScanComplete_ShouldNotSeedSessionPR_WhenFlagOn(t *testing.T) {
 // A finished scan makes its session searchable without a restart (Story 9.1 "Incremental").
 func TestIndexScannedArtifacts_ShouldMakeANewScanSearchable_WithoutRestart(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Title: "indexed", UUID: "uuid-indexed"}
+	inst := &instance.Instance{Title: "indexed", UUID: "uuid-indexed"}
 	idx := search.NewArtifactIndex(nil)
-	handler := indexScannedArtifacts(func() []*session.Instance { return []*session.Instance{inst} }, idx)
+	handler := indexScannedArtifacts(func() []*instance.Instance { return []*instance.Instance{inst} }, idx)
 
 	handler("indexed", &domain.SessionArtifactsBlob{Records: domain.RecordList{domain.BranchRecord{Name: "feat-fresh"}}})
 	hits := idx.Search("feat-fresh", 5)
@@ -719,11 +720,11 @@ func TestIndexScannedArtifacts_ShouldMakeANewScanSearchable_WithoutRestart(t *te
 
 func TestBuildArtifactIndexInBackground_ShouldWaitForTheListener_ThenIndexStoredBlobs(t *testing.T) {
 	t.Parallel()
-	inst := &session.Instance{Title: "stored", UUID: "uuid-stored",
+	inst := &instance.Instance{Title: "stored", UUID: "uuid-stored",
 		Artifacts: &domain.SessionArtifactsBlob{Records: domain.RecordList{domain.BranchRecord{Name: "feat-stored"}}}}
 	idx := search.NewArtifactIndex(nil)
 	ready := make(chan struct{})
-	buildArtifactIndexInBackground(func() []*session.Instance { return []*session.Instance{inst, {Title: "no-blob", UUID: "u2"}} }, idx, ready)
+	buildArtifactIndexInBackground(func() []*instance.Instance { return []*instance.Instance{inst, {Title: "no-blob", UUID: "u2"}} }, idx, ready)
 
 	assert.Zero(t, idx.DocCount(), "nothing is indexed before the listener is up")
 	close(ready)

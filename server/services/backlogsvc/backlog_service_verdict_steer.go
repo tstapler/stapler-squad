@@ -17,9 +17,9 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -101,7 +101,7 @@ func (s *BacklogService) steerWorkSessionWithVerdict(ctx context.Context, p *eve
 	// so a stale unended row doesn't hide the real one.
 	var workUUID string
 	for i := range sessions {
-		if sessions[i].Role != session.SessionRoleWork || sessions[i].EndedAt != nil {
+		if sessions[i].Role != instance.SessionRoleWork || sessions[i].EndedAt != nil {
 			continue
 		}
 		if _, live := s.sessionSteerer.SessionProgram(sessions[i].SessionUUID); live {

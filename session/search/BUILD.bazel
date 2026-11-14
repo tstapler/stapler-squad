@@ -22,6 +22,7 @@ go_library(
         "//session",
         "//session/artifacts",
         "//session/domain",
+        "//session/instance",
         "//telemetry",
         "@io_opentelemetry_go_otel_metric//:metric",
     ],

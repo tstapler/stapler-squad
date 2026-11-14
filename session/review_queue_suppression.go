@@ -11,6 +11,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/telemetry"
 )
@@ -85,7 +86,7 @@ var suppressionRules = []suppressionRule{
 }
 
 // suppressionPolicy runs the rule chain for one session's detection result.
-func suppressionPolicy(snap *domain.InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo, queue *queuepkg.ReviewQueue, opts RuleOptions) SuppressionDecision {
+func suppressionPolicy(snap *domain.InstanceSnapshot, result DetectionResult, statusInfo instance.InstanceStatusInfo, queue *queuepkg.ReviewQueue, opts RuleOptions) SuppressionDecision {
 	rc := ruleCtx{
 		action:           result.Action,
 		priority:         result.Priority,

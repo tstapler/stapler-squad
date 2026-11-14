@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	creackpty "github.com/creack/pty"
@@ -128,14 +131,14 @@ func (m *mockTmuxExecutor) CombinedOutput(cmd *exec.Cmd) ([]byte, error) {
 // TestInstanceBuilder provides a fluent interface for creating test instances with proper isolation
 type TestInstanceBuilder struct {
 	t    *testing.T
-	opts InstanceOptions
+	opts instance.InstanceOptions
 }
 
 // NewTestInstance creates a new test instance builder with sane defaults and proper isolation
 func NewTestInstance(t *testing.T, title string) *TestInstanceBuilder {
 	return &TestInstanceBuilder{
 		t: t,
-		opts: InstanceOptions{
+		opts: instance.InstanceOptions{
 			Title:            title,
 			Path:             t.TempDir(),                              // Each test gets its own temp directory
 			Program:          "bash -c 'echo test session; exec bash'", // Safe default program
@@ -183,12 +186,12 @@ func (b *TestInstanceBuilder) WithCategory(category string) *TestInstanceBuilder
 }
 
 // Build creates the instance with cleanup function
-func (b *TestInstanceBuilder) Build() (*Instance, tmux.CleanupFunc, error) {
+func (b *TestInstanceBuilder) Build() (*instance.Instance, tmux.CleanupFunc, error) {
 	return b.buildWithMockTmux()
 }
 
 // BuildAndStart creates and starts the instance with cleanup functions
-func (b *TestInstanceBuilder) BuildAndStart() (*Instance, tmux.CleanupFunc, tmux.CleanupFunc, error) {
+func (b *TestInstanceBuilder) BuildAndStart() (*instance.Instance, tmux.CleanupFunc, tmux.CleanupFunc, error) {
 	instance, cleanup, err := b.buildWithMockTmux()
 	if err != nil {
 		return nil, nil, nil, err
@@ -206,9 +209,9 @@ func (b *TestInstanceBuilder) BuildAndStart() (*Instance, tmux.CleanupFunc, tmux
 }
 
 // buildWithMockTmux creates an instance with a mock tmux session to prevent real tmux command execution
-func (b *TestInstanceBuilder) buildWithMockTmux() (*Instance, tmux.CleanupFunc, error) {
+func (b *TestInstanceBuilder) buildWithMockTmux() (*instance.Instance, tmux.CleanupFunc, error) {
 	// Create the instance first
-	instance, cleanup, err := NewInstanceWithCleanup(b.opts)
+	instance, cleanup, err := instance.NewInstanceWithCleanup(b.opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -230,7 +233,7 @@ func (b *TestInstanceBuilder) buildWithMockTmux() (*Instance, tmux.CleanupFunc, 
 	mockExecutor.sessionsCreated[mockTmuxSession.GetSanitizedName()] = true
 
 	// Replace the real tmux session with the mock
-	instance.processManager.(*TmuxBackend).TmuxManager().SetSession(mockTmuxSession)
+	instance.ProcessManagerForTest().(*TmuxBackend).TmuxManager().SetSession(mockTmuxSession)
 
 	return instance, cleanup, nil
 }
@@ -756,7 +759,7 @@ func testSessionCreationConcurrency(t *testing.T) {
 
 		// Create sessions concurrently
 		type sessionResult struct {
-			instance *Instance
+			instance *instance.Instance
 			cleanup  tmux.CleanupFunc
 			err      error
 		}
@@ -872,7 +875,7 @@ func testSessionCreationFileSystem(t *testing.T) {
 func testSessionCreationWorktreeManagement(t *testing.T) {
 	t.Run("NewWorktreeCreation", func(t *testing.T) {
 		// Create a git repository
-		tempRepo := setupTestRepository(t)
+		tempRepo := fixturetest.SetupTestRepository(t)
 		defer func() {
 			if err := os.RemoveAll(tempRepo); err != nil {
 				t.Logf("Failed to remove temp repo: %v", err)

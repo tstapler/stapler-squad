@@ -16,10 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ---------------------------------------------------------------------------
@@ -258,22 +258,22 @@ func TestBuildSteerMessage_NonClaudeProgram_NoSuffix(t *testing.T) {
 }
 
 func TestBuildSteerMessage_OverLength_Truncates(t *testing.T) {
-	fixContext := strings.Repeat("x", session.MaxSteerMessageLength+500)
+	fixContext := strings.Repeat("x", instance.MaxSteerMessageLength+500)
 
 	got := buildSteerMessage("claude", fixContext)
 
-	require.LessOrEqual(t, len(got), session.MaxSteerMessageLength)
+	require.LessOrEqual(t, len(got), instance.MaxSteerMessageLength)
 	require.Contains(t, got, truncationPointer)
 	require.True(t, strings.HasSuffix(got, prShipSuffix))
 }
 
 func TestBuildSteerMessage_TruncatedResult_NeverExceedsMaxLength(t *testing.T) {
 	for _, program := range []string{"claude", "", "aider", "proxy-claude"} {
-		fixContext := strings.Repeat("y", session.MaxSteerMessageLength*2)
+		fixContext := strings.Repeat("y", instance.MaxSteerMessageLength*2)
 
 		got := buildSteerMessage(program, fixContext)
 
-		require.LessOrEqualf(t, len(got), session.MaxSteerMessageLength, "program=%q", program)
+		require.LessOrEqualf(t, len(got), instance.MaxSteerMessageLength, "program=%q", program)
 	}
 }
 
@@ -292,11 +292,11 @@ func TestBuildSteerMessage_RealisticComposedLongFixContext_SuffixSurvivesTruncat
 	sb.WriteString("\n## Review: changes requested by @reviewer1\n")
 	sb.WriteString(strings.Repeat("This needs a substantial rework of the retry logic. ", 300))
 	fixContext := sb.String()
-	require.Greater(t, len(fixContext)+len(prShipSuffix), session.MaxSteerMessageLength, "fixture must actually require truncation")
+	require.Greater(t, len(fixContext)+len(prShipSuffix), instance.MaxSteerMessageLength, "fixture must actually require truncation")
 
 	got := buildSteerMessage("claude", fixContext)
 
-	require.LessOrEqual(t, len(got), session.MaxSteerMessageLength)
+	require.LessOrEqual(t, len(got), instance.MaxSteerMessageLength)
 	require.True(t, strings.HasSuffix(got, prShipSuffix), "suffix must survive truncation, got %q", got)
 }
 
@@ -311,7 +311,7 @@ func TestBuildSteerMessage_RealisticComposedLongFixContext_SuffixSurvivesTruncat
 // after only that first byte, producing invalid UTF-8 in the PTY-bound
 // steer message.
 func TestBuildSteerMessage_MultiByteRuneAtTruncationBoundary_NeverSplitsRune(t *testing.T) {
-	budget := session.MaxSteerMessageLength - len(prShipSuffix) - len(truncationPointer)
+	budget := instance.MaxSteerMessageLength - len(prShipSuffix) - len(truncationPointer)
 	require.Positive(t, budget)
 
 	fixContext := strings.Repeat("a", budget-1) + "€" + strings.Repeat("b", 200)
@@ -320,7 +320,7 @@ func TestBuildSteerMessage_MultiByteRuneAtTruncationBoundary_NeverSplitsRune(t *
 	got := buildSteerMessage("claude", fixContext)
 
 	require.Truef(t, utf8.ValidString(got), "truncated steer message must be valid UTF-8, got %q", got)
-	require.LessOrEqual(t, len(got), session.MaxSteerMessageLength)
+	require.LessOrEqual(t, len(got), instance.MaxSteerMessageLength)
 	require.True(t, strings.HasSuffix(got, prShipSuffix))
 }
 
@@ -656,7 +656,7 @@ func requireNotificationEvent(t *testing.T, ch <-chan *events.Event) *events.Eve
 func pinnedBaselineSteer(t *testing.T, svc *BacklogService, itemID, fixContext string) {
 	t.Helper()
 	svc.steerActiveSessionForPRFix(context.Background(), itemID, "pinned item", domain.BacklogStatusPRPending,
-		&backlogdto.ItemSessionSummary{SessionUUID: activeSessionUUIDPrimary, Role: session.SessionRoleWork}, fixContext)
+		&backlogdto.ItemSessionSummary{SessionUUID: activeSessionUUIDPrimary, Role: instance.SessionRoleWork}, fixContext)
 }
 
 func TestSteerActiveSessionForPRFix_should_DeliverWhenReady_When_PinnedBaseline(t *testing.T) {
@@ -821,9 +821,9 @@ func TestSteerActiveSessionForPRFix_should_DeliverBothSignatures_When_FailingChe
 func TestGuardKey_should_Match_When_GetStableIDEqualsActiveSessionUUID(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
-	inst := &session.Instance{UUID: "stable-uuid-1", Title: "guard-key-session", Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	inst := &instance.Instance{UUID: "stable-uuid-1", Title: "guard-key-session", Program: "claude", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	svctest.AddInstanceToPoller(fix.poller, inst)
-	active := &backlogdto.ItemSessionSummary{SessionUUID: inst.UUID, Role: session.SessionRoleWork}
+	active := &backlogdto.ItemSessionSummary{SessionUUID: inst.UUID, Role: instance.SessionRoleWork}
 
 	live := fix.svc.FindLiveInstance(active.SessionUUID)
 

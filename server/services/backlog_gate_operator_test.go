@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Story 1.5.5d: the operator RPC writers decide through the transition gate.
@@ -22,11 +22,11 @@ func TestTransitionHandler_ResolvesCallerClassFromContextActor(t *testing.T) {
 		cls  domain.CallerClass
 	}{
 		{"absent actor is the operator RPC", context.Background(), domain.CallerOperatorTransitionRPC, domain.ClassOperator},
-		{"user actor is the operator RPC", WithTransitionActor(context.Background(), session.TriggeredByUser), domain.CallerOperatorTransitionRPC, domain.ClassOperator},
-		{"agent actor is the MCP delegate", WithTransitionActor(context.Background(), session.TriggeredByAgent), domain.CallerMCPTransitionDelegate, domain.ClassAgent},
+		{"user actor is the operator RPC", WithTransitionActor(context.Background(), instance.TriggeredByUser), domain.CallerOperatorTransitionRPC, domain.ClassOperator},
+		{"agent actor is the MCP delegate", WithTransitionActor(context.Background(), instance.TriggeredByAgent), domain.CallerMCPTransitionDelegate, domain.ClassAgent},
 		{"unknown actor fails closed to the delegate", WithTransitionActor(context.Background(), "robot"), domain.CallerMCPTransitionDelegate, domain.ClassAgent},
 		{"notification action rides the user actor", WithTransitionCaller(context.Background(), domain.CallerOperatorNotificationAction), domain.CallerOperatorNotificationAction, domain.ClassOperator},
-		{"a caller hint never lifts an agent", WithTransitionCaller(WithTransitionActor(context.Background(), session.TriggeredByAgent), domain.CallerOperatorNotificationAction), domain.CallerMCPTransitionDelegate, domain.ClassAgent},
+		{"a caller hint never lifts an agent", WithTransitionCaller(WithTransitionActor(context.Background(), instance.TriggeredByAgent), domain.CallerOperatorNotificationAction), domain.CallerMCPTransitionDelegate, domain.ClassAgent},
 		{"only the notification caller is honored", WithTransitionCaller(context.Background(), domain.CallerOperatorArchiveRPC), domain.CallerOperatorTransitionRPC, domain.ClassOperator},
 	}
 	for _, tc := range cases {

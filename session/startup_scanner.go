@@ -5,6 +5,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -34,7 +35,7 @@ func (ss *StartupScanner) SetOptionsSource(src FlagOptionsSource) { ss.optionsSo
 
 // Scan iterates over instances and adds any that need attention to the queue.
 // Returns the number of sessions added to the queue.
-func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) int {
+func (ss *StartupScanner) Scan(instances []*instance.Instance, queue ReviewQueueWriter) int {
 	scanned, added := 0, 0
 	opts, _ := ss.optionsSource.resolve()
 	for _, inst := range instances {
@@ -72,7 +73,7 @@ func (ss *StartupScanner) Scan(instances []*Instance, queue ReviewQueueWriter) i
 }
 
 // buildStartupItem creates a ReviewItem from an instance and a DetectionResult.
-func buildStartupItem(inst *Instance, result DetectionResult) *queue.ReviewItem {
+func buildStartupItem(inst *instance.Instance, result DetectionResult) *queue.ReviewItem {
 	lastActivity := inst.LastMeaningfulOutput
 	if lastActivity.IsZero() {
 		lastActivity = inst.CreatedAt

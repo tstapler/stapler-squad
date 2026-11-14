@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func TestResolveReviewTarget_ShouldRunInWorkWorktreeAndNameBranch_WhenWorktreeExists(t *testing.T) {
@@ -190,7 +190,7 @@ func TestReviewTargetFor_ShouldResolveWorkWorktreeFromStorage_WhenItemSessionHas
 	}))
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "r1 item", RepoPath: "/shared/repo"})
 	require.NoError(t, err)
-	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: workUUID, SessionRole: session.SessionRoleWork})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: workUUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 
 	svc := &SessionService{storage: storage, concStorage: storage}

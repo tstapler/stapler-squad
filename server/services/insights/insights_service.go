@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/contexthistory"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -145,7 +146,7 @@ func groupUnattributed(meta SessionMeta, projectPath string) SessionMeta {
 		return meta
 	}
 	if !worktreeTitlePattern.MatchString(projectPath) {
-		meta.Role = session.SessionRoleExternal
+		meta.Role = instance.SessionRoleExternal
 	}
 	meta.ItemID = untrackedItemIDPrefix + title
 	meta.ItemTitle = title

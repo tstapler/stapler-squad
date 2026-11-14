@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 
 	"connectrpc.com/connect"
@@ -328,7 +329,7 @@ func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
 	svc := newCreateTestService(t, storage)
 
 	// Seed an existing session with the same title.
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title:   "duplicate-name",
 		Path:    t.TempDir(),
 		Program: "claude",
@@ -575,8 +576,8 @@ func TestCreateSession_GitHubURLResolution_NotBoundByRequestContext(t *testing.T
 	svc := newCreateTestService(t, storage)
 
 	resolvedPath := t.TempDir()
-	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *session.GitHubRef, error) {
-		return resolvedPath, &session.GitHubRef{Owner: "octocat", Repo: "Hello-World"}, nil
+	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *instance.GitHubRef, error) {
+		return resolvedPath, &instance.GitHubRef{Owner: "octocat", Repo: "Hello-World"}, nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -606,12 +607,12 @@ func TestCreatePaths_ShouldAttachViaAttachPR_WhenCreateFromURLOrResolutionOrOneS
 	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
 	t.Cleanup(func() { svc.Shutdown() })
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	svc.SetReviewQueuePoller(session.NewReviewQueuePoller(queue.NewReviewQueue(), statusMgr, nil))
 	svc.SetStatusManager(statusMgr)
 
-	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *session.GitHubRef, error) {
-		return t.TempDir(), &session.GitHubRef{Owner: "octocat", Repo: "Hello-World", PRNumber: 12}, nil
+	svc.githubResolver = func(_ context.Context, _ string, _ []string) (string, *instance.GitHubRef, error) {
+		return t.TempDir(), &instance.GitHubRef{Owner: "octocat", Repo: "Hello-World", PRNumber: 12}, nil
 	}
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title: "create-from-pr-url",
@@ -661,7 +662,7 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	t.Cleanup(func() { svc.Shutdown() })
 
 	// Wire a status manager AND a poller so FindLiveInstance resolves the live pointer.
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	queue := queue.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -815,7 +816,7 @@ func newCreateTestService(t *testing.T, storage *session.Storage) *SessionServic
 
 	// Wire a ReviewQueuePoller so FindLiveInstance (used by destroyCreatedSession to
 	// join the driver goroutine) resolves the live instance instead of always nil.
-	statusMgr := session.NewInstanceStatusManager()
+	statusMgr := instance.NewInstanceStatusManager()
 	queue := queue.NewReviewQueue()
 	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
 	svc.SetReviewQueuePoller(poller)
@@ -891,7 +892,7 @@ func TestWireCallbacks_should_LogWarning_When_ReviewQueuePollerNil(t *testing.T)
 	repoDir := t.TempDir()
 	svctest.InitGitRepoWithCommit(t, repoDir)
 
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:            "wirecallbacks-nil-poller-" + t.Name(),
 		Path:             repoDir,
 		Program:          "sh",

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -144,7 +145,7 @@ func TestTransitionBacklogItemStatus_should_returnBeforeChainFireCreateSessionBe
 	transitionDone := make(chan error, 1)
 	go func() {
 		_, transitionErr := fx.repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone,
-			&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, session.TriggeredBySystem)
+			&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, instance.TriggeredBySystem)
 		transitionDone <- transitionErr
 	}()
 	select {
@@ -548,7 +549,7 @@ func TestWireChainFirer_should_RegisterTheFirerOnTheStorageRepository_And_FireOn
 	_, err = fx.repo.UpdateBacklogItem(ctx, item.ID, backlogdto.BacklogItemUpdate{NextWorkflowID: &wfID}, nil)
 	require.NoError(t, err)
 	_, err = fx.repo.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusDone,
-		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, session.TriggeredBySystem)
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	wait.RequireEventually(t, func() bool { return firer.callCount() == 1 }, 5*time.Second, 5*time.Millisecond,

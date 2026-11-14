@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const failureType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE)
@@ -90,7 +91,7 @@ func crashedSnap(uuid, title, reason string, at time.Time) *domain.InstanceSnaps
 func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_WhenCrashedAndNoneWhenStopped(t *testing.T) {
 	e := newCrashEnv(t, false)
 	storage := e.svc.storage.(*session.Storage)
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title: "crashy", Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
@@ -138,7 +139,7 @@ func TestSessionExitedPublisher_ShouldPublishOneFailureAndOneSessionUpdated_When
 func TestSessionExitedPublisher_ShouldPublishOnlyWhenSnapshotStatusCrashed_WhenExitedEventFromAnotherSource(t *testing.T) {
 	e := newCrashEnv(t, false)
 	storage := e.svc.storage.(*session.Storage)
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title: "other-exit", Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
@@ -257,7 +258,7 @@ func TestCrashCoalescing_ShouldCountHiddenAndVisibleInOneLimiter_WhenMixedCrashe
 func TestSessionExitedPublisher_ShouldReadStatusViaSnapshot_WhenInstanceMutatedConcurrently(t *testing.T) {
 	e := newCrashEnv(t, false)
 	storage := e.svc.storage.(*session.Storage)
-	require.NoError(t, storage.AddInstance(&session.Instance{
+	require.NoError(t, storage.AddInstance(&instance.Instance{
 		Title: "racy-exit", Path: "/tmp/test", Status: domain.Paused, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // remediationBackoffSchedule is the gap BEFORE each numbered attempt after
@@ -588,7 +589,7 @@ func (s *Storage) redriveOne(ctx context.Context, itemID string, d domain.Transi
 			ItemID:       itemID,
 			To:           domain.BacklogStatus(d.To),
 			Precondition: &backlogdto.BacklogItemPrecondition{ExpectedStatus: d.From},
-			TriggeredBy:  TriggeredBySystem,
+			TriggeredBy:  instance.TriggeredBySystem,
 		})
 		if err != nil && !errors.Is(err, domain.ErrPreconditionFailed) {
 			log.Debug("[RedriveTransitionDenials] re-attempt not applied", "item", itemID, "caller", d.Caller, "error", err)

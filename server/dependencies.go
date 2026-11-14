@@ -41,6 +41,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/flow"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/instance"
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	queuepkg "github.com/tstapler/stapler-squad/session/queue"
@@ -74,9 +75,9 @@ type ServerDependencies struct {
 	WakeMetrics       *wakes.Metrics
 	SessionService    *services.SessionService
 	Storage           *session.Storage
-	Instances         []*session.Instance
+	Instances         []*instance.Instance
 	EventBus          *events.EventBus
-	StatusManager     *session.InstanceStatusManager
+	StatusManager     *instance.InstanceStatusManager
 	ReviewQueue       *queuepkg.ReviewQueue
 	ReviewQueuePoller *session.ReviewQueuePoller
 	PRStatusPoller    *prpoller.PRStatusPoller
@@ -330,7 +331,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 // even before the first poll cycle detects them via terminal content scanning.
 func syncOrphanedApprovalsToQueue(
 	store *services.ApprovalStore,
-	instances []*session.Instance,
+	instances []*instance.Instance,
 	queue session.ReviewQueueWriter,
 ) {
 	if store == nil {
@@ -343,7 +344,7 @@ func syncOrphanedApprovalsToQueue(
 	}
 
 	// Build a lookup map for instances by title
-	instMap := make(map[string]*session.Instance, len(instances))
+	instMap := make(map[string]*instance.Instance, len(instances))
 	for _, inst := range instances {
 		instMap[inst.Title] = inst
 	}
@@ -526,7 +527,7 @@ func BuildCoreDeps() (*CoreDeps, error) {
 // ServiceDeps holds Phase 2 dependencies: management components that depend on CoreDeps.
 type ServiceDeps struct {
 	*CoreDeps
-	StatusManager     *session.InstanceStatusManager
+	StatusManager     *instance.InstanceStatusManager
 	ReviewQueuePoller *session.ReviewQueuePoller
 	PRStatusPoller    *prpoller.PRStatusPoller
 	Registry          *session.Registry
@@ -543,7 +544,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 		return nil, fmt.Errorf("BuildServiceDeps: CoreDeps has nil fields")
 	}
 
-	statusManager := session.NewInstanceStatusManager()
+	statusManager := instance.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(
 		core.ReviewQueue, statusManager, core.Storage,
 	)
@@ -565,7 +566,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 	// user_refresh observation source yet, so it uses reconciler_refresh.
 	// A successful fetch resolves an unverified-terminal row and resets
 	// poll_fail_count; a counted failure leaves it unverified and increments it.
-	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *session.Instance, ref domain.PRRef) error {
+	core.SessionService.SetPRRefreshFunc(func(ctx context.Context, _ *instance.Instance, ref domain.PRRef) error {
 		return prStatusPoller.Refresh(ctx, ref, session.PRSourceReconcilerRefresh)
 	})
 	if err := w.Validate(); err != nil {
@@ -585,7 +586,7 @@ func BuildServiceDeps(core *CoreDeps) (*ServiceDeps, error) {
 // process creation, filesystem I/O, and callback wiring.
 type RuntimeDeps struct {
 	*ServiceDeps
-	Instances               []*session.Instance
+	Instances               []*instance.Instance
 	ReactiveQueueMgr        *reviewqueue.ReactiveQueueManager
 	ScrollbackManager       *scrollback.ScrollbackManager
 	TmuxStreamerManager     *session.ExternalTmuxStreamerManager
@@ -809,7 +810,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			return nil
 		})
 	})
-	enricherConfig := session.WorktreeEnricherConfig{}
+	enricherConfig := instance.WorktreeEnricherConfig{}
 	// Isolated test/e2e instances never hit real protected roots: gate is not_needed.
 	tccGateEnabled := cfg.TCCEnrichmentConsentEnabled() && !config.IsIsolatedInstance()
 	if cfg.TCCEnrichmentConsentEnabled() && !tccGateEnabled {
@@ -1090,9 +1091,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// before this process started. One batch query replaces N individual lookups.
 	{
 		var dirUUIDs []string
-		dirInstMap := make(map[string]*session.Instance)
+		dirInstMap := make(map[string]*instance.Instance)
 		for _, inst := range instances {
-			if !inst.IsWorktree && inst.HasTag(session.TagBacklogWork) {
+			if !inst.IsWorktree && inst.HasTag(instance.TagBacklogWork) {
 				dirUUIDs = append(dirUUIDs, inst.UUID)
 				dirInstMap[inst.UUID] = inst
 			}
@@ -1112,7 +1113,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	w2 := warren.NewWire("RuntimeDeps.Pollers")
 	warren.SetAlways(w2, "ReviewQueuePoller.Instances", reviewQueuePoller.SetInstances, instances)
 	warren.SetAlways(w2, "PRStatusPoller.Instances", svc.PRStatusPoller.SetInstances, instances)
-	warren.SetAlways(w2, "PRStatusPoller.OnUpdated", svc.PRStatusPoller.SetOnUpdated, func(inst *session.Instance) {
+	warren.SetAlways(w2, "PRStatusPoller.OnUpdated", svc.PRStatusPoller.SetOnUpdated, func(inst *instance.Instance) {
 		eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"github_pr_priority", "github_pr_state", "github_check_conclusion"}))
 	})
 	if sessionTagPoller != nil {
@@ -1174,11 +1175,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 				continue
 			}
 			title, status := inst.Title, inst.GetLifecycleStatus()
-			outcome, err := session.HotRestoreIfLive(inst, inst.IsLiveOrStoredSessionLive)
+			outcome, err := instance.HotRestoreIfLive(inst, inst.IsLiveOrStoredSessionLive)
 			switch {
 			case err != nil:
 				log.Warn("Reconcile: hot-restore failed", "session", title, "err", err)
-			case outcome == session.HotRestoreCleared:
+			case outcome == instance.HotRestoreCleared:
 				log.Info("Reconcile: restored session (was terminal, now Running)", "session", title, "was", status)
 				eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 			}
@@ -1336,7 +1337,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	// Step 11: ExternalDiscovery with session-added/removed callbacks
 	externalDiscovery := session.NewExternalSessionDiscovery()
-	externalDiscovery.OnSessionAdded(func(instance *session.Instance) {
+	externalDiscovery.OnSessionAdded(func(instance *instance.Instance) {
 		if gate := sessionService.DeliveryGate(); gate != nil {
 			gate.UpsertInstance(instance)
 		}
@@ -1361,7 +1362,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 		log.Info("added external session to review queue poller, PR status poller, and history linker", "session", instance.Title)
 	})
-	externalDiscovery.OnSessionRemoved(func(instance *session.Instance) {
+	externalDiscovery.OnSessionRemoved(func(instance *instance.Instance) {
 		if gate := sessionService.DeliveryGate(); gate != nil {
 			gate.RemoveSession(instance.Title)
 		}
@@ -1600,7 +1601,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 				}
 				return cfg.ContextHealth
 			},
-			func(inst *session.Instance) {
+			func(inst *instance.Instance) {
 				eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"context_health"}))
 			})
 		tokenStore.Start(context.Background())
@@ -2224,7 +2225,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 // package) rather than in session, per this repo's interface-pollution convention,
 // so a fake with no real *session.Storage can stand in for tests.
 type registryInstanceChecker interface {
-	WithInstance(ctx context.Context, sessionID string, fn func(*session.LiveInstance) error) error
+	WithInstance(ctx context.Context, sessionID string, fn func(*instance.LiveInstance) error) error
 }
 
 // newSessionLivenessChecker builds the func(sessionUUID string) bool wired onto
@@ -2254,13 +2255,13 @@ type registryInstanceChecker interface {
 // session's controller never made progress, despite the session having been
 // correctly started and wired (Start + SetStatusManager + StartController) at
 // spawn time in SpawnReviewSession → CreateDirectorySession.
-func newSessionLivenessChecker(findLive func(sessionUUID string) *session.Instance, registry registryInstanceChecker) func(sessionUUID string) bool {
+func newSessionLivenessChecker(findLive func(sessionUUID string) *instance.Instance, registry registryInstanceChecker) func(sessionUUID string) bool {
 	return func(sessionUUID string) bool {
 		if live := findLive(sessionUUID); live != nil {
 			return live.TmuxSessionExists()
 		}
 		alive := false
-		_ = registry.WithInstance(context.Background(), sessionUUID, func(li *session.LiveInstance) error {
+		_ = registry.WithInstance(context.Background(), sessionUUID, func(li *instance.LiveInstance) error {
 			alive = li.TmuxSessionExists()
 			return nil
 		})
@@ -2296,11 +2297,11 @@ func (a *scannerSource) GetWorktrees() []prpoller.WorktreeScanItem {
 // installWorktreeEnricher starts and registers the process-wide worktree enricher
 // that instance loading consults (stopped by session.StopWorktreeEnricher). Any
 // previously registered enricher is stopped first.
-func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherConfig) *session.WorktreeEnricher {
-	session.StopWorktreeEnricher()
-	e := session.NewWorktreeEnricher(cfg)
+func installWorktreeEnricher(ctx context.Context, cfg instance.WorktreeEnricherConfig) *instance.WorktreeEnricher {
+	instance.StopWorktreeEnricher()
+	e := instance.NewWorktreeEnricher(cfg)
 	e.Start(ctx)
-	session.SetWorktreeEnricher(e)
+	instance.SetWorktreeEnricher(e)
 	return e
 }
 
@@ -2310,11 +2311,11 @@ func installWorktreeEnricher(ctx context.Context, cfg session.WorktreeEnricherCo
 // shouldBootStart reports whether the boot loop should Start(false) inst. Archived sessions are
 // deliberately retired and never auto-started (ADR-001, superseded-rework-session-retirement).
 // Re-evaluated after the boot stagger sleep because the answer can change while it sleeps.
-func shouldBootStart(inst *session.Instance) bool {
+func shouldBootStart(inst *instance.Instance) bool {
 	return inst != nil && !inst.IsArchived() && !inst.Started() && !deferToReconcile(inst)
 }
 
-func deferToReconcile(inst *session.Instance) bool {
+func deferToReconcile(inst *instance.Instance) bool {
 	switch inst.GetLifecycleStatus() {
 	case domain.PermanentlyFailed, domain.Failed:
 		return true

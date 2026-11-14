@@ -6,6 +6,7 @@ import (
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"strings"
@@ -36,7 +37,7 @@ type SessionHealthChecker struct {
 	deadPaneRecorder DeadPaneRecorder
 
 	// stopSourceFor builds the pane reader for a snapshot; nil means the live instance (tests inject fakes).
-	stopSourceFor func(*Instance) stopSource
+	stopSourceFor func(*instance.Instance) stopSource
 }
 
 // DeadPaneRecorder is told, before a dead pane is respawned, what its snapshot held.
@@ -78,7 +79,7 @@ const restartGracePeriod = 60 * time.Second
 // leaving it stuck retrying against a directory that will never come back.
 // Reuses the CreationProgress + Stopped pattern CreateSession already uses for
 // startup failures (see server/services/session_service.go).
-func markStartFailed(instance *Instance, err error) {
+func markStartFailed(instance *instance.Instance, err error) {
 	instance.SetCreationProgress(fmt.Sprintf("Session failed: %s", err.Error()))
 	instance.ForceStatus(domain.Stopped)
 	log.ForSession(instance.Title).Error("session failed: working directory missing, giving up", "err", err)
@@ -128,7 +129,7 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 // "server is down") or run destructive recovery against instances whose own socket
 // is genuinely down (false "server is up"). So each instance's down-check is scoped
 // to its own socket, memoized per socket to avoid redundant queries.
-func (h *SessionHealthChecker) checkInstances(instances []*Instance) []HealthCheckResult {
+func (h *SessionHealthChecker) checkInstances(instances []*instance.Instance) []HealthCheckResult {
 	downSockets := make(map[string]bool)
 
 	// One tmux.BatchPaneDeadStatus call per distinct socket per tick, instead of
@@ -223,7 +224,7 @@ func (h *SessionHealthChecker) resetFailureCount(title string) {
 // (the batch fetch failed for this socket) or doesn't contain this session's
 // name (e.g. GetTmuxSessionName() is empty for an external/uninitialized
 // session).
-func paneDeadStatus(instance *Instance, batch map[string]tmux.PaneDeadStatus) (dead bool, code int, signal string) {
+func paneDeadStatus(instance *instance.Instance, batch map[string]tmux.PaneDeadStatus) (dead bool, code int, signal string) {
 	if name := instance.GetTmuxSessionName(); name != "" {
 		if status, ok := batch[name]; ok {
 			return status.Dead, status.Code, status.Signal
@@ -248,7 +249,7 @@ func paneDeadStatus(instance *Instance, batch map[string]tmux.PaneDeadStatus) (d
 // (ADR-001, session-retry-backoff) -- it requires an explicit Retry now, not
 // silent health-checker recovery. Archived sessions are skipped regardless of
 // status: archival means the session was deliberately retired.
-func healthCheckSkipReason(instance *Instance) (string, bool) {
+func healthCheckSkipReason(instance *instance.Instance) (string, bool) {
 	snap := instance.Snapshot()
 	// Checked before IsSuspended() because the statuses that reach
 	// recoverMissingSession's Start(false) -- Active, Creating, Restoring,
@@ -280,7 +281,7 @@ func healthCheckSkipReason(instance *Instance) (string, bool) {
 // checkSingleSession performs a health check on a single session. paneStatus
 // is the batch-fetched pane-dead status for instance's tmux socket (nil if the
 // batch fetch failed), keyed by session name -- see paneDeadStatus.
-func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus map[string]tmux.PaneDeadStatus) HealthCheckResult {
+func (h *SessionHealthChecker) checkSingleSession(instance *instance.Instance, paneStatus map[string]tmux.PaneDeadStatus) HealthCheckResult {
 	result := HealthCheckResult{
 		InstanceTitle: instance.Title,
 		IsHealthy:     true,
@@ -307,7 +308,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 	// constructs fresh on every call (not the live, actor-managed instance),
 	// so marking it started has no effect beyond this health check.
 	if instance.Status == domain.Active && !instance.Started() {
-		instance.started.Store(true)
+		instance.MarkStarted()
 	}
 
 	// Check if instance thinks it's started but tmux session doesn't exist.
@@ -326,7 +327,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance, paneStatus
 
 // checkTmuxHealth classifies instance's tmux backend as missing, dead-paned, or
 // healthy, and drives the matching recovery. Only called for started sessions.
-func (h *SessionHealthChecker) checkTmuxHealth(instance *Instance, paneStatus map[string]tmux.PaneDeadStatus, result *HealthCheckResult) {
+func (h *SessionHealthChecker) checkTmuxHealth(instance *instance.Instance, paneStatus map[string]tmux.PaneDeadStatus, result *HealthCheckResult) {
 	if !instance.TmuxAlive() {
 		h.recoverMissingSession(instance, result)
 		return
@@ -349,7 +350,7 @@ func (h *SessionHealthChecker) checkTmuxHealth(instance *Instance, paneStatus ma
 // recordStartFailure records a failed recovery Start() on result, and gives up
 // permanently when the session's working directory is gone (e.g. a pruned
 // worktree) rather than retrying every health-check cycle forever.
-func recordStartFailure(instance *Instance, err error, action string, result *HealthCheckResult) {
+func recordStartFailure(instance *instance.Instance, err error, action string, result *HealthCheckResult) {
 	result.Issues = append(result.Issues, fmt.Sprintf("Recovery failed: %v", err))
 	result.RecoverySuccess = false
 	result.Actions = append(result.Actions, action)
@@ -361,7 +362,7 @@ func recordStartFailure(instance *Instance, err error, action string, result *He
 
 // recoverMissingSession handles a session marked started whose tmux session no
 // longer exists, by recreating it once the failure debounce has been satisfied.
-func (h *SessionHealthChecker) recoverMissingSession(instance *Instance, result *HealthCheckResult) {
+func (h *SessionHealthChecker) recoverMissingSession(instance *instance.Instance, result *HealthCheckResult) {
 	result.IsHealthy = false
 	result.Issues = append(result.Issues, "Instance marked as started but tmux session doesn't exist")
 
@@ -398,7 +399,7 @@ func (h *SessionHealthChecker) recoverMissingSession(instance *Instance, result 
 // stale-tmux-server-cwd bug surfaced only as "exit code 1", and finding the
 // real cause required manually attaching to a dead pane to read this same
 // text) -- whatever the program itself printed usually does.
-func lastPaneOutputSnippet(instance *Instance) string {
+func lastPaneOutputSnippet(instance *instance.Instance) string {
 	ts := instance.GetTmuxSession()
 	if ts == nil {
 		return ""
@@ -429,7 +430,7 @@ func lastPaneOutputSnippet(instance *Instance) string {
 // TmuxAlive() alone cannot see this -- it only checks session existence -- so
 // without this the session is reported healthy forever. See
 // session/instance_tmux.go PaneProcessDead() doc.
-func (h *SessionHealthChecker) handleDeadPane(instance *Instance, exitCode int, exitSignal string, result *HealthCheckResult) {
+func (h *SessionHealthChecker) handleDeadPane(instance *instance.Instance, exitCode int, exitSignal string, result *HealthCheckResult) {
 	result.IsHealthy = false
 	result.Issues = append(result.Issues, "tmux session alive but pane process has exited (remain-on-exit placeholder)")
 
@@ -492,7 +493,7 @@ func logDeadPaneSnapshot(title string, src stopSource, exitCode int, exitSignal 
 }
 
 // recordDeadPane logs the snapshot and hands it to the recorder, if any.
-func (h *SessionHealthChecker) recordDeadPane(instance *Instance, exitCode int, exitSignal string) {
+func (h *SessionHealthChecker) recordDeadPane(instance *instance.Instance, exitCode int, exitSignal string) {
 	var src stopSource
 	if h.stopSourceFor != nil {
 		src = h.stopSourceFor(instance)
@@ -525,7 +526,7 @@ func observeDeadPane(title string, src stopSource, exitCode int, exitSignal stri
 // refuses to restart, so this can't spin forever forking tmux subprocesses.
 // Only give up and surface a user-visible Crashed banner once the respawn
 // attempt itself fails.
-func handleCrashedPane(instance *Instance, exitCode int, exitSignal string, result *HealthCheckResult) {
+func handleCrashedPane(instance *instance.Instance, exitCode int, exitSignal string, result *HealthCheckResult) {
 	exitReason := fmt.Sprintf("exit code %d", exitCode)
 	if exitSignal != "" {
 		exitReason = fmt.Sprintf("signal %s (exit code %d)", exitSignal, exitCode)
@@ -551,7 +552,7 @@ func handleCrashedPane(instance *Instance, exitCode int, exitSignal string, resu
 // markRespawned records a successful respawn on result and clears any stale
 // "Session failed: ..." creation-progress message, shared by the
 // startup-grace-window and post-grace-window (auto-refresh) respawn paths.
-func markRespawned(instance *Instance, result *HealthCheckResult, action string) {
+func markRespawned(instance *instance.Instance, result *HealthCheckResult, action string) {
 	result.RecoverySuccess = true
 	result.Actions = append(result.Actions, action)
 	instance.SetCreationProgress("")
@@ -568,7 +569,7 @@ func markRespawned(instance *Instance, result *HealthCheckResult, action string)
 // RestoreWithWorkDir, which does NOT relaunch the wrapped program. Killing it
 // first forces Start(false) down the cold-restore path that actually
 // relaunches it (with --resume when a conversation UUID is known).
-func respawnDeadPane(instance *Instance) error {
+func respawnDeadPane(instance *instance.Instance) error {
 	if err := instance.KillSession(); err != nil {
 		log.Warn("failed to kill stale dead-pane session before respawn", "session", instance.Title, "err", err)
 	}
@@ -577,7 +578,7 @@ func respawnDeadPane(instance *Instance) error {
 
 // checkWorktreeHealth flags a session whose git worktree directory has been
 // removed out from under it.
-func checkWorktreeHealth(instance *Instance, result *HealthCheckResult) {
+func checkWorktreeHealth(instance *instance.Instance, result *HealthCheckResult) {
 	if instance.Paused() || !instance.GitManager().HasWorktree() {
 		return
 	}

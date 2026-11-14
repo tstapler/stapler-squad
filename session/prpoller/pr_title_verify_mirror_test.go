@@ -11,9 +11,10 @@ import (
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func viewOf(t *testing.T, inst *session.Instance, n int) domain.PRView {
+func viewOf(t *testing.T, inst *instance.Instance, n int) domain.PRView {
 	t.Helper()
 	for _, v := range inst.Snapshot().GitHub.PRs {
 		if v.Ref.Number() == n {
@@ -31,7 +32,7 @@ func TestPoller_ShouldPersistAndMirrorTitle_WhenFetchSucceeds(t *testing.T) {
 	inst := newPRTestInstance(t)
 	inst.Status = domain.Active
 	require.NoError(t, inst.AttachPR(prRefN(t, 12), domain.AttachSourceManual, domain.PRInitial{State: domain.PRStateOpen}))
-	p.SetInstances([]*session.Instance{inst})
+	p.SetInstances([]*instance.Instance{inst})
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 12), domain.PRInitial{State: domain.PRStateOpen})
 
 	p.checkAllSessions()
@@ -62,7 +63,7 @@ func TestPoller_ShouldMirrorVerifyAttemptsToLiveSession_WhenUnverifiedTerminalPo
 	inst.Status = domain.Active
 	unverified := domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}
 	require.NoError(t, inst.AttachPR(prRefN(t, 9), domain.AttachSourceBackfill, unverified))
-	p.SetInstances([]*session.Instance{inst})
+	p.SetInstances([]*instance.Instance{inst})
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 	require.True(t, viewOf(t, inst, 9).UnverifiedTerminal())
 
@@ -87,7 +88,7 @@ func TestPoller_ShouldClearMirroredVerifyAttempts_WhenLaterFetchResolvesTheRow(t
 	unverified := domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}
 	require.NoError(t, inst.AttachPR(prRefN(t, 9), domain.AttachSourceBackfill, unverified))
 	inst.MirrorPRPollFacts(prRefN(t, 9), domain.PRView{PollFailCount: 3, PollError: "not_found", FirstFailAt: time.Now()})
-	p.SetInstances([]*session.Instance{inst})
+	p.SetInstances([]*instance.Instance{inst})
 	seedStateRow(t, storage.Repo, session.SessionPROwner(inst.UUID), prRefN(t, 9), unverified)
 
 	p.checkAllSessions()

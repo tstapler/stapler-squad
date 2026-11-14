@@ -28,6 +28,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/hostclaim"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -521,7 +522,7 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 	listener.SetEnabled(true)
 
 	// Create a minimal Instance with a known UUID (without starting tmux).
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		UUID: uuid.New().String(),
 	}
 
@@ -585,7 +586,7 @@ func TestBacklogLifecycleListener_WireToInstance_EventStopped_TransitionsToRevie
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetEnabled(true)
 
-	inst := &session.Instance{UUID: uuid.New().String()}
+	inst := &instance.Instance{UUID: uuid.New().String()}
 	listener.WireToInstance(inst)
 
 	itemData := backlogdto.BacklogItemData{
@@ -812,7 +813,7 @@ func TestBacklogLifecycleListener_IgnoresEventsWhenDisabled(t *testing.T) {
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetEnabled(false) // explicitly disabled
 
-	inst := &session.Instance{UUID: sessionUUID}
+	inst := &instance.Instance{UUID: sessionUUID}
 	listener.WireToInstance(inst)
 
 	// Fire EventExited — the gate should stop processing immediately.
@@ -861,7 +862,7 @@ func TestBacklogLifecycleListener_ProcessesEventsWhenEnabled(t *testing.T) {
 	listener := NewBacklogLifecycleListener(storage)
 	listener.SetEnabled(true)
 
-	inst := &session.Instance{UUID: sessionUUID}
+	inst := &instance.Instance{UUID: sessionUUID}
 	listener.WireToInstance(inst)
 
 	// Fire EventExited — the listener must process it and transition the item.
@@ -900,7 +901,7 @@ func newStuckReviewTestItemWithVerdictAge(t *testing.T, storage *session.Storage
 	require.NoError(t, err)
 	is, err := er.Client.ItemSession.Create().
 		SetSessionUUID("headless-review-" + uuid.New().String()).
-		SetSessionRole(string(session.SessionRoleReview)).
+		SetSessionRole(string(instance.SessionRoleReview)).
 		SetBacklogItemID(parsedItemID).
 		Save(ctx)
 	require.NoError(t, err)
@@ -1643,7 +1644,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -1660,7 +1661,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_DoesNotRespawn_When_BackoffNotDue
 	// Put the item back at pr_pending with the same closed PR reference, as if
 	// a fresh push landed the same closed PR number again — the realistic
 	// repeat-tick scenario this gate protects against.
-	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusPRPending, nil, session.TriggeredBySystem)
+	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusPRPending, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener.ReconcilePRPending(ctx, er)
@@ -2013,7 +2014,7 @@ func TestReconcilePRPending_ClosedWithoutMerge_ClearsPRFieldsAndReopens(t *testi
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -2054,7 +2055,7 @@ func TestReconcilePRPending_should_ClearWatermark_When_PRClosedWithoutMerging(t 
 	})
 	fakeSpawner := &fakePRFixSpawner{
 		onCall: func() {
-			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+			_, transErr := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 			require.NoError(t, transErr)
 		},
 	}
@@ -2323,7 +2324,7 @@ func TestReconcilePRPending_SpawnsFixSession_When_LastCommitNotOnMain(t *testing
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.New().String(),
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, workIS.ID, featureSHA, "feature work", time.Now(), 1))
@@ -2447,7 +2448,7 @@ func newPushAndCreatePRTestFixture(t *testing.T, storage *session.Storage) (*bac
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -2455,7 +2456,7 @@ func newPushAndCreatePRTestFixture(t *testing.T, storage *session.Storage) (*bac
 	inst.UUID = sessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/fake-repo", "/tmp/fake-repo/../worktrees/push-pr-test", "push-pr-test", "backlog/push-pr-test", "abc123")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	return item, backlogdto.ItemSessionSummary{ID: is.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
 }
@@ -2774,7 +2775,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 	itemSession, err := storage.CreateItemSession(context.Background(), backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -2783,7 +2784,7 @@ func TestPushAndCreatePR_AppendsBacklogLink_ToAgentDraftedBody(t *testing.T) {
 	inst := newTestInstance("push-pr-drafted-body-test")
 	inst.UUID = sessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(repoDir, repoDir, "push-pr-drafted-body-test", "backlog/push-pr-drafted-body-test", baseSHA)
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	is := backlogdto.ItemSessionSummary{ID: itemSession.ID, SessionUUID: sessionUUID, BacklogItemID: item.ID}
 
 	const draftedBody = "## Summary\nThis change adds the missing dedup check.\n\n## Test plan\n- [x] Ran the new regression test\n"
@@ -3004,7 +3005,7 @@ func TestRecordPRCreatedOutOfBand_NoOp_WhenItemNotInReview(t *testing.T) {
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -3102,7 +3103,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_RecoversImmediately_WhenNoActive
 	// Simulate the race: something else moves the item off "review" while
 	// pushAndCreatePR's own network calls (push, create PR, enable auto-merge)
 	// are still in flight, before its resolveToPRPending call runs.
-	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -3142,7 +3143,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessi
 	item, is := newPushAndCreatePRTestFixture(t, storage)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, is.ID, time.Now()))
 
-	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+	_, err := storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	// A brand-new work session starts for the item — e.g. AutoReopenAfterFailedReview
@@ -3150,7 +3151,7 @@ func TestPushAndCreatePR_StatusDriftedDuringRun_DefersToSelfHeal_WhenActiveSessi
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.New().String(),
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -3253,7 +3254,7 @@ func TestReconcileDriftedPRItems_DoesNotTouchItem_WhenActiveSessionExists(t *tes
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: uuid.New().String(),
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -3327,7 +3328,7 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *session.Storage,
 	createdWorkIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	workIS = createdWorkIS
@@ -3336,13 +3337,13 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *session.Storage,
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		"/tmp/fake-repo", "/tmp/fake-repo/../worktrees/"+workSessionName, workSessionName, "backlog/"+workSessionName, "abc123")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	reviewSessionUUID := uuid.New().String()
 	createdReviewIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: reviewSessionUUID,
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	})
 	require.NoError(t, err)
 
@@ -3354,7 +3355,7 @@ func newHandleReviewSessionExitedFixture(t *testing.T, storage *session.Storage,
 		ID:            createdReviewIS.ID,
 		BacklogItemID: createdItem.ID,
 		SessionUUID:   reviewSessionUUID,
-		Role:          session.SessionRoleReview,
+		Role:          instance.SessionRoleReview,
 	}
 	return createdItem, reviewIS, workSessionName, workIS
 }
@@ -3541,7 +3542,7 @@ func TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone(t *testi
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.UpdateItemSessionEnded(ctx, workIS.ID, time.Now()))
@@ -3552,7 +3553,7 @@ func TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone(t *testi
 	reviewISData, err := storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: reviewSessionUUID,
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: domain.ReviewVerdictPass,
 		PerCriterion:   `[]`,
@@ -3563,7 +3564,7 @@ func TestShipViaAgentOrFallback_NoWorktreeRecorded_StillFallsBackToDone(t *testi
 		ID:            reviewISData.ID,
 		BacklogItemID: item.ID,
 		SessionUUID:   reviewSessionUUID,
-		Role:          session.SessionRoleReview,
+		Role:          instance.SessionRoleReview,
 	}
 
 	listener := NewBacklogLifecycleListener(storage)
@@ -4084,7 +4085,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -4111,7 +4112,7 @@ func TestBacklogLifecycleListener_HeadlessPoolAlone_NoLongerTriggersReviewGateSp
 	sessions, err := storage.ListItemSessions(ctx, createdItem.ID)
 	require.NoError(t, err)
 	for _, s := range sessions {
-		assert.NotEqual(t, session.SessionRoleReview, s.Role, "no review ItemSession should be created when only a headless pool (no session creator) is configured")
+		assert.NotEqual(t, instance.SessionRoleReview, s.Role, "no review ItemSession should be created when only a headless pool (no session creator) is configured")
 	}
 }
 
@@ -4144,11 +4145,11 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItem.ID,
 		SessionUUID: sessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
-	reviewInstance := &session.Instance{UUID: uuid.New().String()}
+	reviewInstance := &instance.Instance{UUID: uuid.New().String()}
 	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	listener := NewBacklogLifecycleListenerWithSpawner(storage, spawner)
 	// Explicitly confirm the nil-workflowEngine default this test relies on —
@@ -4174,7 +4175,7 @@ func TestReviewGateSpawn_should_FireForReviewToPrPending_When_AutomatedReviewGat
 		}
 		reviewEntry = nil
 		for i := range sessions {
-			if sessions[i].Role == session.SessionRoleReview {
+			if sessions[i].Role == instance.SessionRoleReview {
 				reviewEntry = &sessions[i]
 			}
 		}
@@ -4568,12 +4569,12 @@ func TestReconcilePRPending_CleansUpBacklogScaffolding_WhenPRMerged(t *testing.T
 	inst := newTestInstance("pr-pending-worktree")
 	inst.UUID = uuid.New().String()
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage("/repo", worktreePath, "pr-pending-worktree", "backlog/some-item", "abc123")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -4618,12 +4619,12 @@ func newOrphanedAgentPRTestItem(t *testing.T, storage *session.Storage, branchNa
 	inst := newTestInstance("orphaned-agent-pr-worktree")
 	inst.UUID = uuid.New().String()
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage("/tmp/orphaned-agent-pr-test-repo", "/tmp/orphaned-agent-pr-test-repo/../wt", "orphaned-agent-pr-worktree", branchName, "abc123")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// No live session — the whole point of this backstop is that the agent
@@ -4701,11 +4702,11 @@ func TestReconcileOrphanedAgentPRs_should_NoOp_When_NoMatchingPR(t *testing.T) {
 // recoverDriftedPRItem/reconcileDriftedPRItems don't steal an item away from Jules.
 func TestHasActiveSession_should_ReturnTrue_When_OpenJulesSessionPresent(t *testing.T) {
 	t.Parallel()
-	open := []backlogdto.ItemSessionSummary{{Role: session.SessionRoleJulesWork, EndedAt: nil}}
+	open := []backlogdto.ItemSessionSummary{{Role: instance.SessionRoleJulesWork, EndedAt: nil}}
 	assert.True(t, hasActiveSession(open), "an open jules_work session must count as active")
 
 	ended := time.Now()
-	closedRow := []backlogdto.ItemSessionSummary{{Role: session.SessionRoleJulesWork, EndedAt: &ended}}
+	closedRow := []backlogdto.ItemSessionSummary{{Role: instance.SessionRoleJulesWork, EndedAt: &ended}}
 	assert.False(t, hasActiveSession(closedRow), "an ended jules_work session must not count as active")
 }
 
@@ -4720,10 +4721,10 @@ func TestHasActiveSession_should_PreserveWorkAndReviewGating_When_JulesRoleAdded
 		role string
 		want bool // want when EndedAt is nil (open)
 	}{
-		{"work", session.SessionRoleWork, true},
-		{"review", session.SessionRoleReview, true},
-		{"triage", session.SessionRoleTriage, false},
-		{"jules_work", session.SessionRoleJulesWork, true},
+		{"work", instance.SessionRoleWork, true},
+		{"review", instance.SessionRoleReview, true},
+		{"triage", instance.SessionRoleTriage, false},
+		{"jules_work", instance.SessionRoleJulesWork, true},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -4794,9 +4795,9 @@ func TestTransitionBouncingItemToDone_TriggersCleanup(t *testing.T) {
 	newTrackedWorkSession(t, storage, item.ID, item.RepoPath, "backlog/bouncing-merged-cleanup", "")
 
 	for i := 0; i < 3; i++ {
-		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReview, nil, session.TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusReview, nil, instance.TriggeredBySystem)
 		require.NoError(t, err)
-		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, session.TriggeredBySystem)
+		_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress, nil, instance.TriggeredBySystem)
 		require.NoError(t, err)
 	}
 
@@ -4838,7 +4839,7 @@ func TestTransitionBouncingItemToDone_SkipsCleanup_When_TransitionFails(t *testi
 	// Archive the item out from under the in-flight bounce reconciliation so
 	// the review->done precondition inside transitionBouncingItemToDone fails
 	// (item.Status captured before this call is stale).
-	_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, session.TriggeredBySystem, "archived mid-reconcile")
+	_, err = storage.RawArchiveBacklogItem(ctx, item.ID, nil, instance.TriggeredBySystem, "archived mid-reconcile")
 	require.NoError(t, err)
 
 	transErr := listener.transitionBouncingItemToDone(ctx, *item, "test summary")

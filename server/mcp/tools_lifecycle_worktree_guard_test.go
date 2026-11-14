@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -44,7 +45,7 @@ func (e *liveSessionExecutor) Output(_ *exec.Cmd) ([]byte, error) {
 // newWorktreeGuardHandlers wires a real *services.SessionService (the field is a
 // concrete type, so there is no seam to stub OtherLiveSessionInsideWorktree
 // behind) to a poller holding occupants, and returns lifecycleHandlers over it.
-func newWorktreeGuardHandlers(t *testing.T, occupants ...*session.Instance) *lifecycleHandlers {
+func newWorktreeGuardHandlers(t *testing.T, occupants ...*instance.Instance) *lifecycleHandlers {
 	t.Helper()
 	envtest.NewIsolatedStateDir(t)
 	storage := newTestBacklogStorage(t)
@@ -53,7 +54,7 @@ func newWorktreeGuardHandlers(t *testing.T, occupants ...*session.Instance) *lif
 	t.Cleanup(func() { bus.Close() })
 	t.Cleanup(func() { svc.Shutdown() })
 
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	poller.SetInstances(occupants)
 	svc.SetReviewQueuePoller(poller)
 
@@ -65,9 +66,9 @@ func newWorktreeGuardHandlers(t *testing.T, occupants ...*session.Instance) *lif
 // SetTmuxSession only takes effect once the constructor has wired a TmuxBackend.
 // A nil PtyFactory is safe — neither the liveness probe nor the pane-path lookup
 // touches it.
-func newLiveOccupant(t *testing.T, title, paneCWD string) *session.Instance {
+func newLiveOccupant(t *testing.T, title, paneCWD string) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: t.TempDir()})
+	inst, err := instance.NewInstance(instance.InstanceOptions{Title: title, Path: t.TempDir()})
 	require.NoError(t, err)
 	inst.SetTmuxSession(tmux.NewTmuxSessionWithDeps(title, "true", nil, &liveSessionExecutor{
 		sessionName: tmux.NewSessionName(title, tmux.TmuxPrefix).String(),
@@ -79,8 +80,8 @@ func newLiveOccupant(t *testing.T, title, paneCWD string) *session.Instance {
 // newWorktreeTargetInstance builds the pause/stop target: a session whose
 // GetEffectiveRootDir resolves to worktreePath, which both pause_session and
 // stop_session would delete.
-func newWorktreeTargetInstance(uuid, worktreePath string) *session.Instance {
-	inst := &session.Instance{Title: "guard-target-" + uuid, UUID: uuid, Path: worktreePath, Status: domain.Active}
+func newWorktreeTargetInstance(uuid, worktreePath string) *instance.Instance {
+	inst := &instance.Instance{Title: "guard-target-" + uuid, UUID: uuid, Path: worktreePath, Status: domain.Active}
 	inst.SetGitWorktree(git.NewGitWorktreeFromStorage(worktreePath, worktreePath, "guard-target", "guard-branch", ""))
 	return inst
 }
@@ -127,7 +128,7 @@ func TestRefuseIfWorktreeSharedWithOtherLiveSession_AllowsWhenNothingElseOccupie
 	lh := newWorktreeGuardHandlers(t, elsewhere)
 
 	t.Run("directory session has no worktree to protect", func(t *testing.T) {
-		plain := &session.Instance{Title: "guard-plain", UUID: "uuid-plain", Path: worktree, Status: domain.Active}
+		plain := &instance.Instance{Title: "guard-plain", UUID: "uuid-plain", Path: worktree, Status: domain.Active}
 		require.False(t, plain.HasGitWorktree(), "test setup: this instance must have no worktree")
 		assert.Nil(t, lh.refuseIfWorktreeSharedWithOtherLiveSession(plain))
 	})

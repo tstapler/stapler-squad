@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/gitwt"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 )
 
@@ -59,7 +60,7 @@ func TestConfigSurfaceProof_BrowserPassthrough_ChangesInstanceManagerGate(t *tes
 	set := bkfFlagWriter(t)
 	svctest.AssertConfigChangesBehavior(t, func(setting any) any {
 		set("browser-passthrough", setting.(bool))
-		return session.BrowserPassthroughEnabled(config.LoadConfig())
+		return instance.BrowserPassthroughEnabled(config.LoadConfig())
 	}, false, true)
 }
 

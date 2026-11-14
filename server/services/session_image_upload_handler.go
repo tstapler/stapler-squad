@@ -12,6 +12,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -23,7 +24,7 @@ const (
 // instanceFinder resolves a session by ID without restarting sessions.
 // Implemented by ReviewQueuePoller.
 type instanceFinder interface {
-	FindInstance(sessionID string) *session.Instance
+	FindInstance(sessionID string) *instance.Instance
 }
 
 // SessionImageUploadHandler saves uploaded files to a session's uploads/ directory
@@ -128,7 +129,7 @@ func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.
 
 	// Resolve session using live in-memory state when available (avoids restarting
 	// all sessions as a side-effect of LoadInstances → FromInstanceData → Start).
-	var inst *session.Instance
+	var inst *instance.Instance
 	if h.finder != nil {
 		inst = h.finder.FindInstance(sessionID)
 	}

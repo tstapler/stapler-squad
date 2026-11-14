@@ -2,6 +2,7 @@ package session
 
 import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Declarations the session core shares with the backlog lifecycle code (relocated so that code can move to its own package).
@@ -24,7 +25,7 @@ func ReviewVerdictSummariesMostRecentFirst(priorSessions []backlogdto.ItemSessio
 	var out []backlogdto.ReviewVerdictSummary
 	for i := len(priorSessions) - 1; i >= 0; i-- {
 		s := priorSessions[i]
-		if s.Role == SessionRoleReview && s.ReviewVerdict != nil {
+		if s.Role == instance.SessionRoleReview && s.ReviewVerdict != nil {
 			out = append(out, *s.ReviewVerdict)
 		}
 	}

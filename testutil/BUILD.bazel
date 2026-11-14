@@ -16,7 +16,7 @@ go_library(
     deps = [
         "//executor",
         "//executor/safeexec",
-        "//session",
+        "//session/instance",
         "//session/tmux",
         "@com_github_creack_pty//:pty",
         "@com_github_linkdata_deadlock//:deadlock",

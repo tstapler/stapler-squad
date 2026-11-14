@@ -2,16 +2,16 @@ package testutil
 
 import (
 	"fmt"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SessionWaiter provides utilities for waiting on session operations
 type SessionWaiter struct {
-	instance *session.Instance
+	instance *instance.Instance
 }
 
 // NewSessionWaiter creates a new session waiter
-func NewSessionWaiter(instance *session.Instance) *SessionWaiter {
+func NewSessionWaiter(instance *instance.Instance) *SessionWaiter {
 	return &SessionWaiter{instance: instance}
 }
 
@@ -131,21 +131,21 @@ func (w *SessionWaiter) getSessionTitle() string {
 // Package-level convenience functions
 
 // WaitForSession waits for a session to be fully ready
-func WaitForSession(instance *session.Instance) error {
+func WaitForSession(instance *instance.Instance) error {
 	return NewSessionWaiter(instance).WaitForFullyReady()
 }
 
 // WaitForSessionWithTimeout waits for session with custom timeout
-func WaitForSessionWithTimeout(instance *session.Instance, config WaitConfig) error {
+func WaitForSessionWithTimeout(instance *instance.Instance, config WaitConfig) error {
 	return NewSessionWaiter(instance).WaitForFullyReadyWithTimeout(config)
 }
 
 // WaitForSessionPreview waits for session to have specific preview content
-func WaitForSessionPreview(instance *session.Instance, validator ContentValidator) (string, error) {
+func WaitForSessionPreview(instance *instance.Instance, validator ContentValidator) (string, error) {
 	return NewSessionWaiter(instance).WaitForPreview(validator)
 }
 
 // WaitForSessionPreviewContaining waits for session preview containing text
-func WaitForSessionPreviewContaining(instance *session.Instance, text string) (string, error) {
+func WaitForSessionPreviewContaining(instance *instance.Instance, text string) (string, error) {
 	return NewSessionWaiter(instance).WaitForPreviewContaining(text)
 }

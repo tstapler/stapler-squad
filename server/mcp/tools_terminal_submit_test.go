@@ -10,13 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // recordingPM captures SendKeys traffic and reports one pane change after each
 // write, so session.SubmitDriverContent's settle/confirm polls succeed.
 type recordingPM struct {
-	session.ProcessManager
+	instance.ProcessManager
 	mu      sync.Mutex
 	sent    []string
 	pending bool
@@ -53,12 +53,12 @@ func (r *recordingPM) writes() []string {
 func newSubmitHarness(t *testing.T) (*terminalHandlers, *recordingPM) {
 	t.Helper()
 	pm := &recordingPM{}
-	inst := session.NewStartedInstanceForTest(t, "submit-s1", pm)
+	inst := instance.NewStartedInstanceForTest(t, "submit-s1", pm)
 	th := &terminalHandlers{
-		store:       &stubStore{instances: []*session.Instance{inst}},
+		store:       &stubStore{instances: []*instance.Instance{inst}},
 		scrollback:  makeScrollbackMgr(t),
 		writeLim:    newTokenBucket(10, 10),
-		capturePane: func(*session.Instance) (string, error) { return "", nil },
+		capturePane: func(*instance.Instance) (string, error) { return "", nil },
 	}
 	return th, pm
 }
@@ -75,7 +75,7 @@ func TestWriteToSession_PressEnter_SendsContentThenBareEnter(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.Equal(t, true, parseResult(t, res)["success"])
-	assert.Equal(t, []string{longInput, session.EnterKeySequence}, pm.writes())
+	assert.Equal(t, []string{longInput, instance.EnterKeySequence}, pm.writes())
 }
 
 func TestWriteToSession_PressEnterFalse_SendsSingleWriteWithoutEnter(t *testing.T) {
@@ -97,7 +97,7 @@ func TestRunCommand_SendsCommandThenBareEnter(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.Equal(t, true, parseResult(t, res)["success"])
-	assert.Equal(t, []string{"echo " + longInput[:200], session.EnterKeySequence}, pm.writes())
+	assert.Equal(t, []string{"echo " + longInput[:200], instance.EnterKeySequence}, pm.writes())
 }
 
 func TestSteerSession_PTYFallback_SendsMessageThenBareEnter(t *testing.T) {
@@ -110,7 +110,7 @@ func TestSteerSession_PTYFallback_SendsMessageThenBareEnter(t *testing.T) {
 	m := parseResult(t, res)
 	assert.Equal(t, true, m["success"])
 	assert.Equal(t, "send_keys", m["method"])
-	assert.Equal(t, []string{longInput, session.EnterKeySequence}, pm.writes())
+	assert.Equal(t, []string{longInput, instance.EnterKeySequence}, pm.writes())
 }
 
 // CapturePaneContent reports no capture so submit confirmation falls back to HasUpdated.

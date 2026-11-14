@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,8 +95,8 @@ func (f *fakeCtxHistory) Compactions(_ context.Context, _ string) ([]contexthist
 
 // newTestInstance builds a zero-value *session.Instance with UUID set so
 // assembleBundle's Snapshot() call resolves the UUID correctly.
-func newTestInstance(uuid string) *session.Instance {
-	inst := &session.Instance{}
+func newTestInstance(uuid string) *instance.Instance {
+	inst := &instance.Instance{}
 	inst.UUID = uuid
 	return inst
 }
@@ -391,12 +392,12 @@ func TestSaveSessionBundle_WritesFileAndHash(t *testing.T) {
 
 // exportForTest calls the package-internal assembleBundle via the exported
 // ExportBundleForTest shim.
-func exportForTest(t *testing.T, svc *sessionbundle.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
+func exportForTest(t *testing.T, svc *sessionbundle.SessionBundleService, inst *instance.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
 	t.Helper()
 	return exportForTestCtx(t, context.Background(), svc, inst, maxScrollbackLines)
 }
 
-func exportForTestCtx(t *testing.T, ctx context.Context, svc *sessionbundle.SessionBundleService, inst *session.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
+func exportForTestCtx(t *testing.T, ctx context.Context, svc *sessionbundle.SessionBundleService, inst *instance.Instance, maxScrollbackLines int) ([]byte, sessionbundle.BundleManifest, error) {
 	t.Helper()
 	return svc.ExportBundleForTest(ctx, inst, maxScrollbackLines, []byte(`[{"name":"t"}]`))
 }

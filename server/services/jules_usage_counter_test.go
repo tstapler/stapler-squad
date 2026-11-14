@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	sessionjules "github.com/tstapler/stapler-squad/session/jules"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -251,7 +252,7 @@ func TestJulesFullCycle_should_LogNoSecretMaterial_When_DispatchPollCompleteCycl
 	// the real transition itself first, mirroring what *BacklogService's real
 	// transitionWithGuard would have done in production.
 	_, err = storage.RawTransitionBacklogItemStatus(ctx, item.ID, domain.BacklogStatusInProgress,
-		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}, session.TriggeredByUser)
+		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady)}, instance.TriggeredByUser)
 	require.NoError(t, err)
 
 	pollClient := &fakeUsageCycleClient{}

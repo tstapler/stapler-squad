@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"regexp"
 )
 
@@ -44,19 +45,19 @@ func (ie *InhibitionEngine) SanitizeString(s string) string {
 }
 
 // SanitizeTurn applies inhibition rules to all blocks within a CanonicalTurn.
-func (ie *InhibitionEngine) SanitizeTurn(turn CanonicalTurn) CanonicalTurn {
-	sanitizedBlocks := make([]CanonicalBlock, 0, len(turn.Blocks))
+func (ie *InhibitionEngine) SanitizeTurn(turn instance.CanonicalTurn) instance.CanonicalTurn {
+	sanitizedBlocks := make([]instance.CanonicalBlock, 0, len(turn.Blocks))
 	for _, block := range turn.Blocks {
 		sanitizedBlock := block
 
 		switch block.Kind {
-		case BlockKindText, BlockKindThinking:
+		case instance.BlockKindText, instance.BlockKindThinking:
 			sanitizedBlock.Text = ie.SanitizeString(block.Text)
 
-		case BlockKindToolResult:
+		case instance.BlockKindToolResult:
 			sanitizedBlock.ToolResultContent = ie.SanitizeString(block.ToolResultContent)
 
-		case BlockKindToolUse:
+		case instance.BlockKindToolUse:
 			if len(block.ToolArgs) > 0 {
 				var rawArgs map[string]interface{}
 				if err := json.Unmarshal(block.ToolArgs, &rawArgs); err == nil {
@@ -76,8 +77,8 @@ func (ie *InhibitionEngine) SanitizeTurn(turn CanonicalTurn) CanonicalTurn {
 }
 
 // SanitizeTurns applies inhibition rules to a slice of CanonicalTurns.
-func (ie *InhibitionEngine) SanitizeTurns(turns []CanonicalTurn) []CanonicalTurn {
-	sanitized := make([]CanonicalTurn, len(turns))
+func (ie *InhibitionEngine) SanitizeTurns(turns []instance.CanonicalTurn) []instance.CanonicalTurn {
+	sanitized := make([]instance.CanonicalTurn, len(turns))
 	for i, t := range turns {
 		sanitized[i] = ie.SanitizeTurn(t)
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	entsession "github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -78,7 +79,7 @@ func sessionLegacyRef(owner, repo, host, path string, number int) (domain.PRRef,
 	}
 	if host == "" {
 		if repoRef, err := github.NewRepoRef(owner, repo); err == nil {
-			host = hostFromClonedPath(path, repoRef)
+			host = instance.HostFromClonedPath(path, repoRef)
 		}
 	}
 	return domain.NewPRRef(host, owner, repo, number)
@@ -273,7 +274,7 @@ func recordImported(rep *PRBackfillReport, c prBackfillCandidate, res domain.PRL
 // isDeterministicPRImportError reports failures that would repeat identically on
 // every boot. Anything unrecognized is treated as transient.
 func isDeterministicPRImportError(err error) bool {
-	return errors.Is(err, ErrZeroPRRef) || errors.Is(err, ErrInvalidPROwner) || errors.Is(err, domain.ErrSessionPRLinkCap) ||
+	return errors.Is(err, instance.ErrZeroPRRef) || errors.Is(err, ErrInvalidPROwner) || errors.Is(err, domain.ErrSessionPRLinkCap) ||
 		ent.IsValidationError(err) || ent.IsConstraintError(err)
 }
 

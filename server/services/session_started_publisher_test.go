@@ -8,14 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
-func newStartedInstanceWithStatus(t *testing.T, status domain.Status) *session.Instance {
+func newStartedInstanceWithStatus(t *testing.T, status domain.Status) *instance.Instance {
 	t.Helper()
-	inst := session.NewStartedInstanceForTest(t, "started-pub", namedPM{replyPM: &replyPM{}, name: "started-pub"})
-	session.SetStatusForTest(t, inst, status, nil)
+	inst := instance.NewStartedInstanceForTest(t, "started-pub", namedPM{replyPM: &replyPM{}, name: "started-pub"})
+	instance.SetStatusForTest(t, inst, status, nil)
 	return inst
 }
 
@@ -65,7 +65,7 @@ func TestSessionStartedPublisher_should_PublishNothing_When_TransitionFailedOrAr
 
 	archivedAt := time.Now()
 	archived := newStartedInstanceWithStatus(t, domain.Active)
-	session.SetStatusForTest(t, archived, domain.Active, &archivedAt)
+	instance.SetStatusForTest(t, archived, domain.Active, &archivedAt)
 	require.False(t, (&sessionStartedPublisher{svc: svc, inst: archived}).publishIfActive())
 
 	require.Zero(t, drainEvents(ch))

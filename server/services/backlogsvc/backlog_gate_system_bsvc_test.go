@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // systemGateHarness is the storage's gate, backed by a Configured engine whose
@@ -97,10 +98,10 @@ func TestGuardedTransitionCaller_should_NameQueueClaimAndJulesDispatch_When_Give
 		triggeredBy string
 		want        domain.TransitionCaller
 	}{
-		{"queue", domain.BacklogStatusQueued, session.TriggeredByUser, domain.CallerQueueBacklogItem},
-		{"queue autonomous", domain.BacklogStatusQueued, session.TriggeredBySystem, domain.CallerQueueBacklogItem},
-		{"dequeue claim", domain.BacklogStatusInProgress, session.TriggeredBySystem, domain.CallerClaimAndSpawn},
-		{"jules dispatch", domain.BacklogStatusInProgress, session.TriggeredByUser, domain.CallerJulesDispatchStart},
+		{"queue", domain.BacklogStatusQueued, instance.TriggeredByUser, domain.CallerQueueBacklogItem},
+		{"queue autonomous", domain.BacklogStatusQueued, instance.TriggeredBySystem, domain.CallerQueueBacklogItem},
+		{"dequeue claim", domain.BacklogStatusInProgress, instance.TriggeredBySystem, domain.CallerClaimAndSpawn},
+		{"jules dispatch", domain.BacklogStatusInProgress, instance.TriggeredByUser, domain.CallerJulesDispatchStart},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, guardedTransitionCaller(tc.to, tc.triggeredBy), tc.name)
@@ -113,14 +114,14 @@ func TestForceResetItem_should_ReturnDenialAndLeaveStatus_When_OperatorGateBlock
 	item := systemItemAt(t, svc, domain.BacklogStatusReview)
 	remove := h.blockWithGate(t, domain.BacklogStatusReview, domain.BacklogStatusInProgress)
 
-	_, err := svc.forceResetItem(context.Background(), item, session.TriggeredByUser)
+	_, err := svc.forceResetItem(context.Background(), item, instance.TriggeredByUser)
 
 	require.ErrorIs(t, err, domain.ErrGateNotSatisfied)
 	assert.Equal(t, "review", itemStatus(t, svc, item.ID))
 	assert.Empty(t, transitionDeniedRows(t, svc, item.ID), "an operator denial returns the error; it raises no stuck row")
 
 	remove()
-	updated, err := svc.forceResetItem(context.Background(), item, session.TriggeredByUser)
+	updated, err := svc.forceResetItem(context.Background(), item, instance.TriggeredByUser)
 	require.NoError(t, err)
 	assert.Equal(t, "in_progress", updated.Status)
 }
@@ -129,10 +130,10 @@ func TestForceResetItem_should_ReDecideAgainstTheTrueStatus_When_ItemLeftReviewA
 	svc := NewBacklogService(svctest.CreateTestStorage(t), &mockSessionCreator{}, nil, nil, nil, nil)
 	wireEnforcedGate(t, svc)
 	stale := systemItemAt(t, svc, domain.BacklogStatusReview)
-	_, err := svc.storage.RawArchiveBacklogItem(context.Background(), stale.ID, nil, session.TriggeredByUser, "")
+	_, err := svc.storage.RawArchiveBacklogItem(context.Background(), stale.ID, nil, instance.TriggeredByUser, "")
 	require.NoError(t, err)
 
-	_, err = svc.forceResetItem(context.Background(), stale, session.TriggeredByUser)
+	_, err = svc.forceResetItem(context.Background(), stale, instance.TriggeredByUser)
 
 	require.ErrorIs(t, err, session.ErrTransitionNotAllowed, "the unconditional retry re-reads archived and finds no archived->in_progress edge")
 	assert.Equal(t, "archived", itemStatus(t, svc, stale.ID))
@@ -169,7 +170,7 @@ func TestAttachSessionToItem_should_ReportDenialAndKeepStatus_When_SystemGateBlo
 	}))
 	require.NoError(t, err)
 	itemID := createResp.Msg.Item.Id
-	_, err = svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, session.TriggeredBySystem)
+	_, err = svc.storage.RawTransitionBacklogItemStatus(t.Context(), itemID, domain.BacklogStatusReady, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 
 	_, err = svc.AttachSessionToItem(t.Context(), connect.NewRequest(&sessionv1.AttachSessionToItemRequest{ItemId: itemID, SessionUuid: "attach-behind-gate"}))
@@ -184,7 +185,7 @@ func TestRollbackFailedReopen_should_RestoreReviewEvenWhenAGateBlocksInProgressT
 	h := wireEnforcedGate(t, svc)
 	item := systemItemAt(t, svc, domain.BacklogStatusReview)
 	inProgress, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
-		Caller: domain.CallerAutoReopenFailedReview, ItemID: item.ID, To: domain.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerAutoReopenFailedReview, ItemID: item.ID, To: domain.BacklogStatusInProgress, TriggeredBy: instance.TriggeredBySystem,
 	})
 	require.NoError(t, err)
 	h.blockWithGate(t, domain.BacklogStatusInProgress, domain.BacklogStatusReview)
@@ -201,14 +202,14 @@ func TestRollbackFailedPRFixReopen_should_RestorePRPendingAndNotOverwriteAConcur
 	wireEnforcedGate(t, svc)
 	item := systemItemAt(t, svc, domain.BacklogStatusPRPending)
 	_, err := svc.storage.GatedTransition(context.Background(), backlogdto.TransitionRequest{
-		Caller: domain.CallerAutoReopenForPRFix, ItemID: item.ID, To: domain.BacklogStatusInProgress, TriggeredBy: session.TriggeredBySystem,
+		Caller: domain.CallerAutoReopenForPRFix, ItemID: item.ID, To: domain.BacklogStatusInProgress, TriggeredBy: instance.TriggeredBySystem,
 	})
 	require.NoError(t, err)
 
 	svc.rollbackFailedPRFixReopen(context.Background(), item, errors.New("spawn failed"))
 	assert.Equal(t, "pr_pending", itemStatus(t, svc, item.ID))
 
-	_, err = svc.storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, domain.BacklogStatusDone, nil, session.TriggeredBySystem)
+	_, err = svc.storage.RawTransitionBacklogItemStatus(context.Background(), item.ID, domain.BacklogStatusDone, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 	svc.rollbackFailedPRFixReopen(context.Background(), item, errors.New("spawn failed"))
 	assert.Equal(t, "done", itemStatus(t, svc, item.ID), "the status-only CAS keeps the rollback off an item that moved on")

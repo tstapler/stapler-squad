@@ -14,9 +14,9 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/dbpool"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -50,18 +50,18 @@ type SessionRoleResolver func(ctx context.Context, sessionUUID string) string
 
 // SessionTerminator stops a guardrail-tripped session and records reason so
 // the orchestrator can pick the item back up. Nil means notify-only.
-type SessionTerminator func(ctx context.Context, inst *session.Instance, reason string) error
+type SessionTerminator func(ctx context.Context, inst *instance.Instance, reason string) error
 
 // pipelineRoles are sessions the orchestrator spawned for a bounded stage; a
 // cost-budget breach stops them rather than only warning.
 var pipelineRoles = map[string]bool{
-	session.SessionRoleTriage:   true,
-	session.SessionRoleReview:   true,
-	session.SessionRoleDiagnose: true,
+	instance.SessionRoleTriage:   true,
+	instance.SessionRoleReview:   true,
+	instance.SessionRoleDiagnose: true,
 }
 
 type InstancePoller interface {
-	GetInstances() []*session.Instance
+	GetInstances() []*instance.Instance
 }
 
 type SessionSwitcher interface {
@@ -73,7 +73,7 @@ type SessionSwitcher interface {
 // session.SubmitContentWithEnter directly, so tests can assert on invocations
 // without needing a real tmux-backed *session.Instance. The production
 // default is session.SubmitContentWithEnter itself (wired at construction).
-type SessionCompactor func(ctx context.Context, inst *session.Instance, content string) error
+type SessionCompactor func(ctx context.Context, inst *instance.Instance, content string) error
 
 // CapacityMonitorParams bundles NewCapacityMonitor's dependencies. Compactor
 // may be left nil — it defaults to session.SubmitContentWithEnter.
@@ -99,12 +99,12 @@ func NewCapacityMonitor(p CapacityMonitorParams) *CapacityMonitor {
 		//
 		// The closure is the chain's acquirer (Story 5.0): a busy lease is an
 		// error the capacity monitor already logs and retries next cycle.
-		compactor = func(ctx context.Context, inst *session.Instance, content string) error {
-			lease, ok := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+		compactor = func(ctx context.Context, inst *instance.Instance, content string) error {
+			lease, ok := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 			if !ok {
-				return session.ErrLeaseBusy
+				return instance.ErrLeaseBusy
 			}
-			return session.SubmitContentWithEnter(ctx, inst, lease, content)
+			return instance.SubmitContentWithEnter(ctx, inst, lease, content)
 		}
 	}
 	return &CapacityMonitor{
@@ -253,7 +253,7 @@ func (m *CapacityMonitor) pruneSessionState(active map[string]bool) {
 	}
 }
 
-func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.Instance) {
+func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *instance.Instance) {
 	// Lock-free snapshot read: inst.Program was previously read without any lock.
 	snap := inst.Snapshot()
 
@@ -391,7 +391,7 @@ func (m *CapacityMonitor) firstTime(key string) bool {
 // stopForGuardrail publishes one high-priority notification and, when a
 // terminator is wired, stops the session so the orchestrator takes it back.
 // One-shot per (kind, session): it never re-arms.
-func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, kind, title, msg string) {
+func (m *CapacityMonitor) stopForGuardrail(ctx context.Context, inst *instance.Instance, snap *domain.InstanceSnapshot, kind, title, msg string) {
 	if !m.firstTime("stopped:" + kind + ":" + snap.UUID) {
 		return
 	}
@@ -475,7 +475,7 @@ func (m *CapacityMonitor) checkThresholds(limits ProviderLimits, role string) st
 	return ""
 }
 
-func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *session.Instance, reason string, limits ProviderLimits) {
+func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *instance.Instance, reason string, limits ProviderLimits) {
 	// Lock-free snapshot read for inst.Title, inst.Program, inst.UUID.
 	snap := inst.Snapshot()
 
@@ -646,7 +646,7 @@ func (m *CapacityMonitor) idleWaitExceeded(timeline []tokens.TurnStats, since ti
 // never act again for that loop (the tracker stays until real work clears it).
 // Keyed by session UUID (not conversation UUID, which can rotate across
 // resume/history-transfer, and not Title, which a user can rename).
-func (m *CapacityMonitor) checkIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, parseRes *tokens.ParseResult, role string) {
+func (m *CapacityMonitor) checkIdleWaitLoop(ctx context.Context, inst *instance.Instance, snap *domain.InstanceSnapshot, parseRes *tokens.ParseResult, role string) {
 	ceiling := m.config.IdleWaitCeilingFor(role)
 	if ceiling <= 0 {
 		return
@@ -675,7 +675,7 @@ func (m *CapacityMonitor) checkIdleWaitLoop(ctx context.Context, inst *session.I
 // already fired: take the terminal action if the idle run tripped again
 // strictly after that compact, or clear the tracker if a real turn happened
 // since — the loop broke on its own, so a future run is fresh.
-func (m *CapacityMonitor) checkIdleWaitLoopPostIntervention(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, parseRes *tokens.ParseResult, tracker idleWaitTracker, ceiling int, role string) {
+func (m *CapacityMonitor) checkIdleWaitLoopPostIntervention(ctx context.Context, inst *instance.Instance, snap *domain.InstanceSnapshot, parseRes *tokens.ParseResult, tracker idleWaitTracker, ceiling int, role string) {
 	if realWorkSince(parseRes.TurnTimeline, tracker.lastInterventionAt) {
 		m.mu.Lock()
 		delete(m.idleWaitState, snap.UUID)
@@ -714,7 +714,7 @@ func realWorkSince(timeline []tokens.TurnStats, since time.Time) bool {
 // next poll cycle (the tracker still records the attempt, so a repeat
 // trip after this point still escalates rather than retrying /compact
 // forever against a session that won't accept input).
-func (m *CapacityMonitor) compactIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, idleTurns int) {
+func (m *CapacityMonitor) compactIdleWaitLoop(ctx context.Context, inst *instance.Instance, snap *domain.InstanceSnapshot, idleTurns int) {
 	log.Info("CapacityMonitor: idle-wait loop detected, sending /compact",
 		"session", snap.Title, "idle_turns", idleTurns, "ceiling", m.config.IdleWaitTurnCeiling)
 
@@ -739,7 +739,7 @@ func (m *CapacityMonitor) compactIdleWaitLoop(ctx context.Context, inst *session
 
 // escalateIdleWaitLoop is the one-shot terminal action for a loop that
 // survived /compact. A nil inst means notify-only (no session to stop).
-func (m *CapacityMonitor) escalateIdleWaitLoop(ctx context.Context, inst *session.Instance, snap *domain.InstanceSnapshot, idleTurns int) {
+func (m *CapacityMonitor) escalateIdleWaitLoop(ctx context.Context, inst *instance.Instance, snap *domain.InstanceSnapshot, idleTurns int) {
 	const kind = "idle_wait_loop_escalation"
 	msg := fmt.Sprintf("%s is still looping on idle-wait turns after an auto-compact (%d more consecutive turns) — likely stuck waiting on the same background task.", snap.Title, idleTurns)
 	if inst == nil {

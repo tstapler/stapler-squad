@@ -31,7 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/localtoken"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ErrProxyUnavailable wraps any failure to connect to the running HTTP MCP
@@ -76,7 +76,7 @@ func ProxyHeaders() map[string]string {
 			headers["Authorization"] = "Bearer " + tok
 		}
 		if proof := readSessionProof(dir, headers["X-Stapler-Session-UUID"]); proof != "" {
-			headers[session.MCPProofHeader] = proof
+			headers[instance.MCPProofHeader] = proof
 		}
 	}
 	return headers
@@ -87,16 +87,16 @@ func ProxyHeaders() map[string]string {
 // session, no file or a malformed one; the server then treats the caller as
 // unverified.
 func readSessionProof(configDir, sessionUUID string) string {
-	if !session.ValidMCPSessionUUID(sessionUUID) {
+	if !instance.ValidMCPSessionUUID(sessionUUID) {
 		return ""
 	}
 	// #nosec G304 -- the path is built from the config dir and a validated uuid.
-	raw, err := os.ReadFile(session.MCPProofFilePath(configDir, sessionUUID))
+	raw, err := os.ReadFile(instance.MCPProofFilePath(configDir, sessionUUID))
 	if err != nil {
 		return ""
 	}
 	proof := strings.TrimSpace(string(raw))
-	if !strings.HasPrefix(proof, session.MCPProofValuePrefix) {
+	if !strings.HasPrefix(proof, instance.MCPProofValuePrefix) {
 		return ""
 	}
 	return proof

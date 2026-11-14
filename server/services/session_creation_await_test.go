@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // newAwaitTestInstance builds a *session.Instance (no tmux/Start()), wraps it
@@ -24,14 +24,14 @@ import (
 // when no live actor is registered, and registers it with svc's live poller
 // under title so FindLiveInstance(title) resolves it. Status starts at
 // session.Creating (the zero value).
-func newAwaitTestInstance(t *testing.T, svc *SessionService, title string) *session.Instance {
+func newAwaitTestInstance(t *testing.T, svc *SessionService, title string) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title: title,
 		Path:  t.TempDir(),
 	})
 	require.NoError(t, err)
-	live := session.NewLiveInstance(inst)
+	live := instance.NewLiveInstance(inst)
 	t.Cleanup(live.Stop)
 	svc.ReviewQueuePoller.AddInstance(inst)
 	return inst

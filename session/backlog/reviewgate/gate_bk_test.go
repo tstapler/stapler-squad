@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 )
 
@@ -86,7 +87,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -95,7 +96,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 		RepoPath: createdItemData.RepoPath,
 	}
 
-	reviewInstance := &session.Instance{UUID: uuid.New().String()}
+	reviewInstance := &instance.Instance{UUID: uuid.New().String()}
 	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
@@ -114,7 +115,7 @@ func TestReviewGateRunner_SpawnsReviewSession_Success(t *testing.T) {
 	require.NoError(t, err)
 	var reviewEntry *backlogdto.ItemSessionSummary
 	for i := range sessions {
-		if sessions[i].Role == session.SessionRoleReview {
+		if sessions[i].Role == instance.SessionRoleReview {
 			reviewEntry = &sessions[i]
 		}
 	}
@@ -163,7 +164,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -173,7 +174,7 @@ func TestReviewGateRunner_RoutesPromptThroughPipelineEngine_When_ItemHasCustomPi
 		PipelineMode: "quick",
 	}
 
-	spawner := &blktest.MockReviewGateSpawner{Instance: &session.Instance{UUID: uuid.New().String()}}
+	spawner := &blktest.MockReviewGateSpawner{Instance: &instance.Instance{UUID: uuid.New().String()}}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 
@@ -210,7 +211,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -231,7 +232,7 @@ func TestReviewGateRunner_SpawnerError_LogsAndReturns(t *testing.T) {
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
 	for _, s := range sessions {
-		assert.NotEqual(t, session.SessionRoleReview, s.Role, "no review ItemSession should be created when SpawnReviewSession fails")
+		assert.NotEqual(t, instance.SessionRoleReview, s.Role, "no review ItemSession should be created when SpawnReviewSession fails")
 	}
 }
 
@@ -257,7 +258,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -275,7 +276,7 @@ func TestReviewGateRunner_NilSessionCreator_LogsAndReturns(t *testing.T) {
 	sessions, err := storage.ListItemSessions(ctx, item.ID)
 	require.NoError(t, err)
 	for _, s := range sessions {
-		assert.NotEqual(t, session.SessionRoleReview, s.Role, "no review ItemSession should be created when no session creator is configured")
+		assert.NotEqual(t, instance.SessionRoleReview, s.Role, "no review ItemSession should be created when no session creator is configured")
 	}
 }
 
@@ -310,7 +311,7 @@ func TestReviewGateRunner_ThreadsVerificationNotesIntoPrompt(t *testing.T) {
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:            createdItemData.ID,
 		SessionUUID:       workSessionUUID,
-		SessionRole:       session.SessionRoleWork,
+		SessionRole:       instance.SessionRoleWork,
 		VerificationNotes: verificationNotes,
 	})
 	require.NoError(t, err)
@@ -368,7 +369,7 @@ func TestReviewGateRunner_MergesLiveCriterionNoteIntoStalePromptWhenSnapshotPred
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 		AcSnapshot:  domain.AcCriteriaJSON(staleSnapshot),
 	})
 	require.NoError(t, err)
@@ -466,7 +467,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -476,7 +477,7 @@ func TestReviewGateRunner_DiffComputationFailure_BlocksReviewInsteadOfFalseUnver
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-error-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
@@ -553,7 +554,7 @@ func TestReviewGateRunner_NoWorktreeRecorded_DiffComputationFailure_BlocksReview
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// A well-formed but nonexistent SHA, and — critically — no SaveInstances call, so
@@ -637,7 +638,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_BlocksReviewInsteadOfFalsePass(t *t
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// No SaveInstances call, so GetWorktreeDataBySessionUUID finds nothing and Run
@@ -704,7 +705,7 @@ func newEmptyDiffFixture(t *testing.T, ctx context.Context, storage *session.Sto
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	// No SaveInstances call, so GetWorktreeDataBySessionUUID finds nothing and Run
@@ -731,7 +732,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_DuplicateClaimSpawnsRealReview(t *t
 	item, workIS := newEmptyDiffFixture(t, ctx, storage, "Duplicate claim, empty diff test")
 	workIS.VerificationNotes = "duplicate_ref=https://github.com/tstapler/stapler-squad/pull/372 reason=already merged in #372"
 
-	spawner := &blktest.MockReviewGateSpawner{Instance: &session.Instance{UUID: uuid.New().String()}}
+	spawner := &blktest.MockReviewGateSpawner{Instance: &instance.Instance{UUID: uuid.New().String()}}
 	getAutoReopener := func() AutoReopenSpawner { return nil }
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	notifier := &sessiontest.FakeNotifier{}
@@ -775,7 +776,7 @@ func TestReviewGateRunner_EmptyCommittedDiff_TwoConsecutiveDuplicateClaims(t *te
 	getNotifier := func() domain.Notifier { return nil }
 
 	for i := 0; i < 2; i++ {
-		spawner := &blktest.MockReviewGateSpawner{Instance: &session.Instance{UUID: uuid.New().String()}}
+		spawner := &blktest.MockReviewGateSpawner{Instance: &instance.Instance{UUID: uuid.New().String()}}
 		getSessionCreator := func() ReviewGateSpawner { return spawner }
 		runner := NewReviewGateRunner(storage, getAutoReopener, getNotifier, getSessionCreator, nil)
 
@@ -894,7 +895,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -905,7 +906,7 @@ func TestReviewGateRunner_DiffComputationFailure_AutoRepairsFromDivergentBranch(
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "diff-repair-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
@@ -977,7 +978,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -988,7 +989,7 @@ func TestReviewGateRunner_DiffComputationFailure_RecoveredButEmptyDiff_StillBloc
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-repair-empty-test", "main", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
@@ -1059,7 +1060,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1082,7 +1083,7 @@ func TestReviewGateRunner_NoBranchName_BlockedByIdentityGuard_SkipsRepairEntirel
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, repoDir, "diff-error-no-branch-test", "placeholder-branch", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 	forceEmptyBranchNameViaRawSQL(t, storage, "diff-error-no-branch-test")
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
@@ -1161,7 +1162,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1169,7 +1170,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_BlocksReviewWithDistinctVerdict
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, recycledPath, "worktree-mismatch-test", "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
@@ -1250,7 +1251,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 		workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      createdItemData.ID,
 			SessionUUID: workSessionUUID,
-			SessionRole: session.SessionRoleWork,
+			SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 
@@ -1259,7 +1260,7 @@ func TestReviewGateRunner_WorktreeBranchMismatch_RepeatedFailure_StillDedupsViaI
 		inst.UUID = workSessionUUID
 		inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 			repoDir, recycledPath, sessionName, "feature", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
-		require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+		require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 		item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 		runner.Run(ctx, GateContext{RequiresDiff: true}, item, workIS, func(ctx context.Context, item *backlogdto.BacklogItemData, is backlogdto.ItemSessionSummary) {})
@@ -1320,7 +1321,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1328,7 +1329,7 @@ func TestReviewGateRunner_WorktreeDirectoryGone_FallsBackToRepoPath_DoesNotHardB
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "worktree-gone-test", "feature", baseSHA)
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
@@ -1404,7 +1405,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
@@ -1412,7 +1413,7 @@ func TestReviewGateRunner_WorktreeGoneAndBaseSHACorrupted_RecoversViaRepoPath(t 
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(
 		repoDir, worktreeDir, "worktree-gone-basesha-corrupted-test", "feature", corruptedBaseSHA)
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: repoDir}
 
@@ -1539,14 +1540,14 @@ func TestReviewGateRunner_BranchDrift_BlocksReviewWithConflictDetails_When_AutoS
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
 	inst := blktest.NewTestInstance("branch-drift-conflict-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-conflict-test", "feature", baseSHA)
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: origin}
 
@@ -1629,18 +1630,18 @@ func TestReviewGateRunner_BranchDrift_SyncsAutomaticallyAndProceeds_When_NoConfl
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
 	inst := blktest.NewTestInstance("branch-drift-clean-sync-test")
 	inst.UUID = workSessionUUID
 	inst.GitManager().Worktree = git.NewGitWorktreeFromStorage(origin, work, "branch-drift-clean-sync-test", "feature", baseSHA)
-	require.NoError(t, storage.SaveInstances([]*session.Instance{inst}))
+	require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: origin}
 
-	reviewInstance := &session.Instance{UUID: uuid.New().String()}
+	reviewInstance := &instance.Instance{UUID: uuid.New().String()}
 	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
@@ -1697,13 +1698,13 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 	workIS, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      createdItemData.ID,
 		SessionUUID: workSessionUUID,
-		SessionRole: session.SessionRoleWork,
+		SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 
 	item := &backlogdto.BacklogItemData{ID: createdItemData.ID, RepoPath: createdItemData.RepoPath}
 
-	reviewInstance := &session.Instance{UUID: uuid.New().String()}
+	reviewInstance := &instance.Instance{UUID: uuid.New().String()}
 	spawner := &blktest.MockReviewGateSpawner{Instance: reviewInstance}
 	getSessionCreator := func() ReviewGateSpawner { return spawner }
 	getAutoReopener := func() AutoReopenSpawner { return nil }
@@ -1728,7 +1729,7 @@ func TestReviewGateRunner_should_SkipDiffWorktreeBranchDriftChecks_When_GateCont
 	require.NoError(t, err)
 	var reviewEntry *backlogdto.ItemSessionSummary
 	for i := range sessions {
-		if sessions[i].Role == session.SessionRoleReview {
+		if sessions[i].Role == instance.SessionRoleReview {
 			reviewEntry = &sessions[i]
 		}
 	}

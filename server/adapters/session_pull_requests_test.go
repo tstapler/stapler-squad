@@ -11,8 +11,8 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func prView(t *testing.T, n int, state domain.PRState, terminal bool) domain.PRView {
@@ -66,9 +66,9 @@ func TestInstanceToProto_ShouldMapPullRequestsAndKeepScalarsFromMirror(t *testin
 	assert.Equal(t, 1, active)
 }
 
-func newInstanceWithPRs(t *testing.T, title string, numbers ...int) *session.Instance {
+func newInstanceWithPRs(t *testing.T, title string, numbers ...int) *instance.Instance {
 	t.Helper()
-	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: t.TempDir()})
+	inst, err := instance.NewInstance(instance.InstanceOptions{Title: title, Path: t.TempDir()})
 	require.NoError(t, err)
 	inst.UUID = "uuid-" + title
 	for i, n := range numbers {

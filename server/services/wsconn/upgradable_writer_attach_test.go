@@ -10,12 +10,12 @@ import (
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
-func attachFixture(t *testing.T, h *ConnectRPCWebSocketHandler, inst *session.Instance) (*streamhub.StreamHub, *upgradableWriter, <-chan struct{}, context.CancelFunc) {
+func attachFixture(t *testing.T, h *ConnectRPCWebSocketHandler, inst *instance.Instance) (*streamhub.StreamHub, *upgradableWriter, <-chan struct{}, context.CancelFunc) {
 	t.Helper()
 	hub := streamhub.NewStreamHub("attach", nil, streamhub.WithTeardownGrace(time.Hour))
 	t.Cleanup(func() { _ = hub.ForceTeardown() })
@@ -53,7 +53,7 @@ func TestAttachUpgradableSubscriber_should_UpgradeViaServiceEventBus_When_Status
 	hub, w, watchDone, _ := attachFixture(t, h, inst)
 	require.Equal(t, streamhub.TerminalSize{}, hub.NegotiatedSize(), "read-only attach casts no vote")
 
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	svc.GetEventBus().Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 
 	waitClosed(t, w.Upgraded(), "upgrade")
@@ -70,10 +70,10 @@ func TestAttachUpgradableSubscriber_should_UpgradeOnUnarchiveEvent(t *testing.T)
 	h := NewConnectRPCWebSocketHandler(svc, nil, nil)
 	inst := newTymuxInstanceWithStatus(t, domain.Active)
 	archivedAt := time.Now()
-	session.SetStatusForTest(t, inst, domain.Active, &archivedAt)
+	instance.SetStatusForTest(t, inst, domain.Active, &archivedAt)
 	_, w, _, _ := attachFixture(t, h, inst)
 
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	svc.GetEventBus().Publish(events.NewSessionUpdatedEvent(inst, []string{"archived_at"}))
 
 	waitClosed(t, w.Upgraded(), "upgrade after unarchive")
@@ -97,7 +97,7 @@ func TestAttachUpgradableSubscriber_should_UpgradeOnNextFrame_When_NoServiceBus(
 	inst := newTymuxInstanceWithStatus(t, domain.PermanentlyFailed)
 	hub, w, _, _ := attachFixture(t, h, inst)
 
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	require.NotNil(t, w.Writer(), "the next frame's writer lookup upgrades")
 
 	waitClosed(t, w.Upgraded(), "upgrade")

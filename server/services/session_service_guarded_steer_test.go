@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // guardedSteerRecorder fakes the verify and write hooks and records their order.
@@ -22,23 +22,23 @@ type guardedSteerRecorder struct {
 
 func (r *guardedSteerRecorder) install(svc *SessionService, ready notReadyReason, clk *svctest.FakeGuardClock) {
 	svc.guardedSteer.guard.now = clk.Now
-	svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return ready }
-	svc.guardedSteer.verifyPane = func(context.Context, *session.Instance) error {
+	svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return ready }
+	svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error {
 		r.order = append(r.order, "verify")
 		return r.verifyErr
 	}
-	svc.guardedSteer.write = func(context.Context, *session.Instance, string) error {
+	svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error {
 		r.order = append(r.order, "write")
 		r.writes++
 		return r.writeErr
 	}
 }
 
-func newGuardedSteerFixture(t *testing.T, ready notReadyReason) (*SessionService, *session.Instance, *guardedSteerRecorder, *svctest.FakeGuardClock) {
+func newGuardedSteerFixture(t *testing.T, ready notReadyReason) (*SessionService, *instance.Instance, *guardedSteerRecorder, *svctest.FakeGuardClock) {
 	t.Helper()
 	fix := setupForkTestFixture(t)
 	t.Cleanup(fix.cleanup)
-	inst := &session.Instance{
+	inst := &instance.Instance{
 		Title:     "guarded-steer-session",
 		Program:   "claude",
 		CreatedAt: time.Now(),
@@ -135,7 +135,7 @@ func TestSteerInstanceGuarded_should_NotVerifyWriteOrRecord_When_NotReady(t *tes
 			assert.Empty(t, rec.order)
 
 			// Not-ready leaves no cooldown behind: once idle, the same signature delivers.
-			svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return notReadyNone }
+			svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return notReadyNone }
 			out, err = svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 			require.NoError(t, err)
 			assert.Equal(t, SteerDelivered, out)
@@ -174,13 +174,13 @@ func TestSteerSessionGuarded_should_ReturnNotTrackedWithoutWrite_When_FindLiveIn
 
 func TestSteerInstanceGuarded_should_ReleaseClaim_When_WritePanics(t *testing.T) {
 	svc, inst, _, _ := newGuardedSteerFixture(t, notReadyNone)
-	svc.guardedSteer.write = func(context.Context, *session.Instance, string) error { panic("boom") }
+	svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { panic("boom") }
 
 	require.Panics(t, func() {
 		_, _ = svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
 	})
 
-	svc.guardedSteer.write = func(context.Context, *session.Instance, string) error { return nil }
+	svc.guardedSteer.write = func(context.Context, *instance.Instance, string) error { return nil }
 	out, err := svc.SteerInstanceGuarded(context.Background(), inst, "sigB", "msg")
 	require.NoError(t, err)
 	assert.Equal(t, SteerDelivered, out, "a panic must not leave the session GuardBusy")

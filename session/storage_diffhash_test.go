@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	gitutil "github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // setupDiffHashTestRepo and the addCommitForDiffHashTest helper are self-contained
@@ -67,7 +68,7 @@ func TestComputeCurrentDiffHash_should_returnNonEmptyHash_When_CompletedWorkSess
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "diffhash item", RepoPath: repoPath})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "work-1", SessionRole: SessionRoleWork})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "work-1", SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	require.NoError(t, storage.SetItemSessionBaseCommit(ctx, is.ID, baseSHA))
 	require.NoError(t, storage.UpdateItemSessionGitActivity(ctx, is.ID, headSHA, "add foo.go", time.Now(), 1))
@@ -111,7 +112,7 @@ func TestGetRecentReviewVerdictSummaries_should_roundTripDiffHash_When_VerdictSa
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "round trip item"})
 	require.NoError(t, err)
 
-	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "review-1", SessionRole: SessionRoleReview})
+	is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: "review-1", SessionRole: instance.SessionRoleReview})
 	require.NoError(t, err)
 
 	require.NoError(t, storage.SaveReviewVerdict(ctx, is.ID, backlogdto.ReviewVerdictData{

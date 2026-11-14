@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -53,8 +54,8 @@ type determineGolden struct {
 // goldenInstance takes its timestamps from time.Now() at construction: Determine reads the
 // wall clock directly, and parallel subtests start late enough that a shared early instant
 // would drift past the 5s idle threshold.
-func goldenInstance(title string) *Instance {
-	return startedInstance(title, func(inst *Instance, now time.Time) {
+func goldenInstance(title string) *instance.Instance {
+	return startedInstance(title, func(inst *instance.Instance, now time.Time) {
 		inst.LastMeaningfulOutput = now.Add(-time.Second)
 	})
 }
@@ -101,10 +102,10 @@ func determineCase(program, name, content string) determineGolden {
 	determiner := NewDefaultStatusDeterminer(DefaultReviewQueuePollerConfig())
 	title := program + "-" + name
 
-	noController := determiner.Determine(goldenInstance(title), content, InstanceStatusInfo{}, detector, DeterminerOptions{})
+	noController := determiner.Determine(goldenInstance(title), content, instance.InstanceStatusInfo{}, detector, DeterminerOptions{})
 
 	detected, detectedCtx := detector.DetectWithContextFromLines(strings.Split(content, "\n"))
-	withController := determiner.Determine(goldenInstance(title), "", InstanceStatusInfo{
+	withController := determiner.Determine(goldenInstance(title), "", instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detected,
 		StatusContext:      detectedCtx,

@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeStallNudger runs the real claim (so the slot cap and cooldown are exercised) and
@@ -32,7 +33,7 @@ type fakeStallNudger struct {
 	granted []bool
 }
 
-func (n *fakeStallNudger) NudgeStalledSession(ctx context.Context, _ *session.Instance, claim func() (bool, error)) error {
+func (n *fakeStallNudger) NudgeStalledSession(ctx context.Context, _ *instance.Instance, claim func() (bool, error)) error {
 	n.mu.Lock()
 	n.calls++
 	pre, err := n.preFn, n.err
@@ -77,7 +78,7 @@ func newStallNudgeFixture(t *testing.T, title string, itemStatus domain.BacklogS
 	base := newUnlinkedCharFixtureWithStatus(t, title, domain.Active)
 	item, err := base.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: title + " item", Status: string(itemStatus)})
 	require.NoError(t, err)
-	is, err := base.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: base.inst.UUID, SessionRole: session.SessionRoleWork})
+	is, err := base.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: base.inst.UUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	base.itemID, base.itemSes = item.ID, is.ID
 
@@ -86,7 +87,7 @@ func newStallNudgeFixture(t *testing.T, title string, itemStatus domain.BacklogS
 	svc.SetStallNudger(f.nudger)
 	svc.SetNudgeFlagReaders(func() bool { return diagnoseOn }, func() bool { return stallOn })
 	svc.SetAutonomousStuckRespawner(f.respawner)
-	svc.SetDriverRestarter(func(*session.Instance, time.Duration) error {
+	svc.SetDriverRestarter(func(*instance.Instance, time.Duration) error {
 		f.restarts++
 		if f.restartFn != nil {
 			return f.restartFn()
@@ -242,7 +243,7 @@ func TestStallRecovery_NudgeFailureFallsBackOrLeavesPane(t *testing.T) {
 		wantAction  string
 	}{
 		{"not idle", session.ErrNudgeTargetNotIdle, true, "nudge_outcome=not_idle", "action=respawned"},
-		{"lease busy", session.ErrLeaseBusy, true, "nudge_outcome=lease_busy", "action=respawned"},
+		{"lease busy", instance.ErrLeaseBusy, true, "nudge_outcome=lease_busy", "action=respawned"},
 		{"slot unavailable", session.ErrNudgeSlotUnavailable, true, "nudge_outcome=slot_unavailable", "action=respawned"},
 		{"ownership", errors.New("pane owned by another session"), true, "nudge_outcome=ownership", "action=respawned"},
 		{"uncertain delivery", fmt.Errorf("%w: boom", session.ErrNudgeSubmitUncertain), false, "nudge_outcome=uncertain", "action=none"},
@@ -346,7 +347,7 @@ func TestClassifyNudgeError(t *testing.T) {
 	}{
 		{"nil", nil, nudgeOutcomeSuccess, false},
 		{"not idle", fmt.Errorf("x: %w", session.ErrNudgeTargetNotIdle), nudgeOutcomeNotIdle, false},
-		{"lease busy", session.ErrLeaseBusy, nudgeOutcomeLeaseBusy, false},
+		{"lease busy", instance.ErrLeaseBusy, nudgeOutcomeLeaseBusy, false},
 		{"slot unavailable", session.ErrNudgeSlotUnavailable, nudgeOutcomeSlotUnavailable, false},
 		{"claim failed", fmt.Errorf("%w: db down", session.ErrNudgeClaimFailed), nudgeOutcomeSlotUnavailable, false},
 		{"uncertain", fmt.Errorf("%w: %w", session.ErrNudgeSubmitUncertain, errors.New("io")), nudgeOutcomeUncertain, true},
@@ -451,10 +452,10 @@ func TestStallRecovery_StopAfterDeliveryDetaches(t *testing.T) {
 
 type stopAfterNudge struct {
 	inner *fakeStallNudger
-	inst  *session.Instance
+	inst  *instance.Instance
 }
 
-func (n stopAfterNudge) NudgeStalledSession(ctx context.Context, inst *session.Instance, claim func() (bool, error)) error {
+func (n stopAfterNudge) NudgeStalledSession(ctx context.Context, inst *instance.Instance, claim func() (bool, error)) error {
 	err := n.inner.NudgeStalledSession(ctx, inst, claim)
 	n.inst.SetAutonomousMode(false, "")
 	return err
@@ -494,7 +495,7 @@ func TestStallRecovery_ItemMovedOnBeforeMarkStuckSkipsRecovery(t *testing.T) {
 
 // A replaced driver's late completion callback must not stop, remove or rewrite the new run.
 func TestOnAutonomousDriverComplete_ReplacedDriverCallbackLeavesNewDriver(t *testing.T) {
-	f := newCharFixture(t, "replaced-driver", session.SessionRoleWork, domain.BacklogStatusInProgress)
+	f := newCharFixture(t, "replaced-driver", instance.SessionRoleWork, domain.BacklogStatusInProgress)
 	respawner := newSignalingRespawner()
 	f.svc.SetAutonomousStuckRespawner(respawner)
 	svc := f.svc.AutonomousSvc

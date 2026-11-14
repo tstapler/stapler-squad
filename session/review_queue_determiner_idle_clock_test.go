@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -34,7 +35,7 @@ func TestDetermine_Should_ReturnIdleReason_When_IdleClockOutputOnAndOutputOlderT
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			inst := startedInstance("idle-clock", withCreatedAgo(time.Hour), withAges(2*time.Second, 10*time.Minute))
-			got := determiner.Determine(inst, "", InstanceStatusInfo{}, detector, tc.opts)
+			got := determiner.Determine(inst, "", instance.InstanceStatusInfo{}, detector, tc.opts)
 			assert.Equal(t, tc.wantAction, got.Action)
 			assert.Equal(t, tc.wantReason, got.Reason)
 		})
@@ -45,7 +46,7 @@ func TestDetermine_Should_ApplyStuckThresholdToOutputAge_When_IdleClockOutputOnA
 	t.Parallel()
 	determiner := idleClockDeterminer()
 	detector := detection.NewStatusDetector()
-	info := InstanceStatusInfo{
+	info := instance.InstanceStatusInfo{
 		IsControllerActive: true,
 		ClaudeStatus:       detection.StatusWaitingForAgent,
 		IdleState:          detection.IdleStateInfo{State: detection.IdleStateTimeout},

@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // Story 1.5.5d: the agent writers decide through the transition gate.
@@ -72,7 +73,7 @@ func (f *gateFixture) workItem(t *testing.T, status domain.BacklogStatus, ac str
 	item, err := f.storage.CreateBacklogItem(t.Context(), backlogdto.BacklogItemData{Title: "gate item", Status: string(status), AcceptanceCriteria: domain.AcCriteriaJSON(ac), SkipPlanning: true})
 	require.NoError(t, err)
 	sessionUUID := uuid.New().String()
-	_, err = f.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+	_, err = f.storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 	return item, WithSessionUUID(t.Context(), sessionUUID)
 }
@@ -187,7 +188,7 @@ func TestReportBlocked_EscalationFromReview_DoesNotWriteAReviewToReviewTransitio
 			})
 			require.NoError(t, err)
 			sessionUUID := uuid.New().String()
-			_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+			_, err = storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
 			require.NoError(t, err)
 			ctx = WithSessionUUID(t.Context(), sessionUUID)
 		}

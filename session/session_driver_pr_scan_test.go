@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -21,7 +24,7 @@ func TestScanAndLinkPRURL_ShouldAttachAndClearTerminal_WhenNumberChanges(t *test
 		inst := newPRTestInstance(t)
 		fake := &fakePRPersister{}
 		inst.SetPRPersister(fake)
-		require.NoError(t, inst.AttachPR(mustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery,
+		require.NoError(t, inst.AttachPR(fixturetest.MustPRRef(t, "", "acme", "app", 11), domain.AttachSourceBranchDiscovery,
 			domain.PRInitial{State: domain.PRStateMerged, Terminal: true}))
 		require.True(t, inst.Snapshot().GitHub.GitHubPRStatusTerminal)
 
@@ -65,14 +68,14 @@ func TestScanAndLinkPRURL_ShouldAttachAndClearTerminal_WhenNumberChanges(t *test
 	})
 }
 
-func legacyOnlyScanInstance(t *testing.T) *Instance {
+func legacyOnlyScanInstance(t *testing.T) *instance.Instance {
 	t.Helper()
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title: "legacy-scan", Path: t.TempDir(), Program: "echo", Branch: "feat/x",
 		GitHubOwner: "acme", GitHubRepo: "app",
 		GitHubPRURL: "https://github.com/acme/app/pull/11", GitHubPRNumber: 11, GitHubPRStatusTerminal: true,
 	}
-	finishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 	return inst
 }
 
@@ -80,31 +83,31 @@ func TestScanAndLinkPRURL_ShouldNotAttach_WhenRepoMismatchOrBareMention(t *testi
 	t.Parallel()
 	tests := []struct {
 		name      string
-		configure func(*Instance)
+		configure func(*instance.Instance)
 		output    string
 		wantDebug bool
 	}{
 		{name: "other repo", output: "remote: https://github.com/other/lib/pull/7\n", wantDebug: true},
-		{name: "other host", configure: func(i *Instance) { i.GitHubHost = "ghe.example.com" }, output: pushLine12, wantDebug: true},
+		{name: "other host", configure: func(i *instance.Instance) { i.GitHubHost = "ghe.example.com" }, output: pushLine12, wantDebug: true},
 		{name: "bare mention in non-push output", output: "I opened https://github.com/acme/app/pull/12 earlier\n"},
-		{name: "session repo unresolved", configure: func(i *Instance) { i.GitHubOwner, i.GitHubRepo = "", "" }, output: pushLine12, wantDebug: true},
+		{name: "session repo unresolved", configure: func(i *instance.Instance) { i.GitHubOwner, i.GitHubRepo = "", "" }, output: pushLine12, wantDebug: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := installRecordingHandler(t)
-			inst := &Instance{Title: "scan-mismatch", UUID: "u-mismatch", Path: t.TempDir(), Program: "echo", GitHubOwner: "acme", GitHubRepo: "app"}
+			h := fixturetest.InstallRecordingHandler(t)
+			inst := &instance.Instance{Title: "scan-mismatch", UUID: "u-mismatch", Path: t.TempDir(), Program: "echo", GitHubOwner: "acme", GitHubRepo: "app"}
 			if tt.configure != nil {
 				tt.configure(inst)
 			}
-			finishInstanceConstruction(inst)
+			instance.FinishInstanceConstruction(inst)
 
 			scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, tt.output)
 
 			assert.Empty(t, inst.Snapshot().GitHub.PRs)
 			assert.Zero(t, inst.Snapshot().GitHub.GitHubPRNumber)
 			var debugNamesURL bool
-			for _, r := range h.recordsAtLevel(slog.LevelDebug) {
-				if _, ok := r.attrs["url"]; ok {
+			for _, r := range h.RecordsAtLevel(slog.LevelDebug) {
+				if _, ok := r.Attrs["url"]; ok {
 					debugNamesURL = true
 				}
 			}
@@ -149,9 +152,9 @@ func TestScanAndLinkPRURL_ShouldSkipTombstonedRef_WhenOwnerDetachedItBefore(t *t
 	inst.SetPRPersister(storage)
 	ctx := context.Background()
 	owner := SessionPROwner(inst.UUID)
-	_, err := storage.Repo.UpsertSessionPR(ctx, owner, mustPRRef(t, "", "acme", "app", 12), domain.PRLink{Source: domain.AttachSourceManual})
+	_, err := storage.Repo.UpsertSessionPR(ctx, owner, fixturetest.MustPRRef(t, "", "acme", "app", 12), domain.PRLink{Source: domain.AttachSourceManual})
 	require.NoError(t, err)
-	_, err = storage.Repo.DeleteSessionPR(ctx, owner, mustPRRef(t, "", "Acme", "App", 12))
+	_, err = storage.Repo.DeleteSessionPR(ctx, owner, fixturetest.MustPRRef(t, "", "Acme", "App", 12))
 	require.NoError(t, err)
 	require.Equal(t, 0, countLinks(t, storage.Repo))
 
@@ -179,10 +182,10 @@ func TestScanAndLinkPRURL_ShouldReloadTerminalFalse_WhenSessionHasNoLink(t *test
 	t.Parallel()
 	for _, tt := range []struct {
 		name    string
-		persist func(*Storage) prSetPersister
+		persist func(*Storage) instance.PrSetPersister
 	}{
-		{"immediate write", func(s *Storage) prSetPersister { return s }},
-		{"retried by the next full save", func(s *Storage) prSetPersister { return &failingTerminalPersister{Storage: s} }},
+		{"immediate write", func(s *Storage) instance.PrSetPersister { return s }},
+		{"retried by the next full save", func(s *Storage) instance.PrSetPersister { return &failingTerminalPersister{Storage: s} }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			storage, cleanup := createTestStorage(t)
@@ -197,7 +200,7 @@ func TestScanAndLinkPRURL_ShouldReloadTerminalFalse_WhenSessionHasNoLink(t *test
 			inst.SetPRPersister(tt.persist(storage))
 
 			scanAndLinkPRURL(inst, true, scannedPRURLs{}, nil, pushLine12)
-			require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+			require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 
 			again, err := storage.LoadInstances()
 			require.NoError(t, err)

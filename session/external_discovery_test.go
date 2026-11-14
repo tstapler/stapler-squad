@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/mux"
 )
 
@@ -116,8 +117,8 @@ func TestHandleNewSession_GlobalTymux_ExternalSessionStaysTmux(t *testing.T) {
 	on := true
 	require.NoError(t, config.LoadConfig().SetTymuxGlobalOverride(&on))
 	e := NewExternalSessionDiscovery()
-	var got *Instance
-	e.OnSessionAdded(func(i *Instance) { got = i })
+	var got *instance.Instance
+	e.OnSessionAdded(func(i *instance.Instance) { got = i })
 
 	e.handleNewSession(&mux.DiscoveredSession{
 		SocketPath: "/tmp/ssq-ext-test.sock",
@@ -126,6 +127,6 @@ func TestHandleNewSession_GlobalTymux_ExternalSessionStaysTmux(t *testing.T) {
 
 	require.NotNil(t, got)
 	assert.Equal(t, domain.BackendTmux, got.Backend)
-	_, isTmux := got.processManager.(*TmuxBackend)
-	assert.True(t, isTmux, "process manager must be a TmuxBackend, got %T", got.processManager)
+	_, isTmux := got.ProcessManagerForTest().(*TmuxBackend)
+	assert.True(t, isTmux, "process manager must be a TmuxBackend, got %T", got.ProcessManagerForTest())
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // SessionArchiver soft-archives a session by UUID so it stops accumulating in the
@@ -92,7 +93,7 @@ func (l *BacklogLifecycleListener) archiveStaleDoneItems(ctx context.Context) {
 	for _, item := range items {
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusDone)}
 		if _, transErr := l.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
-			Caller: domain.CallerArchiveStaleDone, ItemID: item.ID, To: domain.BacklogStatusArchived, Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+			Caller: domain.CallerArchiveStaleDone, ItemID: item.ID, To: domain.BacklogStatusArchived, Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 		}); transErr != nil {
 			// A denial is reported once by the gate; the item stays done and is retried next tick.
 			logSystemTransitionFailure("archiveStaleDoneItems", item.ID, domain.BacklogStatusArchived, transErr)
@@ -153,7 +154,7 @@ func (l *BacklogLifecycleListener) reconcileTerminalItemSessions(ctx context.Con
 			session.CountLiveWorkResult(session.LiveWorkResultRuleLSkip)
 		}
 		for _, is := range sessions {
-			if is.SessionUUID == "" || !session.IsTmuxBackedSessionRole(is.Role) {
+			if is.SessionUUID == "" || !instance.IsTmuxBackedSessionRole(is.Role) {
 				continue
 			}
 			if archErr := archiver.ArchiveSessionByUUID(ctx, is.SessionUUID); archErr != nil {

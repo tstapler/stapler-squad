@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
@@ -16,7 +17,7 @@ type optsRecordingDeterminer struct {
 	seen []DeterminerOptions
 }
 
-func (d *optsRecordingDeterminer) Determine(_ *Instance, _ string, _ InstanceStatusInfo, _ detection.TerminalDetector, opts DeterminerOptions) DetectionResult {
+func (d *optsRecordingDeterminer) Determine(_ *instance.Instance, _ string, _ instance.InstanceStatusInfo, _ detection.TerminalDetector, opts DeterminerOptions) DetectionResult {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.seen = append(d.seen, opts)
@@ -25,7 +26,7 @@ func (d *optsRecordingDeterminer) Determine(_ *Instance, _ string, _ InstanceSta
 
 func TestDeterminerOptions_Should_ReadResolverOncePerCycle_When_ThreeSessionsPolled(t *testing.T) {
 	t.Parallel()
-	rqp := NewReviewQueuePoller(queue.NewReviewQueue(), NewInstanceStatusManager(), nil)
+	rqp := NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	rec := &optsRecordingDeterminer{}
 	rqp.statusDeterminer = rec
 
@@ -35,7 +36,7 @@ func TestDeterminerOptions_Should_ReadResolverOncePerCycle_When_ThreeSessionsPol
 		return DeterminerOptions{ProseQuestion: true}, RuleOptions{}
 	})
 
-	instances := make([]*Instance, 3)
+	instances := make([]*instance.Instance, 3)
 	for i := range instances {
 		instances[i] = makeStaleInstance(rqp, fmt.Sprintf("opts-session-%d", i))
 	}
@@ -67,7 +68,7 @@ func TestDeterminerOptions_Should_BeZeroValue_When_NoSourceWired(t *testing.T) {
 
 func TestRuleOptions_Should_ReadAckBypassFlagOncePerCycleAndNotEnterDeterminer_When_ThreeSessionsPolled(t *testing.T) {
 	t.Parallel()
-	rqp := NewReviewQueuePoller(queue.NewReviewQueue(), NewInstanceStatusManager(), nil)
+	rqp := NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
 	rec := &optsRecordingDeterminer{}
 	rqp.statusDeterminer = rec
 
@@ -76,7 +77,7 @@ func TestRuleOptions_Should_ReadAckBypassFlagOncePerCycleAndNotEnterDeterminer_W
 		reads.Add(1)
 		return DeterminerOptions{}, RuleOptions{AckBypassFix: true}
 	})
-	instances := make([]*Instance, 3)
+	instances := make([]*instance.Instance, 3)
 	for i := range instances {
 		instances[i] = makeStaleInstance(rqp, fmt.Sprintf("rule-opts-session-%d", i))
 	}

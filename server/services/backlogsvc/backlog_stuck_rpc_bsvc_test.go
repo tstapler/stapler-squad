@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/dbobs"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -638,7 +639,7 @@ func TestTriggerRemediationNow_should_succeedAndConsumeAnAttempt_When_ActionRuns
 	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "work-session-uuid",
-		SessionRole: string(session.SessionRoleWork),
+		SessionRole: string(instance.SessionRoleWork),
 	})
 	require.NoError(t, err)
 	svctest.SeedOpenStuckRow(t, storage, item.ID, domain.StuckReasonBouncing, time.Now(), "bouncing")
@@ -912,7 +913,7 @@ func TestListStuckBacklogItems_should_BatchItemSessionLookups(t *testing.T) {
 		require.NoError(t, err)
 		svctest.SeedOpenStuckRow(t, storage, item.ID, domain.StuckReasonPRReadyUnmerged, time.Now(), "ctx")
 		if i%2 == 0 {
-			is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: session.SessionRoleReview})
+			is, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: uuid.NewString(), SessionRole: instance.SessionRoleReview})
 			require.NoError(t, err)
 			ref := fmt.Sprintf("dup%d", i)
 			require.NoError(t, storage.UpdateItemSessionVerificationNotes(ctx, is.ID, "duplicate_ref="+ref+" same change"))

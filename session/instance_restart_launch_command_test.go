@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/tstapler/stapler-squad/session/domain"
 
 	"github.com/stretchr/testify/assert"
@@ -31,17 +34,17 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 
 	title := fmt.Sprintf("test-spike-%d", time.Now().UnixNano())
-	inst, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	inst, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            title,
 		Path:             t.TempDir(),
-		Program:          stubClaudeBinary(t),
+		Program:          fixturetest.StubClaudeBinary(t),
 		SessionType:      domain.SessionTypeDirectory,
 		AutoYes:          false,
 		TmuxPrefix:       fmt.Sprintf("test_spike_%d_", time.Now().UnixNano()),
-		TmuxServerSocket: coldRestoreSocket(t),
+		TmuxServerSocket: fixturetest.ColdRestoreSocket(t),
 	})
 	require.NoError(t, err)
 	defer func() {
@@ -65,7 +68,7 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 	require.NotContains(t, inst.LaunchCommand, "--resume", "sanity: first launch had no UUID set yet")
 
 	// Simulate the UUID being captured while the session was running (exactly what
-	// tryExtractConversationUUID does mid-session), then the pane dying.
+	// TryExtractConversationUUID does mid-session), then the pane dying.
 	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
 		LastAttached:     time.Now(),
@@ -88,7 +91,7 @@ func TestKillSessionThenStart_RebuildsLaunchCommand(t *testing.T) {
 	// Re-set the UUID first: the cold-restore branch just exercised above clears
 	// i.claudeSession.ConversationUUID by design (see startLocked's comment on
 	// "Clear the stored session ID so HistoryLinker re-detects...") before
-	// re-deriving it via tryExtractConversationUUID, which found nothing in this
+	// re-deriving it via TryExtractConversationUUID, which found nothing in this
 	// fake, JSONL-less test environment and left it empty.
 	inst.SetClaudeSession(&domain.ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",

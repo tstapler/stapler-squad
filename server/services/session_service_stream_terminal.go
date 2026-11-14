@@ -12,8 +12,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"connectrpc.com/connect"
@@ -40,7 +40,7 @@ const CapturePollEvery = 150 * time.Millisecond
 // brief race between this returning and the resumed tmux session actually
 // existing is absorbed by RestoreWithWorkDir's own retry/backoff (~1.5s
 // total) inside the streaming paths that follow.
-func ResumeHibernatedInstance(instance *session.Instance, sessionID string) error {
+func ResumeHibernatedInstance(instance *instance.Instance, sessionID string) error {
 	log.Info("[WebSocket] resuming hibernated session before streaming", "session", sessionID)
 	if err := instance.ResumeFromHibernation(context.Background()); err != nil {
 		return fmt.Errorf("failed to resume hibernated session %q: %w", sessionID, err)
@@ -48,7 +48,7 @@ func ResumeHibernatedInstance(instance *session.Instance, sessionID string) erro
 	return nil
 }
 
-func waitForTerminalResume(ctx context.Context, instance *session.Instance) error {
+func waitForTerminalResume(ctx context.Context, instance *instance.Instance) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(CapturePollEvery)
@@ -92,7 +92,7 @@ func (s *SessionService) StreamTerminal(
 	// Get the session instance - CRITICAL: Use the poller's instance to ensure
 	// timestamp updates are visible to the review queue. Loading fresh from storage
 	// creates a separate object that the poller never sees.
-	var instance *session.Instance
+	var instance *instance.Instance
 	if s.ReviewQueuePoller != nil {
 		instance = s.ReviewQueuePoller.FindInstance(initialMsg.SessionId)
 	}

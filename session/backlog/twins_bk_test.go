@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstage"
 	"github.com/tstapler/stapler-squad/session/ent/stagetransition"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func denOpenDenial(t *testing.T, h *gateHarness, itemID string, caller domain.TransitionCaller, from, to domain.BacklogStatus, reason string) {
@@ -73,7 +74,7 @@ func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome doma
 	reviewIS, err := storage.CreateItemSessionWithVerdict(ctx, backlogdto.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: "headless-review-" + uuid.New().String(),
-		SessionRole: session.SessionRoleReview,
+		SessionRole: instance.SessionRoleReview,
 	}, backlogdto.ReviewVerdictData{
 		OverallOutcome: outcome,
 		Summary:        "no diff available",
@@ -88,7 +89,7 @@ func newStuckReviewTestItem(t *testing.T, storage *session.Storage, outcome doma
 		_, err := storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 			ItemID:      item.ID,
 			SessionUUID: uuid.New().String(),
-			SessionRole: session.SessionRoleWork,
+			SessionRole: instance.SessionRoleWork,
 		})
 		require.NoError(t, err)
 	}
@@ -210,7 +211,7 @@ func (h *gateHarness) status(t *testing.T, id string) string {
 // moveRaw changes the stored status behind the gate's back (a concurrent mover).
 func (h *gateHarness) moveRaw(t *testing.T, id string, to domain.BacklogStatus) {
 	t.Helper()
-	_, err := h.repo.RawTransitionBacklogItemStatus(context.Background(), id, to, nil, session.TriggeredBySystem)
+	_, err := h.repo.RawTransitionBacklogItemStatus(context.Background(), id, to, nil, instance.TriggeredBySystem)
 	require.NoError(t, err)
 }
 

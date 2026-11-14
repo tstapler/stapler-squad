@@ -9,11 +9,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/sessionsummary"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -265,7 +265,7 @@ func (g *SessionSummaryGenerator) ReconcileStaleness(ctx context.Context, row *e
 // BuildDiffSnapshot's FilesChanged derivation depends on diff Content, which isn't
 // persisted). diffContent is the raw diff text forwarded into the LLM narrative
 // prompt — empty when unavailable (e.g. the no-live-instance fallback).
-func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *session.SessionGoalData, reason string) {
+func (g *SessionSummaryGenerator) GenerateAndPersist(ctx context.Context, sessionUUID, sessionTitle string, createdAt time.Time, diff DiffSnapshot, diffContent string, sessionGoal *instance.SessionGoalData, reason string) {
 	release, ok := g.tryAcquire(sessionUUID)
 	if !ok {
 		return
@@ -478,7 +478,7 @@ func (g *SessionSummaryGenerator) persistDecisionsError(ctx context.Context, ses
 
 // buildNarrative returns the session narrative (LLM-generated, or a fallback for a
 // trivial session or an LLM failure) and adds the narrative call's cost to cost.
-func (g *SessionSummaryGenerator) buildNarrative(ctx context.Context, sessionUUID, sessionTitle string, sessionGoal *session.SessionGoalData, diffContent string, incomingDiff DiffSnapshot, decisions DecisionsSnapshot, timeline TimelineSnapshot, cost *CostSnapshot) (narrative string, fallbackUsed bool) {
+func (g *SessionSummaryGenerator) buildNarrative(ctx context.Context, sessionUUID, sessionTitle string, sessionGoal *instance.SessionGoalData, diffContent string, incomingDiff DiffSnapshot, decisions DecisionsSnapshot, timeline TimelineSnapshot, cost *CostSnapshot) (narrative string, fallbackUsed bool) {
 	if isTrivialSession(incomingDiff, decisions, timeline.Duration()) {
 		narrative = narrativeFallbackTrivial
 		fallbackUsed = true

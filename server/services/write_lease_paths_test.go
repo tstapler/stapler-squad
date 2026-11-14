@@ -12,14 +12,15 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
-func leaseTestInstance(t *testing.T, title string) (*session.Instance, *steerRecordingPM) {
+func leaseTestInstance(t *testing.T, title string) (*instance.Instance, *steerRecordingPM) {
 	t.Helper()
 	pm := &steerRecordingPM{}
-	inst := session.NewStartedInstanceForTest(t, title, pm)
-	inst.SetLeaseFlag(&session.LeaseFlag{})
+	inst := instance.NewStartedInstanceForTest(t, title, pm)
+	inst.SetLeaseFlag(&instance.LeaseFlag{})
 	return inst, pm
 }
 
@@ -28,17 +29,17 @@ func leaseTestInstance(t *testing.T, title string) (*session.Instance, *steerRec
 func TestSteerInstance_ShouldReturnRetryableBusyWithZeroWrites_WhenTheLeaseIsHeld(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	inst, pm := leaseTestInstance(t, "steer-lease")
-	held, ok := inst.TryTerminalWriteLease(session.LeaseWriterDriver)
+	held, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 
 	err := fix.svc.steerInternal(context.Background(), inst, "fix it")
-	require.ErrorIs(t, err, session.ErrLeaseBusy)
+	require.ErrorIs(t, err, instance.ErrLeaseBusy)
 	assert.Empty(t, pm.writes())
 
 	held.Release()
 	require.NoError(t, fix.svc.steerInternal(context.Background(), inst, "fix it"))
-	assert.Equal(t, []string{"fix it", session.EnterKeySequence}, pm.writes())
-	session.AssertLeaseFree(t, inst)
+	assert.Equal(t, []string{"fix it", instance.EnterKeySequence}, pm.writes())
+	instance.AssertLeaseFree(t, inst)
 }
 
 // A held lease is SteerBusy with no failure cooldown, so the same signature
@@ -46,9 +47,9 @@ func TestSteerInstance_ShouldReturnRetryableBusyWithZeroWrites_WhenTheLeaseIsHel
 func TestSteerInstanceGuarded_ShouldReturnSteerBusyWithoutFailureCooldown_WhenTheLeaseIsHeld(t *testing.T) {
 	fix := setupForkTestFixture(t)
 	inst, pm := leaseTestInstance(t, "guarded-lease")
-	fix.svc.guardedSteer.ready = func(*session.Instance) notReadyReason { return notReadyNone }
-	fix.svc.guardedSteer.verifyPane = func(context.Context, *session.Instance) error { return nil }
-	held, ok := inst.TryTerminalWriteLease(session.LeaseWriterDriver)
+	fix.svc.guardedSteer.ready = func(*instance.Instance) notReadyReason { return notReadyNone }
+	fix.svc.guardedSteer.verifyPane = func(context.Context, *instance.Instance) error { return nil }
+	held, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 
 	out, err := fix.svc.SteerInstanceGuarded(context.Background(), inst, "sigA", "msg")
@@ -66,10 +67,10 @@ func writeToSessionReq(id string) *connect.Request[sessionv1.WriteToSessionReque
 	return connect.NewRequest(&sessionv1.WriteToSessionRequest{SessionId: id, Input: "ls", PressEnter: true})
 }
 
-func newLeaseTerminalService(t *testing.T, inst *session.Instance) *TerminalService {
+func newLeaseTerminalService(t *testing.T, inst *instance.Instance) *TerminalService {
 	t.Helper()
-	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), session.NewInstanceStatusManager(), nil)
-	poller.SetInstances([]*session.Instance{inst})
+	poller := session.NewReviewQueuePoller(queue.NewReviewQueue(), instance.NewInstanceStatusManager(), nil)
+	poller.SetInstances([]*instance.Instance{inst})
 	ts := NewTerminalService()
 	ts.SetPoller(poller)
 	return ts
@@ -79,7 +80,7 @@ func newLeaseTerminalService(t *testing.T, inst *session.Instance) *TerminalServ
 func TestWriteToSession_ShouldReturnFailedPreconditionWithZeroWrites_WhenTheLeaseIsHeldAndWriteWhenTheFlagIsOff(t *testing.T) {
 	inst, pm := leaseTestInstance(t, "wts-lease")
 	ts := newLeaseTerminalService(t, inst)
-	held, ok := inst.TryTerminalWriteLease(session.LeaseWriterDriver)
+	held, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 
 	_, err := ts.WriteToSession(context.Background(), writeToSessionReq("wts-lease"))
@@ -88,19 +89,19 @@ func TestWriteToSession_ShouldReturnFailedPreconditionWithZeroWrites_WhenTheLeas
 	assert.Empty(t, pm.writes())
 
 	// Flag off: non-exclusive leases, so the write proceeds exactly as before.
-	flag := &session.LeaseFlag{}
+	flag := &instance.LeaseFlag{}
 	flag.SetEnabled(false)
 	inst.SetLeaseFlag(flag)
 	_, err = ts.WriteToSession(context.Background(), writeToSessionReq("wts-lease"))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"ls", session.EnterKeySequence}, pm.writes())
+	assert.Equal(t, []string{"ls", instance.EnterKeySequence}, pm.writes())
 
 	held.Release()
 	flag.SetEnabled(true)
 	_, err = ts.WriteToSession(context.Background(), writeToSessionReq("wts-lease"))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		l, free := inst.TryTerminalWriteLease(session.LeaseWriterOther)
+		l, free := inst.TryTerminalWriteLease(instance.LeaseWriterOther)
 		if free {
 			l.Release()
 		}
@@ -113,14 +114,14 @@ func TestWriteToSession_ShouldReturnFailedPreconditionWithZeroWrites_WhenTheLeas
 func TestCapacityMonitorDefaultCompactor_ShouldReturnErrLeaseBusyWithZeroWrites_WhenTheLeaseIsHeld(t *testing.T) {
 	inst, pm := leaseTestInstance(t, "compactor-lease")
 	m := NewCapacityMonitor(CapacityMonitorParams{})
-	held, ok := inst.TryTerminalWriteLease(session.LeaseWriterDriver)
+	held, ok := inst.TryTerminalWriteLease(instance.LeaseWriterDriver)
 	require.True(t, ok)
 
 	err := m.compactor(context.Background(), inst, "/compact")
-	require.ErrorIs(t, err, session.ErrLeaseBusy)
+	require.ErrorIs(t, err, instance.ErrLeaseBusy)
 	assert.Empty(t, pm.writes())
 
 	held.Release()
 	require.NoError(t, m.compactor(context.Background(), inst, "/compact"))
-	assert.Equal(t, []string{"/compact", session.EnterKeySequence}, pm.writes(), fmt.Sprint(pm.writes()))
+	assert.Equal(t, []string{"/compact", instance.EnterKeySequence}, pm.writes(), fmt.Sprint(pm.writes()))
 }

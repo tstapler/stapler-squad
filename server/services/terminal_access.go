@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // ErrReadOnly is returned when a terminal write is requested for a hidden
@@ -27,7 +27,7 @@ const (
 // AccessFor decides access from the lock-free snapshot only
 // (.claude/rules/instance-lock-free-reads.md). It is the constructor every
 // stream site uses; the unary guards (PR 5u) add their own.
-func AccessFor(inst *session.Instance) TerminalAccess {
+func AccessFor(inst *instance.Instance) TerminalAccess {
 	if inst == nil || inst.Snapshot().Hidden {
 		return TerminalReadOnly
 	}
@@ -56,7 +56,7 @@ func (f *UnaryGuardsFlag) SetEnabled(on bool) { f.off.Store(!on) }
 // It differs from AccessFor only in the live flag: a hidden target is
 // ReadWrite while the flag is off. The pinned-caller test fails if any other
 // function, a stream site included, calls it.
-func AccessForUnary(inst *session.Instance, flag GuardsFlag) TerminalAccess {
+func AccessForUnary(inst *instance.Instance, flag GuardsFlag) TerminalAccess {
 	if inst == nil {
 		return TerminalReadOnly
 	}

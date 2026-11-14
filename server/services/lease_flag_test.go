@@ -10,14 +10,14 @@ import (
 
 	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // resetDefaultLeaseFlag keeps a test that flips the process-wide flag from
 // leaking its state into other tests in the package.
 func resetDefaultLeaseFlag(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() { session.DefaultLeaseFlag.SetEnabled(true) })
+	t.Cleanup(func() { instance.DefaultLeaseFlag.SetEnabled(true) })
 }
 
 func leaseFlagEnabledInRegistry(t *testing.T, svc *FeatureFlagService) bool {
@@ -39,28 +39,28 @@ func TestTerminalWriteLeaseFlag_ShouldBeRegisteredDefaultOnGlobalOnlyAndApplyEve
 	svc := newGatedFlagService(t)
 	require.True(t, FeatureFlagDefault(terminalWriteLeaseFlagName), "default on")
 	assert.True(t, leaseFlagEnabledInRegistry(t, svc.featureFlagSvc))
-	assert.True(t, session.DefaultLeaseFlag.Enabled())
+	assert.True(t, instance.DefaultLeaseFlag.Enabled())
 
 	require.NoError(t, flagUpdateCtx(context.Background(), svc.featureFlagSvc, terminalWriteLeaseFlagName, false))
-	assert.False(t, session.DefaultLeaseFlag.Enabled(), "the off flip applies at once, no reload")
+	assert.False(t, instance.DefaultLeaseFlag.Enabled(), "the off flip applies at once, no reload")
 	assert.False(t, leaseFlagEnabledInRegistry(t, svc.featureFlagSvc))
 
 	require.NoError(t, flagUpdateCtx(context.Background(), svc.featureFlagSvc, terminalWriteLeaseFlagName, true))
-	assert.True(t, session.DefaultLeaseFlag.Enabled())
+	assert.True(t, instance.DefaultLeaseFlag.Enabled())
 }
 
 func TestTerminalWriteLeaseFlag_ShouldStartOffOnlyForAnExplicitPersistedFalse(t *testing.T) {
 	resetDefaultLeaseFlag(t)
 	svc := newGatedFlagService(t)
-	require.True(t, session.DefaultLeaseFlag.Enabled(), "no persisted key: on")
+	require.True(t, instance.DefaultLeaseFlag.Enabled(), "no persisted key: on")
 
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(terminalWriteLeaseFlagName, false))
 	svc.wireLeaseFlag()
-	assert.False(t, session.DefaultLeaseFlag.Enabled())
+	assert.False(t, instance.DefaultLeaseFlag.Enabled())
 
 	require.NoError(t, config.LoadConfig().DeleteFeatureFlag(terminalWriteLeaseFlagName))
 	svc.wireLeaseFlag()
-	assert.True(t, session.DefaultLeaseFlag.Enabled(), "deleting the key returns to the registry default")
+	assert.True(t, instance.DefaultLeaseFlag.Enabled(), "deleting the key returns to the registry default")
 }
 
 // Off is an escape hatch: persisted first, recorded with only the degraded
@@ -69,18 +69,18 @@ func TestTerminalWriteLeaseFlag_ShouldPersistOffWithOnlyTheFallbackRecordAndNeve
 	resetDefaultLeaseFlag(t)
 	e := newAuditEnv(t)
 	e.svc.SetAudit(e.sink, map[string]FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
-	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: session.DefaultLeaseFlag})
+	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
 	e.mfs.setFailWrite(errDiskFull)
 
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, false))
 	v, ok := overrideOf(terminalWriteLeaseFlagName)
 	assert.True(t, ok && !v, "persisted")
-	assert.False(t, session.DefaultLeaseFlag.Enabled(), "applied")
+	assert.False(t, instance.DefaultLeaseFlag.Enabled(), "applied")
 	assert.GreaterOrEqual(t, e.degradedCount(auditModeFallbackLog), 1)
 
 	// The on flip is a tightening flip: it never waits on or fails with the sink.
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, true))
-	assert.True(t, session.DefaultLeaseFlag.Enabled())
+	assert.True(t, instance.DefaultLeaseFlag.Enabled())
 }
 
 // Every flip is a flag_change line carrying the true previous value.
@@ -88,7 +88,7 @@ func TestTerminalWriteLeaseFlag_ShouldAppendFlagChangeLineWithTruePreviousValueF
 	resetDefaultLeaseFlag(t)
 	e := newAuditEnv(t)
 	e.svc.SetAudit(e.sink, map[string]FlagAuditPolicy{terminalWriteLeaseFlagName: terminalWriteLeaseAuditPolicy})
-	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: session.DefaultLeaseFlag})
+	e.svc.SetFeatureController(terminalWriteLeaseFlagName, leaseFlagController{flag: instance.DefaultLeaseFlag})
 
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, false))
 	require.NoError(t, e.flip(terminalWriteLeaseFlagName, true))

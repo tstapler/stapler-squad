@@ -19,6 +19,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/git/backend"
 	"github.com/tstapler/stapler-squad/session/gitprovider"
+	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/session/vcs"
 	"github.com/tstapler/stapler-squad/telemetry"
@@ -43,7 +44,7 @@ type WorkspaceProvider interface {
 // LoadInstances() — which re-hydrates all sessions from disk and spawns PTY/tmux
 // subprocesses — on every read-only RPC call.
 type LiveInstanceFinder interface {
-	FindLiveInstance(id string) *session.Instance
+	FindLiveInstance(id string) *instancepkg.Instance
 }
 
 // branchCacheEntry holds a cached branch list for a repository path.
@@ -125,7 +126,7 @@ func (ws *WorkspaceService) SetGuardsFlag(f GuardsFlag) {
 // All WorkspaceService RPCs use this path. SaveInstances accepts a slice
 // with a single element, so the mutating SwitchWorkspace RPC also uses this
 // rather than loading the full session list.
-func (ws *WorkspaceService) findInstanceFast(id string) (*session.Instance, error) {
+func (ws *WorkspaceService) findInstanceFast(id string) (*instancepkg.Instance, error) {
 	if ws.liveFinder != nil {
 		if inst := ws.liveFinder.FindLiveInstance(id); inst != nil {
 			return inst, nil
@@ -255,7 +256,7 @@ func (ws *WorkspaceService) cachedAfter(workDir string, t time.Time) bool {
 // refreshVCSStatusInBackground joins (or starts) the workdir's computation without
 // blocking the caller. It is itself a waiter, so the work is not cancelled when the
 // triggering request ends; vcsComputeTimeout bounds it.
-func (ws *WorkspaceService) refreshVCSStatusInBackground(ctx context.Context, instance *session.Instance, workDir string) {
+func (ws *WorkspaceService) refreshVCSStatusInBackground(ctx context.Context, instance *instancepkg.Instance, workDir string) {
 	// Background refreshes yield to interactive misses: skip when every slot is busy.
 	if ws.vcsFlights.saturated() {
 		return
@@ -320,7 +321,7 @@ func (ws *WorkspaceService) vcsStatusFailure(
 
 // computeVCSStatus does the expensive work for one workDir and fills the cache.
 // Errors carry the user-facing message GetVCSStatus has always put in Error.
-func (ws *WorkspaceService) computeVCSStatus(ctx context.Context, instance *session.Instance, workDir string) (*vc.VCSStatus, error) {
+func (ws *WorkspaceService) computeVCSStatus(ctx context.Context, instance *instancepkg.Instance, workDir string) (*vc.VCSStatus, error) {
 	ws.vcsMu.Lock()
 	epochAtStart := ws.vcsEpochs[workDir]
 	ws.vcsMu.Unlock()
@@ -399,7 +400,7 @@ func (ws *WorkspaceService) storeVCSStatusIfCurrent(workDir string, epochAtStart
 // GitProvider.GetStatus) because they need the session's recorded base SHA, an
 // Instance-level concept the vc.VCSProvider abstraction doesn't have. Jujutsu has no
 // equivalent base SHA concept, so this only runs for git sessions.
-func (ws *WorkspaceService) addShippedCommits(ctx context.Context, instance *session.Instance, workDir string, status *vc.VCSStatus) {
+func (ws *WorkspaceService) addShippedCommits(ctx context.Context, instance *instancepkg.Instance, workDir string, status *vc.VCSStatus) {
 	baseSHA := instance.GetBaseCommitSHA()
 	if baseSHA == "" {
 		return
@@ -587,16 +588,16 @@ func (ws *WorkspaceService) SwitchWorkspace(
 	// git actually ran in, not of which session asked.
 	preWorkDir := instance.Workspace().ExistingDir
 
-	var switchType session.WorkspaceSwitchType
+	var switchType instancepkg.WorkspaceSwitchType
 	switch req.Msg.SwitchType {
 	case sessionv1.WorkspaceSwitchType_WORKSPACE_SWITCH_TYPE_DIRECTORY:
-		switchType = session.SwitchTypeDirectory
+		switchType = instancepkg.SwitchTypeDirectory
 	case sessionv1.WorkspaceSwitchType_WORKSPACE_SWITCH_TYPE_REVISION:
-		switchType = session.SwitchTypeRevision
+		switchType = instancepkg.SwitchTypeRevision
 	case sessionv1.WorkspaceSwitchType_WORKSPACE_SWITCH_TYPE_WORKTREE:
-		switchType = session.SwitchTypeWorktree
+		switchType = instancepkg.SwitchTypeWorktree
 	default:
-		switchType = session.SwitchTypeRevision
+		switchType = instancepkg.SwitchTypeRevision
 	}
 
 	var changeStrategy vcs.ChangeStrategy
@@ -611,7 +612,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		changeStrategy = vcs.KeepAsWIP
 	}
 
-	switchReq := session.WorkspaceSwitchRequest{
+	switchReq := instancepkg.WorkspaceSwitchRequest{
 		Type:            switchType,
 		Target:          req.Msg.Target,
 		ChangeStrategy:  changeStrategy,
@@ -646,7 +647,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 	}
 
 	if ws.storage != nil {
-		if err := ws.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+		if err := ws.storage.SaveInstances([]*instancepkg.Instance{instance}); err != nil {
 			log.Warn("failed to save instances after workspace switch", "err", err)
 		}
 	}

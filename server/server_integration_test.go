@@ -22,7 +22,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/envtest"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -527,7 +527,7 @@ func TestServer_should_WriteRealPortIntoSessionHooksAndMCPURL_When_StartedWithPo
 		t.Fatalf("CreateSession: %v", err)
 	}
 	sessionID := resp.Msg.Session.Id
-	var inst *session.Instance
+	var inst *instance.Instance
 	t.Cleanup(func() {
 		_, _ = deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: sessionID}))
 		waitForTmuxTeardown(t, inst, 5*time.Second)
@@ -611,7 +611,7 @@ func TestServer_should_WriteUnchangedHookURL_When_StartedOnExplicitPort(t *testi
 		t.Fatalf("CreateSession: %v", err)
 	}
 	sessionID := resp.Msg.Session.Id
-	var inst *session.Instance
+	var inst *instance.Instance
 	t.Cleanup(func() {
 		_, _ = deps.SessionService.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{Id: sessionID}))
 		waitForTmuxTeardown(t, inst, 5*time.Second)
@@ -705,9 +705,9 @@ func waitForResolvedAddr(t *testing.T, srv *Server, timeout time.Duration) strin
 
 // waitForLiveInstance polls SessionService.FindLiveInstance until the session created above
 // is registered in the live poller, failing the test on timeout.
-func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID string, timeout time.Duration) *session.Instance {
+func waitForLiveInstance(t *testing.T, deps *ServerDependencies, sessionID string, timeout time.Duration) *instance.Instance {
 	t.Helper()
-	var inst *session.Instance
+	var inst *instance.Instance
 	wait.RequireEventually(t, func() bool {
 		if got := deps.SessionService.FindLiveInstance(sessionID); got != nil {
 			inst = got
@@ -807,7 +807,7 @@ func waitForPermissionRequestHookCommand(t *testing.T, settingsPath string, time
 // Uses testutil/wait.WaitForCondition rather than require.Eventually because the
 // latter calls t.FailNow()/t.Errorf() internally on timeout, which would break this
 // helper's deliberate non-fatal contract.
-func waitForTmuxTeardown(t *testing.T, inst *session.Instance, timeout time.Duration) {
+func waitForTmuxTeardown(t *testing.T, inst *instance.Instance, timeout time.Duration) {
 	t.Helper()
 	if inst == nil {
 		return

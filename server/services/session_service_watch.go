@@ -12,9 +12,9 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -48,7 +48,7 @@ func (s *SessionService) WatchSessions(
 	} else {
 		// Fresh connection: send initial snapshot using in-memory poller cache —
 		// avoids a full SQLite scan on every new WatchSessions connection.
-		var instances []*session.Instance
+		var instances []*instance.Instance
 		if s.ReviewQueuePoller != nil {
 			instances = s.ReviewQueuePoller.GetInstances()
 		} else {

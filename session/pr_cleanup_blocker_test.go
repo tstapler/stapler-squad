@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -47,18 +50,18 @@ func (f *fakeGateSource) FindInstanceDataByID(id string) (*domain.InstanceData, 
 }
 
 func workSession(uuid, item string) backlogdto.ItemSessionSummary {
-	return backlogdto.ItemSessionSummary{ID: uuid, SessionUUID: uuid, BacklogItemID: item, Role: SessionRoleWork, CreatedAt: prTestEpoch}
+	return backlogdto.ItemSessionSummary{ID: uuid, SessionUUID: uuid, BacklogItemID: item, Role: instance.SessionRoleWork, CreatedAt: fixturetest.PrTestEpoch}
 }
 
-func gateWith(src *fakeGateSource, probe LiveWorkProbe, live bool) *PRCleanupGate {
+func gateWith(src *fakeGateSource, probe instance.LiveWorkProbe, live bool) *PRCleanupGate {
 	return NewPRCleanupGate(src, probe, func() bool { return live })
 }
 
 func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *testing.T) {
 	t.Parallel()
-	open := prRow(t, 22, domain.PRStateOpen, "")
-	merged := prRow(t, 21, domain.PRStateMerged, "")
-	unknown := prRow(t, 23, domain.PRStateUnknown, "")
+	open := fixturetest.PrRow(t, 22, domain.PRStateOpen, "")
+	merged := fixturetest.PrRow(t, 21, domain.PRStateMerged, "")
+	unknown := fixturetest.PrRow(t, 23, domain.PRStateUnknown, "")
 	tests := []struct {
 		name       string
 		src        *fakeGateSource
@@ -94,8 +97,8 @@ func TestPRCleanupGate_Blocked_ShouldHoldOnEveryPRClause_AndNameTheOwner(t *test
 
 func TestPRCleanupGate_Blocked_ShouldIgnoreNonWorkSessions_AndSupersededRoundStillHolds(t *testing.T) {
 	t.Parallel()
-	src := &fakeGateSource{views: map[string][]domain.PRView{"s1": {prRow(t, 30, domain.PRStateOpen, "")}}}
-	review := backlogdto.ItemSessionSummary{ID: "r", SessionUUID: "s1", BacklogItemID: "i1", Role: SessionRoleReview}
+	src := &fakeGateSource{views: map[string][]domain.PRView{"s1": {fixturetest.PrRow(t, 30, domain.PRStateOpen, "")}}}
+	review := backlogdto.ItemSessionSummary{ID: "r", SessionUUID: "s1", BacklogItemID: "i1", Role: instance.SessionRoleReview}
 	_, blocked := gateWith(src, nil, false).Blocked(context.Background(), []backlogdto.ItemSessionSummary{review}, GateOptions{})
 	assert.False(t, blocked, "only work-role links count")
 
@@ -140,7 +143,7 @@ func TestPRCleanupGate_Blocked_ShouldBlockOnPRClausesOnlyOnReworkPath_WhenJustSp
 	assert.False(t, blocked, "rework: a live session never blocks purely for being live")
 	assert.Empty(t, probe.calls)
 
-	src := &fakeGateSource{views: map[string][]domain.PRView{"old": {prRow(t, 30, domain.PRStateOpen, "")}}}
+	src := &fakeGateSource{views: map[string][]domain.PRView{"old": {fixturetest.PrRow(t, 30, domain.PRStateOpen, "")}}}
 	b, blocked := gateWith(src, probe, true).Blocked(ctx, prior, GateOptions{IgnoreLive: true})
 	require.True(t, blocked, "rework: a prior round's open PR still holds its worktree")
 	assert.False(t, b.LiveOnly)
@@ -148,7 +151,7 @@ func TestPRCleanupGate_Blocked_ShouldBlockOnPRClausesOnlyOnReworkPath_WhenJustSp
 
 func TestPRCleanupGate_Blocked_ShouldReportPRBlockNotLive_WhenBothHold(t *testing.T) {
 	t.Parallel()
-	src := &fakeGateSource{views: map[string][]domain.PRView{"s1": {prRow(t, 22, domain.PRStateOpen, "")}}}
+	src := &fakeGateSource{views: map[string][]domain.PRView{"s1": {fixturetest.PrRow(t, 22, domain.PRStateOpen, "")}}}
 	b, blocked := gateWith(src, &fakeProbe{live: map[string]bool{"s1": true}}, true).Blocked(context.Background(), []backlogdto.ItemSessionSummary{workSession("s1", "i1")}, GateOptions{})
 	require.True(t, blocked)
 	assert.False(t, b.LiveOnly, "a PR hold settles for the TTL; only a pure live hold stays unsettled")
@@ -157,7 +160,7 @@ func TestPRCleanupGate_Blocked_ShouldReportPRBlockNotLive_WhenBothHold(t *testin
 func TestBlockedSet_ShouldDedupeFirstBlock_AndReportCountAndAge(t *testing.T) {
 	t.Parallel()
 	b := NewBlockedSet()
-	t0 := prTestEpoch
+	t0 := fixturetest.PrTestEpoch
 	assert.True(t, b.Block("sweep", "i1", "r", t0))
 	assert.False(t, b.Block("sweep", "i1", "r", t0.Add(time.Minute)), "second tick: counter unchanged")
 	assert.True(t, b.Block("archive_rpc", "i1", "r", t0.Add(2*time.Minute)), "a different path counts separately")

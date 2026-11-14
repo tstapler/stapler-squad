@@ -11,8 +11,8 @@ import (
 	"net/http"
 
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/cdp"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const maxInspectBodyBytes = 1024
@@ -21,7 +21,7 @@ const maxInspectBodyBytes = 1024
 type InspectElementHandler struct {
 	finder  InstanceFinder
 	inspect func(ctx context.Context, port int, pt cdp.Point) (*cdp.InspectResult, error)
-	portOf  func(inst *session.Instance) int
+	portOf  func(inst *instance.Instance) int
 }
 
 // NewInspectElementHandler creates a handler backed by the given InstanceFinder.
@@ -35,7 +35,7 @@ func NewInspectElementHandler(finder InstanceFinder) *InspectElementHandler {
 
 // cdpPortOf returns 0 when the instance has no CDP manager; instances restored
 // from storage never run initCDPManager, so CDPManager() can be nil.
-func cdpPortOf(inst *session.Instance) int {
+func cdpPortOf(inst *instance.Instance) int {
 	m := inst.CDPManager()
 	if m == nil {
 		return 0

@@ -10,8 +10,8 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	instancepkg "github.com/tstapler/stapler-squad/session/instance"
 )
 
 // classifyPauseResumeErr maps a Pause()/Resume() error to the appropriate connect
@@ -21,9 +21,9 @@ import (
 func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 	var transErr domain.ErrInvalidTransition
 	if errors.As(err, &transErr) ||
-		errors.Is(err, session.ErrPauseNotPermitted) ||
-		errors.Is(err, session.ErrResumeNotPermitted) ||
-		errors.Is(err, session.ErrDirtyStateUnknown) {
+		errors.Is(err, instancepkg.ErrPauseNotPermitted) ||
+		errors.Is(err, instancepkg.ErrResumeNotPermitted) ||
+		errors.Is(err, instancepkg.ErrDirtyStateUnknown) {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))
 	}
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
@@ -34,8 +34,8 @@ func classifyPauseResumeErr(err error, opDesc string) *connect.Error {
 // classifyPauseResumeErr.
 func classifyStopErr(err error, opDesc string) *connect.Error {
 	var transErr domain.ErrInvalidTransition
-	if errors.As(err, &transErr) || errors.Is(err, session.ErrPauseNotPermitted) ||
-		errors.Is(err, session.ErrDirtyStateUnknown) {
+	if errors.As(err, &transErr) || errors.Is(err, instancepkg.ErrPauseNotPermitted) ||
+		errors.Is(err, instancepkg.ErrDirtyStateUnknown) {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("failed to %s session: %w", opDesc, err))
 	}
 	return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to %s session: %w", opDesc, err))
@@ -46,7 +46,7 @@ func classifyStopErr(err error, opDesc string) *connect.Error {
 // instances already uses that title. Returns false (no error) when msg.Title
 // is nil, empty, or unchanged -- a no-op the caller treats as "nothing to
 // record".
-func applyTitleRename(msg *sessionv1.UpdateSessionRequest, instance *session.Instance, instances []*session.Instance) (bool, error) {
+func applyTitleRename(msg *sessionv1.UpdateSessionRequest, instance *instancepkg.Instance, instances []*instancepkg.Instance) (bool, error) {
 	if msg.Title == nil || *msg.Title == "" || *msg.Title == instance.Title {
 		return false, nil
 	}
@@ -63,7 +63,7 @@ func applyTitleRename(msg *sessionv1.UpdateSessionRequest, instance *session.Ins
 // repeated field is indistinguishable from "not provided", so clients send
 // tags=[""] to clear all tags. Returns false (no error) when msg.Tags is
 // empty -- a no-op the caller treats as "nothing to record".
-func applyTagsUpdate(msg *sessionv1.UpdateSessionRequest, instance *session.Instance) (bool, error) {
+func applyTagsUpdate(msg *sessionv1.UpdateSessionRequest, instance *instancepkg.Instance) (bool, error) {
 	if len(msg.Tags) == 0 {
 		return false, nil
 	}
@@ -86,7 +86,7 @@ func applyTagsUpdate(msg *sessionv1.UpdateSessionRequest, instance *session.Inst
 // classifyStopErr/classifyPauseResumeErr. Returns false (no error) when
 // msg.Status is unset/UNSPECIFIED or already matches instance's current
 // status -- a no-op the caller treats as "nothing to record".
-func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionRequest, instance *session.Instance) (bool, error) {
+func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionRequest, instance *instancepkg.Instance) (bool, error) {
 	if msg.Status == nil || *msg.Status == sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 		return false, nil
 	}
@@ -116,7 +116,7 @@ func (s *SessionService) applyStatusTransition(msg *sessionv1.UpdateSessionReque
 		// pattern, and avoids stamping the reason on a request that got rejected
 		// (permission denied, invalid transition).
 		if msg.PauseReason == nil || *msg.PauseReason == "" {
-			instance.SetPauseReason(session.PauseReasonManual)
+			instance.SetPauseReason(instancepkg.PauseReasonManual)
 		} else {
 			instance.SetPauseReason(*msg.PauseReason)
 		}
@@ -152,7 +152,7 @@ func (s *SessionService) UpdateSession(
 	// Use the live poller list to avoid LoadInstances side-effects (Start() on Active
 	// sessions) that can silently drop sessions if tmux is unavailable, which would then
 	// clobber the poller's complete list via SetInstances.
-	var instances []*session.Instance
+	var instances []*instancepkg.Instance
 	if s.ReviewQueuePoller != nil {
 		instances = s.ReviewQueuePoller.GetInstances()
 	} else {
@@ -185,9 +185,9 @@ func (s *SessionService) UpdateSession(
 	// (SetTitleDirect/SetCategory publish immediately via snapshot.Store, not staged
 	// until SaveInstances) — otherwise a rejected request could still leave title/category
 	// changes visible to concurrent readers.
-	if req.Msg.Note != nil && len(*req.Msg.Note) > session.MaxNoteLength {
+	if req.Msg.Note != nil && len(*req.Msg.Note) > instancepkg.MaxNoteLength {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("note exceeds maximum length of %d bytes", session.MaxNoteLength))
+			fmt.Errorf("note exceeds maximum length of %d bytes", instancepkg.MaxNoteLength))
 	}
 
 	// Track which fields are being updated for event publishing
@@ -259,7 +259,7 @@ func (s *SessionService) UpdateSession(
 			metaTitle, metaCategory, metaNote = nil, nil, nil
 		}
 		changed, _, switchErr := instance.SwitchProgram(ctx, *req.Msg.Program, func() error {
-			return s.storage.SaveInstances([]*session.Instance{instance})
+			return s.storage.SaveInstances([]*instancepkg.Instance{instance})
 		})
 		if changed {
 			updatedFields = append(updatedFields, "program")
@@ -313,12 +313,12 @@ func (s *SessionService) UpdateSession(
 	// Same server-side invariant as CreateSession: auto_approve=true is rejected for an
 	// agent yoloFlagFor can't inject a bypass flag for, not just disabled client-side.
 	if req.Msg.AutoApprove != nil && *req.Msg.AutoApprove != instance.AutoApprove {
-		if *req.Msg.AutoApprove && !session.AutoApproveSupported(instance.Program) {
+		if *req.Msg.AutoApprove && !instancepkg.AutoApproveSupported(instance.Program) {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("auto_approve is not supported for program %q", instance.Program))
 		}
 		if err := instance.SetAutoApprove(*req.Msg.AutoApprove, func() error {
-			return s.storage.SaveInstances([]*session.Instance{instance})
+			return s.storage.SaveInstances([]*instancepkg.Instance{instance})
 		}); err != nil {
 			log.Error("[UpdateSession] failed to restart session after auto-approve change", "session", instance.Title, "err", err)
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after auto-approve change: %w", err))
@@ -335,9 +335,9 @@ func (s *SessionService) UpdateSession(
 	// decision above already chose between the visible path and the audited
 	// O7 backlog-link path.
 	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
-		if len(*req.Msg.SteerMessage) > session.MaxSteerMessageLength {
+		if len(*req.Msg.SteerMessage) > instancepkg.MaxSteerMessageLength {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("steer_message exceeds maximum length of %d bytes", session.MaxSteerMessageLength))
+				fmt.Errorf("steer_message exceeds maximum length of %d bytes", instancepkg.MaxSteerMessageLength))
 		}
 		if err := s.runSteer(ctx, steer, instance, *req.Msg.SteerMessage); err != nil {
 			return nil, steerErrorToConnect(err)
@@ -365,7 +365,7 @@ func (s *SessionService) UpdateSession(
 		}
 	}
 	if sideEffectChanged {
-		if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+		if err := s.storage.SaveInstances([]*instancepkg.Instance{instance}); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 		}
 	}
@@ -383,7 +383,7 @@ func (s *SessionService) UpdateSession(
 // notifySteerSent logs and publishes the "steering input sent" notification
 // shared by both the autonomous and non-autonomous steer branches in
 // UpdateSession.
-func (s *SessionService) notifySteerSent(instance *session.Instance, steerMessage string) {
+func (s *SessionService) notifySteerSent(instance *instancepkg.Instance, steerMessage string) {
 	log.Info("[UpdateSession] steering message sent", "session", instance.Title)
 	s.eventBus.Publish(events.NewNotificationEvent(
 		instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),

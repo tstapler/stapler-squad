@@ -27,7 +27,7 @@ const name = "noarchivedrevival"
 // Analyzer is the exported analysis.Analyzer for the noarchivedrevival check.
 var Analyzer = &analysis.Analyzer{
 	Name: name,
-	Doc:  "requires Start(false)/RecoverFromStopped()/restartForRetry/transitionToLocked(..., Active) in the automated-lifecycle files to follow an IsArchived()/ArchivedAt check, or carry //nolint:noarchivedrevival <reason>",
+	Doc:  "requires Start(false)/RecoverFromStopped()/TransitionToActiveIf()/restartForRetry/transitionToLocked(..., Active) in the automated-lifecycle files to follow an IsArchived()/ArchivedAt check, or carry //nolint:noarchivedrevival <reason>",
 	Run:  run,
 }
 
@@ -39,9 +39,9 @@ var lifecycleFiles = []string{
 	"session/health.go",
 	"session/review_queue_poller.go",
 	"session/session_driver.go",
-	"session/instance_claude.go",
-	"session/instance_serialization.go",
-	"session/hot_restore.go",
+	"session/instance/instance_claude.go",
+	"session/instance/instance_serialization.go",
+	"session/instance/hot_restore.go",
 	"server/dependencies.go",
 	"server/wakes/revive.go",
 	"server/services/question_answer_router.go",
@@ -255,6 +255,8 @@ func revivalCall(call *ast.CallExpr) (string, bool) {
 			}
 		case "RecoverFromStopped":
 			return "RecoverFromStopped()", true
+		case "TransitionToActiveIf":
+			return "TransitionToActiveIf()", true
 		}
 	case *ast.Ident:
 		switch fun.Name {

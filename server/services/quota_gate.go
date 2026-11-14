@@ -11,8 +11,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -179,13 +179,13 @@ func (g *QuotaGate) StatusDetail() string {
 // read here would be a genuine cross-goroutine data race. See
 // session/instance.go's documented Snapshot() contract and
 // capacity_monitor.go's evaluate() for the established precedent.
-func foregroundSessionActive(instances []*session.Instance) bool {
+func foregroundSessionActive(instances []*instance.Instance) bool {
 	for _, inst := range instances {
 		if inst == nil {
 			continue
 		}
 		snap := inst.Snapshot()
-		if snap.Category != session.CategoryBacklog && snap.Status == domain.Active {
+		if snap.Category != instance.CategoryBacklog && snap.Status == domain.Active {
 			return true
 		}
 	}

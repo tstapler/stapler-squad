@@ -19,7 +19,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 const (
@@ -401,7 +401,7 @@ func TestApprovalResolver_ShouldBeInvalidWithoutConfirmAndAppliedWithIt_WhenCIBl
 	require.NoError(t, config.LoadConfig().SetFeatureFlag(blockApprovalOnCIFailureFlagName, true))
 	store := NewApprovalStore("")
 	svc := NewApprovalService(store)
-	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &session.Instance{
+	svc.SetLiveInstanceFinder(&fakeApprovalLiveInstanceFinder{inst: &instance.Instance{
 		Title: "session-X", UUID: "session-X", GitHubPRNumber: 42, GitHubCheckConclusion: ciConclusionFailure,
 	}})
 	require.NoError(t, store.Create(newTestPendingApproval("appr-1", "session-X", "Bash")))

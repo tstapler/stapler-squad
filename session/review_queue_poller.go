@@ -17,6 +17,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/claudectl"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/queue"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -24,14 +25,14 @@ import (
 // StatusProvider is the interface ReviewQueuePoller uses to fetch session status.
 // Defined at the consumption point (the poller), not the production point.
 type StatusProvider interface {
-	GetStatus(inst *Instance) InstanceStatusInfo
+	GetStatus(inst *instance.Instance) instance.InstanceStatusInfo
 	GetController(instanceTitle string) (*claudectl.ClaudeController, bool)
 }
 
 // ContentProvider fetches terminal content for a session.
 // Defined at the consumption point so tests can inject fakes without tmux.
 type ContentProvider interface {
-	GetContent(inst *Instance, statusInfo InstanceStatusInfo, paneActivity map[string]time.Time) string
+	GetContent(inst *instance.Instance, statusInfo instance.InstanceStatusInfo, paneActivity map[string]time.Time) string
 	EvictInstance(title string)
 }
 
@@ -120,7 +121,7 @@ type ReviewQueuePoller struct {
 	queue            *queue.ReviewQueue
 	statusManager    StatusProvider
 	storage          *Storage
-	instances        []*Instance
+	instances        []*instance.Instance
 	config           ReviewQueuePollerConfig
 	statusDetector   detection.TerminalDetector      // For detecting status in sessions without claudectl.ClaudeController
 	approvalProvider domain.ApprovalMetadataProvider // Optional: enriches approval items with hook metadata
@@ -129,7 +130,7 @@ type ReviewQueuePoller struct {
 	tmuxSocket       TmuxSocketQuerier               // Tmux server-socket queries for reconcileSessions; fakeable in tests
 	optionsSource    FlagOptionsSource               // Attention flags, read once per poll cycle; nil = all off
 	explain          suppressionExplainer            // Why-suppressed and why-skipped visibility
-	recorder         SessionEventRecorder            // Attention raised/cleared sink; nil = no-op
+	recorder         instance.SessionEventRecorder   // Attention raised/cleared sink; nil = no-op
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -195,7 +196,7 @@ func NewReviewQueuePollerWithConfig(queue *queue.ReviewQueue, statusManager Stat
 		queue:            queue,
 		statusManager:    statusManager,
 		storage:          storage,
-		instances:        make([]*Instance, 0),
+		instances:        make([]*instance.Instance, 0),
 		config:           config,
 		statusDetector:   detection.NewStatusDetector(),
 		contentProvider:  NewPollerContentProvider(),
@@ -205,14 +206,14 @@ func NewReviewQueuePollerWithConfig(queue *queue.ReviewQueue, statusManager Stat
 }
 
 // SetInstances sets the list of instances to monitor.
-func (rqp *ReviewQueuePoller) SetInstances(instances []*Instance) {
+func (rqp *ReviewQueuePoller) SetInstances(instances []*instance.Instance) {
 	rqp.mu.Lock()
 	defer rqp.mu.Unlock()
 	rqp.instances = instances
 }
 
 // AddInstance adds a single instance to monitor.
-func (rqp *ReviewQueuePoller) AddInstance(instance *Instance) {
+func (rqp *ReviewQueuePoller) AddInstance(instance *instance.Instance) {
 	rqp.mu.Lock()
 	defer rqp.mu.Unlock()
 	// Stagger this session's dirty-cache TTL so sessions added in a burst
@@ -226,7 +227,7 @@ func (rqp *ReviewQueuePoller) RemoveInstance(instanceTitle string) {
 	rqp.mu.Lock()
 	defer rqp.mu.Unlock()
 
-	filtered := make([]*Instance, 0, len(rqp.instances))
+	filtered := make([]*instance.Instance, 0, len(rqp.instances))
 	var removedTitle string
 	for _, inst := range rqp.instances {
 		if inst.MatchesID(instanceTitle) {
@@ -465,7 +466,7 @@ func (rqp *ReviewQueuePoller) ForceReconcile() {
 // - Stopped instances whose tmux session is found alive are revived to Active.
 func (rqp *ReviewQueuePoller) reconcileSessions() {
 	rqp.mu.RLock()
-	instances := make([]*Instance, 0, len(rqp.instances))
+	instances := make([]*instance.Instance, 0, len(rqp.instances))
 	for _, inst := range rqp.instances {
 		// Filtered before grouping/querying so a socket populated only by
 		// push-liveness instances triggers no ListSessions call at all --
@@ -527,26 +528,12 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 				if !liveSessions[sessionName] {
 					log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						// Can't use GetStatus()/Snapshot() here: this closure runs
-						// *inside* an in-flight actor command, and the published
-						// snapshot is only republished by runActor after the command
-						// returns (session/actor.go) -- Snapshot() would read the stale
-						// pre-command value. Fall back to the same i.mu.RLock()-guarded
-						// direct read transitionToLocked uses for its own status read
-						// (session/instance_state.go), which defends against legacy
-						// setters writing i.Status directly under i.mu from other
-						// goroutines while this actor command runs.
-						s.inst.mu.RLock()
-						status := s.inst.Status
-						s.inst.mu.RUnlock()
-						if status == domain.Active {
-							if err := transitionToLocked(s, context.Background(), domain.Stopped); err != nil {
-								log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
-								s.inst.loadStatus(domain.Stopped)
-							}
-						}
-					})
+					// The transition runs inside an in-flight actor command, where the published
+					// snapshot is stale, so TransitionToStoppedIfActiveOrLoad reads status under
+					// i.mu like transitionToLocked does.
+					if err := inst.TransitionToStoppedIfActiveOrLoad(ctx2s); err != nil {
+						log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
+					}
 					cancel()
 					rqp.removeFromQueue(inst.Title)
 					inst.FireLifecycleEvent(domain.EventExited, "reconcile-session-missing")
@@ -568,22 +555,15 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 						rqp.warnArchivedLivePaneOnce(inst, sessionName, serverSocket)
 						continue
 					}
-					if dead, _, _ := inst.paneExitInfoIgnoringStatus(); dead {
+					if dead, _, _ := inst.PaneExitInfoIgnoringStatus(); dead {
 						log.Info("reconcileSessions: stopped session's pane exists but wrapped program has exited, leaving Stopped", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 						continue
 					}
 					log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						s.inst.mu.RLock()
-						status := s.inst.Status
-						s.inst.mu.RUnlock()
-						if status == domain.Stopped {
-							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
-								log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
-							}
-						}
-					})
+					if err := inst.TransitionToActiveIf(ctx2s, domain.Stopped); err != nil {
+						log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
+					}
 					cancel()
 					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-revived")
 				}
@@ -605,16 +585,9 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					}
 					log.Warn("reconcileSessions: hibernated session found alive in tmux, resuming to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						s.inst.mu.RLock()
-						status := s.inst.Status
-						s.inst.mu.RUnlock()
-						if status == domain.Hibernated {
-							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
-								log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
-							}
-						}
-					})
+					if err := inst.TransitionToActiveIf(ctx2s, domain.Hibernated); err != nil {
+						log.Warn("reconcileSessions: resume from hibernation failed", "session", inst.Title, "err", err)
+					}
 					cancel()
 					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-hibernated-but-alive")
 				}
@@ -632,13 +605,9 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 					}
 					log.Warn("reconcileSessions: crashed session found alive in tmux, reviving to Active", "session", inst.Title, "tmux", sessionName, "socket", serverSocket)
 					ctx2s, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					_ = inst.sendCtx(ctx2s, func(s *instanceState) {
-						if s.inst.Status == domain.Crashed {
-							if err := transitionToLocked(s, context.Background(), domain.Active); err != nil {
-								log.Warn("reconcileSessions: revival from crashed failed", "session", inst.Title, "err", err)
-							}
-						}
-					})
+					if err := inst.TransitionToActiveIf(ctx2s, domain.Crashed); err != nil {
+						log.Warn("reconcileSessions: revival from crashed failed", "session", inst.Title, "err", err)
+					}
 					cancel()
 					inst.FireLifecycleEvent(domain.EventStarted, "reconcile-session-crashed-but-alive")
 				}
@@ -662,14 +631,14 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 // reaper. Keyed on Title, the codebase's conventional instance key, so
 // RemoveInstance can drop the entry alongside the content-cache eviction; a
 // rename re-arms the warning once.
-func (rqp *ReviewQueuePoller) warnArchivedLivePaneOnce(inst *Instance, sessionName, serverSocket string) {
+func (rqp *ReviewQueuePoller) warnArchivedLivePaneOnce(inst *instance.Instance, sessionName, serverSocket string) {
 	snap := inst.Snapshot()
 	if _, dup := rqp.archivedLivePaneWarned.LoadOrStore(snap.Title, struct{}{}); dup {
 		return
 	}
-	// Probed after the de-dup: paneExitInfoIgnoringStatus runs several tmux
+	// Probed after the de-dup: PaneExitInfoIgnoringStatus runs several tmux
 	// subprocesses, so it must not fire on every tick.
-	dead, _, _ := inst.paneExitInfoIgnoringStatus()
+	dead, _, _ := inst.PaneExitInfoIgnoringStatus()
 	log.Warn("reconcileSessions: archived session still has a live tmux pane object; not reviving",
 		"session", snap.Title, "tmux", sessionName, "socket", serverSocket,
 		"status", snap.Status, "pane_process_dead", dead,
@@ -684,7 +653,7 @@ const checkSessionsConcurrency = 5
 // checkSessions checks all instances and updates the review queue.
 func (rqp *ReviewQueuePoller) checkSessions() {
 	rqp.mu.RLock()
-	instances := make([]*Instance, len(rqp.instances))
+	instances := make([]*instance.Instance, len(rqp.instances))
 	copy(instances, rqp.instances)
 	rqp.mu.RUnlock()
 
@@ -703,7 +672,7 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 	for _, inst := range instances {
 		sem <- struct{}{}
 		wg.Add(1)
-		go func(i *Instance) {
+		go func(i *instance.Instance) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			rqp.evaluateSession(i, paneActivity, opts, ruleOpts)
@@ -740,7 +709,7 @@ func paneActivitySettled(activity, captureStart time.Time) bool {
 //
 // On error, the last cached content is returned so callers see empty string only
 // on the very first poll for a session.
-func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceStatusInfo, paneActivity map[string]time.Time) string {
+func (p *pollerContentProvider) GetContent(inst *instance.Instance, statusInfo instance.InstanceStatusInfo, paneActivity map[string]time.Time) string {
 	// Lock-free read: load the single bundled entry for this session.
 	entry, _ := p.cache.Load(inst.Title)
 
@@ -830,7 +799,7 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 // permanent false ATTENTION_REASON_STALE entry (see docs/tasks/backlog-feature-improvement.md,
 // 2026-08-02 entry).
 // All other states proceed to status detection regardless of controller state.
-func (rqp *ReviewQueuePoller) shouldSkipSession(inst *Instance) bool {
+func (rqp *ReviewQueuePoller) shouldSkipSession(inst *instance.Instance) bool {
 	// Lock-free snapshot read for Hidden, Status, and ArchivedAt; Started() reads
 	// inst.started (set once during construction, not in the snapshot).
 	// Status.IsSuspended() covers Paused/Hibernated/Stopped/Crashed/PermanentlyFailed:
@@ -859,16 +828,16 @@ func skipReasonOf(snap *domain.InstanceSnapshot, started bool) SkipReason {
 }
 
 // SetEventRecorder wires the sink for AttentionRaised/Cleared events; nil restores the no-op.
-func (rqp *ReviewQueuePoller) SetEventRecorder(r SessionEventRecorder) {
+func (rqp *ReviewQueuePoller) SetEventRecorder(r instance.SessionEventRecorder) {
 	rqp.mu.Lock()
 	defer rqp.mu.Unlock()
 	rqp.recorder = r
 }
 
-func (rqp *ReviewQueuePoller) eventRecorder() SessionEventRecorder {
+func (rqp *ReviewQueuePoller) eventRecorder() instance.SessionEventRecorder {
 	rqp.mu.RLock()
 	defer rqp.mu.RUnlock()
-	return orNoopRecorder(rqp.recorder)
+	return instance.OrNoopRecorder(rqp.recorder)
 }
 
 // removeFromQueue is the poller's single removal path; it records AttentionCleared for
@@ -906,7 +875,7 @@ func (rqp *ReviewQueuePoller) currentOptions() (DeterminerOptions, RuleOptions) 
 // evaluateSession checks a single session and adds/removes from queue as needed, using the
 // cycle's already-resolved flag options. paneActivity is the snapshot from
 // batchPaneActivity(); nil falls back to the TTL cache.
-func (rqp *ReviewQueuePoller) evaluateSession(inst *Instance, paneActivity map[string]time.Time, opts DeterminerOptions, ruleOpts RuleOptions) {
+func (rqp *ReviewQueuePoller) evaluateSession(inst *instance.Instance, paneActivity map[string]time.Time, opts DeterminerOptions, ruleOpts RuleOptions) {
 	// Skip paused, stopped, or unstarted sessions
 	if rqp.shouldSkipSession(inst) {
 		return
@@ -969,7 +938,7 @@ func (rqp *ReviewQueuePoller) evaluateSession(inst *Instance, paneActivity map[s
 }
 
 // handleDetectedRemove applies a determiner Remove action.
-func (rqp *ReviewQueuePoller) handleDetectedRemove(title string, statusInfo InstanceStatusInfo) {
+func (rqp *ReviewQueuePoller) handleDetectedRemove(title string, statusInfo instance.InstanceStatusInfo) {
 	// Without a controller the raw terminal scanner can false-positive Active during a resize
 	// redraw, so keep prompt-reason items there; controller-active sessions are trusted.
 	if !statusInfo.IsControllerActive {
@@ -981,7 +950,7 @@ func (rqp *ReviewQueuePoller) handleDetectedRemove(title string, statusInfo Inst
 }
 
 // addDetectedItem builds, enriches and enqueues the review item for an Add action.
-func (rqp *ReviewQueuePoller) addDetectedItem(inst *Instance, snap *domain.InstanceSnapshot, result DetectionResult, statusInfo InstanceStatusInfo) {
+func (rqp *ReviewQueuePoller) addDetectedItem(inst *instance.Instance, snap *domain.InstanceSnapshot, result DetectionResult, statusInfo instance.InstanceStatusInfo) {
 	reason, priority, context := result.Reason, result.Priority, result.Context
 
 	detectedAt := time.Now()
@@ -1101,7 +1070,7 @@ func setIfNonEmpty(m map[string]string, key, val string) {
 // write is serialised with buildSnapshot) and persists it so restarts don't re-add sessions.
 // Uses UpdateInstanceLastAddedToQueue, not SaveInstances, to avoid the merge logic that would
 // restore deleted instances from disk.
-func (rqp *ReviewQueuePoller) persistLastAddedToQueue(inst *Instance, title string, writeToDB bool) {
+func (rqp *ReviewQueuePoller) persistLastAddedToQueue(inst *instance.Instance, title string, writeToDB bool) {
 	now := time.Now()
 	inst.SetLastAddedToQueue(now)
 	log.Debug("updated LastAddedToQueue timestamp", "session", title, "timestamp", now)
@@ -1146,14 +1115,14 @@ func (rqp *ReviewQueuePoller) GetMonitoredCount() int {
 // This allows external components to trigger immediate re-evaluation without waiting for
 // the next poll cycle, providing <100ms feedback on user interactions.
 // Fetches a fresh pane activity snapshot for accurate cache invalidation.
-func (rqp *ReviewQueuePoller) CheckSession(inst *Instance) {
+func (rqp *ReviewQueuePoller) CheckSession(inst *instance.Instance) {
 	opts, ruleOpts := rqp.currentOptions()
 	rqp.evaluateSession(inst, batchPaneActivity(""), opts, ruleOpts)
 }
 
 // FindInstance finds an instance by session ID (exported for ReactiveQueueManager).
 // Returns nil if the instance is not found in the monitored list.
-func (rqp *ReviewQueuePoller) FindInstance(sessionID string) *Instance {
+func (rqp *ReviewQueuePoller) FindInstance(sessionID string) *instance.Instance {
 	rqp.mu.RLock()
 	defer rqp.mu.RUnlock()
 
@@ -1182,10 +1151,10 @@ func (rqp *ReviewQueuePoller) injectCachedContent(title, content string) {
 // GetInstances returns a snapshot of all live in-memory instances held by the poller.
 // Use this instead of LoadInstances() for read-only operations to avoid the side effect
 // of FromInstanceData() calling Start() on every non-paused instance.
-func (rqp *ReviewQueuePoller) GetInstances() []*Instance {
+func (rqp *ReviewQueuePoller) GetInstances() []*instance.Instance {
 	rqp.mu.RLock()
 	defer rqp.mu.RUnlock()
-	result := make([]*Instance, len(rqp.instances))
+	result := make([]*instance.Instance, len(rqp.instances))
 	copy(result, rqp.instances)
 	return result
 }

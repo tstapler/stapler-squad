@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // mustMkdirSiblingCwd creates dir on disk before it's used as a live probe
@@ -36,8 +36,8 @@ func mustMkdirSiblingCwd(t *testing.T, dir string) string {
 // A struct literal is safe here (unlike a live tmux-backed instance):
 // GitWorktreeManager is a value-typed field, not an interface, so its zero
 // value is usable, and SetGitWorktree only touches that field.
-func newWorktreeGuardTarget(title, uuid, worktreePath string) *session.Instance {
-	inst := &session.Instance{
+func newWorktreeGuardTarget(title, uuid, worktreePath string) *instance.Instance {
+	inst := &instance.Instance{
 		Title:       title,
 		UUID:        uuid,
 		Path:        worktreePath,

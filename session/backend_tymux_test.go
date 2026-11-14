@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -180,22 +183,22 @@ func TestInstanceRestart_MigratesBackendWhenOverrideDiffersFromCurrent(t *testin
 		return tymux.TymuxdReady{}, nil
 	})()
 
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:   "migrate-test",
 		Path:    t.TempDir(),
 		Program: "bash",
 		Status:  domain.Active,
 		Backend: domain.BackendTmux,
 	}
-	inst.started.Store(true)
-	require.NoError(t, inst.initializeBaselineForRestartTest())
+	inst.MarkStarted()
+	require.NoError(t, initializeBaselineForRestartTest(inst))
 
 	err := inst.Restart(false, domain.BackendTymux)
 
 	require.Error(t, err, "Start() against an unreachable tymuxd must fail in this sandboxed test environment")
 	assert.Equal(t, domain.BackendTymux, inst.Backend,
 		"Backend must be updated to the migration target even though the subsequent Start() failed -- the migration decision happens before Start() is attempted")
-	_, ok := inst.processManager.(*TymuxBackend)
+	_, ok := inst.ProcessManagerForTest().(*TymuxBackend)
 	assert.True(t, ok, "processManager must be swapped to *TymuxBackend, not left as the original *TmuxBackend")
 }
 
@@ -221,10 +224,10 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test that starts real tmux sessions")
 	}
-	checkTmuxAvailable(t)
+	fixturetest.CheckTmuxAvailable(t)
 	// A private server socket means this respawn hits a real but
 	// test-isolated tmux server rather than the host's default one.
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:            "no-migrate-test",
 		Path:             t.TempDir(),
 		Program:          "bash",
@@ -232,27 +235,27 @@ func TestInstanceRestart_NoMigration_KeepsExistingBackend(t *testing.T) {
 		Backend:          domain.BackendTmux,
 		TmuxServerSocket: testTmuxSocket(t),
 	}
-	inst.started.Store(true)
-	require.NoError(t, inst.initializeBaselineForRestartTest())
+	inst.MarkStarted()
+	require.NoError(t, initializeBaselineForRestartTest(inst))
 	defer func() { _ = inst.KillSession() }()
 
 	require.NoError(t, inst.Restart(false, ""))
 
 	assert.Equal(t, domain.BackendTmux, inst.Backend)
-	_, ok := inst.processManager.(*TmuxBackend)
+	_, ok := inst.ProcessManagerForTest().(*TmuxBackend)
 	assert.True(t, ok, "processManager must remain a *TmuxBackend when no migration was requested")
 }
 
-// initializeBaselineForRestartTest constructs i.processManager the same way
+// initializeBaselineForRestartTest constructs the instance's process manager the same way
 // NewInstance does (via the factory, so it's a real *TmuxBackend matching
 // i.Backend) without going through the rest of NewInstance's worktree/VNC/
 // CDP machinery this test has no use for.
-func (i *Instance) initializeBaselineForRestartTest() error {
-	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, ProcessManagerOptions{Backend: i.Backend})
+func initializeBaselineForRestartTest(i *instance.Instance) error {
+	pm, err := NewProcessManager(context.Background(), domain.BackendTmux, instance.ProcessManagerOptions{Backend: i.Backend})
 	if err != nil {
 		return err
 	}
-	i.processManager = pm
+	i.SetProcessManagerForTest(pm)
 	return nil
 }
 
@@ -283,7 +286,7 @@ func (f *fakeTymuxManagerForSetCommand) AppendEnv(env ...string) {
 
 func (f *fakeTymuxManagerForSetCommand) SetCommand(command launchcmd.LaunchCommand) {
 	f.gotLaunch = command
-	f.gotCommand = shellString(command)
+	f.gotCommand = instance.ShellString(command)
 }
 
 func (f *fakeTymuxManagerForSetCommand) SetSessionLabel(label string) {
@@ -316,7 +319,7 @@ func TestNewTymuxBackendFromOpts_AppliesProgramViaSetCommand(t *testing.T) {
 	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
 	defer func() { newTymuxSessionFn = orig }()
 
-	newTymuxBackendFromOpts(ProcessManagerOptions{Program: "claude --resume abc"})
+	newTymuxBackendFromOpts(instance.ProcessManagerOptions{Program: "claude --resume abc"})
 
 	assert.Equal(t, "claude --resume abc", fake.gotCommand)
 	exec, ok := fake.gotLaunch.(launchcmd.ExecCommand)
@@ -336,15 +339,15 @@ func TestInstanceRestart_NoMigration_ExistingTymuxBackend_AppliesProgramViaSetCo
 		return tymux.TymuxdReady{}, nil
 	})()
 	fake := &fakeTymuxManagerForSetCommand{}
-	inst := &Instance{
+	inst := &instance.Instance{
 		Title:   "already-tymux-test",
 		Path:    t.TempDir(),
 		Program: "bash",
 		Status:  domain.Active,
 		Backend: domain.BackendTymux,
 	}
-	inst.started.Store(true)
-	inst.processManager = NewTymuxBackend(fake)
+	inst.MarkStarted()
+	inst.SetProcessManagerForTest(NewTymuxBackend(fake))
 
 	require.NoError(t, inst.Restart(false, ""))
 
@@ -358,7 +361,7 @@ func TestNewTymuxBackendFromOpts_AppliesSessionNameAsLabel(t *testing.T) {
 	newTymuxSessionFn = func() tymux.TymuxManager { return fake }
 	defer func() { newTymuxSessionFn = orig }()
 
-	newTymuxBackendFromOpts(ProcessManagerOptions{SessionName: "stapler-squad-2"})
+	newTymuxBackendFromOpts(instance.ProcessManagerOptions{SessionName: "stapler-squad-2"})
 
 	assert.Equal(t, "stapler-squad-2", fake.gotLabel)
 }

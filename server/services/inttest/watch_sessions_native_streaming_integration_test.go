@@ -31,6 +31,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/importer"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/prpoller"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/testutil"
@@ -75,7 +76,7 @@ func newNarrowServerDeps(t *testing.T) *server.ServerDependencies {
 	errorRegistry := services.NewErrorRegistry(storage.GetEntClient(), true)
 	sessionService.SetErrorRegistry(errorRegistry)
 
-	statusManager := session.NewInstanceStatusManager()
+	statusManager := instance.NewInstanceStatusManager()
 	reviewQueue := sessionService.GetReviewQueueInstance()
 	reviewQueuePoller := session.NewReviewQueuePoller(reviewQueue, statusManager, storage)
 	reviewQueuePoller.SetApprovalProvider(domain.ApprovalMetadataProvider(sessionService.GetApprovalStore()))
@@ -174,7 +175,7 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 	prevProofs := services.DefaultMcpProofs()
 	t.Cleanup(func() {
 		services.SetDefaultMcpProofs(prevProofs)
-		session.SetMCPProofProvider(nil)
+		instance.SetMCPProofProvider(nil)
 	})
 	// wireDepsIntoServer unconditionally calls SessionService.SetLifecycleContext,
 	// which starts CapacityMonitor's real Anthropic/Gemini QueryLimits polling
@@ -370,12 +371,12 @@ func TestWatchSessions_should_DeliverMultipleEventsOverNativeHTTP2Stream_When_Ca
 		}
 	}
 
-	inst1 := &session.Instance{
+	inst1 := &instance.Instance{
 		ID: "watch-native-stream-inst-1", Title: "watch-native-stream-inst-1",
 		Path: t.TempDir(), Status: domain.Active, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
-	inst2 := &session.Instance{
+	inst2 := &instance.Instance{
 		ID: "watch-native-stream-inst-2", Title: "watch-native-stream-inst-2",
 		Path: t.TempDir(), Status: domain.Active, Program: "claude",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),

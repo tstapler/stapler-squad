@@ -13,14 +13,15 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/streamhub"
 )
 
-func newTymuxInstanceWithStatus(t *testing.T, status domain.Status) *session.Instance {
+func newTymuxInstanceWithStatus(t *testing.T, status domain.Status) *instance.Instance {
 	t.Helper()
-	inst := session.NewStartedInstanceForTest(t, "upgrade", session.NewTymuxBackend(retainedPaintManager{}))
+	inst := instance.NewStartedInstanceForTest(t, "upgrade", session.NewTymuxBackend(retainedPaintManager{}))
 	inst.Backend = domain.BackendTymux
-	session.SetStatusForTest(t, inst, status, nil)
+	instance.SetStatusForTest(t, inst, status, nil)
 	return inst
 }
 
@@ -35,7 +36,7 @@ func TestUpgradableWriter_should_UpgradeOnce_When_TymuxInstanceBecomesActive(t *
 	require.Nil(t, w.Writer(), "read-only while the session is PermanentlyFailed")
 	require.Zero(t, upgrades)
 
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	first := w.Writer()
 	require.NotNil(t, first, "retry made the session Active; the attach must become read-write")
 	require.Same(t, first, w.Writer(), "the upgraded writer is kept, not rebuilt")
@@ -50,7 +51,7 @@ func TestUpgradableWriter_should_UpgradeFromAnyNonActiveStatus(t *testing.T) {
 			inst := newTymuxInstanceWithStatus(t, from)
 			w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 			require.Nil(t, w.Writer())
-			session.SetStatusForTest(t, inst, domain.Active, nil)
+			instance.SetStatusForTest(t, inst, domain.Active, nil)
 			require.NotNil(t, w.Writer())
 		})
 	}
@@ -60,14 +61,14 @@ func TestUpgradableWriter_should_StayReadOnlyWhileArchived_ThenUpgradeOnUnarchiv
 	t.Parallel()
 	inst := newTymuxInstanceWithStatus(t, domain.Active)
 	archivedAt := time.Now()
-	session.SetStatusForTest(t, inst, domain.Active, &archivedAt)
+	instance.SetStatusForTest(t, inst, domain.Active, &archivedAt)
 	w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 	require.Nil(t, w.Writer(), "archived attach is read-only")
 
-	session.SetStatusForTest(t, inst, domain.Active, &archivedAt)
+	instance.SetStatusForTest(t, inst, domain.Active, &archivedAt)
 	require.Nil(t, w.Writer(), "still archived: stays read-only")
 
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	require.NotNil(t, w.Writer(), "the UI shows the terminal writable after unarchive, so the stream must too")
 }
 
@@ -75,12 +76,12 @@ func TestUpgradableWriter_should_StayReadOnly_When_UnarchivedButNotActive(t *tes
 	t.Parallel()
 	archivedAt := time.Now()
 	inst := newTymuxInstanceWithStatus(t, domain.Stopped)
-	session.SetStatusForTest(t, inst, domain.Stopped, &archivedAt)
+	instance.SetStatusForTest(t, inst, domain.Stopped, &archivedAt)
 	w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 
-	session.SetStatusForTest(t, inst, domain.Stopped, nil)
+	instance.SetStatusForTest(t, inst, domain.Stopped, nil)
 	require.Nil(t, w.Writer())
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	require.NotNil(t, w.Writer())
 }
 
@@ -89,8 +90,8 @@ func TestUpgradableWriter_should_StayReadOnly_When_SessionBecomesHiddenBeforeUpg
 	inst := newTymuxInstanceWithStatus(t, domain.PermanentlyFailed)
 	w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 
-	session.SetHiddenForTest(t, inst, true)
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetHiddenForTest(t, inst, true)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	require.Nil(t, w.Writer(), "a hidden session must never gain write access")
 }
 
@@ -101,7 +102,7 @@ func TestUpgradableWriter_should_UpgradeExactlyOnce_When_WriterIsCalledConcurren
 	var mu sync.Mutex
 	upgrades := 0
 	w.SetOnUpgrade(func(services.TerminalWriter) { mu.Lock(); upgrades++; mu.Unlock() })
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {
@@ -130,7 +131,7 @@ func TestInputReadLoop_should_ForwardInput_When_WriterUpgradesMidConnection(t *t
 	require.NoError(t, dispatchInputReadLoopFrame(p, frame))
 	require.Empty(t, got, "dropped while read-only")
 
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	require.NoError(t, dispatchInputReadLoopFrame(p, frame))
 	require.Len(t, got, 1, "forwarded once the session is Active")
 }
@@ -189,7 +190,7 @@ func TestWireWriterUpgrade_should_UpgradeSubscriberAndVote_When_StatusFlipsWithN
 	t.Cleanup(cancel)
 	_ = h.wireWriterUpgrade(ctx, writerUpgrade{hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(100, 30), bus: bus})
 
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 
 	waitUpgraded(t, w)
@@ -210,7 +211,7 @@ func TestWireWriterUpgrade_should_VoteWithLatestDroppedResize_When_OneWasRecorde
 	_ = h.wireWriterUpgrade(ctx, writerUpgrade{hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(100, 30), bus: bus})
 	w.NoteDroppedResize(160, 50)
 
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
 
 	waitUpgraded(t, w)
@@ -224,7 +225,7 @@ func TestWireWriterUpgrade_should_UpgradeImmediately_When_StatusFlippedBeforeWir
 	h := NewConnectRPCWebSocketHandler(nil, nil, nil)
 	w := h.newUpgradableWriter(inst)
 	hub, id := attachReadOnly(t)
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 
 	_ = h.wireWriterUpgrade(context.Background(), writerUpgrade{hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(90, 20)})
 
@@ -239,7 +240,7 @@ func TestUpgradableWriter_should_NotExposeWriterToOtherCallers_UntilUpgradeCallb
 	w := NewConnectRPCWebSocketHandler(nil, nil, nil).newUpgradableWriter(inst)
 	entered, release := make(chan struct{}), make(chan struct{})
 	w.SetOnUpgrade(func(services.TerminalWriter) { close(entered); <-release })
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 
 	first := make(chan services.TerminalWriter, 1)
 	go func() { first <- w.Writer() }()
@@ -265,7 +266,7 @@ func TestWireWriterUpgrade_should_NotBlockReadLoop_When_ResizeVoteIsSlow(t *test
 			voted <- [2]int{cols, rows}
 		},
 	})
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 
 	got := make(chan services.TerminalWriter, 1)
 	go func() { got <- w.Writer() }() // the input read loop triggering the upgrade
@@ -292,7 +293,7 @@ func TestWireWriterUpgrade_should_UpgradeCapabilityBeforeExposingWriter(t *testi
 		hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(90, 20),
 		vote: func(_ context.Context, _ services.TerminalWriter, _, _ int) {},
 	})
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	require.NotNil(t, w.Writer())
 
 	hub.RequestResize(context.Background(), id, size)
@@ -313,7 +314,7 @@ func TestWireWriterUpgrade_should_VoteResizeRecordedAfterUpgrade(t *testing.T) {
 	w := h.newUpgradableWriter(inst)
 	hub, id := attachReadOnly(t)
 	_ = h.wireWriterUpgrade(context.Background(), writerUpgrade{hub: hub, id: id, writer: w, instance: inst, handshake: handshakeReq(100, 30)})
-	session.SetStatusForTest(t, inst, domain.Active, nil)
+	instance.SetStatusForTest(t, inst, domain.Active, nil)
 	require.NotNil(t, w.Writer())
 	waitUpgraded(t, w)
 

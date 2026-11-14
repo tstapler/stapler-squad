@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
@@ -72,7 +73,7 @@ func artifactsToProto(a *domain.SessionArtifactsBlob, linked bool, supportsTrans
 
 // InstanceToProto converts a session.Instance to a proto Session message.
 // workflowNames is an optional map from workflow UUID to workflow name; pass nil to omit workflow_name.
-func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *sessionv1.Session {
+func InstanceToProto(inst *instance.Instance, workflowNames map[string]string) *sessionv1.Session {
 	if inst == nil {
 		return nil
 	}
@@ -151,51 +152,11 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		RestartedFromSessionId: snap.RestartedFromSessionID,
 	}
 
-	// Retry state (session-retry-backoff), fields 76-80. Read directly from
-	// the instance (not the InstanceSnapshot atomic pointer, which predates
-	// this feature) via RetrySnapshot's race-free copy.
-	rs := inst.RetrySnapshot()
-	protoSession.RetryAttempt = int32(rs.RetryAttempt)         //#nosec G115 -- retry attempt count, capped by policy
-	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts) //#nosec G115 -- retry attempt cap, always small
-	protoSession.LastFailureReason = rs.LastFailureReason
-	if !rs.NextRetryAt.IsZero() {
-		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
-	}
-	if len(rs.RetryHistory) > 0 {
-		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
-		for i, rec := range rs.RetryHistory {
-			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
-				Attempt:   int32(rec.Attempt), //#nosec G115 -- retry attempt count, capped by policy
-				Reason:    rec.Reason,
-				Timestamp: timestamppb.New(rec.Timestamp),
-			}
-		}
-	}
+	applyRetryState(protoSession, inst)
 
 	protoSession.Artifacts = artifactsToProto(snap.Artifacts, snap.HistoryFilePath != "", inst.SupportsTranscript)
 
-	// Convert git worktree data if available
-	wt, err := inst.GetGitWorktree()
-	if err == nil && wt != nil {
-		protoSession.GitWorktree = &sessionv1.GitWorktree{
-			RepoPath:      wt.GetRepoPath(),
-			WorktreePath:  wt.GetWorktreePath(),
-			BranchName:    wt.GetBranchName(),
-			BaseCommitSha: wt.GetBaseCommitSHA(),
-		}
-	}
-
-	// Convert diff stats if available
-	if inst.GetDiffStats() != nil {
-		stats := inst.GetDiffStats()
-		protoSession.DiffStats = &sessionv1.DiffStats{
-			Added:   int32(stats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
-			Removed: int32(stats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
-		}
-	}
-
-	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
-	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+	applyWorktreeAndDiff(protoSession, inst)
 
 	// Convert Claude session data if available
 	if inst.GetClaudeSession() != nil {
@@ -239,6 +200,97 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// Exit reason — only meaningful when status == SESSION_STATUS_CRASHED.
 	protoSession.ExitReason = snap.ExitReason
 
+	applyBrowserStreamStates(protoSession, inst)
+
+	applyStatusDetection(protoSession, inst, snap)
+
+	// Hidden flag — system/background sessions excluded from default list/review queue.
+	protoSession.Hidden = snap.Hidden
+	protoSession.Pinned = snap.Pinned
+	protoSession.TerminalReadOnly, _ = session.TerminalInputBlock(snap)
+
+	// Workflow linkage, name, and archive state.
+	protoSession.WorkflowId = snap.WorkflowID
+	if snap.WorkflowID != "" && workflowNames != nil {
+		protoSession.WorkflowName = workflowNames[snap.WorkflowID]
+	}
+	if snap.ArchivedAt != nil {
+		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
+	}
+
+	// remote_name (field 76): host badge for a remote session (ssh-remote-workspaces
+	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
+	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
+	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
+	if remoteTarget, ok := inst.GetExecutionTarget().(instance.RemoteExecutionTarget); ok {
+		protoSession.RemoteName = remoteTarget.Target().Name
+	}
+
+	// pi approval-extension health (pi-support Epic 4.2) — derived live at read
+	// time via the injected resolver, never persisted. Left at the zero value
+	// (PI_EXTENSION_HEALTH_UNSPECIFIED) when unwired (e.g. tests) or when the
+	// resolver itself determines this isn't a pi session / the flag is off.
+	if resolver := getPiExtensionHealthResolver(); resolver != nil {
+		protoSession.PiExtensionHealth = resolver(protoSession.Id, snap.Program)
+	}
+
+	applySessionGoal(protoSession, inst)
+
+	return protoSession
+}
+
+// applyRetryState copies the session-retry-backoff fields (76-80).
+func applyRetryState(protoSession *sessionv1.Session, inst *instance.Instance) {
+	// Retry state (session-retry-backoff), fields 76-80. Read directly from
+	// the instance (not the InstanceSnapshot atomic pointer, which predates
+	// this feature) via RetrySnapshot's race-free copy.
+	rs := inst.RetrySnapshot()
+	protoSession.RetryAttempt = int32(rs.RetryAttempt)         //#nosec G115 -- retry attempt count, capped by policy
+	protoSession.RetryMaxAttempts = int32(rs.RetryMaxAttempts) //#nosec G115 -- retry attempt cap, always small
+	protoSession.LastFailureReason = rs.LastFailureReason
+	if !rs.NextRetryAt.IsZero() {
+		protoSession.NextRetryAt = timestamppb.New(rs.NextRetryAt)
+	}
+	if len(rs.RetryHistory) > 0 {
+		protoSession.RetryHistory = make([]*sessionv1.RetryAttemptRecord, len(rs.RetryHistory))
+		for i, rec := range rs.RetryHistory {
+			protoSession.RetryHistory[i] = &sessionv1.RetryAttemptRecord{
+				Attempt:   int32(rec.Attempt), //#nosec G115 -- retry attempt count, capped by policy
+				Reason:    rec.Reason,
+				Timestamp: timestamppb.New(rec.Timestamp),
+			}
+		}
+	}
+}
+
+// applyWorktreeAndDiff copies git worktree, diff stats and the commits-ahead signal.
+func applyWorktreeAndDiff(protoSession *sessionv1.Session, inst *instance.Instance) {
+	// Convert git worktree data if available
+	wt, err := inst.GetGitWorktree()
+	if err == nil && wt != nil {
+		protoSession.GitWorktree = &sessionv1.GitWorktree{
+			RepoPath:      wt.GetRepoPath(),
+			WorktreePath:  wt.GetWorktreePath(),
+			BranchName:    wt.GetBranchName(),
+			BaseCommitSha: wt.GetBaseCommitSHA(),
+		}
+	}
+
+	// Convert diff stats if available
+	if inst.GetDiffStats() != nil {
+		stats := inst.GetDiffStats()
+		protoSession.DiffStats = &sessionv1.DiffStats{
+			Added:   int32(stats.Added),   //#nosec G115 -- diff line count, bounded well under int32 max
+			Removed: int32(stats.Removed), //#nosec G115 -- diff line count, bounded well under int32 max
+		}
+	}
+
+	// Cached "has commits ahead of base" signal (AC6) — see Instance.UpdateDiffStats.
+	protoSession.HasCommitsAhead = inst.GetHasCommitsAhead()
+}
+
+// applyBrowserStreamStates copies the VNC and CDP browser-streaming state.
+func applyBrowserStreamStates(protoSession *sessionv1.Session, inst *instance.Instance) {
 	// VNC / browser-passthrough state.
 	if vncMgr := inst.VNCManager(); vncMgr != nil {
 		vncState := vncMgr.State()
@@ -257,9 +309,12 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 			Status: mapCDPStatus(cdpState.Status),
 		}
 	}
+}
 
+// applyStatusDetection copies SubStatus, DetectedStatus/Context, ContextHealth and SubagentCount.
+func applyStatusDetection(protoSession *sessionv1.Session, inst *instance.Instance, snap *domain.InstanceSnapshot) {
 	// Compute status info once for SubStatus + DetectedStatus + DetectedContext.
-	var statusInfo session.InstanceStatusInfo
+	var statusInfo instance.InstanceStatusInfo
 	if snap.Status == domain.Active {
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			statusInfo = mgr.GetStatus(inst)
@@ -288,40 +343,13 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// already 0 by construction when the controller is inactive or status isn't
 	// WaitingForAgent, so a guard here would be a no-op.
 	protoSession.SubagentCount = int32(statusInfo.SubagentCount) //#nosec G115 -- detector-derived count of a handful of shells/monitors, always small
+}
 
-	// Hidden flag — system/background sessions excluded from default list/review queue.
-	protoSession.Hidden = snap.Hidden
-	protoSession.Pinned = snap.Pinned
-	protoSession.TerminalReadOnly, _ = session.TerminalInputBlock(snap)
-
-	// Workflow linkage, name, and archive state.
-	protoSession.WorkflowId = snap.WorkflowID
-	if snap.WorkflowID != "" && workflowNames != nil {
-		protoSession.WorkflowName = workflowNames[snap.WorkflowID]
-	}
-	if snap.ArchivedAt != nil {
-		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
-	}
-
-	// remote_name (field 76): host badge for a remote session (ssh-remote-workspaces
-	// Epic 6.2). Derived live from ExecutionTarget rather than a persisted field --
-	// see the proto field's doc comment for why (ExecutionTarget is `json:"-"`, not
-	// reconstructed across a restart). Empty (the zero value) for a LocalTarget.
-	if remoteTarget, ok := inst.GetExecutionTarget().(session.RemoteExecutionTarget); ok {
-		protoSession.RemoteName = remoteTarget.Target().Name
-	}
-
-	// pi approval-extension health (pi-support Epic 4.2) — derived live at read
-	// time via the injected resolver, never persisted. Left at the zero value
-	// (PI_EXTENSION_HEALTH_UNSPECIFIED) when unwired (e.g. tests) or when the
-	// resolver itself determines this isn't a pi session / the flag is off.
-	if resolver := getPiExtensionHealthResolver(); resolver != nil {
-		protoSession.PiExtensionHealth = resolver(protoSession.Id, snap.Program)
-	}
-
+// applySessionGoal copies the goal summary set via the set_session_goal MCP tool.
+func applySessionGoal(protoSession *sessionv1.Session, inst *instance.Instance) {
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
 	if g := inst.GetSessionGoal(); g != nil {
-		tasksJSON, _ := session.EncodeTasks(g.Tasks) // empty string on error is safe
+		tasksJSON, _ := instance.EncodeTasks(g.Tasks) // empty string on error is safe
 		protoSession.Goal = &sessionv1.SessionGoalSummary{
 			GoalText:   g.Goal,
 			Status:     g.Status,
@@ -331,8 +359,6 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 			UpdatedAt:  timestamppb.New(g.UpdatedAt),
 		}
 	}
-
-	return protoSession
 }
 
 // mapVNCStatus converts a vnc.VNCStatus to the proto VNCStatus enum.
@@ -372,7 +398,7 @@ func mapCDPStatus(status cdp.CDPStatus) sessionv1.CDPStatus {
 // toProtoSubStatusFromInfo derives the SubStatus proto enum from pre-computed status info.
 // Returns SUB_STATUS_UNSPECIFIED for non-Active sessions or when no detection data is available.
 // Rate limit state takes precedence over ClaudeController-detected sub-status.
-func toProtoSubStatusFromInfo(basicStatus domain.Status, rateLimitState int, info session.InstanceStatusInfo) sessionv1.SubStatus {
+func toProtoSubStatusFromInfo(basicStatus domain.Status, rateLimitState int, info instance.InstanceStatusInfo) sessionv1.SubStatus {
 	if basicStatus != domain.Active {
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}

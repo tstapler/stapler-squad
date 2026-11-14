@@ -10,15 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
+
 	"github.com/tstapler/stapler-squad/internal/dirwatch"
 	"github.com/tstapler/stapler-squad/session/domain"
 
-	"github.com/tstapler/stapler-squad/session/internal/sessiontest"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,7 +85,7 @@ func TestSessionRecoveryScenarios(t *testing.T) {
 		t.Skip("skipping integration tests that start real tmux sessions")
 	}
 	// Create a temporary git repository for testing
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	// t.Cleanup, not defer: subtests below are t.Parallel() and spawn real
 	// tmux sessions against tempRepo, so a plain defer here would remove it
 	// while they're still running — observed hanging a full test binary for
@@ -132,10 +133,10 @@ func TestSessionRecoveryScenarios(t *testing.T) {
 // Session is killed and restored, should start in worktree not main repo
 func testSessionRestoredInCorrectWorktree(t *testing.T) {
 	// Set up recovery scenario manually
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
-	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "recovery-test",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd; read'",
@@ -217,11 +218,11 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 // testMultipleSessionsRestoreIndependently tests that multiple sessions
 // can be restored independently in their correct worktrees
 func testMultipleSessionsRestoreIndependently(t *testing.T) {
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
 	// Create two instances using new API with cleanup
-	instance1, cleanup1, err := NewInstanceWithCleanup(InstanceOptions{
+	instance1, cleanup1, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "test-session-1",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
@@ -235,7 +236,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 		}
 	}()
 
-	instance2, cleanup2, err := NewInstanceWithCleanup(InstanceOptions{
+	instance2, cleanup2, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "test-session-2",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
@@ -341,10 +342,10 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 
 // testSessionRecoveryWithExistingChanges tests recovery when worktree has uncommitted changes
 func testSessionRecoveryWithExistingChanges(t *testing.T) {
-	tempRepo := setupTestRepository(t)
+	tempRepo := fixturetest.SetupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 
-	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            "test-changes-session",
 		Path:             tempRepo,
 		Program:          "bash -c 'pwd && sleep 30'",
@@ -460,48 +461,6 @@ func uniqueTestTmuxSocket(t *testing.T, suffix string) string {
 	return name
 }
 
-// setupTestRepository creates a temporary git repository for testing
-//
-// Uses go-git directly rather than shelling out — see
-// the `prefer-go-git-over-subshells` skill.
-func setupTestRepository(t *testing.T) string {
-	t.Helper()
-	dir, err := setupTestRepositoryCommon(t.TempDir(), "# Test Repository")
-	require.NoError(t, err)
-	return dir
-}
-
-// setupTestRepositoryCommon is the shared go-git init/add/commit logic behind
-// setupTestRepository and setupTestRepositoryBench — *testing.T and
-// *testing.B report failures differently (require.NoError vs b.Fatal), so
-// each caller wraps this with its own error handling instead of taking a
-// testing.TB.
-func setupTestRepositoryCommon(dir, readmeContents string) (string, error) {
-	repo, err := git.PlainInit(dir, false)
-	if err != nil {
-		return "", err
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readmeContents), 0644); err != nil {
-		return "", err
-	}
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		return "", err
-	}
-	if _, err := wt.Add("."); err != nil {
-		return "", err
-	}
-	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test User", Email: "test@example.com", When: time.Now()},
-	}); err != nil {
-		return "", err
-	}
-
-	return dir, nil
-}
-
 // testExistingSessionResumption tests that when a tmux session already exists,
 // the system reuses it instead of failing with "session already exists" error
 func testExistingSessionResumption(t *testing.T, tempRepo string) {
@@ -521,7 +480,7 @@ func testExistingSessionResumption(t *testing.T, tempRepo string) {
 	require.True(t, tmuxSession.DoesSessionExist(), "Tmux session should exist after start")
 
 	// Now try to create an instance with the same session name - this would previously fail
-	instance, cleanup, err := NewInstanceWithCleanup(InstanceOptions{
+	instance, cleanup, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionName,
 		Path:             tempRepo,
 		Program:          "bash -c 'echo resumed && sleep 30'",
@@ -564,7 +523,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 	sessionName := "existing-worktree-test"
 
 	// Create first instance to set up the worktree
-	instance1, cleanup1, err := NewInstanceWithCleanup(InstanceOptions{
+	instance1, cleanup1, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionName + "-1",
 		Path:             tempRepo,
 		Program:          "bash -c 'echo first && sleep 30'",
@@ -595,7 +554,7 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 	worktreePath1 := gitWorktree1.GetWorktreePath()
 
 	// Now try to create a second instance with the same branch - this would previously fail
-	instance2, cleanup2, err := NewInstanceWithCleanup(InstanceOptions{
+	instance2, cleanup2, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionName + "-2",
 		Path:             tempRepo,
 		Program:          "bash -c 'echo second && sleep 30'",
@@ -672,7 +631,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 	t.Logf("Testing full resumption scenario with session '%s' and branch '%s'", sessionTitle, branchName)
 
 	// Create initial session (first attempt)
-	instance1, cleanup1, err := NewInstanceWithCleanup(InstanceOptions{
+	instance1, cleanup1, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionTitle,
 		Path:             tempRepo,
 		Program:          "bash -c 'echo initial session && sleep 30'",
@@ -705,7 +664,7 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 
 	// Now simulate the user trying to create the session again (second attempt)
 	// This should reuse both the existing tmux session and worktree
-	instance2, cleanup2, err := NewInstanceWithCleanup(InstanceOptions{
+	instance2, cleanup2, err := instance.NewInstanceWithCleanup(instance.InstanceOptions{
 		Title:            sessionTitle, // Same title
 		Path:             tempRepo,     // Same path
 		Program:          "bash -c 'echo resumed session && sleep 30'",
@@ -786,7 +745,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		sessionTitle := fmt.Sprintf("bench-session-%d", i)
 
-		instance, err := NewInstance(InstanceOptions{
+		instance, err := instance.NewInstance(instance.InstanceOptions{
 			Title:   sessionTitle,
 			Path:    tempRepo,
 			Program: "echo 'benchmark test'",
@@ -827,7 +786,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 // Uses go-git directly rather than shelling out — see
 // the `prefer-go-git-over-subshells` skill.
 func setupTestRepositoryBench(b *testing.B) string {
-	dir, err := setupTestRepositoryCommon(b.TempDir(), "# Benchmark Repository")
+	dir, err := fixturetest.SetupTestRepositoryCommon(b.TempDir(), "# Benchmark Repository")
 	if err != nil {
 		b.Fatal(err)
 	}

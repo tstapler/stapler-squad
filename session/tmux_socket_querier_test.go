@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -84,13 +85,13 @@ func (f *fakeTmuxSocketQuerier) IsServerDown(serverSocket string) bool {
 // makeSocketTestInstance builds a minimal managed Instance whose GetTmuxSessionName()
 // returns tmuxSessionName (via a mockTmuxManager-backed process manager) without
 // touching a real tmux server, for reconcileSessions/health-check tests.
-func makeSocketTestInstance(title, tmuxSessionName, socket string, status domain.Status) *Instance {
-	inst := &Instance{
+func makeSocketTestInstance(title, tmuxSessionName, socket string, status domain.Status) *instance.Instance {
+	inst := &instance.Instance{
 		Title:            title,
 		Status:           status,
 		IsManaged:        true,
 		TmuxServerSocket: socket,
 	}
-	inst.processManager = NewTmuxBackend(&mockTmuxManager{tmuxSessionName: tmuxSessionName})
+	inst.SetProcessManagerForTest(NewTmuxBackend(&mockTmuxManager{tmuxSessionName: tmuxSessionName}))
 	return inst
 }

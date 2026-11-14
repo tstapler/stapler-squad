@@ -5,8 +5,7 @@ import (
 	"testing"
 
 	"github.com/tstapler/stapler-squad/session/domain"
-
-	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // fakeRegistryInstanceChecker records whether/how WithInstance was called, so
@@ -18,10 +17,10 @@ import (
 type fakeRegistryInstanceChecker struct {
 	calls        int
 	lastSession  string
-	withInstance func(fn func(*session.LiveInstance) error) error
+	withInstance func(fn func(*instance.LiveInstance) error) error
 }
 
-func (f *fakeRegistryInstanceChecker) WithInstance(_ context.Context, sessionID string, fn func(*session.LiveInstance) error) error {
+func (f *fakeRegistryInstanceChecker) WithInstance(_ context.Context, sessionID string, fn func(*instance.LiveInstance) error) error {
 	f.calls++
 	f.lastSession = sessionID
 	if f.withInstance != nil {
@@ -40,7 +39,7 @@ func (f *fakeRegistryInstanceChecker) WithInstance(_ context.Context, sessionID 
 // *session.Instance on every 60s ReconcileStuck tick, which is what actually broke the
 // real review session's controller.
 func TestNewSessionLivenessChecker_should_SkipRegistry_When_LiveInstanceIsTracked(t *testing.T) {
-	inst, err := session.NewInstance(session.InstanceOptions{
+	inst, err := instance.NewInstance(instance.InstanceOptions{
 		Title:       "review:93565fa1",
 		Path:        t.TempDir(),
 		Program:     "true",
@@ -50,7 +49,7 @@ func TestNewSessionLivenessChecker_should_SkipRegistry_When_LiveInstanceIsTracke
 		t.Fatalf("session.NewInstance: %v", err)
 	}
 
-	findLive := func(sessionUUID string) *session.Instance {
+	findLive := func(sessionUUID string) *instance.Instance {
 		if sessionUUID != inst.UUID {
 			t.Fatalf("findLive called with unexpected sessionUUID %q, want %q", sessionUUID, inst.UUID)
 		}
@@ -75,9 +74,9 @@ func TestNewSessionLivenessChecker_should_SkipRegistry_When_LiveInstanceIsTracke
 // before the startup reconciliation loop reloads it).
 func TestNewSessionLivenessChecker_should_FallBackToRegistry_When_NoLiveInstanceIsTracked(t *testing.T) {
 	const sessionUUID = "no-live-instance-tracked"
-	findLive := func(string) *session.Instance { return nil }
+	findLive := func(string) *instance.Instance { return nil }
 	registry := &fakeRegistryInstanceChecker{
-		withInstance: func(fn func(*session.LiveInstance) error) error {
+		withInstance: func(fn func(*instance.LiveInstance) error) error {
 			// Simulate ErrSessionNotFound: fn is never invoked, alive stays false.
 			return nil
 		},

@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/server/deliverygate"
 	"github.com/tstapler/stapler-squad/server/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
+	"github.com/tstapler/stapler-squad/session/instance"
 	"github.com/tstapler/stapler-squad/testutil"
 )
 
@@ -57,7 +57,7 @@ func TestShouldNotifyTable(t *testing.T) {
 
 // UT-2.4 — URL uses session.ID not session.Title [R6]
 func TestNotificationURLUsesSessionID(t *testing.T) {
-	notification := buildNotificationForSession(&session.Instance{
+	notification := buildNotificationForSession(&instance.Instance{
 		ID:    "session-abc-123",
 		Title: "My Session (renamed)",
 	}, events.EventSessionUpdated)
@@ -70,7 +70,7 @@ func TestNotificationURLUsesSessionID(t *testing.T) {
 
 // UT-2.5 — Tag uses session.ID not session.Title [R6]
 func TestNotificationTagUsesSessionID(t *testing.T) {
-	notification := buildNotificationForSession(&session.Instance{
+	notification := buildNotificationForSession(&instance.Instance{
 		ID:    "session-abc-123",
 		Title: "Renamed Title",
 	}, events.EventSessionUpdated)
@@ -81,7 +81,7 @@ func TestNotificationTagUsesSessionID(t *testing.T) {
 
 // UT-5.1 — Payload data map includes notificationType and timestamp [R12]
 func TestPayloadDataMapFields(t *testing.T) {
-	notif := buildApprovalNotification(&session.Instance{ID: "s1", Title: "S1"})
+	notif := buildApprovalNotification(&instance.Instance{ID: "s1", Title: "S1"})
 
 	assert.Equal(t, "APPROVAL_NEEDED", notif.Data["notificationType"])
 	ts, ok := notif.Data["timestamp"].(int64)
@@ -91,14 +91,14 @@ func TestPayloadDataMapFields(t *testing.T) {
 
 // UT-5.2 — Payload data map includes sessionId using session.ID [R12, R6]
 func TestPayloadDataSessionID(t *testing.T) {
-	notif := buildApprovalNotification(&session.Instance{ID: "abc-123", Title: "Changed Title"})
+	notif := buildApprovalNotification(&instance.Instance{ID: "abc-123", Title: "Changed Title"})
 	assert.Equal(t, "abc-123", notif.Data["sessionId"])
 }
 
 // "actions" (the review/later buttons) belongs only on approval notifications,
 // not on plain completion ones.
 func TestActionsOnlyOnApprovalDataMap(t *testing.T) {
-	inst := &session.Instance{ID: "s1", Title: "S1"}
+	inst := &instance.Instance{ID: "s1", Title: "S1"}
 	_, hasActions := buildDataMap(inst, "SESSION_COMPLETE")["actions"]
 	assert.False(t, hasActions, "buildDataMap must not include actions")
 
@@ -108,23 +108,23 @@ func TestActionsOnlyOnApprovalDataMap(t *testing.T) {
 
 // UT-5.3 — RequireInteraction=true on approval_needed [R13]
 func TestRequireInteractionApproval(t *testing.T) {
-	notif := buildApprovalNotification(&session.Instance{ID: "s1", Title: "S1"})
+	notif := buildApprovalNotification(&instance.Instance{ID: "s1", Title: "S1"})
 	assert.True(t, notif.RequireInteraction)
 }
 
 func TestRequireInteractionSessionComplete(t *testing.T) {
-	notif := buildCompletedNotification(&session.Instance{ID: "s1", Title: "S1"})
+	notif := buildCompletedNotification(&instance.Instance{ID: "s1", Title: "S1"})
 	assert.False(t, notif.RequireInteraction)
 }
 
 // UT-5.4 — Renotify=true on approval_needed, false on session-complete [R14]
 func TestRenotifyApproval(t *testing.T) {
-	notif := buildApprovalNotification(&session.Instance{ID: "s1", Title: "S1"})
+	notif := buildApprovalNotification(&instance.Instance{ID: "s1", Title: "S1"})
 	assert.True(t, notif.Renotify)
 }
 
 func TestRenotifyComplete(t *testing.T) {
-	notif := buildCompletedNotification(&session.Instance{ID: "s1", Title: "S1"})
+	notif := buildCompletedNotification(&instance.Instance{ID: "s1", Title: "S1"})
 	assert.False(t, notif.Renotify)
 }
 
@@ -134,7 +134,7 @@ func TestRenotifyComplete(t *testing.T) {
 // internal title (e.g. "diagnose:e32264b0:...") whose deep link has nowhere
 // useful to go. The delivery gate, not the push builder, drops it.
 func TestDeliverEvent_should_NotPush_When_HiddenSessionCompletesAndGateOn(t *testing.T) {
-	inst := &session.Instance{ID: "diagnose-1", Title: "diagnose:abc123:1", Status: domain.Stopped, Hidden: true}
+	inst := &instance.Instance{ID: "diagnose-1", Title: "diagnose:abc123:1", Status: domain.Stopped, Hidden: true}
 	event := &events.Event{
 		Type:          events.EventSessionUpdated,
 		Session:       inst,
@@ -144,7 +144,7 @@ func TestDeliverEvent_should_NotPush_When_HiddenSessionCompletesAndGateOn(t *tes
 		return deliverygate.FlagSettings{Global: true}, nil
 	}))
 	g.Flags().Reload()
-	g.SeedFromInstances([]*session.Instance{inst})
+	g.SeedFromInstances([]*instance.Instance{inst})
 	n := &mockNotifier{name: "rec"}
 
 	deliverEvent(context.Background(), event, newDedupTracker(0), []Notifier{n}, g)
@@ -153,7 +153,7 @@ func TestDeliverEvent_should_NotPush_When_HiddenSessionCompletesAndGateOn(t *tes
 }
 
 func TestBuildStatusChangeNotification_should_Deliver_When_SessionNotHidden(t *testing.T) {
-	inst := &session.Instance{ID: "normal-1", Title: "My Session", Status: domain.Stopped, Hidden: false}
+	inst := &instance.Instance{ID: "normal-1", Title: "My Session", Status: domain.Stopped, Hidden: false}
 	event := &events.Event{
 		Type:          events.EventSessionUpdated,
 		Session:       inst,
@@ -362,7 +362,7 @@ func assertPushGateCase(t *testing.T, status domain.Status, updatedFields []stri
 	defer cancel()
 	StartDeliverySubscriber(ctx, bus, []Notifier{n})
 
-	inst := &session.Instance{ID: "sess-1", Title: "Session", Status: status}
+	inst := &instance.Instance{ID: "sess-1", Title: "Session", Status: status}
 	bus.Publish(&events.Event{
 		Type:          events.EventSessionUpdated,
 		Session:       inst,
@@ -426,7 +426,7 @@ func TestInlineNotificationURL_ShouldAppendNotificationId_WhenEventHasNotificati
 
 func TestInlineNotificationURL_ShouldKeepTwoParameterForm_WhenStatusChangeOrApproval(t *testing.T) {
 	want := "/?session=session-abc-123&tab=terminal"
-	sess := &session.Instance{ID: "session-abc-123", Title: "t"}
+	sess := &instance.Instance{ID: "session-abc-123", Title: "t"}
 	assert.Equal(t, want, buildApprovalNotification(sess).Data["url"])
 	assert.Equal(t, want, buildCompletedNotification(sess).Data["url"])
 }
@@ -446,7 +446,7 @@ func TestInlinePush_ShouldTitleFailureNotSessionCompleted_WhenHiddenFailure(t *t
 	})
 	require.True(t, ok)
 	assert.Equal(t, "Review failed: my-review", n.Title)
-	assert.NotEqual(t, buildCompletedNotification(&session.Instance{ID: "x", Title: "t"}).Title, n.Title)
+	assert.NotEqual(t, buildCompletedNotification(&instance.Instance{ID: "x", Title: "t"}).Title, n.Title)
 	assert.Equal(t, "notification-n-fail-1", n.Tag)
 }
 

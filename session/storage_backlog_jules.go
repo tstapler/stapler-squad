@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // JulesPendingUUIDPrefix marks a jules_work ItemSession's session_uuid as a
@@ -44,7 +45,7 @@ const julesDispatchFailedEndReason = "dispatch_failed"
 func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]backlogdto.ItemSessionBacklogEntry, error) {
 	sessions, err := r.Client.ItemSession.Query().
 		Where(
-			itemsession.SessionRole(SessionRoleJulesWork),
+			itemsession.SessionRole(instance.SessionRoleJulesWork),
 			itemsession.EndedAtIsNil(),
 		).
 		WithBacklogItem().
@@ -78,7 +79,7 @@ func (r *EntRepository) ListOpenJulesItemSessions(ctx context.Context) ([]backlo
 func (r *EntRepository) CountJulesItemSessionsSince(ctx context.Context, since time.Time) (int, error) {
 	n, err := r.Client.ItemSession.Query().
 		Where(
-			itemsession.SessionRole(SessionRoleJulesWork),
+			itemsession.SessionRole(instance.SessionRoleJulesWork),
 			itemsession.CreatedAtGTE(since),
 			itemsession.Not(itemsession.SessionUUIDHasPrefix(JulesPendingUUIDPrefix)),
 			itemsession.EndReasonNEQ(julesDispatchFailedEndReason),

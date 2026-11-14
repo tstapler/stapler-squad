@@ -798,8 +798,8 @@ coverage-pkg: ensure-tools proto-gen ## Show per-package coverage summary sorted
 coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targeted by the backend refactor
 	@go test -short -coverprofile=coverage.out -covermode=atomic ./... 2>/dev/null
 	@echo ""
-	@echo "=== session/instance.go ==="
-	@go tool cover -func=coverage.out | grep "session/instance.go" | sort -t'%' -k1 -n
+	@echo "=== session/instance/instance.go ==="
+	@go tool cover -func=coverage.out | grep "session/instance/instance.go" | sort -t'%' -k1 -n
 	@echo ""
 	@echo "=== server/services/session_service.go ==="
 	@go tool cover -func=coverage.out | grep "session_service.go" | sort -t'%' -k1 -n
@@ -1298,7 +1298,7 @@ quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens regi
 pre-commit: format vet test test-race lint vet-architecture ## Pre-commit validation
 	@echo "✅ Pre-commit checks passed"
 
-actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exist outside session/instance*.go and actor.go
+actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exist outside session/instance/ (incl. actor.go)
 	@echo "actor-field-guard: scanning for direct Instance field writes..."
 	@if grep -rEn '\b(inst|instance|liveInst)\.[A-Z][a-zA-Z0-9]+ = [^=]' \
 	    server/services/session_service.go \
@@ -1315,9 +1315,9 @@ actor-field-guard: ## IAC Epic 5 guard: fail if direct Instance field writes exi
 
 # Field-scoped, so unrelated Instance writes (inst.Status = ...) in session_driver.go do not trip it.
 # Receiver-name based: DTO paths named otherwise (i., instanceOpts.) are knowingly not covered.
-pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance*.go and session/session_pr_*.go
+pr-field-guard: ## session-multi-pr-tracking guard: fail if PR/repo fields on an Instance are assigned outside session/instance/ and session/session_pr_*.go
 	@echo "pr-field-guard: scanning for direct PR field writes..."
-	@if git ls-files '*.go' ':!:*_test.go' ':!:session/instance*.go' ':!:session/session_pr_*.go' ':!:session/ent/*' ':!:gen/*' \
+	@if git ls-files '*.go' ':!:*_test.go' ':!:session/instance/*' ':!:session/session_pr_*.go' ':!:session/ent/*' ':!:gen/*' \
 	    | xargs -r grep -EnH '\b(inst|instance|liveInst)\.(GitHubPRNumber|GitHubPRURL|GitHubPRStatusTerminal|GitHubOwner|GitHubRepo) = [^=]' \
 	    2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*//' ; then \
 	    echo "❌ pr-field-guard: direct PR field write found — route through AttachPR / the actor setters (session-multi-pr-tracking)"; \

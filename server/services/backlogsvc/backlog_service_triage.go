@@ -35,6 +35,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/headless"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // initialPromptFor returns s.pipelineEngine.InitialPromptFor(...) when pipelineEngine
@@ -116,7 +117,7 @@ func (s *BacklogService) effectiveReworkCap(item *backlogdto.BacklogItemData) in
 func recentReviewHadVerdict(sessions []backlogdto.ItemSessionSummary, n int) []bool {
 	out := make([]bool, 0, n)
 	for i := len(sessions) - 1; i >= 0 && len(out) < n; i-- {
-		if sessions[i].Role != session.SessionRoleReview {
+		if sessions[i].Role != instance.SessionRoleReview {
 			continue
 		}
 		out = append(out, sessions[i].ReviewVerdict != nil)
@@ -146,7 +147,7 @@ func recentWorkSessionFileLists(repoPath string, sessions []backlogdto.ItemSessi
 	out := make([][]string, 0, n)
 	for i := len(sessions) - 1; i >= 0 && len(out) < n; i-- {
 		is := sessions[i]
-		if is.Role != session.SessionRoleWork || is.EndedAt == nil {
+		if is.Role != instance.SessionRoleWork || is.EndedAt == nil {
 			continue
 		}
 		var files []string
@@ -468,7 +469,7 @@ func slugify(s string) string {
 func triageShortTitle(sessions []backlogdto.ItemSessionSummary, itemTitle string) string {
 	for i := len(sessions) - 1; i >= 0; i-- {
 		s := sessions[i]
-		if s.Role != string(session.SessionRoleTriage) || s.TriageResult == "" {
+		if s.Role != string(instance.SessionRoleTriage) || s.TriageResult == "" {
 			continue
 		}
 		var r pipeline.HeadlessTriageResult
@@ -515,9 +516,9 @@ func (s *BacklogService) SpawnSessionFromItem(
 
 	// A spawn is user-initiated unless the caller explicitly marks it Autonomous
 	// (the autonomous driver spawning its own follow-up sessions).
-	triggeredBy := session.TriggeredByUser
+	triggeredBy := instance.TriggeredByUser
 	if req.Msg.Autonomous {
-		triggeredBy = session.TriggeredBySystem
+		triggeredBy = instance.TriggeredBySystem
 	}
 
 	// 1. Load item.
@@ -530,7 +531,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	}
 
 	// A manual spawn means the operator is retrying: forget any dequeue spawn backoff.
-	if triggeredBy == session.TriggeredByUser {
+	if triggeredBy == instance.TriggeredByUser {
 		s.clearDequeueSpawnFailure(ctx, item.ID)
 	}
 
@@ -704,7 +705,7 @@ func guardedTransitionCaller(to domain.BacklogStatus, triggeredBy string) domain
 	switch {
 	case to == domain.BacklogStatusQueued:
 		return domain.CallerQueueBacklogItem
-	case triggeredBy == session.TriggeredByUser:
+	case triggeredBy == instance.TriggeredByUser:
 		return domain.CallerJulesDispatchStart
 	default:
 		return domain.CallerClaimAndSpawn
@@ -725,9 +726,9 @@ func (s *BacklogService) queueBacklogItem(ctx context.Context, item *backlogdto.
 	}
 	// A spawn is user-initiated unless the caller explicitly marks it Autonomous
 	// (the autonomous driver spawning its own follow-up sessions).
-	triggeredBy := session.TriggeredByUser
+	triggeredBy := instance.TriggeredByUser
 	if autonomous {
-		triggeredBy = session.TriggeredBySystem
+		triggeredBy = instance.TriggeredBySystem
 	}
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReady), Note: "WIP cap hit"}
 	// Blocker guard only applies to the queued/ready -> in_progress transition, so
@@ -868,7 +869,7 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item backlo
 	claimed, claimErr := s.TransitionWithGuard(ctx, &item,
 		domain.BacklogStatusInProgress,
 		&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(fromStatus), Note: "dequeued: WIP slot freed"},
-		session.TriggeredBySystem,
+		instance.TriggeredBySystem,
 		hasUnresolvedBlockers)
 	if claimErr != nil {
 		s.handleClaimError(ctx, item, fromStatus, claimErr)
@@ -881,7 +882,7 @@ func (s *BacklogService) claimAndSpawnCandidate(ctx context.Context, item backlo
 		log.Warn("[DequeueNextQueuedItems] spawn failed for dequeued item; rolling back", "item", item.ID, "error", spawnErr, "to", fromStatus)
 		if _, rbErr := s.storage.Rollback(ctx, item.ID, fromStatus,
 			&backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress), Note: "dequeue spawn failed"},
-			session.TriggeredBySystem); rbErr != nil {
+			instance.TriggeredBySystem); rbErr != nil {
 			log.Error("[DequeueNextQueuedItems] rollback failed", "to", fromStatus, "item", item.ID, "error", rbErr)
 			// The same silent-stranding shape notifySpawnAndRollbackFailed was
 			// built for (BUG-030) — that fix only wired this helper into
@@ -1083,7 +1084,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if isReopen {
 		workCount := 0
 		for _, is := range priorSessions {
-			if is.Role == session.SessionRoleWork {
+			if is.Role == instance.SessionRoleWork {
 				workCount++
 			}
 		}
@@ -1180,12 +1181,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	}
 
 	// 11. Spawn session first so we have the real UUID before creating the ItemSession record.
-	spawnTags := []string{session.TagBacklogWork}
+	spawnTags := []string{instance.TagBacklogWork}
 	if isReopen {
-		spawnTags = append(spawnTags, session.TagBacklogRevision)
+		spawnTags = append(spawnTags, instance.TagBacklogRevision)
 	}
 	if autonomous {
-		spawnTags = append(spawnTags, session.TagAutonomous)
+		spawnTags = append(spawnTags, instance.TagAutonomous)
 	}
 	spawnOpts := services.SessionSpawnOptions{
 		Title:           title,
@@ -1193,7 +1194,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 		Tags:            spawnTags,
 		ProgramOverride: programOverride,
 	}
-	var inst *session.Instance
+	var inst *instance.Instance
 	if useWorktree {
 		inst, err = s.sessionCreator.CreateWorktreeSession(ctx, item.RepoPath, worktreePath, spawnOpts)
 	} else {
@@ -1202,7 +1203,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
 	}
-	inst.SetCategory(session.CategoryBacklog)
+	inst.SetCategory(instance.CategoryBacklog)
 
 	// Steering hook: git-drift-check fires the same branch-drift detection BUG-044's
 	// review-gate precondition uses, but after every git commit/push instead of only
@@ -1230,7 +1231,7 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// up worktree data by session UUID as soon as request_review fires from inside the
 	// spawned session; without this, a fast work session can request review before the
 	// worktree row exists, causing the review gate to fall back to an unreliable diff.
-	if saveErr := s.storage.SaveInstances([]*session.Instance{inst}); saveErr != nil {
+	if saveErr := s.storage.SaveInstances([]*instance.Instance{inst}); saveErr != nil {
 		log.Warn("[SpawnSessionFromItem] failed to persist instance immediately after spawn", "item", item.ID, "session", inst.UUID, "error", saveErr)
 	}
 
@@ -1256,12 +1257,12 @@ func (s *BacklogService) spawnSessionAfterGates(
 	// stamping it broke the merge-verification guard.
 	var workSessionBranchName string
 	if useWorktree {
-		workSessionBranchName = session.BacklogWorkBranchName(workBranchSlug)
+		workSessionBranchName = instance.BacklogWorkBranchName(workBranchSlug)
 	}
 	is, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:                   item.ID,
 		SessionUUID:              inst.UUID,
-		SessionRole:              session.SessionRoleWork,
+		SessionRole:              instance.SessionRoleWork,
 		BranchName:               workSessionBranchName,
 		AcSnapshot:               acSnapshot,
 		PipelineModeSnapshot:     item.PipelineMode,
@@ -1312,9 +1313,9 @@ func (s *BacklogService) spawnSessionAfterGates(
 	if !isReopen {
 		// A spawn is user-initiated unless the caller explicitly marks it
 		// Autonomous (the autonomous driver spawning its own follow-up sessions).
-		triggeredBy := session.TriggeredByUser
+		triggeredBy := instance.TriggeredByUser
 		if autonomous {
-			triggeredBy = session.TriggeredBySystem
+			triggeredBy = instance.TriggeredBySystem
 		}
 		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerSpawnSessionAfterGates, ItemID: item.ID, To: domain.BacklogStatusInProgress,
@@ -1358,7 +1359,7 @@ func (s *BacklogService) stopLiveWorkAndReviewSessions(ctx context.Context, item
 		if itemSession.EndedAt != nil {
 			continue
 		}
-		if itemSession.Role != string(session.SessionRoleWork) && itemSession.Role != string(session.SessionRoleReview) {
+		if itemSession.Role != string(instance.SessionRoleWork) && itemSession.Role != string(instance.SessionRoleReview) {
 			continue
 		}
 		if w := s.openPRWarning(ctx, itemSession.SessionUUID); w != "" {
@@ -1506,7 +1507,7 @@ func hasActiveWorkSession(priorSessions []backlogdto.ItemSessionSummary) bool {
 // "already active."
 func findActiveWorkSession(priorSessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
 	for i := range priorSessions {
-		if priorSessions[i].Role == session.SessionRoleWork && priorSessions[i].EndedAt == nil {
+		if priorSessions[i].Role == instance.SessionRoleWork && priorSessions[i].EndedAt == nil {
 			return &priorSessions[i]
 		}
 	}
@@ -1532,7 +1533,7 @@ func findConfirmedLiveWorkSession(stopper services.SessionStopper, priorSessions
 	}
 	for i := range priorSessions {
 		is := &priorSessions[i]
-		if is.Role != string(session.SessionRoleWork) {
+		if is.Role != string(instance.SessionRoleWork) {
 			continue
 		}
 		if is.EndedAt != nil && !mustRecheck[is.SessionUUID] {
@@ -1552,7 +1553,7 @@ func findConfirmedLiveWorkSession(stopper services.SessionStopper, priorSessions
 // the actual session UUID rather than a bare "already active."
 func findActiveJulesSession(priorSessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
 	for i := range priorSessions {
-		if priorSessions[i].Role == session.SessionRoleJulesWork && priorSessions[i].EndedAt == nil {
+		if priorSessions[i].Role == instance.SessionRoleJulesWork && priorSessions[i].EndedAt == nil {
 			return &priorSessions[i]
 		}
 	}
@@ -1774,7 +1775,7 @@ func (s *BacklogService) notifyIfActiveWorkSessionStale(ctx context.Context, ite
 	}
 	var active *backlogdto.ItemSessionSummary
 	for i := range sessions {
-		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+		if sessions[i].Role == instance.SessionRoleWork && sessions[i].EndedAt == nil {
 			active = &sessions[i]
 			break
 		}
@@ -1843,7 +1844,7 @@ func (s *BacklogService) ResolveReworkBlockedStaleIfRecovered(ctx context.Contex
 	}
 	var active *backlogdto.ItemSessionSummary
 	for i := range sessions {
-		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+		if sessions[i].Role == instance.SessionRoleWork && sessions[i].EndedAt == nil {
 			active = &sessions[i]
 			break
 		}
@@ -1881,7 +1882,7 @@ func (s *BacklogService) resolveReworkBlockedStaleLogged(ctx context.Context, it
 // of a bare "already active."
 func findActiveReviewSession(priorSessions []backlogdto.ItemSessionSummary) *backlogdto.ItemSessionSummary {
 	for i := range priorSessions {
-		if priorSessions[i].Role == session.SessionRoleReview && priorSessions[i].EndedAt == nil {
+		if priorSessions[i].Role == instance.SessionRoleReview && priorSessions[i].EndedAt == nil {
 			return &priorSessions[i]
 		}
 	}
@@ -1905,7 +1906,7 @@ func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []backlog
 	}
 	workCount := 0
 	for _, s := range priorSessions {
-		if s.Role == string(session.SessionRoleWork) {
+		if s.Role == string(instance.SessionRoleWork) {
 			workCount++
 		}
 	}
@@ -1927,12 +1928,12 @@ func buildRevisionTitle(baseTitle string, isReopen bool, priorSessions []backlog
 // left session-resume-fix work committed directly on stapler-squad's own
 // main branch outside a worktree.
 func resolveSessionPath(repoPath, slug, baseBranch string) (worktreePath string, useWorktree bool, err error) {
-	wt, wtErr := session.CreateBacklogWorktree(repoPath, slug, baseBranch)
+	wt, wtErr := instance.CreateBacklogWorktree(repoPath, slug, baseBranch)
 	if wtErr == nil {
 		return wt, true, nil
 	}
 
-	resolvedRepo, pathErr := session.ResolveSessionPath(repoPath)
+	resolvedRepo, pathErr := instance.ResolveSessionPath(repoPath)
 	if pathErr != nil {
 		return "", false, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repo_path: %w", pathErr))
 	}
@@ -1950,7 +1951,7 @@ func resolveSessionPath(repoPath, slug, baseBranch string) (worktreePath string,
 	}
 
 	log.Warn("[SpawnSessionFromItem] not git-managed, falling back to directory mode", "repo", resolvedRepo, "error", wtErr)
-	if dirErr := session.EnsureDirectorySessionPath(resolvedRepo); dirErr != nil {
+	if dirErr := instance.EnsureDirectorySessionPath(resolvedRepo); dirErr != nil {
 		return "", false, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to prepare session directory: %w", dirErr))
 	}
 	return resolvedRepo, false, nil
@@ -2134,7 +2135,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 
 	workCount := 0
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleWork {
+		if is.Role == instance.SessionRoleWork {
 			workCount++
 		}
 	}
@@ -2154,7 +2155,7 @@ func (s *BacklogService) AutoReopenAfterFailedReview(ctx context.Context, itemID
 	}
 	inProgress, transitionErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller: domain.CallerAutoReopenFailedReview, ItemID: itemID, Observed: item, To: domain.BacklogStatusInProgress,
-		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	})
 	if transitionErr != nil {
 		return fmt.Errorf("transition to in_progress: %w", transitionErr)
@@ -2240,7 +2241,7 @@ func (s *BacklogService) rollbackFailedReopen(ctx context.Context, item *backlog
 		ExpectedStatus:    string(domain.BacklogStatusInProgress),
 		ExpectedUpdatedAt: &inProgress.UpdatedAt,
 	}
-	if _, rollbackErr := s.storage.Rollback(ctx, itemID, domain.BacklogStatusReview, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
+	if _, rollbackErr := s.storage.Rollback(ctx, itemID, domain.BacklogStatusReview, rollbackPrecondition, instance.TriggeredBySystem); rollbackErr != nil {
 		log.Error("[AutoReopenAfterFailedReview] rollback to review failed", "item", itemID, "error", rollbackErr)
 		// The item is now stranded in_progress with no active session and no
 		// visible error anywhere else (BUG-030) — a log line nobody reads.
@@ -2300,7 +2301,7 @@ func (s *BacklogService) AutoRespawnAutonomousWork(ctx context.Context, itemID s
 
 	workCount := 0
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleWork {
+		if is.Role == instance.SessionRoleWork {
 			workCount++
 		}
 	}
@@ -2388,7 +2389,7 @@ func (s *BacklogService) RemediateStaleWorkSession(ctx context.Context, itemID s
 	}
 	var active *backlogdto.ItemSessionSummary
 	for i := range sessions {
-		if sessions[i].Role == session.SessionRoleWork && sessions[i].EndedAt == nil {
+		if sessions[i].Role == instance.SessionRoleWork && sessions[i].EndedAt == nil {
 			active = &sessions[i]
 			break
 		}
@@ -2533,7 +2534,7 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 
 	workCount := 0
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleWork {
+		if is.Role == instance.SessionRoleWork {
 			workCount++
 		}
 	}
@@ -2551,7 +2552,7 @@ func (s *BacklogService) autoReopenForPRFix(ctx context.Context, itemID string, 
 	}
 	if _, err := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller: domain.CallerAutoReopenForPRFix, ItemID: itemID, Observed: item, To: domain.BacklogStatusInProgress,
-		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	}); err != nil {
 		return fmt.Errorf("transition to in_progress: %w", err)
 	}
@@ -2628,7 +2629,7 @@ func (s *BacklogService) rollbackFailedPRFixReopen(ctx context.Context, item *ba
 	// Roll back to pr_pending so the reconciler can retry. Status-only CAS: the
 	// notes writes around the spawn bump updated_at, so it cannot be pinned.
 	rollbackPrecondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusInProgress)}
-	if _, rollbackErr := s.storage.Rollback(ctx, itemID, domain.BacklogStatusPRPending, rollbackPrecondition, session.TriggeredBySystem); rollbackErr != nil {
+	if _, rollbackErr := s.storage.Rollback(ctx, itemID, domain.BacklogStatusPRPending, rollbackPrecondition, instance.TriggeredBySystem); rollbackErr != nil {
 		log.Error("[AutoReopenForPRFix] rollback to pr_pending failed", "item", itemID, "error", rollbackErr)
 		// The caller below only ever learns about spawnErr — a rollback
 		// failure here leaves the item stranded at in_progress with no work
@@ -2710,7 +2711,7 @@ func (s *BacklogService) AutoRespawnReview(ctx context.Context, itemID string) e
 	// for consistency rather than inventing a new constant.
 	reviewCount := 0
 	for _, is := range sessions {
-		if is.Role == session.SessionRoleReview {
+		if is.Role == instance.SessionRoleReview {
 			reviewCount++
 		}
 	}
@@ -2797,7 +2798,7 @@ func (s *BacklogService) respawnTriage(ctx context.Context, itemID string, apply
 		precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusQueued)}
 		if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 			Caller: domain.CallerRespawnTriage, ItemID: itemID, To: domain.BacklogStatusIdea,
-			Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+			Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 		}); transErr != nil {
 			return fmt.Errorf("reset queued item to idea before retriage: %w", transErr)
 		}
@@ -3030,7 +3031,7 @@ func (s *BacklogService) skipTriageForNewItem(ctx context.Context, itemID string
 	precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusIdea)}
 	if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 		Caller: domain.CallerMaybeTriggerTriage, ItemID: itemID, To: domain.BacklogStatusReady,
-		Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+		Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 	}); transErr != nil {
 		if isEngineDenial(transErr) {
 			// The gate reported the denial once under maybe_trigger_triage; the
@@ -3426,7 +3427,7 @@ Do not modify the code. Only write the review verdict.
 			if failIS, failCreateErr := s.storage.CreateItemSession(failCleanupCtx, backlogdto.ItemSessionData{
 				ItemID:      item.ID,
 				SessionUUID: services.HeadlessReReviewUUIDPrefix + uuid.New().String(),
-				SessionRole: session.SessionRoleReview,
+				SessionRole: instance.SessionRoleReview,
 				AcSnapshot:  domain.AcCriteriaJSON(acSnapshotJSON),
 			}); failCreateErr != nil {
 				log.Warn("[TriggerReReview] failed to record audit ItemSession for failed call", "item", item.ID, "error", failCreateErr)
@@ -3463,7 +3464,7 @@ Do not modify the code. Only write the review verdict.
 			ItemID:                 item.ID,
 			SessionUUID:            reviewSessionUUID,
 			ConversationUUID:       reviewConversationID,
-			SessionRole:            session.SessionRoleReview,
+			SessionRole:            instance.SessionRoleReview,
 			AcSnapshot:             domain.AcCriteriaJSON(acSnapshotJSON),
 			EstimatedCostUsd:       callCostUSD,
 			CostUnpriced:           !callCostPriced,
@@ -3516,7 +3517,7 @@ Do not modify the code. Only write the review verdict.
 				precondition := &backlogdto.BacklogItemPrecondition{ExpectedStatus: string(domain.BacklogStatusReview)}
 				if _, transErr := s.storage.GatedTransition(ctx, backlogdto.TransitionRequest{
 					Caller: domain.CallerTriggerReReview, ItemID: item.ID, To: domain.BacklogStatusDone,
-					Precondition: precondition, TriggeredBy: session.TriggeredBySystem,
+					Precondition: precondition, TriggeredBy: instance.TriggeredBySystem,
 				}); transErr != nil {
 					log.Warn("[TriggerReReview] PASS but transition to done failed", "error", transErr)
 					// Code is confirmed shipped to main — the item is left stuck in
@@ -3578,7 +3579,7 @@ Do not modify the code. Only write the review verdict.
 	if spawnErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
 	}
-	inst.SetCategory(session.CategoryBacklog)
+	inst.SetCategory(instance.CategoryBacklog)
 	if useAutonomous {
 		s.autonomousStarter.StartAutonomousDriverWithTimeout(inst, 5*time.Minute)
 	}
@@ -3587,7 +3588,7 @@ Do not modify the code. Only write the review verdict.
 	is, err := s.storage.CreateItemSession(ctx, backlogdto.ItemSessionData{
 		ItemID:        item.ID,
 		SessionUUID:   inst.UUID,
-		SessionRole:   session.SessionRoleReview,
+		SessionRole:   instance.SessionRoleReview,
 		AcSnapshot:    domain.AcCriteriaJSON(acSnapshotJSON),
 		DiffTruncated: diffTruncated,
 	})
@@ -3650,7 +3651,7 @@ func (s *BacklogService) tombstoneOrphanWorkSessions(ctx context.Context, itemID
 	var freed []backlogdto.ItemSessionSummary
 	for i := range sessions {
 		is := &sessions[i]
-		if is.Role != string(session.SessionRoleWork) || is.EndedAt != nil {
+		if is.Role != string(instance.SessionRoleWork) || is.EndedAt != nil {
 			continue
 		}
 		if s.sessionStopper.IsSessionLive(is.SessionUUID) {
@@ -3702,7 +3703,7 @@ func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions
 	}
 	var unconfirmedDead map[string]bool
 	for _, is := range sessions {
-		if is.Role != string(session.SessionRoleWork) || is.EndedAt == nil {
+		if is.Role != string(instance.SessionRoleWork) || is.EndedAt == nil {
 			continue
 		}
 		if err := s.sessionStopper.KillTmuxPaneOnly(ctx, is.SessionUUID); err != nil {
@@ -3720,7 +3721,7 @@ func (s *BacklogService) killEndedWorkSessionPanes(ctx context.Context, sessions
 // live as ended. Returns CodeAlreadyExists if a live triage session is genuinely running.
 func (s *BacklogService) tombstoneOrphanTriageSessions(ctx context.Context, itemID, itemStatus string, sessions []backlogdto.ItemSessionSummary) error {
 	for _, is := range sessions {
-		if is.Role != string(session.SessionRoleTriage) || is.EndedAt != nil {
+		if is.Role != string(instance.SessionRoleTriage) || is.EndedAt != nil {
 			continue
 		}
 		// A headless triage session has no live tmux instance to query — check this

@@ -14,6 +14,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/session/instance"
+	"github.com/tstapler/stapler-squad/session/internal/fixturetest"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/domain"
@@ -32,12 +35,12 @@ func stateRowIs(t *testing.T, repo *EntRepository, ref domain.PRRef, state domai
 
 // staleSession adds a second persisted session whose snapshot still holds ref as
 // unknown terminal=true, the shape a backfill seeds.
-func staleSession(t *testing.T, storage *Storage, title, uuid string, ref domain.PRRef) *Instance {
+func staleSession(t *testing.T, storage *Storage, title, uuid string, ref domain.PRRef) *instance.Instance {
 	t.Helper()
 	inst := newTestInstance(title)
 	inst.UUID = uuid
 	inst.GitHubOwner, inst.GitHubRepo = "acme", "app"
-	finishInstanceConstruction(inst)
+	instance.FinishInstanceConstruction(inst)
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}))
 	require.NoError(t, storage.AddInstance(inst)) // create path
 	return inst
@@ -48,7 +51,7 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	ctx := context.Background()
 	storage, inst := persistedPRSession(t)
 	inst.SetPRPersister(storage)
-	ref := mustPRRef(t, "", "acme", "app", 12)
+	ref := fixturetest.MustPRRef(t, "", "acme", "app", 12)
 
 	require.NoError(t, inst.AttachPR(ref, domain.AttachSourceBackfill, domain.PRInitial{State: domain.PRStateUnknown, Terminal: true}))
 	stateRowIs(t, storage.Repo, ref, domain.PRStateUnknown, true, "seeded")
@@ -66,14 +69,14 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 	})
 	t.Run("save instances", func(t *testing.T) {
 		t.Parallel()
-		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+		require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 		stateRowIs(t, storage.Repo, ref, domain.PRStateOpen, false, "SaveInstances")
 	})
 	t.Run("prPersistPending flush", func(t *testing.T) {
 		t.Parallel()
-		inst.prPersistPending.Store(true)
+		inst.SetPRPersistPendingForTest(true)
 		storage.saved.reset() // an unchanged row would otherwise skip the write the flush rides on
-		require.NoError(t, storage.SaveInstances([]*Instance{inst}))
+		require.NoError(t, storage.SaveInstances([]*instance.Instance{inst}))
 		require.False(t, inst.PRPersistPending(), "the flush ran")
 		stateRowIs(t, storage.Repo, ref, domain.PRStateOpen, false, "pending flush")
 	})
@@ -88,14 +91,14 @@ func TestFullSave_ShouldNotOverwritePolledState_WhenAnyFullSavePath(t *testing.T
 		at := prRepoT0
 		archived.SetArchivedAt(&at)
 		require.NoError(t, storage.UpdateInstance(archived))
-		require.NoError(t, storage.SaveInstances([]*Instance{archived}))
+		require.NoError(t, storage.SaveInstances([]*instance.Instance{archived}))
 		stateRowIs(t, storage.Repo, ref, domain.PRStateOpen, false, "archived")
 	})
 	t.Run("suspended session with a stale snapshot", func(t *testing.T) {
 		t.Parallel()
 		suspended := staleSession(t, storage, "stale-suspended", "uuid-stale-suspended", ref)
 		require.True(t, suspended.Snapshot().Status.IsSuspended())
-		require.NoError(t, storage.SaveInstances([]*Instance{suspended}))
+		require.NoError(t, storage.SaveInstances([]*instance.Instance{suspended}))
 		stateRowIs(t, storage.Repo, ref, domain.PRStateOpen, false, "suspended")
 	})
 	assert.Equal(t, 1, countStates(t, storage.Repo), "every save shared the one state row")
