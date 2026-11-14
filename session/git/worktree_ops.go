@@ -82,7 +82,7 @@ func (g *GitWorktree) branchExistsAfterAddFailure(branchRef plumbing.ReferenceNa
 	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
 		if attempt > 0 {
 			native.RecordWorktreeRetry(context.Background())
-			time.Sleep(worktreeAddRetryDelay)
+			g.sleepBeforeRetry()
 		}
 		repo, err := OpenRepo(g.repoPath)
 		if err != nil {
@@ -390,7 +390,7 @@ func (g *GitWorktree) nativeFindLiveWorktreeForBranch() (string, bool) {
 	branchRef := plumbing.NewBranchReferenceName(g.branchName).String()
 	for attempt := 0; attempt < worktreeAddRetryAttempts; attempt++ {
 		if attempt > 0 {
-			time.Sleep(worktreeAddRetryDelay)
+			g.sleepBeforeRetry()
 		}
 		entries, err := nativeListWorktrees(g.repoPath)
 		if err != nil {

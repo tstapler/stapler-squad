@@ -410,15 +410,16 @@ func TestBranchExistsAfterAddFailure_ReturnsTrue_When_BranchAppearsDuringRetryWi
 	repoDir := setupTestRepo(t)
 	branchName := "backlog/delayed-race-winner-layer1"
 
-	go func() {
-		// Past the loop's first two checks (attempt 0 has no pre-sleep; attempt 1
-		// sleeps once) but well within its total budget.
-		time.Sleep(2 * worktreeAddRetryDelay) //nolint:notimesleeptest must create the branch after the production retry loop's own wall-clock backoff (worktreeAddRetryDelay) has begun; no hook exposes loop progress
-		createBranchNative(t, repoDir, branchName)
-	}()
-
 	wt, _, err := NewGitWorktreeWithBranch(repoDir, "test-delayed-race-winner-layer1", branchName)
 	require.NoError(t, err)
+	// The branch appears inside the loop's first backoff (attempt 0 saw "not found").
+	sleeps := 0
+	wt.retrySleep = func(time.Duration) {
+		sleeps++
+		if sleeps == 1 {
+			createBranchNative(t, repoDir, branchName)
+		}
+	}
 
 	assert.True(t, wt.branchExistsAfterAddFailure(plumbing.NewBranchReferenceName(branchName)),
 		"must self-heal once the delayed race winner's branch appears within the retry window")
@@ -539,23 +540,23 @@ func TestSetupFromExistingBranch_SelfHeals_When_WorktreeRegisteredByDelayedRaceW
 	branchName := "backlog/delayed-race-winner-layer2"
 	winnerPath := CanonicalizeWorktreePath(filepath.Join(t.TempDir(), "winner-worktree"))
 
-	// The loser can see the winner's registration while the winner is still writing
-	// its checkout; the TempDir cleanup must wait for that goroutine or it races it.
-	winnerDone := make(chan struct{})
-	t.Cleanup(func() { <-winnerDone })
-	go func() {
-		defer close(winnerDone)
-		time.Sleep(2 * worktreeAddRetryDelay) //nolint:notimesleeptest must register the winner worktree after the production retry loop's own wall-clock backoff (worktreeAddRetryDelay) has begun; no hook exposes loop progress
-		winnerWt := NewGitWorktreeFromStorageWithExecutor(repoDir, winnerPath, "test-delayed-race-winner-layer2-winner", branchName, "")
-		_ = winnerWt.nativeSetupNewWorktree()
-	}()
-
 	spy := newWorktreeAddFailureSpy()
 	wt := NewGitWorktreeFromStorageWithExecutor(repoDir, filepath.Join(t.TempDir(), "loser-worktree"), "test-delayed-race-winner-layer2", branchName, "", WithCommandRunner(spy))
+	// The winner registers inside the loop's first backoff, so attempt 0 sees nothing and
+	// a later attempt must find it; no wall-clock timer to lose under CI load.
+	sleeps := 0
+	wt.retrySleep = func(time.Duration) {
+		sleeps++
+		if sleeps == 1 {
+			winnerWt := NewGitWorktreeFromStorageWithExecutor(repoDir, winnerPath, "test-delayed-race-winner-layer2-winner", branchName, "")
+			require.NoError(t, winnerWt.nativeSetupNewWorktree())
+		}
+	}
 
 	err := wt.setupFromExistingBranch()
 	require.NoError(t, err, "must self-heal once the delayed race winner's registration appears within the retry window")
 	assert.Equal(t, winnerPath, wt.worktreePath)
+	assert.Equal(t, 1, sleeps, "must retry exactly once: attempt 0 finds nothing, attempt 1 finds the winner")
 }
 
 // TestSetupFromExistingBranch_HardFails_When_WorktreeAddErrorsAndBranchNotFoundAnywhere is

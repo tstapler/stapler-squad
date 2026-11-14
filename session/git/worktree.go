@@ -97,6 +97,11 @@ type GitWorktree struct {
 	// refBackend overrides the process-wide backend for git operations; nil means gitprovider.Backend().
 	refBackend backend.Backend
 
+	// retrySleep overrides the backoff sleep in the Ground-Truth Re-Query loops;
+	// nil means time.Sleep. Tests inject it to run the race winner at a loop
+	// boundary instead of on a wall-clock timer.
+	retrySleep func(time.Duration)
+
 	// dirtyChecker computes IsDirtyWithHint's uncached "is the worktree dirty"
 	// result. Defaults to worktreeIsDirty (go-git's Worktree.Status(), no
 	// subprocess — see worktree_git.go) via dirtyCheckerFunc() below; tests in
@@ -400,6 +405,15 @@ func (g *GitWorktree) commandRunner() tmux.CommandRunner {
 		return tmux.LocalRunner{}
 	}
 	return g.runner
+}
+
+// sleepBeforeRetry waits worktreeAddRetryDelay via g.retrySleep, defaulting to time.Sleep.
+func (g *GitWorktree) sleepBeforeRetry() {
+	if g.retrySleep != nil {
+		g.retrySleep(worktreeAddRetryDelay)
+		return
+	}
+	time.Sleep(worktreeAddRetryDelay)
 }
 
 // dirtyCheckerFunc returns g.dirtyChecker, defaulting to worktreeIsDirtyFast (mtime/hash
