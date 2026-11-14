@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/events"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 // blockedNotifyFixture returns a handler wired to an event bus, a work session
@@ -23,7 +23,7 @@ func blockedNotifyFixture(t *testing.T, status domain.BacklogStatus, notes strin
 	item, err := storage.CreateBacklogItem(ctx, backlogdto.BacklogItemData{Title: "Blocked item", Status: string(status), Notes: notes})
 	require.NoError(t, err)
 	sessionUUID := uuid.New().String()
-	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: session.SessionRoleWork})
+	_, err = storage.CreateItemSession(ctx, backlogdto.ItemSessionData{ItemID: item.ID, SessionUUID: sessionUUID, SessionRole: instance.SessionRoleWork})
 	require.NoError(t, err)
 
 	bus := events.NewEventBus(32)

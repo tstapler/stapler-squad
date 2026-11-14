@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services/internal/svctest"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
+	"github.com/tstapler/stapler-squad/session/instance"
 )
 
 func newItemSessionForStamp(t *testing.T, repoPath string) (*BacklogService, *backlogdto.BacklogItemData, backlogdto.ItemSessionSummary) {
@@ -21,7 +21,7 @@ func newItemSessionForStamp(t *testing.T, repoPath string) (*BacklogService, *ba
 	item, err := storage.GetBacklogItem(t.Context(), itemID)
 	require.NoError(t, err)
 	is, err := storage.CreateItemSession(t.Context(), backlogdto.ItemSessionData{
-		ItemID: itemID, SessionUUID: "00000000-0000-0000-0000-000000000001", SessionRole: session.SessionRoleWork,
+		ItemID: itemID, SessionUUID: "00000000-0000-0000-0000-000000000001", SessionRole: instance.SessionRoleWork,
 	})
 	require.NoError(t, err)
 	return svc, item, is
