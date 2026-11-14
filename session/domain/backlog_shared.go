@@ -173,8 +173,7 @@ var RecognizedPlaceholders = []string{
 	"repo_path",
 }
 
-// bounceMainBranch is the branch reconcileBouncingItems' shipped-without-a-PR
-// fallback checks a bouncing item's most recent work-session commit against.
-// Matches server/services/backlog_service_triage.go's prFixMainBranch — kept
-// as an independent constant since this package cannot import server/services.
+// BounceMainBranch is the literal "main". Do not use it to name a repo's default
+// branch — use git.ResolveDefaultBranchName(repoPath). Remaining uses are the
+// allowlist in session/backlog's TestBacklogCode_should_NotHardcodeDefaultBranch.
 const BounceMainBranch = "main"

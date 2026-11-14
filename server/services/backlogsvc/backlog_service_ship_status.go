@@ -102,7 +102,8 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 		}
 	}
 
-	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, prFixMainBranch, lastCommitSha)
+	defaultBranch := git.ResolveDefaultBranchName(item.RepoPath)
+	onMain, mainErr := git.IsCommitOnMain(item.RepoPath, defaultBranch, lastCommitSha)
 	if mainErr != nil {
 		status.Error = fmt.Sprintf("failed to verify commit on main: %v", mainErr)
 		return connect.NewResponse(&sessionv1.GetBacklogItemShipStatusResponse{Status: status}), nil
@@ -119,7 +120,7 @@ func (s *BacklogService) GetBacklogItemShipStatus(
 	wt, wtErr := s.storage.GetWorktreeDataBySessionUUID(ctx, lastWork.SessionUUID)
 	if wtErr == nil && wt.BranchName != "" {
 		status.BranchName = wt.BranchName
-		branchStatus, branchErr := git.BranchAheadBehind(item.RepoPath, wt.BranchName, prFixMainBranch)
+		branchStatus, branchErr := git.BranchAheadBehind(item.RepoPath, wt.BranchName, defaultBranch)
 		if branchErr != nil {
 			status.Error = fmt.Sprintf("failed to check branch status: %v", branchErr)
 		} else {
