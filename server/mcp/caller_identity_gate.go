@@ -10,9 +10,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/wakes"
-	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/domain"
 	"github.com/tstapler/stapler-squad/session/domain/backlogdto"
 	"github.com/tstapler/stapler-squad/session/instance"
@@ -110,6 +108,12 @@ func withCallerIdentityGate(g *callerIdentityGate, tool string, handler identity
 	if !ok {
 		panic(fmt.Sprintf("withCallerIdentityGate: %q has no row in identityGatedTools", tool))
 	}
+	return withCallerIdentityGateRoles(g, tool, allowed, handler)
+}
+
+// withCallerIdentityGateRoles is withCallerIdentityGate with the allowed roles
+// passed at registration, so a new tool needs no row in identityGatedTools.
+func withCallerIdentityGateRoles(g *callerIdentityGate, tool string, allowed []callerRole, handler identityHandler) mcpserver.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		caller, verified := verifiedCallerSessionUUID(ctx)
 		if !verified {
@@ -164,17 +168,4 @@ func roleLookupFrom(get func(ctx context.Context, sessionUUID string) (backlogdt
 		}
 		return roleOfItemSession(link.Role)
 	}
-}
-
-// registerIdentityGatedTools registers the wake, peer-help and owner-action tools behind
-// one identity gate whose role lookup reads the caller's backlog link.
-func registerIdentityGatedTools(s *mcpserver.MCPServer, storage *session.Storage, bus *events.EventBus) {
-	gate := &callerIdentityGate{
-		metrics: wakes.NewMetrics(),
-		roleOf:  roleLookupFrom(storage.GetItemSessionBySessionUUID),
-	}
-	registerWakeTools(s, newWakeHandlers(gate))
-	peerHelp := newPeerHelpHandlers(gate, storage, bus)
-	registerPeerHelpTools(s, peerHelp)
-	registerOwnerActionTools(s, peerHelp)
 }
